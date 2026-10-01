@@ -1,5 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.operations;
 
+import java.sql.Connection;
+import java.sql.Statement;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -443,5 +445,110 @@ class RequestLogStatsRollupTest {
             jdbc.update("DELETE FROM log_entry WHERE id IN (9420, 9421)");
             jdbc.update("DELETE FROM providers WHERE id = 6901");
         }
+    }
+
+    @Test
+    void deleting_a_model_moves_its_usage_to_a_named_orphan_bucket() {
+        // The delete must not drop the usage from the per-model views: the
+        // BEFORE DELETE trigger stamps the captured name on every row of the
+        // model before the FK drops the id, the rows go dirty, and the next
+        // pass re-rolls their hours into the (no id, name) grain. Deleting
+        // before the rollup is populated keeps the "live" side of this class's
+        // invariant a pure log_entry read.
+        assertRollupIsEmpty();
+        jdbc.update("DELETE FROM models WHERE id = 5001");
+
+        // The trigger ran before the FK nulled the id: every row of the model
+        // carries the name now, and none carries the id any more.
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry WHERE model_id IS NULL AND model_name = 'gpt-4'",
+                Integer.class)).isEqualTo(7);
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry WHERE model_id IS NOT NULL AND model_name IS NOT NULL",
+                Integer.class)).isZero();
+
+        Map<String, Object> live = stats(query(24, null, null));
+
+        populateRollup();
+        Map<String, Object> merged = stats(query(24, null, null));
+
+        assertThat(merged.get("modelBreakdown")).isEqualTo(live.get("modelBreakdown"));
+        assertThat(merged.get("modelTimeSeries")).isEqualTo(live.get("modelTimeSeries"));
+
+        // The rollup holds the orphan bucket, named - not one anonymous
+        // no-model bucket that every deleted model would share.
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry_hourly_stats"
+                + " WHERE model_id IS NULL AND model_name = 'gpt-4'",
+                Integer.class)).isGreaterThan(0);
+
+        List<Map<String, Object>> breakdown = (List<Map<String, Object>>) merged.get("modelBreakdown");
+        assertThat(breakdown).hasSize(1);
+        Map<String, Object> entry = breakdown.get(0);
+        assertThat(entry.get("modelId")).isNull();
+        assertThat(entry.get("modelName")).isEqualTo("gpt-4");
+        assertThat((Boolean) entry.get("modelDeleted")).isTrue();
+        assertThat(((Number) entry.get("requestCount")).longValue()).isEqualTo(7L);
+    }
+
+    @Test
+    void a_delete_longer_than_the_write_lag_still_reaches_the_rollup() throws Exception {
+        // The write lag is the pass's guard against writers its snapshot
+        // cannot see yet, and it only holds for writers shorter than the lag.
+        // The delete trigger can outlive it: it rewrites every usage row of
+        // the model in the delete's own transaction. While the delete is
+        // open, a pass advances its watermark past the delete's updated_at
+        // stamp without ever seeing the rows, and no later pass looks at
+        // updated_at before the stamp again. The hours the trigger enqueued
+        // with the delete are what brings them back.
+        assertRollupIsEmpty();
+        populateRollup();
+
+        try (Connection connection = jdbc.getDataSource().getConnection()) {
+            connection.setAutoCommit(false);
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("DELETE FROM models WHERE id = 5001");
+            }
+
+            // The poison: a pass while the delete is still open. Its cutoff
+            // (the write lag is zero in this class) is past the delete's
+            // transaction timestamp, but its snapshot cannot see the
+            // trigger's rows, so it advances the watermark past a change it
+            // never saw. The rolled-up hours still carry the old model id -
+            // this is the state the updated_at mechanism alone can never
+            // repair.
+            assertThat(refreshService.refreshNow()).isTrue();
+            assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry_hourly_stats WHERE model_id = 5001",
+                Integer.class)).isGreaterThan(0);
+
+            connection.commit();
+        }
+
+        // The queue rows committed with the delete name the hours explicitly,
+        // so the next pass re-rolls them and empties the queue.
+        assertThat(refreshService.refreshNow()).isTrue();
+
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM log_entry_rollup_dirty_hours", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM log_entry_hourly_stats WHERE model_id = 5001",
+            Integer.class)).isZero();
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM log_entry_hourly_stats"
+            + " WHERE model_id IS NULL AND model_name = 'gpt-4'",
+            Integer.class)).isGreaterThan(0);
+
+        Map<String, Object> merged = stats(query(24, null, null));
+        List<Map<String, Object>> breakdown = (List<Map<String, Object>>) merged.get("modelBreakdown");
+        assertThat(breakdown).hasSize(1);
+        Map<String, Object> entry = breakdown.get(0);
+        assertThat(entry.get("modelId")).isNull();
+        assertThat(entry.get("modelName")).isEqualTo("gpt-4");
+        assertThat((Boolean) entry.get("modelDeleted")).isTrue();
+        assertThat(((Number) entry.get("requestCount")).longValue()).isEqualTo(7L);
     }
 }

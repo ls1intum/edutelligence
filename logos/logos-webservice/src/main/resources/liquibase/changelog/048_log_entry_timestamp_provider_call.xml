@@ -40,7 +40,7 @@
          timestamp_forwarding (see 027), the hourly rollup buckets on it, and
          two indexes serve it; timestamp_response remains the completion
          instant the lifecycle and the live "total" figure read. -->
-    <changeSet id="042-log-entry-timestamp-provider-call" author="logos">
+    <changeSet id="048-log-entry-timestamp-provider-call" author="logos">
         <addColumn tableName="log_entry">
             <column name="timestamp_provider_call" type="TIMESTAMP WITH TIME ZONE"/>
             <column name="timestamp_provider_response" type="TIMESTAMP WITH TIME ZONE"/>
@@ -66,7 +66,7 @@
          backfill below recomputes every closed hour once, the same call 035
          made to establish the first watermark. Roughly a minute on production;
          every pass after it touches only what moved. -->
-    <changeSet id="042-stats-rollup-provider-call-split" author="logos">
+    <changeSet id="048-stats-rollup-provider-call-split" author="logos">
         <preConditions onFail="MARK_RAN">
             <columnExists tableName="log_entry" columnName="timestamp_provider_call"/>
         </preConditions>

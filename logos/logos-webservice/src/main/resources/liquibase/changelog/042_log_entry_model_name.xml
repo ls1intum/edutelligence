@@ -1,0 +1,462 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Deleting a model must not drop its usage from the statistics.
+
+         log_entry.model_id is ON DELETE SET NULL, so a delete NULLs the model
+         on every usage row, and the per-model aggregates (model breakdown,
+         per-model time series, provider performance) filter on
+         model_id IS NOT NULL or join models live - the orphaned rows vanish
+         from exactly the views that are supposed to show what happened. The
+         totals were never affected: they do not key on the model at all.
+
+         The fix keeps the captured name next to the usage. log_entry gains a
+         model_name column that is filled once, at the moment the model is
+         deleted, by the BEFORE DELETE trigger below: with the FK about to set
+         model_id to NULL, the row still carries the id, so the trigger can
+         match on it and stamp the name. BEFORE is load-bearing - the FK
+         action runs with the row deletion itself, so an AFTER trigger would
+         find model_id already NULL and nothing to match on.
+
+         The trigger is the capture point rather than the application writers
+         on purpose. model_id reaches log_entry from several paths (the
+         orchestrator's metrics/billing/payload updates, the batch settlement
+         insert, the direct-cloud gateway insert), and a capture that lives in
+         one of them silently misses the others. The trigger sits on the table
+         every path eventually orphans, so it cannot be bypassed. It also
+         captures the name the model actually had at deletion - a model that
+         was renamed shortly before its delete must show under the final name,
+         the one the statistics join used to resolve while it was alive.
+
+         The update fires trg_log_entry_updated_at, so the affected hours are
+         dirty for the next logos_stats_rollup_pass and the rollup picks the
+         change up on its own: no manual re-roll, and the re-roll is bounded
+         to the deleted model's hours rather than the whole history. That
+         mechanism alone is not enough: the pass's write lag is its guard
+         against transactions its snapshot cannot see yet, and it only holds
+         for writers shorter than the lag. The orchestrator's single-row
+         writes qualify, but this trigger does not - a delete rewrites every
+         usage row of the model in the delete's own transaction, and a large
+         delete can stay open longer than the lag. A pass running in that
+         window advances its watermark past the delete's updated_at stamp
+         without ever seeing the rows, and no later pass looks at updated_at
+         before the stamp again - the rolled-up hours would keep the old
+         model ID for good.
+
+         So the trigger also enqueues the affected hours in
+         log_entry_rollup_dirty_hours, in the same transaction as the update:
+         the queue rows and the row changes commit together, so any pass that
+         sees a queue row sees the rows behind it. The pass unions the
+         committed queue hours into its dirty set and then consumes exactly
+         the rows its own snapshot saw, so a delete that commits while a pass
+         is running simply waits for the next one.
+
+         Only orphaned rows ever carry model_name. Live rows keep resolving
+         their name through the models join, which is what lets a rename show
+         up without a rollup pass (the grain-keeps-ids rationale of 035).
+         Backfilling live rows would contradict that and stamp updated_at on
+         the entire history, dirtying every hour at once.
+
+         What cannot be recovered: models deleted before this changelog ran.
+         Their model rows are already gone, so no name is left to capture, and
+         those orphans (model_id NULL, model_name NULL) stay excluded from the
+         per-model views exactly as they are today. Rows that never resolved
+         to a model at all look identical and are excluded for the same
+         reason - the per-model views only want rows that belong to a model,
+         live or deleted.
+
+         Cost of a delete with a lot of history: the trigger updates every
+         usage row of the deleted model, which is proportional to that model's
+         traffic. That is the work any per-model re-roll would do anyway, paid
+         once at deletion time. -->
+    <changeSet id="042-log-entry-model-name" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="log_entry" columnName="model_name"/></not>
+        </preConditions>
+        <sql splitStatements="false"><![CDATA[
+            ALTER TABLE log_entry ADD COLUMN model_name text;
+            ALTER TABLE log_entry_hourly_stats ADD COLUMN model_name text;
+
+            CREATE TABLE log_entry_rollup_dirty_hours (
+                id          bigserial PRIMARY KEY,
+                bucket_hour timestamptz NOT NULL,
+                enqueued_at timestamptz NOT NULL DEFAULT now()
+            );
+
+            CREATE FUNCTION logos_model_delete_backfill_name()
+            RETURNS trigger
+            LANGUAGE plpgsql
+            SET search_path = public, pg_catalog
+            AS $$
+            BEGIN
+                -- One scan: the data-modifying CTE stamps the captured name
+                -- on every row of the model and, from the same update,
+                -- enqueues the affected hours for the rollup. The update's
+                -- updated_at stamp only reaches the pass while this delete
+                -- stays shorter than the pass's write lag (see the file
+                -- header); the queue rows commit together with the rows
+                -- behind them, so logos_stats_rollup_pass (042) re-rolls the
+                -- hours either way.
+                WITH updated AS (
+                    UPDATE log_entry SET model_name = OLD.name WHERE model_id = OLD.id
+                    RETURNING timestamp_forwarding, timestamp_request,
+                              timestamp_response
+                )
+                INSERT INTO log_entry_rollup_dirty_hours (bucket_hour)
+                SELECT DISTINCT date_trunc('hour', COALESCE(updated.timestamp_forwarding,
+                                                            updated.timestamp_request,
+                                                            updated.timestamp_response))
+                  FROM updated
+                 WHERE COALESCE(updated.timestamp_forwarding, updated.timestamp_request,
+                                updated.timestamp_response) IS NOT NULL;
+                RETURN OLD;
+            END;
+            $$;
+
+            CREATE TRIGGER trg_models_delete_backfill_model_name
+                BEFORE DELETE ON models
+                FOR EACH ROW
+                EXECUTE FUNCTION logos_model_delete_backfill_name();
+        ]]></sql>
+        <rollback>
+            <sql>DROP TRIGGER IF EXISTS trg_models_delete_backfill_model_name ON models;</sql>
+            <sql>DROP FUNCTION IF EXISTS logos_model_delete_backfill_name();</sql>
+            <sql>DROP TABLE IF EXISTS log_entry_rollup_dirty_hours;</sql>
+            <sql>ALTER TABLE log_entry_hourly_stats DROP COLUMN IF EXISTS model_name;</sql>
+            <sql>ALTER TABLE log_entry DROP COLUMN IF EXISTS model_name;</sql>
+        </rollback>
+    </changeSet>
+
+    <!-- The rollup grain must distinguish orphans by their captured name:
+         with the model gone, model_id alone is NULL for every deleted model,
+         and two of them would collapse into one anonymous bucket. The name
+         is stored only for orphan rows (model_id IS NULL); live rows keep
+         the id-only grain so a rename still shows up without a pass. -->
+    <changeSet id="042-rollup-grain-model-name" author="logos">
+        <!-- The discriminator is the grain index itself: changeset one already
+             added the column, so a columnExists guard would see it before this
+             changeset ever ran. -->
+        <preConditions onFail="MARK_RAN">
+            <sqlCheck expectedResult="0"><![CDATA[
+                SELECT COUNT(*) FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname = 'ux_log_entry_hourly_stats_grain'
+                  AND indexdef LIKE '%model_name%'
+            ]]></sqlCheck>
+        </preConditions>
+        <sql splitStatements="false"><![CDATA[
+            DROP INDEX ux_log_entry_hourly_stats_grain;
+
+            CREATE UNIQUE INDEX ux_log_entry_hourly_stats_grain
+                ON log_entry_hourly_stats (bucket_hour, model_id, model_name, provider_id,
+                                           team_id, user_id, result_status, was_cold_start)
+                NULLS NOT DISTINCT;
+
+            CREATE OR REPLACE FUNCTION logos_stats_rollup_apply(p_hours timestamptz[])
+            RETURNS bigint
+            LANGUAGE plpgsql
+            SET search_path = public, pg_catalog
+            AS $$
+            DECLARE
+                affected bigint;
+            BEGIN
+                IF p_hours IS NULL OR array_length(p_hours, 1) IS NULL THEN
+                    RETURN 0;
+                END IF;
+
+                DELETE FROM log_entry_hourly_stats s
+                 WHERE s.bucket_hour = ANY (p_hours);
+
+                INSERT INTO log_entry_hourly_stats (
+                    bucket_hour, model_id, model_name, provider_id, team_id, user_id,
+                    result_status, was_cold_start, requests,
+                    queue_seconds_sum, queue_seconds_count,
+                    run_seconds_sum, run_seconds_count,
+                    error_count, total_tokens, cost_micro_cents)
+                SELECT
+                    date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                le.timestamp_request,
+                                                le.timestamp_response)),
+                    le.model_id,
+                    CASE WHEN le.model_id IS NULL THEN le.model_name END,
+                    le.provider_id,
+                    le.team_id,
+                    le.user_id,
+                    le.result_status,
+                    COALESCE(le.was_cold_start, FALSE),
+                    COUNT(*),
+                    SUM(CASE WHEN le.timestamp_request IS NOT NULL
+                              AND le.timestamp_forwarding IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+                        END),
+                    COUNT(*) FILTER (WHERE le.timestamp_request IS NOT NULL
+                                       AND le.timestamp_forwarding IS NOT NULL),
+                    SUM(CASE WHEN le.timestamp_forwarding IS NOT NULL
+                              AND le.timestamp_response IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
+                        END),
+                    COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL
+                                       AND le.timestamp_response IS NOT NULL),
+                    COUNT(*) FILTER (WHERE le.result_status IS DISTINCT FROM 'success'
+                                        OR (le.error_message IS NOT NULL
+                                            AND le.error_message <> '')),
+                    COALESCE(SUM(tok.total_tokens), 0)::bigint,
+                    COALESCE(SUM(lec.cost_micro_cents), 0)::bigint
+                FROM log_entry le
+                LEFT JOIN LATERAL (
+                    SELECT SUM(ut.token_count) AS total_tokens
+                    FROM usage_tokens ut
+                    JOIN token_types tt ON tt.id = ut.type_id
+                    WHERE ut.log_entry_id = le.id
+                      AND tt.name = 'total_tokens'
+                ) tok ON TRUE
+                LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
+                WHERE date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                  le.timestamp_request,
+                                                  le.timestamp_response)) = ANY (p_hours)
+                GROUP BY 1, 2, 3, 4, 5, 6, 7, 8;
+
+                GET DIAGNOSTICS affected = ROW_COUNT;
+                RETURN affected;
+            END;
+            $$;
+        ]]></sql>
+        <!-- The 035 pass plus the dirty-hour queue. The queue is the half of
+             the write-lag guard the lag itself cannot provide: a writer that
+             outlives the lag (the model-delete trigger of this file) enqueues
+             its hours atomically with the change, so a pass whose snapshot
+             missed the rows still re-rolls the hours on a later pass. -->
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION logos_stats_rollup_pass(p_write_lag interval)
+            RETURNS TABLE (hours_rebuilt bigint, rows_written bigint)
+            LANGUAGE plpgsql
+            SET search_path = public, pg_catalog
+            AS $$
+            DECLARE
+                v_last       timestamptz;
+                v_cutoff     timestamptz := now() - p_write_lag;
+                v_open       timestamptz := date_trunc('hour', now());
+                v_hours      timestamptz[];
+                v_queued     timestamptz[];
+                v_queued_ids bigint[];
+                v_written    bigint;
+            BEGIN
+                SELECT processed_through INTO v_last FROM log_entry_rollup_state;
+                IF v_last IS NULL THEN
+                    RAISE EXCEPTION 'log_entry_rollup_state is empty; the rollup was never initialised';
+                END IF;
+
+                -- Committed queue hours first, and the ids this pass's
+                -- snapshot actually saw: consumption below is by id, so a
+                -- queue row committed while this pass is running survives
+                -- for the next pass, which re-rolls its hour and sees both
+                -- the rows behind it and (already) the re-roll this pass did.
+                SELECT array_agg(DISTINCT bucket_hour), array_agg(id)
+                  INTO v_queued, v_queued_ids
+                  FROM log_entry_rollup_dirty_hours;
+
+                SELECT COALESCE(array_agg(DISTINCT h), '{}')
+                  INTO v_hours
+                  FROM (
+                        SELECT generate_series(
+                                   LEAST(date_trunc('hour', le.timestamp_request),
+                                         date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                     le.timestamp_request,
+                                                                     le.timestamp_response))),
+                                   GREATEST(date_trunc('hour', le.timestamp_request),
+                                            date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                        le.timestamp_request,
+                                                                        le.timestamp_response))),
+                                   interval '1 hour') AS h
+                          FROM log_entry le
+                         WHERE le.updated_at > v_last
+                           AND le.updated_at <= v_cutoff
+                        UNION
+                        SELECT generate_series(date_trunc('hour', v_last), v_open - interval '1 hour',
+                                               interval '1 hour')
+                        UNION
+                        SELECT unnest(v_queued)
+                       ) dirty
+                 WHERE h IS NOT NULL
+                   AND h < v_open;
+
+                v_written := logos_stats_rollup_apply(v_hours);
+
+                DELETE FROM log_entry_rollup_dirty_hours
+                 WHERE id = ANY (COALESCE(v_queued_ids, '{}'));
+
+                UPDATE log_entry_rollup_state SET processed_through = v_cutoff;
+
+                hours_rebuilt := COALESCE(array_length(v_hours, 1), 0);
+                rows_written  := v_written;
+                RETURN NEXT;
+            END;
+            $$;
+        ]]></sql>
+        <rollback>
+            <!-- Restore the 035 pass before restoring the 035 apply: the
+                 queue-consuming pass is the only reader of
+                 log_entry_rollup_dirty_hours, and changeset one's rollback
+                 drops that table. -->
+            <sql splitStatements="false"><![CDATA[
+                CREATE OR REPLACE FUNCTION logos_stats_rollup_pass(p_write_lag interval)
+                RETURNS TABLE (hours_rebuilt bigint, rows_written bigint)
+                LANGUAGE plpgsql
+                SET search_path = public, pg_catalog
+                AS $$
+                DECLARE
+                    v_last    timestamptz;
+                    v_cutoff  timestamptz := now() - p_write_lag;
+                    v_open    timestamptz := date_trunc('hour', now());
+                    v_hours   timestamptz[];
+                    v_written bigint;
+                BEGIN
+                    SELECT processed_through INTO v_last FROM log_entry_rollup_state;
+                    IF v_last IS NULL THEN
+                        RAISE EXCEPTION 'log_entry_rollup_state is empty; the rollup was never initialised';
+                    END IF;
+
+                    SELECT COALESCE(array_agg(DISTINCT h), '{}')
+                      INTO v_hours
+                      FROM (
+                            SELECT generate_series(
+                                       LEAST(date_trunc('hour', le.timestamp_request),
+                                             date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                         le.timestamp_request,
+                                                                         le.timestamp_response))),
+                                       GREATEST(date_trunc('hour', le.timestamp_request),
+                                                date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                            le.timestamp_request,
+                                                                            le.timestamp_response))),
+                                       interval '1 hour') AS h
+                              FROM log_entry le
+                             WHERE le.updated_at > v_last
+                               AND le.updated_at <= v_cutoff
+                            UNION
+                            SELECT generate_series(date_trunc('hour', v_last), v_open - interval '1 hour',
+                                                   interval '1 hour')
+                           ) dirty
+                     WHERE h IS NOT NULL
+                       AND h < v_open;
+
+                    v_written := logos_stats_rollup_apply(v_hours);
+
+                    UPDATE log_entry_rollup_state SET processed_through = v_cutoff;
+
+                    hours_rebuilt := COALESCE(array_length(v_hours, 1), 0);
+                    rows_written  := v_written;
+                    RETURN NEXT;
+                END;
+                $$;
+            ]]></sql>
+            <!-- Restore the old function before touching the index: re-applying
+                 with it first collapses the per-name orphan buckets back into
+                 the old grain, so the index swap cannot hit a duplicate key.
+                 The re-apply is a full-history one on purpose: rolling back
+                 is the one moment the rollup rows and the apply function
+                 disagree about the grain, and the incremental passes only
+                 know how to fix hours someone dirtied - not hours the
+                 migration itself just re-shaped. -->
+            <sql splitStatements="false"><![CDATA[
+                CREATE OR REPLACE FUNCTION logos_stats_rollup_apply(p_hours timestamptz[])
+                RETURNS bigint
+                LANGUAGE plpgsql
+                SET search_path = public, pg_catalog
+                AS $$
+                DECLARE
+                    affected bigint;
+                BEGIN
+                    IF p_hours IS NULL OR array_length(p_hours, 1) IS NULL THEN
+                        RETURN 0;
+                    END IF;
+
+                    DELETE FROM log_entry_hourly_stats s
+                     WHERE s.bucket_hour = ANY (p_hours);
+
+                    INSERT INTO log_entry_hourly_stats (
+                        bucket_hour, model_id, provider_id, team_id, user_id,
+                        result_status, was_cold_start, requests,
+                        queue_seconds_sum, queue_seconds_count,
+                        run_seconds_sum, run_seconds_count,
+                        error_count, total_tokens, cost_micro_cents)
+                    SELECT
+                        date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                    le.timestamp_request,
+                                                    le.timestamp_response)),
+                        le.model_id,
+                        le.provider_id,
+                        le.team_id,
+                        le.user_id,
+                        le.result_status,
+                        COALESCE(le.was_cold_start, FALSE),
+                        COUNT(*),
+                        SUM(CASE WHEN le.timestamp_request IS NOT NULL
+                                  AND le.timestamp_forwarding IS NOT NULL
+                                 THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+                            END),
+                        COUNT(*) FILTER (WHERE le.timestamp_request IS NOT NULL
+                                           AND le.timestamp_forwarding IS NOT NULL),
+                        SUM(CASE WHEN le.timestamp_forwarding IS NOT NULL
+                                  AND le.timestamp_response IS NOT NULL
+                                 THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
+                            END),
+                        COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL
+                                           AND le.timestamp_response IS NOT NULL),
+                        COUNT(*) FILTER (WHERE le.result_status IS DISTINCT FROM 'success'
+                                            OR (le.error_message IS NOT NULL
+                                                AND le.error_message <> '')),
+                        COALESCE(SUM(tok.total_tokens), 0)::bigint,
+                        COALESCE(SUM(lec.cost_micro_cents), 0)::bigint
+                    FROM log_entry le
+                    LEFT JOIN LATERAL (
+                        SELECT SUM(ut.token_count) AS total_tokens
+                        FROM usage_tokens ut
+                        JOIN token_types tt ON tt.id = ut.type_id
+                        WHERE ut.log_entry_id = le.id
+                          AND tt.name = 'total_tokens'
+                    ) tok ON TRUE
+                    LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
+                    WHERE date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                      le.timestamp_request,
+                                                      le.timestamp_response)) = ANY (p_hours)
+                    GROUP BY 1, 2, 3, 4, 5, 6, 7;
+
+                    GET DIAGNOSTICS affected = ROW_COUNT;
+                    RETURN affected;
+                END;
+                $$;
+            ]]></sql>
+            <sql splitStatements="false"><![CDATA[
+                SELECT logos_stats_rollup_apply(ARRAY(
+                    SELECT DISTINCT date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                le.timestamp_request,
+                                                                le.timestamp_response))
+                    FROM log_entry le
+                    WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
+                          < date_trunc('hour', now())
+                ));
+            ]]></sql>
+            <sql splitStatements="false"><![CDATA[
+                DROP INDEX ux_log_entry_hourly_stats_grain;
+
+                CREATE UNIQUE INDEX ux_log_entry_hourly_stats_grain
+                    ON log_entry_hourly_stats (bucket_hour, model_id, provider_id, team_id,
+                                               user_id, result_status, was_cold_start)
+                    NULLS NOT DISTINCT;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <!-- Deliberately no backfill changeset: model_name is NULL on every
+         preexisting usage and rollup row, so the new grain changes no
+         historical bucket - a full-history re-apply during deployment would
+         rebuild hours that cannot differ. A deleted model's hours are
+         re-rolled incrementally instead: the trigger's updated_at stamp
+         covers deletes shorter than the write lag, and the dirty-hour queue
+         covers the rest. -->
+
+</databaseChangeLog>
