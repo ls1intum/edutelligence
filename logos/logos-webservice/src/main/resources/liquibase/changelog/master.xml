@@ -46,5 +46,7 @@
     <include file="liquibase/changelog/040_reclassify_timeout_errors.xml"/>
     <include file="liquibase/changelog/041_calibration_probe_logs_observed_reason.xml"/>
     <include file="liquibase/changelog/042_log_entry_model_name.xml"/>
+    <include file="liquibase/changelog/043_log_entry_gateway_in_flight_index.xml"/>
+    <include file="liquibase/changelog/044_log_entry_gateway_estimated_tokens.xml"/>
 
 </databaseChangeLog>
