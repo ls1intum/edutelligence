@@ -396,6 +396,36 @@ async def test_keepalive_waits_for_sse_event_boundary(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_keepalive_recognizes_crlf_sse_boundaries(monkeypatch):
+    """CRLF blank lines are also valid SSE event delimiters; keepalives must
+    still fire between complete CRLF events and the bytes must be preserved."""
+
+    async def crlf_stream():
+        yield b'data: {"choices":'
+        await asyncio.sleep(0.2)
+        yield b'[{"delta":{"content":"hi"}}]}\r\n\r\n'
+        yield b"data: [DONE]\r\n\r\n"
+
+    response_obj = StreamingResponse(crlf_stream(), media_type="text/event-stream")
+
+    async def fake_route_and_execute(**kwargs):
+        return response_obj
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+
+    response = await main._keepalive_streaming_response(
+        _Client(leaves=False), log_id=1, request_id="req-13b", path="chat/completions"
+    )
+    raw = await _collect(response)
+
+    assert b'data: {"choices":[{"delta":{"content":"hi"}}]}\r\n\r\n' in raw
+    assert b"data: [DONE]\r\n\r\n" in raw
+    first_event_end = raw.index(b"}\r\n\r\n") + 5
+    if KEEPALIVE in raw:
+        assert raw.index(KEEPALIVE) >= first_event_end
+
+
+@pytest.mark.asyncio
 async def test_cancel_during_pipeline_keepalive_closes_completed_response(monkeypatch):
     """If the client leaves while a phase-one keepalive is yielded, a response
     that finished in that window must still be closed."""

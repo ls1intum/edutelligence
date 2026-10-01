@@ -328,3 +328,42 @@ async def test_local_stream_requests_keep_the_sync_guard(monkeypatch):
 
     assert result == "guarded"
     assert len(guarded) == 1
+
+
+@pytest.mark.asyncio
+async def test_unrelated_local_deployment_does_not_block_keepalive(monkeypatch):
+    """A key that can also reach an unrelated local model must still keepalive
+    when the requested model itself is SSE-safe."""
+    keepalive = []
+
+    async def fake_auth_parse_log(request, use_profile_auth=False, request_id=None):
+        auth = MagicMock()
+        auth.api_key_id = 88
+        auth.resolved_proxy_model = (1, "gpt-4o")
+        return (
+            {},
+            auth,
+            {"stream": True, "model": "gpt-4o"},
+            "127.0.0.1",
+            None,
+            [
+                {"model_id": 1, "type": "openai", "model_name": "gpt-4o"},
+                {"model_id": 2, "type": "local", "model_name": "local-model"},
+            ],
+        )
+
+    async def fake_filter(deployments, payload=None):
+        return deployments
+
+    async def fake_keepalive(request, **kwargs):
+        keepalive.append(kwargs)
+        return "keepalive-guarded"
+
+    monkeypatch.setattr(main, "auth_parse_log", fake_auth_parse_log)
+    monkeypatch.setattr(main, "_filter_logosnode_deployments", fake_filter)
+    monkeypatch.setattr(main, "_keepalive_streaming_response", fake_keepalive)
+
+    result = await main.handle_sync_request("chat/completions", _Client(leaves=False))
+
+    assert result == "keepalive-guarded"
+    assert len(keepalive) == 1

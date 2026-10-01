@@ -3481,6 +3481,49 @@ def _deployments_guarantee_sse(deployments) -> bool:
     return True
 
 
+def _deployments_for_keepalive_gate(body: dict, auth: "AuthContext", deployments) -> list:
+    """Narrow deployments to the requested model before the SSE keepalive gate.
+
+    A key may reach both a logosnode chat model and an unrelated ``local``
+    deployment. Keepalive eligibility must follow the model that will actually
+    run, not every deployment the key can see.
+    """
+    requested = str(body.get("model") or "").strip()
+    if not requested or not deployments:
+        return list(deployments or ())
+    model_id = None
+    resolved = getattr(auth, "resolved_proxy_model", None)
+    if isinstance(resolved, (tuple, list)) and resolved:
+        model_id = resolved[0]
+    if model_id is not None:
+        narrowed = [d for d in deployments if d.get("model_id") == model_id]
+        if narrowed:
+            return narrowed
+    narrowed = [d for d in deployments if str(d.get("model_name") or "") == requested]
+    return narrowed or list(deployments)
+
+
+def _sse_event_end(buf: bytearray) -> int:
+    """Exclusive end index of the first complete SSE event in ``buf``, or -1.
+
+    SSE events end at a blank line. Upstream may use LF (``\\n\\n``) or CRLF
+    (``\\r\\n\\r\\n``); both are recognized, and the returned slice preserves
+    whichever delimiter the upstream sent.
+    """
+    lf = buf.find(b"\n\n")
+    crlf = buf.find(b"\r\n\r\n")
+    if lf < 0 and crlf < 0:
+        return -1
+    if lf < 0:
+        return crlf + 4
+    if crlf < 0:
+        return lf + 2
+    # Whichever blank line appears first delimits the event.
+    if crlf < lf:
+        return crlf + 4
+    return lf + 2
+
+
 def _error_frames(path: str, status: int, body: Any) -> list:
     """A failure as SSE frames in the dialect the client speaks.
 
@@ -3690,11 +3733,11 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
                     if isinstance(item, (bytes, bytearray, memoryview)):
                         pending.extend(item)
                         while True:
-                            boundary = pending.find(b"\n\n")
-                            if boundary < 0:
+                            end = _sse_event_end(pending)
+                            if end < 0:
                                 break
-                            event = bytes(pending[: boundary + 2])
-                            del pending[: boundary + 2]
+                            event = bytes(pending[:end])
+                            del pending[:end]
                             yield event
                     else:
                         # Rare non-bytes chunk from a custom streamer: flush
@@ -3832,7 +3875,7 @@ async def handle_sync_request(path: str, request: Request):
             body.get("model")
             and payload_requests_streaming(body)
             and not _resolves_to_whisper(body, path, auth)
-            and _deployments_guarantee_sse(deployments)
+            and _deployments_guarantee_sse(_deployments_for_keepalive_gate(body, auth, deployments))
         ):
             response = await _keepalive_streaming_response(request, **execute_kwargs)
             return response
