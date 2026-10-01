@@ -4,18 +4,17 @@
 # docs/deployment.md#failover-verification.
 #
 # Fires a steady stream of unauthenticated GET /v1/models requests at the
-# gateway, kills one webservice container partway through, and fails if any
-# request comes back as a connection error or a 5xx — those are the only
-# outcomes a live replica behind Traefik would not otherwise produce.
-# Ordinary 401s (no API key given) count as success: they prove the request
-# reached a healthy instance and was processed.
+# gateway, kills one webservice container partway through, and fails unless
+# every request returns the webservice's expected 401 (no API key). Connection
+# errors (000), 5xx, and other statuses (including rate-gateway 429) count as
+# failures — they do not prove a live webservice replica answered.
 #
 # Usage:
 #   scripts/gateway-failover-demo.sh [BASE_URL] [DURATION_SECONDS]
 #
 # Prerequisites: the target compose stack already up with
 # LOGOS_WEBSERVICE_REPLICAS>=2 (or `--scale logos-webservice=2`). Override
-# COMPOSE_FILE to point at a non-dev stack.
+# COMPOSE_FILE to point at a non-dev stack (e.g. COMPOSE_FILE=docker-compose.yaml).
 
 set -euo pipefail
 
@@ -35,7 +34,14 @@ fi
 KILL_TARGET="${CONTAINERS[0]}"
 
 RESULTS_FILE="$(mktemp)"
-trap 'rm -f "$RESULTS_FILE"' EXIT
+PROBE_EXIT=0
+cleanup() {
+  rm -f "$RESULTS_FILE"
+  # Restore the killed replica so a successful (or failed) run does not leave
+  # the stack at reduced redundancy.
+  docker start "$KILL_TARGET" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
 echo "Firing requests at $BASE_URL/v1/models for ${DURATION}s; killing $KILL_TARGET after ${KILL_AFTER}s..."
 
@@ -55,17 +61,24 @@ sleep "$KILL_AFTER"
 echo "Killing $KILL_TARGET ..."
 docker kill "$KILL_TARGET" >/dev/null
 
+# Always record at least one post-kill probe so short DURATION/KILL_AFTER
+# combinations cannot PASS without testing failover.
+STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$BASE_URL/v1/models" || echo "000")
+echo "$STATUS 0" >>"$RESULTS_FILE"
+
 wait "$LOAD_PID"
 
 TOTAL=$(wc -l <"$RESULTS_FILE")
-# Any status the gateway itself produced (2xx-4xx) means a live instance
-# answered; 000 (curl couldn't connect/timed out) or 5xx means it did not.
-FAILED=$(awk '$1 !~ /^[2-4][0-9][0-9]$/ {c++} END{print c+0}' "$RESULTS_FILE")
+# Unauthenticated /v1/models must return 401 from a live webservice. Treating
+# every 4xx as success would accept rate-gateway 429 under throttling.
+FAILED=$(awk '$1 != "401" {c++} END{print c+0}' "$RESULTS_FILE")
 MAX_LATENCY=$(awk '{if ($2 > m) m = $2} END{print m + 0}' "$RESULTS_FILE")
 
-echo "Requests: $TOTAL, failed (connection error / 5xx): $FAILED, max latency: ${MAX_LATENCY}ms"
+echo "Requests: $TOTAL, failed (not 401): $FAILED, max latency: ${MAX_LATENCY}ms"
 if [ "$FAILED" -gt 0 ]; then
   echo "FAIL: killing one replica was user-visible ($FAILED failed requests)." >&2
+  PROBE_EXIT=1
   exit 1
 fi
 echo "PASS: no failed requests while one replica was killed."
+exit "$PROBE_EXIT"

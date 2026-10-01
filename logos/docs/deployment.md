@@ -317,11 +317,15 @@ Optional `.env` knobs:
 ### Failover verification
 
 Configuring 2 replicas is not the same as proving that killing one is
-harmless. Run `scripts/gateway-failover-demo.sh` against a stack already
-scaled to 2+ webservice replicas — it fires a steady stream of requests at
-`/v1/models`, kills one replica mid-run with `docker kill`, and fails if any
-request gets a `000` (connection refused/timeout) or `5xx` response instead of
-a normal reply:
+harmless for every request. Run `scripts/gateway-failover-demo.sh` against a
+stack already scaled to 2+ webservice replicas — it fires a steady stream of
+short unauthenticated requests at `/v1/models`, kills one replica mid-run with
+`docker kill`, and fails unless every probe returns the webservice's expected
+`401` (no API key). Connection errors (`000`), `5xx`, and other statuses
+(including rate-gateway `429`) count as failures. This check covers new
+requests only; an inference stream held by the killed replica can be lost, and
+the check does not test client recovery. The script restarts the killed
+container on exit.
 
 On the dev compose, first comment out the fixed `127.0.0.1:18082:8081` host
 publish under `logos-webservice: ports:` — a fixed host port cannot be shared
@@ -333,8 +337,14 @@ scripts/gateway-failover-demo.sh http://localhost:18081 30
 ```
 
 Re-run it against the core `docker-compose.yaml` stack (or a staging
-deployment) before relying on 2+ replicas in PROD — the dev compose's rate
-gateway and Traefik timeouts are more forgiving than PROD's.
+deployment) before relying on 2+ replicas in PROD — set `COMPOSE_FILE`
+explicitly so the script does not kill a replica from the default
+dev compose while probing a different URL:
+
+```bash
+COMPOSE_FILE=docker-compose.yaml \
+  scripts/gateway-failover-demo.sh http://localhost:8081 30
+```
 
 ## Environment variables
 
