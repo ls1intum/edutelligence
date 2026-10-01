@@ -51,7 +51,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="042-team-repositories-indexes" author="wasnertobias">
+    <changeSet id="045-team-repositories-indexes" author="wasnertobias">
         <sql><![CDATA[
             ALTER TABLE team_repositories
                 ADD CONSTRAINT fk_team_repositories_team
