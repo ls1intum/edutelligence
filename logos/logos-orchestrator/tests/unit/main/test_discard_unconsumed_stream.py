@@ -11,9 +11,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
 
 import logos as main
-from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
 
 
 @pytest.mark.asyncio
