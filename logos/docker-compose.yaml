@@ -331,8 +331,8 @@ services:
     #   LOGOS_WEBSERVICE_REPLICAS=<N>   # default 1
     # via `docker compose up -d --remove-orphans --scale logos-webservice=$N`
     # on docker-compose.yaml only (worker compose files skip --scale). See
-    # docs/deployment.md#inference-gateway-replicas for the per-key cloud TPM
-    # caveat that comes with raising this above 1.
+    # docs/deployment.md#inference-gateway-replicas. Cloud RPM/TPM stay shared
+    # across replicas via Redis (`logos-redis`).
     # Liquibase serialises schema apply via its database changelog lock.
     restart: unless-stopped
     depends_on:

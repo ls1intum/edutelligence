@@ -266,8 +266,8 @@ replica; Traefik load-balances them under `logos-webservice-svc`.
 The deploy workflows (`logos_deploy-{dev,test,prod}.yml`) scale to this count
 automatically on every deploy, defaulting to **1** when `.env` does not set
 `LOGOS_WEBSERVICE_REPLICAS`. Raising it hides crashes and routine deploys from
-the inference gateway, at the cost of the per-key TPM caveat below — set the
-desired count in the core node's `.env`:
+the inference gateway — cloud RPM and TPM stay shared across replicas via
+Redis (see the knobs below). Set the desired count in the core node's `.env`:
 
 ```bash
 # in the .env next to docker-compose.yaml
