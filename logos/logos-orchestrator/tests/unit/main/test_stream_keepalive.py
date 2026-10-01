@@ -364,6 +364,76 @@ async def test_disconnect_during_scheduling_comment_closes_upstream(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_keepalive_waits_for_sse_event_boundary(monkeypatch):
+    """A keepalive must not be injected inside an SSE event split across
+    upstream chunks — only after a blank-line boundary."""
+
+    async def split_stream():
+        yield b'data: {"choices":'
+        await asyncio.sleep(0.2)  # longer than the 0.05 s keepalive interval
+        yield b'[{"delta":{"content":"hi"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    response_obj = StreamingResponse(split_stream(), media_type="text/event-stream")
+
+    async def fake_route_and_execute(**kwargs):
+        return response_obj
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+
+    response = await main._keepalive_streaming_response(
+        _Client(leaves=False), log_id=1, request_id="req-13", path="chat/completions"
+    )
+    raw = await _collect(response)
+
+    # The split event is reassembled without a keepalive in the middle.
+    assert b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n' in raw
+    assert b": keepalive\n\ndata:" not in raw.replace(b": logos-schedule", b"")
+    first_event_end = raw.index(b"}\n\n") + 3
+    # Any keepalive that did fire must sit after the completed first event.
+    if KEEPALIVE in raw:
+        assert raw.index(KEEPALIVE) >= first_event_end
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_pipeline_keepalive_closes_completed_response(monkeypatch):
+    """If the client leaves while a phase-one keepalive is yielded, a response
+    that finished in that window must still be closed."""
+
+    class _Body:
+        def __init__(self):
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    body = _Body()
+    response_obj = StreamingResponse(body, media_type="text/event-stream")
+    response_obj.body_iterator = body
+    release_work = asyncio.Event()
+
+    async def fake_route_and_execute(**kwargs):
+        await release_work.wait()
+        return response_obj
+
+    monkeypatch.setattr(main, "route_and_execute", fake_route_and_execute)
+    monkeypatch.setattr(main, "_KEEPALIVE_INTERVAL_S", 0.05)
+
+    response = await main._keepalive_streaming_response(
+        _Client(leaves=False), log_id=1, request_id="req-14", path="chat/completions"
+    )
+    agen = response.body_iterator
+    first = await agen.__anext__()
+    assert first == KEEPALIVE
+    # Pipeline finishes while the client is still on the keepalive yield.
+    release_work.set()
+    await asyncio.sleep(0.05)
+    await agen.aclose()
+
+    assert body.closed, "completed upstream response was discarded without closing"
+
+
+@pytest.mark.asyncio
 async def test_no_deployment_still_404s_for_a_streaming_request(monkeypatch):
     """The fast no-deployment 404 is raised before the keepalive branch, so it
     keeps its proper HTTP status instead of becoming an in-stream error."""

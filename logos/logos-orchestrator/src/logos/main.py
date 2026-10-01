@@ -3461,6 +3461,24 @@ _KEEPALIVE_INTERVAL_S = float(os.getenv("LOGOS_STREAM_KEEPALIVE_S", "15"))
 _KEEPALIVE_BYTES = b": keepalive\n\n"
 # Marks the end of the content stream in the keepalive queue.
 _KEEPALIVE_DONE = object()
+# Local HTTP providers may stream NDJSON (or other non-SSE byte protocols).
+# Committing ``text/event-stream`` early and injecting SSE comments would
+# corrupt those responses, so they keep the late-commit path.
+_KEEPALIVE_NON_SSE_PROVIDER_TYPES = frozenset({"local"})
+
+
+def _deployments_guarantee_sse(deployments) -> bool:
+    """Whether every candidate deployment streams SSE to the client.
+
+    The keepalive wrapper commits ``text/event-stream`` before the upstream
+    content type is known. That is correct for logosnode and cloud OpenAI-
+    compatible providers; a ``local`` deployment may return NDJSON and must
+    not take this path.
+    """
+    for deployment in deployments or ():
+        if str(deployment.get("type") or "").lower() in _KEEPALIVE_NON_SSE_PROVIDER_TYPES:
+            return False
+    return True
 
 
 def _error_frames(path: str, status: int, body: Any) -> list:
@@ -3593,9 +3611,9 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
         watcher = asyncio.create_task(_wait_for_client_disconnect(request))
         producer: Optional[asyncio.Task] = None
         inner_iterator = None
+        response: Optional[Response] = None
         try:
             # Phase 1 — the pipeline, keepaliving across its silence.
-            response: Optional[Response] = None
             try:
                 while True:
                     done, _ = await asyncio.wait(
@@ -3652,12 +3670,16 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
                 if comment:
                     yield comment
                 # Phase 2 — the content stream, keepaliving across the
-                # upstream's pre-token silence.
+                # upstream's pre-token silence. Upstream chunks can split an
+                # SSE event across reads; buffer until a blank-line boundary
+                # so a keepalive comment is never injected mid-event.
+                pending = bytearray()
                 while True:
                     try:
                         item = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_INTERVAL_S)
                     except asyncio.TimeoutError:
-                        yield _KEEPALIVE_BYTES
+                        if not pending:
+                            yield _KEEPALIVE_BYTES
                         continue
                     if item is _KEEPALIVE_DONE:
                         break
@@ -3665,7 +3687,24 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
                         for frame in _instream_error_frames(path, item):
                             yield frame
                         break
-                    yield item
+                    if isinstance(item, (bytes, bytearray, memoryview)):
+                        pending.extend(item)
+                        while True:
+                            boundary = pending.find(b"\n\n")
+                            if boundary < 0:
+                                break
+                            event = bytes(pending[: boundary + 2])
+                            del pending[: boundary + 2]
+                            yield event
+                    else:
+                        # Rare non-bytes chunk from a custom streamer: flush
+                        # any buffered SSE first so order stays intact.
+                        if pending:
+                            yield bytes(pending)
+                            pending.clear()
+                        yield item
+                if pending:
+                    yield bytes(pending)
             else:
                 for frame in _instream_sync_frames(response, path):
                     yield frame
@@ -3673,10 +3712,13 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
             watcher.cancel()
             with suppress(asyncio.CancelledError, Exception):
                 await watcher
+            completed = response
             if not work.done():
                 work.cancel()
             with suppress(asyncio.CancelledError, Exception):
-                await work
+                settled = await work
+                if completed is None:
+                    completed = settled
             if producer is not None:
                 if not producer.done():
                     producer.cancel()
@@ -3685,6 +3727,11 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
             if inner_iterator is not None:
                 with suppress(Exception):
                     await inner_iterator.aclose()
+            elif completed is not None:
+                # Cancelled after the pipeline finished but before ownership
+                # moved to the producer (e.g. mid phase-one keepalive yield):
+                # the HTTP path may already hold an open upstream connection.
+                await _discard_response(completed)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
@@ -3779,8 +3826,14 @@ async def handle_sync_request(path: str, request: Request):
         # (Whisper ignores stream) keeps the synchronous path and its upstream
         # content type. Model-free resource-mode requests also stay sync: the
         # model is chosen later, and committing SSE here would mis-label a
-        # Whisper answer selected by classification.
-        if body.get("model") and payload_requests_streaming(body) and not _resolves_to_whisper(body, path, auth):
+        # Whisper answer selected by classification. Local deployments may
+        # stream NDJSON rather than SSE, so they keep the late-commit path too.
+        if (
+            body.get("model")
+            and payload_requests_streaming(body)
+            and not _resolves_to_whisper(body, path, auth)
+            and _deployments_guarantee_sse(deployments)
+        ):
             response = await _keepalive_streaming_response(request, **execute_kwargs)
             return response
         response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
