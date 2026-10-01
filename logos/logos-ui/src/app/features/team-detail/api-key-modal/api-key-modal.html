@@ -226,6 +226,16 @@
               }
             </select>
             <span class="field-hint">{{ slaFieldHint() }}</span>
+            @if (canResetDeveloperSla()) {
+              <button
+                type="button"
+                class="sla-reset"
+                (click)="resetDeveloperSlaToInherited()"
+                [disabled]="saveLoading()"
+              >
+                Reset to inherited
+              </button>
+            }
           </div>
           <div class="form-field">
             <label class="field-label">Log Level</label>

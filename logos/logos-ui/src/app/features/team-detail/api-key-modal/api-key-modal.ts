@@ -305,6 +305,21 @@ export class ApiKeyModalComponent implements OnChanges {
     return sla === '' ? INHERITED_SLA_HINT : slaHint(sla);
   }
 
+  /**
+   * Developer keys historically used priority `0` for team/policy inheritance
+   * (and changelog `039` left many of them at legacy `1`). The SLA select only
+   * offers the three tiers, so owners need a separate action to write `0` again
+   * after pinning — application keys keep an explicit SLA once chosen.
+   */
+  canResetDeveloperSla(): boolean {
+    return this.key?.key_type === 'developer' && this.fSla() !== '';
+  }
+
+  resetDeveloperSlaToInherited(): void {
+    if (!this.canResetDeveloperSla() || this.saveLoading()) return;
+    this.fSla.set('');
+  }
+
   dollarsToMc = dollarsToMc;
 
   get dialogHeader(): string {
@@ -335,8 +350,14 @@ export class ApiKeyModalComponent implements OnChanges {
     };
 
     const selectedSla = this.fSla();
-    if (selectedSla !== '' && selectedSla !== this.initialSla) {
-      payload.default_priority = SLA_PRIORITY[selectedSla];
+    if (selectedSla !== this.initialSla) {
+      if (selectedSla === '') {
+        // Developer-key reset-to-inherited (see canResetDeveloperSla). Application
+        // keys cannot reach '' from an explicit tier through the UI.
+        payload.default_priority = 0;
+      } else {
+        payload.default_priority = SLA_PRIORITY[selectedSla];
+      }
     }
 
     const ops: Promise<unknown>[] = [this.svc.updateApiKey(key.id, payload)];

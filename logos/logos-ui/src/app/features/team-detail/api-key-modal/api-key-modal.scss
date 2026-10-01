@@ -214,6 +214,24 @@
   line-height: 1.35;
 }
 
+.sla-reset {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgb(var(--color-text-accent));
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
 .field-input {
   width: 100%;
   padding: 7px 11px;
