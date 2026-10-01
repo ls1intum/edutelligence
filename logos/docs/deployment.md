@@ -343,7 +343,7 @@ dev compose while probing a different URL:
 
 ```bash
 COMPOSE_FILE=docker-compose.yaml \
-  scripts/gateway-failover-demo.sh http://localhost:8081 30
+  scripts/gateway-failover-demo.sh https://logos.example.org 30
 ```
 
 ## Environment variables
