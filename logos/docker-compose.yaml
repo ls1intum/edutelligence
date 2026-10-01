@@ -338,20 +338,29 @@ services:
     depends_on:
       logos-db:
         condition: service_healthy
+      logos-redis:
+        condition: service_healthy
     environment:
       DB_HOST: logos-db
       DB_PORT: 5432
       DB_NAME: logosdb
       DB_USER: postgres
       DB_PASSWORD: root
+      REDIS_HOST: logos-redis
+      REDIS_PORT: 6379
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      # Deploy-key PEM encryption. Production must set LOGOS_REPO_CREDENTIALS_KEY.
+      LOGOS_REPO_CREDENTIALS_KEY: "${LOGOS_REPO_CREDENTIALS_KEY:-}"
+      LOGOS_REPO_CREDENTIALS_DEV_FALLBACK: "${LOGOS_REPO_CREDENTIALS_DEV_FALLBACK:-}"
       # Inference gateway (Phase 1 of the cloud/local split). When false, the
       # webservice still accepts /v1|/openai|/jobs but proxies every request to
       # the orchestrator after API-key auth.
       LOGOS_GATEWAY_ENABLED: "${LOGOS_GATEWAY_ENABLED:-true}"
       LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS: "${LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS:-15}"
       LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS: "${LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS:-1000000}"
+      LOGOS_GATEWAY_BUDGET_RESERVATION_STALE_MINUTES: "${LOGOS_GATEWAY_BUDGET_RESERVATION_STALE_MINUTES:-30}"
+      LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS: "${LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS:-60}"
       # Per-IP rate limits: /info (no credential) and repeated auth failures on
       # /logosdb/get_model_health. See application.properties (logos.rate-limiting.*).
       LOGOS_RATE_LIMITING_ENABLED: "${LOGOS_RATE_LIMITING_ENABLED:-true}"
@@ -489,6 +498,21 @@ services:
     networks:
       - internal
 
+  # Shared cloud RPM/TPM window for logos-webservice replicas. Ephemeral:
+  # a restart clears the sliding window (limits reset for up to 60 s).
+  logos-redis:
+    image: redis:7-alpine
+    container_name: logos-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    networks:
+      - internal
+
   logos-agent:
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-agent:${IMAGE_TAG:-latest}
     container_name: logos-agent
@@ -518,6 +542,10 @@ services:
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
+      # Same encryption secret as logos-webservice — needed to decrypt
+      # per-link deploy keys for private analysis checkouts.
+      LOGOS_REPO_CREDENTIALS_KEY: "${LOGOS_REPO_CREDENTIALS_KEY:-}"
+      LOGOS_REPO_CREDENTIALS_DEV_FALLBACK: "${LOGOS_REPO_CREDENTIALS_DEV_FALLBACK:-}"
 
       # Identity: this service is reached from the browser, so it verifies
       # Keycloak tokens itself rather than behind the Spring webservice.

@@ -141,6 +141,7 @@
 .main-content {
   position: relative;
   flex: 1;
+  overflow-x: hidden;
   overflow-y: auto;
   min-width: 0;
   min-height: 0;

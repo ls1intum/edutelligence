@@ -299,20 +299,28 @@ short-TTL budget cache are the remaining per-instance state (see
 Optional `.env` knobs:
 
 - `LOGOS_WEBSERVICE_REPLICAS` (default `1`) — webservice replica count for the
-  core `docker-compose.yaml`. Cloud RPM is enforced shared across replicas
-  (a DB row-lock in `GatewayCloudAccounting`); cloud TPM stays per-replica
-  (`GatewayCloudRateLimiter`), so a key's effective TPM ceiling scales with
-  the replica count. Raise this above `1` only on a deployment where gateway
-  failover matters more than a tight per-key TPM limit.
+  core `docker-compose.yaml`. Cloud RPM and TPM are both enforced shared
+  across replicas via Redis (`logos-redis`, sliding 60 s window).
+- `REDIS_HOST` / `REDIS_PORT` (default `logos-redis` / `6379` in compose) —
+  shared rate-limit store for the inference gateway. Ephemeral: a Redis
+  restart clears the window (limits reset for up to 60 s). When a per-key
+  limit is set and Redis is unreachable, cloud admission fails closed (503).
 - `LOGOS_GATEWAY_ENABLED` (default `true`) — when `false`, the gateway still
   accepts the public paths but proxies every request to the orchestrator after
   API-key auth.
 - `LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS` (default `15`) — approximate budget
   overshoot bound; see `GatewayBudgetService`.
-- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — finalized
-  cost reserved in `log_entry_cost` before each direct-cloud forward so
-  concurrent admissions see the spend; reconciled (kept or zeroed) when the
-  stream completes.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS` (default `1000000`) — flat
+  cost reserved in `log_entry` before each direct-cloud forward so concurrent
+  admissions see the spend; replaced by the priced token usage (or zeroed on
+  failure) when the stream completes. Admission takes no lock and does no work
+  that grows with the size of the log: requests on one key run in parallel on
+  every replica, and the budget is approximate within the cache TTL.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_STALE_MINUTES` (default `30`) — a
+  reservation still in flight after this long belongs to a process that is
+  gone and is zeroed.
+- `LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS` (default `60`) — how
+  often each replica sweeps for such stale reservations.
 
 ### Failover verification
 

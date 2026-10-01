@@ -92,6 +92,7 @@ class TeamControllerTest {
         mvc.perform(get("/teams/2001/members").with(TestJwt.adminUser()))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.team").exists())
+           .andExpect(jsonPath("$.team.priority").value((Object) null))
            .andExpect(jsonPath("$.members").isArray());
     }
 

@@ -19,7 +19,18 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import Response, StreamingResponse
 
-from . import capacity, controls, conventions, db, docker_engine, github, model_policy, pulse, triggers
+from . import (
+    analysis_triggers,
+    capacity,
+    controls,
+    conventions,
+    db,
+    docker_engine,
+    github,
+    model_policy,
+    pulse,
+    triggers,
+)
 from .auth import Principal, require_agent_operator
 from .config import settings
 from .schemas import (
@@ -79,6 +90,8 @@ async def lifespan(_app: FastAPI):
     await manager.start()
     triggers.poller.on_queued = manager.scheduler_pass
     await triggers.poller.start()
+    analysis_triggers.poller.on_queued = manager.scheduler_pass
+    await analysis_triggers.poller.start()
     logger.info(
         "agent runner ready: max %s parallel sessions, start below %.0f%% load, " "pause above %.0f%%",
         settings.max_parallel_sessions,
@@ -88,6 +101,7 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await analysis_triggers.poller.stop()
         await triggers.poller.stop()
         await manager.stop()
 
@@ -451,6 +465,9 @@ async def retry_session(session_id: int, principal: Principal = Depends(require_
             reaction_target=row.get("reaction_target"),
             priority=int(row.get("priority") or 50),
             priority_reason=row.get("priority_reason"),
+            repo_url=row.get("repo_url"),
+            repo_slug=row.get("repo_slug"),
+            team_repository_id=row.get("team_repository_id"),
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc

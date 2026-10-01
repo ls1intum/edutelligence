@@ -4,7 +4,9 @@ import { firstValueFrom } from 'rxjs';
 import {
   Team, AdminUser, TeamDetail, TeamMember, TeamApiKey,
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
-  ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam,
+  ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
+  TeamRepositoryPayload, TeamWorkflowsResponse, ReviewRecommendationPayload,
+  StoreDeployKeyPayload, AiLlmCallRecommendation,
 } from '../../shared/models/team.model';
 
 export interface TeamMembersResponse {
@@ -53,6 +55,82 @@ export class TeamManagementService {
 
   getTeamApiKeys(teamId: number): Promise<TeamApiKey[]> {
     return firstValueFrom(this.http.get<TeamApiKey[]>(`/api/admin/teams/${teamId}/api-keys`));
+  }
+
+  getTeamRepositories(teamId: number): Promise<TeamRepository[]> {
+    return firstValueFrom(this.http.get<TeamRepository[]>(`/api/admin/teams/${teamId}/repositories`));
+  }
+
+  createTeamRepository(teamId: number, payload: TeamRepositoryPayload): Promise<TeamRepository> {
+    return firstValueFrom(
+      this.http.post<TeamRepository>(`/api/admin/teams/${teamId}/repositories`, payload),
+    );
+  }
+
+  updateTeamRepository(
+    teamId: number,
+    linkId: number,
+    payload: Partial<TeamRepositoryPayload>,
+  ): Promise<TeamRepository> {
+    return firstValueFrom(
+      this.http.patch<TeamRepository>(`/api/admin/teams/${teamId}/repositories/${linkId}`, payload),
+    );
+  }
+
+  deleteTeamRepository(teamId: number, linkId: number): Promise<void> {
+    return firstValueFrom(
+      this.http.delete<void>(`/api/admin/teams/${teamId}/repositories/${linkId}`),
+    );
+  }
+
+  getTeamWorkflows(teamId: number): Promise<TeamWorkflowsResponse> {
+    return firstValueFrom(
+      this.http.get<TeamWorkflowsResponse>(`/api/admin/teams/${teamId}/workflows`),
+    );
+  }
+
+  analyzeRepositoryHeuristic(teamId: number, linkId: number): Promise<unknown> {
+    return firstValueFrom(
+      this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze`, {}),
+    );
+  }
+
+  analyzeRepositoryAgent(teamId: number, linkId: number): Promise<unknown> {
+    return firstValueFrom(
+      this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze/agent`, {}),
+    );
+  }
+
+  reviewRecommendation(
+    teamId: number,
+    recId: number,
+    payload: ReviewRecommendationPayload,
+  ): Promise<AiLlmCallRecommendation> {
+    return firstValueFrom(
+      this.http.post<AiLlmCallRecommendation>(
+        `/api/admin/teams/${teamId}/recommendations/${recId}/review`,
+        payload,
+      ),
+    );
+  }
+
+  storeRepositoryCredentials(
+    teamId: number,
+    linkId: number,
+    payload: StoreDeployKeyPayload,
+  ): Promise<{ has_credentials: boolean; public_key_fingerprint?: string }> {
+    return firstValueFrom(
+      this.http.put<{ has_credentials: boolean; public_key_fingerprint?: string }>(
+        `/api/admin/teams/${teamId}/repositories/${linkId}/credentials`,
+        payload,
+      ),
+    );
+  }
+
+  revokeRepositoryCredentials(teamId: number, linkId: number): Promise<void> {
+    return firstValueFrom(
+      this.http.delete<void>(`/api/admin/teams/${teamId}/repositories/${linkId}/credentials`),
+    );
   }
 
   getTeamModelPermissions(teamId: number): Promise<number[]> {
