@@ -30,9 +30,11 @@ import {
   SLA_OPTIONS,
   SLA_PRIORITY,
   DEFAULT_SLA,
+  INHERITED_SLA_HINT,
+  effectiveSla,
+  isUnsetPriority,
   slaHint,
   slaLabel,
-  slaOfPriority,
   slaRank,
 } from '../key-sla';
 import { loadKeyOrder, orderRank, saveKeyOrder } from './key-order';
@@ -99,6 +101,7 @@ export class AppKeysTabComponent {
   readonly slaOptions = SLA_OPTIONS;
   readonly slaLabel = slaLabel;
   readonly slaHint = slaHint;
+  readonly inheritedSlaHint = INHERITED_SLA_HINT;
 
   /** Key ids in the drag-and-drop order, most recently persisted for this team. */
   manualOrder = signal<number[]>([]);
@@ -122,8 +125,20 @@ export class AppKeysTabComponent {
     });
   });
 
+  /**
+   * Effective tier for display and sort. An unset key follows the team's
+   * priority (matching the orchestrator); an in-flight override wins.
+   */
   slaOf(key: TeamApiKey): KeySla {
-    return this.slaOverrides().get(key.id) ?? slaOfPriority(key.default_priority);
+    return (
+      this.slaOverrides().get(key.id) ??
+      effectiveSla(key.default_priority, this.team?.priority)
+    );
+  }
+
+  /** True when the key still inherits team/policy priority (no explicit pick). */
+  isInherited(key: TeamApiKey): boolean {
+    return !this.slaOverrides().has(key.id) && isUnsetPriority(key.default_priority);
   }
 
   /** True for the first row of an SLA tier, which draws the tier separator. */
@@ -135,14 +150,17 @@ export class AppKeysTabComponent {
   /**
    * Persist an SLA the person picked.
    *
-   * A key that has no priority of its own reads as the default tier, so
-   * picking that tier looks like a no-op but is a real choice: it pins the
-   * key instead of leaving it to follow the team's or the policy's priority.
-   * The guard therefore compares the stored value, not just the tier.
+   * An unset key shows as inherited, so any of the three tiers — including
+   * the one that matches the effective inherited tier — is a real write that
+   * pins the key. The guard therefore compares the stored value, not just
+   * the displayed tier.
    */
   async changeSla(key: TeamApiKey, sla: KeySla): Promise<void> {
     if (!this.canEdit || this.slaSaving().has(key.id)) return;
-    if (this.slaOf(key) === sla && key.default_priority === SLA_PRIORITY[sla]) return;
+    if (!(sla in SLA_PRIORITY)) return;
+    if (!isUnsetPriority(key.default_priority) && key.default_priority === SLA_PRIORITY[sla]) {
+      return;
+    }
     const previous = this.slaOverrides().get(key.id);
     this.slaError.set('');
     this.slaOverrides.update((m) => new Map(m).set(key.id, sla));
@@ -194,6 +212,10 @@ export class AppKeysTabComponent {
     // would raise a key to the tier above whenever it is dropped directly
     // below a stricter tier, even when both rows share a tier.
     const moved = list[from];
+    // A second drag while the first SLA update is still in flight would save
+    // the new order but `changeSla` would discard the tier change — leave
+    // order and SLA alone until the pending write finishes.
+    if (this.slaSaving().has(moved.id)) return;
     const target = this.slaOf(list[to]);
 
     moveItemInArray(list, from, to);

@@ -1,7 +1,7 @@
 import { CdkDragDrop } from '@angular/cdk/drag-drop';
 import { TestBed } from '@angular/core/testing';
 
-import { TeamApiKey } from '../../../../shared/models/team.model';
+import { TeamApiKey, TeamDetail } from '../../../../shared/models/team.model';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { AppKeysTabComponent } from './app-keys-tab';
 import { SLA_PRIORITY } from '../key-sla';
@@ -60,8 +60,20 @@ describe('AppKeysTabComponent reordering', () => {
 
   const ids = (component: AppKeysTabComponent) => component.orderedKeys().map((k) => k.id);
 
+  const memoryStore = new Map<string, string>();
+
   beforeEach(() => {
-    localStorage.clear();
+    memoryStore.clear();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => memoryStore.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        memoryStore.set(key, value);
+      },
+      removeItem: (key: string) => {
+        memoryStore.delete(key);
+      },
+      clear: () => memoryStore.clear(),
+    });
     vi.clearAllMocks();
     updateApiKey.mockResolvedValue(undefined);
     TestBed.configureTestingModule({
@@ -69,7 +81,9 @@ describe('AppKeysTabComponent reordering', () => {
     });
   });
 
-  afterEach(() => localStorage.clear());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it('sorts by tier first and by the manual order only within a tier', () => {
     const { component, critical, highPrioA, highPrioB } = setup();
@@ -127,15 +141,33 @@ describe('AppKeysTabComponent reordering', () => {
 
   it('pins the default tier on a key that has no priority of its own', async () => {
     const { component } = setup();
-    // 0 reads as the default tier, so picking that tier looks like a no-op —
-    // but it is the only way to stop the key following the team's priority.
+    // An unset key shows as inherited, so picking any of the three tiers —
+    // including the effective one — is a real write that stops inheritance.
     const unset = makeKey(4, 0);
     component.apiKeys = [unset];
+    component.team = { priority: 10 } as TeamDetail;
+
+    expect(component.isInherited(unset)).toBe(true);
+    expect(component.slaOf(unset)).toBe('ux-critical');
 
     await component.changeSla(unset, 'ux-high-prio');
 
     expect(updateApiKey).toHaveBeenCalledWith(unset.id, {
       default_priority: SLA_PRIORITY['ux-high-prio'],
+    });
+    expect(component.isInherited(unset)).toBe(false);
+  });
+
+  it('pins ux-critical on an inherited key whose team is already critical', async () => {
+    const { component } = setup();
+    const unset = makeKey(4, 0);
+    component.apiKeys = [unset];
+    component.team = { priority: 10 } as TeamDetail;
+
+    await component.changeSla(unset, 'ux-critical');
+
+    expect(updateApiKey).toHaveBeenCalledWith(unset.id, {
+      default_priority: SLA_PRIORITY['ux-critical'],
     });
   });
 
@@ -154,5 +186,28 @@ describe('AppKeysTabComponent reordering', () => {
 
     expect(component.slaOf(highPrioA)).toBe('ux-high-prio');
     expect(component.slaError()).toContain(highPrioA.name);
+  });
+
+  it('rejects a second move while an SLA update is still in flight', async () => {
+    const { component, highPrioA, highPrioB, critical } = setup();
+    let finishSave!: () => void;
+    updateApiKey.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+
+    const first = component.onDrop(drop(1, 0)); // highPrioA → critical
+    await Promise.resolve();
+    expect(component.slaSaving().has(highPrioA.id)).toBe(true);
+
+    await component.onDrop(drop(0, 2)); // attempt to move the saving key again
+
+    expect(ids(component)).toEqual([highPrioA.id, critical.id, highPrioB.id]);
+    expect(updateApiKey).toHaveBeenCalledTimes(1);
+
+    finishSave();
+    await first;
   });
 });

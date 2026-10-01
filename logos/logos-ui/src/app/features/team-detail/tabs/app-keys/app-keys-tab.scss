@@ -524,6 +524,24 @@
   &--background {
     background: rgb(var(--color-typography-700));
   }
+
+  // Unset keys follow the team/policy tier for colour, but as a hollow ring
+  // so the promise reads as inherited rather than pinned on the key.
+  &--inherited {
+    background: transparent;
+
+    &.sla-dot--critical {
+      border: 2px solid rgb(var(--color-error));
+    }
+
+    &.sla-dot--high-prio {
+      border: 2px solid rgb(var(--color-primary-500));
+    }
+
+    &.sla-dot--background {
+      border: 2px solid rgb(var(--color-typography-700));
+    }
+  }
 }
 
 .sla-select {
@@ -575,20 +593,18 @@
 }
 
 @media (max-width: 768px) {
-  // The table collapses to cards, so the handle joins the chevron in the card's
-  // floating top-left corner rather than disappearing: reordering a key, and
-  // with it moving a key between SLA tiers, has to stay reachable here too.
-  // The drag starts from the handle alone, so the rest of the card still
-  // scrolls normally.
+  // The card layout already puts the chevron in the flex flow next to the
+  // key name (`position: static` above). Keep the drag handle in that same
+  // flow — before the chevron — instead of absolutely overlaying it. An
+  // absolute handle with `left: 42px` on a static chevron was a no-op and
+  // the two controls overlapped.
   .col-drag {
-    position: absolute;
-    top: 8px;
-    left: 10px;
+    position: static;
+    order: -2;
+    flex: 0 0 auto;
     padding: 0;
-  }
-
-  .table-row > .col-chevron {
-    left: 42px;
+    margin-right: 2px;
+    align-self: center;
   }
 
   .key-drag {

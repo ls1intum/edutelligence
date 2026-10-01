@@ -109,27 +109,46 @@
                 [class.sla-dot--critical]="slaOf(key) === 'ux-critical'"
                 [class.sla-dot--high-prio]="slaOf(key) === 'ux-high-prio'"
                 [class.sla-dot--background]="slaOf(key) === 'ux-background'"
+                [class.sla-dot--inherited]="isInherited(key)"
                 aria-hidden="true"
               ></span>
               @if (canEdit) {
+                <!-- Inherited keys use an empty selected value so every real
+                     tier — including the one that matches the effective
+                     inherited tier — fires change and can pin the key. -->
                 <select
                   class="field-input sla-select"
                   [attr.aria-label]="'SLA for ' + key.name"
-                  [title]="slaHint(slaOf(key))"
+                  [title]="isInherited(key) ? inheritedSlaHint : slaHint(slaOf(key))"
                   [disabled]="slaSaving().has(key.id)"
-                  [value]="slaOf(key)"
+                  [value]="isInherited(key) ? '' : slaOf(key)"
                   (click)="$event.stopPropagation()"
                   (change)="changeSla(key, $any($event.target).value)"
                 >
+                  @if (isInherited(key)) {
+                    <option value="" disabled selected>
+                      inherited ({{ slaLabel(slaOf(key)) }})
+                    </option>
+                  }
                   @for (option of slaOptions; track option.value) {
-                    <option [value]="option.value" [selected]="option.value === slaOf(key)">
+                    <option
+                      [value]="option.value"
+                      [selected]="!isInherited(key) && option.value === slaOf(key)"
+                    >
                       {{ option.label }}
                     </option>
                   }
                 </select>
               } @else {
-                <span class="sla-static" [title]="slaHint(slaOf(key))">
-                  {{ slaLabel(slaOf(key)) }}
+                <span
+                  class="sla-static"
+                  [title]="isInherited(key) ? inheritedSlaHint : slaHint(slaOf(key))"
+                >
+                  @if (isInherited(key)) {
+                    inherited ({{ slaLabel(slaOf(key)) }})
+                  } @else {
+                    {{ slaLabel(slaOf(key)) }}
+                  }
                 </span>
               }
             </div>

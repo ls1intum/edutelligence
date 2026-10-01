@@ -10,8 +10,25 @@ import { loadKeyOrder, orderRank, saveKeyOrder } from './key-order';
  */
 describe('application key manual order', () => {
   const TEAM = 42;
+  const memoryStore = new Map<string, string>();
 
-  afterEach(() => localStorage.clear());
+  beforeEach(() => {
+    memoryStore.clear();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => memoryStore.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        memoryStore.set(key, value);
+      },
+      removeItem: (key: string) => {
+        memoryStore.delete(key);
+      },
+      clear: () => memoryStore.clear(),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   it('round-trips an order through storage', () => {
     saveKeyOrder(TEAM, [3, 1, 2]);
