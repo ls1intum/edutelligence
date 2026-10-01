@@ -285,6 +285,16 @@
   flex-shrink: 0;
 }
 
+// The commit the worker was built from; the tooltip carries the full value.
+.stats-glass-row__version {
+  align-self: center;
+  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+  cursor: help;
+}
+
 // ── Three-column panel layout ─────────────────────────────────────────────────
 .stats-panel-row {
   display: flex;

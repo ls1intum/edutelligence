@@ -1,4 +1,10 @@
-import type { RequestLogStats, VramV2Sample, VramSeriesPoint, VramProviderPayload } from './statistics.models';
+import type {
+  RequestLogStats,
+  VramV2Sample,
+  VramSeriesPoint,
+  VramProviderPayload,
+  WorkerVersionChip,
+} from './statistics.models';
 import { cssVar } from './statistics.constants';
 
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
@@ -82,6 +88,35 @@ export function formatUptime(ts: string | null | undefined, nowMs: number): stri
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m`;
   return '<1m';
+}
+
+const SHORT_COMMIT_LENGTH = 8;
+
+/**
+ * The "version: <commit>" chip for a worker's header, or null to show none.
+ *
+ * An offline worker has no live status to read a version from, and its
+ * "offline" badge already explains the gap. An online worker without a commit
+ * still gets a chip, so the gap reads as a known limit and not a bug:
+ * "unknown" is either reported explicitly (built outside CI) or implied by
+ * silence (a worker that predates version reporting, or whose first status has
+ * not arrived yet).
+ */
+export function describeWorkerVersion(
+  checksum: string | null | undefined,
+  online: boolean,
+): WorkerVersionChip | null {
+  if (!online) return null;
+  if (checksum === 'unknown') {
+    return { label: 'version: unknown', title: 'Built outside CI, so no commit was recorded.' };
+  }
+  if (!checksum) {
+    return {
+      label: 'version: unknown',
+      title: 'No version reported yet. Workers that predate version reporting never report one; redeploy to see it.',
+    };
+  }
+  return { label: `version: ${checksum.slice(0, SHORT_COMMIT_LENGTH)}`, title: checksum };
 }
 
 // ── Recent-requests state filter ──────────────────────────────────────────────

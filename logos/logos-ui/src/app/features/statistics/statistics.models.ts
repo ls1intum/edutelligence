@@ -184,6 +184,7 @@ export interface VramV2Provider {
   last_heartbeat?: string | null;
   connected_at?: string | null;
   worker_started_at?: string | null;
+  worker_version_checksum?: string | null;
   devices?: DeviceInfo[];
   data: VramV2Sample[];
 }
@@ -235,8 +236,12 @@ export type VramProviderMeta = {
   last_heartbeat?: string | null;
   connected_at?: string | null;
   worker_started_at?: string | null;
+  worker_version_checksum?: string | null;
   calibrating?: boolean;
 };
+
+/** What a worker's header shows for its build; see describeWorkerVersion. */
+export type WorkerVersionChip = { label: string; title: string };
 
 // VramProviderPayload from logos-ui-old/app/statistics.tsx lines 68-108
 export type VramProviderPayload = {

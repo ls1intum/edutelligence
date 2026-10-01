@@ -73,6 +73,12 @@ Worker nodes update the same way from their worker directory: bump
 `docker compose up -d`. Lane configuration and calibrated model profiles
 persist in the worker's `data/` volume, so an update does not reset them.
 
+Each worker image carries the commit it was built from, and the Statistics page
+shows it beside the worker's name as `version: <commit>` (the full commit on
+hover). Comparing it across workers shows which ones have picked up an update.
+A worker built outside CI, or one that predates this, shows `version: unknown`;
+to give your own build a commit, pass `--build-arg GIT_SHA=$(git rev-parse HEAD)`.
+
 ## Security & rate limiting
 
 The orchestrator's API surface is tiered:

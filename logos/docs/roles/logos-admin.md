@@ -17,6 +17,12 @@ The UI shows the role badge "Logos Admin" in the header menu.
 Platform-wide usage: request volume, token counts, and latency over time,
 with live updates over the WebSocket statistics feed.
 
+On the **Local Providers** tab, every worker node gets its own section with
+memory, lane health, and GPU metrics. The commit its image was built from is
+shown beside the worker's name as `version: <commit>` (hover for the full
+commit), so you can tell which workers have picked up an update. A worker that
+cannot report one shows `version: unknown`.
+
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 
 ## Models

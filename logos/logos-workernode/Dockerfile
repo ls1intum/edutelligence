@@ -260,6 +260,13 @@ COPY logos_worker_node/ /app/logos_worker_node/
 COPY tools/ /app/tools/
 RUN mkdir -p /app/certs /app/data
 
+# The commit this image was built from; the worker reads it and reports it to
+# Logos. Declared down here on purpose: a changed ARG value rebuilds every RUN
+# below it, and the commit changes on every build, so it must sit after the
+# heavy vLLM layers to keep them cached.
+ARG GIT_SHA=unknown
+RUN printf '%s' "$GIT_SHA" > /app/BUILD_COMMIT
+
 # ---------------------------------------------------------------------------
 # Runtime environment
 # ---------------------------------------------------------------------------

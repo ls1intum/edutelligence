@@ -21,6 +21,7 @@ import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './stat
 import {
   applyTimeSeriesLabels,
   chooseDynamicTargetBuckets,
+  describeWorkerVersion,
   extractProviderHostRamMb,
   extractProviderVramMb,
   formatPercent,
@@ -52,6 +53,7 @@ import type {
   VramProviderMeta,
   VramV2Payload,
   VramV2Sample,
+  WorkerVersionChip,
 } from './statistics.models';
 
 // Child components
@@ -78,6 +80,7 @@ type ProviderGlassRow = {
   name: string;
   online: boolean;
   calibrating: boolean;
+  versionChip: WorkerVersionChip | null;
   lanes: Record<string, LaneSignalData>;
   hasLanes: boolean;
   laneCount: number;
@@ -567,6 +570,7 @@ export class Statistics implements OnInit, OnDestroy {
     });
 
     return names.map((name) => {
+      const online = this._isProviderOnline(name);
       const sample = latestByProvider[name];
       const lanes = lanesByProvider[name] ?? {};
       const vram = extractProviderVramMb(sample);
@@ -578,8 +582,9 @@ export class Statistics implements OnInit, OnDestroy {
 
       return {
         name,
-        online: this._isProviderOnline(name),
+        online,
         calibrating: metaByName[name]?.calibrating === true,
+        versionChip: describeWorkerVersion(metaByName[name]?.worker_version_checksum, online),
         lanes,
         hasLanes: Object.keys(lanes).length > 0,
         laneCount: Object.keys(lanes).length,
@@ -1293,6 +1298,7 @@ export class Statistics implements OnInit, OnDestroy {
         last_heartbeat: provider.last_heartbeat,
         connected_at: provider.connected_at,
         worker_started_at: provider.worker_started_at,
+        worker_version_checksum: provider.worker_version_checksum,
         calibrating: Boolean(provider.calibrating),
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
@@ -1322,6 +1328,7 @@ export class Statistics implements OnInit, OnDestroy {
         last_heartbeat: provider.last_heartbeat,
         connected_at: provider.connected_at,
         worker_started_at: provider.worker_started_at,
+        worker_version_checksum: provider.worker_version_checksum,
         calibrating: Boolean(provider.calibrating),
       };
       const current = prevMeta[provider.name];
@@ -1335,6 +1342,7 @@ export class Statistics implements OnInit, OnDestroy {
         current?.last_heartbeat === meta.last_heartbeat &&
         current?.connected_at === meta.connected_at &&
         current?.worker_started_at === meta.worker_started_at &&
+        current?.worker_version_checksum === meta.worker_version_checksum &&
         Boolean(current?.calibrating) === meta.calibrating;
       if (!same) {
         if (nextMeta === prevMeta) nextMeta = { ...prevMeta };

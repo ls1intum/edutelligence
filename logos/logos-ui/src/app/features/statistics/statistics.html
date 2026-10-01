@@ -369,6 +369,9 @@
             <div class="stats-glass-row">
               <div class="stats-glass-row__header">
                 <span class="stats-glass-row__label">{{ row.name }}</span>
+                @if (row.versionChip; as chip) {
+                  <span class="stats-glass-row__version" [title]="chip.title">{{ chip.label }}</span>
+                }
                 @if (!row.online) {
                   <span class="stats-provider-badge stats-provider-badge--offline">offline</span>
                 }
