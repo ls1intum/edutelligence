@@ -3,19 +3,21 @@ tolerates, where the limit comes from, and its behaviour at the limit.
 
 Ramps concurrency in steps; each step fires ``n`` streaming
 ``POST /v1/chat/completions`` requests at once (``asyncio.gather``) while the
-fake upstream pins its completions open until the whole step is being
-relayed, then waits for all of them to finish or fail.
+fake upstream pins its completions open, samples peak
+``StreamingResponseBody`` occupancy on every webservice replica, then
+releases the hold and waits for all of them to finish or fail.
 
 The hold is what makes the step a concurrency measurement: the fake
 upstream's completion lasts about a second, so an unsynchronised wave lets
 early streams close before the last ones are admitted, and its size would
-say nothing about how much the gateway held at once. The hold and the count
-both live in the upstream (``fake_cloud_upstream.py``, ``/_bench/*``)
-because a gateway relay task is alive exactly while it pumps an upstream
-response — whereas a paused *client* proves nothing, since the gateway can
-buffer a small completion into the socket and free its slot regardless.
-Each step therefore reports ``peak_concurrent_relays`` — overlap measured
-at the far end of the gateway — next to ``n``.
+say nothing about how much the gateway held at once. The hold lives in the
+upstream; the count lives in each webservice
+(``GatewayRelayOccupancy`` around the relay task itself). Counting at the
+upstream over-counts: ``GatewayCloudForwarder.forward()`` opens the
+upstream response before ``StreamingResponseBody`` runs, so bytes can sit
+buffered in the socket without an executor slot. Each step therefore
+reports ``peak_concurrent_relays`` — sum of per-replica peaks — next to
+``n``.
 Stops a fixed number of steps after the first one whose failure rate crosses
 the threshold — far enough to see *how* it degrades (graceful backpressure
 vs. hangs/crashes), not so far that a runaway client outlives the point of
@@ -45,10 +47,11 @@ Environment (all optional, defaults in parentheses):
                                     the limit"
   LOGOS_BENCH_GW_STEPS_PAST_LIMIT  (2)     how many more steps to run once
                                     a step has crossed the threshold
-  LOGOS_BENCH_GW_HOLD_TIMEOUT_S    (30.0)  how long the upstream barrier may
-                                    wait for a step to be fully relayed
-                                    before giving up; must stay below both
-                                    the client and the gateway read timeouts
+  LOGOS_BENCH_GW_HOLD_TIMEOUT_S    (30.0)  how long to wait for gateway relay
+                                    tasks to reach the step size before
+                                    releasing the upstream hold; must stay
+                                    below both the client and the gateway
+                                    read timeouts
   LOGOS_GATEWAY_ASYNC_MAX_SIZE          (64)   informational only — must match
   LOGOS_GATEWAY_ASYNC_QUEUE_CAPACITY    (200)  the webservice's own config to
                                                 mean anything in the report
@@ -58,6 +61,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from typing import Any, Dict, List
 
 import gateway_client as gw
@@ -104,35 +108,65 @@ def _steps(aggregate_ceiling: int) -> List[int]:
     return sorted({max(8, round(aggregate_ceiling * f)) for f in fractions})
 
 
+async def _sample_gateway_peak(target: int, hold_timeout_s: float, fire_task: asyncio.Task) -> Dict[str, Any]:
+    """Poll replica occupancy until the step is fully relayed or time runs out."""
+    deadline = time.monotonic() + hold_timeout_s
+    best: Dict[str, Any] = {"active": 0, "peak_concurrent_relays": 0, "admitted": 0, "replicas": []}
+    while time.monotonic() < deadline:
+        snap = await asyncio.to_thread(gw.gateway_relay_stats)
+        if snap["peak_concurrent_relays"] >= best["peak_concurrent_relays"]:
+            best = snap
+        if snap["active"] >= target or fire_task.done():
+            break
+        await asyncio.sleep(0.05)
+    # One last read in case peak moved on the final admissions.
+    snap = await asyncio.to_thread(gw.gateway_relay_stats)
+    if snap["peak_concurrent_relays"] >= best["peak_concurrent_relays"]:
+        best = snap
+    return best
+
+
 async def _run_step(
     client: httpx.AsyncClient, url: str, headers: Dict[str, str], n: int, hold_timeout_s: float
 ) -> Dict[str, Any]:
-    """One ramp step: arm the upstream barrier, fire ``n``, read the overlap.
+    """One ramp step: hold upstream, fire ``n``, sample gateway relay peak.
 
-    The barrier lives in the fake upstream, not here. A gateway relay task is
-    alive exactly while it pumps an upstream response, so pinning the
-    upstream responses open pins the gateway's slots with them, and the
-    upstream's own peak is the number of slots it really held. Pausing this
-    client instead would prove only that httpx stopped reading: the gateway
-    can push a small completion into the socket buffers and free the slot
-    while the client is still at the barrier.
+    Occupancy is counted inside each webservice around the
+    ``StreamingResponseBody`` callback — the Spring task-executor slot itself.
+    The upstream only pins completions open; counting there would include
+    connections whose first bytes are still buffered before any relay task
+    starts.
     """
-    await gw.arm_upstream_step(client, n, hold_timeout_s)
-    results = await asyncio.gather(*(gw.stream_chat_completion(client, url, headers) for _ in range(n)))
-    stats = await gw.upstream_step_stats(client)
-    await gw.arm_upstream_step(client, 0, hold_timeout_s)  # disarm for the other legs
+    await asyncio.to_thread(gw.reset_gateway_relay_stats)
+    await gw.arm_upstream_step(client, hold_timeout_s)
+    fire_task = asyncio.create_task(
+        asyncio.gather(*(gw.stream_chat_completion(client, url, headers) for _ in range(n)))
+    )
+    try:
+        gateway_stats = await _sample_gateway_peak(n, hold_timeout_s, fire_task)
+        upstream_stats = await gw.release_upstream_step(client)
+    finally:
+        if not fire_task.done():
+            # Ensure the hold cannot outlive the step if release failed.
+            try:
+                await gw.release_upstream_step(client)
+            except Exception:  # noqa: BLE001
+                pass
+        results = list(await fire_task)
 
     ok = [r for r in results if r.ok]
     failed = [r for r in results if not r.ok]
     truncated = [r for r in results if r.stream_complete is False and r.status_code is not None]
     fail_rate = len(failed) / n if n else 0.0
     error_samples = sorted({r.error for r in failed if r.error})[:5]
+    peak = int(gateway_stats.get("peak_concurrent_relays", 0))
 
     return {
         "concurrency": n,
-        "peak_concurrent_relays": stats.get("peak_concurrent_relays", 0),
-        "upstream_admitted": stats.get("admitted", 0),
-        "hold_timed_out": bool(stats.get("timed_out")),
+        "peak_concurrent_relays": peak,
+        "gateway_admitted": gateway_stats.get("admitted", 0),
+        "upstream_admitted": upstream_stats.get("admitted", 0),
+        "hold_timed_out": bool(upstream_stats.get("timed_out")) or peak < n,
         "ok": len(ok),
         "failed": len(failed),
         "truncated_streams": len(truncated),
@@ -145,6 +179,7 @@ async def _run_step(
         # measurement; latency_diff.py is the latency measurement.
         "total_ms": summarize([r.total_ms for r in results]),
         "error_samples": error_samples,
+        "gateway_replicas": gateway_stats.get("replicas", []),
     }
 
 
@@ -199,9 +234,10 @@ async def run() -> Dict[str, Any]:
     return {
         "steps": step_results,
         "onset_concurrency": onset_concurrency,
-        # The headline number: relays the gateway provably had open at the
-        # same time, counted at the upstream end. onset_concurrency is the
-        # size of the wave that first broke, only an upper bound on that.
+        # The headline number: StreamingResponseBody tasks the gateway
+        # replicas had open at the same time, counted around the relay task
+        # itself. onset_concurrency is the size of the wave that first broke,
+        # only an upper bound on that.
         "max_concurrent_relays": peak_held,
         "hold_timeout_s": hold_timeout_s,
         "fail_threshold": fail_threshold,

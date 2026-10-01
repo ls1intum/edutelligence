@@ -14,6 +14,7 @@ Environment (all optional, defaults in parentheses):
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -197,27 +198,87 @@ async def post_chat_completion(client: httpx.AsyncClient, url: str, headers: Dic
         return RequestResult(ok=False, status_code=None, ttfb_ms=None, total_ms=total_ms, error=repr(exc))
 
 
-async def arm_upstream_step(client: httpx.AsyncClient, target: int, hold_timeout_s: float) -> None:
-    """Arm the fake upstream's barrier for the next concurrency step.
+async def arm_upstream_step(client: httpx.AsyncClient, hold_timeout_s: float) -> None:
+    """Arm the fake upstream's hold for the next concurrency step.
 
-    Measuring overlap at the upstream rather than in this process is the
-    point: a gateway relay task lives exactly as long as the upstream
-    response it is pumping, whereas a paused client proves only that httpx
-    stopped reading — the gateway may already have buffered the whole small
-    response and released the slot.
+    The hold pins completions open so gateway ``StreamingResponseBody`` tasks
+    stay in ``transferTo`` long enough to observe a real peak. Overlap is
+    counted on each webservice replica (``GatewayRelayOccupancy``), not here:
+    ``GatewayCloudForwarder.forward()`` opens the upstream response before
+    that executor task runs, so an upstream-side counter over-counts.
     """
     resp = await client.post(
         f"{upstream_url()}/_bench/step",
-        json={"target": target, "hold_timeout_s": hold_timeout_s},
+        json={"hold_timeout_s": hold_timeout_s},
         timeout=10.0,
     )
     resp.raise_for_status()
+
+
+async def release_upstream_step(client: httpx.AsyncClient) -> Dict[str, Any]:
+    resp = await client.post(f"{upstream_url()}/_bench/release", timeout=10.0)
+    resp.raise_for_status()
+    return resp.json()
 
 
 async def upstream_step_stats(client: httpx.AsyncClient) -> Dict[str, Any]:
     resp = await client.get(f"{upstream_url()}/_bench/stats", timeout=10.0)
     resp.raise_for_status()
     return resp.json()
+
+
+_CURL_IMAGE = os.environ.get("LOGOS_BENCH_GW_CURL_IMAGE", "curlimages/curl:8.12.1")
+
+
+def _relay_stats_on_container(cid: str, method: str = "GET", path: str = "") -> Dict[str, Any]:
+    """Hit one replica's relay-stats endpoint via its network namespace.
+
+    The webservice image has no curl, host port 18082 cannot be shared across
+    scaled replicas, and Docker Desktop cannot reach bridge IPs from the host
+    — sharing the container network with a one-shot curl image covers CI and
+    local Mac/Linux alike.
+    """
+    url = f"http://127.0.0.1:8081/internal/gateway_relay_stats{path}"
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        f"--network=container:{cid}",
+        _CURL_IMAGE,
+        "-sS",
+        "-X",
+        method,
+        url,
+    ]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
+
+
+def reset_gateway_relay_stats() -> Dict[str, Any]:
+    """Reset peak/admitted on every running webservice replica."""
+    replicas = []
+    for cid in webservice_containers():
+        snap = _relay_stats_on_container(cid, method="POST", path="/reset")
+        replicas.append({"container": cid[:12], **snap})
+    return _aggregate_relay_stats(replicas)
+
+
+def gateway_relay_stats() -> Dict[str, Any]:
+    """Aggregate StreamingResponseBody occupancy across running replicas."""
+    replicas = []
+    for cid in webservice_containers():
+        snap = _relay_stats_on_container(cid)
+        replicas.append({"container": cid[:12], **snap})
+    return _aggregate_relay_stats(replicas)
+
+
+def _aggregate_relay_stats(replicas: list) -> Dict[str, Any]:
+    return {
+        "active": sum(int(r.get("active", 0)) for r in replicas),
+        "peak_concurrent_relays": sum(int(r.get("peak_concurrent_relays", 0)) for r in replicas),
+        "admitted": sum(int(r.get("admitted", 0)) for r in replicas),
+        "replicas": replicas,
+    }
 
 
 def gateway_headers() -> Dict[str, str]:

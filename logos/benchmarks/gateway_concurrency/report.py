@@ -30,7 +30,7 @@ def build_markdown(result: Dict[str, Any]) -> str:
         onset = conc["onset_concurrency"]
         onset_str = str(onset) if onset is not None else "not reached within the tested steps"
         lines.append(
-            f"Peak streams relayed simultaneously: **{conc.get('max_concurrent_relays', 0)}**. "
+            f"Peak gateway relay tasks simultaneously: **{conc.get('max_concurrent_relays', 0)}**. "
             f"Onset of failures (>{conc['fail_threshold']:.0%} of a step): **{onset_str}** requests per step. "
             f"Configured ceiling: `max-size`={ceiling['spring_task_execution_pool_max_size']} + "
             f"`queue-capacity`={ceiling['spring_task_execution_pool_queue_capacity']} "
@@ -53,15 +53,17 @@ def build_markdown(result: Dict[str, Any]) -> str:
             )
         lines.append("")
         lines.append(
-            "_Step size_ is how many requests were fired at once; _peak relayed_ is how many completions the "
-            "gateway was pumping at the same moment, counted at the fake upstream — a gateway relay task lives "
-            "exactly as long as the upstream response behind it, so only this bounds concurrency. The upstream "
-            "pins each completion open until the whole step is being relayed. ⚠️ marks a step that never became "
-            f"fully concurrent within the {conc.get('hold_timeout_s', 0):.0f}s hold budget — which is what "
-            "reaching the ceiling looks like. _Truncated_ counts 2xx streams that ended without the terminal SSE "
-            "event; they are failures. Latencies here are measured under the barrier and include waiting for a "
-            "held slot, so read them as behaviour under load, not as the gateway's latency — that is the "
-            "added-latency section below."
+            "_Step size_ is how many requests were fired at once; _peak relayed_ is how many "
+            "``StreamingResponseBody`` tasks the webservice replicas had open at the same moment, "
+            "counted around the gateway relay task itself (sum of per-replica peaks). The fake "
+            "upstream only pins each completion open until that peak is sampled — counting overlap "
+            "there would over-count, because the gateway opens the upstream response before the "
+            "executor task runs. ⚠️ marks a step that never became fully concurrent within the "
+            f"{conc.get('hold_timeout_s', 0):.0f}s hold budget — which is what reaching the ceiling "
+            "looks like. _Truncated_ counts 2xx streams that ended without the terminal SSE "
+            "event; they are failures. Latencies here are measured under the barrier and include "
+            "waiting for a held slot, so read them as behaviour under load, not as the gateway's "
+            "latency — that is the added-latency section below."
         )
         lines.append("")
 

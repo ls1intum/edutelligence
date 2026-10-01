@@ -179,7 +179,8 @@ public class GatewayCloudForwarder {
             }
         };
 
-        return ResponseEntity.status(status).headers(responseHeaders).body(stream);
+        return ResponseEntity.status(status).headers(responseHeaders)
+            .body(GatewayRelayOccupancy.track(stream));
     }
 
     /**
