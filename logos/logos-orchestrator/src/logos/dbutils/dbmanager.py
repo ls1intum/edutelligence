@@ -282,6 +282,10 @@ def _model_profile_column_params(data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# A row the central store owns. A profile emptied by a central change (an
+# unsupported verdict cleared) still counts: the worker must adopt it.
+_CENTRAL_PROFILE_ROW = "(mp.profile <> '{}'::jsonb OR mp.sync_revision > 0)"
+
 # Typed model_profiles columns that only a calibration fills; cleared when a
 # calibration is invalidated. max_reported_context_length is a high-water mark
 # and survives on purpose.
@@ -1935,8 +1939,7 @@ class DBManager:
             FROM model_profiles mp
             LEFT JOIN model_calibrations mc ON mc.id = mp.calibration_id
             WHERE mp.provider_id = :provider_id
-              AND mp.profile <> '{}'::jsonb
-        """
+              AND """ + _CENTRAL_PROFILE_ROW
         params: Dict[str, Any] = {"provider_id": provider_id}
         if model_names is not None:
             sql += " AND mp.model_name = ANY(:model_names)"
@@ -1975,7 +1978,11 @@ class DBManager:
         until the next calibration window re-measures them.
         """
         already_central = self.session.execute(
-            text("SELECT 1 FROM model_profiles WHERE provider_id = :provider_id AND profile <> '{}'::jsonb LIMIT 1"),
+            text(
+                "SELECT 1 FROM model_profiles mp WHERE mp.provider_id = :provider_id AND "
+                + _CENTRAL_PROFILE_ROW
+                + " LIMIT 1"
+            ),
             {"provider_id": provider_id},
         ).fetchone()
         if already_central is not None:

@@ -107,8 +107,8 @@ def _fresh_caches(monkeypatch):
 
 def test_profiles_from_a_worker_with_a_local_file_are_only_mirrored():
     db = _FakeDB()
-    changed = logosnode_mod._persist_model_profiles(db, 1, {"org/model": {"base_residency_mb": 1.0}})
-    assert changed == []
+    changed, rejected = logosnode_mod._persist_model_profiles(db, 1, {"org/model": {"base_residency_mb": 1.0}})
+    assert (changed, rejected) == ([], [])
     assert db.legacy_upserts == [(1, {"org/model": {"base_residency_mb": 1.0}})]
     assert db.persisted == []
 
@@ -153,15 +153,39 @@ def test_unchanged_echo_is_written_once():
 def test_rejected_echo_is_retried_and_records_no_calibration():
     db = _FakeDB(accept=False)
     logosnode_mod._persist_model_profiles(db, 1, {"org/model": dict(_CALIBRATED)})
-    logosnode_mod._persist_model_profiles(db, 1, {"org/model": dict(_CALIBRATED)})
+    changed, rejected = logosnode_mod._persist_model_profiles(db, 1, {"org/model": dict(_CALIBRATED)})
+    assert (changed, rejected) == ([], ["org/model"])
     assert len(db.persisted) == 2
     assert db.calibrations == []
 
 
+def test_rejected_echoes_share_one_resync_push(monkeypatch):
+    pushed: list = []
+
+    async def _push(provider_id, model_names=None, calibration_key_hashes=None):
+        pushed.append((provider_id, model_names))
+
+    monkeypatch.setattr(logosnode_mod, "_push_model_profiles", _push)
+    monkeypatch.setattr(logosnode_mod, "_pending_resyncs", {})
+    monkeypatch.setattr(logosnode_mod, "_RESYNC_DELAY_SECONDS", 0)
+
+    async def _scenario():
+        logosnode_mod._schedule_model_profile_resync(1, ["a"])
+        logosnode_mod._schedule_model_profile_resync(1, ["b", "a"])
+        logosnode_mod._schedule_model_profile_resync(2, ["c"])
+        await asyncio.gather(*list(main_mod._background_tasks))
+        logosnode_mod._schedule_model_profile_resync(1, ["a"])
+        await asyncio.gather(*list(main_mod._background_tasks))
+
+    asyncio.run(_scenario())
+    assert sorted(pushed) == [(1, ["a"]), (1, ["a", "b"]), (2, ["c"])]
+    assert logosnode_mod._pending_resyncs == {}
+
+
 def test_fresh_calibration_is_snapshotted_once_and_pushed_back():
     db = _FakeDB(new_revision=1)
-    changed = logosnode_mod._persist_model_profiles(db, 1, {"org/model": dict(_CALIBRATED)})
-    assert changed == ["org/model"]
+    changed, rejected = logosnode_mod._persist_model_profiles(db, 1, {"org/model": dict(_CALIBRATED)})
+    assert (changed, rejected) == (["org/model"], [])
     provider_id, model_name, snapshot, key, key_hash, calibrated_at = db.calibrations[0]
     assert (provider_id, model_name, key_hash) == (1, "org/model", "H1")
     assert snapshot == {
@@ -172,7 +196,7 @@ def test_fresh_calibration_is_snapshotted_once_and_pushed_back():
     assert key["gpu_name"] == "RTX A4000"
     assert calibrated_at.timestamp() == 1790000000.0
 
-    again = logosnode_mod._persist_model_profiles(db, 1, {"org/model": dict(_CALIBRATED)})
+    again, _ = logosnode_mod._persist_model_profiles(db, 1, {"org/model": dict(_CALIBRATED)})
     assert again == []
     assert len(db.calibrations) == 1
 

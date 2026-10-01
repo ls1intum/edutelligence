@@ -66,6 +66,10 @@ _MAX_VLLM_METRICS_BYTES = 4 * 1024 * 1024
 _profile_write_cache = ProfileWriteCache()
 # (provider_id, model) -> last_measured_epoch already snapshotted
 _recorded_calibrations: dict[tuple[int, str], float] = {}
+# provider_id -> models whose echo was rejected, awaiting one coalesced push
+_pending_resyncs: dict[int, set[str]] = {}
+# Lets a push that is already in flight land before a rejected echo re-sends.
+_RESYNC_DELAY_SECONDS = 5.0
 
 
 def _validated_vllm_metrics_text(value: Any, *, provider_id: int) -> str | None:
@@ -165,9 +169,11 @@ def _capture_logosnode_provider_snapshot(
                 model_profiles = runtime_payload.get("model_profiles")
                 if isinstance(model_profiles, dict) and model_profiles:
                     try:
-                        changed_models = _persist_model_profiles(db, provider_id, model_profiles)
+                        changed_models, rejected_models = _persist_model_profiles(db, provider_id, model_profiles)
                         if changed_models:
                             _schedule_model_profile_push(provider_id, changed_models)
+                        if rejected_models:
+                            _schedule_model_profile_resync(provider_id, rejected_models)
                     except Exception:
                         db.session.rollback()
                         logger.warning(
@@ -200,16 +206,19 @@ def _capture_logosnode_provider_snapshot(
     task.add_done_callback(_main._background_tasks.discard)
 
 
-def _persist_model_profiles(db: DBManager, provider_id: int, model_profiles: Dict[str, Any]) -> list[str]:
-    """Store a worker's echoed profiles; returns models to push back to it.
+def _persist_model_profiles(
+    db: DBManager, provider_id: int, model_profiles: Dict[str, Any]
+) -> tuple[list[str], list[str]]:
+    """Store a worker's echoed profiles.
 
-    Profiles a worker echoes unchanged are not written again. A fresh
-    calibration is snapshotted, which bumps the revision the worker adopts.
+    Returns the models with a new central revision, and the models whose
+    echo was rejected as outdated; the worker must be sent both.
     """
     if not is_central_profile_payload(model_profiles):
         _mirror_local_profiles(db, provider_id, model_profiles)
-        return []
+        return [], []
     changed: list[str] = []
+    rejected: list[str] = []
     for model_name, echoed in model_profiles.items():
         if not isinstance(echoed, dict):
             continue
@@ -224,6 +233,7 @@ def _persist_model_profiles(db: DBManager, provider_id: int, model_profiles: Dic
             if not db.persist_central_model_profile(
                 provider_id, model_name, stored, reported_profile(echoed), revision, key_hash
             ):
+                rejected.append(model_name)
                 continue
             _profile_write_cache.remember(provider_id, model_name, digest)
         if not is_new_local_calibration(echoed):
@@ -243,7 +253,7 @@ def _persist_model_profiles(db: DBManager, provider_id: int, model_profiles: Dic
         if new_revision is not None:
             _profile_write_cache.forget(provider_id, model_name)
             changed.append(model_name)
-    return changed
+    return changed, rejected
 
 
 def _mirror_local_profiles(db: DBManager, provider_id: int, model_profiles: Dict[str, Any]) -> None:
@@ -311,6 +321,30 @@ def _schedule_model_profile_push(
     task = asyncio.create_task(_push_model_profiles(provider_id, model_names, calibration_key_hashes))
     _main._background_tasks.add(task)
     task.add_done_callback(_main._background_tasks.discard)
+
+
+def _schedule_model_profile_resync(provider_id: int, model_names: list[str]) -> None:
+    """Re-send profiles a worker has not adopted, e.g. after a failed push.
+
+    Every status repeats the rejected echo; all of them share one push.
+    """
+    pending = _pending_resyncs.get(provider_id)
+    if pending is not None:
+        pending.update(model_names)
+        return
+    _pending_resyncs[provider_id] = set(model_names)
+    task = asyncio.create_task(_run_model_profile_resync(provider_id))
+    _main._background_tasks.add(task)
+    task.add_done_callback(_main._background_tasks.discard)
+
+
+async def _run_model_profile_resync(provider_id: int) -> None:
+    try:
+        await asyncio.sleep(_RESYNC_DELAY_SECONDS)
+    finally:
+        model_names = _pending_resyncs.pop(provider_id, set())
+    if model_names:
+        await _push_model_profiles(provider_id, sorted(model_names))
 
 
 def _string_map(value: Any) -> Dict[str, str]:

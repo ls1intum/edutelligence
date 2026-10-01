@@ -8,7 +8,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from logos.dbutils.dbmanager import DBManager, _upsert_model_profile_sql
+from logos.dbutils.dbmanager import _CENTRAL_PROFILE_ROW, DBManager, _upsert_model_profile_sql
 
 
 def _db():
@@ -72,3 +72,11 @@ def test_known_calibration_is_linked_without_a_new_snapshot():
     _sql, link_params = db.session.execute.call_args_list[2].args
     assert "calibration_id IS DISTINCT FROM :calibration_id" in inspect.getsource(DBManager._link_calibration)
     assert link_params["calibration_id"] == 11
+
+
+def test_profile_emptied_by_a_central_change_stays_central():
+    """Clearing the only verdict of an unsupported-only profile leaves {}
+    at a bumped revision; the worker must still be sent that empty state."""
+    assert "OR mp.sync_revision > 0" in _CENTRAL_PROFILE_ROW
+    for method in (DBManager.get_central_model_profiles, DBManager.import_legacy_model_profiles):
+        assert "_CENTRAL_PROFILE_ROW" in inspect.getsource(method)
