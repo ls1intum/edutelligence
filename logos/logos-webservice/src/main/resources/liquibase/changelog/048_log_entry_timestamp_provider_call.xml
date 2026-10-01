@@ -177,8 +177,8 @@
                     DELETE FROM log_entry_hourly_stats s
                      WHERE s.bucket_hour = ANY (p_hours);
 
-                    <!-- Rollback restores 042's grain + the pre-048 timing
-                         split (forwarding/response), not the bare 035 shape. -->
+                    -- Rollback restores 042's grain + the pre-048 timing
+                    -- split (forwarding/response), not the bare 035 shape.
                     INSERT INTO log_entry_hourly_stats (
                         bucket_hour, model_id, model_name, provider_id, team_id, user_id,
                         result_status, was_cold_start, requests,
