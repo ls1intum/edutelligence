@@ -120,7 +120,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   // No `auto` track: every row is its own grid, so a content-sized column
   // would size differently per row and drift away from the header.
   readonly recGrid =
-    'minmax(10rem, 1.6fr) minmax(9rem, 1fr) minmax(9rem, 1fr) 6.5rem 7.5rem 21rem';
+    'minmax(10rem, 1.6fr) minmax(12rem, 1fr) minmax(9rem, 1fr) 6.5rem 7.5rem 21rem';
 
   ngOnChanges(): void {
     if (this.teamId) {

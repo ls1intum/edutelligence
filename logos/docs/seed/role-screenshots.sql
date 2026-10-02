@@ -562,8 +562,8 @@ WHERE k.name = 'docs-role-tobias.wasner-key'
 INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by)
 SELECT v.name, 'main', 'docs-role-vol-' || v.suffix, 'docs-role-screenshots'
 FROM (VALUES
-    ('edutelligence from main', 'edu'),
-    ('logos-ui from main', 'ui')
+    ('edutelligence', 'edu'),
+    ('logos-ui', 'ui')
 ) AS v(name, suffix)
 WHERE NOT EXISTS (SELECT 1 FROM agent_workspaces w WHERE w.name = v.name);
 
@@ -588,16 +588,16 @@ SELECT w.id, s.task, 'qwen-2.5-72b-instruct', s.status,
        s.tin, s.tout, s.cost
 FROM agent_workspaces w
 JOIN (VALUES
-    ('edutelligence from main', 'queued',
+    ('edutelligence', 'queued',
      'Investigate the statistics WebSocket reconnect loop on the requests tab',
      interval '10 minutes', interval '10 minutes', interval '0', 0, 0, 0::numeric),
-    ('edutelligence from main', 'running',
+    ('edutelligence', 'running',
      'Fix the flaky login spec in the e2e suite — it times out on slow runners',
      interval '2 hours', interval '1 hour 47 minutes', interval '0', 12000, 4000, 0.42),
-    ('edutelligence from main', 'succeeded',
+    ('edutelligence', 'succeeded',
      'Add pagination to the request log export endpoint',
      interval '1 day', interval '1 day', interval '22 hours', 18000, 6000, 0.55),
-    ('logos-ui from main', 'failed',
+    ('logos-ui', 'failed',
      'Remove the duplicated theme tokens from the data table component',
      interval '3 days', interval '3 days', interval '2 days 23 hours', 5000, 1200, 0.11)
 ) AS s(workspace_name, status, task, created_ago, started_ago, finished_ago, tin, tout, cost)

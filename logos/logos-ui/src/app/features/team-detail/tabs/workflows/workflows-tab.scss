@@ -222,7 +222,7 @@
   @media (min-width: 769px) {
     app-data-table {
       display: block;
-      min-width: 63rem;
+      min-width: 66rem;
     }
   }
 }
@@ -243,7 +243,8 @@
   min-width: 0;
   font-size: var(--font-size-sm);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  word-break: break-all;
+  // Break at "/" or "-" first; only a segment too long for the cell is split.
+  overflow-wrap: anywhere;
 
   a {
     color: rgb(var(--color-text-accent));
@@ -440,4 +441,9 @@
   margin: 4px 0 0;
   font-size: var(--font-size-2xs);
   color: rgb(var(--nav-item-text));
+}
+
+.workflow-card .mermaid {
+  display: flex;
+  justify-content: center;
 }
