@@ -791,7 +791,7 @@ else
     ANTHROPIC_DEFAULT_FABLE_MODEL \
     ANTHROPIC_SMALL_FAST_MODEL \
     CLAUDE_CODE_MAX_CONTEXT_TOKENS
-  # Opt into gateway List Models → /model. Requires Claude Code ≥ 2.1.257 when
+  # Opt into gateway List Models -> /model. Requires Claude Code >= 2.1.257 when
   # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set (older builds suppress
   # discovery under that flag).
   export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1

@@ -592,7 +592,7 @@ if ($HasPinnedModel) {
                         'CLAUDE_CODE_MAX_CONTEXT_TOKENS')) {
         Remove-Item -Path "env:$slot" -ErrorAction SilentlyContinue
     }
-    # Opt into gateway List Models → /model. Requires Claude Code ≥ 2.1.257 when
+    # Opt into gateway List Models -> /model. Requires Claude Code >= 2.1.257 when
     # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set.
     $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
 }
