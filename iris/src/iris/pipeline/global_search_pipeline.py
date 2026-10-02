@@ -183,8 +183,10 @@ class _SentinelGateStreamHandler:
 
     def __call__(self, delta):
         if delta is None:
+            was_streaming = self._streaming
             self._buffer = ""
-            if self._streaming:
+            self._streaming = False
+            if was_streaming:
                 self._downstream(None)
             return
         if self._streaming:

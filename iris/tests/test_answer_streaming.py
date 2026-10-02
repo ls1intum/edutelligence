@@ -5,6 +5,8 @@ sentinel-gating stream handler, and the parameterized partial-result sender."""
 
 from types import SimpleNamespace
 
+import pytest
+
 from iris.domain.search.global_search_dto import CourseInfo, EntitySourceDTO
 from iris.domain.status.global_search_status_update_dto import (
     GlobalSearchStatusUpdateDTO,
@@ -135,6 +137,37 @@ class TestSentinelGateStreamHandler:
         gate("An answer")
         gate(None)
         assert chunks == ["An answer", None]
+
+    @pytest.mark.parametrize(
+        "retry_chunks", [["!none!"], ["!no", "ne!"], [" ", "!n", "one!", " "]]
+    )
+    def test_provider_retry_restarts_sentinel_detection(self, retry_chunks):
+        chunks, gate = self.collect()
+        gate("A draft answer")
+        gate(None)
+        for delta in retry_chunks:
+            gate(delta)
+        assert chunks == ["A draft answer", None]
+
+    def test_repeated_resets_before_opening_do_not_emit_a_reset(self):
+        chunks, gate = self.collect()
+        gate("!no")
+        gate(None)
+        gate(None)
+        gate("!none!")
+        assert not chunks
+
+    def test_retry_normal_answer_reopens_gate_and_subsequent_reset_closes_it(self):
+        chunks, gate = self.collect()
+        gate("First answer")
+        gate(None)
+        gate(None)
+        gate("!n")
+        gate("ice retry")
+        gate(" continuation")
+        gate(None)
+        gate("!none!")
+        assert chunks == ["First answer", None, "!nice retry", " continuation", None]
 
 
 class TestPartialResultSenderFactory:
