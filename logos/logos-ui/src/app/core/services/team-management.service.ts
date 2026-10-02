@@ -89,12 +89,6 @@ export class TeamManagementService {
     );
   }
 
-  analyzeRepositoryHeuristic(teamId: number, linkId: number): Promise<unknown> {
-    return firstValueFrom(
-      this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze`, {}),
-    );
-  }
-
   analyzeRepositoryAgent(teamId: number, linkId: number): Promise<unknown> {
     return firstValueFrom(
       this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze/agent`, {}),

@@ -722,7 +722,14 @@ export class Agents implements OnInit {
   originOf(session: AgentSession): string {
     if (session.trigger_kind === 'issue') return 'from an issue';
     if (session.trigger_kind === 'review') return 'from a review';
+    if (session.trigger_kind === 'analysis') return 'repository analysis';
     return session.created_by;
+  }
+
+  /** "team · owner/repo" for a repository analysis, null for other sessions. */
+  analysisTarget(session: AgentSession): string | null {
+    if (session.trigger_kind !== 'analysis' || !session.repo_slug) return null;
+    return session.team_name ? `${session.team_name} · ${session.repo_slug}` : session.repo_slug;
   }
 
   // ── presentation helpers ─────────────────────────────────────────────────

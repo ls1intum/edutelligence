@@ -65,8 +65,8 @@ and set per-key limits / model permissions.
 
 GitHub repositories this team's applications live in. Owners link a repository
 URL, branch, and optional path filters; for private repos they can paste a
-read-only deploy key. From the same tab they can run a heuristic scan or queue
-a LogosOSSAgent analysis session. Linking alone does not start analysis.
+read-only deploy key. LogosOSSAgent picks up a newly linked repository on its
+own within a few minutes; queue an analysis from the same tab to run it sooner.
 
 ![Team detail — Repositories](/img/roles/team-detail-repositories.png)
 

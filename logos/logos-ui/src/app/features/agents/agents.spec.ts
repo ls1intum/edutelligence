@@ -184,6 +184,31 @@ describe('Agents', () => {
     });
   });
 
+  describe('repository analysis sessions', () => {
+    it('names the team and repository being analysed', () => {
+      const analysis = makeSession({
+        trigger_kind: 'analysis',
+        repo_slug: 'ls1intum/hestia',
+        team_name: 'hestia',
+      });
+      expect(component.analysisTarget(analysis)).toBe('hestia · ls1intum/hestia');
+      expect(component.originOf(analysis)).toBe('repository analysis');
+    });
+
+    it('falls back to the slug once the link is gone, and stays out of other sessions', () => {
+      expect(
+        component.analysisTarget(
+          makeSession({ trigger_kind: 'analysis', repo_slug: 'ls1intum/artemis', team_name: null }),
+        ),
+      ).toBe('ls1intum/artemis');
+      expect(
+        component.analysisTarget(
+          makeSession({ trigger_kind: 'issue', repo_slug: 'ls1intum/edutelligence' }),
+        ),
+      ).toBeNull();
+    });
+  });
+
   describe('the standing instructions', () => {
     /**
      * Reset is a statement about one box. The other one may hold an edit
@@ -191,7 +216,7 @@ describe('Agents', () => {
      * operator's back — and refilling it from the answer would throw it
      * away on screen as well.
      */
-    it('resets one half without submitting the other half\'s draft', async () => {
+    it("resets one half without submitting the other half's draft", async () => {
       component.houseRulesDraft.set('rules nobody saved');
       component.environmentNotesDraft.set('notes nobody saved');
 
