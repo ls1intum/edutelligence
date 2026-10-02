@@ -18,6 +18,8 @@ from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
 from iris.tools.chat_tool_providers import CHAT_TOOL_PROVIDERS
+from iris.tools.combined_view_point_out import get_combined_view_context
+from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
 from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.web.status.status_update import StatusCallback
 
@@ -26,7 +28,10 @@ from ...common.pyris_message import IrisMessageRole, PyrisMessage
 from ...domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
-from ...domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
+from ...domain.retrieval.lecture.lecture_retrieval_dto import (
+    LectureRetrievalDTO,
+    printed_page_number,
+)
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
     CompletionArguments,
@@ -145,6 +150,19 @@ def _merge_lecture_content(
             current_view.lecture_unit_page_chunks + retrieved.lecture_unit_page_chunks
         ),
     )
+
+
+def _current_slide_label(chunks: list) -> str:
+    """Describe the slide the student is on the way the student sees it.
+
+    The system prompt tells the agent to name slides by the number printed on them, never by the
+    technical page index used for retrieval and navigation. That rule only holds if the current
+    position is described the same way: with a deck whose printed numbering is shifted (title pages,
+    a cover sheet), labelling the position with the index would hand the agent a wrong number and
+    invite it to quote it.
+    """
+    printed = printed_page_number(getattr(chunks[0], "display_page_number", None))
+    return "an unnumbered page" if printed is None else f"page {printed}"
 
 
 def _tool_activity_snapshot(
@@ -501,6 +519,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             getattr(ctx, "type", None) == "combinedView"
             for ctx in getattr(state, "lecture_contexts", []) or []
         )
+        # Whether the prompt may advertise the point-out tool. Derived from the same function the
+        # provider gates on rather than from `current_view_is_combined`, so the two cannot drift:
+        # a combinedView context carrying neither slides nor video resolves to no lecture unit, and
+        # `provide_combined_view_point_out` then withholds the tool. Gating the block on the mere
+        # presence of the context would send the agent after a tool that was never registered.
+        can_point_out_in_combined_view = (
+            state.allow_lecture_tool
+            and get_combined_view_context(getattr(state, "lecture_contexts", None))
+            is not None
+        )
 
         # Base template context (shared across all contexts)
         template_context: dict[str, Any] = {
@@ -521,6 +549,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "lecture_name": dto.lecture.title if dto.lecture else None,
             "current_view_blocks": current_view_blocks,
             "current_view_is_combined": current_view_is_combined,
+            "can_point_out_in_combined_view": can_point_out_in_combined_view,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
             "programming_language": (
@@ -630,23 +659,25 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
     ) -> list[str]:
-        """Build the blocks describing what the student is currently viewing.
+        """Build the blocks describing where the student currently is.
 
         Looks up the slide page chunks / transcription segments for the student's
-        current position and renders one block per position: the position
-        description (page/timestamp + lecture unit) directly followed by the
-        corresponding lecture material. Only positions whose material is ingested
-        in the vector database are included — otherwise Iris can neither see nor
-        retrieve the material and could not actually be context-aware about it.
+        current position and renders one block per position. Only positions whose
+        material is ingested in the vector database are included — otherwise Iris
+        can neither see nor retrieve the material and could not actually be
+        context-aware about it.
+
+        Only the position itself goes into the system prompt; the material at that
+        position is put on the state for ``read_students_current_position`` to read
+        out instead (see ``iris.tools.current_view_content`` for why).
 
         The content is also stored in ``lecture_content_storage`` so answers about
         the current position get lecture citations even when the agent never calls
         the lecture retrieval tool.
 
         Returns:
-            A list of blocks (position + content). Empty when there is no current
-            position or none of the viewed material is ingested in the vector
-            database.
+            A list of position descriptions. Empty when there is no current position
+            or none of the viewed material is ingested in the vector database.
         """
         context_pages, context_timestamps = self._collect_context_positions(
             getattr(state, "lecture_contexts", [])
@@ -700,19 +731,26 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 (chunk.lecture_unit_id, chunk.page_number), []
             ).append(chunk)
 
+        # Two parallel renderings of the same positions: the bare position for the prompt, and
+        # the position with its material for the tool to read out on request.
         blocks: list[str] = []
-        # One block per viewed position: position description first, then the
-        # corresponding lecture material directly below it.
+        content_blocks: list[str] = []
         for p in context_pages:
             chunks = chunks_by_page.get((p["lecture_unit_id"], p["page"]))
             if not chunks:
                 continue
+            # Labelled by the number printed on the slide, not by the technical page index the
+            # chunks were looked up with: the index stays internal, exactly as in the retrieval
+            # results the agent is told to quote printed numbers from.
+            position = (
+                f"The student is currently viewing {_current_slide_label(chunks)} of the "
+                f'lecture slides of the lecture unit {names[p["lecture_unit_id"]]} '
+                f'(lecture unit ID: {p["lecture_unit_id"]}).'
+            )
             text = "\n".join(chunk.page_text_content for chunk in chunks)
-            blocks.append(
-                f'The student is currently viewing page {p["page"]} of the lecture '
-                f'slides of the lecture unit {names[p["lecture_unit_id"]]} '
-                f'(lecture unit ID: {p["lecture_unit_id"]}). '
-                f"The content of this slide:\n---\n{text}\n---"
+            blocks.append(position)
+            content_blocks.append(
+                f"{position} The content of this slide:\n---\n{text}\n---"
             )
         for t in context_timestamps:
             segments = [
@@ -723,13 +761,21 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             ]
             if not segments:
                 continue
-            text = "\n".join(tr.segment_text for tr in segments)
-            blocks.append(
+            position = (
                 f'The student is currently at {t["timestamp"]} seconds in the '
                 f'lecture video of the lecture unit {names[t["lecture_unit_id"]]} '
-                f'(lecture unit ID: {t["lecture_unit_id"]}). '
-                f"The transcript at this point:\n---\n{text}\n---"
+                f'(lecture unit ID: {t["lecture_unit_id"]}).'
             )
+            text = "\n".join(tr.segment_text for tr in segments)
+            blocks.append(position)
+            content_blocks.append(
+                f"{position} The transcript at this point:\n---\n{text}\n---"
+            )
+
+        # Read by provide_current_view_content when the tools are built, which happens after
+        # the system message, and by the tool itself on every call — the point-out tool marks
+        # this storage as stale once it moved the student off this position.
+        state.current_view_storage[CONTENT_BLOCKS_KEY] = content_blocks
 
         return blocks
 

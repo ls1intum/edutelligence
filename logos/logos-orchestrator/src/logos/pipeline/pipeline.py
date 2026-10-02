@@ -4,6 +4,7 @@ Main request pipeline orchestrating classification → scheduling → execution.
 """
 
 import asyncio
+import datetime
 import logging
 import time
 import uuid
@@ -743,6 +744,22 @@ class RequestPipeline:
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist the limiter's admission decision on the request's log row."""
         self._monitoring.record_rate_limit_admission(request_id, admitted)
+
+    def record_provider_call(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the request is handed to the upstream provider.
+
+        ``at`` pins the observed dispatch instant (the executor paths pass the
+        instant captured after request preparation); omitted it stamps now.
+        """
+        self._monitoring.record_provider_call(request_id, at=at)
+
+    def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the upstream provider's response has fully arrived.
+
+        ``at`` pins the observed arrival instant (the streaming paths pass the
+        last chunk's arrival time); omitted it stamps now.
+        """
+        self._monitoring.record_provider_response(request_id, at=at)
 
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """

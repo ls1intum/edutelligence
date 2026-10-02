@@ -158,6 +158,7 @@ describe('totalCount for a filtered feed without a bucket total yet', () => {
     full_name: 'The Operator',
     api_key_name: 'dev key',
     api_key_type: 'developer',
+    environment: null,
     prompt_tokens: 1200,
     completion_tokens: 42,
     total_tokens: 1242,
@@ -195,5 +196,90 @@ describe('totalCount for a filtered feed without a bucket total yet', () => {
 
   it('shows the bucket total once the first push for it lands', async () => {
     expect((await createComponent(7)).totalCount()).toBe(7);
+  });
+});
+
+/**
+ * Caller chips on a recent-request row.
+ *
+ * Developer keys already name the person; the key name repeats them and is
+ * dropped. Application keys are team credentials — show the environment with
+ * the key icon instead of a user chip.
+ */
+describe('caller chips', () => {
+  const base: RequestItem = {
+    request_id: 'req-caller',
+    model_name: 'model-a',
+    provider_name: 'gpu-01',
+    is_cloud: false,
+    status: 'success',
+    timestamp: '2026-08-29T10:00:00Z',
+    duration: 1,
+    cold_start: false,
+    enqueue_ts: '2026-08-29T10:00:00Z',
+    scheduled_ts: '2026-08-29T10:00:01Z',
+    request_complete_ts: '2026-08-29T10:00:02Z',
+    queue_seconds: 0,
+    total_seconds: 1,
+    initial_priority: null,
+    priority_when_scheduled: null,
+    queue_depth_at_enqueue: null,
+    error_message: null,
+    team_name: 'Logos',
+    username: 'tobias.wasner',
+    full_name: 'Tobias Wasner',
+    api_key_name: 'tobias.wasner-Logos-key',
+    api_key_type: 'developer',
+    environment: null,
+    prompt_tokens: null,
+    completion_tokens: null,
+    total_tokens: null,
+    cost_microcents: null,
+  };
+
+  let component: RecentRequests;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [RecentRequests],
+      providers: [{ provide: StatisticsService, useValue: {} }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(RecentRequests);
+    component = fixture.componentInstance;
+  });
+
+  afterEach(() => {
+    component.ngOnDestroy();
+  });
+
+  it('hides the key chip for developer keys so the user is not repeated', () => {
+    expect(component.showRequester(base)).toBe(true);
+    expect(component.keyChipOf(base)).toBe('');
+  });
+
+  it('shows the environment with the key chip for application keys', () => {
+    const app: RequestItem = {
+      ...base,
+      api_key_type: 'application',
+      api_key_name: 'docs-role-logos-app-key',
+      username: null,
+      full_name: null,
+      environment: 'production',
+    };
+    expect(component.showRequester(app)).toBe(false);
+    expect(component.keyChipOf(app)).toBe('production');
+  });
+
+  it('drops the "-" environment placeholder and falls back to the key name', () => {
+    const app: RequestItem = {
+      ...base,
+      api_key_type: 'application',
+      api_key_name: 'docs-role-logos-app-key',
+      username: null,
+      full_name: null,
+      environment: '-',
+    };
+    expect(component.environmentOf(app)).toBe('');
+    expect(component.keyChipOf(app)).toBe('docs-role-logos-app-key');
   });
 });

@@ -3,8 +3,11 @@
 .team-detail {
   padding: 36px 32px 48px;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
+  // Keep wide children (tab labels, mermaid, tables) from expanding the page.
+  overflow-x: clip;
 }
 
 .breadcrumb {
@@ -91,21 +94,29 @@
   gap: 0;
   border-bottom: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
   margin-bottom: 24px;
+  // Intrinsic nowrap tab labels must scroll inside the viewport, not widen it.
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
   &::-webkit-scrollbar { display: none; }
 }
 
 .tab-btn {
-  padding: 10px 16px 11px;
+  padding: 12px 16px 13px;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-normal);
-  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  line-height: var(--line-height-normal);
+  color: rgb(var(--color-typography-500));
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
   transition: color 0.15s, border-color 0.15s;
 
   &:hover { color: rgb(var(--nav-hover-text)); }
@@ -120,16 +131,29 @@
 // ── Tab content ────────────────────────────────────────────────────────────
 .tab-content {
   min-height: 400px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 app-overview-tab,
 app-members-tab,
 app-app-keys-tab,
+app-repositories-tab,
+app-workflows-tab,
 app-providers-tab,
 app-models-tab,
 app-settings-tab,
+app-activity-tab,
 app-billing-tab {
   display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 767px) {
+  .team-detail {
+    padding: 72px 16px 32px;
+  }
 }
 
 // ── States ─────────────────────────────────────────────────────────────────

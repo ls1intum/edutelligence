@@ -99,7 +99,23 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // charts into a slice of the log they are meant to summarise in full.
         volatile String feedStatus = null;
 
+        // Which half of the statistics page this session is looking at.
+        // "local-providers" → VRAM / lanes / GPUs only; "requests" → aggregates
+        // and the request feed only. Null means both (legacy clients that never
+        // declare an interest, and unit tests that init without one). The page
+        // can show only one tab at a time, so pushing the idle tab's channel is
+        // wasted work on both sides of the socket.
+        volatile String interest = null;
+
         volatile String prevReqSig = "";
+
+        boolean wantsLocalProviders() {
+            return interest == null || "local-providers".equals(interest);
+        }
+
+        boolean wantsRequests() {
+            return interest == null || "requests".equals(interest);
+        }
         // The request ids of the last pushed page — the row set, values
         // excluded. Token counts grow without this moving, and the feed's
         // own count cannot change with them, so a changed row set is the
@@ -205,6 +221,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             case "set_timeline_range" -> handleSetTimelineRange(session, state, msg);
             case "set_scope" -> handleSetScope(session, state, msg);
             case "set_feed_status" -> handleSetFeedStatus(session, state, msg);
+            case "set_interest" -> handleSetInterest(session, state, msg);
             case "ping" -> send(session, Map.of("type", "pong"));
         }
     }
@@ -221,6 +238,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // the whole platform under an unchanged pair of dropdowns.
         applyScope(state, msg);
         applyFeedStatus(state, msg);
+        // Same for the active tab: a reconnect must not flood the idle channel.
+        applyInterest(state, msg);
 
         Map<String, Object> tl = msg.get("timeline") instanceof Map<?,?> m
             ? (Map<String, Object>) m : Map.of();
@@ -239,14 +258,21 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // the reconnect as one more move.
         state.prevScopeSig = "";
 
-        pushTimelineInit(session, state);
+        if (state.wantsRequests()) {
+            pushTimelineInit(session, state);
+            pushRequests(session, state, true);
+        }
         // The window swap and its init publication are one critical section
-        // on the vram lock — see vramLock.
+        // on the vram lock — see vramLock. Still reset the window even when
+        // the viewer is on Requests so a later switch to Local Providers
+        // starts from a clean baseline rather than a cursor from a previous
+        // visit.
         synchronized (state.vramLock) {
             state.vramWindow.set(new VramWindow(vramDay, 0, "", false));
-            pushVramInit(session, state);
+            if (state.wantsLocalProviders()) {
+                pushVramInit(session, state);
+            }
         }
-        pushRequests(session, state, true);
         state.initialized = true;
     }
 
@@ -262,6 +288,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         applyScope(state, msg);
         // The init re-push below already carries the new scope's aggregates.
         state.prevScopeSig = "";
+        // Scope only shapes request-derived panels; skip the push while the
+        // viewer is on Local Providers — the values are applied and will go
+        // out with the next Requests interest switch.
+        if (!state.wantsRequests()) return;
         pushTimelineInit(session, state);
         pushRequests(session, state, true);
     }
@@ -297,7 +327,47 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
      */
     private void handleSetFeedStatus(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         applyFeedStatus(state, msg);
+        if (!state.wantsRequests()) return;
         pushRequests(session, state, true);
+    }
+
+    /**
+     * Which tab the page is showing. Stored and applied the same way as scope:
+     * carried on init so a reconnect restores it, and sent on every switch so
+     * the idle channel stops being pushed. The reply is a full init for the
+     * newly enabled channel — there is no delta that turns VRAM samples into
+     * request aggregates or the other way around.
+     */
+    private void handleSetInterest(WebSocketSession session, SessionState state, Map<String, Object> msg) {
+        String previous = state.interest;
+        applyInterest(state, msg);
+        if (previous != null && previous.equals(state.interest)) return;
+
+        if (state.wantsRequests()) {
+            state.prevScopeSig = "";
+            pushTimelineInit(session, state);
+            pushRequests(session, state, true);
+        }
+        if (state.wantsLocalProviders()) {
+            synchronized (state.vramLock) {
+                // Force a fresh baseline: the cursor from a previous visit (or
+                // from an init that skipped the VRAM push) would otherwise
+                // only stream deltas the client has no series for.
+                VramWindow current = state.vramWindow.get();
+                state.vramWindow.set(new VramWindow(current.day(), 0, "", false));
+                pushVramInit(session, state);
+            }
+        }
+    }
+
+    private static void applyInterest(SessionState state, Map<String, Object> msg) {
+        Object raw = msg.get("interest");
+        // Only the two tab ids are accepted. Absent on init keeps null (= both
+        // channels) for legacy clients; an unknown value is ignored so a typo
+        // cannot widen or clear a declared interest.
+        if (raw instanceof String s && ("local-providers".equals(s) || "requests".equals(s))) {
+            state.interest = s;
+        }
     }
 
     private void handleSetVramDay(WebSocketSession session, SessionState state, Map<String, Object> msg) {
@@ -306,7 +376,9 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             // One critical section on the vram lock — see vramLock.
             synchronized (state.vramLock) {
                 state.vramWindow.set(new VramWindow(s, 0, "", false));
-                pushVramInit(session, state);
+                if (state.wantsLocalProviders()) {
+                    pushVramInit(session, state);
+                }
             }
         }
     }
@@ -322,6 +394,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         } else {
             // The init re-push below already carries the new range's aggregates.
             state.prevScopeSig = "";
+            if (!state.wantsRequests()) return;
             pushTimelineInit(session, state);
             pushRequests(session, state, true);
         }
@@ -337,7 +410,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             if (state == null || !state.initialized || !session.isOpen()) continue;
 
             try {
-                if (t % 2 == 0) {
+                if (state.wantsRequests() && t % 2 == 0) {
                     pushRequests(session, state, false);
                 }
                 // VRAM deltas ride every tick: a lane the worker just loaded
@@ -347,7 +420,9 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // provider-status hop is cached for 3 s, so the per-tick cost
                 // stays small; the push itself is still skipped when nothing
                 // moved (no new samples, cursor, or connection state).
-                pushVramDelta(session, state);
+                if (state.wantsLocalProviders()) {
+                    pushVramDelta(session, state);
+                }
                 // Aggregates are the expensive push (findTotals alone scans the
                 // range twice more for tokens and cost), so they go out at a
                 // tenth of the request cadence and only when something in
@@ -357,7 +432,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // this flag. Without this the page's counters never moved
                 // after load: stats only ever came with timeline_init, i.e. on
                 // connect and on a range change.
-                if (t % 10 == 0 && state.statsDirty) {
+                if (state.wantsRequests() && t % 10 == 0 && state.statsDirty) {
                     state.statsDirty = false;
                     pushStats(session, state);
                 }
@@ -618,6 +693,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             WebSocketSession session = entry.getValue();
             SessionState state = states.get(entry.getKey());
             if (state == null || !state.initialized || !session.isOpen()) continue;
+            if (!state.wantsRequests()) continue;
             try {
                 pushRequests(session, state, false);
             } catch (Exception e) {

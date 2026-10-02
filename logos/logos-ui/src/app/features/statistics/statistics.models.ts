@@ -47,7 +47,10 @@ export type RequestLogStats = {
   };
   statusCounts: Record<string, number>;
   modelBreakdown: Array<{
-    modelId: number;
+    /** null marks a deleted model: the usage survives under modelName. */
+    modelId: number | null;
+    /** Set on deleted-model entries so the UI can show the trash marker. */
+    modelDeleted?: boolean;
     modelName: string;
     requestCount: number;
     avgQueueSeconds: number | null;
@@ -66,7 +69,7 @@ export type RequestLogStats = {
   }>;
   modelTimeSeries?: Array<{
     timestamp: number; // Unix ts (ms)
-    modelId: number;
+    modelId: number | null; // null for deleted models
     modelName: string;
     count: number;
   }>;
@@ -275,6 +278,11 @@ export interface RequestItem {
   full_name: string | null;
   api_key_name: string | null;
   api_key_type: string | null;
+  /**
+   * Application-key environment the request was logged under. Null / "-" for
+   * developer keys (and application keys that never set one).
+   */
+  environment: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;

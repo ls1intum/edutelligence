@@ -2690,6 +2690,269 @@ def test_a_local_batch_runs_its_lines_as_low_priority_requests(monkeypatch):
     assert stored["claims"] == [(2000, batch_local.RUNNER_ID, batch_local.LOCAL_BATCH_LEASE_TTL_S)]
 
 
+def test_a_slow_line_does_not_hold_up_the_lines_behind_it(monkeypatch):
+    # The runner used to start a line only when the whole chunk before it had
+    # finished, so one long request held the queue behind it. A worker takes
+    # the next line as soon as it is free — the same reordering a
+    # provider-executed batch gets from its provider — so the short lines
+    # behind a long one go through while it is still running.
+    monkeypatch.setattr(batch_local, "LOCAL_BATCH_CONCURRENCY", 2)
+    events = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        model = body["model"]
+        events.append(("start", model))
+        if model == "m-slow":
+            await asyncio.sleep(0.4)
+        events.append(("end", model))
+        return {"status_code": 200, "data": {}}
+
+    stored = {}
+
+    class _ReorderDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, batch_object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(
+                _local_line("a", model="m-slow"),
+                _local_line("b", model="m-b"),
+                _local_line("c", model="m-c"),
+                _local_line("d", model="m-d"),
+            )
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            return False
+
+        def save_local_batch_lines(self, object_id, runner_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            stored.setdefault("logged", []).append(kwargs)
+            return {"log-id": 800 + len(stored["logged"])}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
+            stored["finish"] = kwargs
+            return True
+
+    monkeypatch.setattr(batch_local, "DBManager", _ReorderDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2100,
+                "upstream_id": "batch_reorder",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",
+            }
+        )
+    )
+
+    starts = {model: index for index, (kind, model) in enumerate(events) if kind == "start"}
+    ends = {model: index for index, (kind, model) in enumerate(events) if kind == "end"}
+    # c starts while a is still running: the chunked runner could not start c
+    # before a's chunk had finished, i.e. not before a had ended.
+    assert starts["m-c"] < ends["m-slow"]
+    assert sorted(starts) == ["m-b", "m-c", "m-d", "m-slow"]
+    assert stored["finish"]["status"] == "completed"
+    assert stored["finish"]["completed"] == 4
+    assert stored["finish"]["failed"] == 0
+    output = [json.loads(line) for line in stored["content"].splitlines()]
+    assert [row["custom_id"] for row in output] == ["a", "b", "c", "d"]
+
+
+def test_a_cancel_finishes_the_in_flight_lines_and_starts_nothing_new(monkeypatch):
+    # A cancel takes effect before the next line, not before the next chunk:
+    # the line that is running goes through and gets checkpointed — it was
+    # billed for — the lines behind it never start, and the batch closes out
+    # as cancelled.
+    monkeypatch.setattr(batch_local, "LOCAL_BATCH_CONCURRENCY", 1)
+    monkeypatch.setattr(batch_local, "LOCAL_BATCH_LEASE_TTL_S", 0.6)  # heartbeat every 0.2 s
+    executed = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        if body["model"] == "m-slow":
+            await asyncio.sleep(0.5)
+        executed.append(body["model"])
+        return {"status_code": 200, "data": {}}
+
+    stored = {}
+
+    class _CancelDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, batch_object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(
+                _local_line("a", model="m-slow"),
+                _local_line("b", model="m-b"),
+                _local_line("c", model="m-c"),
+            )
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            # The first write starts the batch; from then on a cancel is
+            # pending (the client called /cancel while the slow line ran).
+            stored["progress_calls"] = stored.get("progress_calls", 0) + 1
+            return stored["progress_calls"] > 1
+
+        def save_local_batch_lines(self, object_id, runner_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            return {"log-id": 900}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
+            stored["finish"] = kwargs
+            return True
+
+    monkeypatch.setattr(batch_local, "DBManager", _CancelDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2101,
+                "upstream_id": "batch_cancel",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "cancelling",
+            }
+        )
+    )
+
+    assert executed == ["m-slow"]  # the in-flight line finished, nothing new started
+    assert {row["custom_id"] for row in stored["checkpoints"]} == {"a"}
+    assert stored["finish"]["status"] == "cancelled"
+    assert stored["finish"]["completed"] == 1
+    assert stored["finish"]["failed"] == 0
+    output = [json.loads(line) for line in stored["content"].splitlines()]
+    assert [row["custom_id"] for row in output] == ["a"]
+
+
+def test_the_result_file_keeps_input_order_when_lines_finish_out_of_order(monkeypatch):
+    # Lines complete in whatever order the capacity allows; the result file
+    # still spells them in input order, so a caller gets the same file it
+    # would have gotten from a provider that ran the same lines in a
+    # different order.
+    monkeypatch.setattr(batch_local, "LOCAL_BATCH_CONCURRENCY", 2)
+    finished_order = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        if body["model"] == "m-a":
+            await asyncio.sleep(0.2)  # a is the slow one, b is instant
+        finished_order.append(body["model"])
+        return {"status_code": 200, "data": {"model": body["model"]}}
+
+    stored = {}
+
+    class _OrderDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, batch_object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(_local_line("a", model="m-a"), _local_line("b", model="m-b"))
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            return False
+
+        def save_local_batch_lines(self, object_id, runner_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            return {"log-id": 950}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
+            stored["finish"] = kwargs
+            return True
+
+    monkeypatch.setattr(batch_local, "DBManager", _OrderDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2102,
+                "upstream_id": "batch_order",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",
+            }
+        )
+    )
+
+    assert finished_order == ["m-b", "m-a"]  # they really did finish out of order
+    output = [json.loads(line) for line in stored["content"].splitlines()]
+    assert [row["custom_id"] for row in output] == ["a", "b"]
+
+
 def _runner_key_row(default_priority=1):
     return {
         "id": 11,
@@ -3033,6 +3296,170 @@ def test_a_heartbeat_that_fails_cancels_the_lines_and_writes_nothing(monkeypatch
     assert "content" not in stored
 
 
+def test_a_lease_lost_on_a_line_write_cancels_the_siblings_and_writes_nothing(monkeypatch):
+    # A per-line progress write can be the first to find the lease gone,
+    # before the heartbeat wakes: the in-flight sibling is cancelled so the
+    # new holder runs it exactly once, the line that did finish is
+    # checkpointed (it ran and was billed — the new holder skips it), and
+    # this runner writes no output file and finalizes nothing.
+    monkeypatch.setattr(batch_local, "LOCAL_BATCH_CONCURRENCY", 2)
+    executed = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        if body["model"] == "m-slow":
+            await asyncio.sleep(0.5)
+        executed.append(body["model"])
+        return {"status_code": 200, "data": {}}
+
+    stored = {}
+
+    class _PerLineLossDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, batch_object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(_local_line("a", model="m-fast"), _local_line("b", model="m-slow"))
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            # The first write starts the batch; the first per-line write
+            # finds the lease gone (another runner claimed it in between).
+            stored["progress_calls"] = stored.get("progress_calls", 0) + 1
+            return False if stored["progress_calls"] == 1 else None
+
+        def save_local_batch_lines(self, object_id, runner_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            return {"log-id": 960}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
+            stored["finish"] = kwargs
+            return True
+
+    monkeypatch.setattr(batch_local, "DBManager", _PerLineLossDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    result = asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2103,
+                "upstream_id": "batch_perline",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",
+            }
+        )
+    )
+
+    assert result is None
+    assert executed == ["m-fast"]  # the slow sibling was cancelled mid-flight
+    assert {row["custom_id"] for row in stored["checkpoints"]} == {"a"}
+    assert "finish" not in stored
+    assert "content" not in stored
+
+
+def test_a_lease_lost_after_the_last_worker_still_writes_nothing(monkeypatch):
+    # With one worker there is no sibling to cancel: the worker stops on the
+    # lost flag, gather returns normally, and the check after it must still
+    # keep the deposed runner from writing an output file or finalizing.
+    monkeypatch.setattr(batch_local, "LOCAL_BATCH_CONCURRENCY", 1)
+    executed = []
+
+    async def fake_execute(path, headers, body, client_ip, auth, log_id):
+        executed.append(body["model"])
+        return {"status_code": 200, "data": {}}
+
+    stored = {}
+
+    class _SoloLossDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def claim_local_batch(self, batch_object_id, runner_id, lease_seconds):
+            return True
+
+        def get_local_object_by_upstream_id(self, kind, upstream_id):
+            return {"id": 1000}
+
+        def get_local_batch_file_content(self, object_id):
+            return _jsonl(_local_line("a", model="m-a"), _local_line("b", model="m-b"))
+
+        def get_api_key_by_id(self, api_key_id):
+            return _runner_key_row()
+
+        def get_local_batch_lines(self, object_id):
+            return {}
+
+        def update_local_batch_progress(self, object_id, runner_id, completed, failed, lease_seconds):
+            # The first write starts the batch; the first per-line write
+            # finds the lease gone.
+            stored["progress_calls"] = stored.get("progress_calls", 0) + 1
+            return False if stored["progress_calls"] == 1 else None
+
+        def save_local_batch_lines(self, object_id, runner_id, rows):
+            stored.setdefault("checkpoints", []).extend(rows)
+
+        def log_usage(self, **kwargs):
+            return {"log-id": 970}, 200
+
+        def store_local_batch_file(self, **kwargs):
+            stored.update(kwargs)
+            return 1
+
+        def finish_local_batch(self, object_id, runner_id, **kwargs):
+            stored["finish"] = kwargs
+            return True
+
+    monkeypatch.setattr(batch_local, "DBManager", _SoloLossDB)
+    monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
+    monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
+
+    result = asyncio.run(
+        batch_local.run_local_batch(
+            {
+                "id": 2104,
+                "upstream_id": "batch_solo",
+                "input_file_id": "file-in",
+                "api_key_id": 11,
+                "team_id": OWN_TEAM,
+                "user_id": 13,
+                "status": "in_progress",
+            }
+        )
+    )
+
+    assert result is None
+    assert executed == ["m-a"]  # the worker stopped before the next line
+    assert {row["custom_id"] for row in stored["checkpoints"]} == {"a"}
+    assert "finish" not in stored
+    assert "content" not in stored
+
+
 class _LineLogDB:
     """The minimum of a database a single line needs: its usage-log row."""
 
@@ -3056,7 +3483,7 @@ def test_a_failing_line_is_reported_without_stopping_the_batch(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
     monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
 
-    row, failed = asyncio.run(batch_local._run_line(_local_line("a"), _auth(), {}, asyncio.Semaphore(1)))
+    row, failed = asyncio.run(batch_local._run_line(_local_line("a"), _auth(), {}))
 
     assert failed is True
     assert row["error"]["code"] == "400"
@@ -3080,7 +3507,7 @@ def test_a_line_without_a_log_row_is_refused_not_run_unbilled(monkeypatch):
     monkeypatch.setitem(__import__("sys").modules, "logos.main", main)
     monkeypatch.setattr(main, "execute_proxy_job", fake_execute, raising=False)
 
-    row, failed = asyncio.run(batch_local._run_line(_local_line("a"), _auth(), {}, asyncio.Semaphore(1)))
+    row, failed = asyncio.run(batch_local._run_line(_local_line("a"), _auth(), {}))
 
     assert failed is True
     assert row["response"]["status_code"] == 500

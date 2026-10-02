@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,14 +56,26 @@ public class TeamService {
         this.membershipService = membershipService;
     }
 
+    /**
+     * Deterministic order for the team listings: without an explicit sort the
+     * backing query returns rows in database order, which changes as rows are
+     * added and removed, so the table's rows would jump around on every page
+     * load. Name (case-insensitive) with the id as a stable tiebreak.
+     */
+    private static final Comparator<Team> BY_NAME_THEN_ID = Comparator
+        .comparing(Team::getName, String.CASE_INSENSITIVE_ORDER)
+        .thenComparing(Team::getId);
+
     public List<TeamListResponseDTO> listAllTeams(Integer callerId) {
         return teamRepository.findAll().stream()
+            .sorted(BY_NAME_THEN_ID)
             .map(t -> toListDto(t, callerId, true))
             .toList();
     }
 
     public List<TeamListResponseDTO> listTeamsForUser(Integer userId) {
         return teamRepository.findTeamsForUser(userId).stream()
+            .sorted(BY_NAME_THEN_ID)
             .map(t -> toListDto(t, userId, false))
             .toList();
     }
@@ -162,6 +175,9 @@ public class TeamService {
             teamMap.put("default_cloud_tpm_limit", team.getDefaultCloudTpmLimit());
             teamMap.put("default_local_rpm_limit", team.getDefaultLocalRpmLimit());
             teamMap.put("default_local_tpm_limit", team.getDefaultLocalTpmLimit());
+            // Same field as the teams list: needed so the application-keys SLA
+            // column can show what an unset (inherited) key is actually served as.
+            teamMap.put("priority", team.getPriority());
 
             List<Map<String, Object>> members = memberRepository.findActiveById_TeamId(teamId).stream()
                 .flatMap(m -> userRepository.findById(m.getId().getUserId()).stream().map(user -> {

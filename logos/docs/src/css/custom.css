@@ -1,11 +1,82 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&display=swap");
+
+/* Logos product brand: violet primary (#7C3AED) from logos-ui tokens. */
 :root {
-  --ifm-color-primary: #3578e5;
-  --ifm-color-primary-dark: #2868d1;
+  --ifm-color-primary: #7c3aed;
+  --ifm-color-primary-dark: #6d28d9;
+  --ifm-color-primary-darker: #5b21b6;
+  --ifm-color-primary-darkest: #4c1d95;
+  --ifm-color-primary-light: #8b5cf6;
+  --ifm-color-primary-lighter: #a78bfa;
+  --ifm-color-primary-lightest: #c4b5fd;
+  --ifm-font-family-base: "IBM Plex Sans", "Segoe UI", sans-serif;
   --ifm-code-font-size: 95%;
+  --ifm-heading-font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+[data-theme="dark"] {
+  --ifm-color-primary: #8b5cf6;
+  --ifm-color-primary-dark: #7c3aed;
+  --ifm-color-primary-darker: #6d28d9;
+  --ifm-color-primary-darkest: #5b21b6;
+  --ifm-color-primary-light: #a78bfa;
+  --ifm-color-primary-lighter: #c4b5fd;
+  --ifm-color-primary-lightest: #ddd6fe;
 }
 
 /* Keep the square navbar logo at a readable size (navbar height is 80px). */
 .navbar .navbar__brand img {
   height: 36px;
   width: 36px;
+}
+
+/* Heading deep-links: offset for sticky navbar; make the # permalink visible. */
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  scroll-margin-top: calc(var(--ifm-navbar-height) + 0.75rem);
+}
+
+.markdown .hash-link {
+  opacity: 0.35;
+  padding-left: 0.4rem;
+  transition: opacity 0.15s ease;
+}
+
+.markdown h1:hover .hash-link,
+.markdown h2:hover .hash-link,
+.markdown h3:hover .hash-link,
+.markdown h4:hover .hash-link,
+.markdown .hash-link:focus {
+  opacity: 1;
+  text-decoration: none;
+}
+
+/* Homepage MDX: drop default doc chrome padding/margins. */
+article .markdown:has(.page) > header,
+article .markdown:has(.page) .theme-doc-breadcrumbs,
+article .markdown:has(.page) .theme-doc-version-badge,
+article .markdown:has(.page) .theme-doc-toc-mobile {
+  display: none;
+}
+
+main:has(.page) .container {
+  max-width: none;
+  padding: 0;
+}
+
+main:has(.page) .row {
+  margin: 0;
+}
+
+main:has(.page) .col {
+  max-width: none;
+  padding: 0 !important;
+}
+
+main:has(.page) .pagination-nav {
+  display: none;
 }

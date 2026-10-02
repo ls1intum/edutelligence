@@ -80,14 +80,14 @@
                   <i class="pi pi-users" aria-hidden="true"></i>{{ item.team_name }}
                 </span>
               }
-              @if (requesterOf(item)) {
+              @if (showRequester(item)) {
                 <span class="rr-card__requester" title="Requesting user">
                   <i class="pi pi-user" aria-hidden="true"></i>{{ requesterOf(item) }}
                 </span>
               }
-              @if (item.api_key_name) {
-                <span class="rr-card__key" title="API key">
-                  <i class="pi pi-key" aria-hidden="true"></i>{{ item.api_key_name }}
+              @if (keyChipOf(item)) {
+                <span class="rr-card__key" title="API key environment">
+                  <i class="pi pi-key" aria-hidden="true"></i>{{ keyChipOf(item) }}
                 </span>
               }
             </div>
@@ -111,6 +111,11 @@
 
           <!-- Right column -->
           <div class="rr-card__right">
+            <button class="rr-content-button" type="button"
+              [attr.aria-expanded]="expandedRequestId() === item.request_id"
+              (click)="togglePayloads(item)">
+              {{ expandedRequestId() === item.request_id ? 'Hide content' : 'View content' }}
+            </button>
             @if (stageOf(item) === 'queued') {
               <span class="rr-badge rr-badge--queued">Queued</span>
             }
@@ -138,6 +143,45 @@
               }
             }
           </div>
+          @if (expandedRequestId() === item.request_id) {
+            <section class="rr-payload" aria-label="Request content">
+              <div class="rr-payload__toolbar">
+                <div role="tablist" aria-label="Request and response">
+                  <button type="button" role="tab" class="rr-content-button"
+                    id="rr-request-tab" aria-controls="rr-payload-panel"
+                    [attr.aria-selected]="payloadTab() === 'request'"
+                    (click)="payloadTab.set('request')"
+                    (keydown.arrowright)="payloadTab.set('response'); responseTab.focus()"
+                    #requestTab>Request</button>
+                  <button type="button" role="tab" class="rr-content-button"
+                    id="rr-response-tab" aria-controls="rr-payload-panel"
+                    [attr.aria-selected]="payloadTab() === 'response'"
+                    (click)="payloadTab.set('response')"
+                    (keydown.arrowleft)="payloadTab.set('request'); requestTab.focus()"
+                    #responseTab>Response</button>
+                </div>
+              </div>
+              <div role="tabpanel" id="rr-payload-panel" tabindex="0"
+                [attr.aria-labelledby]="payloadTab() === 'request' ? 'rr-request-tab' : 'rr-response-tab'"
+                [attr.aria-busy]="payloadLoading()">
+                @if (payloadLoading()) {
+                  <p role="status">Loading content…</p>
+                } @else if (payloadError()) {
+                  <p role="alert">{{ payloadError() }}</p>
+                } @else if (payloadText() !== null) {
+                  <pre>{{ payloadText() }}</pre>
+                } @else {
+                  <p>No {{ payloadTab() }} content stored.
+                    @if (payloadTab() === 'response' && stageOf(item) !== 'complete') {
+                      The response will load automatically when the request finishes.
+                    } @else {
+                      Content is only available when payload logging was enabled.
+                    }
+                  </p>
+                }
+              </div>
+            </section>
+          }
         </div>
       }
     </div>

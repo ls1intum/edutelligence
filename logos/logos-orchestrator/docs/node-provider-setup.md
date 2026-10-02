@@ -28,12 +28,12 @@ No overlap between `.env` and `config.yml`.
 
 ## 1. Start Logos
 
-Start the Logos server and make sure it is reachable over HTTPS (e.g. `https://logos.example.com`).
+Start the Logos server and make sure it is reachable over HTTPS (e.g. `https://logos.aet.cit.tum.de`).
 
 ## 2. Register the provider
 
 ```bash
-curl -X POST https://logos.example.com/logosdb/providers/logosnode/register \
+curl -X POST https://logos.aet.cit.tum.de/logosdb/providers/logosnode/register \
   -H 'Content-Type: application/json' \
   -d '{"logos_key":"<root_key>","provider_name":"my-worker-node","base_url":"","privacy_level":"LOCAL"}'
 ```
@@ -71,7 +71,7 @@ cp .env.example .env
 ```
 
 ```dotenv
-LOGOS_URL=https://logos.example.com
+LOGOS_URL=https://logos.aet.cit.tum.de
 LOGOS_API_KEY=<shared_key from step 2>
 ```
 
@@ -141,7 +141,7 @@ curl http://localhost:80/
 ## 7. Verify the Logos session
 
 ```bash
-curl -X POST https://logos.example.com/logosdb/providers/logosnode/status \
+curl -X POST https://logos.aet.cit.tum.de/logosdb/providers/logosnode/status \
   -H 'Content-Type: application/json' \
   -d '{"logos_key":"<root_key>","provider_id":<provider_id>}'
 ```

@@ -28,6 +28,11 @@ export interface LatestRequestsPage {
   next_cursor: RequestCursor | null;
 }
 
+export interface RequestPayloads {
+  input_payload: unknown;
+  response_payload: unknown;
+}
+
 /** Narrowing of the request feed. `null` on a field means "do not narrow by it". */
 export interface RequestFilter {
   userId: number | null;
@@ -56,6 +61,12 @@ export interface ScopeOptions {
 @Injectable({ providedIn: 'root' })
 export class StatisticsService {
   private http = inject(HttpClient);
+
+  getRequestPayloads(requestId: string): Promise<RequestPayloads> {
+    return firstValueFrom(this.http.post<RequestPayloads>('/api/logosdb/request_payloads', {
+      request_id: requestId,
+    }));
+  }
 
   getVramStats(day: string): Promise<VramV2Payload> {
     return firstValueFrom(this.http.post<VramV2Payload>('/api/logosdb/get_ollama_vram_stats', {
@@ -180,6 +191,22 @@ export class StatisticsService {
    */
   sleepLane(providerId: number, laneId: string): Promise<unknown> {
     return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/sleep', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  /**
+   * Take a busy lane offline without dropping its in-flight requests. The
+   * server marks the lane out of the rotation, waits for the in-flight
+   * requests to finish, then sleeps the lane — or unloads it when the host
+   * cannot hold a resident sleeper. The call can take as long as the last
+   * request runs (plus the sleep), so the panel shows "Draining…" for the
+   * whole ride. A lane that does not drain in time answers an error and
+   * keeps serving, so the click can simply be retried.
+   */
+  drainLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/drain', {
       provider_id: providerId,
       lane_id: laneId,
     }));

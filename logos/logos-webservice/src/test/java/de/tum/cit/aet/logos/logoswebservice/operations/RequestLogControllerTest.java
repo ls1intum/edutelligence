@@ -36,7 +36,51 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 class RequestLogControllerTest {
 
     @Autowired MockMvc mvc;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @MockitoBean JwtDecoder jwtDecoder;
+
+    @Test
+    void requestPayloads_returnsStoredJsonOnlyOnDemand() throws Exception {
+        jdbc.update("UPDATE log_entry SET input_payload = CAST(? AS jsonb), response_payload = CAST(? AS jsonb) WHERE request_id = ?",
+            "{\"messages\":[{\"content\":\"Hello\"}]}", "{\"answer\":\"Hi\"}", "req-aaa-111");
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"request_id\":\"req-aaa-111\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.input_payload.messages[0].content").value("Hello"))
+            .andExpect(jsonPath("$.response_payload.answer").value("Hi"));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.requests[*].input_payload").isEmpty())
+            .andExpect(jsonPath("$.requests[*].response_payload").isEmpty());
+    }
+
+    @Test
+    void requestPayloads_preservesMissingAndStreamingContent() throws Exception {
+        jdbc.update("UPDATE log_entry SET response_payload = CAST(? AS jsonb) WHERE request_id = ?",
+            "\"data: chunk\\n\\ndata: [DONE]\"", "req-aaa-111");
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"request_id\":\"req-aaa-111\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.input_payload").value(org.hamcrest.Matchers.nullValue()))
+            .andExpect(jsonPath("$.response_payload").value("data: chunk\n\ndata: [DONE]"));
+    }
+
+    @Test
+    void requestPayloads_validatesRequestAndRequiresAdmin() throws Exception {
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{}"))
+            .andExpect(status().isBadRequest());
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"request_id\":\"missing\"}"))
+            .andExpect(status().isNotFound());
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.testUser())
+                .contentType("application/json").content("{\"request_id\":\"req-aaa-111\"}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/request_payloads")
+                .contentType("application/json").content("{\"request_id\":\"req-aaa-111\"}"))
+            .andExpect(status().isUnauthorized());
+    }
 
     @Test
     void latestRequests_returnsUpToTenRows() throws Exception {
@@ -50,8 +94,11 @@ class RequestLogControllerTest {
            // The feed shows a page of the range, so it reports how big the range is.
            .andExpect(jsonPath("$.total").value(2))
            .andExpect(jsonPath("$.has_more").value(false))
-           // Key name is what the recent-requests cards show next to the user.
+           // Key type + environment drive the recent-requests caller chips
+           // (developer: team+user; application: team+environment).
            .andExpect(jsonPath("$.requests[0].api_key_name").value("dev key"))
+           .andExpect(jsonPath("$.requests[0].api_key_type").value("developer"))
+           .andExpect(jsonPath("$.requests[0].environment").value("production"))
            // Nothing left to page to, so no cursor to page with.
            .andExpect(jsonPath("$.next_cursor").isEmpty());
     }

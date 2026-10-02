@@ -127,6 +127,27 @@ def test_record_sleeping_vram_ema():
     assert abs(profile.sleeping_residual_mb - 530.0) < 1.0
 
 
+def test_record_host_ram_keeps_high_water_mark_across_lean_replica():
+    """Sticky EngineCore growth must not be averaged down by a fresh lean lane."""
+    registry = ModelProfileRegistry()
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 80_000.0, sleeping=False)
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 5_500.0, sleeping=False)
+
+    profile = registry.get_profile("Qwen/Qwen3.8-27B")
+    assert profile is not None
+    assert profile.host_ram_mb == 80_000.0
+
+
+def test_record_host_ram_sleeping_keeps_high_water_mark():
+    registry = ModelProfileRegistry()
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 70_000.0, sleeping=True)
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 8_000.0, sleeping=True)
+
+    profile = registry.get_profile("Qwen/Qwen3.8-27B")
+    assert profile is not None
+    assert profile.host_ram_residual_mb == 70_000.0
+
+
 def test_disk_size_bytes_does_not_derive_base_residency():
     """The legacy disk_size_bytes field is informational — no base_residency from it."""
     registry = ModelProfileRegistry()
@@ -967,6 +988,16 @@ def test_timing_fields_default_to_none_on_legacy_records():
     assert profile is not None
     assert profile.cold_load_time_s is None
     assert profile.wake_from_sleep_time_s is None
+
+
+@pytest.mark.parametrize("tp,cache,expected", [(2, 4096, 15988), (1, 4096, 11892), (2, 8192, 24180), (1, 0, 15988)])
+def test_reconfigured_vram_replaces_only_known_per_rank_cache(tp, cache, expected):
+    from logos_worker_node.model_profiles import reconfigured_vram_mb
+
+    profile = ModelProfileRecord(residency_source="calibrated", tensor_parallel_size=2, kv_budget_mb=4096)
+    assert reconfigured_vram_mb(profile, 15988, tp, cache) == expected
+    profile.kv_budget_mb = None
+    assert reconfigured_vram_mb(profile, 15988, tp, cache) == 15988
 
 
 # ---------------------------------------------------------------------------

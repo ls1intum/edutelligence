@@ -36,6 +36,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
                m.weight_quality, m.tags, m.description,
+               m.profile_ratings::text AS profile_ratings_json,
                (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
                 FROM model_aliases a
                 WHERE a.model_id = m.id
@@ -85,6 +86,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
                m.weight_quality, m.tags, m.description,
+               m.profile_ratings::text AS profile_ratings_json,
                (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
                 FROM model_aliases a
                 WHERE a.model_id = m.id
@@ -170,6 +172,7 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
         -- be wasted work on every other model list request.
         SELECT DISTINCT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
                m.weight_quality, m.tags, m.description,
+               m.profile_ratings::text AS profile_ratings_json,
                (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
                 FROM model_aliases a
                 WHERE a.model_id = m.id

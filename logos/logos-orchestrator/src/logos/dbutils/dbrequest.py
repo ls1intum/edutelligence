@@ -2,6 +2,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from logos.benchmarks.configuration import BenchmarkBatch, BenchmarkSettings
 from logos.dbutils.dbmodules import ThresholdLevel
 
 
@@ -110,12 +111,37 @@ class InternalSleepLaneRequest(BaseModel):
     lane_id: str
 
 
+class InternalDrainLaneRequest(BaseModel):
+    provider_id: int
+    lane_id: str
+
+
 class InternalWakeLaneRequest(BaseModel):
     provider_id: int
     lane_id: str
 
 
-class InternalBenchmarkRequest(BaseModel):
+class InternalBenchmarkRequest(BenchmarkSettings):
+    batch: BenchmarkBatch | None = None
     model_provider_id: int = Field(gt=0)
     samples: int = Field(default=5, gt=0, le=100)
     max_output_tokens: int = Field(default=512, gt=0, le=4096)
+
+
+class DatasetSearchRequest(BaseModel):
+    query: str = Field(default="", max_length=200)
+    cursor: str | None = Field(default=None, max_length=4096)
+
+
+class DatasetMetadataRequest(BaseModel):
+    dataset: str = Field(max_length=200, pattern=r"^[\w.-]+/[\w.-]+$")
+    subset: str | None = Field(default=None, max_length=200)
+    split: str | None = Field(default=None, max_length=100)
+
+
+class BenchmarkLimitsRequest(BaseModel):
+    model_provider_id: int = Field(gt=0)
+
+
+class HfReachabilityRequest(BaseModel):
+    hf_repo_id: str = Field(min_length=1, max_length=200)

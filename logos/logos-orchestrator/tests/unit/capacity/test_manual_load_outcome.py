@@ -419,7 +419,7 @@ def test_the_executor_settles_a_manual_outcome_riding_on_its_lane():
     planner.record_manual_load_outcome(1, "org/model-a", "running", lane_id="planner-org_model-a")
     reason = "the worker rejected the load: no feasible GPU subset"
 
-    async def core(action, timeout_seconds=60.0):
+    async def core(action, timeout_seconds=60.0, deadline=None):
         planner.record_lane_action_failure(action.provider_id, action.lane_id, reason)
         return False
 
@@ -435,7 +435,7 @@ def test_the_executor_settles_a_confirmed_load_as_success():
     planner = _planner()
     planner.record_manual_load_outcome(1, "org/model-a", "running", lane_id="planner-org_model-a")
 
-    async def core(action, timeout_seconds=60.0):
+    async def core(action, timeout_seconds=60.0, deadline=None):
         return True
 
     planner._execute_action_core = core
@@ -453,7 +453,7 @@ def test_a_load_of_the_same_model_on_another_lane_does_not_settle():
     planner = _planner()
     planner.record_manual_load_outcome(1, "org/model-a", "running", lane_id="planner-org_model-a")
 
-    async def core(action, timeout_seconds=60.0):
+    async def core(action, timeout_seconds=60.0, deadline=None):
         return False
 
     planner._execute_action_core = core
@@ -472,7 +472,7 @@ def test_the_lane_less_endpoint_placeholder_is_not_settled_by_any_load():
     planner = _planner()
     planner.record_manual_load_outcome(1, "org/model-a", "running")
 
-    async def core(action, timeout_seconds=60.0):
+    async def core(action, timeout_seconds=60.0, deadline=None):
         return False
 
     planner._execute_action_core = core

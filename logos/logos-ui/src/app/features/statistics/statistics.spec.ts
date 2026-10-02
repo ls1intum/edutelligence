@@ -26,6 +26,7 @@ const wsSpy = () => ({
   setTimelineRange: vi.fn(),
   setScope: vi.fn(),
   setFeedStatus: vi.fn(),
+  setInterest: vi.fn(),
 });
 
 /** Boot the page at the frozen clock and wire in the service spies. */

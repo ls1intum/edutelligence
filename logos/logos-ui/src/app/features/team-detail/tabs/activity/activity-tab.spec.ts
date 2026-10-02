@@ -1,9 +1,10 @@
 import { SimpleChange } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { HttpHeaders, HttpResponse } from '@angular/common/http';
 
 import { RequestItem } from '../../../statistics/statistics.models';
-import { TeamActivityPayload, TraceExport, TraceExportItem } from './activity-tab.models';
-import { ActivityTabComponent, TRACE_CSV_COLUMNS, traceCsvCell, tracesToCsv } from './activity-tab';
+import { TeamActivityPayload } from './activity-tab.models';
+import { ActivityTabComponent } from './activity-tab';
 import { ActivityFilter, TeamActivityService } from './activity-tab.service';
 
 /**
@@ -40,6 +41,7 @@ const makeRequest = (overrides: Partial<RequestItem> = {}): RequestItem => ({
   full_name: 'Test User',
   api_key_name: null,
   api_key_type: null,
+  environment: null,
   prompt_tokens: null,
   completion_tokens: null,
   total_tokens: null,
@@ -214,6 +216,34 @@ describe('ActivityTabComponent', () => {
       expect(fixture.nativeElement.querySelector('.most-asked-questions').textContent).toContain(
         'No questions recorded for this team in the selected period.',
       );
+    });
+
+    /** The section head the ranking lives under, out of the other heads. */
+    const mostAskedHead = (): string => {
+      const heads = Array.from(
+        fixture.nativeElement.querySelectorAll('.ac-section-head'),
+      ) as Element[];
+      return heads.find((el) => (el.textContent ?? '').includes('Most Asked Questions'))
+        ?.textContent ?? '';
+    };
+
+    it('labels the ranking with the sample limit the server names', () => {
+      // The ranking is cut off the newest full-logging rows, and the section
+      // must say so — a question the sample does not cover cannot read as one
+      // the team never asked.
+      component.activity.set(makePayload({ most_asked_sample_limit: 10000 }));
+      fixture.detectChanges();
+
+      expect(mostAskedHead()).toContain(
+        `newest ${(10000).toLocaleString()} requests with full logging`,
+      );
+    });
+
+    it('says nothing about a sample when the server names no limit', () => {
+      component.activity.set(makePayload());
+      fixture.detectChanges();
+
+      expect(mostAskedHead()).not.toContain('requests with full logging');
     });
   });
 
@@ -463,6 +493,7 @@ describe('ActivityTabComponent pagination', () => {
       full_name: null,
       api_key_name: null,
       api_key_type: null,
+      environment: null,
       prompt_tokens: null,
       completion_tokens: null,
       total_tokens: null,
@@ -711,113 +742,10 @@ describe('ActivityTabComponent pagination', () => {
   });
 });
 
-
-describe('traceCsvCell', () => {
-  it('leaves absent values empty', () => {
-    expect(traceCsvCell(null)).toBe('');
-    expect(traceCsvCell(undefined)).toBe('');
-  });
-
-  it('keeps plain values bare', () => {
-    expect(traceCsvCell('req-aaa-111')).toBe('req-aaa-111');
-    expect(traceCsvCell(42)).toBe('42');
-    expect(traceCsvCell(true)).toBe('true');
-  });
-
-  it('quotes and doubles what would break a table', () => {
-    expect(traceCsvCell('failed, timeout')).toBe('"failed, timeout"');
-    expect(traceCsvCell('say "hi"')).toBe('"say ""hi"""');
-    expect(traceCsvCell('line\nbreak')).toBe('"line\nbreak"');
-  });
-
-  it('sends structured values out as compact JSON, quoted', () => {
-    expect(traceCsvCell({ model: 'gpt-4' })).toBe('"{""model"":""gpt-4""}"');
-    // A payload full of commas and quotes must stay one cell: the value is
-    // JSON-compacted first, then every quote is doubled — the inner quotes of
-    // the content survive as JSON escapes, each of them doubled like the rest.
-    const raw = JSON.stringify({ content: 'Hello, "Logos"' });
-    expect(traceCsvCell({ content: 'Hello, "Logos"' })).toBe(
-      `"${raw.replaceAll('"', '""')}"`,
-    );
-  });
-});
-
-describe('tracesToCsv', () => {
-  const trace: TraceExportItem = {
-    request_id: 'req-ccc-333',
-    timestamp_request: null,
-    timestamp_forwarding: null,
-    timestamp_response: null,
-    time_at_first_token: null,
-    privacy_level: 'FULL',
-    model_name: null,
-    provider_type: null,
-    environment: null,
-    api_key_id: null,
-    api_key_name: null,
-    username: null,
-    full_name: null,
-    team_name: null,
-    client_ip: null,
-    status: 'success',
-    error_message: 'failed, timeout "rare"',
-    priority: null,
-    initial_priority: null,
-    priority_when_scheduled: null,
-    queue_depth_at_enqueue: null,
-    queue_depth_at_schedule: null,
-    queue_depth_at_arrival: null,
-    timeout_s: null,
-    utilization_at_arrival: null,
-    queue_wait_ms: null,
-    was_cold_start: null,
-    load_duration_ms: null,
-    available_vram_mb: null,
-    prompt_tokens: null,
-    completion_tokens: null,
-    total_tokens: null,
-    cost_microcents: null,
-    classification_statistics: null,
-    input_payload: { model: 'gpt-4', messages: [{ role: 'user', content: 'Hello, "Logos"' }] },
-    headers: null,
-    response_payload: null,
-  };
-
-  const payload: TraceExport = {
-    team_id: 2001,
-    team_name: 'test-team',
-    days: 7,
-    since: '2026-08-20T00:00:00Z',
-    count: 1,
-    full_logging_enabled: true,
-    truncated: false,
-    traces: [trace],
-  };
-
-  it('writes the header from the same columns the JSON envelope carries', () => {
-    const lines = tracesToCsv(payload).split('\n');
-    expect(lines[0]).toBe(TRACE_CSV_COLUMNS.join(','));
-    expect(lines).toHaveLength(2);
-  });
-
-  it('keeps one trace on one row with absent cells empty', () => {
-    const lines = tracesToCsv(payload).split('\n');
-    // request_id, then the four absent timestamps, then privacy_level —
-    // the leading shape of the row says the empty cells stayed in place
-    // rather than shifting the columns left.
-    expect(lines[1].startsWith('req-ccc-333,,,,,FULL,')).toBe(true);
-  });
-
-  it('escapes cells the way traceCsvCell promises', () => {
-    const csv = tracesToCsv(payload);
-    expect(csv).toContain('"failed, timeout ""rare"""');
-    // The payload cell goes out exactly as the cell builder spells it,
-    // unsplit across the row.
-    expect(csv).toContain(traceCsvCell(trace.input_payload));
-  });
-});
-
 // ── The component's export flow ──────────────────────────────────────────────
+// The file is cut on the application server: the view asks for it, saves the
+// answer under the name the server picked, and says what the file holds when
+// it is a slice rather than the whole window.
 
 describe('ActivityTabComponent trace export', () => {
   let fixture: ComponentFixture<ActivityTabComponent>;
@@ -828,24 +756,41 @@ describe('ActivityTabComponent trace export', () => {
   };
   let lastBlob: Blob | null;
   let lastAnchor: HTMLAnchorElement | null;
-  const payload: TraceExport = {
-    team_id: 42,
-    team_name: 'test-team',
-    days: 7,
-    since: '2026-08-20T00:00:00Z',
-    count: 0,
-    full_logging_enabled: true,
-    truncated: false,
-    traces: [],
-  };
+  let exportBody: string;
+  let exportHeaders: Record<string, string>;
+
+  /** The server's answer: a file body plus the headers that describe it. */
+  const makeExportResponse = (): HttpResponse<Blob> =>
+    new HttpResponse<Blob>({
+      body: new Blob([exportBody], { type: 'application/json' }),
+      status: 200,
+      headers: new HttpHeaders(exportHeaders),
+    });
+
+  /**
+   * The continuation token in the shape the server issues it: the window the
+   * walk started in, the row behind the slice, and the team and requester
+   * the walk was started for. Opaque to the view — it is held and sent back
+   * verbatim, never read.
+   */
+  const exportCursorToken =
+    '2026-09-23T12:00:00Z/2026-09-30T12:00:00Z/2026-08-26T12:00:00.000Z/9041//42';
 
   beforeEach(async () => {
     activityService = {
       getActivity: vi.fn().mockResolvedValue(null),
-      getTraceExport: vi.fn().mockResolvedValue(payload),
+      getTraceExport: vi.fn(),
     };
     lastBlob = null;
     lastAnchor = null;
+    exportBody = '{"team_id":42,"traces":[]}';
+    exportHeaders = {
+      'Content-Disposition': 'attachment; filename="logos-traces-team-42-7d.json"',
+      'X-Logos-Export-Total': '0',
+      'X-Logos-Export-Truncated': 'false',
+      'X-Logos-Export-Count': '0',
+    };
+    activityService.getTraceExport.mockImplementation(async () => makeExportResponse());
 
     await TestBed.configureTestingModule({
       imports: [ActivityTabComponent],
@@ -873,51 +818,190 @@ describe('ActivityTabComponent trace export', () => {
     vi.restoreAllMocks();
   });
 
-  it('asks the server for the team, the period and the active requester filter', async () => {
+  it('asks the server for the team, the period, the filter and the format', async () => {
     component.filterUserId.set(7);
+    component.exportFormat.set('csv');
 
     await component.exportTraces();
 
-    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, 7);
+    // No cursor yet: the first download starts at the newest row.
+    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, 7, 'csv', null);
   });
 
-  it('downloads the JSON envelope under a named file', async () => {
+  it("saves the server's file under the name the server picked", async () => {
     await component.exportTraces();
 
     expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
     expect(lastBlob?.type).toBe('application/json');
-    expect(await lastBlob?.text()).toBe(JSON.stringify(payload, null, 2));
+    expect(await lastBlob?.text()).toBe('{"team_id":42,"traces":[]}');
+  });
+
+  it('falls back to the constructed name when the headers lost the file name', async () => {
+    exportHeaders = { 'X-Logos-Export-Truncated': 'false' };
+
+    await component.exportTraces();
+
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
   });
 
   it('names the download after the team the export was started for', async () => {
     // A slow export is the whole race: the tab may be pointed at another team
     // by the time the answer lands, and the file must still say where its data
     // came from.
-    let resolveExport: (value: TraceExport) => void = () => {};
+    let resolveExport: (value: HttpResponse<Blob>) => void = () => {};
     activityService.getTraceExport.mockImplementation(
       () =>
-        new Promise<TraceExport>((resolve) => {
+        new Promise<HttpResponse<Blob>>((resolve) => {
           resolveExport = resolve;
         }),
     );
 
     const inFlight = component.exportTraces();
     component.teamId = 99;
-    resolveExport(payload);
+    resolveExport(makeExportResponse());
     await inFlight;
 
-    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, null);
+    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, null, 'json', null);
     expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
   });
 
-  it('cuts the CSV from the same envelope when the format asks for it', async () => {
+  it('hands the CSV straight through when the server cut it', async () => {
     component.exportFormat.set('csv');
+    exportBody = 'request_id,timestamp_request';
+    exportHeaders['Content-Disposition'] = 'attachment; filename="logos-traces-team-42-7d.csv"';
 
     await component.exportTraces();
 
     expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.csv');
-    expect(lastBlob?.type).toBe('text/csv');
-    expect(await lastBlob?.text()).toBe(tracesToCsv(payload));
+    expect(await lastBlob?.text()).toBe('request_id,timestamp_request');
+  });
+
+  it('says what the file holds when the window outran one export', async () => {
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+
+    await component.exportTraces();
+
+    // No continuation came back with the file, so the advice is the one the
+    // view can act on: narrow the scope. The number formatting is the same
+    // call the component makes, so the expectation stays right whichever
+    // locale the test runs in. A numeric literal needs parentheses before a
+    // member access (10000. would lex as the number 10000.0).
+    const count = (10000).toLocaleString();
+    const total = (12000).toLocaleString();
+    expect(component.exportNotice()).toBe(
+      `The export carries the ${count} newest requests of ${total} in the ` +
+        'selected period — narrow the period or the requester filter for the rest.',
+    );
+  });
+
+  it('hands the walk to the next, older slice when the file carries a cursor', async () => {
+    // The window outruns one file, and the server said where the file ended:
+    // the button keeps the token, and the next click sends it back verbatim
+    // so the download continues instead of starting over at the rows already
+    // held — the token also carries the window, so the continuation walks
+    // the same period the first slice was cut from.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBe(exportCursorToken);
+    expect(component.exportNotice()).toContain(
+      'press export again for the next, older slice',
+    );
+
+    await component.exportTraces();
+
+    expect(activityService.getTraceExport).toHaveBeenLastCalledWith(
+      42,
+      7,
+      null,
+      'json',
+      exportCursorToken,
+    );
+  });
+
+  it('ends the walk when a slice arrives uncapped', async () => {
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+    await component.exportTraces();
+    expect(component.exportCursor()).not.toBeNull();
+
+    // The last slice holds everything left: no truncation, no cursor — the
+    // button is the start of a fresh walk again.
+    exportHeaders['X-Logos-Export-Truncated'] = 'false';
+    delete exportHeaders['X-Logos-Export-Next-Cursor'];
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportNotice()).toBeNull();
+  });
+
+  it('falls back to narrowing advice when the file carries no continuation', async () => {
+    // A truncated file without a continuation must not promise a next slice
+    // the button cannot deliver. The token is opaque, so the view cannot
+    // reject a malformed one — the only absence it can see is a missing
+    // header, and that is the narrowing case. A token the server never
+    // issued is answered with an error on the next click, not with a
+    // duplicated first slice.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportNotice()).toContain('narrow the period');
+  });
+
+  it('keeps a late answer from resurfacing under the selection the tab moved on to', async () => {
+    // The whole race: the scope changes while the download is out. The file
+    // still gets saved under the name it was started with, but its notice and
+    // its cursor belong to the window that left the screen.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+    let resolveExport: (value: HttpResponse<Blob>) => void = () => {};
+    activityService.getTraceExport.mockImplementation(
+      () =>
+        new Promise<HttpResponse<Blob>>((resolve) => {
+          resolveExport = resolve;
+        }),
+    );
+
+    const inFlight = component.exportTraces();
+    component.setDays('30');
+    resolveExport(makeExportResponse());
+    await inFlight;
+
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
+    expect(component.exportNotice()).toBeNull();
+    expect(component.exportCursor()).toBeNull();
+  });
+
+  it('has no notice to say when the file is the whole answer', async () => {
+    await component.exportTraces();
+
+    expect(component.exportNotice()).toBeNull();
+  });
+
+  it('drops the notice when the scope the file was cut from changes', async () => {
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    await component.exportTraces();
+    expect(component.exportNotice()).not.toBeNull();
+
+    component.setDays('30');
+
+    expect(component.exportNotice()).toBeNull();
   });
 
   it('accepts only json and csv as export formats', () => {
@@ -933,8 +1017,23 @@ describe('ActivityTabComponent trace export', () => {
     await component.exportTraces();
 
     expect(component.exportError()).toBe('Could not export the traces.');
+    expect(component.exportNotice()).toBeNull();
     expect(component.exporting()).toBe(false);
     expect(lastAnchor).toBeNull();
   });
-});
 
+  it('clears an expired continuation cursor so the next click starts fresh', async () => {
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+    await component.exportTraces();
+    expect(component.exportCursor()).toBe(exportCursorToken);
+
+    activityService.getTraceExport.mockRejectedValue({ status: 400, message: 'Malformed export cursor' });
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportError()).toContain('fresh download');
+    expect(component.exportNotice()).toBeNull();
+  });
+});

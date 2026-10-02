@@ -1,11 +1,11 @@
-"""Buffered lifecycle writes  and the failure-path drain contract.
+"""Buffered lifecycle writes and the failure-path drain contract.
 
-The recorder used to UPDATE the log row on every lifecycle event (enqueue,
-scheduled, provider, rate-limit admission, provider metrics) — one pool
-checkout each, all on the request hot path. The fields are now buffered and
-flushed in the single completion UPDATE. The failure paths persist the row
-themselves, so they drain the buffer via take_buffer and must fold the
-fields into their own write for the row to keep the same content.
+Most lifecycle fields are buffered and flushed in the single completion
+UPDATE so the hot path stays cheap. Model / provider / scheduled_ts are
+written eagerly as well — the live stats feed reads those columns while the
+request is still in flight. The failure paths persist the row themselves, so
+they drain the buffer via take_buffer and must fold the fields into their
+own write for the row to keep the same content.
 """
 
 from __future__ import annotations
@@ -52,10 +52,11 @@ def test_completion_write_carries_the_buffered_union(monkeypatch):
     _patch_prom(monkeypatch)
 
     _full_lifecycle(recorder)
+    assert len(calls) == 2  # eager live writes at enqueue + schedule
     recorder.record_complete(request_id="req-buf", result_status="success")
 
-    assert len(calls) == 1
-    call = calls[0]
+    assert len(calls) == 3
+    call = calls[-1]
     assert call["model_id"] == 27
     # Last write wins on a collision, exactly like the sequential UPDATEs.
     assert call["provider_id"] == 13
@@ -74,6 +75,7 @@ def test_taking_the_buffer_drains_it_for_the_failure_write(monkeypatch):
     _patch_prom(monkeypatch)
 
     _full_lifecycle(recorder)
+    live_writes = list(calls)
 
     buffered = recorder.take_buffer("req-buf")
     recorder.discard("req-buf", "error")
@@ -90,20 +92,22 @@ def test_taking_the_buffer_drains_it_for_the_failure_write(monkeypatch):
         "available_vram_mb": 4096,
         "rate_limit_admitted": True,
     }
-    # Neither the drain nor the discard touches the DB; the caller writes.
-    assert calls == []
+    # Drain/discard do not touch the DB; only the earlier live writes did.
+    assert calls == live_writes
+    assert len(live_writes) == 2
     # The buffer is empty after the drain: a double drain is a no-op.
     assert recorder.take_buffer("req-buf") == {}
 
 
-def test_discard_without_a_drain_leaves_no_write(monkeypatch):
+def test_discard_without_a_drain_leaves_no_completion_write(monkeypatch):
     recorder, calls = _make_recorder(monkeypatch, {27: "m"}, {13: "p"})
     _patch_prom(monkeypatch)
 
     _full_lifecycle(recorder)
+    live_writes = list(calls)
     recorder.discard("req-buf", "error")
 
-    assert calls == []
+    assert calls == live_writes
 
 
 def test_complete_after_drain_writes_only_the_terminal_fields(monkeypatch):
@@ -113,12 +117,13 @@ def test_complete_after_drain_writes_only_the_terminal_fields(monkeypatch):
     _patch_prom(monkeypatch)
 
     _full_lifecycle(recorder)
+    live_count = len(calls)
     recorder.take_buffer("req-buf")
     recorder.discard("req-buf", "error")
     recorder.record_complete(request_id="req-buf", result_status="error")
 
-    assert len(calls) == 1
-    call = calls[0]
+    assert len(calls) == live_count + 1
+    call = calls[-1]
     assert call["result_status"] == "error"
     assert "initial_priority" not in call
     assert "rate_limit_admitted" not in call
@@ -139,9 +144,10 @@ def test_settle_and_take_returns_the_terminal_write_without_db(monkeypatch):
     _patch_prom(monkeypatch)
 
     _full_lifecycle(recorder)
+    live_count = len(calls)
     fields = recorder.settle_and_take("req-buf", "success", error_message=None)
 
-    assert calls == []
+    assert len(calls) == live_count  # settle_and_take itself does not write
     assert fields["result_status"] == "success"
     assert fields["provider_id"] == 13
     assert "request_complete_ts" in fields
@@ -163,12 +169,14 @@ def test_write_completion_writes_only_the_handover_dict(monkeypatch):
     # needs: the queue thread writes request A while the loop tracks B.
     _full_lifecycle(recorder)
     fields = recorder.settle_and_take("req-buf", "success")
+    before = len(calls)
     recorder.record_enqueue(request_id="req-other", model_id=27, provider_id=13, initial_priority=None, queue_depth=0)
+    assert len(calls) == before + 1  # eager live write for req-other
 
     recorder.write_completion("req-buf", fields)
 
-    assert len(calls) == 1
-    assert calls[0] == {**fields, "request_id": "req-buf"}
+    assert len(calls) == before + 2
+    assert calls[-1] == {**fields, "request_id": "req-buf"}
     # The event-loop request is untouched by the queue-thread write.
     assert "req-other" in recorder_module._request_states
     assert recorder_module._field_buffers["req-other"]
@@ -194,3 +202,57 @@ def test_split_write_matches_record_complete(monkeypatch):
         call.pop("request_complete_ts", None)
         call.pop("scheduled_ts", None)
     assert split == direct
+
+
+def test_enqueue_writes_requested_model_for_queued_rows(monkeypatch):
+    """Queued stats rows read model_id before completion — enqueue must land it."""
+    recorder, calls = _make_recorder(monkeypatch, {27: "Qwen/Qwen3-8B"}, {12: "gpu-01"})
+    _patch_prom(monkeypatch)
+
+    recorder.record_enqueue(
+        request_id="req-queued",
+        model_id=27,
+        provider_id=12,
+        initial_priority="normal",
+        queue_depth=4,
+    )
+
+    assert calls == [{"request_id": "req-queued", "model_id": 27, "provider_id": 12}]
+
+
+def test_live_writes_ride_the_write_behind_queue(monkeypatch):
+    """Enqueue/schedule identity UPDATEs must not open a DB session on the
+    async request thread — they enqueue onto the write-behind worker."""
+    from logos import write_queue
+
+    recorder, calls = _make_recorder(monkeypatch, {27: "m"}, {12: "p"})
+    _patch_prom(monkeypatch)
+
+    enqueued = []
+    real_enqueue = write_queue.get_write_queue().enqueue
+
+    def spy(fn, *args, **kwargs):
+        enqueued.append((fn, args, kwargs))
+        return real_enqueue(fn, *args, **kwargs)
+
+    monkeypatch.setattr(write_queue.get_write_queue(), "enqueue", spy)
+
+    recorder.record_enqueue(
+        request_id="req-wq",
+        model_id=27,
+        provider_id=12,
+        initial_priority="normal",
+        queue_depth=0,
+    )
+    recorder.record_scheduled(
+        request_id="req-wq",
+        model_id=27,
+        provider_id=12,
+        priority_when_scheduled="normal",
+        queue_depth_at_schedule=0,
+    )
+
+    assert len(enqueued) == 2
+    assert all(fn == recorder._write for fn, _a, _k in enqueued)
+    # Sync-mode queue still applied the writes (tests assert on DB side effects).
+    assert len(calls) == 2

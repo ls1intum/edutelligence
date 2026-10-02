@@ -13,6 +13,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, Optional
 
+from logos import write_queue
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import ResultStatus
 from logos.monitoring import prometheus_metrics as prom
@@ -147,6 +148,10 @@ class MonitoringRecorder:
             "timeout_s": timeout_s,
         }
         self._buffer(request_id, **payload)
+        # The statistics recent-requests feed reads model_id off the log row
+        # while the request still queues. Buffering until completion left that
+        # column null for the whole flight, so queued rows showed no model.
+        self._write_live(request_id, model_id=model_id, provider_id=provider_id)
 
     def record_scheduled(
         self,
@@ -178,12 +183,13 @@ class MonitoringRecorder:
         start = previous[0] if previous is not None else time.monotonic()
         _request_states[request_id] = (start, model, provider)
 
+        scheduled_ts = datetime.datetime.now(datetime.timezone.utc)
         payload = {
             "model_id": model_id,
             "provider_id": provider_id,
             "priority_when_scheduled": priority_when_scheduled,
             "queue_depth_at_schedule": queue_depth_at_schedule,
-            "scheduled_ts": datetime.datetime.now(datetime.timezone.utc),
+            "scheduled_ts": scheduled_ts,
         }
 
         # Flatten provider metrics for DB columns
@@ -196,6 +202,15 @@ class MonitoringRecorder:
                 ]:
                     payload[key] = value
         self._buffer(request_id, **payload)
+        # Stage (queued → executing) and the serving model come from these
+        # columns; without an eager write the feed kept showing Queued with
+        # no model until the completion flush.
+        self._write_live(
+            request_id,
+            model_id=model_id,
+            provider_id=provider_id,
+            scheduled_ts=scheduled_ts,
+        )
 
     def _settle(
         self,
@@ -359,6 +374,60 @@ class MonitoringRecorder:
         """Attach provider_id once it is resolved (after scheduling)."""
         self._buffer(request_id, provider_id=provider_id)
 
+    def record_provider_call(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the request is handed to the upstream provider.
+
+        ``timestamp_forwarding`` (``record_scheduled``) is set when the
+        scheduler picks the provider — for cloud requests long before the
+        provider call, because the rate-limit and budget checks run in
+        between. The statistics page splits a finished request's wall time at
+        this instant instead: the queue figure then covers everything logos
+        made the request wait for, and the exec figure is the provider's own
+        time.
+
+        ``at`` pins the instant the caller observed the dispatch. The executor
+        paths pass the instant captured inside the executor — after its request
+        preparation (the multipart decode for file uploads) and before the
+        send — so that preparation stays out of the provider's window, and a
+        preparation failure (no dispatch) leaves the stamp off. Omitted (or
+        None) stamps ``now()``.
+
+        Buffered like the other pre-execution fields: the split only matters
+        once the request is finished, so the value rides the completion
+        UPDATE rather than costing the hot path its own write.
+        """
+        self._buffer(
+            request_id,
+            timestamp_provider_call=at if at is not None else datetime.datetime.now(datetime.timezone.utc),
+        )
+
+    def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the upstream provider's response has fully arrived.
+
+        ``timestamp_response`` (``record_complete``) is written at completion,
+        which for a finished request is *after* the post-provider work logos
+        still runs — most notably the synchronous cost/pricing lookup. Ending
+        the exec figure at ``timestamp_response`` therefore read that internal
+        billing wait as provider time. The statistics page ends the exec
+        figure at this instant instead: everything between the provider call
+        and the provider's last byte is the provider's own, and what logos
+        does after (billing, persistence) is neither queue nor exec.
+
+        ``at`` pins the instant the caller observed the provider's last byte.
+        The streaming paths pass the last chunk's arrival time rather than the
+        moment this call runs: by then the last chunk has already been yielded
+        downstream and — on cloud SSE — its terminal frame has run the
+        synchronous pricing lookup, both of which are logos work that must stay
+        out of the provider's window. Omitted (or None) stamps ``now()``.
+
+        Buffered like ``record_provider_call``: it only matters once the
+        request is finished, so it rides the completion UPDATE.
+        """
+        self._buffer(
+            request_id,
+            timestamp_provider_response=at if at is not None else datetime.datetime.now(datetime.timezone.utc),
+        )
+
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist whether this key's rate limiter admitted the request.
 
@@ -413,6 +482,22 @@ class MonitoringRecorder:
         used to produce. Unknown requests yield an empty dict.
         """
         return _field_buffers.pop(request_id, {})
+
+    def _write_live(self, request_id: str, **fields: object) -> None:
+        """Persist columns the live stats feed reads while a request runs.
+
+        Most lifecycle fields still ride the completion UPDATE so the hot
+        path stays cheap; model / provider / scheduled_ts must land earlier
+        or in-flight rows look blank and forever Queued.
+
+        The write rides the write-behind queue so the async request path
+        never opens a synchronous DB session here. Callers that also insert
+        a deferred log row must enqueue that INSERT on the same queue first
+        (FIFO) so this UPDATE finds a matching ``request_id``.
+        """
+        live = {k: v for k, v in fields.items() if v is not None}
+        if live:
+            write_queue.get_write_queue().enqueue(self._write, request_id, **live)
 
     def _write(self, request_id: str, **fields: object) -> None:
         try:

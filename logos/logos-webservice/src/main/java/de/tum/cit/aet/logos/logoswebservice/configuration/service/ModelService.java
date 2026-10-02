@@ -15,8 +15,11 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
+import de.tum.cit.aet.logos.logoswebservice.configuration.ModelProfileRatings;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ModelCapabilitiesDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
@@ -161,6 +164,9 @@ public class ModelService {
         if (req.weightAccuracy() != null) model.setWeightAccuracy(req.weightAccuracy());
         if (req.weightCost() != null) model.setWeightCost(req.weightCost());
         if (req.weightQuality() != null) model.setWeightQuality(req.weightQuality());
+        if (req.profileRatings() != null) {
+            model.setProfileRatings(ModelProfileRatings.normalize(req.profileRatings()));
+        }
         ensureNameDoesNotCollideWithAlias(req.name());
         ensureNameIsUniqueAcrossModels(req.name(), req.modelId());
         modelRepository.save(model);
@@ -188,6 +194,7 @@ public class ModelService {
             map.put("weight_accuracy", m.getWeightAccuracy());
             map.put("weight_cost", m.getWeightCost());
             map.put("weight_quality", m.getWeightQuality());
+            map.put("profile_ratings", m.getProfileRatings() != null ? m.getProfileRatings() : Map.of());
             map.put("tags", m.getTags());
             map.put("aliases", listAliases(m.getId()));
             map.put("description", m.getDescription());
@@ -358,6 +365,7 @@ public class ModelService {
         m.put("weight_accuracy", p.getWeightAccuracy());
         m.put("weight_cost", p.getWeightCost());
         m.put("weight_quality", p.getWeightQuality());
+        m.put("profile_ratings", parseProfileRatings(p.getProfileRatingsJson()));
         m.put("tags", p.getTags());
         m.put("aliases", p.getAliases());
         m.put("description", p.getDescription());
@@ -448,5 +456,19 @@ public class ModelService {
             capabilities.getSupportsReasoning(),
             capabilities.getManualOverride()
         );
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Integer> parseProfileRatings(String json) {
+        if (json == null || json.isBlank() || "{}".equals(json.trim())) {
+            return Map.of();
+        }
+        try {
+            Map<?, ?> raw = new ObjectMapper().readValue(json, Map.class);
+            return ModelProfileRatings.normalize(raw);
+        }
+        catch (Exception e) {
+            return Map.of();
+        }
     }
 }

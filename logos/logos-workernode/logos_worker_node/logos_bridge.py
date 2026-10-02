@@ -917,7 +917,10 @@ class LogosBridgeClient:
             return status.model_dump(mode="json")
         if action == "reconfigure_lane":
             updates = params.get("updates") or {}
-            status = await lane_manager.reconfigure_lane(lane_id, updates)
+            if params.get("require_idle"):
+                status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True)
+            else:
+                status = await lane_manager.reconfigure_lane(lane_id, updates)
             return status.model_dump(mode="json")
 
         if action == "start_calibration_session":
@@ -1019,6 +1022,7 @@ class LogosBridgeClient:
         model_name: str,
         *,
         persist: bool = True,
+        record_probe_log: bool = True,
         gpu_devices: str = "",
         kv_cache_dtype: str = "",
         dtype: str = "",
@@ -1070,7 +1074,10 @@ class LogosBridgeClient:
         non-power-of-2 tp must be checked at that exact tp too, or it gets
         permanently excluded before its valid configuration is ever tried.
 
-        ``persist=False`` skips the model_profiles write. Never raises.
+        ``persist=False`` skips the model_profiles write.
+        ``record_probe_log=False`` keeps a rejection out of
+        calibration_probe_logs, where it would replace the node's last real
+        calibration row. Never raises.
         """
         from logos_worker_node.calibration import (  # noqa: PLC0415
             _max_tp_for_plan,
@@ -1149,6 +1156,13 @@ class LogosBridgeClient:
         # this attempt only, stays a candidate, rechecked every session.
         if hf_meta is not None and hf_meta.source == "error:model-not-found-or-unauthorized":
             result["unsupported_reason"] = REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+            if persist and record_probe_log:
+                self._record_precheck_rejection(
+                    model_name,
+                    REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
+                    tensor_parallel_size=tensor_parallel_size,
+                    gpu_devices=gpu_devices,
+                )
             return result
 
         # Gating is temporary (a token can be added later), so this is
@@ -1157,6 +1171,10 @@ class LogosBridgeClient:
         # Skip this attempt only; stays a candidate, rechecked every session.
         if hf_meta is not None and hf_meta.source == "error:model-gated":
             result["unsupported_reason"] = REASON_MODEL_GATED
+            if persist and record_probe_log:
+                self._record_precheck_rejection(
+                    model_name, REASON_MODEL_GATED, tensor_parallel_size=tensor_parallel_size, gpu_devices=gpu_devices
+                )
             return result
 
         # Informational only — never blocks or persists. A registry miss
@@ -1307,6 +1325,13 @@ class LogosBridgeClient:
                 else:
                     description = "HF compatibility precheck: no VRAM left for a min KV cache at every TP size."
                 await self._persist_permanent_unsupported(model_name, unsupported_reason, description)
+                if record_probe_log:
+                    self._record_precheck_rejection(
+                        model_name,
+                        unsupported_reason,
+                        tensor_parallel_size=tensor_parallel_size,
+                        gpu_devices=gpu_devices,
+                    )
 
         return result
 
@@ -1351,6 +1376,7 @@ class LogosBridgeClient:
         plan = self._resolve_configured_plan(model_name)
         result = await self._run_hf_compatibility_precheck(
             model_name,
+            record_probe_log=False,
             gpu_devices=str(plan.get("gpu_devices") or ""),
             kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
             dtype=str(plan.get("dtype") or ""),
@@ -1576,10 +1602,16 @@ class LogosBridgeClient:
             details=json.dumps(
                 {
                     "success": result.success,
+                    "backend": "metal" if is_metal_backend() else "cuda",
                     "probe_command": result.probe_command,
                     "error": result.error,
                     "unsupported_reason": result.unsupported_reason,
                     "node_unhealthy_reason": result.node_unhealthy_reason,
+                    "observed_reason": result.observed_reason,
+                    "metal_capacity_floor_mb": (
+                        round(result.metal_capacity_floor_mb, 1) if result.metal_capacity_floor_mb is not None else None
+                    ),
+                    "stages": result.stages,
                     "tensor_parallel_size": result.tensor_parallel_size,
                     "gpu_devices": result.gpu_devices,
                     "kv_cache_sent_mb": round(result.kv_cache_sent_mb, 1),
@@ -1601,6 +1633,37 @@ class LogosBridgeClient:
                 }
             ),
         )
+
+    def _record_precheck_rejection(
+        self, model_name: str, reason_code: str, *, tensor_parallel_size: int, gpu_devices: str
+    ) -> None:
+        """Report an HF-precheck rejection into calibration_probe_logs, as
+        its own single-stage checklist row — no real vLLM attempt ever ran,
+        so there's no log_text and every other domain must stay absent
+        rather than implying Node Preflight etc. were reached.
+        """
+        from logos_worker_node.calibration import CalibrationResult  # noqa: PLC0415
+
+        result = CalibrationResult(
+            model=model_name,
+            tensor_parallel_size=tensor_parallel_size,
+            gpu_devices=gpu_devices,
+            kv_cache_sent_mb=0.0,
+            success=False,
+            unsupported_reason=reason_code,
+            stages=[
+                {
+                    "name": "HF Compatibility Precheck",
+                    "status": "failure",
+                    "reason_kind": "unsupported",
+                    "reason_code": reason_code,
+                    "generic_error_message": None,
+                    "generic_error_detail": None,
+                    "log_anchor": None,
+                }
+            ],
+        )
+        self._record_calibration_probe_log(model_name, result, None)
 
     def _list_uncalibrated_models(self) -> list[str]:
         """Pick configured models that still need calibration.
@@ -1711,7 +1774,6 @@ class LogosBridgeClient:
                 _CALIBRATION_PORT,
                 _DEFAULT_VLLM,
                 _READY_TIMEOUT_S,
-                CalibrationResult,
                 ProfileStoreUnreadableError,
                 _plan_needs_gpu_pin,
                 calibrate_with_tp_escalation,
@@ -1819,22 +1881,23 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"unsupported reason={_unsupported.reason_code}",
                     )
-                    # No probe ran, but the reason is worth keeping queryable
-                    # in calibration_probe_logs (not just the live event feed)
-                    # — see calibration_probe_log's own DB writer for why a
-                    # pre-flight skip previously left no row there at all.
-                    self._record_calibration_probe_log(
-                        model_name,
-                        CalibrationResult(
-                            model=model_name,
+                    from logos_worker_node.hf_model_info import (  # noqa: PLC0415
+                        REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+                        REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+                    )
+
+                    # A vLLM load failure keeps the row of the probe that
+                    # found it; only a precheck verdict has no row of its own.
+                    if _unsupported.reason_code in (
+                        REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+                        REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+                    ):
+                        self._record_precheck_rejection(
+                            model_name,
+                            _unsupported.reason_code,
                             tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
                             gpu_devices=str(plan.get("gpu_devices") or ""),
-                            kv_cache_sent_mb=0.0,
-                            success=False,
-                            unsupported_reason=_unsupported.reason_code,
-                        ),
-                        None,
-                    )
+                        )
                     continue
 
                 # Pre-flight: sleep gate. If the worker config forbids sleep
@@ -1882,22 +1945,10 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"unsupported reason={precheck['unsupported_reason']}",
                     )
-                    # Same reasoning as the unsupported-list skip above: no
-                    # probe ran, but the HF precheck's verdict (e.g. weights
-                    # too large for this node's VRAM) is exactly what an
-                    # operator looking at calibration_probe_logs wants to see.
-                    self._record_calibration_probe_log(
-                        model_name,
-                        CalibrationResult(
-                            model=model_name,
-                            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
-                            gpu_devices=str(plan.get("gpu_devices") or ""),
-                            kv_cache_sent_mb=0.0,
-                            success=False,
-                            unsupported_reason=precheck["unsupported_reason"],
-                        ),
-                        None,
-                    )
+                    # _run_hf_compatibility_precheck itself already recorded
+                    # this rejection (see _record_precheck_rejection) — no
+                    # second write here, or it would clobber that one's
+                    # stages with a plain, domain-less unsupported_reason.
                     continue
                 # Auto-classification — routes the functional probe to
                 # the model's real serving endpoint. An operator override

@@ -204,6 +204,16 @@ class LogEntry(Base):
     id = Column(Integer, primary_key=True)
     timestamp_request = Column(TIMESTAMP(timezone=True))
     timestamp_forwarding = Column(TIMESTAMP(timezone=True))
+    # When the request was handed to the upstream provider — after every gate
+    # logos controls (scheduler queue, rate limit, budget), not at scheduling.
+    # The statistics page splits a finished request's wall time here: queue is
+    # everything the request waited for, exec is the provider's own time.
+    timestamp_provider_call = Column(TIMESTAMP(timezone=True))
+    # When the upstream provider's response has fully arrived — before logos'
+    # own post-provider work (notably the cost lookup) runs. The statistics
+    # page ends the exec figure here, so that internal post-provider time is
+    # neither queue nor exec.
+    timestamp_provider_response = Column(TIMESTAMP(timezone=True))
     timestamp_response = Column(TIMESTAMP(timezone=True))
     time_at_first_token = Column(TIMESTAMP(timezone=True))
 
@@ -245,6 +255,10 @@ class LogEntry(Base):
     error_message = Column(Text)
     settled_cost_micro_cents = Column(BigInteger)
     cost_finalized = Column(Boolean, nullable=False, default=False)
+    # Admission-time token estimate for the webservice direct-cloud path
+    # (body length / 4). Used to enforce cloud TPM across gateway replicas;
+    # NULL on orchestrator-written rows.
+    gateway_estimated_tokens = Column(Integer, nullable=True)
 
     usage_tokens = relationship("UsageTokens")
     api_key = relationship("ApiKey")

@@ -49,21 +49,28 @@ development accounts. These accounts and their roles are defined in
 
 ## Production deployment
 
-For production, use `docker-compose.yaml` with images built and published by
-the Logos build workflow. The workflow publishes the core images to the
-project's Harbor registry (team-internal), not to the GHCR default the
-compose file falls back to, so set both in `.env` and log in to the registry
-before pulling:
+For production, use `docker-compose.yaml`. Every image is published to the
+public mirror at `ghcr.io/ls1intum/edutelligence`, which is what the compose
+file pulls by default — no registry configuration and no login:
 
 ```bash
-REGISTRY=<your-harbor>/logos
-IMAGE_TAG=<published tag>
-docker login <your-harbor>
+docker compose --env-file .env up -d
 ```
 
-If you do not have access to that registry, build the same images locally
-from the Dockerfiles the workflow uses and tag them for a registry the host
-can pull from (e.g. a local registry):
+The mirror is fed by `main`, so it carries one tag: `latest`. Version tags go
+to the project's deployment registry, which is team-internal. To pull from
+that registry, or from a mirror of your own, set both in `.env` and log in
+once:
+
+```bash
+REGISTRY=<registry-host>/<namespace>
+IMAGE_TAG=<published tag>
+docker login <registry-host>         # host only, no path
+```
+
+To run images you built yourself, build them from the Dockerfiles the build
+workflow uses and tag them for a registry the host can pull from (e.g. a
+local registry):
 
 ```bash
 # The build contexts below are repository-root relative — return there
@@ -78,10 +85,13 @@ docker build -t "$REGISTRY/logos-db:$IMAGE_TAG" logos/db
 docker build -t "$REGISTRY/logos-agent:$IMAGE_TAG" -f logos/logos-agent/Dockerfile .
 docker build -t "$REGISTRY/logos-agent-gateway:$IMAGE_TAG" -f logos/agent-gateway/Dockerfile .
 docker build -t "$REGISTRY/logos-agent-workspace:$IMAGE_TAG" -f logos/logos-agent/workspace/Dockerfile .
+docker build -t "$REGISTRY/logos-rate-gateway:$IMAGE_TAG" -f logos/rate-limit-gateway/Dockerfile .
 ```
 
-(All seven images are required to run the full stack: the agent runner
-refuses to start a session when the `logos-agent-workspace` image is absent.)
+(All eight images are required to run the full stack: `logos-rate-gateway` is
+the only router on the public entrypoints, so without it the stack serves no
+public traffic at all, and the agent runner refuses to start a session when
+the `logos-agent-workspace` image is absent.)
 
 Set the same `REGISTRY` and `IMAGE_TAG` in `.env`, then start the stack
 (the worker node image is built on the GPU host instead — see the worker
