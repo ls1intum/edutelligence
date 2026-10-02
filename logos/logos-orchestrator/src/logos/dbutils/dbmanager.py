@@ -2040,6 +2040,20 @@ class DBManager:
         self.session.commit()
         return int(row.sync_revision) if row is not None else None
 
+    def delete_model_profiles(self, provider_id: int, model_names: Optional[List[str]] = None) -> List[str]:
+        """Forget a node's profiles so its next calibration starts fresh.
+
+        Calibration snapshots stay as history. Returns the deleted models.
+        """
+        sql = "DELETE FROM model_profiles WHERE provider_id = :provider_id"
+        params: Dict[str, Any] = {"provider_id": provider_id}
+        if model_names is not None:
+            sql += " AND model_name = ANY(:model_names)"
+            params["model_names"] = list(model_names)
+        rows = self.session.execute(text(sql + " RETURNING model_name"), params).fetchall()
+        self.session.commit()
+        return [str(r.model_name) for r in rows]
+
     def invalidate_model_calibration(self, calibration_id: int, reason: str) -> List[Tuple[int, str]]:
         """Stop trusting a calibration and strip it from every node using it.
 

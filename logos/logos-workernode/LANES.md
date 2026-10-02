@@ -90,9 +90,11 @@ The worker automatically measures memory footprints:
 
 For vLLM, Logos does not blindly reuse `loaded_vram_mb` as the next load cost. It uses `base_residency_mb` plus a scaled `kv_budget_mb`, then chooses a lower or higher automatic `gpu_memory_utilization` target based on how large the model is relative to the provider VRAM budget.
 
-Profiles update via exponential moving average (alpha=0.3) and persist in the state directory (`/app/data/model_profiles.yml`). They survive restarts and are sent to Logos every 5s so the capacity planner can validate VRAM budgets before loading or waking lanes.
+Profiles update via exponential moving average (alpha=0.3). The worker keeps them only in memory: Logos stores them in its database (`model_profiles`, with calibration snapshots in `model_calibrations`) from the runtime status the worker sends every few seconds, and hands them back when the worker starts. The worker therefore waits for Logos before it starts any lane, and a profile survives the node being reinstalled. The capacity planner reads the same profiles to validate VRAM budgets before loading or waking lanes.
 
-Example persisted profiles (saved automatically to the state directory):
+A node whose state directory still holds a `model_profiles.yml` or `calibration_logs/calibration_unsupported_models.txt` from before hands both to Logos once on its first start and renames them to `*.migrated`.
+
+Example profiles as the worker reports them:
 ```yaml
 model_profiles:
   Qwen/Qwen2.5-1.5B-Instruct:

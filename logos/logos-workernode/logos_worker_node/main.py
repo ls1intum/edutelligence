@@ -9,7 +9,6 @@ import sys
 import time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 if TYPE_CHECKING:
@@ -20,17 +19,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from logos_worker_node.cache_planner import CacheCandidate, CachePlan, plan_cache_order
-from logos_worker_node.calibration import auto_calibrate_models, plans_from_config
+from logos_worker_node.calibration import plans_from_config
 from logos_worker_node.config import get_state_dir, load_config
 from logos_worker_node.gpu import GpuMetricsCollector
 from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
+from logos_worker_node.legacy_profile_import import mark_legacy_profiles_migrated, read_legacy_profiles
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.model_cache import ModelRamCache, _DisabledModelRamCache, create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import ProcessState, model_can_sleep
+from logos_worker_node.profile_fingerprint import cached_vllm_version, calibration_keys
 from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
+from logos_worker_node.vllm_compat import _DEFAULT_VLLM
 
 logging.basicConfig(
     level=logging.INFO,
@@ -134,226 +136,48 @@ async def _prefetch_missing_models(missing: list[str], hf_home: str) -> None:
             logger.warning("Prefetch: failed to download %s", model_name, exc_info=True)
 
 
-async def _auto_calibrate_if_needed(
+async def _load_central_profiles(
     cfg: AppConfig,
+    logos_bridge: LogosBridgeClient,
     model_profiles: ModelProfileRegistry,
-    state_dir: "Path",
-    model_cache: Any | None = None,
+    gpu_collector: Any,
 ) -> None:
-    """Check for uncalibrated capabilities models and calibrate them on startup.
+    """Fill the registry from Logos before any lane or cache plan reads it.
 
-    Not called anywhere in this file today — the nightly/manual RPC path
-    (start_calibration_session) replaced it. Kept only for its tests; ask
-    before wiring a new caller to it.
+    Profiles are stored only in Logos' database, so without Logos the worker
+    has none to start lanes with: it waits instead of guessing. A worker with
+    the Logos bridge disabled has no store at all and starts empty.
     """
-    if os.getenv("LOGOS_SKIP_AUTO_CALIBRATION", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
-        logger.info("Auto-calibration disabled via LOGOS_SKIP_AUTO_CALIBRATION")
+    snapshot = await gpu_collector.get_snapshot()
+    config_path = LogosBridgeClient._resolve_config_path()
+    plans = plans_from_config(config_path) if config_path.exists() else []
+    models = list(cfg.logos.configured_models) if cfg.logos else []
+    model_profiles.set_calibration_keys(
+        calibration_keys(cfg, plans, models, list(snapshot.devices), cached_vllm_version(_DEFAULT_VLLM))
+    )
+    if not (cfg.logos and cfg.logos.enabled):
+        logger.info("Logos bridge disabled — starting without model profiles")
         return
 
-    # This legacy boot-time path calls auto_calibrate_models(), the CUDA-only
-    # entry point — it was never wired to calibrate_model_metal(). Metal
-    # calibration does run today, just via the session-driven RPC path
-    # (start_calibration_session), not this one.
-    if is_metal_backend():
-        logger.info(
-            "Auto-calibration on startup is CUDA-only — skipping on Metal "
-            "(the orchestrator's nightly/manual session path covers it)"
-        )
-        return
-
-    caps = cfg.logos.capabilities_models if cfg.logos else []
-    if not caps:
-        return
-
-    # Resolve config.yml path (also needed below; resolve once and reuse).
-    config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
-    if config_path_str:
-        config_path = Path(config_path_str)
-    else:
-        for candidate in [Path("/app/config.yml"), Path("config.yml")]:
-            if candidate.resolve().is_file():
-                config_path = candidate
-                break
-        else:
-            config_path = Path("config.yml")
-
-    # Build a {model_name: (tp, enforce_eager)} table from production config.
-    # A persisted profile is only valid if BOTH match what production will
-    # actually run — different tp or different enforce_eager produces a
-    # different VRAM footprint (CUDA graph capture pools persist across sleep
-    # and add 5-15 GB to both loaded_vram_mb and sleeping_residual_mb that
-    # eager-mode calibration never sees).
-    #
-    # tp is `None` when the operator left it unspecified — in that case the
-    # calibrator's chosen tp is authoritative (it's the result of a real
-    # probe) and lane_manager._auto_tensor_parallel consumes it at launch
-    # time. Comparing calibrated vs default 1 would trigger an infinite
-    # re-calibration loop for any model that genuinely needs tp>1.
-    expected_settings: dict[str, tuple[int | None, bool]] = {}
-    if config_path.exists():
+    state_dir = get_state_dir()
+    legacy_import = read_legacy_profiles(state_dir)
+    delay = 5.0
+    while True:
         try:
-            for plan in plans_from_config(config_path):
-                m = plan.get("model")
-                if not m:
-                    continue
-                explicit_tp = plan.get("tensor_parallel_size")
-                expected_settings[str(m)] = (
-                    int(explicit_tp) if explicit_tp is not None else None,
-                    bool(plan.get("enforce_eager", False)),
-                )
-        except Exception as exc:
+            profiles = await logos_bridge.fetch_model_profiles(model_profiles.calibration_key_hashes(), legacy_import)
+            break
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "Could not parse plans from %s for provenance check: %s",
-                config_path,
+                "Waiting for model profiles from Logos (%s) — no lane starts without them; retrying in %.0fs",
                 exc,
+                delay,
             )
-
-    uncalibrated = []
-    for model_name in caps:
-        profile = model_profiles.get_profile(model_name)
-        # sleeping_residual_mb is a sleep-mode measurement: it is N/A for a model
-        # that won't sleep (worker-wide kill switch, per-model
-        # enable_sleep_mode=false, or the profile already flagged sleep disabled).
-        # Requiring it for such a model causes an infinite re-calibration loop —
-        # a nosleep lane never produces a sleep measurement, so the profile is
-        # forever "incomplete" and every run re-calibrates (or, with calibration
-        # skipped, the model never registers a deployment). Mirrors the
-        # sleep_na handling in logos_bridge's session-driven needs_calib check.
-        sleep_na = profile is not None and (bool(profile.sleep_mode_disabled) or not model_can_sleep(cfg, model_name))
-        reason = None
-        if profile is None:
-            reason = "no profile"
-        elif profile.base_residency_mb is None:
-            reason = "base_residency_mb is null"
-        elif (not sleep_na) and profile.sleeping_residual_mb is None:
-            reason = "sleeping_residual_mb is null"
-        elif (
-            profile.residency_source == "calibrated"
-            and profile.min_kv_cache_mb is not None
-            and profile.max_kv_cache_mb is not None
-            and profile.min_kv_cache_mb > 0
-            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
-        ):
-            # Collapsed KV envelope: pre-fix calibration runs read
-            # ``search_lo`` after the binary search had mutated it upward to
-            # equal ``best_kv``, so every recorded envelope ended up with
-            # min == max. The runtime clamp needs *room* between the two
-            # ends — without it the planner can't scale KV down when
-            # another lane is resident. Re-calibrate to recover the floor
-            # at ``_KV_CACHE_MIN_STEP_MB``. Operator-pinned profiles also
-            # have min == max by design; they re-calibrate via the fast
-            # explicit-kv path that skips the binary search.
-            reason = (
-                f"collapsed kv envelope (min={profile.min_kv_cache_mb:.0f}MB "
-                f"== max={profile.max_kv_cache_mb:.0f}MB)"
-            )
-        elif profile.residency_source == "calibrated" and not profile.kv_cache_to_max_model_len_pairs:
-            reason = "missing kv_cache_to_max_model_len_pairs"
-        elif (
-            profile.residency_source == "calibrated"
-            and profile.loaded_vram_mb is not None
-            and profile.kv_budget_mb is not None
-            and profile.loaded_vram_mb - profile.base_residency_mb > 0.5 * profile.kv_budget_mb
-        ):
-            # Old-format calibrated profile: base_residency was stored as
-            # weights-only, so loaded_vram (= weights + KV) sits roughly one
-            # full kv_budget *above* base. New format stores full loaded VRAM,
-            # so base ≈ loaded at calibration time and runtime EMA only nudges
-            # loaded a few percent below base after real traffic (the KV pool
-            # is reserved at calibration peak but rarely fully used in practice).
-            #
-            # Only flag as stale when `loaded - base > 0.5 × kv_budget` — that
-            # captures genuine weights-only convention without firing on the
-            # routine "loaded EMA-drifted below base" case, which is what every
-            # restart after real traffic produces.
-            #
-            # "measured" profiles intentionally differ (base=weights-only,
-            # loaded=weights+KV) and must NOT be flagged as stale.
-            reason = f"stale format (base={profile.base_residency_mb:.0f} << loaded={profile.loaded_vram_mb:.0f}, kv_budget={profile.kv_budget_mb:.0f})"  # noqa: E501
-        else:
-            # Provenance check: only honor a calibrated profile if its (tp,
-            # enforce_eager) matches what production will run. Mismatch means
-            # the persisted numbers describe a different configuration and
-            # the planner would budget VRAM incorrectly.
-            expected = expected_settings.get(model_name)
-            if expected is not None and profile.residency_source == "calibrated":
-                expected_tp, expected_eager = expected
-                cal_tp = profile.tensor_parallel_size
-                cal_eager = profile.enforce_eager_at_calibration
-                if expected_tp is not None and cal_tp is not None and cal_tp != expected_tp:
-                    reason = f"tp mismatch (calibrated={cal_tp}, production={expected_tp})"
-                elif cal_eager is not None and cal_eager != expected_eager:
-                    reason = (
-                        f"enforce_eager mismatch (calibrated={cal_eager}, "
-                        f"production={expected_eager}) — graph footprint differs"
-                    )
-        if reason:
-            logger.info("  %s needs calibration: %s", model_name, reason)
-            uncalibrated.append(model_name)
-
-    if not uncalibrated:
-        logger.info(
-            "All %d capabilities models already calibrated \u2014 skipping calibration",
-            len(caps),
-        )
-        return
-
-    logger.info(
-        "%d of %d capabilities models need calibration: %s. Starting auto-calibration...",
-        len(uncalibrated),
-        len(caps),
-        uncalibrated,
-    )
-
-    t0 = time.perf_counter()
-
-    # Run synchronous calibration in a thread to avoid blocking the event loop
-    nccl_p2p = cfg.engines.vllm.nccl_p2p_available if cfg.engines else False
-    _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
-    results = await asyncio.to_thread(
-        auto_calibrate_models,
-        uncalibrated,
-        config_path,
-        state_dir,
-        nccl_p2p_available=nccl_p2p,
-        model_cache=_mc,
-    )
-
-    elapsed = time.perf_counter() - t0
-
-    ok = [r for r in results.values() if r.success]
-    fail = [r for r in results.values() if not r.success]
-
-    for r in ok:
-        logger.info(
-            "Calibrated %s \u2014 base_residency=%.0f MB \u2014 done in calibration batch",
-            r.model,
-            r.base_residency_mb,
-        )
-
-    if fail:
-        for r in fail:
-            logger.warning(
-                "Calibration failed for %s: %s (model will have no placement data)",
-                r.model,
-                r.error,
-            )
-
-    logger.info(
-        "Auto-calibration complete (%d/%d succeeded) in %.1fs. Proceeding to normal startup.",
-        len(ok),
-        len(ok) + len(fail),
-        elapsed,
-    )
-
-    # Reload persisted profiles into the registry so newly calibrated
-    # values are available for lane placement
-    if ok:
-        model_profiles._load_persisted()
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60.0)
+    model_profiles.replace_from_sync(profiles)
+    logger.info("Loaded %d model profile(s) from Logos", len(profiles))
+    if legacy_import is not None:
+        mark_legacy_profiles_migrated(state_dir)
 
 
 def _resolve_worker_cache_root(cfg) -> str:
@@ -1194,10 +1018,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             exc_info=True,
         )
 
-    model_profiles = ModelProfileRegistry(
-        state_dir=get_state_dir(),
-        model_profile_overrides=cfg.model_profile_overrides,
-    )
+    model_profiles = ModelProfileRegistry(model_profile_overrides=cfg.model_profile_overrides)
+    await _load_central_profiles(cfg, logos_bridge, model_profiles, gpu_collector)
 
     # ── tmpfs RAM cache (created before calibration so models can be loaded
     # from RAM during VRAM measurement, then evicted to free space) ──────────
@@ -1210,13 +1032,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
     )
-
-    # Auto-calibration on startup is disabled — the Logos server now drives
-    # calibration via start_calibration / stop_calibration commands during
-    # the nightly maintenance window. _auto_calibrate_if_needed has no
-    # production caller left (tools/calibrate_vram_profiles.py calls
-    # calibrate_model directly, not this) — see the docstring on that
-    # function before wiring anything new to it.
 
     if model_cache.enabled:
         caps = list(cfg.logos.capabilities_models) if cfg.logos else []

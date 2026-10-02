@@ -11,6 +11,7 @@ from logos.dbutils.dbrequest import (
     LogosNodeClearUnsupportedRequest,
     LogosNodeInvalidateCalibrationRequest,
     LogosNodeModelProfilesRequest,
+    LogosNodeResetProfilesRequest,
 )
 from logos.model_profile_store import ProfileWriteCache
 from logos.routers import logosnode as logosnode_mod
@@ -80,6 +81,10 @@ class _FakeDB:
     def clear_calibration_unsupported(self, provider_id, model_name):
         self.cleared.append((provider_id, model_name))
         return 4
+
+    def delete_model_profiles(self, provider_id, model_names=None):
+        self.deleted = (provider_id, model_names)
+        return list(model_names or ["org/model"])
 
     def invalidate_model_calibration(self, calibration_id, reason):
         self.invalidated.append((calibration_id, reason))
@@ -217,7 +222,7 @@ def test_push_sends_effective_profiles(monkeypatch):
     assert db.reported_keys == [(1, {"org/model": "H1"})]
     provider_id, action, params = registry.sent[0]
     assert action == "sync_model_profiles"
-    assert params["complete"] is False
+    assert set(params) == {"profiles"}
     assert params["profiles"]["org/model"]["sync_revision"] == 2
 
 
@@ -282,3 +287,35 @@ def test_invalidation_pushes_every_affected_node(monkeypatch):
     assert db.invalidated == [(9, "wrong footprint")]
     assert pushed == [(1, ["org/model"]), (2, ["org/model"])]
     assert len(result["affected"]) == 2
+
+
+class _SnapshotRegistry:
+    def __init__(self, connected: bool):
+        self.connected = connected
+
+    def peek_runtime_snapshot(self, provider_id):
+        return {"provider_id": provider_id} if self.connected else None
+
+
+def test_reset_is_refused_while_the_worker_is_connected(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(main_mod, "_logosnode_registry", _SnapshotRegistry(connected=True))
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: None)
+    data = LogosNodeResetProfilesRequest(logos_key="k", provider_id=1)
+    response = asyncio.run(logosnode_mod.logosnode_reset_profiles(data))
+    assert response.status_code == 409
+    assert not hasattr(db, "deleted")
+
+
+def test_reset_forgets_the_named_profiles_of_a_stopped_worker(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(main_mod, "_logosnode_registry", _SnapshotRegistry(connected=False))
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: None)
+    logosnode_mod._recorded_calibrations[(1, "org/model")] = 1.0
+    data = LogosNodeResetProfilesRequest(logos_key="k", provider_id=1, model_names=["org/model"])
+    result = asyncio.run(logosnode_mod.logosnode_reset_profiles(data))
+    assert db.deleted == (1, ["org/model"])
+    assert result == {"provider_id": 1, "deleted": ["org/model"]}
+    assert (1, "org/model") not in logosnode_mod._recorded_calibrations

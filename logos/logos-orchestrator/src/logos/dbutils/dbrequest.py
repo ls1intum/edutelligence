@@ -59,6 +59,12 @@ class LogosNodeClearUnsupportedRequest(LogosKeyModel):
     model_name: str
 
 
+class LogosNodeResetProfilesRequest(LogosKeyModel):
+    provider_id: int
+    # None resets every profile of the node
+    model_names: list[str] | None = None
+
+
 class LogosNodeInvalidateCalibrationRequest(LogosKeyModel):
     calibration_id: int
     reason: str = "invalidated by admin"

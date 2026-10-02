@@ -1,7 +1,7 @@
 """Model VRAM profiles.
 
 Sources of truth, in priority order:
-  1. "calibrated"  — pre-measured by tools/calibrate_vram_profiles.py
+  1. "calibrated"  — measured by a calibration session
   2. "measured"    — derived from live observations (loaded_vram - kv_cache_sent)
   3. "override"    — operator-provided values in config.yml
   4. "hf"          — best-effort estimate from the model's Hugging Face
@@ -9,84 +9,28 @@ Sources of truth, in priority order:
                      calibration compatibility pre-check (hf_model_info.py)
                      before a probe has ever run. Below "measured"/"calibrated"
                      in authority — a real measurement always overwrites it.
-  5. "cached"      — any of the above, reloaded from model_profiles.yml on restart
+  5. "cached"      — any of the above, restored from the central store
 
 If base_residency_mb is unknown (no override, no HF estimate, never
 calibrated), placement returns 0 (no estimate) and the lane manager skips
 auto-placement rather than guessing.
 
-Persists in the state directory as model_profiles.yml.
+Profiles live only in memory. Logos' database is their store: the worker
+receives them at startup and through sync_model_profiles, and reports every
+change back in its runtime status.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 import threading
 import time
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, fields
 from typing import Any
-
-try:
-    import yaml
-except ImportError:  # pragma: no cover
-    yaml = None
 
 logger = logging.getLogger(__name__)
 
 _EMA_ALPHA = 0.3  # weight for new measurement vs historical average
-
-
-def atomic_write_yaml(path: Path, payload: dict[str, Any]) -> None:
-    """Write *payload* to *path* as YAML, atomically and race-free.
-
-    Two unrelated writers keep model_profiles.yml: this module's registry and
-    calibration's ``save_profiles``. A fixed ``<name>.tmp`` sidecar makes them
-    collide — both truncate the same scratch file, so one publishes the
-    other's half-written YAML, and the loser's cleanup can delete the winner's
-    temp file out from under its rename. That reintroduces exactly the torn
-    store the atomic write is here to prevent, so the temp name is unique per
-    call. The rename itself is what makes readers safe: they see the old file
-    or the new one, never a truncated one.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        prior_mode: int | None = path.stat().st_mode & 0o777
-    except OSError:
-        prior_mode = None
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    tmp_path = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "w") as f:
-            yaml.safe_dump(payload, f, default_flow_style=False)
-            f.flush()
-            os.fsync(f.fileno())
-        # mkstemp creates 0600. Carry the store's own mode across the replace
-        # so writing it never quietly narrows who can read it; a store being
-        # created for the first time gets the usual umask default instead.
-        if prior_mode is not None:
-            os.chmod(tmp_path, prior_mode)
-        else:
-            os.chmod(tmp_path, 0o666 & ~_current_umask())
-        os.replace(tmp_path, path)
-    finally:
-        # A successful replace already moved it; this only catches the
-        # failure paths, and must never remove the file we just published.
-        tmp_path.unlink(missing_ok=True)
-
-
-def _current_umask() -> int:
-    """Read the process umask without leaving it changed.
-
-    os.umask both sets and returns, so reading it means setting it twice. The
-    window is tiny but real, which is why this is only used for a store that
-    does not exist yet — every later write copies the mode already on disk.
-    """
-    mask = os.umask(0o022)
-    os.umask(mask)
-    return mask
 
 
 def reconfigured_vram_mb(profile: Any, measured_mb: float, gpu_count: int, cache_per_gpu_mb: float) -> float:
@@ -158,7 +102,7 @@ class ModelProfileRecord:
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     # Where base_residency_mb came from — also determines its semantics:
-    #   "calibrated" — pre-measured by calibrate_vram_profiles.py; value is
+    #   "calibrated" — measured by a calibration session; value is
     #                  loaded_vram_mb = full awake footprint with the
     #                  configured KV cap already in effect. KV is INCLUDED;
     #                  callers must NOT add kv_cache_memory_bytes on top.
@@ -169,7 +113,7 @@ class ModelProfileRecord:
     #                  safetensors sizes (pre-calibration precheck).
     #                  Weights-only, same semantics as "measured";
     #                  a real calibration always replaces it.
-    #   "cached"     — any of the above, loaded from persisted yml on restart.
+    #   "cached"     — any of the above, restored without a source label.
     residency_source: str | None = None
     # Provenance: what enforce_eager mode the calibration ran under.
     # When None on a "calibrated" profile, treat as legacy = True (the prior
@@ -227,9 +171,8 @@ class ModelProfileRecord:
     # vllm_compat.py). The master's calibration orchestrator skips models
     # flagged this way so it doesn't burn a maintenance window each night
     # watching the same identity-level error reproduce. Cleared by an
-    # operator (delete the entry from calibration_unsupported_models.txt
-    # and restart, or set this flag to False) after fixing the underlying
-    # cause. None on profiles written before this flag existed.
+    # operator through Logos' clear-unsupported endpoint after fixing the
+    # underlying cause. None on profiles written before this flag existed.
     calibration_unsupported: bool | None = None
     # Reason code matching FatalLoadErrorPattern.reason_code, for diagnostics.
     # Surfaced to ops in master logs alongside `calibration_unsupported=True`.
@@ -257,6 +200,15 @@ class ModelProfileRecord:
     # Per-KV max_model_len sweep captured by calibration, ordered by ascending
     # kv_mb. None for legacy profiles.
     kv_cache_to_max_model_len_pairs: list[dict[str, Any]] | None = None
+    # Central-store bookkeeping, echoed back in the runtime status.
+    # sync_revision is the orchestrator's revision this record reflects; a
+    # local calibration carries calibration_origin="local", no
+    # calibration_id and its calibration_key until the snapshot is linked.
+    sync_revision: int = 0
+    calibration_id: int | None = None
+    calibration_origin: str | None = None
+    calibration_stale: bool | None = None
+    calibration_key: dict[str, Any] | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -320,6 +272,11 @@ class ModelProfileRecord:
             "calibration_max_model_len": self.calibration_max_model_len,
             "calibration_max_num_seqs": self.calibration_max_num_seqs,
             "kv_cache_to_max_model_len_pairs": self.kv_cache_to_max_model_len_pairs,
+            "sync_revision": self.sync_revision,
+            "calibration_id": self.calibration_id,
+            "calibration_origin": self.calibration_origin,
+            "calibration_stale": self.calibration_stale,
+            "calibration_key": self.calibration_key,
         }
 
     def estimate_host_ram_mb(self) -> float:
@@ -350,20 +307,16 @@ class ModelProfileRecord:
 
 
 class ModelProfileRegistry:
-    """Model VRAM profiles persisted in state directory."""
+    """Model VRAM profiles, held in memory and synced with Logos."""
 
     def __init__(
         self,
-        state_dir: Path | None = None,
         model_profile_overrides: dict[str, dict] | None = None,
     ) -> None:
         self._profiles: dict[str, ModelProfileRecord] = {}
-        self._state_dir = state_dir
         self._lock = threading.Lock()
-        # True once a load of model_profiles.yml has failed. Blocks _persist,
-        # which rewrites the whole file from memory and would otherwise
-        # overwrite profiles it never managed to read.
-        self._load_failed = False
+        # model -> (calibration key this node computes for it now, its hash)
+        self._calibration_keys: dict[str, tuple[dict[str, Any], str]] = {}
         self._manual_overrides: dict[str, dict[str, Any]] = {}
         if model_profile_overrides:
             for model_name, ov in model_profile_overrides.items():
@@ -375,7 +328,6 @@ class ModelProfileRegistry:
                     len(self._manual_overrides),
                     ", ".join(sorted(self._manual_overrides)),
                 )
-        self._load_persisted()
 
     @staticmethod
     def _calibrated_tp_conflicts(profile: ModelProfileRecord, tensor_parallel_size: int | None) -> bool:
@@ -421,8 +373,8 @@ class ModelProfileRegistry:
         """Merge additional manual overrides (e.g. from capabilities_overrides).
 
         Re-applies the merged overrides to profile records that already exist:
-        records loaded from the persisted model_profiles.yml are otherwise
-        never revisited after startup, so an override that arrives late — this
+        records restored from Logos are otherwise never revisited after
+        startup, so an override that arrives late — this
         method is also called from the lane-spawn path for profile-level keys
         routed out of engines.vllm.model_overrides — would be missing from the
         live record and from the runtime snapshot the server planner reads.
@@ -558,8 +510,8 @@ class ModelProfileRegistry:
     def seed_capabilities(self, model_names: list[str], engine: str = "vllm") -> None:
         """Pre-create profile stubs for capabilities models before any lane is loaded.
 
-        If a profile already exists (loaded from model_profiles.yml — e.g. from a
-        prior calibration run) it is left untouched. Only applies manual overrides
+        If a profile already exists (restored from Logos — e.g. from a prior
+        calibration run) it is left untouched. Only applies manual overrides
         for genuinely new entries.
         """
         for model_name in model_names:
@@ -594,11 +546,9 @@ class ModelProfileRegistry:
             else:
                 logger.warning(
                     "Capability [UNCALIBRATED] %s — no base_residency_mb known. "
-                    "Run tools/calibrate_vram_profiles.py before starting the worker "
-                    "to enable accurate placement decisions.",
+                    "Logos calibrates it in its next calibration window.",
                     model_name,
                 )
-        self._persist()
 
     @staticmethod
     def _parse_kv_cache_to_mb(value: str) -> float:
@@ -708,7 +658,6 @@ class ModelProfileRegistry:
                 kv_cache_sent_mb,
                 profile.measurement_count,
             )
-        self._persist()
 
     def record_successful_load_util(self, model_name: str, gpu_memory_utilization: float) -> None:
         """Record the lowest known-good gpu_memory_utilization that reached loaded/running."""
@@ -723,7 +672,6 @@ class ModelProfileRegistry:
             ):
                 profile.min_gpu_memory_utilization_to_load = gpu_memory_utilization
                 profile.last_measured_epoch = time.time()
-        self._persist()
 
     def record_sleeping_vram(
         self,
@@ -776,7 +724,6 @@ class ModelProfileRegistry:
             else:
                 profile.sleeping_residual_mb = _ema(profile.sleeping_residual_mb, residual_vram_mb)
             profile.last_measured_epoch = time.time()
-        self._persist()
 
     def record_host_ram(
         self,
@@ -807,7 +754,6 @@ class ModelProfileRegistry:
                 prior = profile.host_ram_mb
                 profile.host_ram_mb = host_ram_mb if prior is None else max(prior, host_ram_mb)
             profile.last_measured_epoch = time.time()
-        self._persist()
 
     def mark_sleep_mode_disabled(self, model_name: str, disabled: bool) -> bool:
         """Persist whether sleep mode is forbidden for this model on this worker.
@@ -829,17 +775,15 @@ class ModelProfileRegistry:
             if profile.sleep_mode_disabled == disabled:
                 return False
             profile.sleep_mode_disabled = disabled
-        self._persist()
         return True
 
     def mark_calibration_unsupported(self, model_name: str, unsupported: bool, reason_code: str | None = None) -> bool:
-        """Persist whether this model is permanently uncalibratable on this worker.
+        """Record whether this model is permanently uncalibratable on this worker.
 
         Returns True when the stored value changed. Used by the
         server-orchestrated calibration path to tell the master "stop
         scheduling this model for calibration — it cannot succeed here
-        until an operator removes the matching line from
-        ``calibration_unsupported_models.txt``."
+        until an operator clears the verdict in Logos."
 
         Setting ``unsupported=False`` is treated as a clearing operation:
         it never creates a new profile entry, only updates an existing
@@ -857,7 +801,6 @@ class ModelProfileRegistry:
                 return False
             profile.calibration_unsupported = unsupported
             profile.calibration_unsupported_reason = reason_code if unsupported else None
-        self._persist()
         return True
 
     def mark_capacity_floor(self, model_name: str, floor_mb: float) -> bool:
@@ -873,7 +816,6 @@ class ModelProfileRegistry:
             if new_floor == current:
                 return False
             profile.metal_capacity_floor_mb = new_floor
-        self._persist()
         return True
 
     def apply_hf_precheck(
@@ -944,8 +886,6 @@ class ModelProfileRegistry:
                     profile.residency_source = "hf"
                     changed = True
 
-        if changed:
-            self._persist()
         return changed
 
     def get_profile(self, model_name: str) -> ModelProfileRecord | None:
@@ -953,140 +893,132 @@ class ModelProfileRegistry:
             return self._profiles.get(model_name)
 
     def get_all_profiles(self) -> dict[str, dict[str, Any]]:
-        """Return all profiles as serializable dicts for websocket payload."""
-        with self._lock:
-            return {name: profile.to_dict() for name, profile in self._profiles.items()}
+        """All profiles as the runtime status reports them to Logos.
 
-    def _persist(self) -> None:
-        """Save model profiles to state directory as YAML.
-
-        Written atomically, and refused outright while the last load failed:
-        this rewrites the whole file from memory, so persisting on top of a
-        store we could not read replaces measured profiles with whatever
-        placeholder state the process built instead — the freshly seeded
-        capability stubs, carrying only the operator's config overrides.
+        Each carries the calibration key this node computes for the model
+        right now and the fields its config.yml overrides, so Logos can tell
+        configuration from measurement.
         """
-        if self._state_dir is None or yaml is None:
-            return
-        if self._load_failed:
-            logger.error(
-                "Refusing to persist model profiles: %s could not be read, so what "
-                "is in memory is not a complete picture of it. Fix or move the file "
-                "to let the worker rebuild it.",
-                self._state_dir / "model_profiles.yml",
-            )
-            return
-        try:
-            # Snapshot and write under one lock. Releasing it between the two
-            # lets a second writer's older snapshot land after this one — the
-            # rename is atomic per call, but two calls still race for which
-            # version ends up on disk.
-            with self._lock:
-                data = {name: profile.to_dict() for name, profile in self._profiles.items()}
-                if not data:
-                    return
-                self._state_dir.mkdir(parents=True, exist_ok=True)
-                atomic_write_yaml(self._state_dir / "model_profiles.yml", {"model_profiles": data})
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to persist model profiles")
+        with self._lock:
+            result = {}
+            for name, profile in self._profiles.items():
+                entry = profile.to_dict()
+                entry["calibration_key_hash"] = self._calibration_keys.get(name, (None, None))[1]
+                entry["overridden_fields"] = self._overridden_fields(name)
+                result[name] = entry
+            return result
 
-    def _load_persisted(self) -> None:
-        """Read persisted model profiles from state file on startup."""
-        if self._state_dir is None or yaml is None:
-            return
-        state_path = self._state_dir / "model_profiles.yml"
-        if not state_path.exists():
-            self._load_failed = False
-            return
-        try:
-            with state_path.open() as f:
-                data = yaml.safe_load(f) or {}
+    def _overridden_fields(self, model_name: str) -> list[str]:
+        overrides = self._manual_overrides.get(model_name) or {}
+        return sorted(key for key in overrides if key in _RECORD_FIELDS)
 
-            profiles = data.get("model_profiles")
-            if profiles is None:
-                self._load_failed = False
-                return
-            if not isinstance(profiles, dict):
-                raise ValueError(f"model_profiles is {type(profiles).__name__}, not a mapping")
-            for model_name, profile_data in profiles.items():
-                if not isinstance(profile_data, dict):
+    def set_calibration_keys(self, keys: dict[str, dict[str, Any]]) -> None:
+        from logos_worker_node.profile_fingerprint import key_hash  # noqa: PLC0415
+
+        with self._lock:
+            self._calibration_keys = {name: (key, key_hash(key)) for name, key in keys.items()}
+
+    def calibration_key(self, model_name: str) -> dict[str, Any] | None:
+        with self._lock:
+            entry = self._calibration_keys.get(model_name)
+        return entry[0] if entry is not None else None
+
+    def calibration_key_hashes(self) -> dict[str, str]:
+        with self._lock:
+            return {name: digest for name, (_, digest) in self._calibration_keys.items()}
+
+    def replace_from_sync(self, profiles: dict[str, Any], skip: frozenset[str] = frozenset()) -> list[str]:
+        """Adopt profiles Logos sent; returns the models that were replaced.
+
+        Models absent from ``profiles`` keep their record. ``skip`` protects
+        a model whose calibration is running: its result must not be
+        overwritten by a sync that predates it.
+        """
+        replaced: list[str] = []
+        with self._lock:
+            for model_name, data in profiles.items():
+                if model_name in skip or not isinstance(data, dict):
                     continue
-                persisted_source = profile_data.get("residency_source")
-                eager_at_cal = profile_data.get("enforce_eager_at_calibration")
-                # Legacy profiles predating provenance tracking were always
-                # measured with the hard-forced eager=True path. Carry that
-                # assumption forward so the reuse check doesn't false-mismatch.
-                if eager_at_cal is None and persisted_source == "calibrated":
-                    eager_at_cal = True
-                self._profiles[str(model_name)] = ModelProfileRecord(
-                    loaded_vram_mb=profile_data.get("loaded_vram_mb"),
-                    sleeping_residual_mb=profile_data.get("sleeping_residual_mb"),
-                    disk_size_bytes=profile_data.get("disk_size_bytes"),
-                    base_residency_mb=profile_data.get("base_residency_mb"),
-                    kv_budget_mb=profile_data.get("kv_budget_mb"),
-                    min_kv_cache_mb=profile_data.get("min_kv_cache_mb"),
-                    max_kv_cache_mb=profile_data.get("max_kv_cache_mb"),
-                    engine=profile_data.get("engine"),
-                    observed_gpu_memory_utilization=profile_data.get("observed_gpu_memory_utilization"),
-                    min_gpu_memory_utilization_to_load=profile_data.get("min_gpu_memory_utilization_to_load"),
-                    tensor_parallel_size=profile_data.get("tensor_parallel_size"),
-                    kv_per_token_bytes=profile_data.get("kv_per_token_bytes"),
-                    num_key_value_heads=profile_data.get("num_key_value_heads"),
-                    max_context_length=profile_data.get("max_context_length"),
-                    min_context_fraction=profile_data.get("min_context_fraction"),
-                    measurement_count=int(profile_data.get("measurement_count", 0) or 0),
-                    last_measured_epoch=float(profile_data.get("last_measured_epoch", 0.0) or 0.0),
-                    residency_source=persisted_source or "cached",
-                    enforce_eager_at_calibration=eager_at_cal,
-                    host_ram_mb=profile_data.get("host_ram_mb"),
-                    host_ram_residual_mb=profile_data.get("host_ram_residual_mb"),
-                    sleep_l1_transient_host_ram_mb=profile_data.get("sleep_l1_transient_host_ram_mb"),
-                    sleep_l2_transient_host_ram_mb=profile_data.get("sleep_l2_transient_host_ram_mb"),
-                    cold_load_time_s=profile_data.get("cold_load_time_s"),
-                    wake_from_sleep_time_s=profile_data.get("wake_from_sleep_time_s"),
-                    sleep_mode_disabled=profile_data.get("sleep_mode_disabled"),
-                    calibration_unsupported=profile_data.get("calibration_unsupported"),
-                    calibration_unsupported_reason=profile_data.get("calibration_unsupported_reason"),
-                    metal_capacity_floor_mb=profile_data.get("metal_capacity_floor_mb"),
-                    calibration_max_model_len=(
-                        int(profile_data["calibration_max_model_len"])
-                        if profile_data.get("calibration_max_model_len")
-                        else None
-                    ),
-                    calibration_max_num_seqs=(
-                        int(profile_data["calibration_max_num_seqs"])
-                        if profile_data.get("calibration_max_num_seqs")
-                        else None
-                    ),
-                    kv_cache_to_max_model_len_pairs=(
-                        profile_data.get("kv_cache_to_max_model_len_pairs")
-                        if isinstance(profile_data.get("kv_cache_to_max_model_len_pairs"), list)
-                        else None
-                    ),
-                )
-            logger.info(
-                "Loaded %d model profile(s) from %s",
-                len(self._profiles),
-                state_path,
-            )
-            for name, prof in self._profiles.items():
-                src = prof.residency_source or "unknown"
-                logger.info(
-                    "  [%s] %s — base_residency=%.0f MB | sleeping=%.0f MB | observations=%d",
-                    src.upper(),
-                    name,
-                    prof.base_residency_mb or 0,
-                    prof.sleeping_residual_mb or 0,
-                    prof.measurement_count,
-                )
-            self._load_failed = False
-        except Exception:  # noqa: BLE001
-            # Loud, and latched: every calibrated profile on this node is in
-            # that file and nowhere else, and _persist would otherwise write
-            # the empty/partial in-memory state straight over it.
-            self._load_failed = True
-            logger.exception(
-                "Failed to load persisted model profiles from %s — profile "
-                "persistence is disabled until this is resolved",
-                state_path,
-            )
+                self._profiles[str(model_name)] = _record_from_dict(data)
+                self._apply_manual_overrides(str(model_name), self._profiles[str(model_name)])
+                replaced.append(str(model_name))
+        return replaced
+
+    def apply_calibration_result(self, model_name: str, measured: dict[str, Any]) -> None:
+        """Layer a fresh local calibration over the model's record.
+
+        Logos snapshots it from the next runtime status and replies with the
+        snapshot's calibration_id.
+        """
+        from logos_worker_node.calibration import merge_profile  # noqa: PLC0415
+
+        with self._lock:
+            prior = self._profiles.get(model_name)
+            merged = merge_profile(prior.to_dict() if prior is not None else None, measured)
+            record = _record_from_dict(merged)
+            record.calibration_id = None
+            record.calibration_origin = "local"
+            record.calibration_stale = False
+            key = self._calibration_keys.get(model_name)
+            record.calibration_key = dict(key[0]) if key is not None else None
+            self._profiles[model_name] = record
+            self._apply_manual_overrides(model_name, record)
+
+
+_RECORD_FIELDS = frozenset(field.name for field in fields(ModelProfileRecord))
+
+
+def _optional_int(value: Any) -> int | None:
+    return int(value) if value else None
+
+
+def _record_from_dict(data: dict[str, Any]) -> ModelProfileRecord:
+    """Build a record from a stored profile dict, tolerating legacy shapes."""
+    persisted_source = data.get("residency_source")
+    eager_at_cal = data.get("enforce_eager_at_calibration")
+    # Profiles predating provenance tracking were always measured with the
+    # hard-forced eager=True path; carrying that forward keeps the reuse
+    # check from false-mismatching.
+    if eager_at_cal is None and persisted_source == "calibrated":
+        eager_at_cal = True
+    pairs = data.get("kv_cache_to_max_model_len_pairs")
+    key = data.get("calibration_key")
+    return ModelProfileRecord(
+        loaded_vram_mb=data.get("loaded_vram_mb"),
+        sleeping_residual_mb=data.get("sleeping_residual_mb"),
+        disk_size_bytes=data.get("disk_size_bytes"),
+        base_residency_mb=data.get("base_residency_mb"),
+        kv_budget_mb=data.get("kv_budget_mb"),
+        min_kv_cache_mb=data.get("min_kv_cache_mb"),
+        max_kv_cache_mb=data.get("max_kv_cache_mb"),
+        engine=data.get("engine"),
+        observed_gpu_memory_utilization=data.get("observed_gpu_memory_utilization"),
+        min_gpu_memory_utilization_to_load=data.get("min_gpu_memory_utilization_to_load"),
+        tensor_parallel_size=data.get("tensor_parallel_size"),
+        kv_per_token_bytes=data.get("kv_per_token_bytes"),
+        num_key_value_heads=data.get("num_key_value_heads"),
+        max_context_length=data.get("max_context_length"),
+        min_context_fraction=data.get("min_context_fraction"),
+        measurement_count=int(data.get("measurement_count", 0) or 0),
+        last_measured_epoch=float(data.get("last_measured_epoch", 0.0) or 0.0),
+        residency_source=persisted_source or "cached",
+        enforce_eager_at_calibration=eager_at_cal,
+        host_ram_mb=data.get("host_ram_mb"),
+        host_ram_residual_mb=data.get("host_ram_residual_mb"),
+        sleep_l1_transient_host_ram_mb=data.get("sleep_l1_transient_host_ram_mb"),
+        sleep_l2_transient_host_ram_mb=data.get("sleep_l2_transient_host_ram_mb"),
+        cold_load_time_s=data.get("cold_load_time_s"),
+        wake_from_sleep_time_s=data.get("wake_from_sleep_time_s"),
+        sleep_mode_disabled=data.get("sleep_mode_disabled"),
+        calibration_unsupported=data.get("calibration_unsupported"),
+        calibration_unsupported_reason=data.get("calibration_unsupported_reason"),
+        metal_capacity_floor_mb=data.get("metal_capacity_floor_mb"),
+        calibration_max_model_len=_optional_int(data.get("calibration_max_model_len")),
+        calibration_max_num_seqs=_optional_int(data.get("calibration_max_num_seqs")),
+        kv_cache_to_max_model_len_pairs=pairs if isinstance(pairs, list) else None,
+        sync_revision=int(data.get("sync_revision", 0) or 0),
+        calibration_id=_optional_int(data.get("calibration_id")),
+        calibration_origin=data.get("calibration_origin"),
+        calibration_stale=data.get("calibration_stale"),
+        calibration_key=key if isinstance(key, dict) else None,
+    )

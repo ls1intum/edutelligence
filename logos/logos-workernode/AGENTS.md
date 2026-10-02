@@ -13,6 +13,7 @@ If any historical note conflicts with runtime behavior, follow the code and the 
 
 ## Notes for agents
 
-- Calibration results persist in the worker's state directory and flow to Logos over the existing websocket heartbeat — no extra worker-side configuration.
+- The worker stores no model profiles. Logos' database is their only store: the worker fetches them at startup (`POST /logosdb/providers/logosnode/model-profiles`, before any lane starts — it waits while Logos is unreachable), Logos pushes central changes with the `sync_model_profiles` command, and every local change reaches Logos through the runtime status (`runtime.model_profiles`, keyed by `sync_revision`).
+- Calibration keys (`profile_fingerprint.py`) tie a calibration to the hardware, vLLM version and config it was measured under; Logos marks a profile `calibration_stale` when the key changes, and the next calibration window re-measures it.
 - Tests run through the shared `logos_test.yml` CI job together with the orchestrator suite; a change touching both needs both green.
 - The `logos/e2e` tier-1 suite drives the real `logos_worker_node` against simulated GPUs (`gpusim`) — run it when changing GPU-compatibility decisions (`../e2e/AGENTS.md`).

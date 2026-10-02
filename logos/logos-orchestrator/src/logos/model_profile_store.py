@@ -21,7 +21,6 @@ CALIBRATION_FIELDS = frozenset(
         "min_kv_cache_mb",
         "max_kv_cache_mb",
         "kv_cache_to_max_model_len_pairs",
-        "calibration_kv_cache_memory_bytes",
         "calibration_max_model_len",
         "calibration_max_num_seqs",
         "tensor_parallel_size",

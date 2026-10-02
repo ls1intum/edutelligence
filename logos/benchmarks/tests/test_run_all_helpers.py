@@ -155,15 +155,66 @@ def test_profile_is_calibrated_distinguishes_stub_from_complete():
     assert bm._profile_is_calibrated(stale) is False
 
 
+def test_profile_measured_under_another_key_is_not_calibrated():
+    complete = {
+        "residency_source": "calibrated",
+        "base_residency_mb": 1000.0,
+        "sleeping_residual_mb": 50.0,
+        "sleep_l1_transient_host_ram_mb": 10.0,
+        "kv_cache_to_max_model_len_pairs": [{"kv": 1, "mml": 1}],
+    }
+    assert bm._profile_is_calibrated(complete) is True
+    assert bm._profile_is_calibrated({**complete, "calibration_stale": True}) is False
+
+
+def test_full_reset_needs_provider_ids_for_the_profiles_in_logos():
+    with (
+        patch.object(bm, "_stop_workernode_via_ssh") as stop,
+        patch.object(bm, "_wipe_calibration_and_weights_via_ssh") as wipe,
+    ):
+        ok = asyncio.run(
+            bm._reset_and_calibrate_all_nodes(
+                ["h1"], "u", None, "/opt/wn", ["m1"], None, 10.0, "https://x", "k", [], 443, True
+            )
+        )
+    assert ok is False
+    stop.assert_not_called()
+    wipe.assert_not_called()
+
+
+def test_full_reset_forgets_profiles_while_nodes_are_stopped():
+    order: list = []
+    with (
+        patch.object(bm, "_stop_workernode_via_ssh", side_effect=lambda *a, **k: order.append("stop")),
+        patch.object(
+            bm, "_reset_profiles_via_rest", new=AsyncMock(side_effect=lambda *a, **k: order.append("reset") or [])
+        ) as reset,
+        patch.object(bm, "_wipe_calibration_and_weights_via_ssh", side_effect=lambda *a, **k: order.append("wipe")),
+        patch.object(bm, "_set_logos_sleep_mode_via_ssh"),
+        patch.object(bm, "_start_workernode_via_ssh", side_effect=lambda *a, **k: order.append("start")),
+        patch.object(bm, "_trigger_calibration_via_rest", new=AsyncMock(return_value=True)),
+        patch.object(bm, "_wait_for_calibration_complete", new=AsyncMock(return_value=True)),
+    ):
+        ok = asyncio.run(
+            bm._reset_and_calibrate_all_nodes(
+                ["h1"], "u", None, "/opt/wn", ["m1"], None, 10.0, "https://logos.example", "k", [3, 4], 443, True
+            )
+        )
+    assert ok is True
+    assert [c.args[2] for c in reset.await_args_list] == [3, 4]
+    assert all(c.args[3:] == () for c in reset.await_args_list)  # all models
+    assert order.index("stop") < order.index("reset") < order.index("start")
+
+
 def test_ensure_calibration_noop_when_all_calibrated():
     with (
         patch.object(bm, "_start_workernode_via_ssh") as start,
         patch.object(bm, "_stop_workernode_via_ssh") as stop,
-        patch.object(bm, "_reset_profile_entries_via_ssh") as reset,
-        patch.object(bm, "_calibration_status_for_host", return_value=({"m1", "m2"}, [])),
+        patch.object(bm, "_reset_profiles_via_rest", new=AsyncMock(return_value=[])) as reset,
+        patch.object(bm, "_calibration_status_for_provider", new=AsyncMock(return_value=({"m1", "m2"}, []))),
         patch.object(bm, "_set_logos_sleep_mode_via_ssh") as sleep_set,
         patch.object(bm, "_trigger_calibration_via_rest", new=AsyncMock(return_value=True)) as trig,
-        patch.object(bm, "_wait_for_calibration_complete_via_ssh", new=AsyncMock(return_value=True)) as wait,
+        patch.object(bm, "_wait_for_calibration_complete", new=AsyncMock(return_value=True)) as wait,
     ):
         ok = asyncio.run(
             bm._ensure_calibration_complete_all_nodes(
@@ -174,7 +225,7 @@ def test_ensure_calibration_noop_when_all_calibrated():
     # Nothing pending → no node churn, no reset, no trigger, no wait.
     start.assert_not_called()
     stop.assert_not_called()
-    reset.assert_not_called()
+    reset.assert_not_awaited()
     sleep_set.assert_not_called()
     trig.assert_not_awaited()
     wait.assert_not_awaited()
@@ -183,17 +234,17 @@ def test_ensure_calibration_noop_when_all_calibrated():
 def test_ensure_calibration_resets_incomplete_then_triggers_with_sleep_on():
     order: list = []
     with (
-        patch.object(bm, "_calibration_status_for_host", return_value=(set(), ["m1"])),
+        patch.object(bm, "_calibration_status_for_provider", new=AsyncMock(return_value=(set(), ["m1"]))),
         patch.object(bm, "_stop_workernode_via_ssh", side_effect=lambda *a, **k: order.append("stop")),
         patch.object(
-            bm, "_reset_profile_entries_via_ssh", side_effect=lambda *a, **k: order.append("reset") or ["m1"]
+            bm, "_reset_profiles_via_rest", new=AsyncMock(side_effect=lambda *a, **k: order.append("reset") or ["m1"])
         ) as reset,
         patch.object(
             bm, "_set_logos_sleep_mode_via_ssh", side_effect=lambda *a, **k: order.append("sleep")
         ) as sleep_set,
         patch.object(bm, "_start_workernode_via_ssh", side_effect=lambda *a, **k: order.append("start")),
         patch.object(bm, "_trigger_calibration_via_rest", new=AsyncMock(return_value=True)) as trig,
-        patch.object(bm, "_wait_for_calibration_complete_via_ssh", new=AsyncMock(return_value=True)) as wait,
+        patch.object(bm, "_wait_for_calibration_complete", new=AsyncMock(return_value=True)) as wait,
     ):
         ok = asyncio.run(
             bm._ensure_calibration_complete_all_nodes(
@@ -201,7 +252,7 @@ def test_ensure_calibration_resets_incomplete_then_triggers_with_sleep_on():
             )
         )
     assert ok is True
-    reset.assert_called_once()  # incomplete entry dropped so worker re-picks it
+    reset.assert_awaited_once()  # incomplete profile forgotten so the worker re-picks it
     sleep_set.assert_called_once()
     trig.assert_awaited_once()
     wait.assert_awaited_once()
@@ -215,10 +266,10 @@ def test_ensure_calibration_fails_without_provider_ids():
     # Pending models but no provider IDs → cannot trigger, must not hang/pass.
     with (
         patch.object(bm, "_stop_workernode_via_ssh") as stop,
-        patch.object(bm, "_reset_profile_entries_via_ssh") as reset,
-        patch.object(bm, "_calibration_status_for_host", return_value=(set(), ["m1"])),
+        patch.object(bm, "_reset_profiles_via_rest", new=AsyncMock(return_value=[])) as reset,
+        patch.object(bm, "_calibration_status_for_provider", new=AsyncMock(return_value=(set(), ["m1"]))),
         patch.object(bm, "_trigger_calibration_via_rest", new=AsyncMock(return_value=True)) as trig,
-        patch.object(bm, "_wait_for_calibration_complete_via_ssh", new=AsyncMock(return_value=True)) as wait,
+        patch.object(bm, "_wait_for_calibration_complete", new=AsyncMock(return_value=True)) as wait,
     ):
         ok = asyncio.run(
             bm._ensure_calibration_complete_all_nodes(
@@ -228,7 +279,7 @@ def test_ensure_calibration_fails_without_provider_ids():
     assert ok is False
     # Bail before touching the nodes.
     stop.assert_not_called()
-    reset.assert_not_called()
+    reset.assert_not_awaited()
     trig.assert_not_awaited()
     wait.assert_not_awaited()
 

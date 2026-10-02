@@ -248,32 +248,6 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     model_profiles = None
     if hasattr(app.state, "model_profiles") and app.state.model_profiles is not None:
         model_profiles = app.state.model_profiles.get_all_profiles()
-        # Reconcile each profile's calibration_unsupported flag against the
-        # current state of calibration_unsupported_models.txt — that file is
-        # operator-editable, so deleting a line should immediately let the
-        # master's orchestrator re-schedule the model without requiring a
-        # worker restart or a separate clear-flag RPC. Best-effort: ignore
-        # any I/O error and leave the persisted flag in place.
-        try:
-            from logos_worker_node.calibration import _load_unsupported_models  # noqa: PLC0415
-            from logos_worker_node.config import get_state_dir  # noqa: PLC0415
-
-            _file_state = _load_unsupported_models(
-                get_state_dir() / "calibration_logs" / "calibration_unsupported_models.txt"
-            )
-            for _name, _prof in model_profiles.items():
-                if _name in _file_state:
-                    _prof["calibration_unsupported"] = True
-                    _prof["calibration_unsupported_reason"] = _file_state[_name].reason_code
-                elif _prof.get("calibration_unsupported"):
-                    # File no longer mentions this model — clear the flag
-                    # both on the wire and in the in-memory registry so the
-                    # next persist drops the stale value.
-                    _prof["calibration_unsupported"] = None
-                    _prof["calibration_unsupported_reason"] = None
-                    app.state.model_profiles.mark_calibration_unsupported(_name, False)
-        except Exception:  # noqa: BLE001
-            pass
 
     return WorkerRuntimeStatus(
         worker_name=cfg.worker.name,

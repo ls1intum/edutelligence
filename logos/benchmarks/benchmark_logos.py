@@ -3790,7 +3790,7 @@ async def _wait_for_dynamo(url: str, expected_models: list[str], timeout_s: floa
 # the ray-llm container with the HF cache mounted + HF_TOKEN. The OpenAI endpoint
 # binds <head>:8000; the benchmark dispatches there (UFW allows logos-test→8000).
 # Exact Logos vLLM run parameters per model, read from the calibrated
-# model_profiles.yml on the workernode (tensor_parallel_size + calibrated
+# profile Logos holds for the workernode (tensor_parallel_size + calibrated
 # max_model_len). The serving-framework baselines (ray, kserve) use THESE so they
 # are directly comparable to logos-nosleep — same engine, same TP, same context.
 # logos-sleep (the contribution) differs only in the sleep/wake fast-path. Update
@@ -5073,17 +5073,16 @@ def _wipe_calibration_and_weights_via_ssh(
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
 ) -> None:
-    """Delete all calibration state AND downloaded model weights on each node.
+    """Delete local calibration leftovers AND downloaded model weights on each node.
 
     The workernode MUST be stopped before calling this (otherwise the container
-    holds the files / GPU). Per node it removes:
-      - ``{workernode_dir}/data/model_profiles.yml`` (+ ``.bak*``) — the
-        calibration results that the worker reads to decide a model is
-        "calibrated". Wiping these forces a fresh calibration on next start.
+    holds the files / GPU). The profiles themselves live in Logos and are reset
+    there (:func:`_reset_profiles_via_rest`). Per node it removes:
+      - any ``{workernode_dir}/data/model_profiles.yml*`` a pre-central worker
+        left behind, so it is never handed over to Logos again.
       - ``{workernode_dir}/data/calibration_logs/`` — the per-model logs plus
         the calibration black/whitelist files
-        (``calibration_failed_commands.txt`` / ``calibration_succeeded_commands.txt``)
-        and ``calibration_unsupported_models.txt``.
+        (``calibration_failed_commands.txt`` / ``calibration_succeeded_commands.txt``).
       - everything under the model weight cache (``weight_cache_path``, i.e. the
         ``LOGOS_MODELS_MOUNT`` vLLM downloads into) so every model re-downloads
         from scratch. When ``weight_cache_path`` is not given it is read from
@@ -5094,7 +5093,7 @@ def _wipe_calibration_and_weights_via_ssh(
     env_path = shlex.quote(f"{workernode_dir}/.env")
     for host in hosts:
         parts = [
-            f"{sudo}rm -f {data_dir}/model_profiles.yml {data_dir}/model_profiles.yml.bak*",
+            f"{sudo}rm -f {data_dir}/model_profiles.yml*",
             f"{sudo}rm -rf {data_dir}/calibration_logs",
         ]
         if weight_cache_path:
@@ -5122,14 +5121,14 @@ def _wipe_calibration_and_weights_via_ssh(
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
         if result.returncode != 0:
             raise RuntimeError(f"Failed to wipe calibration state on {host} (exit {result.returncode}).")
-        print(f"  [calib] {host}: wiped profiles + calibration_logs{weight_note}.")
+        print(f"  [calib] {host}: wiped calibration_logs{weight_note}.")
 
 
 def _profile_is_calibrated(profile: object) -> bool:
     """Mirror the worker's own 'is this model calibrated?' test.
 
-    Must match logos-workernode ``main._auto_calibrate_if_needed`` exactly so we
-    stop waiting exactly when the worker would stop re-calibrating — and, just as
+    Must match logos-workernode ``LogosBridgeClient._list_uncalibrated_models``
+    so we stop waiting exactly when the worker would stop re-calibrating — and, just as
     importantly, so we do NOT treat as done a *legacy* calibrated profile the
     worker would itself recalibrate. If we were more lenient than the worker we
     would skip such a model, then fire requests the worker can't serve.
@@ -5141,7 +5140,9 @@ def _profile_is_calibrated(profile: object) -> bool:
       * the KV envelope is not collapsed (min == max); and
       * for a ``calibrated`` profile: it carries kv_cache_to_max_model_len_pairs
         and is not in the old weights-only format (loaded_vram_mb sitting a full
-        kv_budget above base_residency_mb).
+        kv_budget above base_residency_mb); and
+      * Logos does not mark it stale (measured under another hardware, vLLM or
+        config key — the worker re-measures those).
 
     The worker's (tp, enforce_eager) provenance check is intentionally NOT
     mirrored here — it needs the per-model production plan from config; the
@@ -5162,6 +5163,8 @@ def _profile_is_calibrated(profile: object) -> bool:
         for key in ("sleeping_residual_mb", "sleep_l1_transient_host_ram_mb"):
             if profile.get(key) is None:
                 return False
+    if profile.get("calibration_stale"):
+        return False
     mn, mx = profile.get("min_kv_cache_mb"), profile.get("max_kv_cache_mb")
     if mn is not None and mx is not None and mn > 0 and mn == mx:
         return False  # collapsed KV envelope → worker re-calibrates
@@ -5180,114 +5183,105 @@ def _profile_is_calibrated(profile: object) -> bool:
     return True
 
 
-def _calibration_status_for_host(
-    host: str,
-    ssh_user: str,
-    ssh_key: Optional[str],
-    profiles_path: str,
-    unsupported_path: str,
+def _admin_base_url(logos_url: str, admin_port: int) -> str:
+    host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
+    return f"https://{host}:{admin_port}"
+
+
+async def _calibration_status_for_provider(
+    client: "httpx.AsyncClient",
+    admin_url: str,
+    logos_key: str,
+    provider_id: int,
     models: list[str],
-    sudo: str,
-    relay_host: Optional[str],
-    relay_user: Optional[str],
 ) -> tuple[set[str], list[str]]:
-    """Return (done, pending) benchmark models for one node from its profiles file."""
-    unsupported: set[str] = set()
-    r = subprocess.run(
-        _build_ssh_cmd(
-            host,
-            ssh_user,
-            ssh_key,
-            f"{sudo}cat {shlex.quote(unsupported_path)} 2>/dev/null || true",
-            relay_host,
-            relay_user,
-        ),
-        capture_output=True,
-        text=True,
-    )
-    for line in (r.stdout or "").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            unsupported.add(line.split("\t")[0])
+    """Return (done, pending) benchmark models for one provider.
 
-    r2 = subprocess.run(
-        _build_ssh_cmd(
-            host,
-            ssh_user,
-            ssh_key,
-            f"{sudo}cat {shlex.quote(profiles_path)} 2>/dev/null || true",
-            relay_host,
-            relay_user,
-        ),
-        capture_output=True,
-        text=True,
-    )
+    Profiles live in Logos, which reports them with the worker's runtime
+    snapshot. A worker that is not connected counts as nothing done.
+    """
     profiles: dict = {}
-    if _YAML and (r2.stdout or "").strip():
-        try:
-            data = _yaml.safe_load(r2.stdout) or {}
-            profiles = data.get("model_profiles") or {}
-        except Exception:
-            profiles = {}
-
-    done: set[str] = set()
-    pending: list[str] = []
-    for model in models:
-        if model in unsupported or _profile_is_calibrated(profiles.get(model)):
-            done.add(model)
-        else:
-            pending.append(model)
-    return done, pending
+    try:
+        r = await client.post(
+            f"{admin_url}/logosdb/providers/logosnode/status",
+            json={"provider_id": provider_id, "logos_key": logos_key},
+        )
+        if r.status_code == 200:
+            profiles = ((r.json() or {}).get("runtime") or {}).get("model_profiles") or {}
+    except Exception as exc:
+        print(f"  [calib] provider {provider_id}: status request failed: {exc}", file=sys.stderr)
+    done = {model for model in models if _profile_is_calibrated(profiles.get(model))}
+    return done, [model for model in models if model not in done]
 
 
-async def _wait_for_calibration_complete_via_ssh(
-    hosts: list[str],
-    ssh_user: str,
-    ssh_key: Optional[str],
-    workernode_dir: str,
+async def _wait_for_calibration_complete(
+    admin_url: str,
+    logos_key: str,
+    provider_ids: list[int],
     benchmark_models: list[str],
     timeout_s: float,
-    use_sudo: bool,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
     poll_interval_s: float = 30.0,
 ) -> bool:
-    """Poll every node's model_profiles.yml until all benchmark models calibrate.
+    """Poll Logos until every provider has a complete profile per benchmark model.
 
-    Calibration emits its progress only over the orchestrator event channel
-    (no REST status endpoint), so we read the authoritative artifact instead:
-    the profiles file each worker writes as it finishes a model. Returns True
-    once every node has a complete (or unsupported) profile for every benchmark
-    model, or False on timeout.
+    Returns True once every provider reports a complete (or unsupported)
+    profile for every benchmark model, or False on timeout.
     """
-    sudo = "sudo " if use_sudo else ""
-    profiles_path = f"{workernode_dir}/data/model_profiles.yml"
-    unsupported_path = f"{workernode_dir}/data/calibration_logs/calibration_unsupported_models.txt"
     models = list(benchmark_models)
     deadline = time.monotonic() + timeout_s
     print(
-        f"\n[Calibration] Waiting for {len(models)} model(s) on {len(hosts)} node(s) "
+        f"\n[Calibration] Waiting for {len(models)} model(s) on {len(provider_ids)} provider(s) "
         f"(timeout {timeout_s / 3600:.1f}h, polling every {poll_interval_s:.0f}s) ..."
     )
-    while True:
-        all_done = True
-        print(f"  [calib] progress @ {time.strftime('%H:%M:%S')}:")
-        for host in hosts:
-            done, pending = _calibration_status_for_host(
-                host, ssh_user, ssh_key, profiles_path, unsupported_path, models, sudo, relay_host, relay_user
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        while True:
+            all_done = True
+            print(f"  [calib] progress @ {time.strftime('%H:%M:%S')}:")
+            for pid in provider_ids:
+                done, pending = await _calibration_status_for_provider(client, admin_url, logos_key, pid, models)
+                line = f"    provider {pid}: {len(done)}/{len(models)} done"
+                if pending:
+                    line += f"  | pending: {', '.join(pending)}"
+                    all_done = False
+                print(line)
+            if all_done:
+                print("[Calibration] All benchmark models calibrated on all providers.")
+                return True
+            if time.monotonic() >= deadline:
+                print("[Calibration] TIMEOUT — not all models calibrated in time.", file=sys.stderr)
+                return False
+            await asyncio.sleep(poll_interval_s)
+
+
+async def _reset_profiles_via_rest(
+    admin_url: str,
+    logos_key: str,
+    provider_id: int,
+    models: Optional[list[str]] = None,
+    retry_s: float = 60.0,
+) -> list[str]:
+    """Make Logos forget a stopped node's profiles (``models=None``: all).
+
+    The worker must be stopped: Logos refuses (409) while it is connected, since
+    it would store its in-memory profiles again. A just-stopped worker can take
+    a moment to drop its session, so 409 is retried for ``retry_s``.
+    """
+    deadline = time.monotonic() + retry_s
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        while True:
+            r = await client.post(
+                f"{admin_url}/logosdb/providers/logosnode/model-profiles/reset",
+                json={"provider_id": provider_id, "logos_key": logos_key, "model_names": models},
             )
-            line = f"    {host}: {len(done)}/{len(models)} done"
-            if pending:
-                line += f"  | pending: {', '.join(pending)}"
-                all_done = False
-            print(line)
-        if all_done:
-            print("[Calibration] All benchmark models calibrated on all nodes.")
-            return True
-        if time.monotonic() >= deadline:
-            print("[Calibration] TIMEOUT — not all models calibrated in time.", file=sys.stderr)
-            return False
-        await asyncio.sleep(poll_interval_s)
+            if r.status_code == 200:
+                deleted = list((r.json() or {}).get("deleted") or [])
+                print(f"  [calib] provider {provider_id}: reset {len(deleted)} profile(s)")
+                return deleted
+            if r.status_code != 409 or time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"Cannot reset profiles of provider {provider_id}: HTTP {r.status_code} {r.text[:200]}"
+                )
+            await asyncio.sleep(5.0)
 
 
 async def _trigger_calibration_via_rest(
@@ -5308,8 +5302,7 @@ async def _trigger_calibration_via_rest(
 
     Returns True iff a session was started for every provider.
     """
-    host = logos_url.split("://")[-1].split("/")[0].split(":")[0]
-    endpoint = f"https://{host}:{admin_port}/logosdb/providers/logosnode/calibrate_uncalibrated"
+    endpoint = f"{_admin_base_url(logos_url, admin_port)}/logosdb/providers/logosnode/calibrate_uncalibrated"
     all_ok = True
     async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
         for pid in provider_ids:
@@ -5373,7 +5366,8 @@ async def _reset_and_calibrate_all_nodes(
     """Full from-scratch reset + calibration across all nodes simultaneously.
 
     1. Stop every workernode (free files + GPUs).
-    2. Wipe calibration state + downloaded weights on every node.
+    2. Reset every provider's profiles in Logos and wipe calibration logs +
+       downloaded weights on every node.
     3. Force ``enable_sleep_mode=true`` for all benchmark models — the worker's
        calibration *skips* any sleep-disabled model (the sleep gate in
        logos_bridge._run_calibration_session), so without this every model
@@ -5386,7 +5380,17 @@ async def _reset_and_calibrate_all_nodes(
     print("\n" + "=" * 58)
     print("  [Reset+Calibrate] Full wipe and fresh calibration (all nodes)")
     print("=" * 58)
+    if not provider_ids:
+        print(
+            "  ERROR: --reset-calibration needs --calibration-provider-ids: the profiles "
+            "are stored in Logos and are reset there per provider.",
+            file=sys.stderr,
+        )
+        return False
+    admin_url = _admin_base_url(logos_url, admin_port)
     _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
+    for pid in provider_ids:
+        await _reset_profiles_via_rest(admin_url, logos_key, pid)
     _wipe_calibration_and_weights_via_ssh(
         hosts, ssh_user, ssh_key, workernode_dir, weight_cache_path, use_sudo, relay_host, relay_user
     )
@@ -5411,92 +5415,9 @@ async def _reset_and_calibrate_all_nodes(
             file=sys.stderr,
         )
         return False
-    return await _wait_for_calibration_complete_via_ssh(
-        hosts,
-        ssh_user,
-        ssh_key,
-        workernode_dir,
-        benchmark_models,
-        calibration_timeout_s,
-        use_sudo,
-        relay_host,
-        relay_user,
+    return await _wait_for_calibration_complete(
+        admin_url, logos_key, provider_ids, benchmark_models, calibration_timeout_s
     )
-
-
-def _reset_profile_entries_via_ssh(
-    host: str,
-    ssh_user: str,
-    ssh_key: Optional[str],
-    workernode_dir: str,
-    models: list[str],
-    use_sudo: bool,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> list[str]:
-    """Delete specific model entries from one node's model_profiles.yml.
-
-    The worker treats a model as calibrated the moment ``base_residency_mb`` is
-    known — even if the sleep-residual measurement is missing (it was calibrated
-    with sleep off, leaving ``sleeping_residual_mb: None``) — so it will NOT
-    re-pick that model for calibration. The benchmark needs the COMPLETE profile
-    (sleep scenarios size lanes from it), so we drop the entry to force a clean
-    recalibration. The node must be stopped first, or the running worker
-    re-saves the entry from memory. Reads/writes over SSH the same way as the
-    config helpers (cat -> edit locally -> tee); needs pyyaml on this host.
-    Returns the model names actually removed.
-    """
-    if not models:
-        return []
-    sudo = "sudo " if use_sudo else ""
-    profiles_path = f"{workernode_dir}/data/model_profiles.yml"
-    read_res = subprocess.run(
-        _build_ssh_cmd(
-            host,
-            ssh_user,
-            ssh_key,
-            f"{sudo}cat {shlex.quote(profiles_path)} 2>/dev/null || true",
-            relay_host,
-            relay_user,
-        ),
-        capture_output=True,
-        text=True,
-    )
-    if not (read_res.stdout or "").strip():
-        print(f"  [calib] {host}: no profiles file to reset.")
-        return []
-    if not _YAML:
-        # A profiles file exists with content but we cannot safely rewrite it
-        # without pyyaml. Returning [] here would silently skip the reset and
-        # leave models half-calibrated, defeating the recovery path — fail loud.
-        raise RuntimeError(
-            f"[calib] {host}: pyyaml is required to reset incomplete profile "
-            f"entries {models}, but it is not installed. Install pyyaml on this "
-            "host (the benchmark venv) and retry."
-        )
-    data = _yaml.safe_load(read_res.stdout) or {}
-    mp = data.get("model_profiles") or {}
-    removed = [m for m in models if mp.pop(m, None) is not None]
-    if not removed:
-        return []
-    data["model_profiles"] = mp
-    new_yaml = _yaml.safe_dump(data, default_flow_style=False)
-    write_res = subprocess.run(
-        _build_ssh_cmd(
-            host,
-            ssh_user,
-            ssh_key,
-            f"{sudo}tee {shlex.quote(profiles_path)} > /dev/null",
-            relay_host,
-            relay_user,
-        ),
-        input=new_yaml.encode(),
-        capture_output=True,
-    )
-    if write_res.returncode != 0:
-        raise RuntimeError(f"Cannot rewrite profiles on {host}: {write_res.stderr.decode().strip()}")
-    print(f"  [calib] {host}: reset {len(removed)} incomplete profile(s): {', '.join(removed)}")
-    return removed
 
 
 async def _ensure_calibration_complete_all_nodes(
@@ -5532,40 +5453,30 @@ async def _ensure_calibration_complete_all_nodes(
 
     Order matters and mirrors the reset path:
 
-    1. Read each node's profiles straight off disk (no worker needed — reading
-       while a starting worker rewrites the file races). List the incomplete
-       benchmark models per host. If none anywhere, re-using calibration is free.
-    2. Stop the nodes (so the disk edits stick and the restart re-reads config),
-       drop the incomplete entries so the worker actually re-picks them, and
-       enable sleep mode (calibration *skips* sleep-disabled models AND needs
-       sleep on to record the residual) — all while stopped.
+    1. Read each provider's profiles from Logos and list the incomplete
+       benchmark models. If none anywhere, re-using calibration is free.
+    2. Stop the nodes (so the restart re-reads config), make Logos forget the
+       incomplete profiles so the worker actually re-picks them, and enable
+       sleep mode (calibration *skips* sleep-disabled models AND needs sleep on
+       to record the residual) — all while stopped.
     3. Start the nodes, trigger ``calibrate_uncalibrated`` on every provider, and
        block until every model has a complete profile.
     """
-    sudo = "sudo " if use_sudo else ""
-    profiles_path = f"{workernode_dir}/data/model_profiles.yml"
-    unsupported_path = f"{workernode_dir}/data/calibration_logs/calibration_unsupported_models.txt"
     models = list(benchmark_models)
+    admin_url = _admin_base_url(logos_url, admin_port)
 
-    # Read status from disk — the file exists whether or not the worker runs, and
-    # reading it mid-startup-rewrite would catch a partial file.
-    print("\n[Ensure-Calibrate] Checking calibration status on all nodes ...")
-    pending_by_host: dict[str, list[str]] = {}
+    print("\n[Ensure-Calibrate] Checking calibration status on all providers ...")
+    pending_by_provider: dict[int, list[str]] = {}
     pending_anywhere: set[str] = set()
-    for host in hosts:
-        done, pending = _calibration_status_for_host(
-            host, ssh_user, ssh_key, profiles_path, unsupported_path, models, sudo, relay_host, relay_user
-        )
-        pending_by_host[host] = pending
-        line = f"  [calib] {host}: {len(done)}/{len(models)} calibrated"
-        if pending:
-            line += f"  | incomplete: {', '.join(pending)}"
-            pending_anywhere.update(pending)
-        print(line)
-
-    if not pending_anywhere:
-        print("[Ensure-Calibrate] All benchmark models already calibrated on all nodes — nothing to do.")
-        return True
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        for pid in provider_ids:
+            done, pending = await _calibration_status_for_provider(client, admin_url, logos_key, pid, models)
+            pending_by_provider[pid] = pending
+            line = f"  [calib] provider {pid}: {len(done)}/{len(models)} calibrated"
+            if pending:
+                line += f"  | incomplete: {', '.join(pending)}"
+                pending_anywhere.update(pending)
+            print(line)
 
     if not provider_ids:
         print(
@@ -5577,21 +5488,24 @@ async def _ensure_calibration_complete_all_nodes(
         )
         return False
 
+    if not pending_anywhere:
+        print("[Ensure-Calibrate] All benchmark models already calibrated on all providers — nothing to do.")
+        return True
+
     print("\n" + "=" * 58)
     print("  [Ensure-Calibrate] Finishing calibration for incomplete models")
     print("=" * 58)
     print(f"  Incomplete across nodes: {', '.join(sorted(pending_anywhere))}")
 
-    # Stop first: profile edits would be overwritten by a running worker, and the
-    # sleep-mode override is only read at startup.
+    # Stop first: a running worker would store its in-memory profiles again,
+    # and the sleep-mode override is only read at startup.
     _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
 
-    # Drop the incomplete entries so the worker re-picks them (it would otherwise
-    # skip a base_residency-only profile, treating it as already calibrated).
-    for host in hosts:
-        _reset_profile_entries_via_ssh(
-            host, ssh_user, ssh_key, workernode_dir, pending_by_host[host], use_sudo, relay_host, relay_user
-        )
+    # Forget the incomplete profiles so the worker re-picks them (it would
+    # otherwise skip a base_residency-only profile as already calibrated).
+    for pid, pending in pending_by_provider.items():
+        if pending:
+            await _reset_profiles_via_rest(admin_url, logos_key, pid, pending)
 
     # Calibration needs sleep enabled to produce a complete profile.
     _set_logos_sleep_mode_via_ssh(
@@ -5616,17 +5530,7 @@ async def _ensure_calibration_complete_all_nodes(
             file=sys.stderr,
         )
         return False
-    return await _wait_for_calibration_complete_via_ssh(
-        hosts,
-        ssh_user,
-        ssh_key,
-        workernode_dir,
-        models,
-        calibration_timeout_s,
-        use_sudo,
-        relay_host,
-        relay_user,
-    )
+    return await _wait_for_calibration_complete(admin_url, logos_key, provider_ids, models, calibration_timeout_s)
 
 
 async def _warmup_workernodes_sequentially(
@@ -6740,10 +6644,10 @@ def _build_parser() -> argparse.ArgumentParser:
     svc_grp.add_argument(
         "--reset-calibration",
         action="store_true",
-        help="Before any scenario: stop all workernodes, WIPE every node's "
-        "calibration state (model_profiles.yml, calibration_logs/ incl. the "
-        "failed/succeeded/unsupported black/whitelist) AND its downloaded model "
-        "weights, then start all nodes at once with sleep enabled so each "
+        help="Before any scenario: stop all workernodes, reset every provider's "
+        "profiles in Logos (needs --calibration-provider-ids), WIPE every node's "
+        "calibration_logs/ (incl. the failed/succeeded black/whitelist) AND its "
+        "downloaded model weights, then start all nodes at once with sleep enabled so each "
         "auto-calibrates from scratch in parallel, and wait until every "
         "benchmark model is calibrated before running. Re-downloads all weights "
         "— expect this to add hours. Use when stale calibration is mis-sizing "

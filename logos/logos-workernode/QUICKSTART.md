@@ -57,7 +57,7 @@ engines:
 The server decides when to spin up or tear down lanes based on `capabilities_models` and incoming traffic.
 
 > [!NOTE]
-> The worker automatically measures each model's VRAM footprint and caches it in the state directory (`/app/data/`). This data is sent to Logos every 5 seconds for VRAM-safe load-balancing.
+> The worker automatically measures each model's VRAM footprint and reports it to Logos, which stores it centrally and hands it back when the worker starts. The worker therefore needs Logos to be reachable before it starts any lane.
 
 ## 4. Start the Worker
 

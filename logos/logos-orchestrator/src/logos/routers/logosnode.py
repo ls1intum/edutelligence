@@ -22,6 +22,7 @@ from logos.dbutils.dbrequest import (
     LogosNodeModelProfilesRequest,
     LogosNodeReconfigureLaneRequest,
     LogosNodeRegisterRequest,
+    LogosNodeResetProfilesRequest,
     LogosNodeSleepLaneRequest,
     LogosNodeStatusRequest,
     LogosNodeWakeLaneRequest,
@@ -296,7 +297,7 @@ async def _push_model_profiles(
         await _main._logosnode_registry.send_command(
             provider_id,
             SYNC_MODEL_PROFILES_ACTION,
-            params={"profiles": profiles, "complete": model_names is None},
+            params={"profiles": profiles},
             timeout_seconds=30,
         )
     except Exception:
@@ -914,3 +915,25 @@ async def logosnode_invalidate_calibration(data: LogosNodeInvalidateCalibrationR
         "calibration_id": data.calibration_id,
         "affected": [{"provider_id": pid, "model_name": name} for pid, name in affected],
     }
+
+
+@router.post("/logosdb/providers/logosnode/model-profiles/reset", tags=["logosnode"])
+async def logosnode_reset_profiles(data: LogosNodeResetProfilesRequest):
+    """Forget a node's profiles so its next calibration measures from scratch.
+
+    Refused while the worker is connected: it still holds the profiles in
+    memory, and its next status would store them again.
+    """
+    _require_root_access(data.logos_key)
+    if _main._logosnode_registry.peek_runtime_snapshot(data.provider_id) is not None:
+        return JSONResponse(status_code=409, content={"error": "Stop the worker before resetting its profiles"})
+
+    def _delete() -> list[str]:
+        with DBManager() as db:
+            return db.delete_model_profiles(data.provider_id, data.model_names)
+
+    deleted = await asyncio.to_thread(_delete)
+    _profile_write_cache.forget(data.provider_id)
+    for model_name in deleted:
+        _recorded_calibrations.pop((data.provider_id, model_name), None)
+    return {"provider_id": data.provider_id, "deleted": deleted}

@@ -6,7 +6,7 @@ It does four things:
 - starts one lane process per configured model,
 - keeps a websocket session open to Logos,
 - reports runtime/device/lane status so Logos can schedule against warm/cold capacity,
-- auto-calibrates model memory profiles (observed reservation, base residency, sleeping residual) and persists them across restarts.
+- auto-calibrates model memory profiles (observed reservation, base residency, sleeping residual); Logos stores them centrally and hands them back on restart.
 
 ## Configuration split
 
