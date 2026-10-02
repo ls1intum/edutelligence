@@ -1,9 +1,9 @@
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 import os
 import asyncio
 from pydantic import ConfigDict, BaseModel, Field
 
-from athena import emit_meta
+from athena import emit_meta, GradingCriterion
 from athena.programming import Exercise, Submission, Feedback
 
 from module_programming_llm.config import GradedBasicApproachConfig
@@ -21,6 +21,7 @@ from llm_core.utils.llm_utils import (
 from llm_core.core.predict_and_parse import predict_and_parse
 
 from module_programming_llm.helpers.utils import (
+    format_grading_instructions,
     get_diff,
     load_files_from_repo,
     add_line_numbers,
@@ -51,6 +52,38 @@ class AssessmentModel(BaseModel):
 
     feedbacks: Sequence[FeedbackModel] = Field(description="Assessment feedbacks")
     model_config = ConfigDict(title="Assessment")
+
+
+def get_grading_instructions_for_file(
+    file_path: str,
+    grading_instructions: Optional[str],
+    file_grading_instructions: Dict[str, str],
+    grading_criteria: Optional[List[GradingCriterion]],
+) -> str:
+    """Get the grading instructions to put into the prompt for one file.
+
+    The free-text instructions are split by file only if splitting produced a result, which happens when they are too
+    long to repeat for every file. The structured grading criteria are added for every file unchanged, with the ids the
+    model refers to in grading_instruction_id: an LLM rewriting them per file drops those ids, and without them the
+    model cannot link a suggestion to a criterion.
+
+    Args:
+        file_path (str): Path of the submission file the prompt is for
+        grading_instructions (Optional[str]): Free-text grading instructions of the exercise
+        file_grading_instructions (Dict[str, str]): Free-text instructions split by file name, empty if not split
+        grading_criteria (Optional[List[GradingCriterion]]): Structured grading criteria of the exercise
+
+    Returns:
+        str: Grading instructions for the file, or a placeholder if there are none
+    """
+    if file_grading_instructions:
+        free_text = file_grading_instructions.get(file_path, "")
+    else:
+        free_text = grading_instructions or ""
+    file_instructions = format_grading_instructions(free_text.strip() or None, grading_criteria)
+    if file_instructions:
+        return file_instructions
+    return "No relevant grading instructions found." if file_grading_instructions else "No grading instructions found."
 
 
 # pylint: disable=too-many-locals
@@ -98,12 +131,6 @@ async def generate_suggestions_by_file(
         else {}
     )
 
-    is_short_grading_instructions = (
-        num_tokens_from_string(exercise.grading_instructions)
-        <= config.split_grading_instructions_by_file_prompt.tokens_before_split
-        if exercise.grading_instructions is not None
-        else True
-    )
     file_grading_instructions = (
         {
             item.file_name: item.grading_instructions
@@ -150,17 +177,8 @@ async def generate_suggestions_by_file(
             else "No problem statement found."
         )
 
-        grading_instructions = (
-            exercise.grading_instructions or ""
-            if is_short_grading_instructions
-            else file_grading_instructions.get(
-                file_path, "No relevant grading instructions found."
-            )
-        )
-        grading_instructions = (
-            grading_instructions
-            if grading_instructions.strip()
-            else "No grading instructions found."
+        grading_instructions = get_grading_instructions_for_file(
+            file_path, exercise.grading_instructions, file_grading_instructions, exercise.grading_criteria
         )
 
         file_content = add_line_numbers(file_content)
