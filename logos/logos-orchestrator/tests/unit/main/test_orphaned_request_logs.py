@@ -75,7 +75,7 @@ def test_the_closed_count_is_reported_verbatim(monkeypatch, rowcount):
 
 
 # ---------------------------------------------------------------------------
-# `logos_requests_in_flight` (#790, first comment)
+# `logos_requests_in_flight` (, first comment)
 #
 # The terminal failure paths that write their own log row — a client
 # disconnect, a rate-limit or budget reject — never told the recorder the

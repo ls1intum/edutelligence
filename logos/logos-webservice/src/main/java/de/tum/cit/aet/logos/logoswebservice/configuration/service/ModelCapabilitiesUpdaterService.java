@@ -85,6 +85,7 @@ public class ModelCapabilitiesUpdaterService {
         boolean supportsFunctionCalling = false;
         boolean supportsVision = false;
         boolean supportsReasoning = false;
+        int maxInputTokens = 0;
         for (Map.Entry<String, Object> entry : catalog.entrySet()) {
             String catalogKey = entry.getKey();
             if ("sample_spec".equals(catalogKey) || catalogKey == null || !(entry.getValue() instanceof Map)) {
@@ -108,6 +109,17 @@ public class ModelCapabilitiesUpdaterService {
             supportsReasoning |= Boolean.TRUE.equals(
                 modelData.get("supports_reasoning")
             );
+            // Several registry entries can match one model (the bare name
+            // and one per provider). A request may land on any of them, so
+            // keep the smallest published window, like every other source of
+            // a model's context.
+            Object window = modelData.get("max_input_tokens");
+            if (window instanceof Number number) {
+                int tokens = number.intValue();
+                if (tokens > 0 && (maxInputTokens == 0 || tokens < maxInputTokens)) {
+                    maxInputTokens = tokens;
+                }
+            }
             log.debug(
                 "capabilities_updater: matched '{}' for model '{}'",
                 catalogKey,
@@ -125,7 +137,8 @@ public class ModelCapabilitiesUpdaterService {
             modelId,
             supportsFunctionCalling,
             supportsVision,
-            supportsReasoning
+            supportsReasoning,
+            maxInputTokens > 0 ? maxInputTokens : null
         );
         return true;
     }

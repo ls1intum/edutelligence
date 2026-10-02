@@ -2,6 +2,8 @@ package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -15,6 +17,8 @@ import org.springframework.web.client.RestClientResponseException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.IpRateLimiterService;
+import de.tum.cit.aet.logos.logoswebservice.common.RateLimitExceededException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCalibrationLogRequestDTO;
@@ -22,6 +26,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabiliti
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelPriceService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
@@ -35,21 +40,27 @@ import jakarta.servlet.http.HttpServletRequest;
 public class ModelController {
 
     private final ModelService modelService;
+    private final ModelPriceService modelPriceService;
     private final PriceUpdaterService priceUpdaterService;
     private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
     private final ObjectMapper objectMapper;
+    private final IpRateLimiterService rateLimiter;
 
     public ModelController(ModelService modelService,
+                           ModelPriceService modelPriceService,
                            PriceUpdaterService priceUpdaterService,
                            ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
                            OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           IpRateLimiterService rateLimiter) {
         this.modelService = modelService;
+        this.modelPriceService = modelPriceService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.orchestratorCalibrationLogsClient = orchestratorCalibrationLogsClient;
         this.objectMapper = objectMapper;
+        this.rateLimiter = rateLimiter;
     }
 
     @PostMapping("/get_models")
@@ -62,16 +73,42 @@ public class ModelController {
      * (logos_key / logos-key header or Authorization: Bearer) — not a JWT —
      * because the callers are the applications that send inference traffic,
      * which hold API keys. Only models the key may access are reported.
+     *
+     * <p>
+     * A 401 here is exactly what lets a caller test a leaked key for validity, so repeated 401s from one address
+     * are rate limited: {@link IpRateLimiterService#tryReserveAuthFailureSlot} atomically checks and reserves the
+     * budget before authentication runs, so a burst of concurrent requests cannot all slip through on the same
+     * free slot. The reservation is given back the moment the key is known valid (see
+     * {@link IpRateLimiterService#releaseAuthFailureSlot}) — deliberately before the orchestrator call below,
+     * which can be slow and does not need auth to succeed again: holding the reservation through it would let a
+     * burst of valid concurrent requests exhaust the failure budget among themselves while their calls are in
+     * flight, and would leave the slot stuck until it expired if that call ever threw.
      */
     @PostMapping("/get_model_health")
     public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
-        String apiKey = extractApiKey(request);
-        if (apiKey == null) {
-            return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+        String clientIp = rateLimiter.clientIp(request);
+        if (!rateLimiter.tryReserveAuthFailureSlot(clientIp)) {
+            throw new RateLimitExceededException(60);
         }
-        return modelService.getModelHealth(apiKey)
-            .map(ResponseEntity::ok)
-            .orElseGet(() -> ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key")));
+
+        try {
+            String apiKey = extractApiKey(request);
+            Optional<Set<String>> accessibleModels = apiKey == null
+                ? Optional.empty()
+                : modelService.resolveAccessibleModelsForApiKey(apiKey);
+            if (accessibleModels.isEmpty()) {
+                if (!rateLimiter.recordAuthFailureSlot(clientIp)) {
+                    throw new RateLimitExceededException(60);
+                }
+                return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+            }
+
+            rateLimiter.releaseAuthFailureSlot(clientIp);
+            return ResponseEntity.ok(modelService.getModelHealthForAccessibleModels(accessibleModels.get()));
+        } catch (RuntimeException e) {
+            rateLimiter.releaseAuthFailureSlot(clientIp);
+            throw e;
+        }
     }
 
     static String extractApiKey(HttpServletRequest request) {
@@ -148,6 +185,23 @@ public class ModelController {
             @RequestBody GetModelRequestDTO req) {
         if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
         return modelService.getModel(req.id())
+            .map(ResponseEntity::ok)
+            .<ResponseEntity<?>>map(r -> r)
+            .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
+    }
+
+    /**
+     * Current and historic catalogue prices for one model, grouped per
+     * linked provider. Backs the Prices tab of the model details page,
+     * which the UI hides for models served only by local (logosnode)
+     * providers — those simply carry no price rows.
+     */
+    @PostMapping("/get_model_prices")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getModelPrices(
+            @RequestBody GetModelRequestDTO req) {
+        if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
+        return modelPriceService.getModelPrices(req.id())
             .map(ResponseEntity::ok)
             .<ResponseEntity<?>>map(r -> r)
             .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));

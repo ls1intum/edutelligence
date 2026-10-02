@@ -12,7 +12,7 @@
 #   • tensor_parallel_size is always 1 — one integrated GPU.
 #   • Sleep mode is unavailable (it is built on CUDA virtual memory). The
 #     orchestrator falls back to stop/start to reclaim memory.
-#   • Calibration is unavailable on this backend (the worker skips it
+#   • Calibration is unavailable on this engine (the worker skips it
 #     automatically, no flag needed); profiles are supplied by hand below.
 # =============================================================================
 
@@ -87,7 +87,7 @@ engines:
         # pass --quantization, vLLM infers it.
         quantization: ""
         # vLLM reserves 4 GB for its multimodal processor cache by default.
-        # This family is served text-only on this backend (see
+        # This family is served text-only on this engine (see
         # engines.metal.multimodal_mode above), so that reservation buys
         # nothing and costs 4 GB on a node where unified memory is the
         # binding constraint — an over-subscribed Mac does not fail fast, it
@@ -108,7 +108,7 @@ engines:
 
 # ── Capacity profiles (hand-measured; replaces calibration) ──────────────────
 # calibration.py measures VRAM against nvidia-smi and samples /proc/meminfo,
-# neither of which exists here, so calibration is unavailable on this backend
+# neither of which exists here, so calibration is unavailable on this engine
 # and the worker skips it automatically (no flag required). Set the numbers
 # below by hand; a profile with residency_source="override" counts as valid,
 # so the model is advertised normally (see main.py, the ready_caps filter).

@@ -57,7 +57,7 @@ def test_build_cmd_does_not_duplicate_enforce_eager(monkeypatch) -> None:
 def test_build_cmd_includes_prompt_tokens_details_by_default(monkeypatch) -> None:
     # vLLM keeps usage.prompt_tokens_details (cached_tokens) off by default;
     # Logos lanes must enable it so consumers see the prefix-cache hit share
-    # of local requests the same way they do for cloud providers (#813).
+    # of local requests the same way they do for cloud providers.
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
     # Return a list, like the real _resolve_vllm_binary does: _build_cmd
     # splats the prefix, so a string would expand into a broken command.
@@ -137,7 +137,7 @@ def test_build_cmd_includes_explicit_tool_call_parser(monkeypatch) -> None:
 
 
 def test_infer_tool_call_parser() -> None:
-    from logos_worker_node.vllm_process import _infer_tool_call_parser
+    from logos_worker_node.vllm_compat import _infer_tool_call_parser
 
     # Google Gemma
     assert _infer_tool_call_parser("google/gemma-4-26B-A4B-it") == "gemma4"
@@ -314,7 +314,7 @@ def _handle_with_stub_binary(monkeypatch) -> VllmProcessHandle:
 
 
 def test_chat_template_dir_defaults_to_persistent_path(monkeypatch) -> None:
-    from logos_worker_node.vllm_process import _chat_template_dir
+    from logos_worker_node.vllm_compat import _chat_template_dir
 
     monkeypatch.delenv("LOGOS_CHAT_TEMPLATE_DIR", raising=False)
     assert _chat_template_dir() == "/opt/logos-workernode/chat-templates"
@@ -1682,19 +1682,20 @@ def test_no_attn_override_by_default(monkeypatch):
     assert "--attention-config.backend" not in cmd
 
 
-def test_explicit_attention_backend_config(monkeypatch):
+@pytest.mark.parametrize("backend", ["FLASHINFER", "FLASH_ATTN", "TRITON_ATTN", "FLEX_ATTENTION", "TURBOQUANT"])
+def test_explicit_attention_backend_config(monkeypatch, backend):
     """Explicit attention_backend in config should be passed to vLLM."""
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
     monkeypatch.setattr(handle, "_resolve_vllm_binary", lambda _c: "/tmp/vllm")
     lc = LaneConfig(
         model="test-model",
         vllm=True,
-        vllm_config=VllmConfig(attention_backend="TRITON_ATTN"),
+        vllm_config=VllmConfig(attention_backend=backend),
     )
     cmd = handle._build_cmd(lc)
     assert "--attention-config.backend" in cmd
     idx = cmd.index("--attention-config.backend")
-    assert cmd[idx + 1] == "TRITON_ATTN"
+    assert cmd[idx + 1] == backend
 
 
 def test_auto_attention_backend_pre_ampere(monkeypatch):
@@ -1806,7 +1807,7 @@ def test_build_env_honors_logos_worker_cache_root(monkeypatch):
 
 
 def test_infer_reasoning_parser() -> None:
-    from logos_worker_node.vllm_process import _infer_reasoning_parser
+    from logos_worker_node.vllm_compat import _infer_reasoning_parser
 
     # The production rule table registers only parsers shipping in
     # vllm/reasoning/__init__.py: gemma4, openai_gptoss and qwen3. Other model
@@ -1838,7 +1839,7 @@ def test_infer_reasoning_parser() -> None:
 
 
 def test_infer_default_chat_template_kwargs() -> None:
-    from logos_worker_node.vllm_process import _infer_default_chat_template_kwargs
+    from logos_worker_node.vllm_compat import _infer_default_chat_template_kwargs
 
     # Google Gemma 4 → enable_thinking: True. Pattern is the substring
     # "gemma-4" (with dash) — names without the dash do not match.
@@ -3001,6 +3002,25 @@ async def test_resolve_gguf_spec_mixed_format_plain_repo_served_plain(tmp_path: 
     assert handle._gguf_spec is None
 
 
+def test_auto_gmu_resizes_calibrated_kv_allocation_when_tp_changes() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        residency_source="calibrated",
+        tensor_parallel_size=2,
+        loaded_vram_mb=15988,
+        kv_budget_mb=4096,
+    )
+    handle = VllmProcessHandle("lane", 15000, WorkerConfig(), model_profiles=profiles, per_gpu_total_mb=lambda: 16384)
+    lane = LaneConfig(
+        model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="4G")
+    )
+    assert handle._resolve_gmu(lane.vllm_config, lane) == pytest.approx(11892 / 16384)
+    lane.vllm_config.gpu_memory_utilization = 0.9
+    assert handle._resolve_gmu(lane.vllm_config, lane) == 0.9
+
+
 @pytest.mark.asyncio
 async def test_sharded_checkpoint_rejection_is_honoured_across_a_restart(monkeypatch, tmp_path) -> None:
     """A rejection recorded for the current vLLM sends the lane straight to the
@@ -3159,3 +3179,50 @@ def test_invalidate_sharded_checkpoint_records_the_version(monkeypatch, tmp_path
     assert rec is not None
     assert rec["vllm_version"] == "0.8.0"
     assert "sharded_state_loader.py" in rec["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Startup-log parsing — max concurrency from the vLLM log stream
+# ---------------------------------------------------------------------------
+
+
+async def test_stream_logs_stores_concurrency_factor_not_token_count(monkeypatch) -> None:
+    """The shared _VLLM_MAX_CONCURRENCY_RE has two capture groups (token count,
+    factor). _stream_logs must read the *factor*: with group 1, float("4,096")
+    would raise inside the broad except and kill the log-stream task, leaving
+    max_concurrency None forever."""
+    handle = _handle_with_stub_binary(monkeypatch)
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = self._stdout()
+
+        async def _stdout(self):
+            yield (b"INFO 09-01 12:00:00 core.py:299] Maximum concurrency for " b"4,096 tokens per request: 8.32x\n")
+
+    handle._process = _FakeProcess()
+    await handle._stream_logs()
+
+    assert handle.max_concurrency == 8
+
+
+def test_startup_failure_keeps_root_exception_before_shutdown_tail():
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle._recent_logs.extend(
+        [
+            "(EngineCore pid=12) ValueError: Selected backend FLASHINFER is not valid for this configuration.",
+            "(EngineCore pid=12) Reason: ['compute capability not supported']",
+            *["cleanup line"] * 20,
+            "RuntimeError: Engine core initialization failed. See root cause above.",
+        ]
+    )
+    error = handle._format_startup_failure(60)
+    assert "Cause: ValueError: Selected backend FLASHINFER" in error[:1000]
+    assert "compute capability not supported" in error[:1000]
+    assert "Engine core initialization failed" not in handle._startup_root_cause()
+
+
+def test_generic_startup_error_does_not_invent_a_root_cause():
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
+    handle._recent_logs.append("RuntimeError: Engine core initialization failed. See root cause above.")
+    assert handle._startup_root_cause() == ""

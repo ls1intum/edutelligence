@@ -1,10 +1,16 @@
 """Utilities for aligning transcript segments with detected slide changes."""
 
+from threading import Event
 from typing import Dict, List, Tuple
+
+from iris.common.cancellation import raise_if_cancelled
 
 
 def align_slides_with_segments(
-    segments: List[Dict], slide_timestamps: List[Tuple[float, int]]
+    segments: List[Dict],
+    slide_timestamps: List[Tuple[float, int]],
+    lecture_unit_id: int | None = None,
+    cancel_event: Event | None = None,
 ) -> List[Dict]:
     """Attach slide numbers to transcript segments based on timestamps.
 
@@ -24,6 +30,7 @@ def align_slides_with_segments(
     result = []
 
     for segment in segments:
+        raise_if_cancelled(cancel_event, lecture_unit_id, "during alignment")
         slide_number = -1
 
         for ts, num in reversed(slide_timestamps):

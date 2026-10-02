@@ -43,6 +43,35 @@
   color: rgb(var(--color-typography-300));
 }
 
+.priority-cell {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-300));
+}
+
+.priority-select {
+  width: 100%;
+  max-width: 120px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  color: rgb(var(--color-typography-0));
+  font-size: var(--font-size-sm);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+  box-sizing: border-box;
+
+  &:focus {
+    border-color: rgb(var(--color-text-accent));
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+
 .count-badge {
   display: inline-flex;
   align-items: center;

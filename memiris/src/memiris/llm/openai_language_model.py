@@ -13,10 +13,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Union, cast
 
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from openai import AzureOpenAI, Omit, OpenAI
-from openai.types.chat import (
-    ChatCompletion,
-    ChatCompletionMessageParam,
-)
+from openai.types.chat import ChatCompletion, ChatCompletionMessageParam
 from openai.types.shared_params.response_format_json_schema import (
     JSONSchema,
     ResponseFormatJSONSchema,

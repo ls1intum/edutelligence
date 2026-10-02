@@ -1,7 +1,7 @@
 import { RequestItem } from '../../../statistics/statistics.models';
 
 /**
- * What one team is doing and has spent (issue #776).
+ * What one team is doing and has spent.
  *
  * Lives in the team's own detail view rather than a page of its own: it is one
  * more thing you look at about a team, next to its members, keys and cloud
@@ -44,6 +44,22 @@ export interface RequestCursor {
   request_id: string;
 }
 
+/** One distinct question asked of this team, and how many times. */
+export interface TeamMostAskedQuestion {
+  question: string;
+  count: number;
+}
+
+/**
+ * Where an export slice ends, and the next, older one continues from.
+ *
+ * Opaque on purpose: the token is the server's own encoding of the window
+ * the walk started in and the row behind the slice. The view never parses
+ * it — it hands it back, and a token it cannot show as a valid continuation
+ * is simply not shown.
+ */
+export type ExportCursor = string;
+
 export interface TeamActivityPayload {
   team_id: number;
   days: number;
@@ -51,7 +67,7 @@ export interface TeamActivityPayload {
   /**
    * Whether any key of the team is opted into FULL logging — the only switch
    * under which request and response content is stored at all, so the view
-   * can hint at an empty export before the download is started (issue #667).
+   * can hint at an empty export before the download is started.
    */
   full_logging_enabled: boolean;
   live: TeamLiveCounts;
@@ -59,78 +75,16 @@ export interface TeamActivityPayload {
   total_tokens: number;
   total_requests: number;
   requesters: TeamRequester[];
+  most_asked_questions: TeamMostAskedQuestion[];
+  /**
+   * How many of the team's newest full-logging requests the ranking is cut
+   * from — the section is a sample of the window, and the number says how
+   * large.
+   */
+  most_asked_sample_limit?: number;
   requests: RequestItem[];
   requests_total: number;
   requests_has_more: boolean;
   requests_next_cursor: RequestCursor | null;
 }
 
-// ── Trace export (issue #667) ────────────────────────────────────────────────
-
-/**
- * One request trace of the team export. Every row carries the lifecycle
- * metadata; only the rows the orchestrator recorded at FULL privacy (the ones
- * the requester consented to) also carry the request and response content —
- * for the billing-only rows the payload fields are absent.
- *
- * The payload fields are `unknown` on purpose — their shape is whatever the
- * caller sent to the model, and the export must not pretend to know it.
- */
-export interface TraceExportItem {
-  request_id: string | null;
-  timestamp_request: string | null;
-  timestamp_forwarding: string | null;
-  timestamp_response: string | null;
-  time_at_first_token: string | null;
-  privacy_level: string;
-  model_name: string | null;
-  provider_type: string | null;
-  environment: string | null;
-  api_key_id: number | null;
-  api_key_name: string | null;
-  username: string | null;
-  full_name: string | null;
-  team_name: string | null;
-  client_ip: string | null;
-  status: string;
-  error_message: string | null;
-  priority: string | null;
-  initial_priority: string | null;
-  priority_when_scheduled: string | null;
-  queue_depth_at_enqueue: number | null;
-  queue_depth_at_schedule: number | null;
-  queue_depth_at_arrival: number | null;
-  timeout_s: number | null;
-  utilization_at_arrival: number | null;
-  queue_wait_ms: number | null;
-  was_cold_start: boolean | null;
-  load_duration_ms: number | null;
-  available_vram_mb: number | null;
-  prompt_tokens: number | null;
-  completion_tokens: number | null;
-  total_tokens: number | null;
-  cost_microcents: number | null;
-  classification_statistics: unknown;
-  input_payload: unknown;
-  headers: unknown;
-  response_payload: unknown;
-}
-
-/** Envelope of the trace export — the downloaded file is this object. */
-export interface TraceExport {
-  team_id: number;
-  team_name: string | null;
-  days: number;
-  since: string;
-  count: number;
-  /** Whether any key of the team has full (consent) logging activated. */
-  full_logging_enabled: boolean;
-  /**
-   * Present only when not a single row of the export carries content — the
-   * file explaining itself why the payload columns are all empty.
-   */
-  note?: string;
-  /** True when the window held more traces than one export may carry. */
-  truncated: boolean;
-  traces: TraceExportItem[];
-}

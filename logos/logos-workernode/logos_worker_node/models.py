@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 _GPU_DEVICE_LIST_PATTERN = re.compile(r"^\d+(,\d+)*$")
 _DEFAULT_LANE_CONTEXT_LENGTH = 4096
 # Container path of the model volume. Compose mounts the model volume here,
-# and existing Ollama-era configs (and the engines.ollama migration) may
-# still carry LEGACY_OLLAMA_MODELS_PATH — WorkerConfig._translate_legacy_ollama_models_path
+# and existing legacy configs (and the engine migration) may still carry
+# Legacy model-path setting — WorkerConfig._translate_legacy_ollama_models_path
 # rewrites it to NEW_MODELS_PATH so a config left on the old path keeps working.
 NEW_MODELS_PATH = "/usr/share/logos/models"
 LEGACY_OLLAMA_MODELS_PATH = "/usr/share/ollama/.ollama/models"
@@ -224,6 +224,22 @@ class VllmConfig(BaseModel):
         'e.g. {"VLLM_USE_V1": "0"} to force V0 engine for models '
         "whose head dimensions exceed V1 attention kernel limits.",
     )
+
+    @property
+    def parallel_gpu_count(self) -> int:
+        """Number of GPUs required by tensor and pipeline parallelism."""
+        pipeline = 1
+        for index, arg in enumerate(self.extra_args):
+            if arg == "--pipeline-parallel-size":
+                raw = self.extra_args[index + 1] if index + 1 < len(self.extra_args) else ""
+            elif arg.startswith("--pipeline-parallel-size="):
+                raw = arg.split("=", 1)[1]
+            else:
+                continue
+            if not raw.isdigit() or int(raw) < 1:
+                raise ValueError("pipeline_parallel_size must be a positive integer.")
+            pipeline = int(raw)
+        return self.tensor_parallel_size * pipeline
 
     @field_validator("chat_template")
     @classmethod
@@ -591,6 +607,12 @@ class LogosConfig(BaseModel):
     # reporting the stale snapshot from the last lane transition. Signature
     # dedupe in _send_runtime_status still suppresses true no-op resends.
     status_refresh_interval_seconds: int = Field(default=15, ge=1)
+    # How often to push this worker's merged vLLM /metrics (all running
+    # lanes, relabeled by lane_id) to the orchestrator. Independent of
+    # status_refresh_interval_seconds: counters change on every scrape-worthy
+    # tick, so gating this on the status dedupe signature would mean sending
+    # it constantly instead of on a predictable cadence.
+    vllm_metrics_interval_seconds: int = Field(default=15, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -630,6 +652,10 @@ class LaneConfig(BaseModel):
     flash_attention: bool = True
     gpu_devices: str = ""
     vllm_config: VllmConfig | None = None
+    auto_tensor_parallel: bool = Field(
+        default=True,
+        description="Allow calibrated profiles and GPU sizing to select TP. Disabled after a manual TP change.",
+    )
 
     @field_validator("gpu_devices")
     @classmethod
@@ -670,11 +696,11 @@ class LaneConfig(BaseModel):
             self.vllm_config = VllmConfig()
 
         explicit_gpu_count = _gpu_device_count(self.gpu_devices)
-        tp_size = self.vllm_config.tensor_parallel_size
-        if explicit_gpu_count is not None and tp_size > explicit_gpu_count:
+        required_gpus = self.vllm_config.parallel_gpu_count
+        if explicit_gpu_count is not None and required_gpus > explicit_gpu_count:
             raise ValueError(
-                "vLLM tensor_parallel_size is larger than the lane's explicit gpu_devices set "
-                f"({tp_size} > {explicit_gpu_count})."
+                "vLLM tensor × pipeline parallel size exceeds the lane's explicit gpu_devices set "
+                f"({required_gpus} > {explicit_gpu_count})."
             )
         return self
 
@@ -836,7 +862,7 @@ class DeviceSummary(BaseModel):
     timestamp: datetime
     mode: Literal["nvidia", "derived", "none", "metal"] = "none"
     nvidia_smi_available: bool = False
-    # Backend-neutral successor to nvidia_smi_available: "this worker measured
+    # engine-neutral successor to nvidia_smi_available: "this worker measured
     # the numbers below on real hardware, so free_memory_mb can be trusted".
     # nvidia-smi is one such source, Metal's device_info() is another. Kept as
     # a separate field so pre-Metal orchestrators, which only know
@@ -932,8 +958,12 @@ class WorkerRuntimeStatus(BaseModel):
     worker_id: str
     service_version: str
     timestamp: datetime
+    # Fixed for the process lifetime — distinct from transport.last_connected_at,
+    # which moves on every bridge reconnect.
+    process_started_at: datetime
     transport: WorkerTransportStatus
     devices: DeviceSummary
+    gpu_devices: str = "all"
     host_memory: HostMemorySummary | None = None
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)

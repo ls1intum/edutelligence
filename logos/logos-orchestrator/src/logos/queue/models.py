@@ -87,6 +87,19 @@ class QueueEntry:
     current_priority: Priority
     """Current priority (may be escalated from original)."""
 
+    raw_priority: int = 0
+    """Full-precision integer priority the request resolved to (team/key/policy
+    scale, 1..10). ``current_priority`` only carries the LOW/NORMAL/HIGH bucket
+    this raw value maps to; the raw value refines ordering *inside* a bucket,
+    so e.g. a team priority of 7 dequeues before a plain 5 in NORMAL."""
+
+    role_rank: int = 0
+    """Queue tiebreak rank of the caller within equal priority (pipeline.
+    queue_role_rank): application keys (2) dequeue before admin keys (1),
+    which dequeue before developer/service traffic (0); equal ranks fall
+    back to FIFO. 0 is also the safe default for callers without a caller
+    identity (benchmarks, internal jobs)."""
+
     enqueue_time: datetime = field(default_factory=datetime.now)
     """When this entry was added to the queue."""
 

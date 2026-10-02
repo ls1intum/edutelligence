@@ -951,10 +951,7 @@ class TestCarryingTheConversation:
 class TestCommitSubjects:
     """One line, and about the change rather than about the request.
 
-    The first agent commit in production read `Logos`: Pull request #851
-    ('`Logos`: Serve short queued requests first and answer queue-wait tim —
-    the task's own first line, cut mid-word, with the whole task repeated
-    underneath it.
+    The fallback uses the session subject when no commit text is available.
     """
 
     def test_the_agent_writes_it(self, tmp_path, monkeypatch):
@@ -993,7 +990,7 @@ class TestCommitSubjects:
 
     def test_the_runner_s_sentence_is_the_fallback(self, tmp_path, monkeypatch):
         # Nothing written: what the session was for beats the task's first
-        # line, which for a handover is "Pull request #851 … has been
+        # line, which for a handover is "Pull request … has been
         # assigned to you".
         monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
         monkeypatch.setenv("LOGOS_SESSION_SUBJECT", "Address the review on #858")
@@ -1014,9 +1011,8 @@ class TestClosedIssues:
 
     The number arrives from the runner as the session's assigned issue, not
     read out of the task. The task renders the issue's body and its
-    conversation, and those point at other issues that are pointers, not
-    authorizations to close: the body must not turn a "see #948" into a
-    closing keyword.
+    conversation, and those can point at other issues without authorizing
+    the runner to close them.
     """
 
     def test_the_assigned_issue_is_named(self):
@@ -1140,7 +1136,7 @@ class TestHowAPullRequestIsOpened:
         run_session.open_pull_request("logos/agent/x", "main", task)
 
         body = calls[0][calls[0].index("--body") + 1]
-        # Only the assigned issue — not the #948 the task merely points at.
+        # Only the assigned issue, not unrelated references in the task.
         assert body == "closes #493"
 
     def test_the_title_still_describes_the_change(self, monkeypatch, tmp_path):

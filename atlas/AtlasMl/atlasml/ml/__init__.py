@@ -30,7 +30,7 @@ from .centroid_similarity import (
 
 from .feedback_loop import (
     update_cluster_centroid_on_addition,
-    update_cluster_centroid_on_removal
+    update_cluster_centroid_on_removal,
 )
 
 # Pipeline workflows

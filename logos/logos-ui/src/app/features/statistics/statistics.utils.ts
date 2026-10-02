@@ -1,5 +1,28 @@
-import type { RequestLogStats, VramV2Sample, TimelineEnqueueEvent, VramSeriesPoint, VramProviderPayload } from './statistics.models';
+import type { RequestLogStats, VramV2Sample, VramSeriesPoint, VramProviderPayload } from './statistics.models';
 import { cssVar } from './statistics.constants';
+
+/**
+ * The stable identity of a model in the statistics charts.
+ *
+ * Live models are keyed by their database id, so a rename keeps its series.
+ * A deleted model's rows lost that id, so the key falls back to the name the
+ * delete captured. At most one bucket holds that name: the aggregate groups
+ * by (model_id, model_name), and two live models never carry the same name.
+ * Two generations with the same name (delete, re-add under it, delete again)
+ * merge into that one bucket — no finer distinction is left in the data.
+ *
+ * The two shapes carry distinct fixed prefixes. Without them a deleted model
+ * named "42" would share a key with live model id 42 and merge its usage
+ * into the live series, and a raw name could land on an inherited property
+ * of the plain-object maps the chart builds ("constructor", "__proto__", …).
+ */
+export function modelSeriesKey(modelId: number | null | undefined, modelName: string | null | undefined): string {
+  if (modelId != null) return `model-${modelId}`;
+  if (modelName && modelName.trim() !== '') return `deleted-${modelName}`;
+  // Rows with neither id nor name never reach the per-model views (the
+  // queries filter them out); the total key just keeps this function total.
+  return 'deleted-unknown';
+}
 
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
 
@@ -62,6 +85,26 @@ export function formatElapsed(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}m ${s}s`;
+}
+
+/**
+ * "Uptime since" label for a timestamp, e.g. "3d 4h", "5h 12m", "42m", "<1m".
+ */
+export function formatUptime(ts: string | null | undefined, nowMs: number): string | null {
+  if (!ts) return null;
+  const startMs = new Date(ts).getTime();
+  if (Number.isNaN(startMs)) return null;
+  const diffS = Math.floor((nowMs - startMs) / 1000);
+  // Negative = clock skew between worker/orchestrator/browser; hide rather
+  // than show a nonsense duration.
+  if (diffS < 0) return null;
+  const days = Math.floor(diffS / 86400);
+  const hours = Math.floor((diffS % 86400) / 3600);
+  const minutes = Math.floor((diffS % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
 }
 
 // ── Recent-requests state filter ──────────────────────────────────────────────
@@ -629,6 +672,18 @@ export const extractProviderHostRamMb = (
   };
 };
 
+/**
+ * Whether a provider's device reports a single unified memory pool — Apple
+ * Silicon (Metal) has no separate VRAM at all, GPU and CPU draw from the same
+ * bytes. The statistics page must not show such a worker a "VRAM" pie next to
+ * a "RAM" pie: the two charts would describe the same pool twice, and the
+ * VRAM total is a wired-down budget heuristic rather than a real pool. Gated
+ * on device_mode because it is the flag the worker sets for exactly this
+ * hardware; the page then shows one "Unified memory" chart instead.
+ */
+export const isUnifiedMemoryProvider = (sample: VramV2Sample | null | undefined): boolean =>
+  sample?.scheduler_signals?.provider?.device_mode === 'metal';
+
 export const buildVramSignature = (
   providers: VramProviderPayload[]
 ): string =>
@@ -658,89 +713,47 @@ export const chooseDynamicTargetBuckets = (spanMs: number): number => {
   const hour = 60 * 60 * 1000;
   const day = 24 * hour;
 
-  if (spanMs > 30 * day) return 90;
+  if (spanMs > 45 * day) return 90;
+  // ~month windows want one bar per day, not the old six-hour buckets.
+  if (spanMs > 14 * day) return 30;
   if (spanMs > 7 * day) return 96;
   if (spanMs > day) return 108;
-  return 120;
+  // Calendar day (and shorter): five-minute bars — 86_400 / 300 ≈ 288.
+  return 288;
 };
 
-export const chooseDynamicBucketMs = (spanMs: number): number => {
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  const safeSpanMs = Math.max(spanMs, minute);
-  const targetBuckets = chooseDynamicTargetBuckets(safeSpanMs);
-  const rawBucketMs = Math.max(safeSpanMs / targetBuckets, minute);
-  const niceCandidates = [
-    minute,
-    5 * minute,
-    15 * minute,
-    30 * minute,
-    hour,
-    3 * hour,
-    6 * hour,
-    12 * hour,
-    day,
-  ];
-
-  return niceCandidates.reduce((best, candidate) =>
-    Math.abs(candidate - rawBucketMs) < Math.abs(best - rawBucketMs)
-      ? candidate
-      : best
-  );
-};
-
-export const aggregateEventsToVolumeSeries = (
-  events: TimelineEnqueueEvent[],
-  startMs: number,
-  endMs: number,
-  bucketMs: number
-): RequestLogStats['timeSeries'] => {
-  const safeBucketMs = Math.max(bucketMs, 30 * 1000);
-  const alignedStart = Math.floor(startMs / safeBucketMs) * safeBucketMs;
-  const alignedEnd = Math.ceil(endMs / safeBucketMs) * safeBucketMs;
-  const buckets = new Map<
-    number,
-    { cloud: number; local: number; total: number }
-  >();
-
-  for (let ts = alignedStart; ts <= alignedEnd; ts += safeBucketMs) {
-    buckets.set(ts, { cloud: 0, local: 0, total: 0 });
+/**
+ * Explicit bucket range for volume-chart tooltips, e.g. "04:30 – 04:35" for
+ * five-minute bars or "Sep 1" for a daily bucket.
+ */
+export function formatBucketRange(startMs: number, bucketMs: number): string {
+  if (!Number.isFinite(startMs) || !Number.isFinite(bucketMs) || bucketMs <= 0) {
+    return new Date(startMs).toLocaleString();
   }
+  const start = new Date(startMs);
+  const end = new Date(startMs + bucketMs);
+  const dayMs = 86_400_000;
 
-  for (const event of events) {
-    const ts = Number(event.timestamp_ms);
-    if (!Number.isFinite(ts) || ts < alignedStart || ts > alignedEnd)
-      continue;
-    const bucketTs = Math.floor(ts / safeBucketMs) * safeBucketMs;
-    const bucket = buckets.get(bucketTs) || {
-      cloud: 0,
-      local: 0,
-      total: 0,
-    };
-    if (event.is_cloud) bucket.cloud += 1;
-    else bucket.local += 1;
-    bucket.total += 1;
-    buckets.set(bucketTs, bucket);
-  }
-
-  const rawSeries: RequestLogStats['timeSeries'] = [];
-  for (const [timestamp, bucket] of buckets.entries()) {
-    rawSeries.push({
-      timestamp,
-      label: '',
-      cloud: bucket.cloud,
-      local: bucket.local,
-      total: bucket.total,
-      avgRunSeconds: null,
-      avgVram: null,
+  if (bucketMs >= dayMs) {
+    if (bucketMs === dayMs) {
+      return start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+    const startLabel = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endLabel = new Date(end.getTime() - 1).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
     });
+    return `${startLabel} – ${endLabel}`;
   }
 
-  rawSeries.sort((a, b) => a.timestamp - b.timestamp);
-  return applyTimeSeriesLabels(
-    rawSeries,
-    new Date(alignedStart),
-    new Date(alignedEnd)
-  );
-};
+  const fmt = (d: Date) =>
+    `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  // Same calendar day: show times only. Crossing midnight keeps the day so
+  // "23:00 – 00:00" is not read as a backwards interval.
+  if (start.toDateString() === new Date(end.getTime() - 1).toDateString()) {
+    return `${fmt(start)} – ${fmt(end)}`;
+  }
+  const dayFmt = (d: Date) =>
+    `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${fmt(d)}`;
+  return `${dayFmt(start)} – ${dayFmt(end)}`;
+}

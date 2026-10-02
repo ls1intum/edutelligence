@@ -49,6 +49,19 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration045_teamRepositoriesExist() {
+        assertThat(tableExists("team_repositories")).isTrue();
+        assertThat(columnExists("team_repositories", "repo_url")).isTrue();
+        assertThat(columnExists("team_repositories", "repo_slug")).isTrue();
+        assertThat(columnExists("team_repositories", "branch")).isTrue();
+        assertThat(columnExists("team_repositories", "paths")).isTrue();
+        Integer uniqueIndex = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "uq_team_repositories_team_slug");
+        assertThat(uniqueIndex).isEqualTo(1);
+    }
+
+    @Test
     void migration001_keycloakColumnsExist() {
         assertThat(columnExists("users", "keycloak_id")).isTrue();
         assertThat(columnExists("users", "last_synced_at")).isTrue();
@@ -90,6 +103,25 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration042_modelNameColumnsAndOrphanGrainIndexExist() {
+        // Deleting a model captures its name on the usage rows so the per-model
+        // statistics survive; the rollup grain must tell orphans apart by that
+        // name, so the unique grain index carries the column.
+        assertThat(columnExists("log_entry", "model_name")).isTrue();
+        assertThat(columnExists("log_entry_hourly_stats", "model_name")).isTrue();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes"
+            + " WHERE schemaname='public' AND indexname='ux_log_entry_hourly_stats_grain'"
+            + " AND indexdef LIKE '%model_name%'",
+            Integer.class);
+        assertThat(count).isEqualTo(1);
+        // A delete can outlive the rollup pass's write lag, in which case the
+        // updated_at stamp alone is never re-scanned; the delete's queue of
+        // affected hours is what the pass falls back on.
+        assertThat(tableType("log_entry_rollup_dirty_hours")).isEqualTo("BASE TABLE");
+    }
+
+    @Test
     void migration029_providerSnapshotsTableRenamed() {
         // The physical table carries the engine-neutral name now...
         assertThat(tableType("provider_snapshots")).isEqualTo("BASE TABLE");
@@ -112,7 +144,7 @@ class LiquibaseBaselineTest {
     @Test
     void migration030_allowsStartWithoutOllamaTypedProviders() {
         // The 030 gate must be a no-op on a clean schema (the provider_type
-        // enum makes 'ollama' rows impossible) — reaching this test already
+        // enum makes legacy local-provider rows impossible) — reaching this test already
         // proves the changelog ran to the end.
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM providers", Integer.class)).isZero();
     }
@@ -141,6 +173,9 @@ class LiquibaseBaselineTest {
         assertThat(key.get("name")).isEqualTo("Ada Lovelace-Team Alpha-key");
         assertThat(key.get("is_active")).isEqualTo(true);
         assertThat(key.get("environment")).isEqualTo("-");
+        // The 002 backfill SQL writes the legacy default 1, which is preserved
+        // as-is (changeset 039 deliberately does not rewrite existing rows;
+        // 1 keeps acting as an explicit LOW override until an admin resets it).
         assertThat(((Number) key.get("default_priority")).intValue()).isEqualTo(1);
         assertThat(key.get("use_custom_permissions")).isEqualTo(false);
     }
@@ -176,6 +211,49 @@ class LiquibaseBaselineTest {
             "SELECT is_active FROM api_keys WHERE key_value='lg-existing'", Boolean.class)).isFalse();
         assertThat(developerKeyCount(rootUser, teamId)).isEqualTo(0);
         assertThat(developerKeyCount(inactiveUser, teamId)).isEqualTo(0);
+    }
+
+    @Test
+    void migration039_preservesExistingPrioritiesAndUnsetsFutureDefaults() {
+        // A stored 1 on a developer key is ambiguous: legacy factory/backfill
+        // default or a deliberately pinned LOW override. There is no reliable
+        // provenance, so 039 must leave every existing row untouched (a bulk
+        // reset would silently lift pinned-LOW keys to team/policy priority
+        // without owner intent) and only re-point the column default so
+        // future raw inserts use the "unset" marker 0.
+        Integer userId = jdbc.queryForObject(
+            "INSERT INTO users (username, role, is_active) VALUES ('key-reset', 'app_developer', true) RETURNING id",
+            Integer.class);
+        Integer teamId = jdbc.queryForObject(
+            "INSERT INTO teams (name) VALUES ('Reset') RETURNING id", Integer.class);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-pinned-low-dev', 'pinned low dev', 'developer', ?, ?, 1, true)", teamId, userId);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-explicit-dev', 'explicit dev', 'developer', ?, ?, 5, true)", teamId, userId);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-app-key', 'app key', 'application', ?, ?, 1, true)", teamId, userId);
+
+        runMigration039();
+
+        // Existing values survive, including a developer key pinned to LOW.
+        assertThat(keyPriority("lg-pinned-low-dev")).isEqualTo(1);
+        assertThat(keyPriority("lg-explicit-dev")).isEqualTo(5);
+        assertThat(keyPriority("lg-app-key")).isEqualTo(1);
+
+        // A new row that omits default_priority gets the new default 0.
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, is_active) "
+            + "VALUES ('lg-default-dev', 'default dev', 'developer', ?, ?, true)", teamId, userId);
+        assertThat(keyPriority("lg-default-dev")).isEqualTo(0);
+    }
+
+    private int keyPriority(String keyValue) {
+        Number priority = jdbc.queryForObject(
+            "SELECT default_priority FROM api_keys WHERE key_value=?", Number.class, keyValue);
+        return priority.intValue();
+    }
+
+    private void runMigration039() {
+        jdbc.update("ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 0");
     }
 
     private int developerKeyCount(Integer userId, Integer teamId) {

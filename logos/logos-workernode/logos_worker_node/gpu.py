@@ -12,7 +12,7 @@ from logos_worker_node.models import DeviceInfo, DeviceSummary
 
 logger = logging.getLogger("logos_worker_node.gpu")
 
-_NVIDIA_SMI_QUERY = "index,uuid,name,memory.used,memory.total,utilization.gpu," "temperature.gpu,power.draw"
+_NVIDIA_SMI_QUERY = "index,uuid,name,memory.used,memory.total,utilization.gpu," "temperature.gpu,power.draw,compute_cap"
 _NVIDIA_SMI_FORMAT = "csv,noheader,nounits"
 _SUBPROCESS_TIMEOUT = 10
 
@@ -105,7 +105,7 @@ class GpuMetricsCollector:
             nvidia_smi_available=available,
             # available is exactly "measured device telemetry" on this path
             # (start() only sets it when nvidia-smi exists and polls) — mirror
-            # it into the backend-neutral flag so the orchestrator's consumers
+            # it into the application server-neutral flag so the orchestrator's consumers
             # (main.py reporting, logosnode_provider gating) interpret the
             # snapshot the same way as the Metal path does.
             telemetry_available=available,
@@ -179,7 +179,7 @@ class GpuMetricsCollector:
                     utilization_percent=utilization,
                     temperature_celsius=temperature,
                     power_draw_watts=power_draw,
-                    extra={"index": device_index},
+                    extra={"index": device_index, "compute_capability": parts[8] if len(parts) > 8 else None},
                 )
             )
 
@@ -200,6 +200,18 @@ class GpuMetricsCollector:
                 text=True,
                 timeout=_SUBPROCESS_TIMEOUT,
             )
+            if result.returncode != 0:
+                # Older drivers may not expose compute_cap. Preserve ordinary telemetry.
+                result = subprocess.run(
+                    [
+                        "nvidia-smi",
+                        f"--query-gpu={_NVIDIA_SMI_QUERY.rsplit(',', 1)[0]}",
+                        f"--format={_NVIDIA_SMI_FORMAT}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=_SUBPROCESS_TIMEOUT,
+                )
             if result.returncode != 0:
                 logger.warning(
                     "nvidia-smi returned %d: %s",

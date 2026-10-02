@@ -22,9 +22,13 @@ jobs:
     uses: ./.github/workflows/iris_docs-build.yml
     secrets: inherit
 
+  build-logos:
+    uses: ./.github/workflows/logos_docs-build.yml
+    secrets: inherit
+
   deploy:
     if: github.ref == 'refs/heads/main'
-    needs: [build-athena, build-atlas, build-iris]
+    needs: [build-athena, build-atlas, build-iris, build-logos]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -47,6 +51,12 @@ jobs:
         with:
           name: iris-docs
           path: site/iris
+
+      - name: Download Logos docs
+        uses: actions/download-artifact@v4
+        with:
+          name: logos-docs
+          path: site/logos
 
       - name: Create landing page
         run: |
@@ -184,6 +194,12 @@ jobs:
                       <a href="/edutelligence/iris/" class="card">
                           <h2>Iris</h2>
                           <p>AI-powered virtual tutor for context-aware, scaffolded learning support</p>
+                          <span class="btn">View Documentation →</span>
+                      </a>
+
+                      <a href="/edutelligence/logos/" class="card">
+                          <h2>Logos</h2>
+                          <p>LLM engineering platform for shared and self-hosted language models</p>
                           <span class="btn">View Documentation →</span>
                       </a>
                   </div>

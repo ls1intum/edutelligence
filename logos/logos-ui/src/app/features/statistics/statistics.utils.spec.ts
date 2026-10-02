@@ -1,7 +1,11 @@
 import {
   extractProviderHostRamMb,
+  formatBucketRange,
   formatPercent,
   formatTokenCount,
+  formatUptime,
+  isUnifiedMemoryProvider,
+  modelSeriesKey,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -202,6 +206,45 @@ describe('extractProviderHostRamMb', () => {
 });
 
 /**
+ * A provider's memory is a single pool (not a VRAM pool beside a RAM pool)
+ * when its device reports unified memory. The page decides on this alone, so
+ * the answer has to be exactly "Metal", never anything that merely looks
+ * like it.
+ */
+describe('isUnifiedMemoryProvider', () => {
+  it('reads the device mode off the provider signals', () => {
+    const sample = {
+      timestamp: 't',
+      scheduler_signals: {
+        provider: { device_mode: 'metal' },
+      },
+    };
+    expect(isUnifiedMemoryProvider(sample)).toBe(true);
+  });
+
+  it('is false for every other device mode', () => {
+    for (const mode of ['cuda', 'none', 'unknown', '']) {
+      expect(
+        isUnifiedMemoryProvider({
+          timestamp: 't',
+          scheduler_signals: { provider: { device_mode: mode } },
+        }),
+      ).toBe(false);
+    }
+    expect(isUnifiedMemoryProvider({ timestamp: 't', scheduler_signals: { provider: {} } })).toBe(
+      false,
+    );
+  });
+
+  it('is false when the sample or its signals are missing', () => {
+    expect(isUnifiedMemoryProvider({ timestamp: 't' })).toBe(false);
+    expect(isUnifiedMemoryProvider({ timestamp: 't', scheduler_signals: {} })).toBe(false);
+    expect(isUnifiedMemoryProvider(null)).toBe(false);
+    expect(isUnifiedMemoryProvider(undefined)).toBe(false);
+  });
+});
+
+/**
  * The share of a part in a total, as the cold-start KPI card shows it.
  *
  * The point is the small end: a share that integer rounding collapses to
@@ -257,5 +300,93 @@ describe('formatPercent', () => {
     expect(formatPercent(1, 1_000_000_000)).toBe('<0.000001%');
     // The last share that still fits six decimals keeps its exact reading.
     expect(formatPercent(1, 100_000_000)).toBe('0.000001%');
+  });
+});
+
+/**
+ * "Uptime since" label used for the worker-uptime and ws-connection-uptime
+ * chips on the statistics page's worker panel.
+ */
+describe('formatUptime', () => {
+  const nowMs = new Date('2026-09-16T12:00:00Z').getTime();
+
+  it('reads null for a missing or unparseable timestamp', () => {
+    expect(formatUptime(null, nowMs)).toBeNull();
+    expect(formatUptime(undefined, nowMs)).toBeNull();
+    expect(formatUptime('not-a-date', nowMs)).toBeNull();
+  });
+
+  it('reads null for a timestamp in the future (clock skew)', () => {
+    expect(formatUptime('2026-09-16T12:00:01Z', nowMs)).toBeNull();
+  });
+
+  it('reads "<1m" for a connection under a minute old', () => {
+    expect(formatUptime('2026-09-16T11:59:30Z', nowMs)).toBe('<1m');
+  });
+
+  it('reads whole minutes under an hour', () => {
+    expect(formatUptime('2026-09-16T11:42:00Z', nowMs)).toBe('18m');
+  });
+
+  it('reads hours and minutes under a day', () => {
+    expect(formatUptime('2026-09-16T06:30:00Z', nowMs)).toBe('5h 30m');
+  });
+
+  it('reads days and hours at a day or more', () => {
+    expect(formatUptime('2026-09-13T04:00:00Z', nowMs)).toBe('3d 8h');
+  });
+});
+
+/**
+ * Explicit volume-bucket ranges for chart tooltips.
+ */
+describe('formatBucketRange', () => {
+  it('formats a five-minute bucket as a time range', () => {
+    // Local-time formatting: pin the instant so the label is stable across TZ.
+    const start = new Date(2026, 8, 18, 4, 30, 0).getTime();
+    expect(formatBucketRange(start, 5 * 60_000)).toBe('04:30 – 04:35');
+  });
+
+  it('formats a daily bucket as a single calendar day', () => {
+    const start = new Date(2026, 8, 1, 0, 0, 0).getTime();
+    expect(formatBucketRange(start, 86_400_000)).toBe('Sep 1');
+  });
+});
+
+/**
+ * The per-model chart series are keyed by this, not by the model id alone:
+ * a deleted model's id is gone from the feed, so its usage would otherwise
+ * lose its series (and its legend entry) along with it.
+ */
+describe('modelSeriesKey', () => {
+  it('keys a live model by its id, ignoring the name', () => {
+    expect(modelSeriesKey(42, 'gpt-4')).toBe('model-42');
+  });
+
+  it('keys a deleted model by its captured name', () => {
+    expect(modelSeriesKey(null, 'gpt-4')).toBe('deleted-gpt-4');
+  });
+
+  it('keeps a deleted model that re-took a live id out of the live series', () => {
+    // Without the distinct prefixes a deleted model named "42" would share
+    // its key with live model id 42 and merge into its usage.
+    expect(modelSeriesKey(null, '42')).not.toBe(modelSeriesKey(42, '42'));
+  });
+
+  it('never yields a key that resolves to an inherited object property', () => {
+    // The chart keeps its series in plain objects; a raw name like
+    // "constructor" would read an inherited property instead of the entry.
+    for (const name of ['constructor', '__proto__', 'toString']) {
+      const key = modelSeriesKey(null, name);
+      const map: Record<string, number> = {};
+      map[key] = 1;
+      expect(Object.hasOwn(map, key)).toBe(true);
+      expect(map[key]).toBe(1);
+    }
+  });
+
+  it('falls back to a single shared bucket when neither id nor name survived', () => {
+    expect(modelSeriesKey(null, null)).toBe('deleted-unknown');
+    expect(modelSeriesKey(null, '   ')).toBe('deleted-unknown');
   });
 });

@@ -76,6 +76,10 @@ def _internal_request(authorization: str = "Bearer test-secret") -> SimpleNamesp
     return SimpleNamespace(headers={"authorization": authorization} if authorization else {})
 
 
+def _health_request(client_ip: str = "203.0.113.1") -> SimpleNamespace:
+    return SimpleNamespace(headers={}, client=SimpleNamespace(host=client_ip))
+
+
 # ---------------------------------------------------------------------------
 # /health — public liveness signal, no model catalogue
 # ---------------------------------------------------------------------------
@@ -94,7 +98,7 @@ async def test_local_up_returns_200_lean_payload(monkeypatch):
     registry.peek_runtime_snapshot = snapshots.get
     _patch_registry(monkeypatch, registry)
 
-    response = await monitoring_mod.health()
+    response = await monitoring_mod.health(_health_request())
 
     assert response.status_code == 200
     body = _body(response)
@@ -118,7 +122,7 @@ async def test_local_down_returns_503_and_keeps_cloud_breakdown(monkeypatch):
     registry.peek_runtime_snapshot = lambda pid: None
     _patch_registry(monkeypatch, registry)
 
-    response = await monitoring_mod.health()
+    response = await monitoring_mod.health(_health_request())
 
     assert response.status_code == 503
     body = _body(response)
@@ -145,7 +149,7 @@ async def test_legacy_local_provider_is_not_counted_as_cloud(monkeypatch):
     registry.peek_runtime_snapshot = lambda pid: None
     _patch_registry(monkeypatch, registry)
 
-    response = await monitoring_mod.health()
+    response = await monitoring_mod.health(_health_request())
 
     assert _body(response)["cloud_models"] == "DOWN"
 
@@ -157,12 +161,36 @@ async def test_db_failure_reports_down(monkeypatch):
     registry.peek_runtime_snapshot = lambda pid: None
     _patch_registry(monkeypatch, registry)
 
-    response = await monitoring_mod.health()
+    response = await monitoring_mod.health(_health_request())
 
     assert response.status_code == 503
     body = _body(response)
     assert body["status"] == "DOWN"
     assert "models" not in body
+
+
+@pytest.mark.asyncio
+async def test_health_is_rate_limited_per_ip(monkeypatch):
+    # /health runs a database query on every call and takes no credential, so
+    # a caller cannot use it to generate unbounded load.
+    from logos import rate_limiter as rate_limiter_mod
+
+    monkeypatch.setattr(rate_limiter_mod, "PUBLIC_ENDPOINT_RPM", 2)
+    monkeypatch.setattr(rate_limiter_mod, "_rate_limiter", rate_limiter_mod.InMemoryRateLimiter())
+    registry = MagicMock()
+    registry.peek_runtime_snapshot = lambda pid: None
+    _patch_registry(monkeypatch, registry)
+
+    request = _health_request("203.0.113.77")
+    assert (await monitoring_mod.health(request)).status_code in (200, 503)
+    assert (await monitoring_mod.health(request)).status_code in (200, 503)
+    with pytest.raises(HTTPException) as exc:
+        await monitoring_mod.health(request)
+    assert exc.value.status_code == 429
+
+    # A different source IP has its own, untouched budget.
+    other = _health_request("203.0.113.78")
+    assert (await monitoring_mod.health(other)).status_code in (200, 503)
 
 
 # ---------------------------------------------------------------------------

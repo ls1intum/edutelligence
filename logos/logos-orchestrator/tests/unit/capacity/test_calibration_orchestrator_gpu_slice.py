@@ -1,4 +1,4 @@
-"""CalibrationOrchestrator GPU-slice eligibility (issue #592).
+"""CalibrationOrchestrator GPU-slice eligibility.
 
 On a heterogeneous node (e.g. 3 GPUs) the calibration probe only uses a
 power-of-two slice of the GPUs — the largest slice, ``{0..tp-1}``. A lane that

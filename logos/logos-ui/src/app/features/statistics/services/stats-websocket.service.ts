@@ -1,10 +1,10 @@
 import { Injectable, inject } from '@angular/core';
 import { AuthService } from '../../../core/auth/services/auth.service';
 import {
+  StatsTab,
   TimelineRequestConfig,
   VramV2Payload,
   TimelineInitPayload,
-  TimelineDeltaPayload,
 } from '../statistics.models';
 
 // ─── Pure helper functions (exported for unit tests) ─────────────────────────
@@ -38,7 +38,6 @@ export interface StatsWsHandlers {
   onVramInit: (payload: VramV2Payload) => void;
   onVramDelta: (payload: VramV2Payload) => void;
   onTimelineInit: (payload: TimelineInitPayload) => void;
-  onTimelineDelta: (payload: TimelineDeltaPayload) => void;
   /**
    * Recomputed aggregates for the same range — the same shape as
    * `timeline_init` minus its (far larger) event list. Pushed while the page is
@@ -57,12 +56,13 @@ export interface StatsWsHandlers {
 export interface StatsScope {
   userId: number | null;
   teamId: number | null;
+  providerId: number | null;
+  errorsOnly: boolean;
 }
 
 export interface StatsWsConnectOptions {
   vramDayOffset: number;
   timeline: TimelineRequestConfig;
-  timelineDeltas: boolean;
   scope?: StatsScope;
   /**
    * State bucket the request feed is narrowed to (queued/running/error/
@@ -70,6 +70,12 @@ export interface StatsWsConnectOptions {
    * scope, so the KPI cards and charts keep their full team/user totals.
    */
   feedStatus?: string | null;
+  /**
+   * Which tab is on screen. Only that tab's channel is pushed — Local
+   * Providers gets VRAM, Requests gets aggregates and the feed. Stored so a
+   * reconnect re-declares it instead of briefly flooding both.
+   */
+  interest?: StatsTab;
   handlers: StatsWsHandlers;
 }
 
@@ -77,7 +83,6 @@ type ServerMessage =
   | { type: 'vram_init'; payload: VramV2Payload }
   | { type: 'vram_delta'; payload: VramV2Payload }
   | { type: 'timeline_init'; payload: TimelineInitPayload }
-  | { type: 'timeline_delta'; payload: TimelineDeltaPayload }
   | { type: 'stats'; payload: TimelineInitPayload }
   | { type: 'requests'; payload: { requests?: Array<any> } }
   | { type: 'pong' };
@@ -91,6 +96,8 @@ export class StatsWebsocketService {
   private ws: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
+  /** Watchdog for the wake-time liveness ping; cleared when a pong arrives. */
+  private wakeProbeTimer: ReturnType<typeof setTimeout> | null = null;
   private backoff = 2000;
   private active = false;
 
@@ -107,6 +114,7 @@ export class StatsWebsocketService {
     this.backoff = 2000;
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this._handleWake);
+      window.addEventListener('pageshow', this._handlePageShow);
       document.addEventListener('visibilitychange', this._handleWake);
     }
     void this._openSocket();
@@ -147,6 +155,8 @@ export class StatsWebsocketService {
           action: 'set_scope',
           user_id: scope.userId,
           team_id: scope.teamId,
+          provider_id: scope.providerId,
+          errors_only: scope.errorsOnly || null,
         })
       );
     }
@@ -170,9 +180,27 @@ export class StatsWebsocketService {
     }
   }
 
+  /**
+   * Tell the server which tab is on screen so it only pushes that channel.
+   *
+   * Stored on the options as well as sent, so a reconnect re-declares it —
+   * otherwise the first init after wake would flood both channels under a
+   * page that still shows only one. The server answers with a full init for
+   * the newly enabled channel.
+   */
+  setInterest(interest: StatsTab): void {
+    if (this.opts) {
+      this.opts = { ...this.opts, interest };
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: 'set_interest', interest }));
+    }
+  }
+
   reconnect(): void {
     this.backoff = 2000;
     this._clearReconnectTimer();
+    this._clearWakeProbeTimer();
     this._clearPingTimer();
     this._closeSocket();
     void this._openSocket();
@@ -182,9 +210,11 @@ export class StatsWebsocketService {
     this.active = false;
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this._handleWake);
+      window.removeEventListener('pageshow', this._handlePageShow);
       document.removeEventListener('visibilitychange', this._handleWake);
     }
     this._clearReconnectTimer();
+    this._clearWakeProbeTimer();
     this._clearPingTimer();
     this._closeSocket();
     this.opts = null;
@@ -193,19 +223,57 @@ export class StatsWebsocketService {
   // ── Private helpers ─────────────────────────────────────────────────────────
 
   /**
-   * Reconnects immediately when the tab becomes visible again or the network
-   * comes back, instead of waiting out the backoff timer.
+   * After sleep the browser often keeps readyState OPEN on a dead TCP socket.
+   * A plain "already open → do nothing" check then leaves the page frozen
+   * until a manual reload. Probe with a ping; if no pong arrives, force a
+   * reconnect. When the socket is already gone, open immediately.
    */
   private _handleWake = (): void => {
     if (!this.active) return;
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
     this.backoff = 2000;
     this._clearReconnectTimer();
+
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+      return;
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this._probeSocketLiveness();
+      return;
+    }
     void this._openSocket();
   };
+
+  /** bfcache restore: the socket from before freeze is never usable again. */
+  private _handlePageShow = (event: PageTransitionEvent): void => {
+    if (!this.active || !event.persisted) return;
+    this.reconnect();
+  };
+
+  private _probeSocketLiveness(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    // One probe at a time — alt-tabbing must not stack timers that all
+    // reconnect on the same dead socket.
+    if (this.wakeProbeTimer !== null) return;
+    try {
+      this.ws.send(JSON.stringify({ action: 'ping' }));
+    } catch {
+      this.reconnect();
+      return;
+    }
+    this.wakeProbeTimer = setTimeout(() => {
+      this.wakeProbeTimer = null;
+      // Still no pong: the OPEN socket is a zombie (typical after laptop sleep).
+      this.reconnect();
+    }, 3_000);
+  }
+
+  private _clearWakeProbeTimer(): void {
+    if (this.wakeProbeTimer !== null) {
+      clearTimeout(this.wakeProbeTimer);
+      this.wakeProbeTimer = null;
+    }
+  }
 
   private _scheduleReconnect(): void {
     if (!this.active || this.reconnectTimer !== null) return;
@@ -259,6 +327,7 @@ export class StatsWebsocketService {
     }
 
     this._clearReconnectTimer();
+    this._clearWakeProbeTimer();
     this._clearPingTimer();
     this._closeSocket();
 
@@ -283,7 +352,6 @@ export class StatsWebsocketService {
         JSON.stringify({
           action: 'init',
           vram_day: this.currentVramDay,
-          timeline_deltas: current.timelineDeltas,
           timeline: {
             start: current.timeline.start,
             end: current.timeline.end,
@@ -291,7 +359,10 @@ export class StatsWebsocketService {
           },
           user_id: current.scope?.userId ?? null,
           team_id: current.scope?.teamId ?? null,
+          provider_id: current.scope?.providerId ?? null,
+          errors_only: current.scope?.errorsOnly || null,
           status: current.feedStatus ?? null,
+          interest: current.interest ?? null,
         })
       );
 
@@ -305,14 +376,18 @@ export class StatsWebsocketService {
     ws.onmessage = (event: MessageEvent) => {
       try {
         const msg: ServerMessage = JSON.parse(event.data);
+        if (msg.type === 'pong') {
+          // A wake probe (or the keepalive interval) got an answer — the
+          // socket is alive, so cancel any pending force-reconnect.
+          this._clearWakeProbeTimer();
+          return;
+        }
         if (msg.type === 'vram_init') {
           opts.handlers.onVramInit(msg.payload);
         } else if (msg.type === 'vram_delta') {
           opts.handlers.onVramDelta(msg.payload);
         } else if (msg.type === 'timeline_init') {
           opts.handlers.onTimelineInit(msg.payload);
-        } else if (msg.type === 'timeline_delta') {
-          opts.handlers.onTimelineDelta(msg.payload);
         } else if (msg.type === 'stats') {
           opts.handlers.onStats(msg.payload);
         } else if (msg.type === 'requests') {

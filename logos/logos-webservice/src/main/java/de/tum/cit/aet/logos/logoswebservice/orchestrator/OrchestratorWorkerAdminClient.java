@@ -35,6 +35,10 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/calibrate_uncalibrated", Map.of("provider_id", providerId));
     }
 
+    public ResponseEntity<Map> stopCalibration(int providerId) {
+        return post("/internal/logosnode/stop_calibration", Map.of("provider_id", providerId));
+    }
+
     public ResponseEntity<Map> deleteLane(int providerId, String laneId) {
         return post("/internal/logosnode/lanes/delete", Map.of("provider_id", providerId, "lane_id", laneId));
     }
@@ -45,6 +49,18 @@ public class OrchestratorWorkerAdminClient {
 
     public ResponseEntity<Map> wakeLane(int providerId, String laneId) {
         return post("/internal/logosnode/lanes/wake", Map.of("provider_id", providerId, "lane_id", laneId));
+    }
+
+    /**
+     * Takes a busy lane offline without dropping its in-flight requests: the
+     * orchestrator marks the lane out of the rotation, waits for the in-flight
+     * requests to finish, and only then sleeps the lane (or unloads it when
+     * the host cannot hold a resident sleeper). The wait plus the sleep
+     * command stay under this client's read timeout, so a plain post is
+     * enough.
+     */
+    public ResponseEntity<Map> drainLane(int providerId, String laneId) {
+        return post("/internal/logosnode/lanes/drain", Map.of("provider_id", providerId, "lane_id", laneId));
     }
 
     /**
@@ -66,15 +82,21 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/lanes/load_status", Map.of("provider_id", providerId, "model", model));
     }
 
-    public ResponseEntity<Map> startModelBenchmark(int modelProviderId, int sampleSize, int maxOutputTokens) {
-        return post(
-            "/internal/model_benchmarks/run",
-            Map.of(
-                "model_provider_id", modelProviderId,
-                "samples", sampleSize,
-                "max_output_tokens", maxOutputTokens
-            )
-        );
+    public ResponseEntity<Map> startModelBenchmark(int modelProviderId, int sampleSize, int maxOutputTokens,
+                                                   Map<String, Object> settings) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>(settings);
+        body.put("model_provider_id", modelProviderId);
+        body.put("samples", sampleSize);
+        body.put("max_output_tokens", maxOutputTokens);
+        return post("/internal/model_benchmarks/run", body);
+    }
+
+    public ResponseEntity<Map> benchmarkDatasets(String operation, Map<String, Object> body) {
+        return post("/internal/model_benchmarks/datasets/" + operation, body);
+    }
+
+    public ResponseEntity<Map> benchmarkLimits(Map<String, Object> body) {
+        return post("/internal/model_benchmarks/limits", body);
     }
 
     public ResponseEntity<Map> cancelModelBenchmark(int jobId) {

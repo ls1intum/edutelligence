@@ -135,4 +135,16 @@ export class Shell {
       }))
       .filter((g) => g.items.length > 0);
   });
+
+  /**
+   * Team detail lives at `/teams/:id` while the sidebar entry is
+   * `/team-management` — keep Teams highlighted for the whole flow.
+   */
+  isNavActive(item: MenuItem): boolean {
+    const url = this.router.url.split('?')[0];
+    if (item.path === '/team-management') {
+      return url === '/team-management' || url.startsWith('/teams/');
+    }
+    return url === item.path || url.startsWith(`${item.path}/`);
+  }
 }

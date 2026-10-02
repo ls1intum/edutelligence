@@ -15,8 +15,11 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
+import de.tum.cit.aet.logos.logoswebservice.configuration.ModelProfileRatings;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ModelCapabilitiesDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
@@ -77,15 +80,17 @@ public class ModelService {
     }
 
     /**
-     * Current health of every model the given API key may access, as computed
-     * live by the orchestrator from its worker registry. Applications use this
-     * to check before sending traffic whether a model has a healthy/available
-     * deployment right now. Access follows the key's permissions exactly as
-     * the orchestrator resolves them for requests: the key's own model
-     * permissions when it uses custom permissions, otherwise its team's.
-     * Returns empty when the key is unknown or inactive.
+     * Validates the given API key and resolves the set of model names it may access, exactly as the orchestrator
+     * resolves them for requests: the key's own model permissions when it uses custom permissions, otherwise its
+     * team's. Returns empty when the key is unknown or inactive.
+     *
+     * <p>
+     * Split out from {@link #getModelHealthForAccessibleModels} — the DB-only half of what used to be one
+     * {@code getModelHealth} method — so a caller doing its own rate limiting around authentication (see
+     * {@code ModelController#getModelHealth}) can release that budget the moment the key is known valid, instead
+     * of holding it through the slower orchestrator call below.
      */
-    public Optional<Map<String, Object>> getModelHealth(String keyValue) {
+    public Optional<Set<String>> resolveAccessibleModelsForApiKey(String keyValue) {
         ApiKey key = apiKeyRepository.findByKeyValueAndIsActiveTrue(keyValue).orElse(null);
         if (key == null) {
             return Optional.empty();
@@ -102,10 +107,19 @@ public class ModelService {
         } else {
             accessibleModels = Set.of();
         }
+        return Optional.of(accessibleModels);
+    }
+
+    /**
+     * Current health of every model in {@code accessibleModels}, as computed live by the orchestrator from its
+     * worker registry. Applications use this to check before sending traffic whether a model has a
+     * healthy/available deployment right now.
+     */
+    public Map<String, Object> getModelHealthForAccessibleModels(Set<String> accessibleModels) {
         List<Map<String, Object>> visible = orchestratorModelHealthClient.getModelHealth().stream()
             .filter(entry -> accessibleModels.contains(entry.get("name")))
             .toList();
-        return Optional.of(Map.of("models", visible));
+        return Map.of("models", visible);
     }
 
     @Transactional
@@ -144,6 +158,9 @@ public class ModelService {
         if (req.weightAccuracy() != null) model.setWeightAccuracy(req.weightAccuracy());
         if (req.weightCost() != null) model.setWeightCost(req.weightCost());
         if (req.weightQuality() != null) model.setWeightQuality(req.weightQuality());
+        if (req.profileRatings() != null) {
+            model.setProfileRatings(ModelProfileRatings.normalize(req.profileRatings()));
+        }
         ensureNameDoesNotCollideWithAlias(req.name());
         ensureNameIsUniqueAcrossModels(req.name(), req.modelId());
         modelRepository.save(model);
@@ -171,6 +188,7 @@ public class ModelService {
             map.put("weight_accuracy", m.getWeightAccuracy());
             map.put("weight_cost", m.getWeightCost());
             map.put("weight_quality", m.getWeightQuality());
+            map.put("profile_ratings", m.getProfileRatings() != null ? m.getProfileRatings() : Map.of());
             map.put("tags", m.getTags());
             map.put("aliases", listAliases(m.getId()));
             map.put("description", m.getDescription());
@@ -341,6 +359,7 @@ public class ModelService {
         m.put("weight_accuracy", p.getWeightAccuracy());
         m.put("weight_cost", p.getWeightCost());
         m.put("weight_quality", p.getWeightQuality());
+        m.put("profile_ratings", parseProfileRatings(p.getProfileRatingsJson()));
         m.put("tags", p.getTags());
         m.put("aliases", p.getAliases());
         m.put("description", p.getDescription());
@@ -374,5 +393,19 @@ public class ModelService {
             capabilities.getSupportsVision(),
             capabilities.getSupportsReasoning()
         );
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Integer> parseProfileRatings(String json) {
+        if (json == null || json.isBlank() || "{}".equals(json.trim())) {
+            return Map.of();
+        }
+        try {
+            Map<?, ?> raw = new ObjectMapper().readValue(json, Map.class);
+            return ModelProfileRatings.normalize(raw);
+        }
+        catch (Exception e) {
+            return Map.of();
+        }
     }
 }

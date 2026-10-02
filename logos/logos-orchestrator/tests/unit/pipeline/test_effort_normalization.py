@@ -1,6 +1,6 @@
 """Reasoning-effort normalization for Qwen3.8 models.
 
-Regression test for #749: the Qwen3.8 chat template only accepts
+The Qwen3.8 chat template only accepts
 xhigh/medium/low as reasoning effort, while clients such as Claude Code send
 the Anthropic value "high" in every request (output_config.effort). vLLM
 forwards the value to the template, which rejects it with an error surfaced
@@ -62,7 +62,7 @@ def test_longest_matching_pattern_wins_over_broader_pattern(monkeypatch):
 
 
 def test_anthropic_output_config_high_mapped_to_xhigh():
-    # The exact request shape from #749 (Claude Code /v1/messages).
+    # The exact request shape from  (Claude Code /v1/messages).
     payload = {
         "model": "Qwen/Qwen3.8-27B",
         "max_tokens": 64,

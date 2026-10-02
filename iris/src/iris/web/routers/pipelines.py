@@ -1,3 +1,4 @@
+import time
 from threading import Thread
 from typing import List
 
@@ -23,6 +24,13 @@ from iris.domain.rewriting_pipeline_execution_dto import (
 )
 from iris.domain.search.global_search_dto import GlobalSearchRequestDTO
 from iris.domain.search.search_intent_dto import SearchIntent
+from iris.domain.status.global_search_status_update_dto import (
+    GlobalSearchStatusUpdateDTO,
+)
+from iris.domain.status.run_state_dto import RunStateEnum
+from iris.domain.struggle.struggle_intervention_pipeline_execution_dto import (
+    StruggleInterventionPipelineExecutionDTO,
+)
 from iris.domain.variant.abstract_variant import AbstractVariant, find_variant
 from iris.llm.external.model import LanguageModel
 from iris.llm.llm_configuration import LlmConfigurationError
@@ -45,12 +53,14 @@ from iris.pipeline.rewriting_pipeline import RewritingPipeline
 from iris.pipeline.shared.global_search_intent_classifier import (
     classify as classify_intent,
 )
+from iris.pipeline.struggle_intervention_pipeline import StruggleInterventionPipeline
 from iris.pipeline.tutor_suggestion_pipeline import TutorSuggestionPipeline
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
     LectureGlobalSearchRetrieval,
 )
 from iris.tracing import TracedThreadPoolExecutor
 from iris.vector_database.database import VectorDatabase
+from iris.web.status.partial_result_sender import PartialResultSender
 from iris.web.status.status_update import (
     AutonomousTutorCallback,
     ChatRunCallback,
@@ -58,6 +68,7 @@ from iris.web.status.status_update import (
     GlobalSearchCallback,
     InconsistencyCheckCallback,
     RewritingCallback,
+    StruggleInterventionCallback,
     TutorSuggestionCallback,
 )
 from iris.web.utils import validate_pipeline_variant
@@ -339,6 +350,44 @@ def run_autonomous_tutor_pipeline(dto: AutonomousTutorPipelineExecutionDTO):
     thread.start()
 
 
+def run_struggle_intervention_pipeline_worker(
+    dto: StruggleInterventionPipelineExecutionDTO, variant_id: str, request_id: str
+):
+    set_request_id(request_id)
+    logger.info("Struggle intervention pipeline started")
+    try:
+        callback = StruggleInterventionCallback(
+            run_id=dto.settings.authentication_token,
+            base_url=dto.settings.artemis_base_url,
+        )
+    except Exception as e:
+        logger.error("Error creating struggle-intervention callback", exc_info=e)
+        capture_exception(e)
+        return
+    try:
+        variant = find_variant(StruggleInterventionPipeline.get_variants(), variant_id)
+        pipeline = StruggleInterventionPipeline()
+        pipeline(dto=dto, variant=variant, callback=callback)
+    except Exception as e:
+        logger.error("Error running struggle-intervention pipeline", exc_info=e)
+        callback.fail("Fatal error.", exception=e)
+
+
+@router.post(
+    "/struggle-intervention/run",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+def run_struggle_intervention_pipeline(dto: StruggleInterventionPipelineExecutionDTO):
+    variant = validate_pipeline_variant(dto.settings, StruggleInterventionPipeline)
+    request_id = get_request_id()
+    thread = Thread(
+        target=run_struggle_intervention_pipeline_worker,
+        args=(dto, variant, request_id),
+    )
+    thread.start()
+
+
 def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: str):
     set_request_id(request_id)
     try:
@@ -352,13 +401,14 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
         return
 
     try:
+        started = time.perf_counter()
         intent = classify_intent(dto.query)
-        logger.debug(
+        logger.info(
             "[global-search] query=%r  intent=%s  → %s",
             dto.query[:120],
             intent,
             (
-                "calling LLM (HyDE + answer)"
+                "calling LLM (answer)"
                 if intent == SearchIntent.TRIGGER_AI
                 else "skipping LLM (sources only)"
             ),
@@ -369,36 +419,72 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
                 client, local=dto.settings.is_local()
             )
             sources = retriever.search(
-                query=dto.query, limit=dto.limit, access_context=dto.access_context
+                query=dto.query,
+                limit=dto.limit,
+                course_ids=dto.course_ids,
+                exclude_course_ids=dto.exclude_course_ids,
+                access_context=dto.access_context,
             )
             logger.info(
-                "[global-search] answer=null  sources=%d  (LLM skipped)",
+                "[global-search] answer=null  sources=%d  total_ms=%.0f  (LLM skipped)",
                 len(sources),
+                (time.perf_counter() - started) * 1000,
             )
             callback.finish(answer=None, sources=sources, tokens=[])
             return
 
         callback.update()
         pipeline = GlobalSearchPipeline(client, local=dto.settings.is_local())
-        result = pipeline(
-            query=dto.query,
-            limit=dto.limit,
-            intent=intent,
-            access_context=dto.access_context,
-        )
+        sender = None
+        if getattr(dto.settings, "stream_response", False):
+            sender = PartialResultSender(
+                callback.url,
+                dto.settings.authentication_token,
+                status_dto_factory=lambda text, seq: GlobalSearchStatusUpdateDTO(
+                    run_state=RunStateEnum.RUNNING,
+                    partial_result=text,
+                    partial_seq=seq,
+                ),
+            )
+            sender.start()
+        try:
+            result = pipeline(
+                query=dto.query,
+                limit=dto.limit,
+                intent=intent,
+                access_context=dto.access_context,
+                entity_candidates=dto.entity_candidates,
+                course_ids=dto.course_ids,
+                exclude_course_ids=dto.exclude_course_ids,
+                stream_handler=sender.on_delta if sender else None,
+                stage_handler=lambda stage, sources: callback.update(
+                    stage=stage, stage_sources=sources
+                ),
+            )
+        finally:
+            if sender is not None:
+                sender.stop()
+        total_ms = (time.perf_counter() - started) * 1000
         if result.answer:
             logger.info(
-                "[global-search] LLM produced an answer (%d chars, %d sources)",
+                "[global-search] LLM produced an answer (%d chars, %d sources) total_ms=%.0f",
                 len(result.answer),
                 len(result.sources),
+                total_ms,
             )
         else:
             logger.info(
-                "[global-search] answer=null  sources=%d  (LLM returned null or was skipped)",
+                "[global-search] answer=null  sources=%d  total_ms=%.0f  "
+                "(LLM returned null or was skipped)",
                 len(result.sources),
+                total_ms,
             )
         callback.finish(
-            answer=result.answer, sources=result.sources, tokens=pipeline.tokens
+            answer=result.answer,
+            sources=result.sources,
+            entity_sources=result.entity_sources,
+            citation_source_types=result.citation_source_types,
+            tokens=pipeline.tokens,
         )
     except Exception as e:
         logger.error("Error running global search pipeline", exc_info=e)
@@ -412,7 +498,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
 )
 def run_global_search_pipeline(dto: GlobalSearchRequestDTO):
     """
-    Answer a student's question using course content retrieved via HyDE.
+    Answer a student's question using retrieved course content.
 
     Returns 202 immediately. Sends webhook callbacks to Artemis:
       - TRIGGER_AI (LLM path, ~5-8s): thinking callback first, then result
@@ -475,6 +561,11 @@ def get_pipeline(feature: str) -> list[FeatureDTO]:
         case "AUTONOMOUS_TUTOR":
             return get_available_variants(
                 safe_get_variants(AutonomousTutorPipeline.get_variants), available_llms
+            )
+        case "STRUGGLE_INTERVENTION":
+            return get_available_variants(
+                safe_get_variants(StruggleInterventionPipeline.get_variants),
+                available_llms,
             )
         case _:
             raise HTTPException(

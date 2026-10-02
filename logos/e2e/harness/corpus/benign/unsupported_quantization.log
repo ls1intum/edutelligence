@@ -1,0 +1,6 @@
+INFO 05-06 17:11:53 [api_server.py:1000] vLLM API server version 0.11.0
+ERROR 05-06 17:11:57 [core.py:712] EngineCore failed to start.
+ERROR 05-06 17:11:57 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/quantization/awq_marlin.py", line 96, in get_min_capability
+ERROR 05-06 17:11:57 [core.py:712]     raise ValueError(...)
+ERROR 05-06 17:11:57 [core.py:712] ValueError: The quantization method awq_marlin is not supported for the current GPU. Minimum capability: 80. Current capability: 75.
+Process EngineCore_DP0: exited with code 1

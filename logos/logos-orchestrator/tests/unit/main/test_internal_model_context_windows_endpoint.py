@@ -170,7 +170,7 @@ async def test_native_is_known_without_a_live_lane(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_calibrated_cap_is_the_overall_when_nothing_wider_was_reported(monkeypatch):
-    """The #829 root cause at the stats level.
+    """A calibrated cap is reported when no wider context value exists.
 
     A calibration capped --max-model-len to fit the pinned KV budget and
     recorded no wider KV point, so ``calibration_max_model_len`` is the only
@@ -200,9 +200,9 @@ async def test_calibrated_cap_is_the_overall_when_nothing_wider_was_reported(mon
 @pytest.mark.asyncio
 async def test_all_workernodes_offline_falls_back_to_the_historic_max(monkeypatch):
     """No registered session at all: the live snapshots say nothing, so the
-    historic maximum the database keeps per model is what is still reported
-    (#829) — ``overall`` only, since no lane is up that would make any
-    current_* figure true."""
+    historic maximum the database keeps per model is what is still reported —
+    ``overall`` only, since no lane is up that would make any current_* figure
+    true."""
     monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     registry = MagicMock()
