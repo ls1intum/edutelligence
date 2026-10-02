@@ -253,7 +253,11 @@ class RequestLogStatsControllerTest {
            // Providers that actually carried traffic in the range, for the
            // global provider filter on the statistics page.
            .andExpect(jsonPath("$.providers").isArray())
-           .andExpect(jsonPath("$.providers.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)));
+           .andExpect(jsonPath("$.providers.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(1)))
+           .andExpect(jsonPath("$.models.length()").value(1))
+           .andExpect(jsonPath("$.models[0].id").value(5001))
+           .andExpect(jsonPath("$.models[0].label").value("gpt-4"))
+           .andExpect(jsonPath("$.models[0].requestCount").value(2));
     }
 
     @Test
@@ -265,6 +269,7 @@ class RequestLogStatsControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.requesters.length()").value(1))
            .andExpect(jsonPath("$.requesters[0].id").value(1001))
+           .andExpect(jsonPath("$.models[0].requestCount").value(1))
            // The team list itself stays whole: it is the control being used to
            // choose, so narrowing it by the current choice would leave no way
            // back to the others.
@@ -278,7 +283,8 @@ class RequestLogStatsControllerTest {
                 .contentType("application/json")
                 .content("{\"team_id\": 999999}"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.requesters").isEmpty());
+           .andExpect(jsonPath("$.requesters").isEmpty())
+           .andExpect(jsonPath("$.models").isEmpty());
     }
 
     @Test
@@ -289,7 +295,8 @@ class RequestLogStatsControllerTest {
                 .content("{\"start_date\": \"2020-01-01T00:00:00Z\", \"end_date\": \"2020-01-02T00:00:00Z\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.teams").isEmpty())
-           .andExpect(jsonPath("$.requesters").isEmpty());
+           .andExpect(jsonPath("$.requesters").isEmpty())
+           .andExpect(jsonPath("$.models").isEmpty());
     }
 
     @Test

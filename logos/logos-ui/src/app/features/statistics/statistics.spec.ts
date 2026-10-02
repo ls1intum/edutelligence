@@ -26,6 +26,7 @@ const wsSpy = () => ({
   setTimelineRange: vi.fn(),
   setScope: vi.fn(),
   setFeedStatus: vi.fn(),
+  setFeedFilters: vi.fn(),
   setInterest: vi.fn(),
 });
 
@@ -293,5 +294,47 @@ describe('Statistics scope options', () => {
     expect(page.component.feedTeams()).toEqual(fresh.teams);
     expect(page.component.filterUserId()).toBe(7);
     expect(page.ws.setScope.mock.calls.length).toBe(scopesBefore);
+  });
+});
+
+describe('recent request model and provider filters', () => {
+  let fixture: ComponentFixture<Statistics>;
+  afterEach(() => fixture?.destroy());
+
+  it('combines feed selections and status while keeping the page scope intact', async () => {
+    const page = await pageAt();
+    fixture = page.fx;
+    page.component.statsPending.set(false);
+    page.component.liveFeedTotal.set(12);
+    page.component.setFeedModelFilter(['5001', '5002']);
+    expect(page.component.requestFeedTotal()).toBeNull();
+    page.component.setFeedProviderFilter(['6001', '6002']);
+    page.component.setFeedStatusFilter('running');
+    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith('running', [5001, 5002], [6001, 6002]);
+    expect(page.ws.setScope).not.toHaveBeenCalled();
+    expect(page.component.statsPending()).toBe(false);
+    expect(page.component.requestsPending()).toBe(true);
+    const opts = page.ws.connect.mock.calls[0][0];
+    opts.handlers.onRequestsData({ requests: [], total: 4 });
+    expect(page.component.requestFeedTotal()).toBe(4);
+    opts.handlers.onRequestsData({ requests: [] });
+    expect(page.component.requestFeedTotal()).toBe(4);
+    page.component.setPreset('day');
+    expect(page.component.requestFeedTotal()).toBeNull();
+    page.component.clearFeedFilters();
+    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith(null, [], []);
+    expect(page.component.feedFilterActive()).toBe(false);
+  });
+
+  it('offers models and providers from scope options', async () => {
+    const page = await pageAt(vi.fn().mockResolvedValue({
+      teams: [], requesters: [],
+      models: [{ id: 5001, label: 'org/long-model', requestCount: 8 }],
+      providers: [{ id: 6001, label: 'worker-with-a-long-name', requestCount: 8 }],
+    }));
+    fixture = page.fx;
+    await Promise.resolve();
+    expect(page.component.feedModelOptions()).toEqual([{ value: '5001', label: 'org/long-model (8)' }]);
+    expect(page.component.feedProviderOptions()).toEqual([{ value: '6001', label: 'worker-with-a-long-name (8)' }]);
   });
 });

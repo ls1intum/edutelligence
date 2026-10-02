@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -81,6 +82,15 @@ class StatsV2WebSocketHandlerFeedStatusTest {
                 payload.put("requests", servedRows.stream().map(HashMap::new).toList());
                 payload.put("has_more", false);
                 payload.put("next_cursor", null);
+                return payload;
+            });
+
+        when(requestLogService.getLatestRequests(
+                any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any()))
+            .thenAnswer(inv -> {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                payload.put("requests", servedRows.stream().map(HashMap::new).toList());
+                payload.put("has_more", false);
                 return payload;
             });
 
@@ -221,4 +231,51 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         assertThat(pushedTypes()).containsExactly("requests");
         verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any());
     }
+    @Test
+    void modelAndProviderSelectionsFilterOnlyTheFeedAndSurviveInit() throws Exception {
+        servedRows = List.of(row("req-selected", 10));
+        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any()))
+            .thenReturn(23L);
+        connectAndInit();
+        clearInvocations(statsService);
+        handler.handleMessage(session, new TextMessage(
+            "{\"action\":\"set_feed_filters\",\"status\":\"finished\",\"model_ids\":[5001,5002],\"provider_ids\":[6001,6002]}"));
+        assertThat(pushedTypes()).containsExactly("requests");
+        verify(requestLogService).getLatestRequests(any(), any(), any(), any(), any(), eq(false),
+            eq("finished"), any(), any(), eq(10), eq(false), eq(List.of(5001, 5002)), eq(List.of(6001, 6002)));
+        assertThat(objectMapper.readTree(sent.getFirst().getPayload()).path("payload").path("total").asLong()).isEqualTo(23);
+        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean());
+
+        clearInvocations(requestLogService);
+        handler.handleMessage(session, new TextMessage(
+            "{\"action\":\"init\",\"interest\":\"requests\",\"model_ids\":[5002],\"provider_ids\":[6002]}"));
+        verify(requestLogService).getLatestRequests(any(), any(), any(), any(), any(), eq(false),
+            eq(null), any(), any(), eq(10), eq(false), eq(List.of(5002)), eq(List.of(6002)));
+    }
+
+    @Test
+    void selectionTotalsRefreshWhenOlderRowsMoveButNotOnTokenGrowth() throws Exception {
+        connectAndInit();
+        servedRows = List.of(row("req-selected", 10));
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
+            .thenReturn("20;event-1");
+        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any()))
+            .thenReturn(20L);
+        handler.handleMessage(session, new TextMessage("{\"action\":\"set_feed_filters\",\"model_ids\":[5001]}"));
+        clearInvocations(requestLogService);
+        sent.clear();
+        servedRows = List.of(row("req-selected", 11));
+        invokePushRequests(false);
+        verify(requestLogService, never()).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any());
+        sent.clear();
+
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
+            .thenReturn("21;event-2");
+        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any()))
+            .thenReturn(21L);
+        invokePushRequests(false);
+        assertThat(pushedTypes()).containsExactly("requests");
+        assertThat(objectMapper.readTree(sent.getFirst().getPayload()).path("payload").path("total").asLong()).isEqualTo(21);
+    }
+
 }

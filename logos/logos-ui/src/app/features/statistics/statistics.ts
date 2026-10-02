@@ -29,7 +29,6 @@ import {
   isUnifiedMemoryProvider,
   modelSeriesKey,
   normalizeFeedStatus,
-  resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
   BYTES_PER_GIB,
   BYTES_PER_MIB,
@@ -62,6 +61,7 @@ import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
 import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
+import { MultiSelectComponent } from '../../shared/components/multi-select/multi-select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
 import { StatisticsService } from './services/statistics.service';
 import { RequestVolumeChartComponent, ChartTooltip } from './components/request-volume-chart/request-volume-chart';
@@ -113,6 +113,7 @@ type ProviderGlassRow = {
     LaneHealthPanel,
     LaneMemoryPieComponent,
     SelectComponent,
+    MultiSelectComponent,
     RecentRequests,
     RequestVolumeChartComponent,
     SparklineComponent,
@@ -197,6 +198,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly feedUsers = signal<FeedFilterOption[]>([]);
   readonly feedTeams = signal<FeedFilterOption[]>([]);
   readonly feedProviders = signal<FeedFilterOption[]>([]);
+  readonly feedModels = signal<FeedFilterOption[]>([]);
 
   // ── Scope ─────────────────────────────────────────────────────────────────
   // Null on either side means "everyone". The filter lives on the page rather
@@ -323,6 +325,40 @@ export class Statistics implements OnInit, OnDestroy {
   // makes sense for the list of individual requests, not for the KPI cards and
   // charts above it, which must keep summarising the whole team/user selection.
   readonly feedStatus = signal<string | null>(null);
+  readonly feedModelIds = signal<string[]>([]);
+  readonly feedProviderIds = signal<string[]>([]);
+  readonly feedFilterActive = computed(() =>
+    this.feedStatus() !== null || this.feedModelIds().length > 0 || this.feedProviderIds().length > 0,
+  );
+  readonly feedModelOptions = computed<AppSelectOption[]>(() => this.feedModels().map(model => ({
+    value: String(model.id), label: `${model.label} (${model.requestCount.toLocaleString()})`,
+  })));
+  readonly feedProviderOptions = computed<AppSelectOption[]>(() => this.feedProviders().map(provider => ({
+    value: String(provider.id), label: `${provider.label} (${provider.requestCount.toLocaleString()})`,
+  })));
+
+  setFeedModelFilter(values: string[]): void {
+    this.feedModelIds.set(values);
+    this.applyFeedFilters();
+  }
+
+  setFeedProviderFilter(values: string[]): void {
+    this.feedProviderIds.set(values);
+    this.applyFeedFilters();
+  }
+
+  clearFeedFilters(): void {
+    this.feedStatus.set(null);
+    this.feedModelIds.set([]);
+    this.feedProviderIds.set([]);
+    this.applyFeedFilters();
+  }
+
+  private applyFeedFilters(): void {
+    this.liveFeedTotal.set(null);
+    this.requestsPending.set(true);
+    this.statsWs.setFeedFilters(this.feedStatus(), this.feedModelIds().map(Number), this.feedProviderIds().map(Number));
+  }
 
   readonly feedStatusOptions = computed<AppSelectOption[]>(() => [
     { value: '', label: 'All states' },
@@ -340,7 +376,7 @@ export class Statistics implements OnInit, OnDestroy {
 
   /** Total the feed header shows: the status-filtered count, else the KPI total. */
   readonly requestFeedTotal = computed(() =>
-    resolveFeedTotal(this.feedStatus(), this.liveFeedTotal(), this.totalRequests()),
+    this.feedFilterActive() ? this.liveFeedTotal() : this.totalRequests(),
   );
 
   setFeedStatusFilter(value: string | null): void {
@@ -356,7 +392,7 @@ export class Statistics implements OnInit, OnDestroy {
     // Only the feed changes, so only it is marked loading — the KPI cards and
     // charts keep their current (unaffected) numbers.
     this.requestsPending.set(true);
-    this.statsWs.setFeedStatus(next);
+    this.statsWs.setFeedFilters(next, this.feedModelIds().map(Number), this.feedProviderIds().map(Number));
   }
 
   // ── Raw WS signals ────────────────────────────────────────────────────────────
@@ -932,6 +968,8 @@ export class Statistics implements OnInit, OnDestroy {
       timeline: cfg,
       scope: this.currentScope(),
       feedStatus: this.feedStatus(),
+      feedModelIds: this.feedModelIds().map(Number),
+      feedProviderIds: this.feedProviderIds().map(Number),
       interest: this.activeTab(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
@@ -1051,6 +1089,7 @@ export class Statistics implements OnInit, OnDestroy {
       this.feedTeams.set(options.teams ?? []);
       this.feedUsers.set(options.requesters ?? []);
       this.feedProviders.set(options.providers ?? []);
+      this.feedModels.set(options.models ?? []);
 
       // The selected requester may not be in the new list — a different team, or
       // a range they were quiet in. Leaving them selected would hold the page on
@@ -1092,6 +1131,7 @@ export class Statistics implements OnInit, OnDestroy {
 
   /** Mark every range-scoped panel as loading until the next push resolves it. */
   private markRangeChanged(): void {
+    this.liveFeedTotal.set(null);
     this.statsPending.set(true);
     this.requestsPending.set(true);
   }
@@ -1218,7 +1258,7 @@ export class Statistics implements OnInit, OnDestroy {
     // between. Unfiltered pushes have no total, and switching the filter
     // clears this signal, so the borrowed aggregate is never shown for a
     // set it does not describe.
-    if (this.feedStatus() && typeof payload.total === 'number') {
+    if (this.feedFilterActive() && typeof payload.total === 'number') {
       this.liveFeedTotal.set(payload.total);
     }
   }

@@ -83,6 +83,76 @@ class RequestLogControllerTest {
     }
 
     @Test
+    void latestRequests_combinesModelProviderAndStatusSelectionsWithPaging() throws Exception {
+        jdbc.update("INSERT INTO providers (id, name, base_url, provider_type, privacy_level, auth_name, auth_format) "
+            + "VALUES (6002, 'second-provider', 'https://example.org', 'cloud', 'LOCAL', 'Authorization', 'Bearer {}')");
+        jdbc.update("UPDATE log_entry SET model_id = 5002, provider_id = 6002 WHERE request_id = 'req-bbb-222'");
+        String page1 = mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_ids\":[5001,5002],\"provider_ids\":[6001,6002],\"status\":\"finished\",\"limit\":1}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(2))
+            .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"))
+            .andExpect(jsonPath("$.has_more").value(true))
+            .andReturn().getResponse().getContentAsString();
+        var cursor = new ObjectMapper().readTree(page1).path("next_cursor");
+        var body = new java.util.LinkedHashMap<String, Object>();
+        body.put("model_ids", java.util.List.of(5001, 5002));
+        body.put("provider_ids", java.util.List.of(6001, 6002));
+        body.put("status", "finished");
+        body.put("limit", 1);
+        body.put("cursor_ts", cursor.path("ts").asText());
+        body.put("cursor_id", cursor.path("request_id").asText());
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content(new ObjectMapper().writeValueAsString(body)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(2))
+            .andExpect(jsonPath("$.requests[0].request_id").value("req-aaa-111"))
+            .andExpect(jsonPath("$.has_more").value(false));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"model_ids\":[5001],\"provider_ids\":[6001]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(1))
+            .andExpect(jsonPath("$.requests[0].request_id").value("req-aaa-111"));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"provider_ids\":[6002]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(1))
+            .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"model_ids\":[5001],\"provider_ids\":[6002]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(0))
+            .andExpect(jsonPath("$.requests").isEmpty());
+    }
+
+    @Test
+    void latestRequests_emptySelectionsAreUnfilteredAndUnknownIdsMatchNothing() throws Exception {
+        for (String body : java.util.List.of("{\"model_ids\":[] ,\"provider_ids\":[]}", "{}")) {
+            mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                    .contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(2));
+        }
+        for (String body : java.util.List.of("{\"model_ids\":[9999]}", "{\"provider_ids\":[9999]}",
+                "{\"model_ids\":[5001],\"provider_ids\":[6001],\"team_id\":2001,\"user_id\":1001,\"status\":\"running\"}")) {
+            mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                    .contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(0))
+                .andExpect(jsonPath("$.requests").isEmpty());
+        }
+    }
+
+    @Test
+    void latestRequests_rejectsMalformedSelections() throws Exception {
+        for (String body : java.util.List.of("{\"model_ids\":\"5001\"}", "{\"provider_ids\":[\"6001\"]}",
+                "{\"model_ids\":[1.5]}", "{\"provider_ids\":[-1]}")) {
+            mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                    .contentType("application/json").content(body))
+                .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
     void latestRequests_returnsUpToTenRows() throws Exception {
         mvc.perform(post("/logosdb/latest_requests")
                 .with(TestJwt.logosAdmin())

@@ -220,6 +220,31 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
     @Transactional(readOnly = true)
     @Query(value = """
+        SELECT le.model_id AS id,
+               COALESCE(m.name, le.model_name, 'Model ' || le.model_id) AS label,
+               COUNT(*) AS requestCount
+        FROM log_entry le
+        LEFT JOIN models m ON m.id = le.model_id
+        WHERE le.request_id IS NOT NULL
+          AND le.timestamp_request BETWEEN :start AND :end
+          AND le.model_id IS NOT NULL
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
+        GROUP BY le.model_id, COALESCE(m.name, le.model_name, 'Model ' || le.model_id)
+        ORDER BY requestCount DESC, label
+        """, nativeQuery = true)
+    List<ScopeOptionProjection> findModelsWithTraffic(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("teamId") Integer teamId,
+        @Param("userId") Integer userId,
+        @Param("providerId") Integer providerId,
+        @Param("errorsOnly") Boolean errorsOnly);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
         SELECT le.request_id AS requestId,
                COALESCE(m.name, le.model_name, 'Model ' || le.model_id) AS modelName,
                COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
@@ -300,6 +325,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (:allModels = TRUE OR le.model_id IN (:modelIds))
+          AND (:allProviders = TRUE OR le.provider_id IN (:providerIds))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
           -- One of the four lifecycle buckets the feed can be narrowed to:
           -- queued (not yet scheduled), running (scheduled, not answered),
@@ -346,6 +373,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
         @Param("errorsOnly") Boolean errorsOnly,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
+        @Param("allProviders") boolean allProviders,
+        @Param("providerIds") List<Integer> providerIds,
         @Param("status") String status,
         @Param("cursorTs") Timestamp cursorTs,
         @Param("cursorId") String cursorId,
@@ -409,6 +440,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (:allModels = TRUE OR le.model_id IN (:modelIds))
+          AND (:allProviders = TRUE OR le.provider_id IN (:providerIds))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
           -- Identical to the predicate in {@link #findLatestRequests} (minus the
           -- cursor): the count and the rows must describe the same set.
@@ -434,6 +467,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
         @Param("errorsOnly") Boolean errorsOnly,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
+        @Param("allProviders") boolean allProviders,
+        @Param("providerIds") List<Integer> providerIds,
         @Param("status") String status);
 
     @Transactional(readOnly = true)

@@ -64,7 +64,8 @@ public class RequestLogController {
         int limit = body.get("limit") instanceof Number n
             ? n.intValue() : RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
         return ResponseEntity.ok(requestLogService.getLatestRequests(
-            start, end, userId, teamId, providerId, errorsOnly, status, cursorTs, cursorId, limit, true));
+            start, end, userId, teamId, providerId, errorsOnly, status, cursorTs, cursorId, limit, true,
+            RequestLogService.readFeedIds(body, "model_ids"), RequestLogService.readFeedIds(body, "provider_ids")));
     }
 
     /** Payloads are excluded from the feed and fetched explicitly for one row. */
