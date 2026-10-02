@@ -23,7 +23,6 @@ from logos.context_budget import estimate_prompt_tokens
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
-from logos.timeouts import global_timeout_s
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
@@ -40,7 +39,7 @@ from .ettft_estimator import (
 )
 from .latency_store import LatencyStore
 from .prefix_affinity import PrefixAffinityRouter
-from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
+from .scheduler_interface import DEFAULT_QUEUE_TIMEOUT_S, QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
 
@@ -934,7 +933,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
     async def _queue_and_wait(self, best_scored: tuple, request: SchedulingRequest) -> Optional[SchedulingResult]:
         """Queue on the best-scored candidate and wait for release."""
         model_id, provider_id, provider_type, score, priority_int, ettft = best_scored
-        priority = Priority.from_int(priority_int)
+        priority = Priority.from_resolved(priority_int)
 
         loop = asyncio.get_running_loop()
         future = loop.create_future()
@@ -953,6 +952,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             priority,
             is_cold_at_queue=is_cold_at_queue,
             provider_affinity=request.required_provider_id,
+            eligible_provider_ids=request.eligible_provider_ids,
             raw_priority=priority_int,
             role_rank=request.role_rank,
         )
@@ -984,9 +984,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 )
 
         try:
-            timeout = (
-                request.timeout_s if request.timeout_s else global_timeout_s(1200)
-            )  # 20 min queue wait (or LOGOS_TIMEOUT_S)
+            timeout = request.timeout_s if request.timeout_s else DEFAULT_QUEUE_TIMEOUT_S
             result = await asyncio.wait_for(future, timeout=timeout)
             prom.ADMISSION_HOLD_DURATION_SECONDS.observe(time.monotonic() - _hold_start)
 

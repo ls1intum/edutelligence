@@ -58,11 +58,17 @@ class ExecutionContext:
     auth_value: str
     model_name: str
     lane_id: Optional[str] = None
+    # Engine behind the lane for logosnode placements ("vllm" | "ollama");
+    # None for non-lane providers. Stream resume can only continue a
+    # generation on vLLM, which honours the ``continue_final_message``
+    # continuation contract.
+    engine: Optional[str] = None
     # Set for Azure routes that resolve the deployment from the request body
     # rather than the URL (the Responses API and the Anthropic Messages
     # route): the deployment id the body's "model" field must be rewritten to.
     # See ``_azure_responses_route`` / ``_azure_anthropic_route``.
     azure_body_deployment: Optional[str] = None
+
     # Set only for inbound ``POST /v1/messages``: which surface this upstream
     # actually serves, and therefore whether the request and its response have
     # to be translated out of and back into the Anthropic Messages shape.
@@ -211,7 +217,9 @@ class ContextResolver:
             endpoint = auth_info["endpoint"]
             base_url = auth_info["base_url"]
         lane_id: Optional[str] = None
+        lane_engine: Optional[str] = None
         azure_body_deployment: Optional[str] = None
+
 
         if provider_type == "logosnode":
             prepared_lane: Optional[Dict[str, Any]] = None
@@ -255,6 +263,7 @@ class ContextResolver:
                                 break
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
+                    lane_engine = "vllm" if lane.get("vllm") else "ollama"
                     if lane_id:
                         forward_url = f"logosnode://provider/{provider_id}/lane/{lane_id}"
                     else:
@@ -351,6 +360,7 @@ class ContextResolver:
             auth_value=auth_value,
             model_name=model_name,
             lane_id=lane_id,
+            engine=lane_engine,
             azure_body_deployment=azure_body_deployment,
             anthropic_dialect=anthropic_dialect,
             messages_upstream=messages_upstream,
