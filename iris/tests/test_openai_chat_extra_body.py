@@ -192,3 +192,35 @@ def test_reasoning_token_allowance_extends_pipeline_budgets():
 
 def test_reasoning_token_allowance_defaults_to_unchanged_budgets():
     assert _chat_params(_build_model(), max_tokens=30)["max_completion_tokens"] == 30
+
+
+def test_system_only_prompt_is_sent_as_user_message():
+    rewritten = keep_system_messages_leading(
+        [{"role": "system", "content": _text("Answer the forum post below.")}]
+    )
+    assert rewritten == [
+        {"role": "user", "content": _text("Answer the forum post below.")}
+    ]
+
+
+def test_system_prompt_stays_system_in_tool_loop_with_user_message():
+    messages = [
+        {"role": "system", "content": _text("Instructions")},
+        {"role": "user", "content": _text("Question")},
+        {"role": "assistant", "content": [], "tool_calls": []},
+        {"role": "tool", "content": "result", "tool_call_id": "1"},
+    ]
+    assert keep_system_messages_leading(messages)[0]["role"] == "system"
+
+
+def test_system_only_tool_loop_keeps_instructions_as_user_message():
+    messages = [
+        {"role": "system", "content": _text("Instructions")},
+        {"role": "assistant", "content": [], "tool_calls": []},
+        {"role": "tool", "content": "result", "tool_call_id": "1"},
+    ]
+    assert [m["role"] for m in keep_system_messages_leading(messages)] == [
+        "user",
+        "assistant",
+        "tool",
+    ]

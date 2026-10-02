@@ -130,3 +130,16 @@ def test_qwen_answer_matching_text_inside_im_end_is_not_confused_with_it():
         _tok("<|im_end|>", 0.0),
     ]
     assert _convert("\n\nim", tokens).token_logprobs == [0.0, -1.5]
+
+
+def test_answer_spelling_out_an_end_marker_is_not_matched_to_the_marker():
+    tokens = [
+        _tok("<|message|>", -2.0),
+        _tok("<", -2.5),
+        _tok("|", -2.5),
+        _tok("return", -2.5),
+        _tok("|", -2.5),
+        _tok(">", -2.5),
+        _tok("<|return|>", -0.0001),
+    ]
+    assert _convert("<|return|>", tokens).token_logprobs == [-2.5] * 5

@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 import time
 from datetime import datetime
 from typing import (
@@ -187,13 +188,16 @@ def keep_system_messages_leading(
     messages: list[ChatCompletionMessageParam],
 ) -> list[ChatCompletionMessageParam]:
     """
-    Rewrite messages for chat templates that accept one system message, first.
+    Rewrite messages for Qwen3.x-style chat templates.
 
-    Qwen3.x templates reject any system message that is not the first message
-    with a 400, but Iris places system messages inside the history (context
-    switches, command markers, earlier suggestions). Leading system messages
-    are merged into one; later ones become user messages at the same position,
-    marked so the model can still tell them apart from what the student wrote.
+    These templates reject, with a 400, any system message that is not the
+    first message and any conversation without a user message. Iris places
+    system messages inside the history (context switches, command markers,
+    earlier suggestions), and several pipelines send only a system prompt.
+    Leading system messages are merged into one; later ones become user
+    messages at the same position, marked so the model can still tell them
+    apart from what the student wrote. Without any user message, the leading
+    system prompt is sent as the user message instead.
     """
     result: list[ChatCompletionMessageParam] = []
     in_leading_block = True
@@ -222,6 +226,12 @@ def keep_system_messages_leading(
                 },
             )
         )
+    if result and result[0].get("role") == "system":
+        if not any(message.get("role") == "user" for message in result):
+            result[0] = cast(
+                ChatCompletionMessageParam,
+                {"role": "user", "content": result[0].get("content")},
+            )
     return result
 
 
@@ -433,6 +443,10 @@ def create_iris_tool_calls(message_tool_calls) -> list[ToolCallDTO]:
     ]
 
 
+# Whole-token control markers such as <|return|>, <|end|>, <|im_end|>.
+_SPECIAL_TOKEN_RE = re.compile(r"<\|[A-Za-z0-9_]+\|>")
+
+
 def _token_bytes(token: Any) -> bytes:
     raw = getattr(token, "bytes", None)
     if raw:
@@ -467,8 +481,16 @@ def _content_tokens(logprobs: Any, content: Optional[str]) -> Optional[list[Any]
         spans.append((start, len(stream)))
     boundaries = {0} | {end for _, end in spans}
 
+    # The answer ends before the trailing end-of-turn markers; searching
+    # them could match an answer that spells out a marker.
+    search_end = len(stream)
+    for token, (start, _) in reversed(list(zip(tokens, spans))):
+        if not _SPECIAL_TOKEN_RE.fullmatch(getattr(token, "token", "") or ""):
+            break
+        search_end = start
+
     target = content.encode("utf-8")
-    haystack = bytes(stream)
+    haystack = bytes(stream[:search_end])
     content_start = haystack.rfind(target)
     while content_start >= 0 and not (
         content_start in boundaries and content_start + len(target) in boundaries
@@ -702,8 +724,8 @@ class OpenAIChatModel(ChatModel):
     # models use `chat_template_kwargs: {enable_thinking: true}` so they keep
     # reasoning even where the gateway's chat-template default disables it.
     extra_body: Optional[Dict[str, Any]] = None
-    # Set for models whose chat template rejects system messages after the
-    # first message (Qwen3.x); see keep_system_messages_leading.
+    # Set for models whose chat template accepts a system message only first
+    # and requires a user message (Qwen3.x); see keep_system_messages_leading.
     leading_system_message_only: bool = False
     # Tokens added to a pipeline's max_tokens before it is sent. The output
     # limit also covers reasoning, so a reasoning model would otherwise spend a

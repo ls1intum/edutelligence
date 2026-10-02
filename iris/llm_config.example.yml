@@ -219,8 +219,9 @@
 # too slow for chat), so pin an explicit level. Thinking mode should not run
 # with the low temperatures Iris pipelines request, hence
 # supports_temperature: false (the model's own sampling defaults apply). Its
-# template rejects system messages after the first message, which Iris uses
-# for context switches, hence leading_system_message_only: true.
+# template rejects system messages after the first message (Iris uses them for
+# context switches) and conversations without a user message (several
+# pipelines send only a system prompt), hence leading_system_message_only.
 - id: qwen3.8-27b
   type: openai_chat
   model: Qwen/Qwen3.8-27B
