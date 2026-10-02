@@ -39,3 +39,8 @@ def test_fresh_calibration_needs_nothing():
 
 def test_stale_calibration_is_recalibrated():
     assert _orch(_calibrated(True))._provider_has_uncalibrated_models(1) is True
+
+
+def test_stale_marker_survives_serialization():
+    assert _calibrated(True).to_dict()["calibration_stale"] is True
+    assert _calibrated(None).to_dict()["calibration_stale"] is None

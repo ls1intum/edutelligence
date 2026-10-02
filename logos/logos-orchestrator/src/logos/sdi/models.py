@@ -515,6 +515,7 @@ class ModelProfile:
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
             "calibration_unsupported_reason": self.calibration_unsupported_reason,
+            "calibration_stale": self.calibration_stale,
         }
 
 
