@@ -5,8 +5,8 @@ against one (model, worker) at a time. It is not the forwarding gate; that
 lives in `evaluate_admission` and reads the live engine signals (see
 `test_logosnode_admission.py`).
 
-The two differ on `num_parallel`. #781 read it as the worker's real limit,
-but it is the concurrency vLLM guarantees at *full context* — a lower bound.
+The two differ on `num_parallel`. The worker guarantees this concurrency at
+*full context*, so it is a lower bound rather than a hard ceiling.
 Measured: a dev lane reporting `num_parallel=4` served 23 concurrent
 requests at 47% KV; a production lane reporting 1 served 8 at 78%. Used as a
 ceiling it throttles by 5-8x. So the ledger keeps a loose ceiling and lets

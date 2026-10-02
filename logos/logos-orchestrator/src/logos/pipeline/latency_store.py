@@ -261,6 +261,34 @@ class LatencyStore:
             state = self._overhead.get(key)
         return state.n if state is not None else 0
 
+    def snapshot_metrics(
+        self, get_provider_name: Optional[Callable[[int], Optional[str]]] = None
+    ) -> list[tuple[str, str, str, float, int]]:
+        """Return a point-in-time snapshot of all EWMA entries for Prometheus publishing.
+
+        Each row is ``(model_name, provider_label, metric_name, value_s, n)``.
+        ``metric_name`` is the tier value string for overhead entries
+        (e.g. ``"cold"``, ``"sleeping"``), or one of ``"ttft"``, ``"e2e"``,
+        ``"prefill_s_per_token"`` for the model-level metrics.
+        ``provider_label`` is the provider name when ``get_provider_name`` resolves
+        it, otherwise the string representation of the provider id.
+        """
+        rows: list[tuple[str, str, str, float, int]] = []
+        with self._lock:
+            for (model_name, provider_id, tier), state in self._overhead.items():
+                label = (get_provider_name(provider_id) if get_provider_name else None) or str(provider_id)
+                rows.append((model_name, label, tier.value, state.value, state.n))
+            for (model_name, provider_id), state in self._ttft.items():
+                label = (get_provider_name(provider_id) if get_provider_name else None) or str(provider_id)
+                rows.append((model_name, label, _TIER_TTFT, state.value, state.n))
+            for (model_name, provider_id), state in self._e2e_latency.items():
+                label = (get_provider_name(provider_id) if get_provider_name else None) or str(provider_id)
+                rows.append((model_name, label, _TIER_E2E, state.value, state.n))
+            for (model_name, provider_id), state in self._prefill_s_per_token.items():
+                label = (get_provider_name(provider_id) if get_provider_name else None) or str(provider_id)
+                rows.append((model_name, label, _TIER_PREFILL_PER_TOKEN, state.value, state.n))
+        return rows
+
     # ------------------------------------------------------------------
     # Persistence helpers
     # ------------------------------------------------------------------

@@ -5,6 +5,10 @@
 // ==========================================================================
 
 .model-error-report {
+  // Match the summary cards in Complete Logs on Dev; reserve monospace for code.
+  --model-detail-font-family: sans-serif;
+  --model-detail-font-size: var(--font-size-sm);
+  --model-detail-heading-size: var(--font-size-base);
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -58,11 +62,6 @@
   font-weight: var(--font-weight-bold);
   line-height: var(--line-height-none);
   color: rgb(var(--color-typography-0));
-}
-
-.model-state-emoji {
-  font-size: 1.6rem;
-  line-height: 1;
 }
 
 .model-desc {
@@ -148,6 +147,14 @@
   min-height: 400px;
 }
 
+.tab-content--technical {
+  font-family: var(--model-detail-font-family);
+  font-size: var(--model-detail-font-size);
+  line-height: var(--line-height-normal);
+
+  button, input, select, textarea { font-family: inherit; }
+}
+
 // ==========================================================================
 // Performance
 // ==========================================================================
@@ -166,14 +173,14 @@
 
   h2 {
     color: rgb(var(--color-typography-100));
-    font-size: var(--font-size-base);
+    font-size: var(--model-detail-heading-size);
     font-weight: var(--font-weight-semibold);
   }
 
   p {
     margin-top: 3px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
 }
 
@@ -182,7 +189,7 @@
   align-items: center;
   gap: 7px;
   color: rgb(var(--color-typography-500));
-  font-size: var(--font-size-sm);
+  font-size: var(--model-detail-font-size);
   font-weight: var(--font-weight-medium);
 
   i {
@@ -205,11 +212,10 @@
   gap: 20px;
 }
 
-.performance-card {
-  @include glass-surface;
+.performance-card,
+.logs-panel { @include glass-surface; }
 
-  padding: 24px;
-}
+.performance-card { padding: 24px; }
 
 .performance-card__header {
   display: flex;
@@ -225,25 +231,15 @@
 
   h3 {
     color: rgb(var(--color-typography-100));
-    font-size: var(--font-size-base);
+    font-size: var(--model-detail-heading-size);
     font-weight: var(--font-weight-semibold);
   }
 
   p {
     margin-top: 4px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
-}
-
-.benchmark-tool {
-  flex-shrink: 0;
-  padding: 4px 9px;
-  border-radius: 999px;
-  background: rgb(var(--color-accent-green) / var(--opacity-soft));
-  color: rgb(var(--color-accent-green));
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
 }
 
 .metric-grid {
@@ -264,7 +260,7 @@
   strong {
     margin-bottom: 4px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
     font-weight: var(--font-weight-semibold);
     letter-spacing: var(--letter-spacing-wide);
   }
@@ -274,7 +270,7 @@
     justify-content: space-between;
     gap: 8px;
     color: rgb(var(--color-typography-500));
-    font-size: var(--font-size-sm);
+    font-size: var(--model-detail-font-size);
   }
 
   b {
@@ -286,7 +282,7 @@
 .performance-card__footer {
   margin-top: 18px;
   color: rgb(var(--color-typography-500));
-  font-size: var(--font-size-sm);
+  font-size: var(--model-detail-font-size);
 }
 
 @media (max-width: 1100px) {
@@ -301,88 +297,10 @@
     flex-direction: column;
   }
 
-  .performance-refresh {
-    justify-content: center;
-  }
-
   .performance-list,
   .metric-grid {
     grid-template-columns: 1fr;
   }
-}
-
-// ==========================================================================
-// Process Table
-// ==========================================================================
-
-.process-name {
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-  color: rgb(var(--color-typography-100));
-}
-
-// ==========================================================================
-// Status Badges
-// ==========================================================================
-
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25rem 0.75rem;
-  border-radius: 999px;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--line-height-none);
-}
-
-.status-badge--success {
-  color: rgb(var(--color-success));
-  background:
-    rgb(
-      var(--color-success)
-      / var(--opacity-soft)
-    );
-  border:
-    1px solid
-    rgb(
-      var(--color-success)
-      / var(--opacity-border)
-    );
-}
-
-.status-badge--failure {
-  color: rgb(var(--color-error));
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-soft)
-    );
-  border:
-    1px solid
-    rgb(
-      var(--color-error)
-      / var(--opacity-border)
-    );
-}
-
-// ==========================================================================
-// Expanded Process Content
-// ==========================================================================
-
-.expanded-row {
-  background:
-    rgb(var(--color-surface-50));
-  border-top:
-    1px solid
-    rgb(
-      var(--glass-stroke)
-      / var(--glass-stroke-opacity)
-    );
-}
-
-.expanded-content {
-  padding: 1rem 1.5rem 1.25rem 3.5rem;
 }
 
 // ==========================================================================
@@ -405,6 +323,10 @@
   border-radius: 10px;
 }
 
+.capacity-box {
+  margin-top: 1rem;
+}
+
 .expanded-header {
   display: flex;
   align-items: center;
@@ -420,11 +342,6 @@
   font-weight: var(--font-weight-bold);
   text-transform: uppercase;
   letter-spacing: var(--letter-spacing-wide);
-}
-
-.checklist-emoji {
-  font-size: 1.5rem;
-  line-height: 1;
 }
 
 // ==========================================================================
@@ -505,6 +422,32 @@
     );
 }
 
+// A model-level fact (e.g. a Metal capacity floor), not a pass/fail
+// deployment phase — kept visually distinct from check-icon--success/
+// --failed so it doesn't read as another checklist condition.
+.check-icon--info {
+  color: rgb(var(--color-typography-300));
+  background:
+    rgb(
+      var(--color-typography-300)
+      / var(--opacity-soft)
+    );
+  border:
+    1px solid
+    rgb(
+      var(--color-typography-300)
+      / var(--opacity-strong)
+    );
+  font-style: italic;
+}
+
+.check-value {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-700));
+}
+
 // ==========================================================================
 // Scope
 // ==========================================================================
@@ -515,14 +458,6 @@
   padding: 0;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-}
-
-.scope-badge--global {
-  color: rgb(var(--color-primary-500));
-}
-
-.scope-badge--node {
-  color: rgb(var(--color-accent-cyan));
 }
 
 .scope-badge--success {
@@ -541,7 +476,23 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.35rem;
+}
+
+// Wraps the scope-nodes button row — either bare (the "Successful
+// Nodes" case) or inside an error-box, optionally preceded by a label.
+.error-scope {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+// The "Successful Nodes" block sits directly in the checklist, right
+// under the check-row's badge — .checklist's own 0.5rem gap alone reads
+// as too tight against it, unlike the error-box case above which has
+// its own margin/border for separation.
+.checklist > .error-scope {
+  margin-top: 0.5rem;
 }
 
 // ==========================================================================
@@ -608,32 +559,20 @@
   }
 }
 
+// Combined with the base .scope-node-button in the template — only the
+// color-related declarations need overriding here.
 .scope-node-button--success {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25rem 0.65rem;
   background:
     rgb(
       var(--color-success)
       / var(--opacity-soft)
     );
-  border:
-    1px solid
+  border-color:
     rgb(
       var(--color-success)
       / var(--opacity-border)
     );
-  border-radius: 999px;
   color: rgb(var(--color-success));
-  font: inherit;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  cursor: pointer;
-  transition:
-    background-color 0.15s,
-    border-color 0.15s,
-    color 0.15s;
 
   &:hover {
     background:
@@ -673,35 +612,78 @@
 // ==========================================================================
 
 .error-box {
-  margin:
-    0.5rem 0
-    0.75rem
-    2.25rem;
-  padding: 1rem;
+  margin: 0.5rem 0 0.75rem 2.25rem;
+  padding: 0.75rem 0.875rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
   background:
     rgb(
       var(--color-error)
       / var(--opacity-faint)
     );
-  border:
-    1px solid
-    rgb(
-      var(--color-error)
-      / var(--opacity-border)
-    );
   border-left:
-    4px solid
+    3px solid
     rgb(var(--color-error));
-  border-radius: 8px;
+  border-radius: 6px;
 }
 
-.error-box-title {
-  margin-bottom: 0.5rem;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
-  color: rgb(var(--color-error));
+// Header row: badge + primary message on one line. Replaces the old
+// stacked "ERROR DETAILS" title + badge-on-its-own-line + a paragraph
+// that mostly repeated what the badge already said — the badge's own
+// `title` attribute now carries that longer explanation as a native
+// tooltip instead of permanent vertical space.
+.error-box-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.reason-badge {
+  flex-shrink: 0;
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: var(--letter-spacing-wider);
+  cursor: help;
+}
+
+.reason-badge--unsupported,
+.reason-badge--node,
+.reason-badge--observed {
+  color: rgb(var(--color-error));
+  background:
+    rgb(
+      var(--color-error)
+      / var(--opacity-faint)
+    );
+}
+
+.reason-badge--unknown {
+  color: rgb(var(--color-typography-300));
+  background:
+    rgb(
+      var(--color-typography-300)
+      / var(--opacity-faint)
+    );
+}
+
+.error-box-message {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-typography-700));
+}
+
+// Short, pre-written (not raw-log) description for a classified reason
+// — always visible, no toggle needed since it's a sentence or two.
+.error-box-detail {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
 }
 
 .error-box pre {
@@ -713,20 +695,22 @@
   color: rgb(var(--color-typography-300));
 }
 
+// Only shown for unclassified errors, gating a raw log excerpt — kept
+// visually quieter than the (now primary) message/detail text above.
 .error-toggle {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  margin-bottom: 0.5rem;
   padding: 0;
   background: none;
   border: none;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
-  color: rgb(var(--color-error));
+  color: rgb(var(--color-typography-300));
   cursor: pointer;
 
   &:hover {
+    color: rgb(var(--color-error));
     text-decoration: underline;
   }
 }
@@ -744,10 +728,7 @@
 // ==========================================================================
 
 .logs-panel {
-  @include glass-surface;
-
   padding: 12px;
-  border-radius: 8px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -768,7 +749,7 @@
 }
 
 .log-selector__label {
-  font-size: var(--font-size-base);
+  font-size: var(--model-detail-heading-size);
   font-weight: var(--font-weight-medium);
   color: rgb(var(--color-typography-700));
 }
@@ -797,6 +778,18 @@
         / 0.5
       );
     outline-offset: 2px;
+  }
+}
+
+.log-selector__timestamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-400));
+
+  i {
+    font-size: var(--font-size-xs);
   }
 }
 
@@ -857,8 +850,8 @@
   overflow: auto;
   background: rgb(var(--color-surface-0));
   color: rgb(var(--color-typography-100));
-  font-family: 'JetBrains Mono', monospace;
-  font-size: var(--font-size-sm);
+  font-family: monospace;
+  font-size: var(--model-detail-font-size);
   line-height: var(--line-height-normal);
 }
 
@@ -958,123 +951,32 @@
   font-weight: var(--font-weight-semibold);
 }
 
-.calibration-status__attempts {
-  margin-left: auto;
-  color: rgb(var(--color-typography-700));
-  font-size: var(--font-size-sm);
-}
+.calibration-status--success { --status-color: var(--color-success); }
+.calibration-status--failure { --status-color: var(--color-error); }
 
-.calibration-status--success {
-  border-color:
-    rgb(
-      var(--color-success)
-      / var(--opacity-border)
-    );
-  background:
-    rgb(
-      var(--color-success)
-      / var(--opacity-faint)
-    );
-
-  .calibration-status__icon {
-    color: rgb(var(--color-success));
-    background:
-      rgb(
-        var(--color-success)
-        / var(--opacity-soft)
-      );
-  }
-
-  .calibration-status__value {
-    color: rgb(var(--color-success));
-  }
-}
-
+.calibration-status--success,
 .calibration-status--failure {
-  border-color:
-    rgb(
-      var(--color-error)
-      / var(--opacity-border)
-    );
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-faint)
-    );
+  border-color: rgb(var(--status-color) / var(--opacity-border));
+  background: rgb(var(--status-color) / var(--opacity-faint));
 
   .calibration-status__icon {
-    color: rgb(var(--color-error));
-    background:
-      rgb(
-        var(--color-error)
-        / var(--opacity-soft)
-      );
+    color: rgb(var(--status-color));
+    background: rgb(var(--status-color) / var(--opacity-soft));
   }
 
-  .calibration-status__value {
-    color: rgb(var(--color-error));
-  }
-}
-
-.calibration-status--unknown {
-  .calibration-status__icon {
-    color: rgb(var(--color-typography-700));
-    background:
-      rgb(
-        var(--color-typography-700)
-        / var(--opacity-soft)
-      );
-  }
+  .calibration-status__value { color: rgb(var(--status-color)); }
 }
 
 // ==========================================================================
 // Log Errors
 // ==========================================================================
 
-.log-line--error {
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-soft)
-    );
-  border-left:
-    3px solid
-    rgb(var(--color-error));
-}
-
-.log-line--error .log-line-content {
-  color: rgb(var(--color-error));
-  font-weight: var(--font-weight-semibold);
-}
-
-.log-line--error .log-line-number {
-  color: rgb(var(--color-error));
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-faint)
-    );
-  border-right-color:
-    rgb(
-      var(--color-error)
-      / var(--opacity-border)
-    );
-}
-
 .log-line--highlighted {
-  background:
-    rgb(
-      var(--color-error)
-      / var(--opacity-soft)
-    );
+  background: rgb(var(--color-error) / var(--opacity-soft));
 
   .log-line-number {
-    background:
-      rgb(
-        var(--color-error)
-        / var(--opacity-faint)
-      );
     color: rgb(var(--color-error));
+    background: rgb(var(--color-error) / var(--opacity-faint));
   }
 
   .log-line-content {
@@ -1092,11 +994,6 @@
     padding: 24px 16px 32px;
   }
 
-  .expanded-content {
-    padding-left: 1rem;
-    padding-right: 1rem;
-  }
-
   .error-box {
     margin-left: 0;
   }
@@ -1107,5 +1004,22 @@
 
   .check-name {
     font-size: var(--font-size-sm);
+  }
+}
+
+.benchmark-worker-select {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px;
+  font-size: var(--model-detail-font-size);
+  select {
+    min-height: 40px;
+    padding: 8px 10px;
+    font: inherit;
+    color: inherit;
+    background: var(--surface-card, transparent);
+    border: 1px solid var(--surface-border, #d1d5db);
+    border-radius: 6px;
   }
 }

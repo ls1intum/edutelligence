@@ -1,4 +1,4 @@
-"""The historic context high-water mark of model_profiles (#829).
+"""The historic context high-water mark of model_profiles.
 
 The orchestrator's view of a model's context used to live only in the live
 worker runtime snapshots: with every workernode offline, /v1/models carried
@@ -13,6 +13,7 @@ calibration cannot shrink the mark.
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
@@ -40,8 +41,8 @@ def test_manual_override_is_the_length():
 
 
 def test_calibrated_cap_counts_on_its_own():
-    """The #829 root cause: when a calibration caps --max-model-len to fit the
-    pinned KV budget and records no wider KV point, that cap is the only
+    """A calibration cap counts as the reported context when it is the only
+    available context value. When no wider KV point is recorded, that cap is the
     context the profile reports. Ignoring it is exactly what made the model
     look context-unknown while its worker sat connected and ready to serve
     it at that width."""
@@ -130,3 +131,57 @@ def test_historic_max_reduces_each_model_across_providers():
         "gemma-12b": 49152,
         "qwen-27b": 262144,
     }
+
+
+# ---------------------------------------------------------------------------
+# get_catalog_context_by_model
+# ---------------------------------------------------------------------------
+
+
+def test_catalog_context_reduces_each_model_to_the_smallest_window():
+    # A model can appear once per cloud provider it is associated with; like
+    # every other source of a model's context, the smallest published window
+    # is the only one that holds unconditionally.
+    db = _db()
+    db.session.execute.return_value = MagicMock(
+        fetchall=MagicMock(
+            return_value=[
+                SimpleNamespace(name="gpt-5.6-luna", max_input_tokens=1050000),
+                SimpleNamespace(name="gpt-5.6-luna", max_input_tokens=1000000),
+                SimpleNamespace(name="gpt-5.6-terra", max_input_tokens=1050000),
+            ]
+        )
+    )
+
+    assert db.get_catalog_context_by_model() == {
+        "gpt-5.6-luna": 1000000,
+        "gpt-5.6-terra": 1050000,
+    }
+
+
+def test_catalog_context_drops_rows_without_a_positive_window():
+    db = _db()
+    db.session.execute.return_value = MagicMock(
+        fetchall=MagicMock(
+            return_value=[
+                SimpleNamespace(name="windowless-model", max_input_tokens=None),
+                SimpleNamespace(name="zero-model", max_input_tokens=0),
+                SimpleNamespace(name="fine-model", max_input_tokens=131072),
+            ]
+        )
+    )
+
+    assert db.get_catalog_context_by_model() == {"fine-model": 131072}
+
+
+def test_catalog_context_query_only_reads_cloud_associated_models():
+    # The catalog figure stands in for what a provider serves, so it must not
+    # be read for a model only a logosnode provider serves: a local-only model
+    # with no lane up has no window being served, and advertising the
+    # registry's number for it would report one no deployment holds. (Checked
+    # against the source rather than the executed text: the unit-test conftest
+    # stubs sqlalchemy, so text() calls come back as None here.)
+    source = inspect.getsource(DBManager.get_catalog_context_by_model)
+    assert "JOIN model_provider mp ON mp.model_id = m.id" in source
+    assert "JOIN providers p ON p.id = mp.provider_id" in source
+    assert "p.provider_type = 'cloud'" in source

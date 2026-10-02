@@ -81,8 +81,30 @@ public class OrchestratorNotificationService {
 
     @Async
     public void sendRefresh(boolean rebuildClassifier, boolean syncCloudModels) {
+        postRefresh(rebuildClassifier, syncCloudModels);
+    }
+
+    /**
+     * Synchronous counterpart of {@link #sendRefresh(boolean, boolean)} for
+     * callers that have to report delivery, e.g. the explicit refresh
+     * endpoint. The async path swallows failures by design — a background
+     * announcement must never fail the request that triggered it — but an
+     * operator who pressed "refresh" is owed the truth: false means the
+     * orchestrator was not reached and the pass did not start. Acceptance
+     * is all that is promised; the model sync pass itself is scheduled on
+     * the orchestrator and not awaited (see /internal/cloud_model_sync_status
+     * for its completion state).
+     */
+    public boolean sendRefreshSync(boolean rebuildClassifier, boolean syncCloudModels) {
+        return postRefresh(rebuildClassifier, syncCloudModels);
+    }
+
+    private boolean postRefresh(boolean rebuildClassifier, boolean syncCloudModels) {
+        // Unconfigured stays as quiet as the old fire-and-forget path: a dev
+        // webservice without an orchestrator logs nothing on every provider
+        // change; the sync caller surfaces the gap as a plain false.
         if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
-            return;
+            return false;
         }
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -92,8 +114,10 @@ public class OrchestratorNotificationService {
                 Map.of("rebuild_classifier", rebuildClassifier, "sync_cloud_models", syncCloudModels), headers
             );
             restTemplate.postForEntity(orchestratorUrl + "/internal/refresh_pipeline", request, Void.class);
+            return true;
         } catch (Exception e) {
             log.warn("Failed to notify orchestrator of pipeline refresh: {}", e.getMessage());
+            return false;
         }
     }
 }

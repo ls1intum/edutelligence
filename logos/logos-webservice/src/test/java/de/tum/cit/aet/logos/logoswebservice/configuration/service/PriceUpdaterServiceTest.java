@@ -208,6 +208,16 @@ class PriceUpdaterServiceTest {
     }
 
     @Test
+    void ignoresAbsentNullCostDimensions() {
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("input_cost_per_audio_token", null);
+        catalog.put("input_cost_per_token", 1.0e-6);
+        assertThat(ingest(catalog))
+            .containsExactly(new SavedPrice(
+                "billed_input_uncached", "token", 0, "default", Math.round(1.0e-6 * 1e11)));
+    }
+
+    @Test
     void expandsStructuredGuardrailUnitPrices() {
         assertThat(ingest(Map.of("guardrail_cost_per_unit", Map.of(
             "contentPolicyUnits", 1.5e-4,

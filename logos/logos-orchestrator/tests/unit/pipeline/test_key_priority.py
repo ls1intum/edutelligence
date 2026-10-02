@@ -1,28 +1,82 @@
-"""API-key default_priority drives queue ordering.
+"""Queue priority resolution: key > team > policy, plus the role tiebreak.
 
 The classifier bakes the policy's priority into every candidate; the pipeline
-then applies the requesting key's default_priority on top, so the key owner's
-explicit choice wins and an unset key (0) keeps the policy's priority.
+then applies the requesting key's default_priority on top of the team's
+admin-set priority, so the key owner's explicit choice wins, an unset key (0)
+falls back to the team's priority, and an unset team (0, the default) keeps
+the historical policy-only behaviour.
 """
 
 from logos import PipelineRequest, RequestPipeline, SchedulingResult
-from logos.pipeline.pipeline import resolve_queue_priority
+from logos.pipeline.pipeline import queue_role_rank, resolve_queue_priority
+from logos.queue import Priority
 
 
 def test_resolve_queue_priority_key_wins_when_set():
-    assert resolve_queue_priority(10, 5) == 10
+    assert resolve_queue_priority(10, 5, 1) == 10
     # Even a lower key priority is honoured — it is the key owner's choice.
-    assert resolve_queue_priority(1, 10) == 1
+    assert resolve_queue_priority(1, 5, 10) == 1
     # Arbitrary values pass through (Priority.from_int normalises them later).
-    assert resolve_queue_priority(7, 5) == 7
+    assert resolve_queue_priority(7, None, 5) == 7
 
 
-def test_resolve_queue_priority_unset_key_falls_back_to_policy():
-    assert resolve_queue_priority(0, 5) == 5
-    assert resolve_queue_priority(None, 10) == 10
-    # Both unset: 0 (ProxyPolicy default), which Priority.from_int maps to NORMAL.
-    assert resolve_queue_priority(0, 0) == 0
-    assert resolve_queue_priority(0, None) == 0
+def test_resolve_queue_priority_unset_key_falls_back_to_team():
+    # An unset key takes the team's admin-set priority. Newly provisioned
+    # developer keys are created with 0 (ApiKeyFactory, schema default per
+    # webservice changelog 036), so this is the case normal developer/app-admin
+    # traffic hits; legacy keys may still carry a stored 1, which acts as an
+    # explicit override until an admin resets the key.
+    assert resolve_queue_priority(0, 5, 10) == 5
+    assert resolve_queue_priority(None, 1, 10) == 1
+    # The team's choice wins over the policy's.
+    assert resolve_queue_priority(0, 1, 10) == 1
+
+
+def test_resolve_queue_priority_unset_team_falls_back_to_policy():
+    assert resolve_queue_priority(0, None, 5) == 5
+    assert resolve_queue_priority(0, 0, 10) == 10
+    # All unset: resolves to the default level, NORMAL (see the regression
+    # below) — not 0, which would rank below explicit NORMAL in the queue.
+    assert resolve_queue_priority(0, 0, 0) == int(Priority.NORMAL)
+    assert resolve_queue_priority(0, None, None) == int(Priority.NORMAL)
+
+
+def test_all_unset_resolves_to_normal_raw_not_zero():
+    """Regression: with key, team and policy all unset the resolved priority
+    must be NORMAL's raw value (5), not 0. 0 lands in the NORMAL bucket via
+    ``Priority.from_int`` but, as ``raw_priority=0``, would rank below
+    explicit NORMAL (5) traffic inside that bucket and skip the role-rank
+    tiebreak between the two."""
+    resolved = resolve_queue_priority(0, 0, 0)
+    assert resolved == int(Priority.NORMAL)
+    # The raw value matches the bucket it maps to — no 0/5 mismatch.
+    assert Priority.from_int(resolved) is Priority.NORMAL
+    assert resolved == int(Priority.from_int(resolved))
+
+
+def test_queue_role_rank_application_keys_rank_highest():
+    # Application keys rank above everything, whatever user owns them.
+    assert queue_role_rank("application", None) == 2
+    assert queue_role_rank("application", "app_developer") == 2
+    assert queue_role_rank("application", "app_admin") == 2
+
+
+def test_queue_role_rank_admins_above_developers():
+    assert queue_role_rank("developer", "app_admin") == 1
+    assert queue_role_rank("developer", "logos_admin") == 1
+    assert queue_role_rank("developer", "app_developer") == 0
+    assert queue_role_rank("developer", None) == 0
+
+
+def test_queue_role_rank_unknown_callers_rank_lowest():
+    # Service keys, keys without a user, internal/benchmark traffic, and
+    # unknown key types all rank 0 — they never jump ahead of interactive
+    # developer traffic.
+    assert queue_role_rank("service", None) == 0
+    assert queue_role_rank("internal", None) == 0
+    assert queue_role_rank(None, None) == 0
+    assert queue_role_rank("mystery", "app_admin") == 1  # the user role still counts
+    assert queue_role_rank("mystery", "app_developer") == 0
 
 
 class _FakeClassifier:
@@ -65,7 +119,9 @@ class _StubExecutionContext:
 
 
 class _FakeContextResolver:
-    async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+    async def resolve_context(
+        self, model_id, provider_id, request_path=None, request_id=None, **kwargs
+    ):  # noqa: ARG002
         return _StubExecutionContext(model_id, provider_id)
 
 
@@ -132,22 +188,33 @@ async def test_key_priority_wins_even_when_lower_than_policy():
     assert [prio for _, _, prio in scheduler.last_request.classified_models] == [1]
 
 
-async def test_unset_key_falls_back_to_policy_priority():
-    """default_priority=0 (webservice/UI default) keeps the policy's priority."""
+async def test_unset_key_uses_team_priority_over_policy():
+    """An unset key takes the team's admin-set priority over the policy's."""
     pipeline, scheduler, _monitoring = _build_pipeline()
 
-    await pipeline.process(_request(default_priority=0))
+    await pipeline.process(_request(default_priority=0, team_priority=1))
+
+    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [1]
+
+
+async def test_unset_key_and_team_fall_back_to_policy_priority():
+    """default_priority=0 and team_priority=0 keep the policy's priority."""
+    pipeline, scheduler, _monitoring = _build_pipeline()
+
+    await pipeline.process(_request(default_priority=0, team_priority=0))
 
     assert [prio for _, _, prio in scheduler.last_request.classified_models] == [5]
 
 
-async def test_unset_key_without_policy_keeps_prior_behavior():
-    """No key priority and no policy: priority stays 0 (→ NORMAL) as before."""
+async def test_unset_key_and_team_resolve_to_normal_raw():
+    """No key, team or policy priority: resolves to NORMAL's raw value (5), so
+    the entry's raw_priority matches its bucket and default traffic ranks
+    level with explicit NORMAL in the queue (regression)."""
     pipeline, scheduler, _monitoring = _build_pipeline()
 
     await pipeline.process(_request(policy=None, default_priority=0))
 
-    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [0]
+    assert [prio for _, _, prio in scheduler.last_request.classified_models] == [5]
 
 
 async def test_enqueue_monitoring_uses_effective_priority():
@@ -165,3 +232,21 @@ async def test_classification_stats_report_effective_priority():
     result = await pipeline.process(_request(default_priority=10))
 
     assert result.classification_stats["candidates"][0]["priority"] == 10
+
+
+async def test_role_rank_reaches_the_scheduler():
+    """The caller's tiebreak rank flows from PipelineRequest to the scheduler,
+    which passes it to the queue (application > app admin > developer)."""
+    pipeline, scheduler, _monitoring = _build_pipeline()
+
+    await pipeline.process(_request(role_rank=2))
+
+    assert scheduler.last_request.role_rank == 2
+
+
+async def test_role_rank_defaults_to_lowest():
+    pipeline, scheduler, _monitoring = _build_pipeline()
+
+    await pipeline.process(_request())
+
+    assert scheduler.last_request.role_rank == 0

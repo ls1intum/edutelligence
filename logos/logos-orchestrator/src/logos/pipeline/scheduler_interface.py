@@ -72,6 +72,10 @@ class SchedulingRequest:
     deployments: list[Deployment]
     classified_models: Optional[List[Tuple[int, float, int]]] = None  # (model_id, weight, priority)
     timeout_s: Optional[float] = None
+    # Queue tiebreak rank of the caller (pipeline.queue_role_rank):
+    # application keys dequeue before admin keys, which dequeue before
+    # developer traffic, within equal priority. 0 = unknown/lowest.
+    role_rank: int = 0
     required_provider_id: Optional[int] = None
     """Trusted internal affinity. When set, scheduling and queue dispatch
     must never fall back to another provider."""

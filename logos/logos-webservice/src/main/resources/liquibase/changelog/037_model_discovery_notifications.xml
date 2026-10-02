@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- 037: Pending price/capability refreshes for auto-discovered models.
+
+         The orchestrator's discovery syncs (Azure deployments, generic cloud
+         /v1/models) insert model_provider links and then ask the webservice
+         to refresh prices and capabilities for the newly linked models. The
+         webservice endpoint is idempotent, so re-announcing a model is
+         harmless — losing the announcement is not: if the webservice is
+         temporarily unreachable when the sync commits its links, the next
+         sync sees the existing links and would never re-announce, leaving the
+         models unpriced until the unrelated daily full refresh.
+
+         The orchestrator therefore writes every newly linked model into this
+         queue in the same transaction as the link itself, and deletes the
+         rows only after the webservice has acknowledged the notification.
+         A failed or crashed delivery simply stays queued and is retried on
+         the next sync pass. The webservice never reads or writes this table;
+         it exists purely as the orchestrator's outbox. -->
+    <changeSet id="037-model-discovery-notifications" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="model_discovery_notifications"/></not>
+        </preConditions>
+        <createTable tableName="model_discovery_notifications">
+            <column name="model_id" type="INTEGER">
+                <constraints nullable="false" primaryKey="true"
+                             primaryKeyName="pk_model_discovery_notifications"
+                             foreignKeyName="fk_model_discovery_notifications_model"
+                             references="models(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="queued_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="model_discovery_notifications"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

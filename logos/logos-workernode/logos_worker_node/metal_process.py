@@ -46,16 +46,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-from logos_worker_node.metal import default_metal_venv
+from logos_worker_node.metal import resolve_metal_vllm_binary
 from logos_worker_node.models import LaneConfig, MetalConfig
-from logos_worker_node.vllm_process import (
-    _DEFAULT_LANE_CONTEXT_LENGTH,
-    VllmProcessHandle,
+from logos_worker_node.vllm_compat import (
     _infer_default_chat_template_kwargs,
     _infer_reasoning_parser,
     _infer_tool_call_parser,
     _resolve_chat_template,
 )
+from logos_worker_node.vllm_process import _DEFAULT_LANE_CONTEXT_LENGTH, VllmProcessHandle
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         self._metal_config = metal_config or MetalConfig()
 
     # ------------------------------------------------------------------
-    # Preflight guards that do not apply to this backend
+    # Preflight guards that do not apply to this engine
     # ------------------------------------------------------------------
 
     def _require_c_compiler(self) -> None:
@@ -152,26 +151,13 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         The worker runs in its own virtualenv, which deliberately does not
         contain vLLM or mlx — those live in the vllm-metal venv created by its
         install.sh. So unlike the CUDA path, the interpreter running this code
-        is never the right place to look first.
+        is never the right place to look first. Shared with the Metal
+        calibration probe via resolve_metal_vllm_binary — both must agree
+        on where vllm actually lives.
         """
-        configured = (configured_binary or "").strip()
-        # A lane-level vllm_binary is almost always the schema default "vllm";
-        # only treat it as authoritative when it actually points somewhere.
-        explicit = configured if (configured and configured != "vllm") else ""
-        # default_metal_venv() reads LOGOS_METAL_VENV — the same variable
-        # scripts/install-macos.sh installs into — so a custom venv location
-        # is found here instead of silently falling through to PATH.
-        candidates = [
-            explicit,
-            (self._metal_config.vllm_binary or "").strip(),
-            os.path.join(default_metal_venv(), "bin", "vllm"),
-        ]
-        for candidate in candidates:
-            if not candidate:
-                continue
-            resolved = os.path.abspath(os.path.expanduser(candidate))
-            if os.path.isfile(resolved) and os.access(resolved, os.X_OK):
-                return [resolved]
+        resolved = resolve_metal_vllm_binary(configured_binary, self._metal_config.vllm_binary)
+        if resolved is not None:
+            return [resolved]
 
         # Fall back to the inherited resolution (PATH, sibling, module form) so
         # non-standard installs still work, and so the error it raises when
@@ -346,12 +332,12 @@ class MetalVllmProcessHandle(VllmProcessHandle):
             env["HF_HOME"] = self._resolve_hf_home(cache_root_dir)
 
         # vLLM's own cache root still applies (tokenizer/config artifacts),
-        # even though nothing torch-compiles on this backend.
+        # even though nothing torch-compiles on this engine.
         if "VLLM_CACHE_ROOT" not in os.environ:
             env["VLLM_CACHE_ROOT"] = os.path.join(cache_root_dir, ".cache", "vllm")
 
         # server_dev_mode is honoured; sleep mode never sets it here because
-        # the sleep endpoints are unavailable on this backend anyway.
+        # the sleep endpoints are unavailable on this engine anyway.
         if vc.server_dev_mode:
             env["VLLM_SERVER_DEV_MODE"] = "1"
 
@@ -399,7 +385,7 @@ class MetalVllmProcessHandle(VllmProcessHandle):
         return process_env
 
     # ------------------------------------------------------------------
-    # Sleep / wake — unsupported on this backend
+    # Sleep / wake — unsupported on this engine
     # ------------------------------------------------------------------
 
     def _ensure_sleep_mode_ready(self) -> None:

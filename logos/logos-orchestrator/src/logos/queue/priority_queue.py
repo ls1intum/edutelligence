@@ -14,13 +14,14 @@ entries on their required worker.
 
 Within one priority level flagged ``background_app`` entries and regular
 entries dispatch in a bounded interleave — one flagged, then two regular,
-repeating (see ``_select_dispatch_head``) — each class in arrival order.
-The flag marks background app traffic — an agent's background calls, e.g.
-its auto-permission classifier — that a full queue of interactive traffic
-would otherwise starve for the whole wait window; the interleave gives it a
-fast lane without letting a steady flagged stream starve ordinary
-same-priority traffic in return. Unflagged traffic keeps exactly its old
-relative order, so the reordering only touches the flagged entries.
+repeating (see ``_select_dispatch_head``) — each class ordered by
+``raw_priority``, ``role_rank``, then arrival. The flag marks background
+app traffic — an agent's background calls, e.g. its auto-permission
+classifier — that a full queue of interactive traffic would otherwise
+starve for the whole wait window; the interleave gives it a fast lane
+without letting a steady flagged stream starve ordinary same-priority
+traffic in return. Unflagged traffic keeps exactly its old relative
+order, so the reordering only touches the flagged entries.
 """
 
 import heapq
@@ -44,20 +45,25 @@ from logos.queue.models import Priority, QueueEntry, QueueStatePerPriority
 _REGULAR_PER_CYCLE = 2
 
 
-def _bg_sort_key(background_app: bool) -> int:
-    """Heap key for the background-app class ordering inside one priority
-    level. 0 sorts before 1; the flagged/regular interleave itself is
-    applied at dequeue time (``_select_dispatch_head``)."""
-    return 0 if background_app else 1
-
-
 class PriorityQueueManager:
     """Thread-safe priority queue manager keyed by ``model_id``.
 
     Maintains separate priority heaps per model:
-        queues[model_id][Priority.HIGH] = [(-priority, bg_key, ts, entry_id, QueueEntry), ...]
+        queues[model_id][Priority.HIGH] = [(-raw_priority, -role_rank, ts, entry_id, QueueEntry), ...]
         queues[model_id][Priority.NORMAL] = [...]
         queues[model_id][Priority.LOW] = [...]
+
+    Ordering inside the queue:
+    1. ``-raw_priority``: the full-precision priority the request resolved to
+       (team > key > policy scale, 1..10). Bucket choice (LOW/NORMAL/HIGH)
+       still comes from ``Priority.from_int(raw_priority)``; the raw value
+       refines ordering *within* a bucket, so a team priority of 7 dequeues
+       before a plain 5 in NORMAL.
+    2. ``-role_rank``: the caller's queue tiebreak rank (application keys
+       before admin keys before developer traffic, see
+       pipeline.queue_role_rank) — the default intra-team ordering
+       application > app admin > developer.
+    3. ``ts``: FIFO for equal priority and rank.
 
     Design principles:
     - Pure queue operations — no scheduling policy.
@@ -70,12 +76,13 @@ class PriorityQueueManager:
     - Backward-compatible: every method that previously accepted
       ``provider_id`` still accepts it; unpinned behavior stays model-wide.
     - Within a priority level: bounded interleave of background-app and
-      regular entries, each class in arrival order (see
-      ``_select_dispatch_head``).
+      regular entries, each class ordered by raw priority / role rank /
+      arrival (see ``_select_dispatch_head``).
     """
 
     def __init__(self):
-        # queues[model_id][priority] = heap of (-priority, bg_key, ts, entry_id, QueueEntry)
+        # queues[model_id][priority] = heap of
+        # (-raw_priority, -role_rank, ts, entry_id, QueueEntry)
         self._queues: Dict[int, Dict[Priority, List[Tuple[int, int, float, str, QueueEntry]]]] = defaultdict(
             lambda: {
                 Priority.LOW: [],
@@ -115,6 +122,8 @@ class PriorityQueueManager:
         is_cold_at_queue: bool = False,
         background_app: bool = False,
         provider_affinity: int | None = None,
+        raw_priority: int | None = None,
+        role_rank: int = 0,
     ) -> str:
         """Add a task to the priority queue for ``model_id``.
 
@@ -126,6 +135,13 @@ class PriorityQueueManager:
         ``logos.pipeline.pipeline.is_background_app``): the entry takes its
         place in the bounded interleave — a fast lane while the flagged
         slot is owed, never a monopoly (see ``_select_dispatch_head``).
+
+        ``raw_priority`` is the full-precision priority the request resolved
+        to (1..10 scale); it refines the ordering inside the bucket that
+        ``priority`` (``Priority.from_int(raw_priority)``) selects. Defaults
+        to ``int(priority)``. ``role_rank`` is the caller's tiebreak rank
+        within equal priority (see pipeline.queue_role_rank); 0 = unknown
+        caller, which waits behind interactive traffic.
         """
         with self._lock:
             self._entry_counter += 1
@@ -137,6 +153,8 @@ class PriorityQueueManager:
                 model_id=model_id,
                 original_priority=priority,
                 current_priority=priority,
+                raw_priority=int(raw_priority if raw_priority is not None else priority),
+                role_rank=role_rank,
                 enqueue_time=datetime.now(),
                 is_cold_at_queue=is_cold_at_queue,
                 background_app=background_app,
@@ -144,8 +162,8 @@ class PriorityQueueManager:
             )
 
             heap_entry = (
-                -int(priority),
-                _bg_sort_key(background_app),
+                -entry.raw_priority,
+                -entry.role_rank,
                 datetime.now().timestamp(),
                 entry_id,
                 entry,
@@ -208,19 +226,23 @@ class PriorityQueueManager:
         The flagged head dispatches when no regular entry is eligible or
         when ``_REGULAR_PER_CYCLE`` regular dispatches followed the last
         flagged one (the ``_regular_since_flagged`` cursor); otherwise the
-        regular head dispatches. Within a class, arrival order (the heap's
-        ts/entry_id key) decides. Pinned entries only match their required
-        provider. Caller must hold ``_lock``.
+        regular head dispatches. Within a class, ``(-raw_priority,
+        -role_rank, ts, entry_id)`` decides. Pinned entries only match their
+        required provider. Caller must hold ``_lock``.
         """
         queue = self._queues[model_id][priority]
         eligible = [item for item in queue if provider_id is None or item[4].provider_affinity in (None, provider_id)]
         if not eligible:
             return None
         flagged_head = min(
-            (item for item in eligible if item[1] == 0), key=lambda item: (item[2], item[3]), default=None
+            (item for item in eligible if item[4].background_app),
+            key=lambda item: item[:4],
+            default=None,
         )
         regular_head = min(
-            (item for item in eligible if item[1] == 1), key=lambda item: (item[2], item[3]), default=None
+            (item for item in eligible if not item[4].background_app),
+            key=lambda item: item[:4],
+            default=None,
         )
         cursor = self._regular_since_flagged[model_id][priority]
         if flagged_head is not None and (regular_head is None or cursor >= _REGULAR_PER_CYCLE):
@@ -242,15 +264,16 @@ class PriorityQueueManager:
 
         # Dispatch order within this priority level: bounded interleave of
         # background-app and regular entries (``_select_dispatch_head``),
-        # each class in arrival order. The cursor advances on actual
-        # dequeues, so a dispatched entry's slot stays burned and the
-        # interleave state cannot drift across quiescent periods.
+        # each class ordered by raw priority / role rank / arrival. The
+        # cursor advances on actual dequeues, so a dispatched entry's slot
+        # stays burned and the interleave state cannot drift across
+        # quiescent periods.
         eligible_index = self._select_dispatch_head(model_id, priority, provider_id)
         if eligible_index is None:
             return None, None
 
-        _neg_pri, bg_key, _ts, entry_id, entry = queue[eligible_index]
-        if bg_key == 0:
+        _, _, _, entry_id, entry = queue[eligible_index]
+        if entry.background_app:
             # A flagged dispatch: the next ``_REGULAR_PER_CYCLE`` slots are
             # owed to regular traffic again.
             self._regular_since_flagged[model_id][priority] = 0
@@ -321,11 +344,16 @@ class PriorityQueueManager:
             entry_to_move.escalate(new_priority)
             # An escalation is a fresh arrival at the new level: the
             # re-stamped heap ts makes it tail of its class there, and the
-            # new level's interleave cursor is independent.
+            # new level's interleave cursor is independent. Escalation
+            # changes the bucket, not the caller: keep the entry's raw
+            # priority and role rank so its position inside the new bucket
+            # matches where it would have sat — except the bucket floor,
+            # which tracks the new priority.
+            entry_to_move.raw_priority = int(new_priority)
 
             heap_entry = (
-                -int(new_priority),
-                _bg_sort_key(entry_to_move.background_app),
+                -entry_to_move.raw_priority,
+                -entry_to_move.role_rank,
                 datetime.now().timestamp(),
                 entry_id,
                 entry_to_move,
@@ -380,7 +408,7 @@ class PriorityQueueManager:
 
         with self._lock:
             queue = self._queues[model_id][priority]
-            entries = [entry for (_, _, _, _eid, entry) in queue]
+            entries = [entry for (*_, entry) in queue]
             entries.sort(key=lambda e: e.enqueue_time)
             return entries
 
@@ -391,8 +419,8 @@ class PriorityQueueManager:
                 return None
             model_id, priority = self._entry_lookup[entry_id]
             queue = self._queues[model_id][priority]
-            for _, _, _ts, eid, entry in queue:
-                if eid == entry_id:
+            for (*_, entry) in queue:
+                if entry.entry_id == entry_id:
                     return entry
             return None
 
@@ -442,7 +470,7 @@ class PriorityQueueManager:
             if not model_queues:
                 return False
             for queue in model_queues.values():
-                for _neg_pri, _bg_key, _ts, _eid, entry in queue:
+                for (*_, entry) in queue:
                     eligible = provider_id is None or entry.provider_affinity in (None, provider_id)
                     if eligible and entry.is_cold_at_queue:
                         return True

@@ -1,0 +1,9 @@
+INFO 04-02 09:12:11 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 04-02 09:12:19 [gpu_model_runner.py:2100] Loading model weights took 14.9382 GB
+ERROR 04-02 09:12:26 [core.py:712] EngineCore failed to start.
+ERROR 04-02 09:12:26 [core.py:712] Traceback (most recent call last):
+ERROR 04-02 09:12:26 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/vllm/v1/worker/gpu_worker.py", line 312, in determine_available_memory
+ERROR 04-02 09:12:26 [core.py:712]     self.model_runner.profile_run()
+ERROR 04-02 09:12:26 [core.py:712] torch.OutOfMemoryError: CUDA error: out of memory
+ERROR 04-02 09:12:26 [core.py:712] GPU 0 has a total capacity of 44.99 GiB of which 108.00 MiB is free.
+Process EngineCore_DP0: exited with code 1

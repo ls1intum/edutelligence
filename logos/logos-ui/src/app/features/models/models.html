@@ -28,16 +28,17 @@
     'DESCRIPTION',
     ...(role() === 'logos_admin' ? ['TAGS', 'ALIASES'] : []),
     'CAPABILITIES',
+    'PROFILE',
     ...(role() === 'logos_admin' ? ['LAST USED', 'WEIGHTS', ''] : [])
   ]"
   [gridCols]="
     role() === 'logos_admin'
-      ? '200fr 240fr 140fr 160fr 200fr 120fr 170fr 72px'
-      : '220fr 260fr 220fr'
+      ? '180fr 180fr 110fr 120fr 100fr 110fr 120fr 150fr 72px'
+      : '200fr 240fr 180fr 140fr'
   "
   [loading]="loading()"
   [empty]="filteredModels().length === 0"
-  [sortableColumn]="role() === 'logos_admin' ? 5 : -1"
+  [sortableColumn]="role() === 'logos_admin' ? 6 : -1"
   [sortDirection]="lastUsedSortDirection"
   (sortToggle)="toggleLastUsedSort()"
   emptyMessage="No models match your search."
@@ -51,7 +52,7 @@
           <button
             type="button"
             class="model-name"
-            (click)="openReport(model)"
+            (click)="openModel(model)"
           >
             {{ model.name }}
           </button>
@@ -175,6 +176,15 @@
         }
       </div>
 
+      <!-- Profile spider -->
+      <div class="col-profile profile-cell" role="cell" data-label="Profile">
+        @if (hasProfileRatings(model)) {
+          <app-model-profile-radar [ratings]="model.profile_ratings!" [size]="88" />
+        } @else {
+          <span>-</span>
+        }
+      </div>
+
       <!-- Last used: logos_admin only -->
       @if (role() === 'logos_admin') {
         <div
@@ -182,13 +192,18 @@
           role="cell"
           data-label="Last used"
         >
-          <span
-            class="last-used"
-            [class.last-used--stale]="isStaleModel(model.last_used_at)"
-            [attr.title]="lastUsedTooltip(model.last_used_at)"
-          >
-            {{ formatLastUsed(model.last_used_at) }}
-          </span>
+          @if (formatLastUsed(model.last_used_at); as lastUsed) {
+            <span
+              class="last-used"
+              [class.last-used--stale]="isStaleModel(model.last_used_at)"
+              [attr.title]="lastUsedTooltip(model.last_used_at)"
+            >
+              <span class="last-used__primary">{{ lastUsed.primary }}</span>
+              @if (lastUsed.age) {
+                <span class="last-used__age">{{ lastUsed.age }}</span>
+              }
+            </span>
+          }
         </div>
       }
 
@@ -403,6 +418,30 @@
       </div>
     </div>
 
+    <p class="form-section-label form-section-label--mt">Profile (Likert 1–5)</p>
+    <p class="form-hint">Spider-chart axes for latency, quality, and price. Leave blank to omit.</p>
+    <div class="profile-editor">
+      <div class="form-row">
+        @for (axis of profileAxes; track axis) {
+          <div class="form-field">
+            <label class="field-label" [attr.for]="'add-profile-' + axis">{{ axis | titlecase }}</label>
+            <input
+              [id]="'add-profile-' + axis"
+              class="field-input field-input--short"
+              type="number"
+              min="1"
+              max="5"
+              step="1"
+              [value]="profileValue(addProfile(), axis)"
+              (input)="setProfileAxis('add', axis, $any($event.target).value)"
+              [disabled]="addLoading()"
+            />
+          </div>
+        }
+      </div>
+      <app-model-profile-radar [ratings]="addProfile()" [size]="120" />
+    </div>
+
     @if (addError()) {
       <app-error-message [message]="addError()!" />
     }
@@ -540,6 +579,30 @@
           [disabled]="editLoading()"
         />
       </div>
+    </div>
+
+    <p class="form-section-label form-section-label--mt">Profile (Likert 1–5)</p>
+    <p class="form-hint">Spider-chart axes for latency, quality, and price.</p>
+    <div class="profile-editor">
+      <div class="form-row">
+        @for (axis of profileAxes; track axis) {
+          <div class="form-field">
+            <label class="field-label" [attr.for]="'edit-profile-' + axis">{{ axis | titlecase }}</label>
+            <input
+              [id]="'edit-profile-' + axis"
+              class="field-input field-input--short"
+              type="number"
+              min="1"
+              max="5"
+              step="1"
+              [value]="profileValue(editProfile(), axis)"
+              (input)="setProfileAxis('edit', axis, $any($event.target).value)"
+              [disabled]="editLoading()"
+            />
+          </div>
+        }
+      </div>
+      <app-model-profile-radar [ratings]="editProfile()" [size]="120" />
     </div>
 
     @if (editError()) {

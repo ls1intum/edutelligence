@@ -4,6 +4,11 @@
 
 ## Architecture documentation
 
+The published documentation — user, administrator, and developer guides, the
+subsystem and terminology reference, and per-role UI guides — lives at
+<https://ls1intum.github.io/edutelligence/logos/> (source: `logos/docs/`,
+built with Docusaurus by the `Build Logos Documentation` workflow).
+
 See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, context-resolution, LogosNode/HTTP forwarding, and completion boundaries.
 
 See the [agent runner](logos-agent/README.md) for how Logos runs coding agents in isolated containers on its own spare serving capacity, and the boundaries those sessions work within.
@@ -29,21 +34,25 @@ pip install uv
 
 #### Dependencies
 
-Create a virtual environment and install the dependencies:
+From the repository root (`edutelligence/`), link the common `shared` package
+once and install the orchestrator dependencies:
 
 ```bash
-uv venv .venv
-source .venv/bin/activate
-uv pip install .
+cd logos/logos-orchestrator
+ln -s ../../shared shared
+uv sync --locked --python 3.13
 ```
 
-If that does not work, try pinning to Python 3.13 explicitly:
+For later dependency syncs, run `uv sync --locked` in `logos/logos-orchestrator/`.
+The parent `logos/pyproject.toml` only configures formatting; it is not the
+orchestrator package. The warning about its missing `[project]` table is harmless.
 
-```bash
-uv venv .venv --python 3.13
-source .venv/bin/activate
-uv pip install .
-```
+In PyCharm, use `logos/logos-orchestrator/.venv/bin/python` as the interpreter.
+The **Package requirements are not satisfied** notification means that this
+interpreter is missing dependencies or has different versions than the project
+requires. **Sync project** installs them using uv. If it reports that the `shared`
+distribution cannot be found, check the symlink above before retrying. No separate
+`requirements.txt` is needed.
 
 ## Development
 
@@ -412,7 +421,7 @@ In DBeaver, create a new PostgreSQL connection and configure the **SSH** tab as 
 
 | Field | Value |
 |-------|-------|
-| Host/IP | `aetvm45.cit.tum.de` |
+| Host/IP | `logos-test.aet.cit.tum.de` |
 | Port | `22` |
 | User Name | your TUM username (e.g. `ge69yun`) |
 | Authentication | Public Key |

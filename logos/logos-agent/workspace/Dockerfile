@@ -15,6 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
+      openssh-client \
       ca-certificates \
       curl \
       gnupg \
@@ -110,7 +111,7 @@ COPY iris/.pre-commit-config.yaml /tmp/hooks/iris/.pre-commit-config.yaml
 COPY athena/.pre-commit-config.yaml /tmp/hooks/athena/.pre-commit-config.yaml
 COPY memiris/.pre-commit-config.yaml /tmp/hooks/memiris/.pre-commit-config.yaml
 RUN uv venv --python 3.13 /opt/venv \
-  && uv pip install --python /opt/venv pre-commit \
+  && uv pip install --python /opt/venv pre-commit==4.6.2 \
   && cd /tmp/hooks \
   && git init -q . \
   && git config user.email agent@logos.invalid \

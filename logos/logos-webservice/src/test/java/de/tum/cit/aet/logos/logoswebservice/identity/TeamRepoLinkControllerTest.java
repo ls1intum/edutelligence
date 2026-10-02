@@ -1,0 +1,362 @@
+package de.tum.cit.aet.logos.logoswebservice.identity;
+
+import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
+import de.tum.cit.aet.logos.logoswebservice.TestJwt;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+@Import(TestContainersConfig.class)
+@TestPropertySource(properties = {
+    "spring.liquibase.enabled=true",
+    "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
+    "logos.auth.roles.logos-admin=itg-admin",
+    "logos.auth.roles.app-admin=chair-member",
+    "logos.auth.sync-debounce-minutes=5"
+})
+@Sql(scripts = {"/sql/seed-identity.sql", "/sql/seed-configuration.sql", "/sql/seed-admin.sql"},
+     executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+@Sql(scripts = {"/sql/cleanup-admin.sql", "/sql/cleanup-configuration.sql", "/sql/cleanup-identity.sql"},
+     executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+class TeamRepoLinkControllerTest {
+
+    @Autowired MockMvc mvc;
+    @MockitoBean JwtDecoder jwtDecoder;
+
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    @Test
+    void list_requiresAppAdminOrAbove() throws Exception {
+        mvc.perform(get("/admin/teams/2001/repositories").with(TestJwt.testUser()))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void list_forbiddenForNonOwnerAppAdmin() throws Exception {
+        // adminuser owns team 2001; creating another team they do not own is
+        // awkward here, so use logos admin to create a second team and then
+        // hit it as adminuser (owner of 2001 only).
+        MvcResult created = mvc.perform(post("/teams")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"repo-link-foreign\",\"owner_ids\":[1003]}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int foreignTeamId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        mvc.perform(get("/admin/teams/" + foreignTeamId + "/repositories")
+                .with(TestJwt.adminUser()))
+           .andExpect(status().isForbidden());
+
+        mvc.perform(delete("/teams/" + foreignTeamId).with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+    }
+
+    @Test
+    void crud_logosAdminFullCycle() throws Exception {
+        mvc.perform(get("/admin/teams/2001/repositories").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$").isArray())
+           .andExpect(jsonPath("$.length()").value(0));
+
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "repo_url": "https://github.com/ls1intum/edutelligence.git",
+                      "branch": "main",
+                      "paths": ["logos/logos-ui", "logos/logos-agent"]
+                    }
+                    """))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/edutelligence"))
+           .andExpect(jsonPath("$.branch").value("main"))
+           .andExpect(jsonPath("$.paths[0]").value("logos/logos-ui"))
+           .andExpect(jsonPath("$.paths[1]").value("logos/logos-agent"))
+           .andReturn();
+
+        JsonNode link = mapper.readTree(created.getResponse().getContentAsString());
+        int linkId = link.get("id").asInt();
+
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"git@github.com:ls1intum/edutelligence.git\"}"))
+           .andExpect(status().isConflict());
+
+        mvc.perform(patch("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"branch\":\"develop\",\"paths\":[\"logos\"]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.branch").value("develop"))
+           .andExpect(jsonPath("$.paths[0]").value("logos"));
+
+        mvc.perform(delete("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.message").value("Repository link deleted"));
+
+        mvc.perform(get("/admin/teams/2001/repositories").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void create_ownerAppAdminSucceeds() throws Exception {
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/Artemis\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/artemis"));
+    }
+
+    @Test
+    void create_rejectsCaseVariantDuplicate() throws Exception {
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/Artemis\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/artemis"));
+
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/LS1INTUM/artemis.git\"}"))
+           .andExpect(status().isConflict())
+           .andExpect(jsonPath("$.detail", containsString("ls1intum/artemis")));
+    }
+
+    @Test
+    void update_clearsPathFiltersWithEmptyArray() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("""
+                    {
+                      "repo_url": "https://github.com/ls1intum/path-clear",
+                      "paths": ["logos"]
+                    }
+                    """))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.paths[0]").value("logos"))
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        mvc.perform(patch("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"paths\":[]}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.paths").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
+
+    @Test
+    void update_slugChangeInvalidatesPriorAnalyses() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/old-repo\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/old-repo"))
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        jdbc.update("""
+            INSERT INTO ai_workflow_analyses
+                (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            VALUES (2001, ?, 'abc', 'succeeded', 'heuristic', now())
+            """, linkId);
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ai_workflow_analyses WHERE team_repository_id = ?",
+                Integer.class, linkId)).isEqualTo(1);
+
+        mvc.perform(patch("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/new-repo\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.repo_slug").value("ls1intum/new-repo"));
+
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM ai_workflow_analyses WHERE team_repository_id = ?",
+                Integer.class, linkId)).isZero();
+    }
+
+    @Test
+    void create_rejectsNonGithubUrl() throws Exception {
+        mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://gitlab.com/ls1intum/edutelligence\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.detail", containsString("GitHub")));
+    }
+
+    @Test
+    void create_concurrentDuplicateReturnsConflict() throws Exception {
+        // Two writers can both pass the precheck; the unique index must still
+        // surface as 409 rather than an unhandled 500.
+        var ready = new java.util.concurrent.CountDownLatch(2);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var outcomes = new java.util.concurrent.ConcurrentLinkedQueue<Integer>();
+
+        Runnable postOnce = () -> {
+            try {
+                ready.countDown();
+                start.await();
+                int status = mvc.perform(post("/admin/teams/2001/repositories")
+                        .with(TestJwt.logosAdmin())
+                        .contentType("application/json")
+                        .content("{\"repo_url\":\"https://github.com/ls1intum/race-repo\"}"))
+                    .andReturn()
+                    .getResponse()
+                    .getStatus();
+                outcomes.add(status);
+            } catch (Exception e) {
+                outcomes.add(-1);
+            }
+        };
+
+        Thread a = new Thread(postOnce);
+        Thread b = new Thread(postOnce);
+        a.start();
+        b.start();
+        ready.await();
+        start.countDown();
+        a.join();
+        b.join();
+
+        org.assertj.core.api.Assertions.assertThat(outcomes)
+            .containsExactlyInAnyOrder(200, 409);
+    }
+
+    @Test
+    void delete_cancelsQueuedAnalysisSessionsForLink() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/acme/unlink-me\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        Integer workspaceId = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('unlink-cancel-ws', 'main', 'unlink-cancel-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        Integer sessionId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push, team_repository_id, trigger_kind,
+                repo_url, repo_slug
+            ) VALUES (?, 'analyze', 'queued', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'analysis',
+                      'https://github.com/acme/unlink-me.git', 'acme/unlink-me')
+            RETURNING id
+            """, Integer.class, workspaceId, linkId);
+
+        mvc.perform(delete("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+
+        java.util.Map<String, Object> row = jdbc.queryForMap(
+            "SELECT status, error, team_repository_id FROM agent_sessions WHERE id = ?", sessionId);
+        org.assertj.core.api.Assertions.assertThat(row.get("status")).isEqualTo("cancelled");
+        org.assertj.core.api.Assertions.assertThat(row.get("team_repository_id")).isNull();
+        org.assertj.core.api.Assertions.assertThat((String) row.get("error"))
+            .contains("repository link");
+    }
+
+    @Test
+    void delete_requestsRunnerCancelForRunningAndPausedAnalysis() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/acme/unlink-active\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        Integer wsRun = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('unlink-run-ws', 'main', 'unlink-run-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        Integer wsPaused = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('unlink-paused-ws', 'main', 'unlink-paused-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        Integer runningId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push, team_repository_id, trigger_kind,
+                repo_url, repo_slug, container_id
+            ) VALUES (?, 'analyze', 'running', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'analysis',
+                      'https://github.com/acme/unlink-active.git', 'acme/unlink-active', 'ctr-run')
+            RETURNING id
+            """, Integer.class, wsRun, linkId);
+        Integer pausedId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push, team_repository_id, trigger_kind,
+                repo_url, repo_slug, container_id
+            ) VALUES (?, 'analyze', 'paused', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'analysis',
+                      'https://github.com/acme/unlink-active.git', 'acme/unlink-active', 'ctr-paused')
+            RETURNING id
+            """, Integer.class, wsPaused, linkId);
+
+        mvc.perform(delete("/admin/teams/2001/repositories/" + linkId)
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk());
+
+        for (Integer sessionId : java.util.List.of(runningId, pausedId)) {
+            java.util.Map<String, Object> row = jdbc.queryForMap(
+                "SELECT status, error, team_repository_id FROM agent_sessions WHERE id = ?", sessionId);
+            // Still occupying until the agent runner honors cancel_requested.
+            org.assertj.core.api.Assertions.assertThat(row.get("status"))
+                .isIn("running", "paused");
+            org.assertj.core.api.Assertions.assertThat(row.get("team_repository_id")).isNull();
+            org.assertj.core.api.Assertions.assertThat((String) row.get("error"))
+                .startsWith("cancel_requested:");
+        }
+    }
+
+    @Test
+    void delete_missingLinkReturns404() throws Exception {
+        mvc.perform(delete("/admin/teams/2001/repositories/99999")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isNotFound());
+    }
+}

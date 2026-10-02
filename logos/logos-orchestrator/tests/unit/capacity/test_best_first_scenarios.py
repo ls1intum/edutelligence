@@ -198,7 +198,7 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     planner._lane_load_failure_until = {}
     planner._cross_provider_best_first = True
     planner._replica_first_eviction = True
-    planner._replicate_on_free_vram = False  # opt-in; tests turn it on
+    planner._replicate_on_free_vram = False  # on by default; pin off unless a test enables it
     # Eviction-picker dependencies
     planner._lane_loaded_at = {}
     planner._lane_idle_since = {}
@@ -1316,8 +1316,8 @@ class TestReplication:
         assert len(actions) == 1
         assert actions[0].provider_id == b.provider_id
 
-    def test_disabled_by_default_returns_empty(self):
-        """With LOGOS_REPLICATE_ON_FREE_VRAM unset (default), nothing fires."""
+    def test_disabled_returns_empty(self):
+        """With LOGOS_REPLICATE_ON_FREE_VRAM disabled, nothing fires."""
         a = _MockProvider(
             provider_id=1,
             name="A",

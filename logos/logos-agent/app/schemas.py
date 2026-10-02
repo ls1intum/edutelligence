@@ -155,7 +155,7 @@ class SessionSummary(BaseModel):
     screenshot_count: int = 0
     # Set when the runner queued this session itself in response to the
     # repository: what kind of event it was ('issue', 'review') and which one
-    # ('issue-812'). Null for sessions a person created.
+    # ('<event-kind>'). Null for sessions a person created.
     trigger_kind: str | None = None
     trigger_ref: str | None = None
     # How urgent this work is, and the sentence explaining it.

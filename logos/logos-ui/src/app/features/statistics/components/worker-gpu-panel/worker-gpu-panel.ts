@@ -16,10 +16,16 @@ import {
   VramProviderMeta,
   VramV2Sample,
 } from '../../statistics.models';
-import { extractProviderHostRamMb } from '../../statistics.utils';
+import { extractProviderHostRamMb, formatUptime } from '../../statistics.utils';
 import { EmptyState } from '../empty-state/empty-state';
 
 type CalibrateState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'success'; message: string }
+  | { kind: 'error'; message: string };
+
+type StopState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'success'; message: string }
@@ -51,6 +57,7 @@ export class WorkerGpuPanel implements OnChanges {
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
   @Input() lanesByProvider: Record<string, Record<string, LaneSignalData>> = {};
   @Input() activeProvider: string | null = null;
+  @Input() nowMs = Date.now();
 
   private statisticsService = inject(StatisticsService);
 
@@ -66,6 +73,13 @@ export class WorkerGpuPanel implements OnChanges {
    *  the same worker apart (A → B → A). */
   private calibrateGeneration = 0;
 
+  stopState = signal<StopState>({ kind: 'idle' });
+  /** Same staleness guards as calibrateProvider/calibrateGeneration, kept
+   *  separate so a stop click and a calibrate click in flight at once don't
+   *  clobber each other's state. */
+  private stopProvider: string | null = null;
+  private stopGeneration = 0;
+
   ngOnChanges(_changes: SimpleChanges): void {
     const resolved = this.resolvedActiveProvider;
     if (resolved === this.resolvedProvider) return;
@@ -79,6 +93,9 @@ export class WorkerGpuPanel implements OnChanges {
     this.calibrateState.set({ kind: 'idle' });
     this.calibrateProvider = null;
     this.calibrateGeneration += 1;
+    this.stopState.set({ kind: 'idle' });
+    this.stopProvider = null;
+    this.stopGeneration += 1;
     this.resolvedProvider = resolved;
   }
 
@@ -111,6 +128,18 @@ export class WorkerGpuPanel implements OnChanges {
     return !this.isOnline(active);
   }
 
+  get workerUptimeLabel(): string | null {
+    const active = this.resolvedActiveProvider;
+    if (!active) return null;
+    return formatUptime(this.providerMeta[active]?.worker_started_at, this.nowMs);
+  }
+
+  get wsUptimeLabel(): string | null {
+    const active = this.resolvedActiveProvider;
+    if (!active) return null;
+    return formatUptime(this.providerMeta[active]?.connected_at, this.nowMs);
+  }
+
   get latestSample(): VramV2Sample | null {
     const active = this.resolvedActiveProvider;
     return active ? (this.providerLatestSamples[active] ?? null) : null;
@@ -136,6 +165,16 @@ export class WorkerGpuPanel implements OnChanges {
 
   get deviceMode(): string | null {
     return this.providerSignals?.device_mode ?? null;
+  }
+
+  /**
+   * Apple Silicon has one pool; the Unified memory pie already shows it.
+   * The device card's Memory bar would restate a wired-down budget (often
+   * ~75–80% of physical RAM) next to that pie and disagree with it — hide
+   * the bar so only one total is on screen.
+   */
+  get isUnifiedMemory(): boolean {
+    return this.deviceMode === 'metal';
   }
 
   get isDerived(): boolean {
@@ -165,6 +204,15 @@ export class WorkerGpuPanel implements OnChanges {
 
   get canCalibrate(): boolean {
     return this.activeProviderId != null && !this.isOffline;
+  }
+
+  get isCalibrating(): boolean {
+    const active = this.resolvedActiveProvider;
+    return active != null && this.providerMeta[active]?.calibrating === true;
+  }
+
+  get canStop(): boolean {
+    return this.activeProviderId != null && this.isCalibrating && !this.isOffline;
   }
 
   usedPct(device: DeviceInfo): number {
@@ -279,6 +327,48 @@ export class WorkerGpuPanel implements OnChanges {
       } else {
         const detail = e.error?.error ?? `HTTP ${e.status}`;
         this.calibrateState.set({ kind: 'error', message: detail });
+      }
+    }
+  }
+
+  async handleStopCalibration(): Promise<void> {
+    const pid = this.activeProviderId;
+    const active = this.resolvedActiveProvider;
+    if (pid == null || active == null) return;
+    const generation = (this.stopGeneration += 1);
+    this.stopProvider = active;
+    this.stopState.set({ kind: 'loading' });
+
+    try {
+      const body = await this.statisticsService.stopCalibration(pid);
+      if (
+        generation !== this.stopGeneration ||
+        this.stopProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
+      const message = body?.was_active
+        ? body.current_model
+          ? `Calibration cancelled (was calibrating ${body.current_model}).`
+          : 'Calibration cancelled.'
+        : 'No calibration session was running.';
+      this.stopState.set({ kind: 'success', message });
+    } catch (err: unknown) {
+      if (
+        generation !== this.stopGeneration ||
+        this.stopProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
+      const e = err as { status?: number; error?: { error?: string } };
+      if (e.status === 404 || e.status === 501 || e.status === 0) {
+        this.stopState.set({
+          kind: 'error',
+          message: 'Action not available on this server yet.',
+        });
+      } else {
+        const detail = e.error?.error ?? `HTTP ${e.status}`;
+        this.stopState.set({ kind: 'error', message: detail });
       }
     }
   }

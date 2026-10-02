@@ -29,6 +29,9 @@ export function benchmarkConfigurationItems(
     item('split', 'Split', first(configuration, [
       ['scenario', 'spec', 'data', 0, 'load_kwargs', 'split'],
     ])),
+    item('text_column', 'Prompt column', first(configuration, [
+      ['scenario', 'spec', 'data_column_mapper', 'column_mappings', 'text_column'],
+    ])),
     item('sample_size', 'Sample size', benchmark.sample_size),
     item('profile', 'Profile', first(configuration, [
       ['benchmark', 'profile', 'kind'],
@@ -71,6 +74,7 @@ export function servingConfigurationItems(
     item('tensor_parallel_size', 'Tensor parallel size', field(serving, 'tensor_parallel_size')),
     item('pipeline_parallel_size', 'Pipeline parallel size', field(serving, 'pipeline_parallel_size')),
     item('kv_cache_dtype', 'KV cache dtype', field(serving, 'kv_cache_dtype')),
+    item('attention_backend', 'Attention backend', field(serving, 'attention_backend')),
     item('kv_cache_memory', 'KV cache memory', first(serving, [
       ['kv_cache_memory_bytes'],
       ['kv_cache_memory'],
