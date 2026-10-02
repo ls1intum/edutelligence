@@ -18,11 +18,13 @@ from logos.auth import authenticate_api_key
 from logos.batch_api import handle_batch_api_request
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
+from logos.dbutils.dbrequest import WebSearchRequest
 from logos.errors import coerce_upstream_error
 from logos.jobs.job_service import JobService
 from logos.logosnode_snapshot import _resolve_requested_model_name
 from logos.main import _model_context_fields, _served_context_window_stats, handle_sync_request, submit_job_request
 from logos.responses import get_client_ip
+from logos.web_search import SearchUnavailable, search_web
 
 logger = logging.getLogger("LogosLogger")
 
@@ -470,6 +472,17 @@ for _batch_prefix in ("v1", "openai", "jobs/v1", "jobs/openai"):
             tags=["batch"],
             include_in_schema=_batch_prefix == "v1",
         )
+
+
+@router.post("/v1/web-search", tags=["user-facing"])
+async def web_search(body: WebSearchRequest, request: Request):
+    """Return DuckDuckGo results through the existing API-key gateway."""
+    authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
+    try:
+        results = await search_web(body.query, body.max_results)
+    except SearchUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"query": body.query, "source": "DuckDuckGo", "results": results}
 
 
 @router.post("/v1/{path:path}", tags=["user-facing"])
