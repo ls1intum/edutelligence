@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Base64;
 
@@ -26,5 +27,17 @@ class RepoCredentialCryptoTest {
         assertThat(Base64.getDecoder().decode(encrypted).length).isGreaterThan(12);
         assertThat(crypto.decrypt(encrypted)).isEqualTo(pem);
         assertThat(RepoCredentialCrypto.fingerprint(pem)).hasSize(64);
+    }
+
+    @Test
+    void withoutKey_reportsUnconfiguredAndRefusesCrypto() {
+        RepoCredentialCrypto crypto = new RepoCredentialCrypto(null);
+
+        assertThat(crypto.isConfigured()).isFalse();
+        assertThatThrownBy(() -> crypto.encrypt("pem"))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("LOGOS_REPO_CREDENTIALS_KEY");
+        assertThatThrownBy(() -> crypto.decrypt("Y2lwaGVydGV4dC1wbGFjZWhvbGRlcg=="))
+            .isInstanceOf(IllegalStateException.class);
     }
 }
