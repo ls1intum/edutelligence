@@ -187,6 +187,27 @@ public class ProviderService {
         return Map.of("result", "Disconnected model from provider.");
     }
 
+    /**
+     * Trigger an immediate cloud model sync in the orchestrator: every cloud
+     * provider's {@code /v1/models} listing is re-read now instead of at the
+     * next 15-minute interval. The pass is scheduled on the orchestrator and
+     * writes the resulting models and links itself, so nothing is stored here.
+     * Not transactional — there is no write to defer the notification past,
+     * which is exactly what lets the pass start at once.
+     *
+     * <p>Unlike the provider mutations, this waits for the orchestrator to
+     * accept the refresh and reports the outcome: an operator who pressed
+     * refresh must not be told "triggered" when the pass never started. The
+     * fire-and-forget path would swallow exactly that failure.
+     */
+    public Map<String, Object> refreshModels() {
+        if (!orchestratorNotificationService.sendRefreshSync(false, true)) {
+            throw new IllegalStateException(
+                "The orchestrator could not be reached; the model refresh was not triggered.");
+        }
+        return Map.of("result", "Model refresh triggered.");
+    }
+
     public List<Map<String, Object>> getProviderModels(Integer providerId) {
         return modelProviderRepository.findModelsForProvider(providerId).stream()
             .map(p -> {

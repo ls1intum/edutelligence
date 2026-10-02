@@ -24,6 +24,7 @@ CLOUD_CONTEXT = SimpleNamespace(
     model_name="gpt-4.1-nano",
     lane_id=None,
     anthropic_dialect=UpstreamDialect.CHAT_COMPLETIONS,
+    messages_upstream=False,
 )
 
 MESSAGES_BODY = {"model": "gpt-4.1-nano", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}
@@ -88,9 +89,8 @@ async def test_sync_response_is_returned_as_an_anthropic_message(monkeypatch):
 
     # The ledger keeps the upstream's own field names, so billing and the
     # statistics page are unaffected by the translation.
-    logged = dummy_db.payload_calls[0]
-    assert logged["payload"]["choices"][0]["message"]["content"] == "OK"
-    assert logged["usage"]["prompt_tokens"] == 18
+    assert dummy_db.store_calls[0]["payload"]["choices"][0]["message"]["content"] == "OK"
+    assert dummy_db.finalize_calls[0]["usage"]["prompt_tokens"] == 18
 
 
 @pytest.mark.asyncio

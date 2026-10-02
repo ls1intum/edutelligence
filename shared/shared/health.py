@@ -29,7 +29,8 @@ class HealthCheck(BaseModel):
     version: str = Field(..., description="Application version")
     uptime_seconds: int = Field(..., description="Application uptime in seconds")
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="Time when health check was performed"
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Time when health check was performed",
     )
     components: Dict[str, ComponentHealth] = Field(
         default_factory=dict, description="Status of individual components"

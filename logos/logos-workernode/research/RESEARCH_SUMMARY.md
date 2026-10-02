@@ -30,7 +30,7 @@
 ## 1. Hardware Environment
 
 ```
-Server:    hochbruegge.aet.cit.tum.de
+Server:    <GPU node hostname>
 CPU:       Intel Xeon Silver 4110 @ 2.10GHz (8 cores / 16 threads)
 RAM:       187 GB DDR4
 GPU 0:     Quadro RTX 5000  — 16,384 MiB VRAM, Bus 3B:00.0, NUMA 0
@@ -76,7 +76,7 @@ The **LogosWorkerNode** is a lightweight FastAPI daemon that manages GPU-acceler
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  GPU Node (hochbruegge)                                          │
+│  GPU Node                                                        │
 │                                                                   │
 │  ┌──────────────────┐          ┌────────────────────────────┐    │
 │  │  LogosWorkerNode  │  manages │  Lane Pool                 │    │

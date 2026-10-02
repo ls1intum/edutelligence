@@ -7,7 +7,7 @@ export type ThresholdLevel =
   | 'CLOUD_NOT_IN_EU_BY_US_PROVIDER'
   | 'THIRD_PARTY_HARDWARE';
 
-// API returns snake_case (backend uses manual toMap() with snake_case keys)
+// API returns snake_case (application server uses manual toMap() with snake_case keys)
 export interface Policy {
   id: number;
   name: string;

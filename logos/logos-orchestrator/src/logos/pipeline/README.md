@@ -78,9 +78,11 @@ When a request names a model, `main.py` first verifies access and limits deploym
 The priority a request is queued with is resolved by `resolve_queue_priority()` in `pipeline.py` before scheduling:
 
 - **The API key's `default_priority` wins** when set (non-zero). It is configured per key in the admin UI ("Queue Priority"), so a key owner's explicit choice determines where that key's traffic sits in the queue, regardless of the policy.
-- **The policy-level `priority` is the fallback** when the key has none set (`0`, the default for newly created keys): the request queues with the priority of the policy selected for it (or `0` → NORMAL when no policy applies).
+- **The team's admin-set `priority` is next** when the key has none set (`0`, the default for newly created keys).
+- **The policy-level `priority` is the fallback** when neither key nor team has one set.
+- **The default level is `NORMAL` (5)** when none of the above applies. The resolver returns NORMAL's raw value — not `0` — so the entry's `raw_priority` matches the bucket `Priority.from_int` already chooses for it. A raw `0` would land in the NORMAL bucket but rank below explicit NORMAL (5) traffic in that bucket and skip the role-rank tiebreak between the two.
 
-Both values use the same 1/5/10 scale (LOW/NORMAL/HIGH, see `queue/models.py`); non-canonical values are normalized by `Priority.from_int`. The resolved value is applied to every classified candidate, so the schedulers, the priority queues, the monitoring events, and the logged classification stats all agree on it.
+All values use the same 1/5/10 scale (LOW/NORMAL/HIGH, see `queue/models.py`); non-canonical values are normalized by `Priority.from_int`. The resolved value is applied to every classified candidate, so the schedulers, the priority queues, the monitoring events, and the logged classification stats all agree on it.
 
 ## Pipeline Components
 

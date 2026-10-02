@@ -1,0 +1,22 @@
+.most-asked-questions {
+  ol {
+    padding-left: 16px;
+  }
+
+  li {
+    padding: 0.1rem 0;
+    font-size: var(--font-size-sm);
+    color: rgb(var(--color-typography-500));
+  }
+
+  &__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  &__count {
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+}

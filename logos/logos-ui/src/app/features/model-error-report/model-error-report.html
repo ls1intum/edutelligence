@@ -64,7 +64,7 @@
     </nav>
 
     <!-- Tab Content -->
-    <section class="tab-content">
+    <section class="tab-content" [class.tab-content--technical]="activeTab() === 'complete_logs' || activeTab() === 'performance'">
 
       @switch (activeTab()) {
 
@@ -87,188 +87,82 @@
 
           } @else if (hasCompleteLogs()) {
 
-            <app-data-table
-              [columns]="['', 'PROCESS']"
-              gridCols="40px 1fr"
-              [loading]="processesLoading()"
-              [empty]="processes().length === 0"
-              emptyMessage="No process information available."
-            >
+            @if (checklistItems().length === 0) {
 
-              @for (process of processes(); track process.id) {
+              <div class="empty-state">
+                <h2>No checklist information available</h2>
+                <p>No deployment checklist could be built for this model.</p>
+              </div>
 
-                <!-- Process Row -->
-                <div
-                  class="table-row"
-                  [class.table-row--expanded]="isExpanded(process.id)"
-                >
+            } @else {
 
-                  <div class="col-chevron">
+              <div class="checklist-box">
 
-                    <button
-                      type="button"
-                      class="btn-chevron"
-                      [class.btn-chevron--open]="isExpanded(process.id)"
-                      [attr.aria-label]="'Expand ' + process.process"
-                      (click)="toggleProcess(process.id)"
-                    >
-                      <i class="pi pi-chevron-right"></i>
-                    </button>
+                <header class="expanded-header">
+                  <span class="expanded-title">
+                    Deployment Checklist
+                  </span>
+                </header>
 
-                  </div>
+                <div class="checklist">
 
-                  <div class="col-process">
+                  @for (item of checklistItems(); track item.name) {
 
-                    <span class="process-name">
-                      {{ process.process }}
-                    </span>
+                    <div class="check-row">
 
-                  </div>
+                      <span
+                        class="check-icon"
+                        [class.check-icon--success]="item.status === 'success'"
+                        [class.check-icon--failed]="item.status === 'failure'"
+                      >
+                        @if (item.status === 'success') {
+                          ✓
+                        } @else {
+                          !
+                        }
+                      </span>
 
-                </div>
+                      <span class="check-name">
+                        {{ item.name }}
+                      </span>
 
-                <!-- Expanded Details -->
-                @if (isExpanded(process.id)) {
+                      @if (item.scope) {
+                        <span
+                          class="scope-badge"
+                          [ngClass]="getScopePercentageClass(item.scope, item.status)"
+                        >
+                          {{ getScopeLabel(item.scope, item.status) }}
+                        </span>
+                      }
 
-                  <div class="expanded-row">
+                    </div>
 
-                    <div class="expanded-content">
+                    @if (
+                      item.name === 'Server Start' &&
+                      item.status === 'success' &&
+                      item.scope?.nodes?.length
+                    ) {
 
-                      <div class="checklist-box">
+                      <div class="error-scope">
 
-                        <header class="expanded-header">
-                          <span class="expanded-title">
-                            Checklist
-                          </span>
-                        </header>
+                        <strong>
+                          Successful Nodes:
+                        </strong>
 
-                        <div class="checklist">
+                        <div class="scope-nodes">
 
-                          @for (item of process.items; track $index) {
+                          @for (
+                            node of item.scope?.nodes ?? [];
+                            track node
+                          ) {
 
-                            <div class="check-row">
-
-                              <span
-                                class="check-icon"
-                                [class.check-icon--success]="item.status === 'success'"
-                                [class.check-icon--failed]="item.status === 'failure'"
-                              >
-                                @if (item.status === 'success') {
-                                  ✓
-                                } @else {
-                                  !
-                                }
-                              </span>
-
-                              <span class="check-name">
-                                {{ item.name }}
-                              </span>
-
-                              @if (item.scope) {
-                                <span
-                                  class="scope-badge"
-                                  [ngClass]="getScopePercentageClass(item.scope, item.status)"
-                                >
-                                  {{ getScopeLabel(item.scope, item.status) }}
-                                </span>
-                              }
-
-                            </div>
-
-                            @if (
-                              item.name === 'Deployment Success' &&
-                              item.status === 'success' &&
-                              item.scope?.nodes?.length
-                            ) {
-
-                              <div class="error-scope">
-
-                                <strong>
-                                  Successful Nodes:
-                                </strong>
-
-                                <div class="scope-nodes">
-
-                                  @for (
-                                    node of item.scope?.nodes ?? [];
-                                    track node
-                                  ) {
-
-                                    <button
-                                      type="button"
-                                      class="scope-node-button scope-node-button--success"
-                                      (click)="openNodeLog(node)"
-                                    >
-                                      {{ node }}
-                                    </button>
-
-                                  }
-
-                                </div>
-
-                              </div>
-
-                            }
-
-                            @if (item.errorMessage) {
-
-                              <section class="error-box">
-
-                                <h3 class="error-box-title">
-                                  Error Details
-                                </h3>
-
-                                @if (item.scope) {
-                                  <div class="error-scope">
-                                    <strong>Scope:</strong>
-
-                                    @if (item.scope.type === 'global') {
-                                      <span>Global</span>
-                                    } @else {
-                                      <div class="scope-nodes">
-                                        @for (node of item.scope.nodes ?? []; track node) {
-                                          <button
-                                            type="button"
-                                            class="scope-node-button"
-                                            (click)="openNodeLog(node, item.errorMessage)"
-                                          >
-                                            {{ node }}
-                                          </button>
-                                        }
-                                      </div>
-                                    }
-                                  </div>
-                                }
-
-                                @if (item.errorDetail && item.errorDetail !== item.errorMessage) {
-
-                                  <button
-                                    type="button"
-                                    class="error-toggle"
-                                    (click)="toggleError(item.name)"
-                                  >
-                                    <i
-                                      class="pi pi-chevron-right"
-                                      [class.error-toggle__icon--open]="isErrorExpanded(item.name)"
-                                    ></i>
-                                    {{ isErrorExpanded(item.name) ? 'Hide full error' : 'Show full error' }}
-                                  </button>
-
-                                  @if (isErrorExpanded(item.name)) {
-                                    <pre>{{ item.errorDetail }}</pre>
-                                  } @else {
-                                    <pre>{{ item.errorMessage }}</pre>
-                                  }
-
-                                } @else {
-
-                                  <pre>{{ item.errorMessage }}</pre>
-
-                                }
-
-                              </section>
-
-                            }
+                            <button
+                              type="button"
+                              class="scope-node-button scope-node-button--success"
+                              (click)="openNodeLog(node)"
+                            >
+                              {{ node }}
+                            </button>
 
                           }
 
@@ -276,15 +170,132 @@
 
                       </div>
 
-                    </div>
+                    }
+
+                    @if (item.errorMessage) {
+
+                      <section class="error-box">
+
+                        <div class="error-box-header">
+
+                          @if (item.reasonKind === 'unsupported') {
+                            <span
+                              class="reason-badge reason-badge--unsupported"
+                              title="This model cannot load on this node and will not be retried until an operator resolves the underlying issue."
+                            >
+                              Unsupported
+                            </span>
+                          } @else if (item.reasonKind === 'node_unhealthy') {
+                            <span
+                              class="reason-badge reason-badge--node"
+                              title="This node itself is degraded — it affects every model scheduled here, not just this one."
+                            >
+                              Node Unhealthy
+                            </span>
+                          } @else if (item.reasonKind === 'observed') {
+                            <span
+                              class="reason-badge reason-badge--observed"
+                              title="Last observed on a failing probe. Not a permanent classification — this node may succeed on the next calibration window."
+                            >
+                              Observed
+                            </span>
+                          } @else {
+                            <span class="reason-badge reason-badge--unknown">
+                              Error
+                            </span>
+                          }
+
+                          <span class="error-box-message">
+                            {{ item.errorMessage }}
+                          </span>
+
+                        </div>
+
+                        @if (item.reasonKind && item.errorDetail && item.errorDetail !== item.errorMessage) {
+
+                          <p class="error-box-detail">
+                            {{ item.errorDetail }}
+                          </p>
+
+                        }
+
+                        @if (item.scope) {
+                          <div class="error-scope">
+                            <div class="scope-nodes">
+                              @for (node of item.scope.nodes ?? []; track node) {
+                                <button
+                                  type="button"
+                                  class="scope-node-button"
+                                  (click)="openNodeLog(node, item.nodeAnchors?.get(node) ?? item.logAnchor ?? item.errorMessage)"
+                                >
+                                  {{ node }}
+                                </button>
+                              }
+                            </div>
+                          </div>
+                        }
+
+                        @if (!item.reasonKind && item.errorDetail && item.errorDetail !== item.errorMessage) {
+
+                          <button
+                            type="button"
+                            class="error-toggle"
+                            (click)="toggleError(item.name)"
+                          >
+                            <i
+                              class="pi pi-chevron-right"
+                              [class.error-toggle__icon--open]="isErrorExpanded(item.name)"
+                            ></i>
+                            {{ isErrorExpanded(item.name) ? 'Hide raw log' : 'Show raw log' }}
+                          </button>
+
+                          @if (isErrorExpanded(item.name)) {
+                            <pre>{{ item.errorDetail }}</pre>
+                          }
+
+                        }
+
+                      </section>
+
+                    }
+
+                  }
+
+                </div>
+
+              </div>
+
+              @if (metalCapacityFloorMb() != null) {
+
+                <div class="checklist-box capacity-box">
+
+                  <header class="expanded-header">
+                    <span class="expanded-title">
+                      Metal Capacity Requirement
+                    </span>
+                  </header>
+
+                  <div class="check-row">
+
+                    <span class="check-icon check-icon--info">
+                      i
+                    </span>
+
+                    <span class="check-name">
+                      Minimum unified memory
+                    </span>
+
+                    <span class="check-value">
+                      &gt; {{ formatMb(metalCapacityFloorMb()) }}
+                    </span>
 
                   </div>
 
-                }
+                </div>
 
               }
 
-            </app-data-table>
+            }
 
           } @else {
 
@@ -332,6 +343,13 @@
                     </option>
                   }
                 </select>
+
+                @if (selectedCalibratedAt(); as calibratedAt) {
+                  <span class="log-selector__timestamp">
+                    <i class="pi pi-clock" aria-hidden="true"></i>
+                    Calibrated {{ calibratedAt }}
+                  </span>
+                }
 
                 <div class="log-selector__actions">
 
@@ -546,15 +564,30 @@
           </details>
 
           @if (benchmarkPairs().length > 0) {
-            <section class="benchmark-runner">
+            <section class="benchmark-runner" id="benchmark-runner">
               <header class="benchmark-runner__header">
                 <div>
                   <h3>Run benchmark</h3>
-                  <p>GSM8K main/test · 512 max output tokens · includes one unmeasured warm-up request</p>
+                  <p>{{ benchmarkSettings().dataset }} · {{ benchmarkSettings().subset }}/{{ benchmarkSettings().split }} · {{ benchmarkSettings().max_output_tokens }} max output tokens · one unmeasured warm-up request</p>
                 </div>
-                <span>One active run per provider</span>
+                @if (selectedBenchmarkPair()?.provider_type === 'logosnode') {
+                  <button type="button" class="benchmark-run-button" (click)="useComparisonBaseline()"
+                    title="Prepare GSM8K main/test, 50 requests, 512 max output tokens, seed 42, TP 1, PP 1 and concurrency 4. Other worker settings stay unchanged.">
+                    Load comparison preset
+                  </button>
+                }
               </header>
 
+              <label class="benchmark-worker-select">Worker / provider for the next benchmark
+                <select [value]="selectedBenchmarkPair()?.model_provider_id" (change)="selectedBenchmarkPairId.set(+$any($event.target).value)">
+                  @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+                    <option [value]="pair.model_provider_id">{{ pair.provider_name }} · {{ pair.model_name }}</option>
+                  }
+                </select>
+              </label>
+              <app-benchmark-settings-editor [pair]="selectedBenchmarkPair()"
+                [settings]="benchmarkSettings()" (settingsChange)="benchmarkSettings.set($event)"
+                (validChange)="benchmarkSettingsValid.set($event)" (limitsChange)="benchmarkWorkerLimits.set($event)" />
               <div class="benchmark-sample-control">
                 <div class="benchmark-sample-control__heading">
                   <label class="benchmark-sample-control__label" for="benchmark-sample-size">Sample size</label>
@@ -586,6 +619,10 @@
                 </div>
               </div>
 
+              <app-benchmark-batch-editor [settings]="benchmarkSettings()" [samples]="benchmarkSampleSize()"
+                [worker]="selectedBenchmarkPair()?.provider_type === 'logosnode'" [limits]="benchmarkWorkerLimits()"
+                (planChange)="benchmarkBatch.set($event)" (validChange)="benchmarkBatchValid.set($event)" />
+
               <div class="benchmark-runner__pairs">
                 @for (pair of benchmarkPairs(); track pair.model_provider_id) {
                   <div class="benchmark-pair">
@@ -593,9 +630,9 @@
                       <strong>{{ pair.provider_name }}</strong>
                       <span>{{ pair.model_name }}</span>
                       <div class="benchmark-order-summary" aria-label="Benchmark configuration">
-                        <small>GSM8K</small>
+                        <small>{{ benchmarkSettings().dataset }}</small>
                         <small>{{ benchmarkSampleLabel() }}</small>
-                        <small>512 max tokens</small>
+                        <small>{{ benchmarkSettings().max_output_tokens }} max tokens</small>
                       </div>
                     </div>
 
@@ -607,17 +644,22 @@
                           }
                           {{ benchmarkStatusLabel(run) }}
                         </span>
+                        @if (benchmarkBatchProgress(run); as progress) {
+                          <small aria-live="polite">{{ progress }}</small>
+                          @if (run.result.total_runs) { <progress [value]="run.result.completed_runs ?? 0" [max]="run.result.total_runs" aria-label="Completed benchmark runs"></progress> }
+                        }
                         @if (run.status === 'failed' && run.error_message) {
-                          <small>{{ run.error_message }}</small>
+                          <app-benchmark-run-failure [run]="run" />
                         }
                         @if (isBenchmarkActive(run)) {
                           <button
-                            class="benchmark-delete-button"
+                            class="benchmark-cancel-button"
                             type="button"
                             (click)="cancelBenchmark(run)"
-                            [disabled]="benchmarkCancellingJobId() === run.id"
+                            [disabled]="benchmarkCancellingJobId() !== null"
+                            [attr.aria-label]="'Cancel benchmark on ' + pair.provider_name"
                           >
-                            {{ benchmarkCancellingJobId() === run.id ? 'Cancelling…' : 'Cancel' }}
+                            {{ benchmarkCancellingJobId() === run.id ? 'Cancelling…' : 'Stop benchmark' }}
                           </button>
                         }
                       } @else if (!pair.endpoint_configured) {
@@ -628,25 +670,35 @@
                       }
                     </div>
 
-                    <button
-                      class="benchmark-run-button"
-                      type="button"
-                      (click)="startBenchmark(pair)"
-                      [disabled]="benchmarkStartingPairId() === pair.model_provider_id || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
-                      [attr.title]="!pair.endpoint_configured
-                        ? 'Configure the provider endpoint first'
-                        : 'Run benchmark on ' + pair.provider_name + ' · ' + pair.model_name + ' · ' + benchmarkSampleLabel()"
-                    >
-                      @if (benchmarkStartingPairId() === pair.model_provider_id) {
-                        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-                        Starting…
-                      } @else if (providerHasActiveBenchmark(pair.provider_id)) {
-                        Running…
-                      } @else {
-                        <i class="pi pi-play" aria-hidden="true"></i>
-                        Run benchmark
+                    <div class="benchmark-start-action">
+                      @if (benchmarkConfirmPairId() === pair.model_provider_id) {
+                        <section class="benchmark-start-notice" [id]="'benchmark-notice-' + pair.model_provider_id" aria-label="Confirm benchmark start" (keydown.escape)="benchmarkConfirmPairId.set(null)">
+                          <strong>{{ benchmarkTotalRuns() }} {{ benchmarkTotalRuns() === 1 ? 'run' : 'runs' }} on {{ pair.provider_name }}</strong>
+                          <p>The benchmark runs alongside other requests. Concurrent traffic can affect measured performance.</p>
+                          @if (hasServingOverrides()) { <p>The selected vLLM settings may reload the model and remain active after the run.</p> }
+                          @if (benchmarkBatch()) { <p>Start the entire batch once. No confirmation is needed between runs.</p> }
+                          <button type="button" class="benchmark-cancel-button" (click)="benchmarkConfirmPairId.set(null)">Edit settings</button>
+                        </section>
                       }
-                    </button>
+                      <button
+                        class="benchmark-run-button"
+                        type="button"
+                        (click)="benchmarkConfirmPairId() === pair.model_provider_id ? startBenchmark(pair) : benchmarkConfirmPairId.set(pair.model_provider_id)"
+                        [attr.aria-expanded]="benchmarkConfirmPairId() === pair.model_provider_id"
+                        [attr.aria-controls]="benchmarkConfirmPairId() === pair.model_provider_id ? 'benchmark-notice-' + pair.model_provider_id : null"
+                        [disabled]="selectedBenchmarkPair()?.model_provider_id !== pair.model_provider_id || !benchmarkSettingsValid() || !benchmarkBatchValid() || (hasServingOverrides() && pair.provider_type !== 'logosnode') || benchmarkStartingPairId() !== null || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured"
+                      >
+                        @if (benchmarkStartingPairId() === pair.model_provider_id) {
+                          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Starting…
+                        } @else if (providerHasActiveBenchmark(pair.provider_id)) {
+                          Running…
+                        } @else {
+                          <i class="pi pi-play" aria-hidden="true"></i>
+                          {{ benchmarkConfirmPairId() === pair.model_provider_id ? 'Confirm & start' : benchmarkBatch() ? 'Review & start batch' : 'Review & start benchmark' }}
+                          @if (benchmarkBatch()) { · {{ benchmarkTotalRuns() }} runs }
+                        }
+                      </button>
+                    </div>
                   </div>
                 }
               </div>
@@ -680,6 +732,8 @@
             @if (benchmarkDeleteError(); as error) {
               <app-error-message variant="banner" [message]="error" />
             }
+
+            <app-benchmark-comparison [runs]="performance()" />
 
             <div class="performance-list">
 
@@ -767,6 +821,9 @@
                     </summary>
 
                     <div class="benchmark-configuration__content">
+                      <button type="button" class="benchmark-run-button" (click)="useBenchmarkConfiguration(benchmark)">
+                        Use for next benchmark
+                      </button>
                       <div class="configuration-headings">
                         <h4>GuideLLM benchmark</h4>
                         <div>
@@ -822,6 +879,24 @@
             </div>
 
           }
+
+        }
+
+        <!-- Access -->
+        @case ('access') {
+
+          <app-model-access />
+
+        }
+
+        <!-- Prices -->
+        @case ('prices') {
+
+          <app-model-prices-tab
+            [loading]="pricesLoading()"
+            [hasError]="pricesError()"
+            [cards]="priceProviderCards()"
+          />
 
         }
 

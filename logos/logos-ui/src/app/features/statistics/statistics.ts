@@ -1,7 +1,6 @@
 import {
   Component,
   computed,
-  effect,
   afterRenderEffect,
   ElementRef,
   inject,
@@ -12,21 +11,23 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { ActivatedRoute, Router } from '@angular/router';
+import type { Subscription } from 'rxjs';
 
 import { StatsWebsocketService } from './services/stats-websocket.service';
 
 import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './statistics.constants';
 
 import {
-  aggregateEventsToVolumeSeries,
   applyTimeSeriesLabels,
-  chooseDynamicBucketMs,
   chooseDynamicTargetBuckets,
   extractProviderHostRamMb,
   extractProviderVramMb,
   formatPercent,
   formatRangeLabel,
   formatTokenCount as formatTokenCountValue,
+  isUnifiedMemoryProvider,
+  modelSeriesKey,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -37,7 +38,7 @@ import {
 } from './statistics.utils';
 
 import {
-  TimePreset, calendarRange, periodLabel as periodLabelFn,
+  TimePreset, calendarRange, periodLabel as periodLabelFn, periodRolloverDue,
 } from '../../shared/utils/time-range';
 import { formatUsd } from '../../shared/utils/currency';
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
@@ -48,8 +49,7 @@ import type {
   LaneSignalData,
   RequestItem,
   RequestLogStats,
-  TimelineDeltaPayload,
-  TimelineEnqueueEvent,
+  StatsTab,
   TimelineInitPayload,
   VramProviderMeta,
   VramV2Payload,
@@ -60,7 +60,7 @@ import type {
 import { ChartPanel } from './components/chart-panel/chart-panel';
 import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
-import { LaneVramPieComponent } from './components/lane-vram-pie/lane-vram-pie';
+import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
 import { StatisticsService } from './services/statistics.service';
@@ -69,19 +69,39 @@ import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
-import { VramDonutComponent } from './components/vram-donut/vram-donut';
-import { VramRemainingChartComponent } from './components/vram-remaining-chart/vram-remaining-chart';
+import { VramDonutComponent, type DonutSlice } from './components/vram-donut/vram-donut';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
 const RAW_VRAM_SAMPLE_CAP = 720;
 
-/**
- * Ceiling on the accumulated enqueue events the volume chart re-buckets. Matches
- * the server's own cap on the initial load, so a session that has been open for
- * hours holds no more than a fresh one would.
- */
-const TIMELINE_EVENT_CAP = 200_000;
+/** One Local Providers glass row — everything the panels for a single worker need. */
+type ProviderGlassRow = {
+  name: string;
+  online: boolean;
+  calibrating: boolean;
+  lanes: Record<string, LaneSignalData>;
+  hasLanes: boolean;
+  laneCount: number;
+  totalVramMb: number;
+  freeVramMb: number;
+  modelsLoaded: number;
+  ram: { reported: boolean; totalMb: number; freeMb: number; usedMb: number };
+  hasLaneRam: boolean;
+  /**
+   * True when the worker runs on unified memory (Apple Silicon / Metal): the
+   * page then shows one "Unified memory" panel instead of the VRAM and RAM
+   * pair, which would describe the same pool twice.
+   */
+  unifiedMemory: boolean;
+  /** Pool figures for the unified panel: host RAM when reported, else the
+   *  worker's device memory reading. 0 on non-unified rows. */
+  unifiedTotalMb: number;
+  unifiedFreeMb: number;
+  fallbackVramPie: DonutSlice[];
+  vramUsedGb: number;
+  vramTotalGb: number;
+};
 
 @Component({
   selector: 'app-statistics',
@@ -91,7 +111,7 @@ const TIMELINE_EVENT_CAP = 200_000;
     ChartPanel,
     EmptyState,
     LaneHealthPanel,
-    LaneVramPieComponent,
+    LaneMemoryPieComponent,
     SelectComponent,
     RecentRequests,
     RequestVolumeChartComponent,
@@ -100,7 +120,6 @@ const TIMELINE_EVENT_CAP = 200_000;
     StatusBars,
     StatsSkeletonComponent,
     VramDonutComponent,
-    VramRemainingChartComponent,
     WorkerGpuPanel,
     TimeRangeBarComponent,
   ],
@@ -111,10 +130,73 @@ const TIMELINE_EVENT_CAP = 200_000;
 export class Statistics implements OnInit, OnDestroy {
   private statsWs = inject(StatsWebsocketService);
   private statisticsService = inject(StatisticsService);
+  private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  /**
+   * The page carries two sections that share a websocket but nothing else: the
+   * state of the local providers right now, and request traffic over a chosen
+   * period. They are split because reading them together invites the wrong
+   * conclusion — the time range in the header narrows the request panels and
+   * has no bearing at all on the VRAM, RAM, lane and GPU panels, which always
+   * show the latest sample.
+   *
+   * Only one tab is visible at a time, so the socket declares an interest and
+   * the server pushes just that channel — VRAM while Local Providers is open,
+   * aggregates and the feed while Requests is. Switching tabs re-inits the
+   * newly enabled channel so the panel is not stale.
+   *
+   * The active tab is mirrored into ?tab= so a link points at the section it was
+   * copied from, and each switch is a history entry so Back returns to the tab
+   * it came from.
+   */
+  readonly TABS: ReadonlyArray<{ id: StatsTab; label: string }> = [
+    { id: 'local-providers', label: 'Local Providers' },
+    { id: 'requests', label: 'Requests' },
+  ];
+  readonly activeTab = signal<StatsTab>('local-providers');
+
+  setActiveTab(tab: StatsTab): void {
+    if (this.activeTab() === tab) return;
+    // The signal is not set here: the query-parameter subscription below owns
+    // it, so a tab reached by Back, by a pasted link or by this click all take
+    // the same path and cannot disagree.
+    this.router.navigate([], {
+      relativeTo: this.route,
+      // The default stays out of the URL rather than decorating every link with
+      // a parameter that changes nothing.
+      queryParams: { tab: tab === 'local-providers' ? null : tab },
+      queryParamsHandling: 'merge',
+    });
+  }
+
+  /** Resolves a ?tab= value, falling back to the default for anything unknown. */
+  private tabFromParam(raw: string | null): StatsTab {
+    return this.TABS.some((t) => t.id === raw) ? (raw as StatsTab) : 'local-providers';
+  }
+
+  /**
+   * Apply a tab from the URL and tell the socket which channel to push.
+   * Loading flags go up for the newly enabled panels so they do not keep
+   * showing numbers from a previous visit while the re-init is in flight.
+   */
+  private applyTab(tab: StatsTab): void {
+    const previous = this.activeTab();
+    this.activeTab.set(tab);
+    if (previous === tab) return;
+    if (tab === 'requests') {
+      this.markRangeChanged();
+    } else {
+      this.isVramLoading.set(true);
+    }
+    this.statsWs.setInterest(tab);
+  }
 
   /** Filter options, loaded once on init. */
   readonly feedUsers = signal<FeedFilterOption[]>([]);
   readonly feedTeams = signal<FeedFilterOption[]>([]);
+  readonly feedProviders = signal<FeedFilterOption[]>([]);
 
   // ── Scope ─────────────────────────────────────────────────────────────────
   // Null on either side means "everyone". The filter lives on the page rather
@@ -127,9 +209,21 @@ export class Statistics implements OnInit, OnDestroy {
   // not be a narrower truth — it would be no data at all.
   readonly filterUserId = signal<number | null>(null);
   readonly filterTeamId = signal<number | null>(null);
+  readonly filterProviderId = signal<number | null>(null);
+  readonly errorsOnly = signal(false);
+
+  // Every loadScopeOptions bumps this; a response that resolves for an older
+  // value is stale — its range or team moved on while the request was in
+  // flight, and applying it would replace the options of the current
+  // selection and could clear a requester the fresh list does contain.
+  private scopeOptionsGeneration = 0;
 
   readonly filterActive = computed(
-    () => this.filterUserId() !== null || this.filterTeamId() !== null,
+    () =>
+      this.filterUserId() !== null ||
+      this.filterTeamId() !== null ||
+      this.filterProviderId() !== null ||
+      this.errorsOnly(),
   );
 
   // Both lists carry their request count, so the dropdown says which entries
@@ -154,6 +248,19 @@ export class Statistics implements OnInit, OnDestroy {
     })),
   ]);
 
+  readonly providerFilterOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'All providers' },
+    ...this.feedProviders().map((p) => ({
+      value: String(p.id),
+      label: `${p.label} (${p.requestCount.toLocaleString()})`,
+    })),
+  ]);
+
+  readonly outcomeFilterOptions: AppSelectOption[] = [
+    { value: '', label: 'All outcomes' },
+    { value: 'errors', label: 'Errors only' },
+  ];
+
   /**
    * Nobody in the selected team sent anything in this range, so the requester
    * dropdown has nothing but its "everyone" entry. Worth saying outright — an
@@ -173,6 +280,13 @@ export class Statistics implements OnInit, OnDestroy {
     return id === null ? '' : String(id);
   });
 
+  readonly selectedProviderValue = computed(() => {
+    const id = this.filterProviderId();
+    return id === null ? '' : String(id);
+  });
+
+  readonly selectedOutcomeValue = computed(() => (this.errorsOnly() ? 'errors' : ''));
+
   /** What the active filter narrows to, for the label above the KPI strip. */
   readonly filterLabel = computed(() => {
     const parts: string[] = [];
@@ -184,8 +298,24 @@ export class Statistics implements OnInit, OnDestroy {
     if (userId !== null) {
       parts.push(this.feedUsers().find((u) => u.id === userId)?.label ?? `user ${userId}`);
     }
+    const providerId = this.filterProviderId();
+    if (providerId !== null) {
+      parts.push(
+        this.feedProviders().find((p) => p.id === providerId)?.label ?? `provider ${providerId}`,
+      );
+    }
+    if (this.errorsOnly()) parts.push('errors only');
     return parts.join(' · ');
   });
+
+  private currentScope() {
+    return {
+      userId: this.filterUserId(),
+      teamId: this.filterTeamId(),
+      providerId: this.filterProviderId(),
+      errorsOnly: this.errorsOnly(),
+    };
+  }
 
   // ── Request feed state filter ───────────────────────────────────────────────
   // One lifecycle bucket the recent-requests list is narrowed to; null shows
@@ -235,8 +365,6 @@ export class Statistics implements OnInit, OnDestroy {
   readonly vramProviderMetaByName = signal<Record<string, VramProviderMeta>>({});
   readonly devicesByProvider = signal<Record<string, DeviceInfo[]>>({});
   readonly latestRequests = signal<RequestItem[]>([]);
-  readonly timelineEvents = signal<TimelineEnqueueEvent[]>([]);
-  readonly selectedVramProvider = signal<string | null>(null);
   readonly customRange = signal<{ start: Date; end: Date } | null>(null);
   readonly error = signal<string | null>(null);
   readonly vramError = signal<string | null>(null);
@@ -250,13 +378,24 @@ export class Statistics implements OnInit, OnDestroy {
   // ── Preset / time-range-bar state ─────────────────────────────────────────────
   readonly preset = signal<TimePreset>('30d');
   readonly offset = signal(0);
-  readonly presetRange = computed(() => calendarRange(this.preset(), this.offset()));
+  /**
+   * The instant the calendar range on screen was resolved. `presetRange`
+   * resolves from this instead of from "now at first read", so the page
+   * remembers which period it is showing and can notice when the period
+   * moves out from under it — see `handleCalendarRollover`.
+   */
+  private readonly rangeAnchorMs = signal(Date.now());
+  readonly presetRange = computed(() =>
+    calendarRange(this.preset(), this.offset(), new Date(this.rangeAnchorMs())),
+  );
   readonly periodLabel = computed(() =>
     periodLabelFn(this.preset(), this.offset(), this.presetRange()),
   );
 
   // Internal: stored timeline range for derived series
   private timelineRangeMs: { startMs: number; endMs: number; bucketMs: number } | null = null;
+  /** Bucket width the volume chart uses for explicit range labels. */
+  readonly volumeBucketMs = signal(0);
   private hasResolvedStats = false;
 
   /**
@@ -271,6 +410,7 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Ticker ────────────────────────────────────────────────────────────────────
   private nowInterval: ReturnType<typeof setInterval> | null = null;
+  private routeSub: Subscription | null = null;
 
   // ── wsTimelineConfig ─────────────────────────────────────────────────────────
   readonly wsTimelineConfig = computed(() => {
@@ -285,7 +425,7 @@ export class Statistics implements OnInit, OnDestroy {
       startDate = r.currStart;
       // currEnd is the exclusive next-period midnight (e.g. Jul 1 for June).
       // Cap at now so we don't request future buckets, and subtract 1ms so
-      // the backend doesn't include a stray midnight bucket from the next period.
+      // the application server doesn't include a stray midnight bucket from the next period.
       endDate = new Date(Math.min(r.currEnd.getTime() - 1, Date.now()));
     }
     const spanMs = Math.max(endDate.getTime() - startDate.getTime(), 60 * 1000);
@@ -297,31 +437,6 @@ export class Statistics implements OnInit, OnDestroy {
   });
 
   // ── Provider derivations ──────────────────────────────────────────────────────
-
-  readonly vramProviders = computed(() => Object.keys(this.vramRawDataByProvider()).sort());
-
-  readonly vramProviderOptions = computed<AppSelectOption[]>(() =>
-    this.vramProviders().map((p) => ({
-      value: p,
-      label: this._isProviderOnline(p) ? p : `${p} (offline)`,
-    })),
-  );
-
-  readonly latestVramSample = computed<VramV2Sample | null>(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return null;
-    const rawSeries = this.vramRawDataByProvider()[prov] || [];
-    if (!rawSeries.length) return null;
-    const raw = rawSeries[rawSeries.length - 1];
-    if (!raw?.timestamp) return null;
-    return raw as VramV2Sample;
-  });
-
-  readonly latestVramPoint = computed(() => {
-    const raw = this.latestVramSample();
-    if (!raw) return null;
-    return toVramSeriesPoint(raw, new Date(raw.timestamp).getTime());
-  });
 
   readonly lanesByProvider = computed<Record<string, Record<string, LaneSignalData>>>(() => {
     const result: Record<string, Record<string, LaneSignalData>> = {};
@@ -445,173 +560,81 @@ export class Statistics implements OnInit, OnDestroy {
     };
   });
 
-  readonly selectedProviderLanes = computed<Record<string, LaneSignalData>>(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return {};
-    return this.lanesByProvider()[prov] ?? {};
-  });
-
-  readonly selectedProviderTotalVramMb = computed(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return 0;
-    return extractProviderVramMb(this.latestSampleByProvider()[prov]).totalMb;
-  });
-
-  readonly hasSelectedProviderLanes = computed(
-    () => Object.keys(this.selectedProviderLanes()).length > 0,
-  );
-
-  readonly selectedProviderFreeVramMb = computed(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return 0;
-    return extractProviderVramMb(this.latestSampleByProvider()[prov]).freeMb;
-  });
-
   /**
-   * Badge text for the selected provider's free VRAM, or null when there is no
-   * sample to report. A provider whose memory is exhausted legitimately reports
-   * 0 MB free, so absence has to be the missing sample rather than the value —
-   * gating the badge on `> 0` hid exactly the state worth seeing.
+   * One glass row per local provider, online-first then alphabetical.
+   *
+   * The Local Providers tab used to pick a single provider from a dropdown;
+   * every provider is shown at once now so the page just scrolls.
    */
-  readonly selectedProviderFreeVramLabel = computed<string | null>(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return null;
-    const sample = this.latestSampleByProvider()[prov];
-    if (!sample) return null;
-    return `${(extractProviderVramMb(sample).freeMb / 1024).toFixed(1)} GB free`;
-  });
+  readonly providerGlassRows = computed<ProviderGlassRow[]>(() => {
+    const latestByProvider = this.latestSampleByProvider();
+    const lanesByProvider = this.lanesByProvider();
+    const metaByName = this.vramProviderMetaByName();
 
-  readonly vramPieData = computed(() => {
-    const pt = this.latestVramPoint();
-    const usedGb = pt?.used_vram_gb ?? 0;
-    const remainingGb = pt?.remaining_vram_gb ?? 0;
-    const totalGb = pt?.total_vram_gb ?? usedGb + remainingGb;
-    if (totalGb <= 0) return [];
+    const names = Object.keys(latestByProvider).sort((a, b) => {
+      const aOnline = this._isProviderOnline(a);
+      const bOnline = this._isProviderOnline(b);
+      if (aOnline !== bOnline) return aOnline ? -1 : 1;
+      return a.localeCompare(b);
+    });
 
-    const reportedModels = pt?.loaded_models ?? [];
-    const rawModelSlices = reportedModels
-      .map((model, index) => ({
-        value: Number(model.size_gb || 0),
-        color: seriesColor(index),
-        text: model.name,
-      }))
-      .filter((slice) => slice.value > 0);
+    return names.map((name) => {
+      const sample = latestByProvider[name];
+      const lanes = lanesByProvider[name] ?? {};
+      const vram = extractProviderVramMb(sample);
+      const ram = extractProviderHostRamMb(sample);
+      const point = sample?.timestamp
+        ? toVramSeriesPoint(sample, new Date(sample.timestamp).getTime())
+        : null;
+      const modelsLoaded = point?.models_loaded ?? point?.loaded_models?.length ?? 0;
+      const unifiedMemory = isUnifiedMemoryProvider(sample);
 
-    const attributedUsedGb = rawModelSlices.reduce((sum, s) => sum + s.value, 0);
-    const modelScale =
-      attributedUsedGb > usedGb && attributedUsedGb > 0 ? usedGb / attributedUsedGb : 1;
-    const modelSlices = rawModelSlices.map((slice) => ({
-      ...slice,
-      value: Number((slice.value * modelScale).toFixed(3)),
-    }));
-    const modeledUsedGb = modelSlices.reduce((sum, s) => sum + s.value, 0);
-    const otherUsedGb = Math.max(usedGb - modeledUsedGb, 0);
-
-    return [
-      ...modelSlices,
-      {
-        value: otherUsedGb,
-        color: CHART_ROLE.total,
-        text: modelSlices.length > 0 ? 'Other used' : 'Used',
-      },
-      {
-        value: remainingGb,
-        color: seriesColor(3),
-        text: 'Free',
-      },
-    ].filter((s) => s.value > 0);
-  });
-
-  readonly vramSummary = computed(() => {
-    const pt = this.latestVramPoint();
-    const usedGb = pt?.used_vram_gb ?? 0;
-    const remainingGb = pt?.remaining_vram_gb ?? 0;
-    const totalGb = usedGb + remainingGb;
-    const freePct = totalGb > 0 ? Math.round((remainingGb / totalGb) * 100) : 0;
-    const models = pt?.loaded_models ?? [];
-    const modelPreview =
-      models.length > 0
-        ? `${models
-            .slice(0, 3)
-            .map((m) => m.name)
-            .join(', ')}${models.length > 3 ? ` +${models.length - 3} more` : ''}`
-        : 'No models reported';
-    return {
-      usedGb,
-      remainingGb,
-      totalGb,
-      freePct,
-      modelsLoaded: pt?.models_loaded ?? models.length,
-      modelPreview,
-      models,
-    };
+      return {
+        name,
+        online: this._isProviderOnline(name),
+        calibrating: metaByName[name]?.calibrating === true,
+        lanes,
+        hasLanes: Object.keys(lanes).length > 0,
+        laneCount: Object.keys(lanes).length,
+        totalVramMb: vram.totalMb,
+        freeVramMb: vram.freeMb,
+        modelsLoaded,
+        ram,
+        hasLaneRam: Object.values(lanes).some((l) => typeof l.host_ram_mb === 'number'),
+        unifiedMemory,
+        // The single pool is the host's physical RAM; the device reading is
+        // only a wired-down budget slice of it and serves as the fallback for
+        // workers that predate the host_memory summary.
+        unifiedTotalMb: unifiedMemory ? (ram.reported ? ram.totalMb : vram.totalMb) : 0,
+        unifiedFreeMb: unifiedMemory ? (ram.reported ? ram.freeMb : vram.freeMb) : 0,
+        fallbackVramPie: this._fallbackVramPie(point),
+        vramUsedGb: point?.used_vram_gb ?? 0,
+        vramTotalGb: point?.total_vram_gb ?? (point?.used_vram_gb ?? 0) + (point?.remaining_vram_gb ?? 0),
+      };
+    });
   });
 
   // ── Volume line data ──────────────────────────────────────────────────────────
 
+  /**
+   * The request-volume series, taken as-is from the server's bucketed
+   * aggregate.
+   *
+   * It used to be re-derived in the browser from the raw enqueue events of
+   * every request in the range. That was wrong at production scale: the server
+   * capped the event list at 200k rows ordered oldest-first, so any range
+   * holding more than that — the default 30 days holds 417k — lost everything
+   * after the cut. The chart went flat for the most recent 13 days while the
+   * KPI card above it still counted all 417k requests.
+   *
+   * `stats.timeSeries` has neither problem: it is aggregated in the database
+   * over the whole range, it arrives already bucketed, and it costs a few
+   * kilobytes rather than 25 MB.
+   */
   readonly volumeSeries = computed(() => {
-    const s = this.stats();
-    if (!s?.timeSeries) {
+    const series = this.stats()?.timeSeries;
+    if (!series?.length) {
       return { totalLineData: [], cloudLineData: [], localLineData: [] };
-    }
-
-    const tsSeries = s.timeSeries;
-    const cr = this.customRange();
-
-    const fallbackStart = tsSeries[0]?.timestamp ?? Date.now() - 30 * 24 * 3600 * 1000;
-    const fallbackEnd = tsSeries[tsSeries.length - 1]?.timestamp ?? Date.now();
-    const rangeStartMs = cr
-      ? cr.start.getTime()
-      : Math.min(this.timelineRangeMs?.startMs ?? fallbackStart, fallbackStart);
-    const rangeEndMs = cr
-      ? cr.end.getTime()
-      : Math.max(this.timelineRangeMs?.endMs ?? fallbackEnd, fallbackEnd);
-
-    if (
-      !Number.isFinite(rangeStartMs) ||
-      !Number.isFinite(rangeEndMs) ||
-      rangeEndMs <= rangeStartMs
-    ) {
-      return { totalLineData: [], cloudLineData: [], localLineData: [] };
-    }
-
-    const bucketMs = chooseDynamicBucketMs(rangeEndMs - rangeStartMs);
-    const events = this.timelineEvents();
-    let series: RequestLogStats['timeSeries'] = [];
-
-    if (events.length > 0) {
-      series = aggregateEventsToVolumeSeries(events, rangeStartMs, rangeEndMs, bucketMs);
-    } else {
-      const alignedStart = Math.floor(rangeStartMs / bucketMs) * bucketMs;
-      const alignedEnd = Math.ceil(rangeEndMs / bucketMs) * bucketMs;
-      const buckets = new Map<number, { total: number; cloud: number; local: number }>();
-      for (let ts = alignedStart; ts <= alignedEnd; ts += bucketMs) {
-        buckets.set(ts, { total: 0, cloud: 0, local: 0 });
-      }
-      for (const point of tsSeries) {
-        if (point.timestamp < alignedStart || point.timestamp > alignedEnd) continue;
-        const bucketTs = Math.floor(point.timestamp / bucketMs) * bucketMs;
-        const current = buckets.get(bucketTs) || { total: 0, cloud: 0, local: 0 };
-        current.total += point.total || 0;
-        current.cloud += point.cloud || 0;
-        current.local += point.local || 0;
-        buckets.set(bucketTs, current);
-      }
-      series = applyTimeSeriesLabels(
-        Array.from(buckets.entries())
-          .map(([timestamp, v]) => ({
-            timestamp,
-            label: '',
-            total: v.total,
-            cloud: v.cloud,
-            local: v.local,
-            avgRunSeconds: null,
-            avgVram: null,
-          }))
-          .sort((a, b) => a.timestamp - b.timestamp),
-        new Date(alignedStart),
-        new Date(alignedEnd),
-      );
     }
 
     return {
@@ -638,7 +661,7 @@ export class Statistics implements OnInit, OnDestroy {
 
       const byModel: Record<string, Map<number, number>> = {};
       for (const entry of mts) {
-        const key = String(entry.modelId);
+        const key = modelSeriesKey(entry.modelId, entry.modelName);
         if (!byModel[key]) byModel[key] = new Map();
         const ts = entry.timestamp;
         if (bucketSet.has(ts)) {
@@ -660,8 +683,8 @@ export class Statistics implements OnInit, OnDestroy {
       }
 
       const result: Record<string, Array<{ value: number; timestamp: number }>> = {};
-      for (const [modelId, bucketMap] of Object.entries(byModel)) {
-        result[modelId] = bucketTimestamps.map((ts) => ({
+      for (const [key, bucketMap] of Object.entries(byModel)) {
+        result[key] = bucketTimestamps.map((ts) => ({
           value: bucketMap.get(ts) || 0,
           timestamp: ts,
         }));
@@ -671,21 +694,33 @@ export class Statistics implements OnInit, OnDestroy {
   );
 
   readonly modelLabelById = computed<Record<string, string>>(() => {
-    const nameById: Record<string, string> = {};
+    const nameByKey: Record<string, string> = {};
+    const idByKey: Record<string, number | null> = {};
     for (const m of this.stats()?.modelBreakdown ?? []) {
-      nameById[String(m.modelId)] = m.modelName;
+      const key = modelSeriesKey(m.modelId, m.modelName);
+      nameByKey[key] = m.modelName;
+      idByKey[key] = m.modelId;
     }
     for (const e of this.stats()?.modelTimeSeries ?? []) {
-      const key = String(e.modelId);
-      if (!(key in nameById)) nameById[key] = e.modelName;
+      const key = modelSeriesKey(e.modelId, e.modelName);
+      if (!(key in nameByKey)) {
+        nameByKey[key] = e.modelName;
+        idByKey[key] = e.modelId;
+      }
     }
     const nameCount: Record<string, number> = {};
-    for (const name of Object.values(nameById)) {
+    for (const name of Object.values(nameByKey)) {
       nameCount[name] = (nameCount[name] || 0) + 1;
     }
     const labels: Record<string, string> = {};
-    for (const [id, name] of Object.entries(nameById)) {
-      labels[id] = (nameCount[name] || 0) > 1 ? `${name} (${id})` : name;
+    for (const [key, name] of Object.entries(nameByKey)) {
+      // The name is shared by more than one series — a live model that
+      // re-took the name of a deleted one. Suffix the live entry with its id;
+      // the deleted entry is already recognized by its trash icon (legend)
+      // and its "(deleted)" suffix (model share donut), so it stays bare.
+      labels[key] = (nameCount[name] || 0) > 1 && idByKey[key] != null
+        ? `${name} (${idByKey[key]})`
+        : name;
     }
     return labels;
   });
@@ -694,12 +729,25 @@ export class Statistics implements OnInit, OnDestroy {
     const breakdown = this.stats()?.modelBreakdown ?? [];
     const map: Record<string, string> = {};
     breakdown.forEach((m, idx) => {
-      map[String(m.modelId)] = seriesColor(idx);
+      map[modelSeriesKey(m.modelId, m.modelName)] = seriesColor(idx);
     });
-    Object.keys(this.modelSeriesMap()).forEach((id) => {
-      if (!map[id]) map[id] = seriesColor(Object.keys(map).length);
+    Object.keys(this.modelSeriesMap()).forEach((key) => {
+      if (!map[key]) map[key] = seriesColor(Object.keys(map).length);
     });
     return map;
+  });
+
+  /**
+   * The keys of series whose model no longer exists. The per-model charts mark
+   * those entries as deleted (trash icon in the legend, "(deleted)" in the
+   * donut), so the user can tell old usage from a model that is still there.
+   */
+  readonly modelDeletedKeys = computed<Set<string>>(() => {
+    const keys = new Set<string>();
+    for (const m of this.stats()?.modelBreakdown ?? []) {
+      if (m.modelId == null) keys.add(modelSeriesKey(m.modelId, m.modelName));
+    }
+    return keys;
   });
 
   // ── Distribution pie data ─────────────────────────────────────────────────────
@@ -722,17 +770,21 @@ export class Statistics implements OnInit, OnDestroy {
       .filter((m) => m.total > 0)
       .sort((a, b) => b.total - a.total);
 
+    const deletedSuffix = (key: string) => (this.modelDeletedKeys().has(key) ? ' (deleted)' : '');
     if (windowed.length === 0) {
-      return (this.stats()?.modelBreakdown ?? []).map((m) => ({
-        value: m.requestCount,
-        color: this.modelColors()[String(m.modelId)] || seriesColor(0),
-        text: this.modelLabelById()[String(m.modelId)] || m.modelName,
-      }));
+      return (this.stats()?.modelBreakdown ?? []).map((m) => {
+        const key = modelSeriesKey(m.modelId, m.modelName);
+        return {
+          value: m.requestCount,
+          color: this.modelColors()[key] || seriesColor(0),
+          text: (this.modelLabelById()[key] || m.modelName) + deletedSuffix(key),
+        };
+      });
     }
     return windowed.map((m) => ({
       value: m.total,
       color: this.modelColors()[m.id] || seriesColor(0),
-      text: this.modelLabelById()[m.id] || m.id,
+      text: (this.modelLabelById()[m.id] || m.id) + deletedSuffix(m.id),
     }));
   });
 
@@ -804,14 +856,6 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Lane KPI helpers ──────────────────────────────────────────────────────────
 
-  readonly totalLanesAcrossProviders = computed(() => {
-    let count = 0;
-    for (const lanes of Object.values(this.onlineLanesByProvider())) {
-      count += Object.keys(lanes).length;
-    }
-    return count;
-  });
-
   readonly allLanesForKpi = computed(() =>
     Object.values(this.onlineLanesByProvider()).flatMap((p) => Object.values(p)),
   );
@@ -838,39 +882,9 @@ export class Statistics implements OnInit, OnDestroy {
   readonly STATUS_COLOR = STATUS_COLOR;
   readonly seriesColor = seriesColor;
 
-  // ── Provider-selection auto-ranking effect ────────────────────────────────────
+  // ── Tooltip positioning ───────────────────────────────────────────────────────
 
   constructor() {
-    effect(() => {
-      const providers = this.vramProviders();
-      if (!providers.length) {
-        this.selectedVramProvider.set(null);
-        return;
-      }
-      const source = this.vramRawDataByProvider();
-      const meta = this.vramProviderMetaByName();
-
-      const ranked = [...providers].sort((left, right) => {
-        const leftMeta = meta[left];
-        const rightMeta = meta[right];
-        const leftConnected =
-          leftMeta?.connection_state !== 'offline' && leftMeta?.connected !== false;
-        const rightConnected =
-          rightMeta?.connection_state !== 'offline' && rightMeta?.connected !== false;
-        const leftHasSamples = (source[left] || []).length > 0;
-        const rightHasSamples = (source[right] || []).length > 0;
-        const leftScore = (leftHasSamples ? 2 : 0) + (leftConnected ? 1 : 0);
-        const rightScore = (rightHasSamples ? 2 : 0) + (rightConnected ? 1 : 0);
-        if (leftScore !== rightScore) return rightScore - leftScore;
-        return left.localeCompare(right);
-      });
-
-      const current = this.selectedVramProvider();
-      if (!current || !providers.includes(current)) {
-        this.selectedVramProvider.set(ranked[0]);
-      }
-    });
-
     // Position the chart hover tooltip near the cursor, then clamp it inside the
     // viewport so it is always fully visible (critical on narrow mobile screens).
     afterRenderEffect(() => {
@@ -900,26 +914,39 @@ export class Statistics implements OnInit, OnDestroy {
   // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
   ngOnInit(): void {
+    // Subscribed, not read once: Angular reuses this component for a
+    // query-parameter navigation, so a snapshot read in ngOnInit would leave
+    // the URL naming one tab while the page still showed the other.
+    // Interest is declared on connect from the first resolved tab, and every
+    // later change goes through applyTab so Back / a pasted link / a click
+    // all re-gate the socket the same way.
+    const initialTab = this.tabFromParam(this.route.snapshot.queryParamMap.get('tab'));
+    this.activeTab.set(initialTab);
+    this.routeSub = this.route.queryParamMap.subscribe((params) => {
+      this.applyTab(this.tabFromParam(params.get('tab')));
+    });
+
     const cfg = this.wsTimelineConfig();
     this.statsWs.connect({
       vramDayOffset: -1, // web path → vram_day = 'all'
       timeline: cfg,
-      // Enabled: without the deltas the volume chart is drawn once from the
-      // events of the initial load and then never moves again.
-      timelineDeltas: true,
-      scope: { userId: this.filterUserId(), teamId: this.filterTeamId() },
+      scope: this.currentScope(),
       feedStatus: this.feedStatus(),
+      interest: this.activeTab(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
         onVramDelta: (p) => this.handleVramWsDeltaV2(p),
         onTimelineInit: (p) => this.handleTimelineInitV2(p),
-        onTimelineDelta: (p) => this.handleTimelineDeltaV2(p),
         onStats: (p) => this.handleStatsRefreshV2(p),
         onRequestsData: (p) => this.handleRequestsWsData(p),
       },
     });
 
-    this.nowInterval = setInterval(() => this.nowMs.set(Date.now()), 30_000);
+    this.nowInterval = setInterval(() => {
+      const now = Date.now();
+      this.nowMs.set(now);
+      this.handleCalendarRollover(now);
+    }, 30_000);
     void this.loadScopeOptions();
   }
 
@@ -931,6 +958,7 @@ export class Statistics implements OnInit, OnDestroy {
     if (next === this.filterUserId()) return;
     this.filterUserId.set(next);
     this.applyScope();
+    void this.loadScopeOptions();
   }
 
   /**
@@ -949,10 +977,29 @@ export class Statistics implements OnInit, OnDestroy {
     void this.loadScopeOptions();
   }
 
+  setProviderFilter(value: string | null): void {
+    const id = value ? Number(value) : null;
+    const next = Number.isFinite(id as number) ? id : null;
+    if (next === this.filterProviderId()) return;
+    this.filterProviderId.set(next);
+    this.applyScope();
+    void this.loadScopeOptions();
+  }
+
+  setErrorsOnlyFilter(value: string | null): void {
+    const next = value === 'errors';
+    if (next === this.errorsOnly()) return;
+    this.errorsOnly.set(next);
+    this.applyScope();
+    void this.loadScopeOptions();
+  }
+
   clearFilter(): void {
     if (!this.filterActive()) return;
     this.filterUserId.set(null);
     this.filterTeamId.set(null);
+    this.filterProviderId.set(null);
+    this.errorsOnly.set(false);
     this.applyScope();
     void this.loadScopeOptions();
   }
@@ -965,7 +1012,7 @@ export class Statistics implements OnInit, OnDestroy {
    */
   private applyScope(): void {
     this.markRangeChanged();
-    this.statsWs.setScope({ userId: this.filterUserId(), teamId: this.filterTeamId() });
+    this.statsWs.setScope(this.currentScope());
   }
 
   /**
@@ -983,11 +1030,27 @@ export class Statistics implements OnInit, OnDestroy {
    */
   private async loadScopeOptions(): Promise<void> {
     const cfg = this.wsTimelineConfig();
-    const teamId = this.filterTeamId();
+    const scope = this.currentScope();
+    // Claim this request before the await: any later range or team change
+    // bumps the counter and supersedes whatever this response still carries.
+    const generation = ++this.scopeOptionsGeneration;
     try {
-      const options = await this.statisticsService.getScopeOptions(cfg.start, cfg.end, teamId);
+      const options = await this.statisticsService.getScopeOptions(cfg.start, cfg.end, {
+        teamId: scope.teamId,
+        userId: scope.userId,
+        providerId: scope.providerId,
+        errorsOnly: scope.errorsOnly,
+      });
+      if (generation !== this.scopeOptionsGeneration) {
+        // A newer request is in flight or already applied — its lists
+        // describe the selection on screen. This one describes the one
+        // before it, and neither its options nor its "the selected requester
+        // is gone" check may touch the current state.
+        return;
+      }
       this.feedTeams.set(options.teams ?? []);
       this.feedUsers.set(options.requesters ?? []);
+      this.feedProviders.set(options.providers ?? []);
 
       // The selected requester may not be in the new list — a different team, or
       // a range they were quiet in. Leaving them selected would hold the page on
@@ -998,6 +1061,11 @@ export class Statistics implements OnInit, OnDestroy {
         this.filterUserId.set(null);
         this.applyScope();
       }
+      const providerId = this.filterProviderId();
+      if (providerId !== null && !this.feedProviders().some((p) => p.id === providerId)) {
+        this.filterProviderId.set(null);
+        this.applyScope();
+      }
     } catch {
       // A failure leaves the dropdowns as they are, which still describes the
       // scope in force. No reason to bother the operator about it.
@@ -1006,6 +1074,8 @@ export class Statistics implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.statsWs.disconnect();
+    this.routeSub?.unsubscribe();
+    this.routeSub = null;
     if (this.nowInterval !== null) {
       clearInterval(this.nowInterval);
       this.nowInterval = null;
@@ -1025,29 +1095,6 @@ export class Statistics implements OnInit, OnDestroy {
     this.statsPending.set(true);
     this.requestsPending.set(true);
   }
-
-  setSelectedVramProvider(name: string | null): void {
-    this.selectedVramProvider.set(name);
-  }
-
-  /**
-   * The user-selected time range in epoch ms — the VRAM-remaining chart
-   * windows its (always-live 'all') samples over this global range instead of
-   * maintaining its own day offset.
-   */
-  readonly selectedTimeRangeMs = computed(() => {
-    const cfg = this.wsTimelineConfig();
-    const cfgEndMs = new Date(cfg.end).getTime();
-    // Follow the ticker while the selection is live. wsTimelineConfig only
-    // recomputes when the preset, offset or zoom changes, so its end is the
-    // instant the range was picked — and the chart drops every sample past its
-    // window end, which would leave the curve standing still on an open page.
-    const nowMs = this.nowMs();
-    return {
-      startMs: new Date(cfg.start).getTime(),
-      endMs: this.isLiveEnd(cfgEndMs, nowMs) ? Math.max(cfgEndMs, nowMs) : cfgEndMs,
-    };
-  });
 
   /**
    * Whether a range end means "up to now" rather than a fixed past instant.
@@ -1075,36 +1122,33 @@ export class Statistics implements OnInit, OnDestroy {
     };
   });
 
-  /**
-   * VRAM samples of the selected provider only. The remaining-VRAM chart sits
-   * in the provider-scoped section, so it shows that provider's curve — every
-   * other panel in that section is scoped the same way.
-   */
-  readonly selectedProviderVramData = computed<Record<string, VramV2Sample[]>>(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return {};
-    const samples = this.vramRawDataByProvider()[prov];
-    return samples ? { [prov]: samples } : {};
-  });
-
-  /** True while the selected provider's worker is running a calibration session. */
-  readonly selectedProviderCalibrating = computed(() => {
-    const prov = this.selectedVramProvider();
-    if (!prov) return false;
-    return this.vramProviderMetaByName()[prov]?.calibrating === true;
-  });
-
   setCustomRange(range: { start: Date; end: Date }): void {
     this.customRange.set(range);
     this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    // The zoomed window holds a different set of requesters and teams than
+    // the range it replaces — and the call supersedes whatever request is
+    // still in flight for the range the operator zoomed away from, so that
+    // stale response can no longer replace the new list or clear a requester
+    // it does not contain.
+    void this.loadScopeOptions();
   }
 
   clearCustomRange(): void {
+    // Back on a preset, the period is resolved from the calendar again —
+    // from *now*, so the anchor that marks the period on screen moves with
+    // it. (Every preset and offset change funnels through here — and the
+    // "back to a preset" button calls this directly, so the dropdown reload
+    // has to live here, not in the callers.)
+    this.rangeAnchorMs.set(Date.now());
     this.customRange.set(null);
     this.resetZoomCounter.update((c) => c + 1);
     this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
+    // Same reason as in setCustomRange: the preset range is a different list
+    // than the custom window it replaces, and the in-flight request for that
+    // window must be superseded.
+    void this.loadScopeOptions();
   }
 
   setPreset(p: TimePreset): void {
@@ -1112,14 +1156,44 @@ export class Statistics implements OnInit, OnDestroy {
     this.offset.set(0);
     this.clearCustomRange();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
-    // The dropdowns list what the range holds, so a different range is a
-    // different list — and possibly one the current selection is not in.
-    void this.loadScopeOptions();
   }
 
   setOffset(o: number): void {
     this.offset.set(o);
     this.clearCustomRange();
+    this.statsWs.setTimelineRange(this.wsTimelineConfig());
+  }
+
+  /**
+   * Re-anchor the range once the period it names has moved on.
+   *
+   * The range is resolved from the calendar when it is picked and then it
+   * sits: the server deliberately keeps the start where the preset put it and
+   * only slides the end to now, so a page that stays open across midnight
+   * keeps counting the previous day's requests under a header that still
+   * says "Today" — the counters never start the new day at zero.
+   *
+   * The page's ticker is its only clock, so it doubles as the rollover
+   * detector: when the period the preset names at the new instant is not the
+   * one the range was resolved from, the moved range is applied exactly as a
+   * picked one — pending flags up, new range to the server, scope dropdowns
+   * reloaded — and the anchor follows it so the next tick compares against
+   * the new period.
+   */
+  private handleCalendarRollover(nowMs: number): void {
+    if (
+      !periodRolloverDue(
+        this.preset(),
+        this.offset(),
+        this.rangeAnchorMs(),
+        nowMs,
+        this.customRange() !== null,
+      )
+    ) {
+      return;
+    }
+    this.rangeAnchorMs.set(nowMs);
+    this.markRangeChanged();
     this.statsWs.setTimelineRange(this.wsTimelineConfig());
     void this.loadScopeOptions();
   }
@@ -1198,8 +1272,7 @@ export class Statistics implements OnInit, OnDestroy {
       endMs: rangeEnd.getTime(),
       bucketMs,
     };
-
-    this.replaceTimelineEvents(payload.events || []);
+    this.volumeBucketMs.set(bucketMs);
 
     const labeled = applyTimeSeriesLabels(payload.stats.timeSeries || [], rangeStart, rangeEnd);
     this.stats.set({ ...payload.stats, timeSeries: labeled });
@@ -1234,31 +1307,10 @@ export class Statistics implements OnInit, OnDestroy {
       endMs: rangeEnd.getTime(),
       bucketMs: (payload.bucketSeconds || 60) * 1000,
     };
+    this.volumeBucketMs.set(this.timelineRangeMs.bucketMs);
 
     const labeled = applyTimeSeriesLabels(payload.stats.timeSeries || [], rangeStart, rangeEnd);
     this.stats.set({ ...payload.stats, timeSeries: labeled });
-  }
-
-  /**
-   * Newly enqueued requests, appended to the event list the volume chart
-   * re-buckets. Without this the chart would sit still while the counters
-   * beside it moved on every aggregate push.
-   */
-  private handleTimelineDeltaV2(payload: TimelineDeltaPayload): void {
-    if (!payload.events?.length) return;
-    // Same race as the aggregate push: a delta still in flight belongs to the
-    // range being left. `timeline_init` replaces the whole event list anyway.
-    if (this.statsPending()) return;
-    // Range first: `timelineRangeMs` is a plain field, so the series only picks
-    // a new end up when a signal it also reads changes. Appending the events is
-    // that signal — do it second or the chart trails the data by one delta.
-    if (payload.range?.end) {
-      const endMs = new Date(payload.range.end).getTime();
-      if (Number.isFinite(endMs) && this.timelineRangeMs) {
-        this.timelineRangeMs = { ...this.timelineRangeMs, endMs };
-      }
-    }
-    this.appendTimelineEvents(payload.events);
   }
 
   // ── Raw-series updaters ───────────────────────────────────────────────────────
@@ -1287,6 +1339,8 @@ export class Statistics implements OnInit, OnDestroy {
         runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
         last_heartbeat: provider.last_heartbeat,
+        connected_at: provider.connected_at,
+        worker_started_at: provider.worker_started_at,
         calibrating: Boolean(provider.calibrating),
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
@@ -1314,6 +1368,8 @@ export class Statistics implements OnInit, OnDestroy {
         runtime_modes: provider.runtime_modes,
         transport_connected: provider.transport_connected,
         last_heartbeat: provider.last_heartbeat,
+        connected_at: provider.connected_at,
+        worker_started_at: provider.worker_started_at,
         calibrating: Boolean(provider.calibrating),
       };
       const current = prevMeta[provider.name];
@@ -1325,6 +1381,8 @@ export class Statistics implements OnInit, OnDestroy {
         JSON.stringify(current?.runtime_modes || []) === JSON.stringify(meta.runtime_modes || []) &&
         current?.transport_connected === meta.transport_connected &&
         current?.last_heartbeat === meta.last_heartbeat &&
+        current?.connected_at === meta.connected_at &&
+        current?.worker_started_at === meta.worker_started_at &&
         Boolean(current?.calibrating) === meta.calibrating;
       if (!same) {
         if (nextMeta === prevMeta) nextMeta = { ...prevMeta };
@@ -1371,61 +1429,63 @@ export class Statistics implements OnInit, OnDestroy {
     if (next !== prev) this.vramRawDataByProvider.set(next);
   }
 
-  /** Request ids already in `timelineEvents`, so a delta can dedupe in O(1). */
-  private readonly knownEventIds = new Set<string>();
-
-  private replaceTimelineEvents(events: TimelineEnqueueEvent[]): void {
-    const nextMap = new Map<string, TimelineEnqueueEvent>();
-    for (const event of events || []) {
-      if (!event?.request_id || !Number.isFinite(Number(event.timestamp_ms))) continue;
-      nextMap.set(event.request_id, event);
-    }
-    const merged = Array.from(nextMap.values()).sort((a, b) => a.timestamp_ms - b.timestamp_ms);
-    this.knownEventIds.clear();
-    for (const event of merged) this.knownEventIds.add(event.request_id);
-    this.timelineEvents.set(merged);
-  }
-
-  /**
-   * Append delta events to the list the volume chart re-buckets.
-   *
-   * Appended rather than merged and re-sorted: the server hands out deltas from
-   * a cursor that only ever moves forward, starting at the end of the initially
-   * loaded range, so every delta event is newer than everything already here.
-   * That matters at this cadence — re-sorting a list that can hold 200k events
-   * every two seconds would be felt on the UI thread.
-   *
-   * Capped, dropping the oldest: a long session on a busy range would otherwise
-   * grow without bound. Losing the oldest thins out the left edge of the chart
-   * rather than its live end, which is the side being watched, and
-   * `stats.timeSeries` — refreshed alongside — still covers the whole range for
-   * anyone reading totals.
-   */
-  private appendTimelineEvents(events: TimelineEnqueueEvent[]): void {
-    const fresh: TimelineEnqueueEvent[] = [];
-    for (const event of events) {
-      if (!event?.request_id || !Number.isFinite(Number(event.timestamp_ms))) continue;
-      if (this.knownEventIds.has(event.request_id)) continue;
-      this.knownEventIds.add(event.request_id);
-      fresh.push(event);
-    }
-    if (fresh.length === 0) return;
-
-    const current = this.timelineEvents();
-    let next = [...current, ...fresh];
-    if (next.length > TIMELINE_EVENT_CAP) {
-      const dropped = next.slice(0, next.length - TIMELINE_EVENT_CAP);
-      for (const event of dropped) this.knownEventIds.delete(event.request_id);
-      next = next.slice(next.length - TIMELINE_EVENT_CAP);
-    }
-    this.timelineEvents.set(next);
-  }
-
   // ── Helpers ───────────────────────────────────────────────────────────────────
 
   private _isProviderOnline(name: string): boolean {
     const m = this.vramProviderMetaByName()[name];
     return m?.connection_state !== 'offline' && m?.connected !== false;
+  }
+
+  /**
+   * Legacy model-list donut used when a provider has no lane signals yet (older
+   * snapshot shape). Same accounting as the old selected-provider pie.
+   */
+  private _fallbackVramPie(
+    pt: {
+      used_vram_gb?: number;
+      remaining_vram_gb?: number;
+      total_vram_gb?: number;
+      loaded_models?: Array<{ name: string; size_gb: number }>;
+    } | null,
+  ): DonutSlice[] {
+    if (!pt) return [];
+    const usedGb = pt.used_vram_gb ?? 0;
+    const remainingGb = pt.remaining_vram_gb ?? 0;
+    const totalGb = pt.total_vram_gb ?? usedGb + remainingGb;
+    if (totalGb <= 0) return [];
+
+    const reportedModels = pt.loaded_models ?? [];
+    const rawModelSlices = reportedModels
+      .map((model, index) => ({
+        value: Number(model.size_gb || 0),
+        color: seriesColor(index),
+        text: model.name,
+      }))
+      .filter((slice) => slice.value > 0);
+
+    const attributedUsedGb = rawModelSlices.reduce((sum, s) => sum + s.value, 0);
+    const modelScale =
+      attributedUsedGb > usedGb && attributedUsedGb > 0 ? usedGb / attributedUsedGb : 1;
+    const modelSlices = rawModelSlices.map((slice) => ({
+      ...slice,
+      value: Number((slice.value * modelScale).toFixed(3)),
+    }));
+    const modeledUsedGb = modelSlices.reduce((sum, s) => sum + s.value, 0);
+    const otherUsedGb = Math.max(usedGb - modeledUsedGb, 0);
+
+    return [
+      ...modelSlices,
+      {
+        value: otherUsedGb,
+        color: CHART_ROLE.total,
+        text: modelSlices.length > 0 ? 'Other used' : 'Used',
+      },
+      {
+        value: remainingGb,
+        color: seriesColor(3),
+        text: 'Free',
+      },
+    ].filter((s) => s.value > 0);
   }
 
   isProviderOnline = (name: string): boolean => this._isProviderOnline(name);

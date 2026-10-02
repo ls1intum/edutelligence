@@ -1216,7 +1216,7 @@ class _ResumeCtxResolver:
     """The pipeline's context resolver for the scenario: every
     (model, provider) resolves to that provider's vLLM lane."""
 
-    async def resolve_context(self, *, model_id: int, provider_id: int, request_path: str | None = None):
+    async def resolve_context(self, *, model_id: int, provider_id: int, request_path: str | None = None, request_id=None, deployment_info=None):
         return _resume_context(model_id, provider_id)
 
 
@@ -1229,7 +1229,7 @@ class _BlockingResumeCtxResolver:
         self.calls = 0
         self.block = asyncio.Event()
 
-    async def resolve_context(self, *, model_id: int, provider_id: int, request_path: str | None = None):
+    async def resolve_context(self, *, model_id: int, provider_id: int, request_path: str | None = None, request_id=None, deployment_info=None):
         self.calls += 1
         if self.calls == 2:
             await self.block.wait()
@@ -2140,6 +2140,10 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
         try:
             yield b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'
             yield b'data: {"id":"c2","choices":[{"delta":{"content":" there"}}]}\n\n'
+            # Stay open like a real worker stream (which waits for stream_end)
+            # until the consumer closes it. Ending here would let the arrival
+            # pump exhaust it before the disconnect this test is about.
+            await asyncio.Event().wait()
         finally:
             # Stands in for the real cleanup, which sends `cancel_command`.
             closed.set()
@@ -2161,7 +2165,7 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -2219,6 +2223,7 @@ async def test_an_abandoned_response_reaches_the_worker_as_a_cancellation(monkey
                 provider_type="logosnode",
                 lane_id="lane-1",
                 anthropic_dialect=None,
+                messages_upstream=False,
             ),
             {"messages": [{"role": "user", "content": "hi"}]},
             42,
@@ -2322,7 +2327,13 @@ async def test_a_worker_that_cannot_cancel_is_counted_separately():
 # ---------------------------------------------------------------------------
 
 
-async def _run_streamer(monkeypatch, *, abandon_after: int | None, chunks: list[bytes] | None = None):
+async def _run_streamer(
+    monkeypatch,
+    *,
+    abandon_after: int | None,
+    chunks: list[bytes] | None = None,
+    provider_response_calls: list | None = None,
+):
     from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline
 
     import logos as main
@@ -2352,11 +2363,14 @@ async def _run_streamer(monkeypatch, *, abandon_after: int | None, chunks: list[
         raising=False,
     )
     completion_calls: list[dict] = []
-    pipeline, _c, _r = _make_pipeline(completion_calls=completion_calls)
+    pipeline, _c, _r = _make_pipeline(
+        completion_calls=completion_calls,
+        provider_response_calls=provider_response_calls,
+    )
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -2399,10 +2413,24 @@ async def test_a_stream_the_client_walked_away_from_is_not(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_closing_after_done_is_a_success(monkeypatch):
-    """GuideLLM closes after [DONE]; that is completion, not a disconnect."""
-    calls = await _run_streamer(monkeypatch, abandon_after=3)
+    """GuideLLM closes after [DONE]; that is completion, not a disconnect.
+
+    Closing the generator at the terminal-frame yield must still persist the
+    provider-response stamp (the captured last-chunk arrival), or statistics
+    fall back to completion time and include post-provider billing delay.
+    """
+    provider_response_calls: list = []
+    calls = await _run_streamer(
+        monkeypatch,
+        abandon_after=3,
+        provider_response_calls=provider_response_calls,
+    )
     assert calls[-1]["result_status"] == "success"
     assert calls[-1]["error_message"] is None
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-stream"
+    assert at is not None, "closing after [DONE] must preserve the response stamp"
 
 
 @pytest.mark.asyncio

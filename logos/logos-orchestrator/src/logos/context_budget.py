@@ -29,7 +29,7 @@ from typing import Any, Iterator, Optional
 # slightly above the true count for prose while dropping the ~20 % overshoot
 # that 3.0 produced on agent payloads. That overshoot once pushed a request
 # that fit its 256k window over the estimate's limit and 404'd the whole
-# model out of routing (#810) — so the estimate must track the traffic it
+# model out of routing  — so the estimate must track the traffic it
 # actually sees, not a worst case.
 CHARS_PER_TOKEN = 3.5
 

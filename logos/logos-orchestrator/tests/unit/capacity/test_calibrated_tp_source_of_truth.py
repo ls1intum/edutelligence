@@ -1,4 +1,4 @@
-"""The calibrated tensor_parallel_size is the single source of truth (issue #616).
+"""The calibrated tensor_parallel_size is the single source of truth.
 
 The size-vs-VRAM inference reads ``base_residency_mb`` against one GPU's 85%
 threshold. For a calibrated profile that value is the FULL awake footprint
@@ -73,9 +73,8 @@ def test_infer_still_infers_for_uncalibrated_profiles() -> None:
 def test_load_params_keep_a_calibrated_tp1_on_one_gpu() -> None:
     """The lane request must not carry an inferred TP for a calibrated TP=1.
 
-    This is the upstream half of issue #616: the orchestrator sent tp=2 for
-    Phi-4-reasoning because it re-inferred off the full-footprint base
-    residency, and the worker then persisted tp=2 over the calibrated profile.
+    The orchestrator must send tp=1 for Phi-4-reasoning rather than re-infer
+    from the full-footprint base residency.
     """
     planner = _planner()
     planner._registry = _FakeRegistry(device_count=2)  # noqa: SLF001

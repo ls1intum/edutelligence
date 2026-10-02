@@ -5,9 +5,8 @@ decode uploads through ``vllm.multimodal.media.audio.load_audio``, which has
 exactly two backends and both are optional: ``soundfile`` (primary) and
 ``av``/PyAV (fallback, and the resampler to Whisper's 16 kHz). They ship solely
 in vLLM's ``[audio]`` extra, so a pin without it turns *every* transcription
-request into the same opaque 400, "Invalid or unsupported audio file." — the
-failure mode of issue #925, which stood from the day Whisper support landed
-because the pin never carried the extra.
+request into the same opaque 400, "Invalid or unsupported audio file." because
+the pin does not carry the required extra.
 
 The pin is not only hand-edited: ``.github/workflows/logos_update-vllm.yml``
 rewrites it on every vLLM release. These tests therefore cover both halves of

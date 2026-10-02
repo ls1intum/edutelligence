@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import socket
+import time
 from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Awaitable, Callable, Iterable
 
 from logos_worker_node import prometheus_metrics as prom
-from logos_worker_node.calibration import calibration_gpu_slice
+from logos_worker_node.calibration import select_calibration_gpus
 from logos_worker_node.host_ram import measure_process_tree_host_ram_mb
 from logos_worker_node.metal import is_metal_backend
 from logos_worker_node.metal_process import MetalVllmProcessHandle
-from logos_worker_node.model_profiles import ModelProfileRegistry
+from logos_worker_node.model_profiles import ModelProfileRegistry, reconfigured_vram_mb
 from logos_worker_node.models import (
     DeviceSummary,
     LaneAction,
@@ -34,7 +36,7 @@ from logos_worker_node.vllm_process import VllmProcessHandle, effective_gmu
 
 logger = logging.getLogger("logos_worker_node.lane_manager")
 
-# Type for the backend process handle (vLLM is the only engine)
+# Type for the application server process handle (vLLM is the only engine)
 ProcessHandle = VllmProcessHandle
 
 _DEFAULT_PORT_START = 11436
@@ -350,6 +352,36 @@ class LaneManager:
         self._starting_deadlines: dict[str, float] = {}
         self._status_revision = 0
         self._status_event = asyncio.Event()
+        # Separate revision for in-flight count changes. The bridge refresh
+        # loop must learn about every increment/decrement (the orchestrator's
+        # per-snapshot forward budget resets only on a new status push), but a
+        # count change is NOT a lifecycle change: waking the loop must not
+        # trigger a full-node status build (all lanes, all probes) — that is
+        # the exact cost W3 removed from the hot path. The loop reacts to a
+        # count bump by patching the last payload in memory .
+        self._count_revision = 0
+        # Per-lane status TTL cache for the request hot path (acquire_lane_
+        # for_infer). A status build costs three HTTP probes against the lane
+        # (loaded models, metrics, sleep state); before this, EVERY request
+        # paid that. Entries expire after _lane_status_ttl_seconds and any
+        # lifecycle event clears the whole cache via _mark_status_dirty, so
+        # only steady-state re-acquires of an unchanged lane are served from
+        # cache. 0 disables the cache (legacy per-call build).
+        try:
+            _lane_status_ttl = float(os.getenv("LOGOS_LANE_STATUS_TTL_S") or 1.0)
+        except (TypeError, ValueError):
+            _lane_status_ttl = 1.0
+        if _lane_status_ttl <= 0:
+            # 0 (or negative) explicitly disables the cache (legacy behavior).
+            _lane_status_ttl = 0.0
+        elif not math.isfinite(_lane_status_ttl):
+            # inf/nan would keep cached lane statuses forever (until a
+            # lifecycle event clears the cache) — treat as invalid and fall
+            # back to the default TTL.
+            _lane_status_ttl = 1.0
+        self._lane_status_ttl_seconds = _lane_status_ttl
+        # lane_id -> (built_at monotonic, LaneStatus)
+        self._lane_status_cache: dict[str, tuple[float, LaneStatus]] = {}
         self._model_profiles = model_profiles
         self._last_profile_state: dict[str, str] = {}
         # Stuck-inference detection: track BOTH prompt_tokens_total and
@@ -381,7 +413,7 @@ class LaneManager:
         self._last_crash_restart_attempt_at: dict[str, float] = {}
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
-        # GPUs held by a running calibration session (issue #592). Non-None while
+        # GPUs held by a running calibration session. Non-None while
         # a session is live: auto-placement must not put new lanes on these GPUs
         # and an explicit lane targeting them is refused, so the calibration's
         # probe keeps the slice's VRAM to itself. Leftover GPUs stay placeable.
@@ -453,7 +485,7 @@ class LaneManager:
         for model_name in capabilities_models:
             # Check HF cache (transformers style: models--org--name)
             hf_cache_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
-            # Check direct model path (ollama-style models dir, and — on
+            # Check direct model path (legacy models directory, and — on
             # backends with their own cache root — a model dir placed there)
             checked = [os.path.join(models_path, model_name)]
             if cache_root:
@@ -489,7 +521,7 @@ class LaneManager:
         return lane_id in self._static_lane_ids
 
     # ------------------------------------------------------------------
-    # Calibration session (issue #592)
+    # Calibration session
     # ------------------------------------------------------------------
 
     @property
@@ -497,21 +529,45 @@ class LaneManager:
         """GPUs held by a running calibration session, or ``None`` when idle."""
         return self._calibration_gpu_subset
 
-    def begin_calibration_session(self) -> frozenset[int]:
-        """Hold the node's largest power-of-two GPU slice for a calibration run.
+    def _busy_gpu_indices(self) -> frozenset[int]:
+        """GPU indices touched by any currently running vLLM lane.
 
-        Returns the held slice (GPUs ``0..slice_size-1``). While it is held,
-        auto-placement excludes these GPUs and any new lane targeting them is
-        refused, so the calibration probe keeps the slice's VRAM to itself.
-        Lanes on the leftover GPUs (``slice_size..N-1``) are unaffected and keep
-        serving during the session.
+        A lane whose ``gpu_devices`` is blank/"all" spans every GPU, so the
+        whole node counts as busy rather than under-reporting its footprint.
         """
-        self._calibration_gpu_subset = frozenset(calibration_gpu_slice(self._gpu_device_count()))
+        busy: set[int] = set()
+        for handle in self._handles.values():
+            lc = handle.lane_config
+            if lc is None or not lc.vllm:
+                continue
+            gset = self._lane_gpu_set(lc.gpu_devices)
+            if gset is None:
+                return frozenset(range(self._gpu_device_count()))
+            busy |= gset
+        return frozenset(busy)
+
+    def begin_calibration_session(self) -> frozenset[int]:
+        """Hold a GPU slice for a calibration run, preferring idle GPUs.
+
+        Returns the held slice — the node's largest power-of-two GPU count,
+        picked from currently-idle GPUs first (so a model loaded on GPU 0
+        doesn't force calibration onto ``[0, 1]`` while ``[1, 2]`` sit idle;
+        see :func:`select_calibration_gpus`). Only falls back to the naive
+        ``0..slice_size-1`` slice when too few GPUs are idle to cover the
+        needed size. While the slice is held, auto-placement excludes these
+        GPUs and any new lane targeting them is refused, so the calibration
+        probe keeps the slice's VRAM to itself. Lanes outside the slice are
+        unaffected and keep serving during the session.
+        """
+        total = self._gpu_device_count()
+        busy = self._busy_gpu_indices()
+        self._calibration_gpu_subset = frozenset(select_calibration_gpus(total, busy))
         if self._calibration_gpu_subset:
             logger.info(
-                "Calibration session holds GPU(s) %s — new lanes on these are refused; "
-                "leftover GPU(s) stay placeable",
+                "Calibration session holds GPU(s) %s (%s) — new lanes on these are "
+                "refused; leftover GPU(s) stay placeable",
                 sorted(self._calibration_gpu_subset),
+                "fully idle" if not (busy & self._calibration_gpu_subset) else "includes busy GPU(s)",
             )
         return self._calibration_gpu_subset
 
@@ -898,7 +954,9 @@ class LaneManager:
                     return
             await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
 
-    async def reconfigure_lane(self, lane_id: str, updates: dict[str, Any]) -> LaneStatus:
+    async def reconfigure_lane(
+        self, lane_id: str, updates: dict[str, Any], *, require_idle: bool = False
+    ) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
         async with self._lock:
             handle = self._handles.get(lane_id)
@@ -919,9 +977,44 @@ class LaneManager:
             if not changed:
                 return await self._get_status_unlocked(lane_id)
 
+            parallel_changed = False
+            if current.vllm_config is not None and current_data.get("vllm_config"):
+                requested_vllm = VllmConfig(**current_data["vllm_config"])
+                parallel_changed = (
+                    requested_vllm.tensor_parallel_size != current.vllm_config.tensor_parallel_size
+                    or requested_vllm.parallel_gpu_count != current.vllm_config.parallel_gpu_count
+                )
+                if parallel_changed:
+                    current_data["auto_tensor_parallel"] = False
+                    # Automatic placement belongs to the old parallel topology.
+                    # Static operator pins remain authoritative.
+                    if lane_id not in self._static_lane_ids:
+                        current_data["gpu_devices"] = ""
             new_lc = LaneConfig(**current_data)
+            if parallel_changed:
+                available = self._gpu_device_count()
+                pool = self._global_config.gpu_devices
+                if pool and pool.lower() != "all":
+                    available = min(available, len(set(self._parse_gpu_selector(pool))))
+                required = new_lc.vllm_config.parallel_gpu_count
+                if required > available:
+                    raise ValueError(
+                        f"Tensor × pipeline parallel size requires {required} GPUs, "
+                        f"but this worker provides only {available}."
+                    )
             self._validate_vllm_runtime_requirements([new_lc])
-            if _lane_needs_restart(current, new_lc):
+            # Benchmark settings include spawn-time options such as KV cache size
+            # that the planner's automatic tuning deliberately excludes.
+            restart_needed = _lane_needs_restart(current, new_lc) or (
+                require_idle and current.vllm_config != new_lc.vllm_config
+            )
+            if restart_needed:
+                active = self._active_requests.get(lane_id, 0)
+                if require_idle and active > 0:
+                    raise RuntimeError(
+                        f"Cannot apply vLLM settings: model '{current.model}' still has {active} active request(s). "
+                        "Wait for them to finish, or run the benchmark with the current settings."
+                    )
                 await self._restart_lane_unlocked(lane_id, new_lc)
             prom.LANE_TRANSITIONS_TOTAL.labels(action="reconfigure").inc()
 
@@ -1487,6 +1580,21 @@ class LaneManager:
     def get_handle(self, lane_id: str) -> ProcessHandle | None:
         return self._handles.get(lane_id)
 
+    def running_vllm_endpoints(self) -> list[tuple[str, str, int]]:
+        """Return (lane_id, model, port) for every lane with a live vLLM process.
+
+        Used to fetch and forward each lane's native ``/metrics`` — a cold,
+        sleeping, or stopped lane has no server to scrape, so it is skipped.
+        """
+        endpoints: list[tuple[str, str, int]] = []
+        for lane_id, handle in self._handles.items():
+            if handle.status().state != ProcessState.RUNNING:
+                continue
+            lc = handle.lane_config
+            model = lc.model if lc is not None else ""
+            endpoints.append((lane_id, model, handle.port))
+        return endpoints
+
     def get_handle_for_model(self, model: str) -> ProcessHandle | None:
         """Find the process handle for a given model name."""
         matches: list[tuple[str, ProcessHandle]] = []
@@ -1505,7 +1613,17 @@ class LaneManager:
             if lane_id not in self._handles:
                 raise KeyError(f"Lane '{lane_id}' not found")
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
-            self._mark_status_dirty()
+            # No _mark_status_dirty() here: counting a request is not a
+            # lifecycle change, and a dirty mark would make the bridge loop
+            # rebuild the full node status (all lanes, all probes) next to the
+            # relay — the worker's biggest per-request cost . The
+            # count revision instead wakes the loop (shared _status_event —
+            # the combined wait re-checks both revisions, so the spurious
+            # status wake is a cheap int compare), which patches the last
+            # payload in memory (no I/O) so the orchestrator still gets a
+            # per-request status push for its forward budget.
+            self._count_revision += 1
+            self._status_event.set()
 
     async def acquire_lane_for_infer(self, lane_id: str) -> LaneStatus:
         """Atomically verify the lane is routable AND count the request under a
@@ -1539,7 +1657,9 @@ class LaneManager:
                     f"(runtime_state={status.runtime_state}, sleep_state={status.sleep_state})"
                 )
             self._active_requests[lane_id] = self._active_requests.get(lane_id, 0) + 1
-            self._mark_status_dirty()
+            # See increment_active_requests: no dirty mark on the hot path.
+            self._count_revision += 1
+            self._status_event.set()
             return status
 
     async def decrement_active_requests(self, lane_id: str) -> None:
@@ -1548,7 +1668,23 @@ class LaneManager:
                 return
             current = self._active_requests.get(lane_id, 0)
             self._active_requests[lane_id] = max(0, current - 1)
-            self._mark_status_dirty()
+            # See increment_active_requests: no dirty mark on the hot path.
+            self._count_revision += 1
+            self._status_event.set()
+
+    async def total_active_requests(self) -> int:
+        """Total in-flight requests across all lanes (lock-protected)."""
+        async with self._lock:
+            return sum(self._active_requests.values())
+
+    async def active_requests_snapshot(self) -> dict[str, int]:
+        """Per-lane in-flight counts (lock-protected copy).
+
+        Used by the bridge refresh loop to patch the last pushed runtime
+        payload after a count change without rebuilding the status .
+        """
+        async with self._lock:
+            return dict(self._active_requests)
 
     @property
     def lane_ids(self) -> list[str]:
@@ -1581,7 +1717,7 @@ class LaneManager:
         )
 
     async def destroy_lanes_on_gpus(self, gpu_set: set[int]) -> int:
-        """Stop only the vLLM lanes that occupy a GPU in *gpu_set* (issue #592).
+        """Stop only the vLLM lanes that occupy a GPU in *gpu_set*.
 
         Used at the start of a calibration session to free the held GPU slice
         for the probe without touching lanes on the leftover GPUs, which keep
@@ -1688,6 +1824,8 @@ class LaneManager:
         """Validate and optionally escalate tensor_parallel_size for vLLM lanes.
 
         Policy:
+        - Manual TP changes disable auto_tensor_parallel for this lane, so
+          later restarts keep the selected value instead of the profile's TP.
         - A calibrated profile's tensor_parallel_size is the single source of
           truth — the profile's residency and KV data were measured under that
           TP, so the lane must run at it. It wins over whatever TP the
@@ -1696,7 +1834,7 @@ class LaneManager:
           footprint (weights + KV, often most of a GPU), which the heuristic
           misreads as "does not fit one GPU" and escalates to a higher TP,
           silently overwriting the calibrated verdict with a split-brain
-          profile (see issue #616).
+          profile.
         - Otherwise: TP=1 is the safe default when the model fits on one GPU.
         - If TP is explicitly set > 1, respect the operator's choice.
         - If TP is at default (1) and the model **provably** does not fit on
@@ -1706,6 +1844,8 @@ class LaneManager:
           OOM failures.
         """
         if lane_config.vllm_config is None:
+            return lane_config
+        if not lane_config.auto_tensor_parallel:
             return lane_config
         vc = lane_config.vllm_config
         gpu_count = self._gpu_device_count()
@@ -1876,7 +2016,7 @@ class LaneManager:
         return frozenset(int(part) for part in raw.split(",") if part.isdigit())
 
     def _lane_touches_gpus(self, gpu_devices: str | None, gpu_set: set[int]) -> bool:
-        """True when a lane's GPU set intersects *gpu_set* (issue #592 guard)."""
+        """True when a lane's GPU set intersects *gpu_set* (guard)."""
         lanes = self._lane_gpu_set(gpu_devices)
         if lanes is None:
             return True  # spans all GPUs → intersects any non-empty set
@@ -1907,7 +2047,13 @@ class LaneManager:
         # it is smaller, mirroring the orchestrator's _estimate_model_loaded_vram.
         if profile.residency_source == "calibrated" and base_mb > 0:
             observed = float(profile.loaded_vram_mb or 0.0)
-            return min(base_mb, observed) if observed > 0 else base_mb
+            measured = min(base_mb, observed) if observed > 0 else base_mb
+            vc = lane_config.vllm_config
+            if vc is not None:
+                return reconfigured_vram_mb(
+                    profile, measured, vc.parallel_gpu_count, self._parse_memory_to_mb(vc.kv_cache_memory_bytes)
+                )
+            return measured
 
         kv_mb = 0.0
         if lane_config.vllm_config and lane_config.vllm_config.kv_cache_memory_bytes:
@@ -2061,10 +2207,10 @@ class LaneManager:
         allowed_rows = [row for row in device_rows if int(row["index"]) in set(allowed_indices)]
         if self._calibration_gpu_subset:
             # A running calibration holds its slice's VRAM for the probe — a new
-            # lane may only take the leftover GPUs (issue #592).
+            # lane may only take the leftover GPUs.
             held = set(self._calibration_gpu_subset)
             allowed_rows = [row for row in allowed_rows if int(row["index"]) not in held]
-        tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
+        tp_size = lane_config.vllm_config.parallel_gpu_count
         if len(allowed_rows) < tp_size:
             if self._calibration_gpu_subset:
                 # Fail fast rather than fall back to cuda:0 (a held slice GPU):
@@ -2255,7 +2401,7 @@ class LaneManager:
 
         tp_size = 1
         if lane_config.vllm_config:
-            tp_size = max(1, int(lane_config.vllm_config.tensor_parallel_size))
+            tp_size = lane_config.vllm_config.parallel_gpu_count
         per_gpu_needed_mb = total_needed_mb / tp_size
 
         # Which GPU indices will this lane use?
@@ -2283,7 +2429,7 @@ class LaneManager:
                 break  # can't check — proceed with spawn
 
             # nvidia_smi_available stays False on Metal nodes (there is no
-            # nvidia-smi to speak of), so gate on the backend-neutral flag and
+            # nvidia-smi to speak of), so gate on the application server-neutral flag and
             # fall back to the legacy one for snapshots that predate it. A
             # Metal snapshot on the sysctl-fallback path also reports
             # telemetry_available=False (its budget is an estimate, not a
@@ -2518,47 +2664,54 @@ class LaneManager:
                 logger.warning("Restart '%s': failed to destroy old handle", lane_id, exc_info=True)
             await old_handle.close()
 
-            new_config = await self._auto_place_gpu_devices(lane_id, new_config)
-
-            # Spawn new process on the same port
-            new_handle = _create_handle(
-                lane_id,
-                port,
-                self._global_config,
-                self._vllm_engine_config,
-                new_config,
-                model_profiles=self._model_profiles,
-                per_gpu_total_mb=self._per_gpu_vram_mb,
-                metal_config=self._metal_config,
-            )
-            await new_handle.init()
-
-            self._record_event(
-                lane_id,
-                "restart_spawn_new",
-                model=new_config.model,
-                port=port,
-            )
-            logger.info(
-                "Restart '%s': spawning new vLLM process on port %d",
-                lane_id,
-                port,
-            )
-
+            new_handle = None
             try:
+                # The collector still contains the old process's allocation after
+                # destroy(). Refresh and allow CUDA reclamation before placement.
+                if self._gpu_force_poll is not None:
+                    await self._gpu_force_poll()
+                await self._wait_for_vram_headroom(lane_id, new_config)
+                new_config = await self._auto_place_gpu_devices(lane_id, new_config)
+
+                # Spawn new process on the same port
+                new_handle = _create_handle(
+                    lane_id,
+                    port,
+                    self._global_config,
+                    self._vllm_engine_config,
+                    new_config,
+                    model_profiles=self._model_profiles,
+                    per_gpu_total_mb=self._per_gpu_vram_mb,
+                    metal_config=self._metal_config,
+                )
+                await new_handle.init()
+
+                self._record_event(
+                    lane_id,
+                    "restart_spawn_new",
+                    model=new_config.model,
+                    port=port,
+                )
+                logger.info(
+                    "Restart '%s': spawning new vLLM process on port %d",
+                    lane_id,
+                    port,
+                )
+
                 await new_handle.spawn(new_config)
             except Exception as exc:
                 logger.error(
-                    "Restart '%s' failed during spawn: %s",
+                    "Restart '%s' failed during preparation or spawn: %s",
                     lane_id,
                     exc,
                 )
                 self._record_event(lane_id, "restart_failed", model=new_config.model, details=str(exc))
-                try:
-                    await new_handle.destroy()
-                except Exception:
-                    pass
-                await new_handle.close()
+                if new_handle is not None:
+                    try:
+                        await new_handle.destroy()
+                    except Exception:
+                        pass
+                    await new_handle.close()
                 # Lane is now dead — remove it from handles and release all
                 # bookkeeping so the dead lane is not reported as active.
                 self._handles.pop(lane_id, None)
@@ -2783,6 +2936,33 @@ class LaneManager:
     def status_revision(self) -> int:
         return self._status_revision
 
+    @property
+    def count_revision(self) -> int:
+        return self._count_revision
+
+    async def wait_for_status_or_count_revision(
+        self, last_revision: int, last_count_revision: int, timeout: float | None = None
+    ) -> tuple[int, int]:
+        """Wait until either revision changes (or the timeout elapses).
+
+        Returns the current (status_revision, count_revision). The split
+        exists so the bridge can react to in-flight count changes with an
+        in-memory payload patch instead of a full status rebuild .
+        """
+        while True:
+            if self._status_revision != last_revision or self._count_revision != last_count_revision:
+                return self._status_revision, self._count_revision
+            self._status_event.clear()
+            if self._status_revision != last_revision or self._count_revision != last_count_revision:
+                continue
+            try:
+                if timeout is None:
+                    await self._status_event.wait()
+                else:
+                    await asyncio.wait_for(self._status_event.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                return self._status_revision, self._count_revision
+
     async def wait_for_status_revision(self, last_revision: int, timeout: float | None = None) -> int:
         while True:
             if self._status_revision != last_revision:
@@ -2801,16 +2981,37 @@ class LaneManager:
     def _mark_status_dirty(self) -> None:
         self._status_revision += 1
         self._status_event.set()
+        # A dirty mark is a lifecycle signal (lane added/removed/slept/woken/
+        # reconfigured/crashed): whatever a cached status said about any lane
+        # may now be wrong, so drop the whole cache. The per-request hot path
+        # (increment/acquire/decrement) deliberately does NOT mark dirty —
+        # that is what keeps the TTL cache warm ; it bumps the count
+        # revision instead, which the bridge refresh loop turns into an
+        # in-memory patch of the last payload (no status rebuild).
+        self._lane_status_cache.clear()
 
     async def _get_status_unlocked(self, lane_id: str) -> LaneStatus:
         handle = self._handles.get(lane_id)
         if handle is None:
             raise KeyError(f"Lane '{lane_id}' not found")
         ps = handle.status()
+        if self._lane_status_ttl_seconds > 0:
+            cached = self._lane_status_cache.get(lane_id)
+            # The cheap synchronous process check is ALWAYS consulted fresh:
+            # a dead process must never be masked by a cached status. While
+            # the process is alive, a steady-state re-acquire within the TTL
+            # is served from the cache instead of three HTTP probes.
+            if cached is not None and ps.state == ProcessState.RUNNING:
+                built_at, status = cached
+                if time.monotonic() - built_at < self._lane_status_ttl_seconds:
+                    return status
         pid_vram_map = await self._query_process_vram_map(
             [ps.pid] if ps.state == ProcessState.RUNNING and ps.pid is not None else []
         )
-        return await self._build_lane_status(handle, pid_vram_map)
+        status = await self._build_lane_status(handle, pid_vram_map)
+        if self._lane_status_ttl_seconds > 0:
+            self._lane_status_cache[lane_id] = (time.monotonic(), status)
+        return status
 
     async def _collect_statuses_unlocked(self) -> list[LaneStatus]:
         handles = list(self._handles.values())

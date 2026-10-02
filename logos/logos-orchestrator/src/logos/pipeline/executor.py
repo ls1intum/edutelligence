@@ -6,6 +6,7 @@ The Executor is a pure HTTP client that makes streaming or synchronous requests.
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import time
@@ -38,6 +39,13 @@ class ExecutionResult:
     status_code: Optional[int] = None
     raw_body: Optional[bytes] = None
     content_type: Optional[str] = None
+    # Captured in execute_sync around the HTTP send so the caller can stamp
+    # the provider window from them: dispatch after logos' request preparation
+    # *and* HTTP client setup, response before client teardown and body
+    # parsing. dispatch_at stays None when preparation or client init fails —
+    # the request never reached the provider.
+    dispatch_at: Optional[datetime.datetime] = None
+    response_at: Optional[datetime.datetime] = None
 
 
 @dataclass
@@ -45,6 +53,15 @@ class StreamingExecutionStatus:
     """Mutable terminal status shared with a streaming response consumer."""
 
     error: Optional[str] = None
+    # The instant the mid-stream transport failure was observed, captured here
+    # (upstream) so the response stamp does not wait for a slow client to drain
+    # buffered chunks before the failure time is recorded.
+    error_at: Optional[datetime.datetime] = None
+    # The instant the request was handed to the upstream, captured inside the
+    # entered HTTP client context immediately before the stream send — so
+    # client construction/setup stays out of the provider window, and a client
+    # init failure leaves this unset (no send happened).
+    dispatch_at: Optional[datetime.datetime] = None
 
 
 class Executor:
@@ -128,6 +145,11 @@ class Executor:
 
         request_kwargs = self._request_kwargs(payload)
         async with httpx.AsyncClient(timeout=timeout) as client:
+            if status is not None:
+                # Inside the entered client, immediately before the send: client
+                # construction/setup is logos work, and a client that fails to
+                # open never reaches this stamp.
+                status.dispatch_at = datetime.datetime.now(datetime.timezone.utc)
             stream = client.stream("POST", url, headers=headers, **request_kwargs)
             # Entering the context is the request itself — connect, send,
             # wait for the response headers — so the wall bounds it too,
@@ -183,6 +205,7 @@ class Executor:
                         raise
                     if status is not None:
                         status.error = str(exc)
+                        status.error_at = datetime.datetime.now(datetime.timezone.utc)
                     if not emit_recovery_frames:
                         # The caller ends the stream in its own dialect — the
                         # Chat Completions frame it would receive here is
@@ -292,7 +315,14 @@ class Executor:
 
         logger.info(f"Sync request to {url}")
 
+        # Captured here, not by the caller: the request preparation (the
+        # multipart decode for file uploads), HTTP client setup/teardown, and
+        # the response parsing are logos work and must stay out of the
+        # provider's window.
+        dispatch_at = None
+        response_at = None
         try:
+            request_kwargs = self._request_kwargs(payload)
             async with httpx.AsyncClient() as client:
                 # The deadline is a single absolute wall over the whole POST;
                 # the per-operation httpx timeout cannot play that role
@@ -300,6 +330,10 @@ class Executor:
                 remaining = deadline_at - time.monotonic() if deadline_at is not None else None
                 if remaining is not None and remaining <= 0:
                     raise RetryDeadlineExceeded("sync execution passed its retry deadline")
+                # Inside the entered client, immediately before/after the send:
+                # a client that fails to open leaves dispatch_at unset, and
+                # teardown after response_at stays out of the provider window.
+                dispatch_at = datetime.datetime.now(datetime.timezone.utc)
                 post = client.post(
                     url,
                     headers=headers,
@@ -307,7 +341,7 @@ class Executor:
                     # unbounded for long-running LLM requests and cold starts;
                     # a retry passes its remaining deadline.
                     timeout=timeout,
-                    **self._request_kwargs(payload),
+                    **request_kwargs,
                 )
                 if remaining is None:
                     response = await post
@@ -318,6 +352,7 @@ class Executor:
                         # wait_for's own timeout is the wall, not a transport
                         # failure — keep the deadline's identity.
                         raise RetryDeadlineExceeded("sync execution passed its retry deadline") from None
+                response_at = datetime.datetime.now(datetime.timezone.utc)
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
@@ -349,6 +384,8 @@ class Executor:
                             is_streaming=False,
                             headers=dict(response.headers),
                             status_code=response.status_code,
+                            dispatch_at=dispatch_at,
+                            response_at=response_at,
                         )
                     else:
                         body = {"error": response.text[:500]}
@@ -371,6 +408,8 @@ class Executor:
                 status_code=response.status_code,
                 raw_body=raw_body,
                 content_type=content_type,
+                dispatch_at=dispatch_at,
+                response_at=response_at,
             )
 
         except RetryDeadlineExceeded:
@@ -396,6 +435,10 @@ class Executor:
                 usage={},
                 is_streaming=False,
                 status_code=None,
+                # None when preparation or client init failed before the send:
+                # the request never reached the provider, so no dispatch instant.
+                dispatch_at=dispatch_at,
+                response_at=response_at,
             )
 
     @staticmethod

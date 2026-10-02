@@ -1,0 +1,7 @@
+INFO 07-09 06:31:17 [api_server.py:1000] vLLM API server version 0.11.0
+ERROR 07-09 06:31:40 [core.py:712] EngineCore failed to start.
+ERROR 07-09 06:31:40 [core.py:712] Traceback (most recent call last):
+ERROR 07-09 06:31:40 [core.py:712]   File "/usr/share/logos/models/.cache/vllm/torch_compile_cache/c40ab1/rank_0_0/backbone.py", line 214, in forward
+ERROR 07-09 06:31:40 [core.py:712]     return self._compiled_call(*args)
+ERROR 07-09 06:31:40 [core.py:712] RuntimeError: expected scalar type BFloat16 but found Float
+Process EngineCore_DP0: exited with code 1

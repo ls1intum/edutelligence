@@ -64,7 +64,7 @@ class _FakeContextResolver:
     def __init__(self):
         self.last = None
 
-    async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+    async def resolve_context(self, model_id, provider_id, request_path=None, request_id=None, deployment_info=None):  # noqa: ARG002
         self.last = (model_id, provider_id)
         return _StubExecutionContext(model_id, provider_id)
 
@@ -129,7 +129,7 @@ async def test_pinned_request_skips_classification_and_keeps_model():
 
     assert result.success is True
     assert classifier.calls == []  # classification did not run at all
-    assert scheduler.requests[0].classified_models == [(27, 1.0, 0)]
+    assert scheduler.requests[0].classified_models == [(27, 1.0, int(Priority.NORMAL))]
     assert result.model_id == 27
 
 
@@ -335,7 +335,7 @@ async def test_context_resolve_call_is_cut_off_at_the_remaining_retry_budget():
     scheduler.release = lambda *args, **kwargs: releases.append((args, kwargs))  # noqa: ARG005
 
     class _SlowContextResolver:
-        async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+        async def resolve_context(self, model_id, provider_id, request_path=None, request_id=None, deployment_info=None):  # noqa: ARG002
             # Stands in for the ~120 s of lane-selection sleeps the real
             # resolver can perform before returning.
             await asyncio.sleep(60)
@@ -374,7 +374,7 @@ async def test_context_resolve_deadline_survives_the_scheduling_wait():
         def __init__(self):
             self.entered = 0
 
-        async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+        async def resolve_context(self, model_id, provider_id, request_path=None, request_id=None, deployment_info=None):  # noqa: ARG002
             self.entered += 1
             await asyncio.sleep(60)
             return _StubExecutionContext(model_id, provider_id)
@@ -417,7 +417,7 @@ async def test_exhausted_resolve_budget_never_restores_the_default_window():
         def __init__(self):
             self.entered = 0
 
-        async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+        async def resolve_context(self, model_id, provider_id, request_path=None, request_id=None, deployment_info=None):  # noqa: ARG002
             self.entered += 1
             await asyncio.sleep(60)
             return _StubExecutionContext(model_id, provider_id)

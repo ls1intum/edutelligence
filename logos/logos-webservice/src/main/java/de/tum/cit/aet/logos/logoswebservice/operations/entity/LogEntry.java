@@ -25,6 +25,8 @@ public class LogEntry {
     private Instant timestampRequest;
 
     private Instant timestampForwarding;
+    private Instant timestampProviderCall;
+    private Instant timestampProviderResponse;
     private Instant timestampResponse;
     private Instant timeAtFirstToken;
 
@@ -67,6 +69,8 @@ public class LogEntry {
     public Integer getId() { return id; }
     public Instant getTimestampRequest() { return timestampRequest; }
     public Instant getTimestampForwarding() { return timestampForwarding; }
+    public Instant getTimestampProviderCall() { return timestampProviderCall; }
+    public Instant getTimestampProviderResponse() { return timestampProviderResponse; }
     public Instant getTimestampResponse() { return timestampResponse; }
     public Instant getTimeAtFirstToken() { return timeAtFirstToken; }
     public LogLevel getPrivacyLevel() { return privacyLevel; }

@@ -21,6 +21,7 @@ from logos.errors import coerce_upstream_error
 from logos.jobs.job_service import JobService
 from logos.logosnode_snapshot import _resolve_requested_model_name
 from logos.main import _model_context_fields, _served_context_window_stats, handle_sync_request, submit_job_request
+from logos.responses import get_client_ip
 
 logger = logging.getLogger("LogosLogger")
 
@@ -49,7 +50,7 @@ async def list_models(request: Request):
     Returns:
         JSONResponse matching the OpenAI GET /v1/models spec.
     """
-    auth = authenticate_api_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
     with DBManager() as db:
         models = db.get_models_for_api_key(auth.api_key_id)
@@ -114,7 +115,7 @@ async def retrieve_model(model_id: str, request: Request):
     Raises:
         HTTPException(404): Model not found or user lacks access.
     """
-    auth = authenticate_api_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
     with DBManager() as db:
         model = db.get_model_for_api_key(auth.api_key_id, model_id)
@@ -179,7 +180,7 @@ async def warmup_model(model_id: str, request: Request):
     Deliberately not "send a tiny request": that bills the caller, occupies a
     slot, and returns a completion nobody wanted.
     """
-    auth = authenticate_api_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
     model_name = _resolve_accessible_model_name(auth.api_key_id, model_id)
     if model_name is None:
         raise HTTPException(status_code=404, detail="Model not found or access denied")
@@ -393,14 +394,15 @@ async def logos_service_long_sync(request: Request, path: str = None):
 
 
 # vLLM non-prefixed endpoints (not part of OpenAI API spec, but user-facing).
-# These are canonical paths for pooling, scoring, reranking, and tokenization.
+# These are canonical paths for pooling, scoring, reranking, classification,
+# and tokenization.
 async def _handle_vllm_native(request: Request):
     """Forward to vLLM using the original request path."""
     path = request.url.path.lstrip("/")
     return await handle_sync_request(path, request)
 
 
-for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
+for _vllm_path in ("/pooling", "/score", "/rerank", "/classify", "/tokenize", "/detokenize"):
     router.add_api_route(
         _vllm_path,
         _handle_vllm_native,
@@ -462,7 +464,7 @@ async def get_job_status(job_id: int, request: Request):
     Uses team-based authorization - you can only view jobs created by your current team.
     Logos Admins can view all jobs.
     """
-    auth = authenticate_api_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
     job = JobService.fetch(job_id)
     if job is None:

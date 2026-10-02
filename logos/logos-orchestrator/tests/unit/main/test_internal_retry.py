@@ -75,9 +75,30 @@ class _FakePipeline:
     def record_completion(self, **kwargs):  # noqa: ARG002
         return None
 
+    def record_provider_call(self, request_id, at=None):  # noqa: ARG002
+        return None
+
+    def record_provider_response(self, request_id, at=None):  # noqa: ARG002
+        return None
+
+    def settle_completion(self, **kwargs):  # noqa: ARG002
+        return {}
+
+    def write_completion(self, request_id, fields):  # noqa: ARG002
+        return None
+
 
 def _auth():
-    return SimpleNamespace(key_value="lg-key", default_priority=0, api_key_id=None, cloud_rl=None, local_rl=None)
+    return SimpleNamespace(
+        key_value="lg-key",
+        default_priority=0,
+        team_priority=0,
+        key_type=None,
+        user_role=None,
+        api_key_id=None,
+        cloud_rl=None,
+        local_rl=None,
+    )
 
 
 @pytest.fixture
@@ -131,6 +152,9 @@ def _auth_with_rl(api_key_id=1):
     return SimpleNamespace(
         key_value="lg-key",
         default_priority=0,
+        team_priority=0,
+        key_type=None,
+        user_role=None,
         api_key_id=api_key_id,
         cloud_rl={"rpm": 10, "tpm": 1000},
         local_rl={"rpm": 5, "tpm": 5000},
@@ -999,6 +1023,18 @@ class _EnqueueTrackingPipeline:
     def record_completion(self, **kwargs):  # noqa: ARG002
         return None
 
+    def record_provider_call(self, request_id, at=None):  # noqa: ARG002
+        return None
+
+    def record_provider_response(self, request_id, at=None):  # noqa: ARG002
+        return None
+
+    def settle_completion(self, **kwargs):  # noqa: ARG002
+        return {}
+
+    def write_completion(self, request_id, fields):  # noqa: ARG002
+        return None
+
 
 def _resume_call_kwargs():
     return dict(
@@ -1170,7 +1206,7 @@ async def test_logosnode_pre_token_failure_comes_back_as_json_error(retry_env):
     retry_env.setattr(main, "_pipeline", _FakePipeline([_fail_result("unused")]), raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -1226,7 +1262,7 @@ async def test_pre_token_deadline_is_not_retried_on_the_same_lane(retry_env):
     retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", 1.0)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -1286,7 +1322,7 @@ async def _pre_token_streaming_response(budget):
     # log_id=0: the fake DB has no persistence methods, and the test
     # consumes the body, which runs the streamer's logging finally.
     return await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         0,
         12,
@@ -1503,7 +1539,7 @@ def _ok_cloud_result(provider_id=1, request_id="req-1"):
             provider_type="cloud",
             forward_url="https://cloud.test/v1/chat/completions",
             lane_id=None,
-            anthropic_dialect=None,
+            anthropic_dialect=None, messages_upstream=False,
         ),
         classification_stats={},
         scheduling_stats={
@@ -1605,7 +1641,7 @@ async def test_logosnode_retry_execution_clamps_the_infer_window(retry_env):
                     model_name="stub-model",
                     provider_type="logosnode",
                     lane_id="lane-1",
-                    anthropic_dialect=None,
+                    anthropic_dialect=None, messages_upstream=False,
                 ),
                 classification_stats={},
                 scheduling_stats={
@@ -1624,7 +1660,7 @@ async def test_logosnode_retry_execution_clamps_the_infer_window(retry_env):
                     model_name="stub-model",
                     provider_type="logosnode",
                     lane_id="lane-2",
-                    anthropic_dialect=None,
+                    anthropic_dialect=None, messages_upstream=False,
                 ),
                 classification_stats={},
                 scheduling_stats={
@@ -1705,7 +1741,7 @@ async def test_a_retry_stream_passes_the_absolute_deadline_to_the_node(retry_env
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_id=1, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, model_name="stub-model"
+            provider_id=1, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False, model_name="stub-model"
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         None,
@@ -1766,7 +1802,7 @@ async def test_a_retry_stream_passes_the_absolute_deadline_to_the_cloud(retry_en
             provider_id=1,
             provider_type="cloud",
             forward_url="https://provider.test/v1/chat/completions",
-            anthropic_dialect=None,
+            anthropic_dialect=None, messages_upstream=False,
             model_name="stub-model",
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
@@ -1827,7 +1863,7 @@ async def test_a_retry_sync_call_passes_the_absolute_deadline_to_the_cloud(retry
             provider_id=1,
             provider_type="cloud",
             forward_url="https://provider.test/v1/chat/completions",
-            anthropic_dialect=None,
+            anthropic_dialect=None, messages_upstream=False,
             model_name="stub-model",
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
@@ -1906,7 +1942,7 @@ async def test_cloud_responses_deadline_ends_the_stream_in_a_failed_event(retry_
             provider_id=1,
             provider_type="cloud",
             forward_url="https://provider.test/v1/responses",
-            anthropic_dialect=None,
+            anthropic_dialect=None, messages_upstream=False,
             model_name="stub-model",
         ),
         {"model": "test-model", "input": "hi"},
