@@ -114,6 +114,11 @@ export class AiTools implements OnInit, OnDestroy {
   readonly ready = computed(() => {
     if (!this.teamChosen()) return false;
     if (this.activeTool() === 'claudecode') {
+      // Unpinned is fine, but only once Logos has listed at least one model
+      // this key can reach — otherwise the install cannot make a request.
+      if (this.modelsLoading() || this.modelsError() || this.models().length === 0) {
+        return false;
+      }
       return !this.modelChosen() || this.modelUsable();
     }
     return this.modelUsable();

@@ -4100,6 +4100,11 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
             elif inner_iterator is not None:
                 with suppress(Exception):
                     await inner_iterator.aclose()
+            # handle_sync_request hands the live-feed entry to this generator for
+            # StreamingResponse; without finish here a cancel before the body
+            # producer starts (or any path that never enters a streamer finally)
+            # leaves the request registered forever.
+            _live_streams.finish(request_id)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 

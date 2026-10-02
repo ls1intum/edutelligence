@@ -247,7 +247,7 @@
 
       <div class="step-nav">
         <button type="button" class="btn-secondary" (click)="back()">Back</button>
-        <button type="button" class="btn-primary" [disabled]="activeTool() === 'claudecode' ? (modelChosen() && !modelUsable()) : !modelUsable()" (click)="next()">
+        <button type="button" class="btn-primary" [disabled]="!ready()" (click)="next()">
           Continue <i class="pi pi-arrow-right" aria-hidden="true"></i>
         </button>
       </div>

@@ -162,6 +162,16 @@ describe('AiTools model gating', () => {
     expect(component.modelUsable()).toBe(true);
   });
 
+  it('blocks Claude Code setup when the key has no accessible models', async () => {
+    await build([]);
+    component.chooseTool('claudecode');
+
+    expect(component.modelChosen()).toBe(false);
+    expect(component.models().length).toBe(0);
+    expect(component.ready()).toBe(false);
+    expect(component.canOpen(4)).toBe(false);
+  });
+
   it('lets Claude Code continue without a pin when the only model is too narrow', async () => {
     await build([model({ model_name: 'narrow', context_window_current_min: 32768 })]);
     component.chooseTool('claudecode');

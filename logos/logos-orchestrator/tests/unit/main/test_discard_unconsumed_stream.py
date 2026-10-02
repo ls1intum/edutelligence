@@ -204,6 +204,9 @@ async def test_cancel_at_scheduling_comment_discards_prefetched_http_stream(monk
         async def is_disconnected(self) -> bool:
             return False
 
+    main._live_streams.start("req-comment-cancel", prompt_tokens=1, prompt_estimated=True)
+    assert any(s["request_id"] == "req-comment-cancel" for s in main._live_streams.snapshot())
+
     response = await main._keepalive_streaming_response(
         _Client(), log_id=1, request_id="req-comment-cancel", path="chat/completions"
     )
@@ -216,3 +219,6 @@ async def test_cancel_at_scheduling_comment_discards_prefetched_http_stream(monk
 
     assert upstream_closed, "prefetched upstream stayed open after comment-yield cancel"
     assert release_calls, "scheduler slot was not released after comment-yield cancel"
+    assert not any(
+        s["request_id"] == "req-comment-cancel" for s in main._live_streams.snapshot()
+    ), "live-stream registry entry must be finished when the keepalive wrapper exits"

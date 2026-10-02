@@ -51,7 +51,7 @@ $ErrorActionPreference = 'Stop'
 # Bump on every change installed copies should pick up. Keep in step with the same
 # constant in claude-logos.sh - the two wrappers are one tool with two front ends.
 # A monotonic integer, not a version string: the comparison cannot misread anything.
-$ClaudeLogosVersion = 4          # 2026-10-02
+$ClaudeLogosVersion = 5          # 2026-10-02
 
 $ConfigDir = if ($env:LOGOS_CONFIG_DIR) { $env:LOGOS_CONFIG_DIR }
              else { Join-Path $env:USERPROFILE '.config\claude-logos' }
@@ -584,6 +584,17 @@ if ($HasPinnedModel) {
         Set-Item -Path "env:$slot" -Value $LogosModel
     }
     $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = "$ContextForCli"
+} else {
+    # Drop inherited pins/context so /model discovery is not overridden.
+    foreach ($slot in @('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+                        'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+                        'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL',
+                        'CLAUDE_CODE_MAX_CONTEXT_TOKENS')) {
+        Remove-Item -Path "env:$slot" -ErrorAction SilentlyContinue
+    }
+    # Opt into gateway List Models → /model. Requires Claude Code ≥ 2.1.257 when
+    # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set.
+    $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
 }
 $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = "$MaxOutputTokens"
 # Keep telemetry, model discovery and other non-inference calls off api.anthropic.com.

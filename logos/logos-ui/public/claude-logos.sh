@@ -38,7 +38,7 @@ set -euo pipefail
 # version string: the comparison is a single `-gt` that cannot misread anything,
 # where sorting "1.10" against "1.9" needs care to get right. The date is here for
 # people; only the number is compared.
-CLAUDE_LOGOS_VERSION=4          # 2026-10-02
+CLAUDE_LOGOS_VERSION=5          # 2026-10-02
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -574,7 +574,7 @@ if (( HAS_PINNED_MODEL )); then
 else
   # Still learn the key's model ids for the "new model" notice and --check.
   _ids="$(model_ids_probe | tr '\n' '\t')"
-  probe_result="ids\t${_ids}"
+  probe_result=$'ids\t'"${_ids}"
 fi
 
 if (( HAS_PINNED_MODEL )); then
@@ -772,8 +772,9 @@ export ANTHROPIC_AUTH_TOKEN="$LOGOS_KEY"
 unset ANTHROPIC_API_KEY
 
 # When a model is pinned, force every Claude Code slot at it (previous behaviour).
-# When it is not, leave the slots unset so Claude Code discovers Logos models via
-# GET /v1/models (Anthropic shape under anthropic-version) and can switch with /model.
+# When it is not, clear any inherited pin/context so Claude Code discovers Logos
+# models via GET /v1/models and can switch with /model — an inherited
+# ANTHROPIC_MODEL would otherwise still select that id.
 if (( HAS_PINNED_MODEL )); then
   export ANTHROPIC_MODEL="$LOGOS_MODEL"
   export ANTHROPIC_DEFAULT_HAIKU_MODEL="$LOGOS_MODEL"
@@ -782,6 +783,18 @@ if (( HAS_PINNED_MODEL )); then
   export ANTHROPIC_DEFAULT_FABLE_MODEL="$LOGOS_MODEL"
   export ANTHROPIC_SMALL_FAST_MODEL="$LOGOS_MODEL"   # pre-2.x name, harmless if ignored
   export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CONTEXT_FOR_CLI"
+else
+  unset ANTHROPIC_MODEL \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL \
+    ANTHROPIC_DEFAULT_SONNET_MODEL \
+    ANTHROPIC_DEFAULT_OPUS_MODEL \
+    ANTHROPIC_DEFAULT_FABLE_MODEL \
+    ANTHROPIC_SMALL_FAST_MODEL \
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS
+  # Opt into gateway List Models → /model. Requires Claude Code ≥ 2.1.257 when
+  # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set (older builds suppress
+  # discovery under that flag).
+  export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 fi
 export CLAUDE_CODE_MAX_OUTPUT_TOKENS="$LOGOS_MAX_OUTPUT_TOKENS"
 # Keep telemetry, model discovery and other non-inference calls off api.anthropic.com,
