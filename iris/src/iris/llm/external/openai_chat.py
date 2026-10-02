@@ -433,27 +433,78 @@ def create_iris_tool_calls(message_tool_calls) -> list[ToolCallDTO]:
     ]
 
 
-def _extract_token_logprobs(logprobs: Any) -> Optional[list[float]]:
-    """Extract the flat list of per-token log-probabilities from a choice's
-    ``logprobs`` payload, or ``None`` if they were not requested/returned."""
-    content = getattr(logprobs, "content", None)
-    if not content:
+def _token_bytes(token: Any) -> bytes:
+    raw = getattr(token, "bytes", None)
+    if raw:
+        return bytes(raw)
+    return (getattr(token, "token", "") or "").encode("utf-8")
+
+
+def _content_tokens(logprobs: Any, content: Optional[str]) -> Optional[list[Any]]:
+    """Return the logprob tokens that produced the visible ``content``.
+
+    Reasoning models served by vLLM (gpt-oss, Qwen3) return logprobs for the
+    whole generated stream: reasoning, template markers such as ``</think>``
+    or ``<|channel|>final<|message|>``, the answer, and end tokens. Only the
+    answer tokens may feed confidence scoring. The answer is the last part of
+    the stream, so the tokens are aligned with ``content`` by bytes (a
+    character can span tokens) at its last occurrence. If the content cannot
+    be located, all tokens are kept, as before, and a warning is logged.
+    """
+    tokens = getattr(logprobs, "content", None)
+    if not tokens:
         return None
-    return [token.logprob for token in content]
+    if not content:
+        return list(tokens)
+
+    spans: list[tuple[int, int]] = []
+    stream = bytearray()
+    for token in tokens:
+        start = len(stream)
+        stream.extend(_token_bytes(token))
+        spans.append((start, len(stream)))
+
+    target = content.encode("utf-8")
+    content_start = bytes(stream).rfind(target)
+    if content_start < 0:
+        logger.warning(
+            "Could not align %d logprob tokens with the response content; "
+            "using all tokens for confidence scoring.",
+            len(tokens),
+        )
+        return list(tokens)
+    content_end = content_start + len(target)
+    return [
+        token
+        for token, (start, end) in zip(tokens, spans)
+        if start < content_end and end > content_start
+    ]
+
+
+def _extract_token_logprobs(
+    logprobs: Any, content: Optional[str] = None
+) -> Optional[list[float]]:
+    """Extract the per-token log-probabilities of the visible content from a
+    choice's ``logprobs`` payload, or ``None`` if they were not returned."""
+    tokens = _content_tokens(logprobs, content)
+    if not tokens:
+        return None
+    return [token.logprob for token in tokens]
 
 
 def _extract_token_logprob_entries(
-    logprobs: Any,
+    logprobs: Any, content: Optional[str] = None
 ) -> Optional[list[TokenLogprobEntry]]:
-    """Extract rich per-token entries (token string + top-k alternatives) from
-    a choice's ``logprobs`` payload, or ``None`` if it was not returned.
+    """Extract rich per-token entries (token string + top-k alternatives) of the
+    visible content from a choice's ``logprobs`` payload, or ``None`` if it was
+    not returned.
 
     Tolerant of backends that return plain logprobs without ``top_logprobs``:
     those entries get an empty candidate list, which confidence scoring treats
     as "uncertainty method not applicable" and falls back to mean-logprob.
     """
-    content = getattr(logprobs, "content", None)
-    if not content:
+    tokens = _content_tokens(logprobs, content)
+    if not tokens:
         return None
     return [
         TokenLogprobEntry(
@@ -464,7 +515,7 @@ def _extract_token_logprob_entries(
                 for candidate in (getattr(token, "top_logprobs", None) or [])
             ],
         )
-        for token in content
+        for token in tokens
     ]
 
 
@@ -566,8 +617,8 @@ def convert_to_iris_message(
         contents=[TextMessageContentDTO(textContent=content)],
         sendAt=current_time,
         token_usage=token_usage,
-        token_logprobs=_extract_token_logprobs(logprobs),
-        token_logprob_entries=_extract_token_logprob_entries(logprobs),
+        token_logprobs=_extract_token_logprobs(logprobs, content),
+        token_logprob_entries=_extract_token_logprob_entries(logprobs, content),
     )
 
 
