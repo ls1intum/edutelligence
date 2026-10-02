@@ -64,7 +64,7 @@ class StatsV2WebSocketHandlerLivePushTest {
      */
     @SuppressWarnings("unchecked")
     private static void stubLatestRequests(RequestLogService service, Map<String, Object> template) {
-        when(service.getLatestRequests(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean()))
+        when(service.getLatestRequests(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any()))
             .thenAnswer(inv -> Map.of("requests", List.of(new HashMap<>(template))));
     }
 
