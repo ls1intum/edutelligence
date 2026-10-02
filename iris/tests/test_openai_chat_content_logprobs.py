@@ -108,3 +108,25 @@ def test_tokens_without_bytes_align_by_text():
         SimpleNamespace(token="ok", bytes=None, logprob=-0.5),
     ]
     assert _convert("ok", tokens).token_logprobs == [-0.5]
+
+
+def test_answer_matching_text_inside_the_end_token_is_not_confused_with_it():
+    for answer in ("return", "|", ">", "end"):
+        tokens = [
+            _tok("<|channel|>", -2.0),
+            _tok("final", -2.0),
+            _tok("<|message|>", -2.0),
+            _tok(answer, -2.5),
+            _tok("<|return|>", -0.0001),
+        ]
+        assert _convert(answer, tokens).token_logprobs == [-2.5], answer
+
+
+def test_qwen_answer_matching_text_inside_im_end_is_not_confused_with_it():
+    tokens = [
+        _tok("</think>", -2.0),
+        _tok("\n\n", 0.0),
+        _tok("im", -1.5),
+        _tok("<|im_end|>", 0.0),
+    ]
+    assert _convert("\n\nim", tokens).token_logprobs == [0.0, -1.5]

@@ -448,7 +448,9 @@ def _content_tokens(logprobs: Any, content: Optional[str]) -> Optional[list[Any]
     or ``<|channel|>final<|message|>``, the answer, and end tokens. Only the
     answer tokens may feed confidence scoring. The answer is the last part of
     the stream, so the tokens are aligned with ``content`` by bytes (a
-    character can span tokens) at its last occurrence. If the content cannot
+    character can span tokens) at its last occurrence that starts and ends on
+    token boundaries; that excludes matches inside a single token, such as an
+    answer "return" inside the end token ``<|return|>``. If the content cannot
     be located, all tokens are kept, as before, and a warning is logged.
     """
     tokens = getattr(logprobs, "content", None)
@@ -463,9 +465,15 @@ def _content_tokens(logprobs: Any, content: Optional[str]) -> Optional[list[Any]
         start = len(stream)
         stream.extend(_token_bytes(token))
         spans.append((start, len(stream)))
+    boundaries = {0} | {end for _, end in spans}
 
     target = content.encode("utf-8")
-    content_start = bytes(stream).rfind(target)
+    haystack = bytes(stream)
+    content_start = haystack.rfind(target)
+    while content_start >= 0 and not (
+        content_start in boundaries and content_start + len(target) in boundaries
+    ):
+        content_start = haystack.rfind(target, 0, content_start + len(target) - 1)
     if content_start < 0:
         logger.warning(
             "Could not align %d logprob tokens with the response content; "
