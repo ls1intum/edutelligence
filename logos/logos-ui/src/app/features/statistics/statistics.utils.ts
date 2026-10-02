@@ -125,7 +125,9 @@ const SHORT_COMMIT_LENGTH = 8;
  * silence (a worker that predates version reporting, or whose first status has
  * not arrived yet).
  *
- * `title` is the hover text behind the chip's info icon. For a commit it puts
+ * `hint` is the sentence in the card behind the chip's info icon. For a commit
+ * the full commit travels separately in `commit`, so the card can set it on a
+ * line of its own with a copy button; the "unknown" cases have no commit.
  */
 export function describeWorkerVersion(
   checksum: string | null | undefined,
@@ -133,17 +135,19 @@ export function describeWorkerVersion(
 ): WorkerVersionChip | null {
   if (!online) return null;
   if (checksum === 'unknown') {
-    return { label: 'version: unknown', title: 'Built outside CI, so no commit was recorded.' };
+    return { label: 'version: unknown', hint: 'Built outside CI, so no commit was recorded.', commit: null };
   }
   if (!checksum) {
     return {
       label: 'version: unknown',
-      title: 'No version reported yet. Workers that predate version reporting never report one; redeploy to see it.',
+      hint: 'No version reported yet. Workers that predate version reporting never report one; redeploy to see it.',
+      commit: null,
     };
   }
   return {
     label: `version: ${checksum.slice(0, SHORT_COMMIT_LENGTH)}`,
-    title: `Commit this worker's image was built from:\n${checksum}`,
+    hint: "Commit this worker's image was built from:",
+    commit: checksum,
   };
 }
 

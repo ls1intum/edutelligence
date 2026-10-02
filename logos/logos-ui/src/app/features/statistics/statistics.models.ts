@@ -243,8 +243,12 @@ export type VramProviderMeta = {
   calibrating?: boolean;
 };
 
-/** What a worker's header shows for its build; see describeWorkerVersion. */
-export type WorkerVersionChip = { label: string; title: string };
+/**
+ * What a worker's header shows for its build; see describeWorkerVersion.
+ * `hint` is the sentence in the card behind the chip's info icon, and `commit`
+ * the full commit that card shows (null when there is none).
+ */
+export type WorkerVersionChip = { label: string; hint: string; commit: string | null };
 
 // VramProviderPayload from logos-ui-old/app/statistics.tsx lines 68-108
 export type VramProviderPayload = {

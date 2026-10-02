@@ -271,6 +271,8 @@
 }
 
 .stats-glass-row__header {
+  // The version card hangs off this on a phone (see version-hint.scss).
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -312,11 +314,9 @@
   }
 }
 
-// The commit a worker was built from: monospace like a hash, with a help
-// cursor because hovering it (and its info icon) explains the value.
-.stats-panel-badge--version {
+// The commit a worker was built from reads like a hash, so it is set in monospace.
+.stats-panel-badge__mono {
   font-family: var(--font-family-mono, monospace);
-  cursor: help;
 }
 
 // ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────

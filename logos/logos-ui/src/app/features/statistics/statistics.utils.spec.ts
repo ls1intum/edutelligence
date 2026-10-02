@@ -346,30 +346,33 @@ describe('formatUptime', () => {
 describe('describeWorkerVersion', () => {
   const commit = 'a3f9c21e0b7d4f65a1c2d3e4f5061728394a5b6c';
 
-  it('shows the first 8 characters, with the full commit on its own line of the tooltip', () => {
+  it('shows the first 8 characters and hands the full commit to the card separately', () => {
     expect(describeWorkerVersion(commit, true)).toEqual({
       label: 'version: a3f9c21e',
-      title: `Commit this worker's image was built from:\n${commit}`,
+      hint: "Commit this worker's image was built from:",
+      commit,
     });
   });
 
-  it('keeps the whole commit on the last tooltip line, unshortened', () => {
-    const lines = describeWorkerVersion(commit, true)?.title.split('\n');
-    expect(lines).toHaveLength(2);
-    expect(lines?.[1]).toBe(commit);
+  it('keeps the whole commit, unshortened, out of the sentence', () => {
+    const chip = describeWorkerVersion(commit, true);
+    expect(chip?.commit).toBe(commit);
+    expect(chip?.hint).not.toContain(commit);
   });
 
   it('says "unknown" for a worker that reports it was built outside CI', () => {
     const chip = describeWorkerVersion('unknown', true);
     expect(chip?.label).toBe('version: unknown');
-    expect(chip?.title).toContain('outside CI');
+    expect(chip?.hint).toContain('outside CI');
+    expect(chip?.commit).toBeNull();
   });
 
   it('says "unknown" for a worker that reports nothing', () => {
     for (const missing of [null, undefined, '']) {
       const chip = describeWorkerVersion(missing, true);
       expect(chip?.label).toBe('version: unknown');
-      expect(chip?.title).toContain('predate');
+      expect(chip?.hint).toContain('predate');
+      expect(chip?.commit).toBeNull();
     }
   });
 

@@ -71,6 +71,7 @@ import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
+import { VersionHint } from './components/version-hint/version-hint';
 import { VramDonutComponent, type DonutSlice } from './components/vram-donut/vram-donut';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
@@ -122,6 +123,7 @@ type ProviderGlassRow = {
     StatKpiCardComponent,
     StatusBars,
     StatsSkeletonComponent,
+    VersionHint,
     VramDonutComponent,
     WorkerGpuPanel,
     TimeRangeBarComponent,
