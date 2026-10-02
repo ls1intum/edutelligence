@@ -200,6 +200,7 @@ async def mark_analysis_unchanged(*, session_id: int, team_repository_id: int, c
                 UPDATE ai_workflow_analyses
                    SET status = 'skipped', commit_sha = :sha, error = NULL, finished_at = :now
                  WHERE agent_session_id = :session_id
+                   AND status IN ('queued', 'running')
                 """),
             {"sha": commit_sha, "now": datetime.now(timezone.utc), "session_id": session_id},
         )

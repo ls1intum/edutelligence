@@ -347,7 +347,9 @@ async def _ingest_unchanged(tmp_path, monkeypatch, *, claimed, analysed):
 
 async def test_unchanged_session_is_recorded_as_skipped(tmp_path, monkeypatch):
     conn = await _ingest_unchanged(tmp_path, monkeypatch, claimed="a" * 40, analysed="a" * 40)
-    assert any("SET status = 'skipped'" in sql for sql, _ in conn.statements)
+    skip = next(sql for sql, _ in conn.statements if "SET status = 'skipped'" in sql)
+    # A row recovery already settled (e.g. cancelled mid-finalize) stays as it is.
+    assert "AND status IN ('queued', 'running')" in skip
     assert not any("INSERT INTO ai_workflows" in sql for sql, _ in conn.statements)
 
 
