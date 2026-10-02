@@ -157,6 +157,11 @@ it asks `GET /v1/models`, prints the window it got, and exports the result into
 its own child process — nothing outside the wrapper is touched, so plain
 `claude` keeps using an Anthropic subscription unchanged.
 
+`LOGOS_MODEL` is optional. When unset, Claude Code discovers Logos models from
+that listing and you switch with `/model`. When set, every Claude Code model
+slot (`opus`, `sonnet`, `haiku`, …) is pinned to that id — useful as a default,
+not required for the setup flow.
+
 It also does two things with the listing it already has in hand:
 
 - **Warms the model up.** `POST /v1/models/{model}/warmup` tells the planner the
@@ -167,6 +172,7 @@ It also does two things with the listing it already has in hand:
   reservation: the planner still decides using its own fairness rules, a warmup
   can never evict a lane real traffic is using, and no inference request is ever
   sent on the caller's behalf. Warming a model the key has no access to is a 404.
+  Warmup runs only when `LOGOS_MODEL` is pinned.
 - **Names models that are new to you.** The id list is compared against the one
   from the last run (`~/.config/claude-logos/known-models`); additions are
   printed. The first run records the baseline silently rather than announcing

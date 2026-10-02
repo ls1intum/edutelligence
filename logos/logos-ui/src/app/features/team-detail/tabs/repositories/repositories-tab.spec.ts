@@ -9,7 +9,6 @@ describe('RepositoriesTabComponent', () => {
   const createTeamRepository = vi.fn();
   const updateTeamRepository = vi.fn();
   const deleteTeamRepository = vi.fn();
-  const analyzeRepositoryHeuristic = vi.fn();
   const analyzeRepositoryAgent = vi.fn();
   const storeRepositoryCredentials = vi.fn();
   const revokeRepositoryCredentials = vi.fn();
@@ -31,7 +30,6 @@ describe('RepositoriesTabComponent', () => {
     createTeamRepository.mockResolvedValue(sample);
     updateTeamRepository.mockResolvedValue(sample);
     deleteTeamRepository.mockResolvedValue(undefined);
-    analyzeRepositoryHeuristic.mockResolvedValue({ id: 1, status: 'succeeded' });
     analyzeRepositoryAgent.mockResolvedValue({ id: 2, status: 'queued' });
     storeRepositoryCredentials.mockResolvedValue({ has_credentials: true });
     revokeRepositoryCredentials.mockResolvedValue(undefined);
@@ -44,7 +42,6 @@ describe('RepositoriesTabComponent', () => {
             createTeamRepository,
             updateTeamRepository,
             deleteTeamRepository,
-            analyzeRepositoryHeuristic,
             analyzeRepositoryAgent,
             storeRepositoryCredentials,
             revokeRepositoryCredentials,
@@ -126,13 +123,6 @@ describe('RepositoriesTabComponent', () => {
     await component.submitForm();
     expect(component.formError()).toContain('GitHub');
     expect(component.formOpen()).toBe(true);
-  });
-
-  it('runs heuristic analysis', async () => {
-    const component = setup();
-    await component.analyzeHeuristic(sample);
-    expect(analyzeRepositoryHeuristic).toHaveBeenCalledWith(7, 11);
-    expect(getTeamRepositories).toHaveBeenCalled();
   });
 
   it('queues agent analysis', async () => {
