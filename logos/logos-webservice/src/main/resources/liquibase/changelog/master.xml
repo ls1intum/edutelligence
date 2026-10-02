@@ -53,5 +53,6 @@
     <include file="liquibase/changelog/047_objective_priority_model_ratings.xml"/>
     <include file="liquibase/changelog/048_log_entry_timestamp_provider_call.xml"/>
     <include file="liquibase/changelog/049_team_activity_indexes.xml"/>
+    <include file="liquibase/changelog/050_model_capabilities_manual_override.xml"/>
 
 </databaseChangeLog>
