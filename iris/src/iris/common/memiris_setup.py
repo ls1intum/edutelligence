@@ -295,6 +295,19 @@ def has_memories_for_tenant(tenant: Tenant, memory_service: MemoryService) -> bo
         return False
 
 
+def memories_for_llm(memories: Sequence[Memory]) -> list[dict[str, str]]:
+    """
+    Reduce memories to what a model needs to read: id, title and content.
+
+    A Memory's string form includes its embedding vectors (thousands of floats
+    each), which would otherwise be pasted into the prompt as tool output.
+    """
+    return [
+        {"id": str(memory.id), "title": memory.title, "content": memory.content}
+        for memory in memories
+    ]
+
+
 class MemirisWrapper:
     """
     A wrapper class for the Memiris memory service for easier use in Iris's pipelines.
@@ -448,7 +461,7 @@ class MemirisWrapper:
 
     def create_tool_memory_search(
         self, accessed_memory_storage: list[Memory], limit: int = 5
-    ) -> Callable[[str], Sequence[Memory] | str]:
+    ) -> Callable[[str], list[dict[str, str]] | str]:
         """
         Creates a tool for vector search in the memory service.
 
@@ -456,7 +469,7 @@ class MemirisWrapper:
             Callable[[str], Any]: A function that performs vector search.
         """
 
-        def memiris_search_for_memories(query: str) -> Sequence[Memory] | str:
+        def memiris_search_for_memories(query: str) -> list[dict[str, str]] | str:
             """
             Use this tool to search for memories about a user.
             This function performs a semantic search for memories that match the query.
@@ -466,7 +479,8 @@ class MemirisWrapper:
             Args:
                 query (str): The query string to search for memories.
             Returns:
-                Sequence[Memory]: A list of Memory objects that most closely match the query.
+                list[dict[str, str]]: The id, title and content of the memories that most
+                closely match the query.
             """
             try:
                 vectors = self.vectorizer.vectorize(query)
@@ -485,21 +499,23 @@ class MemirisWrapper:
             if len(memories) == 0:
                 return "No memories found for the given query."
 
-            return memories
+            return memories_for_llm(memories)
 
         return memiris_search_for_memories
 
     def create_tool_find_similar_memories(
         self, accessed_memory_storage: list[Memory], limit: int = 5
-    ) -> Callable[[str], Sequence[Memory] | str]:
+    ) -> Callable[[str], list[dict[str, str]] | str]:
         """
         Creates a tool to find similar memories based on a given memory ID.
 
         Returns:
-            Callable[[str], Sequence[Memory]]: A function that finds similar memories.
+            Callable[[str], list[dict[str, str]] | str]: A function that finds similar memories.
         """
 
-        def memiris_find_similar_memories(memory_id: str) -> Sequence[Memory] | str:
+        def memiris_find_similar_memories(
+            memory_id: str,
+        ) -> list[dict[str, str]] | str:
             """
             Use this tool to find similar memories of another memory.
             You must provide the valid UUID of the memory you want to find similar memories for.
@@ -511,8 +527,8 @@ class MemirisWrapper:
             Args:
                 memory_id (str): The valid UUID of the memory to find similar memories for.
             Returns:
-                Sequence[Memory] | str: A list of Memory objects that are similar to the provided memory ID,
-                or an error message.
+                list[dict[str, str]] | str: The id, title and content of memories similar to
+                the provided memory ID, or an error message.
             """
             if is_valid_uuid(memory_id):
                 memory_uuid: UUID = to_uuid(memory_id)  # type: ignore
@@ -561,7 +577,7 @@ class MemirisWrapper:
 
                     if len(memories) == limit:
                         accessed_memory_storage.extend(memories)
-                        return memories
+                        return memories_for_llm(memories)
                 except Exception:
                     logger.exception(
                         "Failed to fetch memory connections for memory %s "
@@ -596,7 +612,7 @@ class MemirisWrapper:
             if len(memories) == 0:
                 return "No similar memories found."
 
-            return memories
+            return memories_for_llm(memories)
 
         return memiris_find_similar_memories
 

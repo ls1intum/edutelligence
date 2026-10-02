@@ -1,5 +1,8 @@
 # pylint: disable=protected-access
 from unittest.mock import MagicMock, patch
+from uuid import UUID
+
+from memiris.domain.memory import Memory
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common import memiris_setup  # noqa: E402
@@ -106,3 +109,31 @@ def test_gpt5_entry_without_temperature_flag_keeps_memiris_default():
         )
     )
     assert converted._supports_temperature is False
+
+
+def test_memory_tools_return_no_embedding_vectors():
+    memory = Memory(
+        uid=UUID("00000000-0000-0000-0000-000000000001"),
+        title="Learning style",
+        content="Prefers short code examples.",
+        learnings=[UUID("00000000-0000-0000-0000-000000000002")],
+        vectors={"qwen3-embedding": [0.123456789] * 4096},
+    )
+    wrapper = memiris_setup.MemirisWrapper.__new__(memiris_setup.MemirisWrapper)
+    wrapper.tenant = "artemis-user-1"
+    wrapper.vectorizer = MagicMock()
+    wrapper.memory_service = MagicMock()
+    wrapper.memory_service.semantic_search.return_value = [memory]
+    accessed: list = []
+
+    output = wrapper.create_tool_memory_search(accessed)("learning style")
+
+    assert output == [
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "title": "Learning style",
+            "content": "Prefers short code examples.",
+        }
+    ]
+    assert len(str(output)) < 200
+    assert accessed == [memory]
