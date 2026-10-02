@@ -4,5 +4,8 @@ public record ReviewRecommendationRequestDTO(
     String action,
     String confirmedSla,
     java.util.List<String> confirmedObjectivePriority,
-    Integer apiKeyId
+    Integer apiKeyId,
+    // True when the owner chose "No key": the review binds and re-prioritises
+    // no key, not even the one the recommendation was linked to before.
+    Boolean noApiKey
 ) {}

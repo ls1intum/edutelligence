@@ -215,6 +215,18 @@
   margin-top: 16px;
 }
 
+// Below 769px the shared table turns into cards and needs no minimum width.
+.recs-scroll {
+  overflow-x: auto;
+
+  @media (min-width: 769px) {
+    app-data-table {
+      display: block;
+      min-width: 63rem;
+    }
+  }
+}
+
 .recs-title {
   margin: 0 0 10px;
   font-size: var(--font-size-sm);
@@ -331,6 +343,38 @@
   align-items: flex-start;
   gap: 6px;
   min-width: 0;
+
+  .field-select {
+    width: 100%;
+    max-width: 100%;
+  }
+}
+
+.cell-confidence {
+  font-variant-numeric: tabular-nums;
+}
+
+.key-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 16px;
+
+  .field-select {
+    max-width: 18rem;
+  }
+}
+
+.key-picker-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+}
+
+.key-picker-hint {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--nav-item-text));
 }
 
 .cell-recommended {
