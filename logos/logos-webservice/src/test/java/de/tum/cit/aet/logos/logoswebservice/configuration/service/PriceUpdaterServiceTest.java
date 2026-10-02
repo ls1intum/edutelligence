@@ -15,6 +15,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -59,7 +60,8 @@ class PriceUpdaterServiceTest {
 
         service = new PriceUpdaterService(new ObjectMapper(),
             mock(ModelRepository.class), mock(ModelProviderRepository.class),
-            mock(ProviderRepository.class), tokenTypeRepository, tokenPriceRepository);
+            mock(ProviderRepository.class), tokenTypeRepository, tokenPriceRepository,
+            mock(TransactionTemplate.class));
     }
 
     // findByName is stubbed to return a TokenType carrying its name so we can map
