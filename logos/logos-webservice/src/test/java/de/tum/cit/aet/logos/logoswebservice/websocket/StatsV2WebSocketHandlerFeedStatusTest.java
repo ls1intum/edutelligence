@@ -76,21 +76,12 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         // A fresh, mutable payload per call — the push writes "total" into it
         // while a filter is on, and the real service returns a fresh map too.
         when(requestLogService.getLatestRequests(
-                any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean()))
-            .thenAnswer(inv -> {
-                Map<String, Object> payload = new LinkedHashMap<>();
-                payload.put("requests", servedRows.stream().map(HashMap::new).toList());
-                payload.put("has_more", false);
-                payload.put("next_cursor", null);
-                return payload;
-            });
-
-        when(requestLogService.getLatestRequests(
                 any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any()))
             .thenAnswer(inv -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("requests", servedRows.stream().map(HashMap::new).toList());
                 payload.put("has_more", false);
+                payload.put("next_cursor", null);
                 return payload;
             });
 
@@ -168,7 +159,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         // counts its one queued row.
         when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
             .thenReturn("6;2026-08-29T21:00:00Z");
-        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any())).thenReturn(1L);
+        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(1L);
 
         handler.handleMessage(session, new TextMessage("{\"action\":\"set_feed_status\",\"status\":\"queued\"}"));
         assertThat(pushedTypes()).containsExactly("requests");
@@ -207,12 +198,12 @@ class StatsV2WebSocketHandlerFeedStatusTest {
 
         when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
             .thenReturn("1;2026-08-29T21:00:00Z");
-        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any())).thenReturn(1L);
+        when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(1L);
 
         servedRows = List.of(row("req-1", 100));
         handler.handleMessage(session, new TextMessage("{\"action\":\"set_feed_status\",\"status\":\"queued\"}"));
         // The forced push after a filter change counts the bucket.
-        verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any());
+        verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any());
         clearInvocations(requestLogService);
         sent.clear();
 
@@ -221,7 +212,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         servedRows = List.of(row("req-1", 101));
         invokePushRequests(false);
         assertThat(pushedTypes()).containsExactly("requests");
-        verify(requestLogService, never()).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any());
+        verify(requestLogService, never()).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any());
         sent.clear();
 
         // A second queued row appears: the row set has moved, so the count is
@@ -229,7 +220,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         servedRows = List.of(row("req-1", 101), row("req-2", 40));
         invokePushRequests(false);
         assertThat(pushedTypes()).containsExactly("requests");
-        verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any());
+        verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any());
     }
     @Test
     void modelAndProviderSelectionsFilterOnlyTheFeedAndSurviveInit() throws Exception {

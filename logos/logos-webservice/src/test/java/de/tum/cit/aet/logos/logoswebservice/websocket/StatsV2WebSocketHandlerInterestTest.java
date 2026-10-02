@@ -66,7 +66,7 @@ class StatsV2WebSocketHandlerInterestTest {
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));
         when(requestLogService.getLatestRequests(
-                any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean()))
+                any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any()))
             .thenAnswer(inv -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("requests", List.of());
@@ -159,7 +159,7 @@ class StatsV2WebSocketHandlerInterestTest {
         }
 
         verify(requestLogService, never()).getLatestRequests(
-            any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean());
+            any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any());
         // Delta path reuses getVramStats with the cursor; init already cleared.
         verify(vramService, atLeastOnce()).getVramStats(anyString(), anyInt());
         assertThat(pushedTypes()).doesNotContain("requests", "stats", "timeline_init");
