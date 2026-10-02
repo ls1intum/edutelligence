@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.admin.service;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -176,9 +177,50 @@ public class ExportImportService {
                     "objective_priority",
                     ObjectivePriority.forSla(sla == null ? null : String.valueOf(sla)));
             }
+            if ("ai_llm_call_recommendations".equals(table)) {
+                for (String flag : List.of("model_set_by_owner", "review_carried_over")) {
+                    if (copy.get(flag) == null) copy.put(flag, false);
+                }
+            }
             out.add(copy);
         }
+        if ("ai_workflow_analyses".equals(table)) {
+            failOlderInFlightAnalyses(out);
+        }
         return out;
+    }
+
+    /**
+     * Exports from before the one-in-flight-per-repository index may hold
+     * several queued/running analyses of one repository; the index would
+     * reject them. Keep the newest per repository and mark the others failed,
+     * as Liquibase 050 does for an upgraded database.
+     */
+    private static void failOlderInFlightAnalyses(List<Map<String, Object>> rows) {
+        Map<Object, Map<String, Object>> newest = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            if (!isInFlight(row) || row.get("team_repository_id") == null) continue;
+            newest.merge(row.get("team_repository_id"), row,
+                (a, b) -> idOf(b) > idOf(a) ? b : a);
+        }
+        for (Map<String, Object> row : rows) {
+            Object repo = row.get("team_repository_id");
+            if (isInFlight(row) && repo != null && newest.get(repo) != row) {
+                row.put("status", "failed");
+                if (row.get("error") == null) row.put("error", "superseded by a newer queued analysis");
+                if (row.get("finished_at") == null) row.put("finished_at", row.get("started_at"));
+            }
+        }
+    }
+
+    private static boolean isInFlight(Map<String, Object> row) {
+        Object status = row.get("status");
+        return "queued".equals(status) || "running".equals(status);
+    }
+
+    private static long idOf(Map<String, Object> row) {
+        Object id = row.get("id");
+        return id instanceof Number n ? n.longValue() : Long.parseLong(String.valueOf(id));
     }
 
     private void detachAgentSessionsFromRepositories() {

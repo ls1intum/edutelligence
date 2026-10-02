@@ -242,6 +242,7 @@ class TeamRepoLinkControllerTest {
                 .content("{\"model\":\"  openai/gpt-oss-120b \"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.detected_model").value("openai/gpt-oss-120b"))
+           .andExpect(jsonPath("$.model_set_by_owner").value(true))
            .andExpect(jsonPath("$.review_status").value("pending"));
 
         // A review keeps the model; both write paths go through the same row lock.
@@ -307,6 +308,170 @@ class TeamRepoLinkControllerTest {
         org.assertj.core.api.Assertions.assertThat(
             jdbc.queryForObject("SELECT default_priority FROM api_keys WHERE id = 3001", Integer.class))
             .isEqualTo(7);
+    }
+
+    @Test
+    void queueAgentAnalysis_refusesASecondWhileOneIsInFlight() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/twice\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        mvc.perform(post("/admin/teams/2001/repositories/" + linkId + "/analyze/agent")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.status").value("queued"));
+        mvc.perform(post("/admin/teams/2001/repositories/" + linkId + "/analyze/agent")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isConflict())
+           .andExpect(jsonPath("$.detail", containsString("already queued or running")));
+    }
+
+    @Test
+    void analyzeAll_queuesEveryLinkOnceAndIsLogosAdminOnly() throws Exception {
+        for (String repo : new String[] {"all-a", "all-b"}) {
+            mvc.perform(post("/admin/teams/2001/repositories")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"repo_url\":\"https://github.com/ls1intum/" + repo + "\"}"))
+               .andExpect(status().isOk());
+        }
+        int links = jdbc.queryForObject("SELECT count(*) FROM team_repositories", Integer.class);
+
+        mvc.perform(post("/admin/repositories/analyze").with(TestJwt.adminUser()))
+           .andExpect(status().isForbidden());
+        mvc.perform(post("/admin/repositories/analyze").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.queued").value(links))
+           .andExpect(jsonPath("$.already_in_flight").value(0));
+        mvc.perform(post("/admin/repositories/analyze").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.queued").value(0))
+           .andExpect(jsonPath("$.already_in_flight").value(links));
+    }
+
+    @Test
+    void reanalysis_showsTheLastReviewedDecisionAndRefusesEditsToSupersededRows() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/chain\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+        // A (accepted) <- B (changed proposal, still pending) <- C (latest, pending)
+        int[] analyses = new int[3];
+        for (int i = 0; i < 3; i++) {
+            analyses[i] = jdbc.queryForObject("""
+                INSERT INTO ai_workflow_analyses
+                    (team_id, team_repository_id, commit_sha, status, source, finished_at)
+                VALUES (2001, ?, ?, 'succeeded', 'agent', now() - (? * interval '1 hour'))
+                RETURNING id
+                """, Integer.class, linkId, "c" + i, 3 - i);
+        }
+        Integer a = jdbc.queryForObject("""
+            INSERT INTO ai_llm_call_recommendations
+                (analysis_id, team_id, file_path, recommended_sla, review_status, confirmed_sla, reviewed_at)
+            VALUES (?, 2001, 'app/chat.py', 'ux-critical', 'accepted', 'ux-critical', now())
+            RETURNING id
+            """, Integer.class, analyses[0]);
+        Integer b = jdbc.queryForObject("""
+            INSERT INTO ai_llm_call_recommendations
+                (analysis_id, team_id, file_path, recommended_sla, previous_recommendation_id)
+            VALUES (?, 2001, 'app/chat.py', 'ux-background', ?)
+            RETURNING id
+            """, Integer.class, analyses[1], a);
+        Integer c = jdbc.queryForObject("""
+            INSERT INTO ai_llm_call_recommendations
+                (analysis_id, team_id, file_path, recommended_sla, previous_recommendation_id)
+            VALUES (?, 2001, 'app/chat.py', 'ux-high-prio', ?)
+            RETURNING id
+            """, Integer.class, analyses[2], b);
+
+        mvc.perform(get("/admin/teams/2001/workflows").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           // Only the latest analysis is up for review, and it shows A's decision.
+           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + b + ")]").isEmpty())
+           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + c + ")].previous.id").value(a))
+           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + c + ")].previous.sla").value("ux-critical"));
+
+        mvc.perform(put("/admin/teams/2001/recommendations/" + b + "/model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model\":\"x\"}"))
+           .andExpect(status().isConflict());
+        mvc.perform(post("/admin/teams/2001/recommendations/" + b + "/review")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"reject\"}"))
+           .andExpect(status().isConflict());
+
+        jdbc.update("UPDATE ai_llm_call_recommendations SET review_carried_over = TRUE WHERE id = ?", c);
+        mvc.perform(post("/admin/teams/2001/recommendations/" + c + "/review")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"accept\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.review_carried_over").value(false));
+    }
+
+    @Test
+    void displayedRecommendationsStayEditableWhenAnAnalysisHasNoFinishTime() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/imported\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+        Integer finished = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_analyses (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            VALUES (2001, ?, 'done', 'succeeded', 'agent', now()) RETURNING id
+            """, Integer.class, linkId);
+        // e.g. from an import: succeeded, but no finish time, and a higher id
+        jdbc.update("""
+            INSERT INTO ai_workflow_analyses (team_id, team_repository_id, commit_sha, status, source)
+            VALUES (2001, ?, 'nofinish', 'succeeded', 'agent')
+            """, linkId);
+        Integer rec = jdbc.queryForObject("""
+            INSERT INTO ai_llm_call_recommendations (analysis_id, team_id, file_path, recommended_sla)
+            VALUES (?, 2001, 'app/x.py', 'ux-critical') RETURNING id
+            """, Integer.class, finished);
+
+        mvc.perform(get("/admin/teams/2001/workflows").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + rec + ")]").isNotEmpty());
+        mvc.perform(post("/admin/teams/2001/recommendations/" + rec + "/review")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"reject\"}"))
+           .andExpect(status().isOk());
+    }
+
+    @Test
+    void queueing_isRefusedByTheInFlightIndexEvenWithoutThePrecheck() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/racy\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+        // Another writer (the agent runner's nightly pass) queued one meanwhile.
+        jdbc.update("""
+            INSERT INTO ai_workflow_analyses (team_id, team_repository_id, status, source, started_at)
+            VALUES (2001, ?, 'running', 'agent', now())
+            """, linkId);
+        int sessionsBefore = jdbc.queryForObject("SELECT count(*) FROM agent_sessions", Integer.class);
+
+        mvc.perform(post("/admin/teams/2001/repositories/" + linkId + "/analyze/agent")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isConflict());
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject("SELECT count(*) FROM agent_sessions", Integer.class)).isEqualTo(sessionsBefore);
     }
 
     @Test

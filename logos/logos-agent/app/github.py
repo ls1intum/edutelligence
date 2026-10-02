@@ -13,6 +13,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -391,6 +392,28 @@ async def _get(path: str, params: dict[str, Any] | None = None, *, timeout_s: fl
             status=response.status_code,
         )
     return response.json()
+
+
+async def branch_head(repo_slug: str, branch: str, *, timeout_s: float = 15.0) -> str | None:
+    """The commit a branch points at, or None when GitHub will not say.
+
+    None covers a private repository the runner cannot read, a missing branch
+    and any API trouble: the caller then lets the session find out itself.
+    Uses the runner token when there is one (rate limit), anonymous otherwise.
+    """
+    headers = {"Accept": "application/vnd.github.sha", "X-GitHub-Api-Version": "2022-11-28"}
+    if settings.github_token:
+        headers["Authorization"] = f"Bearer {settings.github_token}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            response = await client.get(f"{_API}/repos/{repo_slug}/commits/{quote(branch, safe='')}", headers=headers)
+    except httpx.HTTPError as exc:
+        logger.info("branch head lookup for %s@%s failed: %s", repo_slug, branch, exc)
+        return None
+    sha = response.text.strip()
+    if response.status_code != 200 or len(sha) != 40:
+        return None
+    return sha
 
 
 # One page is 100 items — GitHub's maximum — and at most this many pages are

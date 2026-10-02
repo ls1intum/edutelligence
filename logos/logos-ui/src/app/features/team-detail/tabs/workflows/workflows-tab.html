@@ -199,6 +199,15 @@
                     @if (rec.confirmed_sla) {
                       <span class="sla-badge sla-badge--muted">{{ rec.confirmed_sla }}</span>
                     }
+                    @if (rec.review_carried_over) {
+                      <p class="previous-decision">Kept from the previous analysis</p>
+                    } @else if (rec.review_status === 'pending' && rec.previous; as prev) {
+                      <!-- A re-analysis proposes; the earlier decision stays until reviewed. -->
+                      <p class="previous-decision" title="Last decision on this call site">
+                        Was {{ prev.review_status }}: {{ prev.sla }} ·
+                        {{ prev.objective_priority.join(' › ') }}
+                      </p>
+                    }
                   </div>
                   <div class="cell-actions" role="cell" data-label="">
                     @if (canEdit && rec.review_status === 'pending') {

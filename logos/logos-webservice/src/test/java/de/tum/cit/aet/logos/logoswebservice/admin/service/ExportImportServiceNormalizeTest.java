@@ -63,6 +63,37 @@ class ExportImportServiceNormalizeTest {
     }
 
     @Test
+    void normalizeRecommendationsDefaultsModelSetByOwnerForOlderDumps() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", 9);
+        row.put("recommended_sla", "ux-critical");
+        List<Map<String, Object>> out =
+            service.normalizeImportRows("ai_llm_call_recommendations", List.of(row));
+        assertEquals(false, out.get(0).get("model_set_by_owner"));
+        assertEquals(false, out.get(0).get("review_carried_over"));
+    }
+
+    @Test
+    void normalizeAnalysesKeepsOnlyTheNewestInFlightPerRepository() {
+        List<Map<String, Object>> rows = List.of(
+            analysis(1, 7, "queued"), analysis(2, 7, "running"), analysis(3, 7, "succeeded"),
+            analysis(4, 8, "queued"));
+        List<Map<String, Object>> out = service.normalizeImportRows("ai_workflow_analyses", rows);
+        assertEquals(List.of("failed", "running", "succeeded", "queued"),
+            out.stream().map(r -> r.get("status")).toList());
+        assertEquals("superseded by a newer queued analysis", out.get(0).get("error"));
+    }
+
+    private static Map<String, Object> analysis(int id, int repo, String status) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", id);
+        row.put("team_repository_id", repo);
+        row.put("status", status);
+        row.put("started_at", "2026-10-01T10:00:00Z");
+        return row;
+    }
+
+    @Test
     void normalizeEmptyRowsReturnsEmpty() {
         assertTrue(service.normalizeImportRows("models", null).isEmpty());
         assertTrue(service.normalizeImportRows("models", List.of()).isEmpty());
