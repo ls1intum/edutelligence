@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewRecommendationRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetRecommendationModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.StoreDeployKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.AiWorkflowAnalysisService;
@@ -84,6 +85,19 @@ public class AiWorkflowController {
             return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
         }
         return ResponseEntity.ok(service.reviewRecommendation(teamId, recId, body, auth.userId()));
+    }
+
+    @PutMapping("/teams/{teamId}/recommendations/{recId}/model")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> setRecommendationModel(
+            @PathVariable Integer teamId,
+            @PathVariable Integer recId,
+            @RequestBody SetRecommendationModelRequestDTO body,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (forbiddenForNonOwner(auth, teamId)) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        return ResponseEntity.ok(service.setRecommendationModel(teamId, recId, body));
     }
 
     @PutMapping("/teams/{teamId}/repositories/{linkId}/credentials")

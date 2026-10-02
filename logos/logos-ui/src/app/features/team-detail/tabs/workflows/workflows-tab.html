@@ -28,6 +28,28 @@
     recommendations never take effect until you review them.
   </p>
 
+  @if (canEdit && apiKeys.length > 0) {
+    <div class="key-picker">
+      <label class="key-picker-label" for="workflows-review-key">Application key</label>
+      <select
+        id="workflows-review-key"
+        class="field-select"
+        [ngModel]="reviewKeyValue()"
+        (ngModelChange)="setReviewKey($event)"
+        [disabled]="reviewingId() != null"
+      >
+        <option value="">No key</option>
+        @for (key of keysByPriority(); track key.id) {
+          <option [value]="key.id">{{ key.name }} · priority {{ key.default_priority ?? 0 }}</option>
+        }
+      </select>
+      <span class="key-picker-hint">
+        Accept and Override set this key's queue priority from the confirmed SLA.
+        Defaults to the highest-priority key.
+      </span>
+    </div>
+  }
+
   @if (loadError()) {
     <app-error-message variant="banner" [message]="loadError()" />
   }
@@ -42,7 +64,7 @@
     </div>
   } @else if (!data() || data()!.repositories.length === 0) {
     <div class="empty-state">
-      No repositories linked yet. Add one under the Repositories tab, then run Analyze.
+      No repositories linked yet. Add one under the Repositories tab; LogosOSSAgent analyses it within a few minutes.
     </div>
   } @else {
     @for (repo of data()!.repositories; track repo.id) {
@@ -66,7 +88,7 @@
               }
             </div>
           } @else {
-            <span class="meta-muted">No succeeded analysis yet — run Analyze on the Repositories tab.</span>
+            <span class="meta-muted">No succeeded analysis yet — LogosOSSAgent picks it up on its own, or queue one on the Repositories tab.</span>
           }
         </header>
 
@@ -79,7 +101,7 @@
               }
             </div>
             @if (wf.diagram_mermaid) {
-              <pre class="mermaid">{{ wf.diagram_mermaid }}</pre>
+              <pre class="mermaid">{{ diagramSource(wf) }}</pre>
             }
           </article>
         }
@@ -112,7 +134,22 @@
                     }
                   </div>
                   <div class="cell-model" role="cell" data-label="Model">
-                    <span>{{ rec.detected_model || '—' }}</span>
+                    @if (canEdit) {
+                      <select
+                        class="field-select"
+                        [attr.aria-label]="'Model used by recommendation ' + rec.id"
+                        [ngModel]="rec.detected_model ?? ''"
+                        (ngModelChange)="setModel(rec, $event)"
+                        [disabled]="savingModelId() === rec.id"
+                      >
+                        <option value="">Unknown</option>
+                        @for (name of modelOptions(rec); track name) {
+                          <option [value]="name">{{ name }}</option>
+                        }
+                      </select>
+                    } @else {
+                      <span>{{ rec.detected_model || '—' }}</span>
+                    }
                     @if (ratingsForDetectedModel(rec.detected_model); as ratings) {
                       <app-model-profile-radar [ratings]="ratings" [size]="96" />
                     }
@@ -150,7 +187,7 @@
                       }
                     </ol>
                   </div>
-                  <div role="cell" data-label="Confidence">
+                  <div class="cell-confidence" role="cell" data-label="Confidence">
                     {{ (rec.confidence * 100) | number: '1.0-0' }}%
                   </div>
                   <div role="cell" data-label="Status">
@@ -163,20 +200,6 @@
                   </div>
                   <div class="cell-actions" role="cell" data-label="">
                     @if (canEdit && rec.review_status === 'pending') {
-                      @if (apiKeys.length > 0) {
-                        <select
-                          class="field-select"
-                          [attr.aria-label]="'API key for recommendation ' + rec.id"
-                          [ngModel]="keySelectValue(rec)"
-                          (ngModelChange)="setAcceptKey(rec.id, $event)"
-                          [disabled]="reviewingId() === rec.id"
-                        >
-                          <option value="">No key</option>
-                          @for (key of apiKeys; track key.id) {
-                            <option [value]="key.id">{{ key.name }}</option>
-                          }
-                        </select>
-                      }
                       <select
                         class="field-select"
                         [attr.aria-label]="'Override SLA for recommendation ' + rec.id"

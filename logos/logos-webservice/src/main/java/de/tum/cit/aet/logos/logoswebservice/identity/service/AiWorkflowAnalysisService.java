@@ -21,6 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewRecommendationRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetRecommendationModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.StoreDeployKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.AiLlmCallRecommendation;
@@ -41,6 +42,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepositoryCr
 public class AiWorkflowAnalysisService {
 
     private static final Set<String> VALID_SLAS = Set.of("ux-critical", "ux-high-prio", "ux-background");
+    private static final int MAX_MODEL_NAME_LENGTH = 200;
     private static final Set<String> REVIEW_ACTIONS = Set.of("accept", "override", "reject");
 
     /**
@@ -80,6 +82,11 @@ public class AiWorkflowAnalysisService {
             }
           ]
         }
+
+        `diagram_mermaid` must parse with Mermaid 11: wrap every node and edge label
+        in double quotes (`A["Session title LLM (deferred)"]`, `B{"EXERCISE mode?"}`,
+        `A -->|"yes"| B`). Parentheses, brackets, braces, pipes or slashes inside an
+        unquoted label are syntax errors and the diagram will not render.
 
         `objective_priority` is a full ranking of latency, quality, and price (most
         important first). It complements SLA: SLA is urgency/interactivity; the ranking
@@ -307,6 +314,27 @@ public class AiWorkflowAnalysisService {
             return null;
         }
         return crypto.decrypt(encrypted);
+    }
+
+    /**
+     * Records which model a call site uses. Analyses often cannot tell — the
+     * model is usually configuration, not code — so the owner says it. Allowed
+     * in any review state: it describes the code, not the decision.
+     */
+    @Transactional
+    public Map<String, Object> setRecommendationModel(int teamId, int recId,
+                                                      SetRecommendationModelRequestDTO body) {
+        AiLlmCallRecommendation rec = recommendationRepository.findByIdAndTeamId(recId, teamId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "Recommendation not found"));
+        String model = body == null || body.model() == null ? null : body.model().trim();
+        if (model != null && model.length() > MAX_MODEL_NAME_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "model must be at most " + MAX_MODEL_NAME_LENGTH + " characters");
+        }
+        rec.setDetectedModel(model == null || model.isEmpty() ? null : model);
+        recommendationRepository.save(rec);
+        return recommendationToMap(rec);
     }
 
     @Transactional

@@ -101,6 +101,20 @@ export class TeamManagementService {
     );
   }
 
+  /** Record which model a recommended call site uses; null clears it. */
+  setRecommendationModel(
+    teamId: number,
+    recId: number,
+    model: string | null,
+  ): Promise<AiLlmCallRecommendation> {
+    return firstValueFrom(
+      this.http.put<AiLlmCallRecommendation>(
+        `/api/admin/teams/${teamId}/recommendations/${recId}/model`,
+        { model },
+      ),
+    );
+  }
+
   reviewRecommendation(
     teamId: number,
     recId: number,
