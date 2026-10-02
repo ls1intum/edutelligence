@@ -235,6 +235,8 @@
   padding-top: 8px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow-y: auto;
 }
 
 .rr-card__right {

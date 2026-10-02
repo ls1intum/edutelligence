@@ -142,10 +142,10 @@
           </div>
           @if (stageOf(item) === 'complete' && item.status === 'error' && item.error_message) {
             <details class="rr-card__error">
-              <summary class="rr-card__error-summary" [title]="item.error_message">
+              <summary class="rr-card__error-summary" aria-label="Error details" [title]="item.error_message">
                 <i class="pi pi-chevron-right" aria-hidden="true"></i>
-                <span class="rr-card__error-snippet">{{ item.error_message }}</span>
-                <span class="rr-card__error-action">Error details</span>
+                <span class="rr-card__error-snippet" aria-hidden="true">{{ item.error_message }}</span>
+                <span class="rr-card__error-action" aria-hidden="true">Error details</span>
               </summary>
               <div class="rr-card__error-message">{{ item.error_message }}</div>
             </details>
