@@ -401,3 +401,17 @@ def test_match_recommendations_prefers_the_same_workflow_then_the_nearest_line()
     ]
     matched = analysis_ingest.match_recommendations(previous, current)
     assert {i: m["id"] for i, m in matched.items()} == {0: 2, 1: 1}
+
+
+def test_an_oversized_group_stays_unmatched_instead_of_building_every_pair(monkeypatch):
+    monkeypatch.setattr(analysis_ingest, "MAX_MATCH_PAIRS_PER_GROUP", 4)
+    rows = [{"file_path": "a.py", "workflow_name": "chat", "start_line": i} for i in range(3)]
+    previous = [{"id": i, **r} for i, r in enumerate(rows)]
+    assert analysis_ingest.match_recommendations(previous, rows) == {}  # 3 x 3 > 4: left pending
+    assert len(analysis_ingest.match_recommendations(previous[:2], rows[:2])) == 2
+
+
+def test_matching_ten_thousand_rows_in_one_group_is_cheap():
+    rows = [{"file_path": "a.py", "workflow_name": "chat", "start_line": i} for i in range(10_000)]
+    previous = [{"id": i, **r} for i, r in enumerate(rows)]
+    assert analysis_ingest.match_recommendations(previous, rows) == {}

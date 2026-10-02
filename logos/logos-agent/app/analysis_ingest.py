@@ -33,6 +33,8 @@ DEFAULT_OBJECTIVE_PRIORITY = list(OBJECTIVE_KEYS)
 MAX_ANALYSIS_BYTES = 2 * 1024 * 1024
 # Bound on walking pending predecessors back to the last reviewed decision.
 MAX_ANCESTOR_HOPS = 50
+# Bound on the candidate pairs one (file, workflow) group may build when matching.
+MAX_MATCH_PAIRS_PER_GROUP = 10_000
 
 
 def objective_priority_for_sla(sla: str) -> list[str]:
@@ -538,25 +540,38 @@ def match_recommendations(previous: list[dict[str, Any]], current: list[dict[str
             return 0
         return abs(int(prev["start_line"]) - int(cur["start_line"]))
 
-    pairs = [
-        (line_gap(cur, prev), ci, pi)
-        for ci, cur in enumerate(current)
-        for pi, prev in enumerate(previous)
-        if cur["workflow_name"]
-        and prev["file_path"] == cur["file_path"]
-        and prev["workflow_name"] == cur["workflow_name"]
-    ]
-    for _gap, ci, pi in sorted(pairs):
-        if ci not in matched and pi not in used:
-            matched[ci] = previous[pi]
-            used.add(pi)
+    groups: dict[tuple[str, str], tuple[list[int], list[int]]] = {}
+    for ci, cur in enumerate(current):
+        if cur["workflow_name"]:
+            groups.setdefault((cur["file_path"], cur["workflow_name"]), ([], []))[0].append(ci)
+    for pi, prev in enumerate(previous):
+        key = (prev["file_path"], prev["workflow_name"] or "")
+        if key in groups:
+            groups[key][1].append(pi)
+    for cur_ids, prev_ids in groups.values():
+        # Pairing is quadratic in the group; a group too large to pair cheaply
+        # stays unmatched (pending) rather than stalling the runner.
+        if len(cur_ids) * len(prev_ids) > MAX_MATCH_PAIRS_PER_GROUP:
+            continue
+        pairs = sorted((line_gap(current[ci], previous[pi]), ci, pi) for ci in cur_ids for pi in prev_ids)
+        for _gap, ci, pi in pairs:
+            if ci not in matched and pi not in used:
+                matched[ci] = previous[pi]
+                used.add(pi)
 
-    for file_path in {cur["file_path"] for cur in current}:
-        open_current = [ci for ci, cur in enumerate(current) if cur["file_path"] == file_path and ci not in matched]
-        open_previous = [pi for pi, prev in enumerate(previous) if prev["file_path"] == file_path and pi not in used]
-        if len(open_current) == 1 and len(open_previous) == 1:
-            matched[open_current[0]] = previous[open_previous[0]]
-            used.add(open_previous[0])
+    open_current: dict[str, list[int]] = {}
+    for ci, cur in enumerate(current):
+        if ci not in matched:
+            open_current.setdefault(cur["file_path"], []).append(ci)
+    open_previous: dict[str, list[int]] = {}
+    for pi, prev in enumerate(previous):
+        if pi not in used:
+            open_previous.setdefault(prev["file_path"], []).append(pi)
+    for file_path, cur_ids in open_current.items():
+        prev_ids = open_previous.get(file_path, [])
+        if len(cur_ids) == 1 and len(prev_ids) == 1:
+            matched[cur_ids[0]] = previous[prev_ids[0]]
+            used.add(prev_ids[0])
     return matched
 
 
