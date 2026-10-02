@@ -1014,6 +1014,23 @@ def _raise_fd_limit() -> None:
         print(f"  [fd] could not raise RLIMIT_NOFILE (soft={soft}): {exc}", flush=True)
 
 
+def _error_from_sse_chunk(chunk: dict) -> Optional[str]:
+    """Extract a pipeline error message from one decoded SSE JSON object.
+
+    Logos and OpenAI-compatible servers often report mid-stream failures as
+    HTTP 200 with an error object in the body. Anthropic uses
+    ``{"type":"error","error":{...}}``.
+    """
+    err_obj = chunk.get("error")
+    if isinstance(err_obj, dict):
+        return str(err_obj.get("message") or err_obj.get("type") or err_obj)[:500]
+    if isinstance(err_obj, str) and err_obj.strip():
+        return err_obj.strip()[:500]
+    if chunk.get("type") == "error":
+        return str(chunk.get("message") or chunk)[:500]
+    return None
+
+
 async def _dispatch(
     client: httpx.AsyncClient,
     base_url: str,
@@ -1126,6 +1143,18 @@ async def _dispatch(
 
             async for raw in resp.aiter_lines():
                 line = raw.strip()
+                if line.startswith(": logos-schedule"):
+                    # A streaming request commits its response before the
+                    # scheduling decision is known, so the ETTFT/warmth values
+                    # ride in the stream as a comment (they no longer appear in
+                    # the response headers).
+                    for kv in line.split()[1:]:
+                        name, _, value = kv.partition("=")
+                        if name == "x-logos-warmth-state":
+                            warmth_state = _parse_int_or_none(value)
+                        elif name == "x-logos-ettft-ms":
+                            ettft_ms = _parse_float_or_none(value)
+                    continue
                 if not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
@@ -1135,6 +1164,11 @@ async def _dispatch(
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue
+
+                # Pipeline failures often ride HTTP 200 with an SSE error object.
+                # Without this, the run records success=True and empty error.
+                if error is None:
+                    error = _error_from_sse_chunk(chunk)
 
                 if not model:
                     model = chunk.get("model", "")

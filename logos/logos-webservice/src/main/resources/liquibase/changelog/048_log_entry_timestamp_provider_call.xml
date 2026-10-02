@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The statistics page splits a finished request's wall time into a
+         queue figure (everything the request waited for), an exec figure
+         (the provider's own time), and the leftover logos-side tail.
+
+         It used to cut at timestamp_forwarding, which the orchestrator writes
+         when the scheduler picks the provider. For cloud requests the
+         rate-limit check and the monthly budget lookup run in between, so that
+         logos-side wait read as provider execution — a team whose requests
+         actually took ~3 s upstream showed up with several times that, next to
+         a near-zero queue figure. And it ended the exec figure at
+         timestamp_response, which the orchestrator writes at completion, i.e.
+         after the post-provider cost lookup — so a slow billing lookup read as
+         provider time too.
+
+         Two new columns move the cut to the real provider window:
+           timestamp_provider_call     — the request is handed to the upstream
+                                         provider, after every gate logos
+                                         controls and after payload preparation.
+           timestamp_provider_response — the provider's full response has
+                                         arrived, before logos' own post-
+                                         provider work (notably the cost
+                                         lookup).
+         The queue figure spans timestamp_request to
+         timestamp_provider_call; the exec figure spans
+         timestamp_provider_call to timestamp_provider_response. Both fall back
+         to the old columns for rows they do not carry: everything written
+         before this migration, and requests that never reached the provider
+         (a rate-limit or budget reject), which keep the old, scheduling-based
+         split.
+
+         timestamp_forwarding and timestamp_response are untouched on purpose:
+         the /me/keys usage window counts a key's admitted requests from
+         timestamp_forwarding (see 027), the hourly rollup buckets on it, and
+         two indexes serve it; timestamp_response remains the completion
+         instant the lifecycle and the live "total" figure read. -->
+    <changeSet id="048-log-entry-timestamp-provider-call" author="logos">
+        <addColumn tableName="log_entry">
+            <column name="timestamp_provider_call" type="TIMESTAMP WITH TIME ZONE"/>
+            <column name="timestamp_provider_response" type="TIMESTAMP WITH TIME ZONE"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="log_entry" columnName="timestamp_provider_call"/>
+            <dropColumn tableName="log_entry" columnName="timestamp_provider_response"/>
+        </rollback>
+    </changeSet>
+
+    <!-- The queue/run split the rollup stores per hour is the definition the
+         KPI strip's "avg run · queue" line answers, so it moves to the same
+         provider window as the per-request feed above. One function shared by
+         the backfill and every incremental pass (see 035) — recreating it is
+         what applies the new definition, and the pass then keeps the table
+         honest on its own for everything after.
+
+         Rows predating the columns carry no provider-call / provider-response
+         stamps, so the COALESCEs reproduce the old split for them — except the
+         hours already rolled up under the old function, which would otherwise
+         keep serving the mislabeled averages indefinitely: a pass only
+         recomputes hours whose rows moved, and history does not move. The
+         backfill below recomputes every closed hour once, the same call 035
+         made to establish the first watermark. Roughly a minute on production;
+         every pass after it touches only what moved. -->
+    <changeSet id="048-stats-rollup-provider-call-split" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="log_entry" columnName="timestamp_provider_call"/>
+        </preConditions>
+        <sql splitStatements="false"><![CDATA[
+            CREATE OR REPLACE FUNCTION logos_stats_rollup_apply(p_hours timestamptz[])
+            RETURNS bigint
+            LANGUAGE plpgsql
+            SET search_path = public, pg_catalog
+            AS $$
+            DECLARE
+                affected bigint;
+            BEGIN
+                IF p_hours IS NULL OR array_length(p_hours, 1) IS NULL THEN
+                    RETURN 0;
+                END IF;
+
+                DELETE FROM log_entry_hourly_stats s
+                 WHERE s.bucket_hour = ANY (p_hours);
+
+                INSERT INTO log_entry_hourly_stats (
+                    bucket_hour, model_id, model_name, provider_id, team_id, user_id,
+                    result_status, was_cold_start, requests,
+                    queue_seconds_sum, queue_seconds_count,
+                    run_seconds_sum, run_seconds_count,
+                    error_count, total_tokens, cost_micro_cents)
+                SELECT
+                    date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                le.timestamp_request,
+                                                le.timestamp_response)),
+                    le.model_id,
+                    -- Keep 042's orphan-name grain: two deleted models must not
+                    -- collapse into one anonymous (NULL, NULL) bucket.
+                    CASE WHEN le.model_id IS NULL THEN le.model_name END,
+                    le.provider_id,
+                    le.team_id,
+                    le.user_id,
+                    le.result_status,
+                    COALESCE(le.was_cold_start, FALSE),
+                    COUNT(*),
+                    SUM(CASE WHEN le.timestamp_request IS NOT NULL
+                              AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
+                                                     - le.timestamp_request))
+                        END),
+                    COUNT(*) FILTER (WHERE le.timestamp_request IS NOT NULL
+                                       AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL),
+                    SUM(CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                              AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                             THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                                     - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)))
+                        END),
+                    COUNT(*) FILTER (WHERE COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                                       AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL),
+                    COUNT(*) FILTER (WHERE le.result_status IS DISTINCT FROM 'success'
+                                        OR (le.error_message IS NOT NULL
+                                            AND le.error_message <> '')),
+                    COALESCE(SUM(tok.total_tokens), 0)::bigint,
+                    COALESCE(SUM(lec.cost_micro_cents), 0)::bigint
+                FROM log_entry le
+                LEFT JOIN LATERAL (
+                    SELECT SUM(ut.token_count) AS total_tokens
+                    FROM usage_tokens ut
+                    JOIN token_types tt ON tt.id = ut.type_id
+                    WHERE ut.log_entry_id = le.id
+                      AND tt.name = 'total_tokens'
+                ) tok ON TRUE
+                LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
+                WHERE date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                  le.timestamp_request,
+                                                  le.timestamp_response)) = ANY (p_hours)
+                GROUP BY 1, 2, 3, 4, 5, 6, 7, 8;
+
+                GET DIAGNOSTICS affected = ROW_COUNT;
+                RETURN affected;
+            END;
+            $$;
+        ]]></sql>
+        <sql splitStatements="false"><![CDATA[
+            SELECT logos_stats_rollup_apply(ARRAY(
+                SELECT DISTINCT date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                            le.timestamp_request,
+                                                            le.timestamp_response))
+                FROM log_entry le
+                WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
+                      < date_trunc('hour', now())
+            ));
+
+            ANALYZE log_entry_hourly_stats;
+        ]]></sql>
+        <!-- Restore the 042 definition (orphan model_name grain + the old
+             forwarding/response timing split): the pass calls this function
+             on every run, so dropping it would fail the rollup on every
+             minute and push the page back onto full live reads for no benefit. -->
+        <rollback>
+            <sql splitStatements="false"><![CDATA[
+                CREATE OR REPLACE FUNCTION logos_stats_rollup_apply(p_hours timestamptz[])
+                RETURNS bigint
+                LANGUAGE plpgsql
+                SET search_path = public, pg_catalog
+                AS $$
+                DECLARE
+                    affected bigint;
+                BEGIN
+                    IF p_hours IS NULL OR array_length(p_hours, 1) IS NULL THEN
+                        RETURN 0;
+                    END IF;
+
+                    DELETE FROM log_entry_hourly_stats s
+                     WHERE s.bucket_hour = ANY (p_hours);
+
+                    -- Rollback restores 042's grain + the pre-048 timing
+                    -- split (forwarding/response), not the bare 035 shape.
+                    INSERT INTO log_entry_hourly_stats (
+                        bucket_hour, model_id, model_name, provider_id, team_id, user_id,
+                        result_status, was_cold_start, requests,
+                        queue_seconds_sum, queue_seconds_count,
+                        run_seconds_sum, run_seconds_count,
+                        error_count, total_tokens, cost_micro_cents)
+                    SELECT
+                        date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                    le.timestamp_request,
+                                                    le.timestamp_response)),
+                        le.model_id,
+                        CASE WHEN le.model_id IS NULL THEN le.model_name END,
+                        le.provider_id,
+                        le.team_id,
+                        le.user_id,
+                        le.result_status,
+                        COALESCE(le.was_cold_start, FALSE),
+                        COUNT(*),
+                        SUM(CASE WHEN le.timestamp_request IS NOT NULL
+                                  AND le.timestamp_forwarding IS NOT NULL
+                                 THEN EXTRACT(EPOCH FROM (le.timestamp_forwarding - le.timestamp_request))
+                            END),
+                        COUNT(*) FILTER (WHERE le.timestamp_request IS NOT NULL
+                                           AND le.timestamp_forwarding IS NOT NULL),
+                        SUM(CASE WHEN le.timestamp_forwarding IS NOT NULL
+                                  AND le.timestamp_response IS NOT NULL
+                                 THEN EXTRACT(EPOCH FROM (le.timestamp_response - le.timestamp_forwarding))
+                            END),
+                        COUNT(*) FILTER (WHERE le.timestamp_forwarding IS NOT NULL
+                                           AND le.timestamp_response IS NOT NULL),
+                        COUNT(*) FILTER (WHERE le.result_status IS DISTINCT FROM 'success'
+                                            OR (le.error_message IS NOT NULL
+                                                AND le.error_message <> '')),
+                        COALESCE(SUM(tok.total_tokens), 0)::bigint,
+                        COALESCE(SUM(lec.cost_micro_cents), 0)::bigint
+                    FROM log_entry le
+                    LEFT JOIN LATERAL (
+                        SELECT SUM(ut.token_count) AS total_tokens
+                        FROM usage_tokens ut
+                        JOIN token_types tt ON tt.id = ut.type_id
+                        WHERE ut.log_entry_id = le.id
+                          AND tt.name = 'total_tokens'
+                    ) tok ON TRUE
+                    LEFT JOIN log_entry_cost lec ON lec.log_entry_id = le.id
+                    WHERE date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                      le.timestamp_request,
+                                                      le.timestamp_response)) = ANY (p_hours)
+                    GROUP BY 1, 2, 3, 4, 5, 6, 7, 8;
+
+                    GET DIAGNOSTICS affected = ROW_COUNT;
+                    RETURN affected;
+                END;
+                $$;
+            ]]></sql>
+            <!-- Recompute every closed hour under the restored 035 definition:
+                 the forward's backfill ran those hours under the new provider
+                 split, so without this they would keep serving the new-definition
+                 averages while the incremental pass (which calls this function)
+                 uses the old one. -->
+            <sql splitStatements="false"><![CDATA[
+                SELECT logos_stats_rollup_apply(ARRAY(
+                    SELECT DISTINCT date_trunc('hour', COALESCE(le.timestamp_forwarding,
+                                                                le.timestamp_request,
+                                                                le.timestamp_response))
+                    FROM log_entry le
+                    WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)
+                          < date_trunc('hour', now())
+                ));
+
+                ANALYZE log_entry_hourly_stats;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

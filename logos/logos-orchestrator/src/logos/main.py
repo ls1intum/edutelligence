@@ -29,10 +29,12 @@ from logos.anthropic_compat import (
     MessagesStreamTranslator,
     UpstreamDialect,
     from_message,
+    is_messages_path,
     stream_translator,
     translate_error,
     translate_response,
 )
+from logos.anthropic_compat.common import sse
 from logos.auth import AuthContext, authenticate_api_key
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
 from logos.batch_local import local_batch_runner_loop
@@ -1632,6 +1634,85 @@ def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
     return headers or None
 
 
+_STREAM_END = object()
+
+# Upper bound on pulled-but-undelivered chunks buffered for a slow client. The
+# pump decouples arrival capture from client delivery, but an unbounded buffer
+# would let a pathologically slow client accumulate the whole provider response
+# in memory. Once the buffer is full the pump waits (backpressure) instead of
+# growing without limit; normal clients never fill it, so their arrivals stay
+# captured off the client's pace.
+_STREAM_BUFFER_MAX_CHUNKS = 512
+
+# Attribute the arrival pump attaches to a source exception with the instant
+# the failure was observed upstream, so a response stamp can use it without
+# waiting for a slow client to drain buffered chunks.
+_STREAM_FAILURE_AT = "logos_stream_failure_at"
+
+
+async def _chunks_with_arrival(source):
+    """Yield ``(chunk, arrival)`` pairs with arrival decoupled from delivery.
+
+    A background task pulls from ``source`` as fast as data arrives and records
+    each chunk's arrival instant, buffering it for the consumer, which yields at
+    the client's own pace. The recorded arrival therefore reflects when the
+    provider sent the byte, not when the client was ready to take it — what the
+    statistics page's exec figure needs: the provider's own time, without logos'
+    client-delivery wait.
+
+    The buffer is bounded (``_STREAM_BUFFER_MAX_CHUNKS``): a slow client cannot
+    accumulate unbounded provider output. When it fills, the pump waits for
+    room (backpressure) rather than growing memory.
+
+    The source is closed and the pump cancelled when this generator ends,
+    including on a client disconnect (GeneratorExit at the ``yield``). A source
+    exception is re-raised to the consumer (annotated with the upstream failure
+    instant) once the in-flight chunks are drained. The caller must close this
+    generator (e.g. via ``aclosing``) so the cleanup in the finally runs.
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=_STREAM_BUFFER_MAX_CHUNKS)
+
+    async def _pump() -> None:
+        try:
+            # The pump pulls as fast as data arrives. The put is bounded, so a
+            # slow client applies backpressure (the put blocks) once the buffer
+            # is full instead of accumulating the response without limit.
+            async for chunk in source:
+                await queue.put((chunk, datetime.datetime.now(datetime.timezone.utc)))
+        except asyncio.CancelledError:
+            # Client disconnect. The source may be closing already (cancelled
+            # __anext__) or still open (the pump was waiting for buffer room),
+            # so close it unless a concurrent close is in flight.
+            with suppress(RuntimeError):
+                await source.aclose()
+            raise
+        except BaseException as exc:  # noqa: BLE001 - re-raised by the consumer
+            # Stamp the failure where it is observed, upstream, not when the
+            # (possibly slow) client finishes draining buffered chunks.
+            try:
+                setattr(exc, _STREAM_FAILURE_AT, datetime.datetime.now(datetime.timezone.utc))
+            except AttributeError:
+                pass  # exception type does not accept attributes
+            with suppress(RuntimeError):
+                await source.aclose()
+            await queue.put(exc)
+        await queue.put(_STREAM_END)
+
+    pump = asyncio.get_running_loop().create_task(_pump())
+    try:
+        while True:
+            item = await queue.get()
+            if item is _STREAM_END:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        pump.cancel()
+        with suppress(asyncio.CancelledError):
+            await pump
+
+
 async def _streaming_response(
     context,
     payload,
@@ -1689,6 +1770,12 @@ async def _streaming_response(
 
     def _pre_stream_error_response(status_code: int, body: Any, error_message: str):
         """Record an error that occurred before a streaming response was committed."""
+        # The provider's (error) response is complete the moment this runs — it
+        # either sent an error status or the transport failed — so end the exec
+        # figure here. Without the stamp the exec window would fall back to the
+        # completion time, which adds the error handling and persistence below.
+        if request_id:
+            _pipeline.record_provider_response(request_id)
         corrected_sc, error_body = coerce_upstream_error(status_code, body)
         _release()
         if log_id:
@@ -1763,6 +1850,10 @@ async def _streaming_response(
             }
 
         def _new_logosnode_chunk_iter():
+            # The stamp lands on the actual WebSocket send, not here: session
+            # acquisition and the send lock run before it, and a pre-token
+            # retry calls this again, so each attempt re-stamps and the final
+            # attempt's send is what the request keeps.
             return _logosnode_registry.send_stream_command(
                 provider_id=provider_id,
                 action="infer_stream",
@@ -1772,9 +1863,16 @@ async def _streaming_response(
                     "request_path": request_path,
                 },
                 timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+                on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
             )
 
+        unconsumed_cleanup = _UnconsumedStreamCleanup(None, _release)
+
         async def logosnode_streamer():
+            # Discard of a never-started body cannot run this generator's finally;
+            # claim the reserved slot as soon as the body runs.
+            if unconsumed_cleanup is not None:
+                unconsumed_cleanup.claim_for_streamer()
             stream_log = _StreamingLogAccumulator()
             error_message = None
             ttft_recorded = False
@@ -1790,6 +1888,17 @@ async def _streaming_response(
             # also completes the disconnect count, which until now only saw
             # the clients that left *before* the first token.
             stream_completed = False
+            # The provider's last byte is the last chunk off the worker stream.
+            # _chunks_with_arrival captures each chunk's arrival on a
+            # background pump (independent of the client's pace), so this holds
+            # the last chunk's arrival — not the moment the loop ends, which
+            # under backpressure would be after the client already took it.
+            last_chunk_at = None
+            # Closing the generator at the terminal-frame yield (GuideLLM and
+            # similar close after [DONE]) raises GeneratorExit and skips the
+            # post-loop stamp. Track whether we stamped so finally can persist
+            # the captured arrival before record_completion when needed.
+            provider_response_stamped = False
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
@@ -1802,10 +1911,13 @@ async def _streaming_response(
                         # async-generator GC hook, so its cleanup (which is
                         # what sends the cancellation) would run at some
                         # unspecified later point. Closing it here runs that
-                        # cleanup while the disconnect is being handled.
-                        async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
-                            async for chunk in chunk_iter:
+                        # cleanup while the disconnect is being handled. The
+                        # chunks are read through _chunks_with_arrival so the
+                        # arrival instant is captured off the client's pace.
+                        async with aclosing(_chunks_with_arrival(_new_logosnode_chunk_iter())) as wrapped:
+                            async for chunk, arrival in wrapped:
                                 produced = True
+                                last_chunk_at = arrival
                                 # Parse before yielding: GuideLLM closes its HTTP
                                 # stream as soon as it receives [DONE]. If the
                                 # completion flag were set afterwards, that normal
@@ -1838,7 +1950,22 @@ async def _streaming_response(
                             await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
                             continue
                         error_message = str(e)
+                        # The worker stream failed; stamp the failure instant the
+                        # arrival pump recorded upstream (annotated on the
+                        # exception), not the last chunk's arrival — a stream that
+                        # produced chunks and then timed out waiting for stream_end
+                        # should count that wait as provider run time, which
+                        # last_chunk_at would omit.
+                        if request_id:
+                            _pipeline.record_provider_response(request_id, at=getattr(e, _STREAM_FAILURE_AT, None))
+                            provider_response_stamped = True
                         raise e
+                    # The worker stream completed — the provider's last byte,
+                    # stamped at that chunk's arrival (last_chunk_at), before
+                    # the finally's billing/persistence runs.
+                    if request_id:
+                        _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                        provider_response_stamped = True
                     stream_completed = True
                     break  # stream completed without raising
             finally:
@@ -1854,6 +1981,16 @@ async def _streaming_response(
                 # as a success.
                 if error_message is None and stream_log.upstream_error:
                     error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
+                # Client close after [DONE] jumps here via GeneratorExit before
+                # the post-loop stamp. Persist the captured terminal arrival so
+                # statistics do not fall back to completion time (billing delay).
+                if (
+                    request_id
+                    and not provider_response_stamped
+                    and stream_log.terminal_event_received
+                    and last_chunk_at is not None
+                ):
+                    _pipeline.record_provider_response(request_id, at=last_chunk_at)
                 billable = stream_completed and stream_log.upstream_error is None
                 response_payload = stream_log.response_payload()
                 usage_tokens = _usage_tokens_from_payload(
@@ -1906,11 +2043,13 @@ async def _streaming_response(
                 )
                 _release()
 
-        return StreamingResponse(
+        response = StreamingResponse(
             logosnode_streamer(),
             media_type="text/event-stream",
             headers=_decision_response_headers(request_id, scheduling_stats),
         )
+        response._logos_unconsumed_cleanup = unconsumed_cleanup
+        return response
 
     # ── HTTP executor path ────────────────────────────────────────────────
     stream_status = StreamingExecutionStatus()
@@ -1921,6 +2060,16 @@ async def _streaming_response(
         on_headers=process_headers,
         status=stream_status,
     )
+
+    def _stamp_provider_call():
+        # The executor captures the dispatch instant after its request
+        # preparation (the multipart decode for file uploads) and before the
+        # send, in status.dispatch_at — set once the generator body has run,
+        # i.e. by the peek below. A preparation failure leaves it unset: the
+        # request never reached the provider, so the call stamp stays off and
+        # the stats split falls back to the scheduling-based cut.
+        if request_id and stream_status.dispatch_at is not None:
+            _pipeline.record_provider_call(request_id, at=stream_status.dispatch_at)
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so
     # that on_headers fires and – crucially – UpstreamStreamError is raised
@@ -1934,6 +2083,9 @@ async def _streaming_response(
             provider_id,
             exc.status_code,
         )
+        # The provider was called and answered (with an error status) — the
+        # queue figure ends at the dispatch it captured.
+        _stamp_provider_call()
         return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
     except StopAsyncIteration:
         first_chunk = None
@@ -1945,8 +2097,18 @@ async def _streaming_response(
             type(exc).__name__,
             exc,
         )
+        _stamp_provider_call()
         return _pre_stream_error_response(502, {"error": str(exc)}, str(exc))
 
+    # The peek ran the executor's setup, so the dispatch instant it captured
+    # is available — stamp the provider call from it (see _sync_response for
+    # the reasoning).
+    _stamp_provider_call()
+
+    # When the first upstream byte (or an immediately-empty stream) was
+    # observed. The http_streamer starts its last-byte tracker from this so an
+    # empty or single-chunk stream still stamps a real arrival instant.
+    stream_first_byte_at = datetime.datetime.now(datetime.timezone.utc)
     upstream_content_type = upstream_stream_headers.get("content-type", "")
     upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
     response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
@@ -1957,6 +2119,9 @@ async def _streaming_response(
     response_headers["content-type"] = (
         "text/event-stream" if translating else (upstream_content_type or "text/event-stream")
     )
+
+    # Bound before http_streamer so the closure can claim it when the body runs.
+    unconsumed_cleanup = None
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
@@ -1976,9 +2141,33 @@ async def _streaming_response(
             translated_stream = None
         error_message = None
         ttft_recorded = False
+        # The provider's last byte is the last chunk off the upstream (or the
+        # empty-stream observation, for a body-less stream). _chunks_with_arrival
+        # captures each chunk's arrival on a background pump — independent of the
+        # client's pace and of the loop's end — so this holds the last chunk's
+        # arrival, ahead of the cloud-SSE pricing lookup and terminal-frame
+        # delivery, both of which are logos work that must stay out of the
+        # provider's window.
+        last_chunk_at = stream_first_byte_at
+        # The first chunk was already observed at the peek (stream_first_byte_at),
+        # before StreamingResponse started. Re-injecting it into the pump would
+        # re-stamp it at pump start, which for a delayed response start inflates
+        # a one-chunk stream's run figure — so keep the peek instant for it and
+        # the pump's recorded arrival for every later chunk.
+        first_chunk_pending = bool(first_chunk)
+        # Closing at the terminal-frame yield skips the post-loop stamp via
+        # GeneratorExit; finally uses this to persist the captured arrival.
+        provider_response_stamped = False
 
-        def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
-            return cost_enricher.feed(chunk) if cost_enricher else [chunk]
+        async def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
+            if cost_enricher is None:
+                return [chunk]
+            # A settled usage frame triggers a synchronous pricing DB lookup; run
+            # the enrichment off the event loop so the arrival pump (a separate
+            # task on this loop) keeps recording chunk arrivals while billing
+            # runs. feed() is awaited sequentially, so its buffer sees one call
+            # at a time and is safe from the worker thread.
+            return await asyncio.to_thread(cost_enricher.feed, chunk)
 
         def client_chunks(chunk: bytes | str) -> list[bytes | str]:
             """Record one upstream chunk and return what the client receives.
@@ -1993,30 +2182,54 @@ async def _streaming_response(
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
         _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
-        try:
-            # Yield the already-peeked first chunk
-            if first_chunk:
-                for outgoing_chunk in enriched_chunks(first_chunk):
-                    for client_chunk in client_chunks(outgoing_chunk):
-                        yield client_chunk
-                if not ttft_recorded:
-                    if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
-                    _record_ettft_accuracy(scheduling_stats)
-                    ttft_recorded = True
 
+        # The already-peeked first chunk is re-injected at the head of the
+        # source so the arrival pump starts before the first yield to the
+        # client. Yielding it directly (as before) would let a slow client hold
+        # up that yield while the pump is not yet running, so every later
+        # chunk's arrival would be stamped only after the client took chunk
+        # one — inflating the provider's run figure.
+        async def _source():
+            if first_chunk:
+                yield first_chunk
             async for chunk in chunk_iter:
-                for outgoing_chunk in enriched_chunks(chunk):
-                    for client_chunk in client_chunks(outgoing_chunk):
-                        yield client_chunk
-                _live_streams.update(request_id, stream_log.streamed_tokens())
-                if chunk and not ttft_recorded:
-                    if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
-                    _record_ettft_accuracy(scheduling_stats)
-                    ttft_recorded = True
+                yield chunk
+
+        # Discard of a never-started body cannot run this generator's finally;
+        # claim ownership of the prefetched upstream + slot as soon as we run.
+        if unconsumed_cleanup is not None:
+            unconsumed_cleanup.claim_for_streamer()
+
+        try:
+            async with aclosing(_chunks_with_arrival(_source())) as wrapped:
+                async for chunk, arrival in wrapped:
+                    # The re-injected first chunk keeps its peek instant; later
+                    # chunks use the pump's recorded arrival.
+                    last_chunk_at = stream_first_byte_at if first_chunk_pending else arrival
+                    first_chunk_pending = False
+                    for outgoing_chunk in await enriched_chunks(chunk):
+                        for client_chunk in client_chunks(outgoing_chunk):
+                            yield client_chunk
+                    _live_streams.update(request_id, stream_log.streamed_tokens())
+                    if chunk and not ttft_recorded:
+                        if log_id:
+                            with DBManager() as db:
+                                db.set_time_at_first_token(log_id)
+                        _record_ettft_accuracy(scheduling_stats)
+                        ttft_recorded = True
+            # The upstream stream is exhausted. When the executor recovered from
+            # a mid-stream transport failure it set stream_status.error (and
+            # error_at) and ended the iterator without raising — so end the exec
+            # figure at that failure instant, not the last good chunk's arrival.
+            # Otherwise the provider's last byte is the last chunk's arrival
+            # (last_chunk_at), stamped before any enrichment or terminal-frame
+            # delivery keeps that logos-side work out of the provider's numbers.
+            if request_id:
+                if stream_status.error is not None:
+                    _pipeline.record_provider_response(request_id, at=stream_status.error_at)
+                else:
+                    _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                provider_response_stamped = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2044,6 +2257,14 @@ async def _streaming_response(
                     yield client_chunk
         except Exception as exc:
             error_message = str(exc)
+            # The upstream failed mid-stream; stamp the failure instant the
+            # arrival pump recorded upstream (annotated on the exception), not
+            # the last chunk's arrival — the interval between the last good byte
+            # and the observed failure is provider time, and last_chunk_at would
+            # omit it.
+            if request_id:
+                _pipeline.record_provider_response(request_id, at=getattr(exc, _STREAM_FAILURE_AT, None))
+                provider_response_stamped = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
                     for client_chunk in client_chunks(outgoing_chunk):
@@ -2073,6 +2294,11 @@ async def _streaming_response(
                 error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
             failed = error_message is not None
             stream_log.finish()
+            # Client close after [DONE] jumps here via GeneratorExit before the
+            # post-loop stamp. Persist the captured terminal arrival so the
+            # exec figure does not fall back to completion (billing) time.
+            if request_id and not provider_response_stamped and stream_log.terminal_event_received:
+                _pipeline.record_provider_response(request_id, at=last_chunk_at)
             response_payload = stream_log.response_payload()
             usage_tokens = _usage_tokens_from_payload(
                 response_payload,
@@ -2133,10 +2359,13 @@ async def _streaming_response(
             )
             _release()
 
-    return StreamingResponse(
+    unconsumed_cleanup = _UnconsumedStreamCleanup(chunk_iter, _release)
+    response = StreamingResponse(
         http_streamer(),
         headers=response_headers,
     )
+    response._logos_unconsumed_cleanup = unconsumed_cleanup
+    return response
 
 
 def _persist_terminal_response(
@@ -2214,15 +2443,29 @@ async def _sync_response(
         )
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, upstream_payload)
+        # The provider-call stamp is taken at the actual dispatch below — after
+        # preparation, and for LogosNode after session acquisition and the
+        # send lock — so the queue/exec split excludes the rate-limit and
+        # budget checks that ran in between. A preparation failure never
+        # reaches the dispatch, so a request that never went out carries no stamp.
 
         timed_out = False
         error_message = None
         status_override = None
+        # The instant the provider's full response arrived. For a LogosNode
+        # sync this is the moment send_command returns — before logos merges
+        # the worker's perf trace and decodes the (possibly large base64) body.
+        # For a cloud sync it is the moment execute_sync returns. Capturing it
+        # at dispatch keeps that logos-side post-response work out of the
+        # provider's run figure.
+        response_at = None
 
         if context.provider_type == "logosnode" and context.lane_id:
             sync_payload = force_non_streaming_payload(prepared_payload)
             try:
                 with perf_trace.phase(request_id, "rpc.send_command"):
+                    # Stamp on the actual WebSocket send, after session
+                    # acquisition and the send lock (see send_command).
                     rpc_result = await _logosnode_registry.send_command(
                         provider_id=provider_id,
                         action="infer",
@@ -2232,7 +2475,13 @@ async def _sync_response(
                             "request_path": request_path,
                         },
                         timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
+                        on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
                     )
+                # The full response is in hand the moment send_command returns;
+                # capture it before the perf merge and body decoding below,
+                # which are logos work that must stay out of the provider's
+                # run figure.
+                response_at = datetime.datetime.now(datetime.timezone.utc)
                 # The worker returns its own (LOGOS_WORKER_PERF_TRACE-gated)
                 # phase breakdown inside the command result; merge it under
                 # rpc.worker.* so the transport cost is the difference.
@@ -2309,7 +2558,28 @@ async def _sync_response(
                 )
         else:
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
-        response_at = datetime.datetime.now(datetime.timezone.utc)
+            # The executor captured both instants where they belong: the
+            # dispatch after its request preparation (the multipart decode for
+            # file uploads) and the response before its body parsing — both of
+            # which are logos work. A preparation failure leaves dispatch_at
+            # unset — the request never reached the provider, so the call
+            # stamp stays off and the stats split falls back to the
+            # scheduling-based cut.
+            if request_id and exec_result.dispatch_at is not None:
+                _pipeline.record_provider_call(request_id, at=exec_result.dispatch_at)
+            if response_at is None:
+                response_at = exec_result.response_at
+        if response_at is None:
+            # No captured instant — a LogosNode dispatch that raised before a
+            # response arrived, or a transport failure with no response: the
+            # failure is observed now.
+            response_at = datetime.datetime.now(datetime.timezone.utc)
+        # The provider's full response has arrived; logos' own post-provider
+        # work (rate-limit header handling, the cost lookup) runs from here.
+        # Ending the exec figure at this instant keeps that internal time out
+        # of the provider's numbers.
+        if request_id:
+            _pipeline.record_provider_response(request_id, at=response_at)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -2975,6 +3245,13 @@ async def _execute_resource_mode(
                 raise
 
     # Execute and Respond
+    #
+    # The provider-call / provider-response timestamps are stamped inside the
+    # execution paths (_sync_response, _streaming_response) at the actual
+    # dispatch and response points — not here — because payload preparation
+    # and, for LogosNode streams, the deferred WebSocket dispatch happen in
+    # between. Stamping before them would count that logos-side work as
+    # provider time.
     try:
         if is_async_job:
             # Async jobs are always non-streaming - use helper
@@ -3201,14 +3478,62 @@ async def _settle(task: asyncio.Task) -> Any:
     return None
 
 
+class _UnconsumedStreamCleanup:
+    """Close a prefetched upstream iterator and free its scheduler slot.
+
+    ``_streaming_response`` peeks the first chunk before building the
+    ``StreamingResponse``, so the upstream connection and the booked lane
+    already exist. Closing the never-started ``http_streamer`` body does
+    not run its ``finally``, so discard must tear those down explicitly.
+    Once the streamer starts it claims this object and owns cleanup itself.
+    """
+
+    __slots__ = ("_chunk_iter", "_release", "_claimed")
+
+    def __init__(self, chunk_iter, release) -> None:
+        self._chunk_iter = chunk_iter
+        self._release = release
+        self._claimed = False
+
+    def claim_for_streamer(self) -> None:
+        """The body generator is consuming the upstream; skip discard cleanup."""
+        self._claimed = True
+        self._chunk_iter = None
+        self._release = None
+
+    async def close(self) -> None:
+        if self._claimed:
+            return
+        self._claimed = True
+        chunk_iter = self._chunk_iter
+        release = self._release
+        self._chunk_iter = None
+        self._release = None
+        if chunk_iter is not None:
+            with suppress(Exception):
+                await chunk_iter.aclose()
+        if release is not None:
+            with suppress(Exception):
+                release()
+
+
 async def _discard_response(response: Any) -> None:
     """Close a response nobody is left to read.
 
     ``_streaming_response`` pulls the first chunk before handing the response
-    over, so by then the upstream connection is already open. Closing the body
-    iterator unwinds the executor's stream contexts instead of leaving them to
-    the garbage collector.
+    over, so by then the upstream connection is already open. Closing only
+    the never-started body generator would leave that iterator and the
+    scheduler slot behind — the attached cleanup closes both, then the body
+    iterator is closed for any streamer that did start.
     """
+    if response is None:
+        return
+    cleanup = getattr(response, "_logos_unconsumed_cleanup", None)
+    if cleanup is not None:
+        with suppress(Exception):
+            await cleanup.close()
+        with suppress(Exception):
+            response._logos_unconsumed_cleanup = None
     iterator = getattr(response, "body_iterator", None)
     if iterator is None:
         return
@@ -3441,6 +3766,349 @@ async def _wait_for_worker_connect(
     return deployments
 
 
+# ── Keepalives while a streaming request is still being processed ──────────
+#
+# A streaming client sees no bytes until the first token: the scheduling wait,
+# the context resolution, and the upstream's pre-token silence all happen
+# before a single byte is on the wire. A reverse proxy in front of Logos (the
+# deployment's Traefik defaults to a 180 s respond timeout) gives up with a 504
+# long before a queued or cold-loading request produces its first token, and the
+# client reports a network failure. Committing the response early and dribbling
+# keepalive bytes keeps the connection alive through the whole wait.
+
+# How often a keepalive goes out when nothing else is. Well under the 180 s the
+# proxy allows, so a single dropped keepalive cannot open the 504 window.
+_KEEPALIVE_INTERVAL_S = float(os.getenv("LOGOS_STREAM_KEEPALIVE_S", "15"))
+# An SSE comment: a valid, ignorable line in every SSE stream (Anthropic and
+# OpenAI alike), and safe to send before the upstream dialect is even known.
+_KEEPALIVE_BYTES = b": keepalive\n\n"
+# Marks the end of the content stream in the keepalive queue.
+_KEEPALIVE_DONE = object()
+# Local HTTP providers may stream NDJSON (or other non-SSE byte protocols).
+# Committing ``text/event-stream`` early and injecting SSE comments would
+# corrupt those responses, so they keep the late-commit path.
+_KEEPALIVE_NON_SSE_PROVIDER_TYPES = frozenset({"local"})
+
+
+def _deployments_guarantee_sse(deployments) -> bool:
+    """Whether every candidate deployment streams SSE to the client.
+
+    The keepalive wrapper commits ``text/event-stream`` before the upstream
+    content type is known. That is correct for logosnode and cloud OpenAI-
+    compatible providers; a ``local`` deployment may return NDJSON and must
+    not take this path.
+    """
+    for deployment in deployments or ():
+        if str(deployment.get("type") or "").lower() in _KEEPALIVE_NON_SSE_PROVIDER_TYPES:
+            return False
+    return True
+
+
+def _deployments_for_keepalive_gate(body: dict, auth: "AuthContext", deployments) -> list:
+    """Narrow deployments to the requested model before the SSE keepalive gate.
+
+    A key may reach both a logosnode chat model and an unrelated ``local``
+    deployment. Keepalive eligibility must follow the model that will actually
+    run, not every deployment the key can see.
+    """
+    requested = str(body.get("model") or "").strip()
+    if not requested or not deployments:
+        return list(deployments or ())
+    model_id = None
+    resolved = getattr(auth, "resolved_proxy_model", None)
+    if isinstance(resolved, (tuple, list)) and resolved:
+        model_id = resolved[0]
+    if model_id is not None:
+        narrowed = [d for d in deployments if d.get("model_id") == model_id]
+        if narrowed:
+            return narrowed
+    narrowed = [d for d in deployments if str(d.get("model_name") or "") == requested]
+    return narrowed or list(deployments)
+
+
+def _sse_event_end(buf: bytearray) -> int:
+    """Exclusive end index of the first complete SSE event in ``buf``, or -1.
+
+    SSE events end at a blank line. Upstream may use LF (``\\n\\n``) or CRLF
+    (``\\r\\n\\r\\n``); both are recognized, and the returned slice preserves
+    whichever delimiter the upstream sent.
+    """
+    lf = buf.find(b"\n\n")
+    crlf = buf.find(b"\r\n\r\n")
+    if lf < 0 and crlf < 0:
+        return -1
+    if lf < 0:
+        return crlf + 4
+    if crlf < 0:
+        return lf + 2
+    # Whichever blank line appears first delimits the event.
+    if crlf < lf:
+        return crlf + 4
+    return lf + 2
+
+
+def _error_frames(path: str, status: int, body: Any) -> list:
+    """A failure as SSE frames in the dialect the client speaks.
+
+    Once the keepalive response has committed (200, text/event-stream), a
+    failure can no longer ride a proper HTTP status — it has to travel in the
+    stream, the way a mid-stream failure already does. The frame shape follows
+    the inbound path: a Messages client gets an ``error`` event, a chat
+    client an OpenAI ``data:`` error frame plus ``[DONE]``.
+    """
+    _, openai_body = coerce_upstream_error(status, body)
+    if is_messages_path(path):
+        return [sse("error", translate_error(openai_body))]
+    return [b"\n\n", f"data: {json.dumps(openai_body)}\n\n".encode(), b"data: [DONE]\n\n"]
+
+
+def _instream_error_frames(path: str, exc: Exception) -> list:
+    """An exception from the execution path as in-stream error frames."""
+    if isinstance(exc, HTTPException):
+        return _error_frames(path, exc.status_code, {"error": str(exc.detail)})
+    return _error_frames(path, 500, {"error": str(exc)})
+
+
+def _instream_sync_frames(response: Response, path: str) -> list:
+    """A synchronous response that the keepalive response has to carry.
+
+    ``route_and_execute`` can answer a ``stream: true`` request without a
+    stream — a pre-stream error, or a request the pipeline resolved to a
+    non-streaming answer (Whisper ignores ``stream``). The keepalive response
+    is already committed, so the answer rides in the stream: an error becomes
+    an error frame, and a 200 body is handed over as-is.
+    """
+    status = getattr(response, "status_code", 200)
+    raw = getattr(response, "body", b"")
+    if status != 200:
+        try:
+            body = json.loads(raw) if raw else {"error": "request failed"}
+        except (ValueError, TypeError):
+            body = {"error": raw.decode(errors="replace") if raw else "request failed"}
+        return _error_frames(path, status, body)
+    return [raw] if raw else []
+
+
+def _resolves_to_whisper(body: dict, path: str, auth: "AuthContext") -> bool:
+    """Whether a request will be answered synchronously by a Whisper model.
+
+    Whisper ignores ``stream`` and keeps its upstream content type, so such a
+    request must not commit an SSE keepalive response — it would hand the
+    transcription back as a raw JSON body under ``text/event-stream``. The
+    check covers the requested name, the audio upload path, and the resolved
+    model, because a logical alias (e.g. ``transcription-production``) can
+    point at ``whisper-1`` even though the requested text does not say so.
+    """
+    if is_whisper_payload(body) or is_audio_upload_path(path):
+        return True
+    resolved = getattr(auth, "resolved_proxy_model", None)
+    model_name = resolved[1] if isinstance(resolved, (tuple, list)) else resolved
+    return "whisper" in str(model_name or "").lower()
+
+
+def _scheduling_comment(headers) -> Optional[bytes]:
+    """The scheduling decision as an SSE comment, or None if it carried none.
+
+    The ETTFT estimate and warmth state are only known once the pipeline has
+    run — after the keepalive response is committed, so they cannot ride the
+    response headers. The benchmark client correlates the scheduler's view with
+    the observed TTFT, so the values travel in the stream as a comment (ignored
+    by every other client) under the same names the headers used.
+    """
+    names = ("x-logos-ettft-ms", "x-logos-ettft-tier", "x-logos-warmth-state")
+    parts = [f"{name}={headers[name]}" for name in names if headers.get(name) is not None]
+    if not parts:
+        return None
+    return (": " + " ".join(["logos-schedule"] + parts) + "\n\n").encode()
+
+
+async def _keepalive_producer(inner_iterator, queue: "asyncio.Queue") -> None:
+    """Feed the content streamer's chunks into ``queue``.
+
+    A producer task (rather than awaiting the streamer inline) keeps the drain
+    robust under cancellation: when the client walks away, cancelling this task
+    unwinds the ``aclosing`` context, which closes the inner streamer and runs
+    its cleanup — the worker cancel, the scheduler release — promptly, instead
+    of leaving the streamer to the async-generator GC hook.
+    """
+    try:
+        async with aclosing(inner_iterator):
+            async for chunk in inner_iterator:
+                await queue.put(chunk)
+        await queue.put(_KEEPALIVE_DONE)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        with suppress(asyncio.CancelledError):
+            await queue.put(exc)
+
+
+async def _keepalive_streaming_response(request: Request, **execute_kwargs):
+    """Answer a streaming request with a response that stays alive while it works.
+
+    Returns a ``StreamingResponse`` immediately, so the headers — and thus the
+    first bytes — reach the client (and any proxy) within milliseconds, well
+    inside the proxy's respond timeout. The generator then runs the usual
+    execution path and dribbles a keepalive byte whenever the gap since the
+    last real byte exceeds ``_KEEPALIVE_INTERVAL_S``.
+
+    Two phases, because both can sit behind a long silence:
+
+    * **Pipeline** — ``route_and_execute`` schedules, resolves the context and
+      (on the HTTP path) peeks the upstream's first chunk. All of it runs
+      before any token exists, and it is what can take minutes.
+    * **Content** — the resolved stream's body, drained through a queue so the
+      keepalives keep flowing across the upstream's own pre-token silence.
+
+    A keepalive is yielded by this wrapper, not by the streamer, so it never
+    reaches the logging, billing or translation that the streamer performs on
+    real content. Failures that used to be an HTTP status (a scheduling
+    timeout, a context error, a pre-stream non-2xx) become in-stream error
+    events once the response has committed; the no-deployment 404 is raised
+    before this point and keeps its status.
+    """
+    request_id = execute_kwargs.get("request_id")
+    log_id = execute_kwargs.get("log_id")
+    path = execute_kwargs.get("path")
+    headers = {"X-Request-ID": request_id} if request_id else None
+
+    async def gen():
+        work = asyncio.create_task(route_and_execute(**execute_kwargs))
+        watcher = asyncio.create_task(_wait_for_client_disconnect(request))
+        producer: Optional[asyncio.Task] = None
+        inner_iterator = None
+        response: Optional[Response] = None
+        try:
+            # Phase 1 — the pipeline, keepaliving across its silence.
+            try:
+                while True:
+                    done, _ = await asyncio.wait(
+                        {work, watcher},
+                        timeout=_KEEPALIVE_INTERVAL_S,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    # The watcher's probe consumes the http.disconnect message,
+                    # so a disconnect that lands in the same tick as a finished
+                    # task wins: streaming into a closed socket would be lost
+                    # either way.
+                    if watcher in done:
+                        logger.info(
+                            "Cancelled request %s: client disconnected before the response was ready", request_id
+                        )
+                        _record_log_failure(
+                            log_id,
+                            request_id,
+                            "Client disconnected before the response was ready; upstream request cancelled.",
+                        )
+                        # The response may have been produced in this same tick:
+                        # on the HTTP path its first chunk is already peeked, so
+                        # the upstream connection is open. Close it (and let the
+                        # scheduler slot release) instead of leaving it to the
+                        # client that is already gone.
+                        await _discard_response(await _settle(work))
+                        return
+                    if work in done:
+                        response = work.result()
+                        break
+                    yield _KEEPALIVE_BYTES
+            except Exception as exc:
+                for frame in _instream_error_frames(path, exc):
+                    yield frame
+                return
+
+            # The response is ready; Starlette's own watcher takes over the
+            # disconnect for the body phase.
+            watcher.cancel()
+
+            if isinstance(response, StreamingResponse):
+                # Own the upstream stream before yielding anything else: if the
+                # client disconnects while the scheduling comment is sent,
+                # ``finally`` must still cancel the producer / close this
+                # iterator so the worker connection and scheduler slot release.
+                inner_iterator = response.body_iterator
+                queue: "asyncio.Queue" = asyncio.Queue(maxsize=1024)
+                producer = asyncio.create_task(_keepalive_producer(inner_iterator, queue))
+                # The scheduling decision (ETTFT estimate, warmth) was only
+                # known once the pipeline ran — too late for the committed
+                # headers — so it rides in the stream as a comment for the
+                # benchmark client that correlates it with the observed TTFT.
+                comment = _scheduling_comment(response.headers)
+                if comment:
+                    yield comment
+                # Phase 2 — the content stream, keepaliving across the
+                # upstream's pre-token silence. Upstream chunks can split an
+                # SSE event across reads; buffer until a blank-line boundary
+                # so a keepalive comment is never injected mid-event.
+                pending = bytearray()
+                while True:
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_INTERVAL_S)
+                    except asyncio.TimeoutError:
+                        if not pending:
+                            yield _KEEPALIVE_BYTES
+                        continue
+                    if item is _KEEPALIVE_DONE:
+                        break
+                    if isinstance(item, Exception):
+                        for frame in _instream_error_frames(path, item):
+                            yield frame
+                        break
+                    if isinstance(item, (bytes, bytearray, memoryview)):
+                        pending.extend(item)
+                        while True:
+                            end = _sse_event_end(pending)
+                            if end < 0:
+                                break
+                            event = bytes(pending[:end])
+                            del pending[:end]
+                            yield event
+                    else:
+                        # Rare non-bytes chunk from a custom streamer: flush
+                        # any buffered SSE first so order stays intact.
+                        if pending:
+                            yield bytes(pending)
+                            pending.clear()
+                        yield item
+                if pending:
+                    yield bytes(pending)
+            else:
+                for frame in _instream_sync_frames(response, path):
+                    yield frame
+        finally:
+            watcher.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await watcher
+            completed = response
+            if not work.done():
+                work.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                settled = await work
+                if completed is None:
+                    completed = settled
+            if producer is not None:
+                if not producer.done():
+                    producer.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await producer
+            # Always discard the settled response. Closing only a never-started
+            # body_iterator (e.g. cancel at the scheduling-comment yield before
+            # the producer enters http_streamer) bypasses its finally and would
+            # leave the prefetched upstream / reserved slot behind; discard runs
+            # the attached cleanup first, then closes the body.
+            if completed is not None:
+                await _discard_response(completed)
+            elif inner_iterator is not None:
+                with suppress(Exception):
+                    await inner_iterator.aclose()
+            # handle_sync_request hands the live-feed entry to this generator for
+            # StreamingResponse; without finish here a cancel before the body
+            # producer starts (or any path that never enters a streamer finally)
+            # leaves the request registered forever.
+            _live_streams.finish(request_id)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
@@ -3523,6 +4191,24 @@ async def handle_sync_request(path: str, request: Request):
             request_id=request_id,
             required_provider_id=required_provider_id,
         )
+        # A streaming request commits its response immediately and stays alive
+        # with keepalives while it is processed: the scheduling wait and the
+        # upstream's pre-token silence otherwise sit behind zero bytes and a
+        # proxy's respond timeout (Traefik's default 180 s) 504s the client
+        # before the first token. A request the pipeline answers synchronously
+        # (Whisper ignores stream) keeps the synchronous path and its upstream
+        # content type. Model-free resource-mode requests also stay sync: the
+        # model is chosen later, and committing SSE here would mis-label a
+        # Whisper answer selected by classification. Local deployments may
+        # stream NDJSON rather than SSE, so they keep the late-commit path too.
+        if (
+            body.get("model")
+            and payload_requests_streaming(body)
+            and not _resolves_to_whisper(body, path, auth)
+            and _deployments_guarantee_sse(_deployments_for_keepalive_gate(body, auth, deployments))
+        ):
+            response = await _keepalive_streaming_response(request, **execute_kwargs)
+            return response
         response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
         return response
     finally:

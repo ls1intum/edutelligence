@@ -8,7 +8,7 @@
     <!-- Immutable calibration snapshots. A NULL calibration_key_hash marks
          an import without a known hardware/vLLM key; those are never
          shared. Rows outlive their provider (ON DELETE SET NULL). -->
-    <changeSet id="042-model-calibrations" author="logos">
+    <changeSet id="050-model-calibrations" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="model_calibrations"/></not>
         </preConditions>
@@ -43,7 +43,7 @@
 
     <!-- Authoritative per-node profiles. sync_revision is bumped on every
          central change, so an older worker echo cannot overwrite it. -->
-    <changeSet id="042-model-profiles-central-state" author="logos">
+    <changeSet id="050-model-profiles-central-state" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="model_profiles" columnName="sync_revision"/></not>
         </preConditions>
@@ -73,7 +73,7 @@
     <!-- model_profiles is written on every worker status. Every query keys
          on provider_id, which the (provider_id, model_name) unique index
          already serves; these three indexes are never read. -->
-    <changeSet id="042-model-profiles-drop-unused-indexes" author="logos">
+    <changeSet id="050-model-profiles-drop-unused-indexes" author="logos">
         <sql><![CDATA[
             DROP INDEX IF EXISTS idx_model_profiles_provider;
             DROP INDEX IF EXISTS idx_model_profiles_model_name;

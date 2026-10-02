@@ -21,6 +21,12 @@
   color: rgb(var(--color-typography-500));
 }
 
+// What the last export covered — a capped download must read as one, not as a
+// complete answer.
+.ac-note--export {
+  margin-top: 12px;
+}
+
 .ac-error {
   margin-top: 12px;
   font-size: var(--font-size-sm);

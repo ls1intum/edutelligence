@@ -374,6 +374,60 @@ class MonitoringRecorder:
         """Attach provider_id once it is resolved (after scheduling)."""
         self._buffer(request_id, provider_id=provider_id)
 
+    def record_provider_call(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the request is handed to the upstream provider.
+
+        ``timestamp_forwarding`` (``record_scheduled``) is set when the
+        scheduler picks the provider — for cloud requests long before the
+        provider call, because the rate-limit and budget checks run in
+        between. The statistics page splits a finished request's wall time at
+        this instant instead: the queue figure then covers everything logos
+        made the request wait for, and the exec figure is the provider's own
+        time.
+
+        ``at`` pins the instant the caller observed the dispatch. The executor
+        paths pass the instant captured inside the executor — after its request
+        preparation (the multipart decode for file uploads) and before the
+        send — so that preparation stays out of the provider's window, and a
+        preparation failure (no dispatch) leaves the stamp off. Omitted (or
+        None) stamps ``now()``.
+
+        Buffered like the other pre-execution fields: the split only matters
+        once the request is finished, so the value rides the completion
+        UPDATE rather than costing the hot path its own write.
+        """
+        self._buffer(
+            request_id,
+            timestamp_provider_call=at if at is not None else datetime.datetime.now(datetime.timezone.utc),
+        )
+
+    def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the upstream provider's response has fully arrived.
+
+        ``timestamp_response`` (``record_complete``) is written at completion,
+        which for a finished request is *after* the post-provider work logos
+        still runs — most notably the synchronous cost/pricing lookup. Ending
+        the exec figure at ``timestamp_response`` therefore read that internal
+        billing wait as provider time. The statistics page ends the exec
+        figure at this instant instead: everything between the provider call
+        and the provider's last byte is the provider's own, and what logos
+        does after (billing, persistence) is neither queue nor exec.
+
+        ``at`` pins the instant the caller observed the provider's last byte.
+        The streaming paths pass the last chunk's arrival time rather than the
+        moment this call runs: by then the last chunk has already been yielded
+        downstream and — on cloud SSE — its terminal frame has run the
+        synchronous pricing lookup, both of which are logos work that must stay
+        out of the provider's window. Omitted (or None) stamps ``now()``.
+
+        Buffered like ``record_provider_call``: it only matters once the
+        request is finished, so it rides the completion UPDATE.
+        """
+        self._buffer(
+            request_id,
+            timestamp_provider_response=at if at is not None else datetime.datetime.now(datetime.timezone.utc),
+        )
+
     def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
         """Persist whether this key's rate limiter admitted the request.
 

@@ -150,7 +150,11 @@ capturing.
    providers and three models (capabilities, aliases, prices); policies;
    priced `log_entry` rows (billing + statistics + My Workspace usage bars);
    one `in_progress` and one `completed` batch; agent workspaces/sessions;
-   and team budget / default rate limits for the team-detail overview.
+   and team budget / default rate limits for the team-detail overview. It
+   also creates a fourth, catalog-only model (`gpt-4o-mini`), gives it usage,
+   and deletes it again — the delete trigger keeps that usage under the
+   model's former name, so the statistics shot shows a trash-marked
+   deleted-model entry.
 
 3. If the seed aborts with `required Keycloak users missing`, finish step 1
    and re-run. Do **not** invent alternate usernames — the role guides and
@@ -181,6 +185,8 @@ flows use a **concept** name (no role prefix); role-only list pages keep the
 | `team-detail-overview.png` | owner or `logos_admin` | `/teams/<id>` — **Overview** | `roles/app-admin.md#teams` |
 | `team-detail-members.png` | same | `/teams/<id>` — **Members** | same |
 | `team-detail-application-keys.png` | owner or `logos_admin` | `/teams/<id>` — **Application Keys** | same |
+| `team-detail-repositories.png` | owner or `logos_admin` | `/teams/<id>` — **Repositories** | same |
+| `team-detail-workflows.png` | owner or `logos_admin` | `/teams/<id>` — **Workflows** | same |
 | `team-detail-models.png` | owner or `logos_admin` | `/teams/<id>` — **Models** | same |
 | `team-detail-activity.png` | owner or `logos_admin` | `/teams/<id>` — **Activity** | same |
 | `team-detail-cloud-usage.png` | owner or `logos_admin` | `/teams/<id>` — **Cloud Usage** | same |
