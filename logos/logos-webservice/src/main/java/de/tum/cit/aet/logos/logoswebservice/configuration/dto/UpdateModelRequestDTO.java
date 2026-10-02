@@ -18,12 +18,13 @@ public record UpdateModelRequestDTO(
      * weight values that actually change are auto-marked as overrides.
      */
     Map<String, Boolean> weightOverrides,
+    Map<String, Integer> profileRatings,
     List<String> aliases
 ) {
     public UpdateModelRequestDTO(Integer modelId, String name, String description, String tags,
                                  Integer weightLatency, Integer weightAccuracy,
                                  Integer weightCost, Integer weightQuality) {
         this(modelId, name, description, tags, weightLatency, weightAccuracy, weightCost, weightQuality,
-            null, null);
+            null, null, null);
     }
 }

@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.repository;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -41,4 +42,6 @@ public interface TokenPriceRepository extends JpaRepository<TokenPrice, Integer>
     @Query(value = "UPDATE token_prices SET valid_to = statement_timestamp() "
         + "WHERE provider_id = :providerId AND valid_to IS NULL", nativeQuery = true)
     int closeCurrentPricesByProviderId(@Param("providerId") int providerId);
+
+    List<TokenPrice> findByModelId(Integer modelId);
 }

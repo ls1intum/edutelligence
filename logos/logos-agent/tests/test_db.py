@@ -189,6 +189,66 @@ class TestStatementTypes:
 
         assert "CAST(:attempts AS INTEGER)" in source
 
+    def test_create_session_writes_repo_target_columns(self):
+        import inspect
+
+        source = inspect.getsource(db.create_session)
+        assert "repo_url" in source
+        assert "repo_slug" in source
+        assert "team_repository_id" in source
+        select = db._SESSION_SELECT
+        assert "s.repo_url" in select
+        assert "s.repo_slug" in select
+        assert "s.team_repository_id" in select
+
+
+async def test_create_session_passes_repo_fields(monkeypatch):
+    """Optional repo targeting lands in the INSERT parameters."""
+    model = _Model()
+    captured: dict = {}
+
+    class _Capturing(_Connection):
+        async def execute(self, sql, params=None):
+            sql_text = str(sql).strip()
+            if sql_text.startswith("INSERT INTO agent_sessions"):
+                captured.update(params or {})
+            return await super().execute(sql, params)
+
+    def fake_sessionmaker():
+        def factory():
+            return _Capturing(model)
+
+        return factory
+
+    monkeypatch.setattr(db, "sessionmaker", fake_sessionmaker)
+    session_id = await db.create_session(
+        **_create_kwargs(),
+        repo_url="https://github.com/acme/app.git",
+        repo_slug="acme/app",
+        team_repository_id=42,
+    )
+    assert session_id == 1
+    assert captured["repo_url"] == "https://github.com/acme/app.git"
+    assert captured["repo_slug"] == "acme/app"
+    assert captured["team_repository_id"] == 42
+
+
+async def test_create_session_defaults_repo_fields_to_null(monkeypatch):
+    model = _Model()
+    captured: dict = {}
+
+    class _Capturing(_Connection):
+        async def execute(self, sql, params=None):
+            if str(sql).strip().startswith("INSERT INTO agent_sessions"):
+                captured.update(params or {})
+            return await super().execute(sql, params)
+
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: _Capturing(model)))
+    await db.create_session(**_create_kwargs())
+    assert captured["repo_url"] is None
+    assert captured["repo_slug"] is None
+    assert captured["team_repository_id"] is None
+
 
 class TestMovingInTheQueue:
     """What an operator can say about the order.

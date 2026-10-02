@@ -7,12 +7,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
@@ -46,17 +48,20 @@ public class ProviderService {
     private final TokenPriceRepository tokenPriceRepository;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelMetricsService modelMetricsService;
+    private final JdbcTemplate jdbc;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
                            TokenPriceRepository tokenPriceRepository,
                            OrchestratorNotificationService orchestratorNotificationService,
-                           ModelMetricsService modelMetricsService) {
+                           ModelMetricsService modelMetricsService,
+                           JdbcTemplate jdbc) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
         this.tokenPriceRepository = tokenPriceRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelMetricsService = modelMetricsService;
+        this.jdbc = jdbc;
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
@@ -168,6 +173,27 @@ public class ProviderService {
         if (!providerRepository.existsById(providerId)) {
             throw new IllegalArgumentException("Provider not found: " + providerId);
         }
+        // Lock the provider row before checking: inserting a batch_object
+        // takes a FOR KEY SHARE lock on the referenced row, so no concurrent
+        // registration can commit while the count and the delete run.
+        // Without it, a creation could land an unsettled batch between the
+        // count and the delete, and the cascade would erase its row while
+        // the upstream job keeps running.
+        jdbc.queryForObject("SELECT id FROM providers WHERE id = ? FOR UPDATE", Long.class, providerId);
+        // Deleting the provider cascades its batch_objects rows away. For a
+        // batch that still runs upstream — or finished there without its
+        // usage being booked yet — that would leave the job unreachable and
+        // its spend unbillable, so the deletion waits for it. Settled
+        // records are safe to cascade: the job is terminal and metered.
+        Long unsettled = jdbc.queryForObject(
+            "SELECT count(*) FROM batch_objects WHERE kind = 'batch' AND provider_id = ? AND settled_at IS NULL",
+            Long.class, providerId);
+        if (unsettled != null && unsettled > 0) {
+            throw new ConflictException(
+                "Provider " + providerId + " still has " + unsettled
+                    + " batch(es) running or not yet settled; they must finish and be metered "
+                    + "before the provider can be deleted.");
+        }
         // The pair rows cascade-delete with the provider, which changes the
         // best available latency/cost of every connected model. Collect the
         // affected models before the cascade, and re-derive and re-rank them
@@ -230,6 +256,27 @@ public class ProviderService {
         modelProviderRepository.deleteByModelIdAndProviderId(req.modelId(), req.providerId());
         orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Disconnected model from provider.");
+    }
+
+    /**
+     * Trigger an immediate cloud model sync in the orchestrator: every cloud
+     * provider's {@code /v1/models} listing is re-read now instead of at the
+     * next 15-minute interval. The pass is scheduled on the orchestrator and
+     * writes the resulting models and links itself, so nothing is stored here.
+     * Not transactional — there is no write to defer the notification past,
+     * which is exactly what lets the pass start at once.
+     *
+     * <p>Unlike the provider mutations, this waits for the orchestrator to
+     * accept the refresh and reports the outcome: an operator who pressed
+     * refresh must not be told "triggered" when the pass never started. The
+     * fire-and-forget path would swallow exactly that failure.
+     */
+    public Map<String, Object> refreshModels() {
+        if (!orchestratorNotificationService.sendRefreshSync(false, true)) {
+            throw new IllegalStateException(
+                "The orchestrator could not be reached; the model refresh was not triggered.");
+        }
+        return Map.of("result", "Model refresh triggered.");
     }
 
     public List<Map<String, Object>> getProviderModels(Integer providerId) {

@@ -49,7 +49,7 @@ export class Login implements OnInit {
     this.error.set('');
     try {
       const kc = this.auth.keycloak;
-      // #632: use the server-provided RP id (parent domain) when present; passing
+      // Use the server-provided RP id (parent domain) when present; passing
       // undefined lets loginWithPasskey fall back to defaultRpId() (the hostname).
       const tokens = await loginWithPasskey(keycloakIssuer(kc), kc.clientId!, getPasskeyConfig().rpId);
       // Seamless, no redirect (exactly like the React app): hand the silently-

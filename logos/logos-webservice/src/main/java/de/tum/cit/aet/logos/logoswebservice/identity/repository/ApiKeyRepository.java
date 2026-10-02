@@ -214,6 +214,46 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
         """, nativeQuery = true)
     List<ModelAccessProjection> findAccessibleModelsByKey(@Param("keyId") int keyId);
 
+    /**
+     * Custom-permission keys that touch the model: a direct model grant, or a
+     * provider grant on any of the model's hosting providers. Team-level
+     * grants are ignored for these keys, so the access matrix must list them
+     * on their own.
+     */
+    @Query(value = """
+        SELECT ak.id AS key_id, ak.name AS key_name, ak.is_active, ak.team_id,
+               t.name AS team_name,
+               (EXISTS (SELECT 1 FROM api_key_model_permissions akmp
+                        WHERE akmp.api_key_id = ak.id AND akmp.model_id = :modelId)) AS model_grant
+        FROM api_keys ak
+        LEFT JOIN teams t ON t.id = ak.team_id
+        WHERE ak.use_custom_permissions = true
+          AND (EXISTS (SELECT 1 FROM api_key_model_permissions akmp
+                       WHERE akmp.api_key_id = ak.id AND akmp.model_id = :modelId)
+               OR EXISTS (SELECT 1 FROM api_key_provider_permissions akpp
+                          WHERE akpp.api_key_id = ak.id
+                            AND akpp.provider_id IN (
+                                SELECT mp.provider_id FROM model_provider mp
+                                WHERE mp.model_id = :modelId)))
+        ORDER BY ak.id
+        """, nativeQuery = true)
+    List<CustomPermissionKeyProjection> findCustomPermissionKeysForModel(@Param("modelId") int modelId);
+
+    /**
+     * Which of the given keys hold a grant for a hosting provider of the
+     * model, for the per-provider columns of the key section.
+     */
+    @Query(value = """
+        SELECT akpp.api_key_id, akpp.provider_id
+        FROM api_key_provider_permissions akpp
+        WHERE akpp.api_key_id IN (:keyIds)
+          AND akpp.provider_id IN (
+              SELECT mp.provider_id FROM model_provider mp
+              WHERE mp.model_id = :modelId)
+        """, nativeQuery = true)
+    List<KeyProviderGrantProjection> findProviderGrantsForKeys(
+            @Param("keyIds") List<Integer> keyIds, @Param("modelId") int modelId);
+
     List<ApiKey> findByUserIdAndTeamIdAndKeyType(Integer userId, Integer teamId, ApiKeyType keyType);
 
     List<ApiKey> findByUserIdAndTeamIdIsNullAndKeyType(Integer userId, ApiKeyType keyType);

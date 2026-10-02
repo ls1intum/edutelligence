@@ -4,6 +4,7 @@ import {
   inject,
   signal,
   OnInit,
+  OnDestroy,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
@@ -41,7 +42,7 @@ import { SelectComponent, AppSelectOption } from '../../shared/components/select
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './providers.scss',
 })
-export class Providers implements OnInit {
+export class Providers implements OnInit, OnDestroy {
   private providerService = inject(ProviderManagementService);
   private modelService = inject(ModelManagementService);
 
@@ -89,7 +90,7 @@ export class Providers implements OnInit {
   private cloudProviderTypeOptionsFor(type: ProviderType): AppSelectOption[] {
     if (type === 'logosnode') {
       // Never rendered — the field is hidden for a logosnode — but the value
-      // still has to resolve to something the backend maps to NULL.
+      // still has to resolve to something the application server maps to NULL.
       return [{ value: 'none', label: 'none' }];
     }
     return [
@@ -176,6 +177,10 @@ export class Providers implements OnInit {
   loading = signal(true);
   search = signal('');
   loadError = signal(false);
+
+  // ── Model refresh state ─────────────────────────────────────────────────
+  refreshing = signal(false);
+  refreshError = signal(false);
 
   // ── Expand state ─────────────────────────────────────────────────────────
   expandedId = signal<number | null>(null);
@@ -289,6 +294,93 @@ export class Providers implements OnInit {
     }
   }
 
+  // ── Model refresh ─────────────────────────────────────────────────────────
+  // The orchestrator's cloud model sync is scheduled, not awaited: after the
+  // trigger returns it scrapes every cloud upstream in turn, so the trigger
+  // answer is not completion. Neither is an unchanged model list — the
+  // first write of a pass can land at any moment, and a mid-pass snapshot
+  // can look stable while a later provider is still ahead. The explicit
+  // signal is the orchestrator's pass-in-flight status: poll it while
+  // refetching the model lists, and stop only once it explicitly reports
+  // done — a status that cannot be read (timeout, rolling-deploy 404) is
+  // unknown, not done, and is retried on the next round. The rounds cap
+  // bounds both a stuck upstream (one provider may hold the pass for its
+  // full 30 s request timeout) and a status that never becomes readable.
+  private static readonly REFRESH_POLL_INTERVAL_MS = 2000;
+  private static readonly REFRESH_POLL_MAX_ROUNDS = 45;
+
+  private refreshPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async refreshModels(): Promise<void> {
+    if (this.refreshing()) return;
+    this.refreshing.set(true);
+    this.refreshError.set(false);
+    try {
+      await this.providerService.refreshModels();
+      await this.waitForSyncToFinish();
+    } catch {
+      this.refreshError.set(true);
+    } finally {
+      this.refreshPollTimer = null;
+      this.refreshing.set(false);
+    }
+  }
+
+  ngOnDestroy(): void {
+    if (this.refreshPollTimer !== null) clearTimeout(this.refreshPollTimer);
+  }
+
+  private async waitForSyncToFinish(): Promise<void> {
+    for (let round = 0; round < Providers.REFRESH_POLL_MAX_ROUNDS; round++) {
+      // Status first: when the pass is already done (e.g. there are no
+      // cloud providers at all), the refetch below is the final state and
+      // no further rounds are needed.
+      const running = await this.syncStatus();
+      await this.refetchModelLists();
+      // Only an explicit "not running" from the orchestrator ends the wait.
+      // A status that could not be read is unknown, not done — it must not
+      // report an accepted sync as settled while the pass may still be
+      // writing — so it is retried on the next round.
+      if (running === false) return;
+      await new Promise<void>((resolve) => {
+        this.refreshPollTimer = setTimeout(resolve, Providers.REFRESH_POLL_INTERVAL_MS);
+      });
+    }
+    // The cap ran out with the pass still running, or its status still
+    // unreadable (a stuck upstream, a rolling deploy): stop waiting and
+    // release the button — the next interval pass catches up.
+  }
+
+  /**
+   * true/false when the orchestrator answered, null when its status could
+   * not be read (network failure, or a response without a usable
+   * `running` field). Only an explicit false ends the refresh wait.
+   */
+  private async syncStatus(): Promise<boolean | null> {
+    try {
+      const { running } = await this.providerService.modelSyncStatus();
+      return running === true || running === false ? running : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Refetch the model lists this page shows — the global model catalogue and,
+   * for an expanded row, that provider's connections. Both move
+   * independently: the sync writes per provider, preserving the links the
+   * operator configured by hand.
+   */
+  private async refetchModelLists(): Promise<void> {
+    const models = await this.modelService.getModels();
+    this.allModels.set(models);
+    const expanded = this.expandedId();
+    if (expanded !== null) {
+      const conns = await this.providerService.getProviderModels(expanded);
+      this.providerModels.update((m) => ({ ...m, [expanded]: conns }));
+    }
+  }
+
   formatPrivacy(level: PrivacyLevel): string {
     const map: Record<PrivacyLevel, string> = {
       LOCAL: 'LOCAL',
@@ -394,7 +486,7 @@ export class Providers implements OnInit {
       const generatedKey: string = (res && (res as { api_key?: string }).api_key) || '';
       // Only surface the key when we actually generated one, i.e. the operator
       // left the key field empty. An operator-supplied key is echoed back by the
-      // backend too, and there is nothing new to show for that case.
+      // application server too, and there is nothing new to show for that case.
       if (generatedKey && payload.api_key === undefined) {
         this.createdKeyName.set(payload.name);
         this.createdKey.set(generatedKey);
@@ -462,7 +554,7 @@ export class Providers implements OnInit {
       auth_name: this.editAuthName().trim(),
       auth_format: this.editAuthFormat().trim(),
       provider_type: this.editProviderType(),
-      // Send 'none' literally — the backend treats null as "leave unchanged",
+      // Send 'none' literally — the application server treats null as "leave unchanged",
       // so mapping it to null makes resetting the cloud type a silent no-op.
       cloud_provider_type: this.editCloudProviderType(),
       privacy_level: this.editPrivacyLevel(),

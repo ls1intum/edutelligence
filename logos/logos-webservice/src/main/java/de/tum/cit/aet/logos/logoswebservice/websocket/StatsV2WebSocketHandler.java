@@ -11,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +23,6 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import de.tum.cit.aet.logos.logoswebservice.operations.service.EnqueueEventService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.VramService;
@@ -41,12 +41,36 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private static final int LATEST_REQUESTS_PUSH_SIZE = RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
 
 
-    private static class SessionState {
+    // The vram window a session is looking at: the selected day (null =
+    // today), the cursor into it, the provider connection-state baseline, and
+    // whether the window's init — the full-day payload that establishes the
+    // viewer's baseline — has gone out. One immutable reference so a
+    // transition (init, set_vram_day) is a single atomic swap and the tick
+    // thread's snapshot is a single atomic read — transition and snapshot can
+    // never disagree. Separate volatile fields (however ordered) cannot
+    // guarantee that: the writer can always pause between the generation bump
+    // and the day write, letting the tick capture a fresh generation with the
+    // stale day.
+    record VramWindow(String day, int cursor, String metaSig, boolean baselineSent) {}
+
+    // Package-private, with its fields, so the unit test can pin the
+    // isCurrentVramWindow predicate on a real state instance.
+    static class SessionState {
         volatile boolean initialized = false;
         volatile String logosKey = "";
 
-        volatile String vramDay = null;
-        volatile int vramCursor = 0;
+        // The current vram window; swapped atomically on every change. The
+        // reference identity is the generation: any earlier snapshot is stale
+        // the moment it is swapped out, whatever the writer paused on.
+        final AtomicReference<VramWindow> vramWindow = new AtomicReference<>(new VramWindow(null, 0, "", false));
+
+        // The one ordering mechanism between window transitions and
+        // publication. The tick's delta (capture to send) and every
+        // transition (the swap plus its init push) run under it, so a push
+        // for a superseded window always reaches the viewer before the newer
+        // window's init: the compareAndSet guards the state, this guard
+        // guards the order the messages arrive in.
+        final Object vramLock = new Object();
 
         // The user-selected window. The live delta slide advances only the end
         // to "now"; the start stays anchored where the preset put it.
@@ -55,9 +79,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile int targetBuckets = DEFAULT_TARGET_BUCKETS;
         volatile int bucketSeconds = 60;
         volatile boolean timelineLive = true;
-        volatile boolean deltaEnabled = true;
-        volatile String cursorTs = null;
-        volatile String cursorId = "";
 
         // Who the page is looking at. Null means the whole platform, which is
         // where every session starts. Applies to everything derived from
@@ -67,6 +88,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // rather than merely useless.
         volatile Integer scopeUserId = null;
         volatile Integer scopeTeamId = null;
+        volatile Integer scopeProviderId = null;
+        volatile boolean scopeErrorsOnly = false;
 
         // One lifecycle bucket the request feed is narrowed to (queued, running,
         // error, finished); null shows all states. Deliberately not part of the
@@ -76,7 +99,23 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // charts into a slice of the log they are meant to summarise in full.
         volatile String feedStatus = null;
 
+        // Which half of the statistics page this session is looking at.
+        // "local-providers" → VRAM / lanes / GPUs only; "requests" → aggregates
+        // and the request feed only. Null means both (legacy clients that never
+        // declare an interest, and unit tests that init without one). The page
+        // can show only one tab at a time, so pushing the idle tab's channel is
+        // wasted work on both sides of the socket.
+        volatile String interest = null;
+
         volatile String prevReqSig = "";
+
+        boolean wantsLocalProviders() {
+            return interest == null || "local-providers".equals(interest);
+        }
+
+        boolean wantsRequests() {
+            return interest == null || "requests".equals(interest);
+        }
         // The request ids of the last pushed page — the row set, values
         // excluded. Token counts grow without this moving, and the feed's
         // own count cannot change with them, so a changed row set is the
@@ -88,7 +127,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // a baseline and does not trigger a redundant stats push on top of
         // the one timeline_init already sent.
         volatile String prevScopeSig = "";
-        volatile String prevVramMetaSig = "";
 
         // Traffic moved since the last aggregate push, so the totals the
         // statistics page shows are out of date. Recomputing them is a scan of
@@ -100,8 +138,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
             timelineEnd = now.toInstant().toString();
             timelineStart = now.minusDays(DEFAULT_WINDOW_DAYS).toInstant().toString();
-            cursorTs = timelineEnd;
-            cursorId = "";
             timelineLive = true;
         }
 
@@ -116,8 +152,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 timelineEnd = e.toInstant().toString();
                 targetBuckets = Math.max(1, buckets);
                 timelineLive = now.toEpochSecond() - e.toEpochSecond() <= 120;
-                cursorTs = timelineEnd;
-                cursorId = "";
                 return true;
             } catch (Exception ex) { return false; }
         }
@@ -126,7 +160,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private final VramService vramService;
     private final RequestLogService requestLogService;
     private final RequestLogStatsService statsService;
-    private final EnqueueEventService enqueueService;
     private final OrchestratorLiveStreamClient liveStreamClient;
     private final ObjectMapper objectMapper;
 
@@ -137,13 +170,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     public StatsV2WebSocketHandler(VramService vramService,
                                    RequestLogService requestLogService,
                                    RequestLogStatsService statsService,
-                                   EnqueueEventService enqueueService,
                                    OrchestratorLiveStreamClient liveStreamClient,
                                    ObjectMapper objectMapper) {
         this.vramService = vramService;
         this.requestLogService = requestLogService;
         this.statsService = statsService;
-        this.enqueueService = enqueueService;
         this.liveStreamClient = liveStreamClient;
         this.objectMapper = objectMapper;
         this.scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -190,6 +221,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             case "set_timeline_range" -> handleSetTimelineRange(session, state, msg);
             case "set_scope" -> handleSetScope(session, state, msg);
             case "set_feed_status" -> handleSetFeedStatus(session, state, msg);
+            case "set_interest" -> handleSetInterest(session, state, msg);
             case "ping" -> send(session, Map.of("type", "pong"));
         }
     }
@@ -199,17 +231,15 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         state.initialized = false;
 
         Object dayObj = msg.get("vram_day");
-        state.vramDay = (dayObj instanceof String s && !s.isBlank()) ? s : null;
-        state.vramCursor = 0;
-
-        Object tdObj = msg.get("timeline_deltas");
-        state.deltaEnabled = tdObj == null || coerceBool(tdObj, true);
+        String vramDay = (dayObj instanceof String s && !s.isBlank()) ? s : null;
 
         // Carried on init as well as through set_scope, so a reconnect restores
         // the filter the page is showing instead of silently widening back to
         // the whole platform under an unchanged pair of dropdowns.
         applyScope(state, msg);
         applyFeedStatus(state, msg);
+        // Same for the active tab: a reconnect must not flood the idle channel.
+        applyInterest(state, msg);
 
         Map<String, Object> tl = msg.get("timeline") instanceof Map<?,?> m
             ? (Map<String, Object>) m : Map.of();
@@ -228,9 +258,21 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // the reconnect as one more move.
         state.prevScopeSig = "";
 
-        pushTimelineInit(session, state);
-        pushVramInit(session, state);
-        pushRequests(session, state, true);
+        if (state.wantsRequests()) {
+            pushTimelineInit(session, state);
+            pushRequests(session, state, true);
+        }
+        // The window swap and its init publication are one critical section
+        // on the vram lock — see vramLock. Still reset the window even when
+        // the viewer is on Requests so a later switch to Local Providers
+        // starts from a clean baseline rather than a cursor from a previous
+        // visit.
+        synchronized (state.vramLock) {
+            state.vramWindow.set(new VramWindow(vramDay, 0, "", false));
+            if (state.wantsLocalProviders()) {
+                pushVramInit(session, state);
+            }
+        }
         state.initialized = true;
     }
 
@@ -244,12 +286,12 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
      */
     private void handleSetScope(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         applyScope(state, msg);
-        // The cursor points into the old scope's event stream; deltas resumed
-        // from it would skip everything the new scope should have seen.
-        state.cursorTs = state.timelineEnd;
-        state.cursorId = "";
         // The init re-push below already carries the new scope's aggregates.
         state.prevScopeSig = "";
+        // Scope only shapes request-derived panels; skip the push while the
+        // viewer is on Local Providers — the values are applied and will go
+        // out with the next Requests interest switch.
+        if (!state.wantsRequests()) return;
         pushTimelineInit(session, state);
         pushRequests(session, state, true);
     }
@@ -257,6 +299,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     private static void applyScope(SessionState state, Map<String, Object> msg) {
         state.scopeUserId = msg.get("user_id") instanceof Number n ? n.intValue() : null;
         state.scopeTeamId = msg.get("team_id") instanceof Number n ? n.intValue() : null;
+        state.scopeProviderId = msg.get("provider_id") instanceof Number n ? n.intValue() : null;
+        state.scopeErrorsOnly = Boolean.TRUE.equals(msg.get("errors_only"));
     }
 
     /**
@@ -283,15 +327,59 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
      */
     private void handleSetFeedStatus(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         applyFeedStatus(state, msg);
+        if (!state.wantsRequests()) return;
         pushRequests(session, state, true);
+    }
+
+    /**
+     * Which tab the page is showing. Stored and applied the same way as scope:
+     * carried on init so a reconnect restores it, and sent on every switch so
+     * the idle channel stops being pushed. The reply is a full init for the
+     * newly enabled channel — there is no delta that turns VRAM samples into
+     * request aggregates or the other way around.
+     */
+    private void handleSetInterest(WebSocketSession session, SessionState state, Map<String, Object> msg) {
+        String previous = state.interest;
+        applyInterest(state, msg);
+        if (previous != null && previous.equals(state.interest)) return;
+
+        if (state.wantsRequests()) {
+            state.prevScopeSig = "";
+            pushTimelineInit(session, state);
+            pushRequests(session, state, true);
+        }
+        if (state.wantsLocalProviders()) {
+            synchronized (state.vramLock) {
+                // Force a fresh baseline: the cursor from a previous visit (or
+                // from an init that skipped the VRAM push) would otherwise
+                // only stream deltas the client has no series for.
+                VramWindow current = state.vramWindow.get();
+                state.vramWindow.set(new VramWindow(current.day(), 0, "", false));
+                pushVramInit(session, state);
+            }
+        }
+    }
+
+    private static void applyInterest(SessionState state, Map<String, Object> msg) {
+        Object raw = msg.get("interest");
+        // Only the two tab ids are accepted. Absent on init keeps null (= both
+        // channels) for legacy clients; an unknown value is ignored so a typo
+        // cannot widen or clear a declared interest.
+        if (raw instanceof String s && ("local-providers".equals(s) || "requests".equals(s))) {
+            state.interest = s;
+        }
     }
 
     private void handleSetVramDay(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         Object dayObj = msg.get("day");
         if (dayObj instanceof String s && !s.isBlank()) {
-            state.vramDay = s;
-            state.vramCursor = 0;
-            pushVramInit(session, state);
+            // One critical section on the vram lock — see vramLock.
+            synchronized (state.vramLock) {
+                state.vramWindow.set(new VramWindow(s, 0, "", false));
+                if (state.wantsLocalProviders()) {
+                    pushVramInit(session, state);
+                }
+            }
         }
     }
 
@@ -306,6 +394,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         } else {
             // The init re-push below already carries the new range's aggregates.
             state.prevScopeSig = "";
+            if (!state.wantsRequests()) return;
             pushTimelineInit(session, state);
             pushRequests(session, state, true);
         }
@@ -321,13 +410,17 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             if (state == null || !state.initialized || !session.isOpen()) continue;
 
             try {
-                if (t % 2 == 0) {
+                if (state.wantsRequests() && t % 2 == 0) {
                     pushRequests(session, state, false);
-                    if (state.deltaEnabled && state.timelineLive) {
-                        pushTimelineDelta(session, state);
-                    }
                 }
-                if (t % 5 == 0) {
+                // VRAM deltas ride every tick: a lane the worker just loaded
+                // reaches the UI within one second of its status report
+                // instead of waiting up to five for the next vram cadence.
+                // The fetch is cursor-scoped (new snapshots only) and the
+                // provider-status hop is cached for 3 s, so the per-tick cost
+                // stays small; the push itself is still skipped when nothing
+                // moved (no new samples, cursor, or connection state).
+                if (state.wantsLocalProviders()) {
                     pushVramDelta(session, state);
                 }
                 // Aggregates are the expensive push (findTotals alone scans the
@@ -339,7 +432,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // this flag. Without this the page's counters never moved
                 // after load: stats only ever came with timeline_init, i.e. on
                 // connect and on a range change.
-                if (t % 10 == 0 && state.statsDirty) {
+                if (state.wantsRequests() && t % 10 == 0 && state.statsDirty) {
                     state.statsDirty = false;
                     pushStats(session, state);
                 }
@@ -350,40 +443,99 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     }
 
     private void pushVramInit(WebSocketSession session, SessionState state) {
+        VramWindow window = null;
         try {
-            String day = state.vramDay != null ? state.vramDay : LocalDate.now(ZoneOffset.UTC).toString();
+            window = state.vramWindow.get();
+            // A baseline already went out for this window — the websocket
+            // thread's init or an earlier tick's retry established it:
+            // pushing the full day again would only restate what the viewer
+            // has.
+            if (window.baselineSent()) return;
+            String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
             Map<String, Object> payload = vramService.getVramStats(day, 0);
             Object sid = payload.get("last_snapshot_id");
-            state.vramCursor = sid instanceof Number n ? n.intValue() : 0;
-            state.prevVramMetaSig = vramMetaSig(payload);
-            send(session, Map.of("type", "vram_init", "payload", payload));
+            int cursor = sid instanceof Number n ? n.intValue() : 0;
+            // The payload belongs to the window it was captured for; if a
+            // window change swapped the reference meanwhile, that window's
+            // init is responsible for the push — the stale baseline is
+            // dropped together with the stale payload.
+            if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), cursor, vramMetaSig(payload), true))) {
+                send(session, Map.of("type", "vram_init", "payload", payload));
+            }
         } catch (Exception e) {
-            send(session, Map.of("type", "vram_init", "payload", Map.of("error", "Failed to load VRAM data")));
+            log.warn("[ws/stats/v2] vram_init error: {}", e.getMessage());
+            // The error belongs to the window this init was captured for. If
+            // a day change swapped it out while the query was in flight, the
+            // newer window's init owns the viewer's baseline now — publishing
+            // this stale failure would overwrite a good day with an error.
+            if (window != null && isCurrentVramWindow(state, window)) {
+                send(session, Map.of("type", "vram_init", "payload", Map.of("error", "Failed to load VRAM data")));
+            }
         }
     }
 
     private void pushVramDelta(WebSocketSession session, SessionState state) {
-        try {
-            String day = state.vramDay != null ? state.vramDay : LocalDate.now(ZoneOffset.UTC).toString();
-            Map<String, Object> payload = vramService.getVramStats(day, state.vramCursor);
-            Object sid = payload.get("last_snapshot_id");
-            int nextCursor = sid instanceof Number n ? n.intValue() : state.vramCursor;
-            // Providers are always present (connection metadata is attached
-            // even without new snapshots), so deltas are pushed only when new
-            // samples arrived, the cursor moved, or a provider's connection
-            // state flipped (e.g. a worker went offline — exactly the moment
-            // no new snapshots arrive anymore).
-            boolean hasNewSamples = hasSamples(payload);
-            String metaSig = vramMetaSig(payload);
-            boolean metaChanged = !metaSig.equals(state.prevVramMetaSig);
-            if (hasNewSamples || nextCursor != state.vramCursor || metaChanged) {
-                state.vramCursor = nextCursor;
-                state.prevVramMetaSig = metaSig;
-                send(session, Map.of("type", "vram_delta", "payload", payload));
+        // The whole capture-to-send section runs on the vram lock (see
+        // vramLock): a window transition cannot land between this delta's
+        // capture and its publication, so a push for a superseded window
+        // always reaches the viewer before the newer window's init. The
+        // compareAndSet below stays as the state-level guard.
+        synchronized (state.vramLock) {
+            try {
+                // The snapshot is one atomic read: whatever the in-flight
+                // query fetched is checked against the very reference it was
+                // captured from, and written back only by compareAndSet. A
+                // window change (init, set_vram_day) swaps the reference, so
+                // an in-flight delta spanning the change is dropped whatever
+                // it fetched — it can never send previous-day samples or
+                // overwrite the new day's cursor and connection-state
+                // baseline.
+                VramWindow window = state.vramWindow.get();
+                // A window whose init has not gone out yet is not consumable
+                // by a delta: init and the first delta after a day change
+                // query the same (day, cursor 0) and race for the write-back
+                // — whichever loses the compareAndSet drops its push, and a
+                // delta winning that race would owe the viewer a full-day
+                // "init" that never comes. Instead the tick retries the owed
+                // init: one transient failure of the websocket thread's init
+                // must not wedge the session's vram feed behind a window no
+                // push will ever touch.
+                if (!window.baselineSent()) {
+                    pushVramInit(session, state);
+                    return;
+                }
+                String day = window.day() != null ? window.day() : LocalDate.now(ZoneOffset.UTC).toString();
+                Map<String, Object> payload = vramService.getVramStats(day, window.cursor());
+                Object sid = payload.get("last_snapshot_id");
+                int nextCursor = sid instanceof Number n ? n.intValue() : window.cursor();
+                // Providers are always present (connection metadata is
+                // attached even without new snapshots), so deltas are pushed
+                // only when new samples arrived, the cursor moved, or a
+                // provider's connection state flipped (e.g. a worker went
+                // offline — exactly the moment no new snapshots arrive
+                // anymore).
+                boolean hasNewSamples = hasSamples(payload);
+                String metaSig = vramMetaSig(payload);
+                boolean metaChanged = !metaSig.equals(window.metaSig());
+                if (hasNewSamples || nextCursor != window.cursor() || metaChanged) {
+                    if (state.vramWindow.compareAndSet(window, new VramWindow(window.day(), nextCursor, metaSig, window.baselineSent()))) {
+                        send(session, Map.of("type", "vram_delta", "payload", payload));
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("[ws/stats/v2] vram_delta error: {}", e.getMessage());
             }
-        } catch (Exception e) {
-            log.warn("[ws/stats/v2] vram_delta error: {}", e.getMessage());
         }
+    }
+
+    // Whether a vram window snapshot captured on the tick thread is still the
+    // state's current window. The reference identity is the check: a
+    // transition is a single atomic swap, so a fresh-generation/stale-day
+    // pairing — what separate volatile fields allowed when the writer paused
+    // between the generation bump and the day write — is not expressible,
+    // and any snapshot swapped out is stale whatever it fetched.
+    static boolean isCurrentVramWindow(SessionState state, VramWindow snapshot) {
+        return state.vramWindow.get() == snapshot;
     }
 
     private static boolean hasSamples(Map<String, Object> payload) {
@@ -414,18 +566,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         try {
             Map<String, Object> stats = statsService.getRequestLogStats(
                 state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId);
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n ? n.intValue() : 60;
 
-            Map<String, Object> events = enqueueService.getInRange(
-                state.timelineStart, state.timelineEnd, 200_000,
-                state.scopeUserId, state.scopeTeamId);
-
-            Map<String, Object> payload = new LinkedHashMap<>(stats);
-            payload.put("cursor",  Map.of("enqueue_ts", state.cursorTs != null ? state.cursorTs : "",
-                                          "request_id", state.cursorId));
-            payload.put("events", events.get("events"));
-            send(session, Map.of("type", "timeline_init", "payload", payload));
+            send(session, Map.of("type", "timeline_init", "payload", stats));
         } catch (Exception e) {
             send(session, Map.of("type", "timeline_init", "payload", Map.of("error", "Failed to load timeline data")));
         }
@@ -434,21 +578,20 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     /**
      * Re-send the aggregates for the session's range.
      *
-     * Deliberately not {@link #pushTimelineInit}: that one also ships every
-     * enqueue event in the range (up to 200k rows), which is fine once on
-     * connect and far too much to repeat while the page is open. The client
-     * keeps its event list current from the deltas instead.
+     * Identical in content to {@link #pushTimelineInit}; it is a separate
+     * message only so the client can tell a range change (which invalidates
+     * what is on screen) from a periodic refresh of the range it already shows.
      */
     private void pushStats(WebSocketSession session, SessionState state) {
         try {
             // A live selection keeps growing, so it has to be queried up to now,
-            // the same way pushRequests and pushTimelineDelta do it. Only the end
-            // moves; the start stays where the preset put it.
+            // the same way pushRequests does. Only the end moves; the start
+            // stays where the preset put it.
             if (state.timelineLive) state.timelineEnd = Instant.now().toString();
 
             Map<String, Object> stats = statsService.getRequestLogStats(
                 state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId);
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
                 ? n.intValue() : state.bucketSeconds;
             send(session, Map.of("type", "stats", "payload", stats));
@@ -457,52 +600,17 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private void pushTimelineDelta(WebSocketSession session, SessionState state) {
-        try {
-            String untilIso = Instant.now().toString();
-            Map<String, Object> result = enqueueService.getDeltas(
-                state.cursorTs, state.cursorId, untilIso, 5000,
-                state.scopeUserId, state.scopeTeamId);
-
-            @SuppressWarnings("unchecked")
-            var events = (java.util.List<?>) result.get("events");
-            if (events == null || events.isEmpty()) return;
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> cursor = (Map<String, Object>) result.get("cursor");
-            String newTs = (String) cursor.get("enqueue_ts");
-            String newId = (String) cursor.get("request_id");
-            if (newTs != null && !newTs.isBlank()) { state.cursorTs = newTs; state.cursorId = newId; }
-
-            // Only the end moves. Re-anchoring the start to now-windowSeconds
-            // would turn every calendar-anchored preset into a rolling window:
-            // picking "Today" at 00:20 gives a 20-minute span, so an hour later
-            // the view would cover 01:00–01:20 instead of the whole day.
-            state.timelineEnd = untilIso;
-
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("events", events);
-            payload.put("cursor", Map.of("enqueue_ts", state.cursorTs != null ? state.cursorTs : "",
-                                         "request_id", state.cursorId));
-            payload.put("bucketSeconds", state.bucketSeconds);
-            payload.put("range", Map.of("start", state.timelineStart, "end", state.timelineEnd));
-            send(session, Map.of("type", "timeline_delta", "payload", payload));
-        } catch (Exception e) {
-            log.warn("[ws/stats/v2] timeline_delta error: {}", e.getMessage());
-        }
-    }
-
     private void pushRequests(WebSocketSession session, SessionState state, boolean force) {
         try {
             // A live selection ("last 30 days", "today", …) keeps growing while
             // the page is open, so the request list has to query up to *now*.
-            // state.timelineEnd is only advanced by pushTimelineDelta, which the
-            // statistics page disables (timelineDeltas: false) — reading it here
-            // would pin the list to the instant the range was set and no request
-            // enqueued after page load would ever show up.
+            // state.timelineEnd is only moved by a range change, so reading it
+            // here would pin the list to the instant the range was set and no
+            // request enqueued after page load would ever show up.
             String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
             Map<String, Object> payload = requestLogService.getLatestRequests(
                 state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                state.scopeProviderId, state.scopeErrorsOnly,
                 state.feedStatus, null, null, LATEST_REQUESTS_PUSH_SIZE, false);
             mergeLiveStreams(payload);
             String sig = requestsSig(payload);
@@ -519,7 +627,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             boolean scopeMoved = false;
             if (state.feedStatus != null) {
                 String scopeSig = requestLogService.scopeMovementSig(
-                    state.timelineStart, end, state.scopeUserId, state.scopeTeamId);
+                    state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                    state.scopeProviderId, state.scopeErrorsOnly);
                 if (scopeSig != null && !scopeSig.equals(state.prevScopeSig)) {
                     // The first probe after a fresh baseline (init, scope or
                     // range change re-pushed the aggregates moments ago) just
@@ -548,6 +657,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 if (state.feedStatus != null && (force || rowsChanged)) {
                     payload.put("total", requestLogService.countFeedRows(
                         state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                        state.scopeProviderId, state.scopeErrorsOnly,
                         state.feedStatus));
                 }
                 state.prevReqSig = sig;
@@ -583,6 +693,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             WebSocketSession session = entry.getValue();
             SessionState state = states.get(entry.getKey());
             if (state == null || !state.initialized || !session.isOpen()) continue;
+            if (!state.wantsRequests()) continue;
             try {
                 pushRequests(session, state, false);
             } catch (Exception e) {
@@ -705,16 +816,6 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private static boolean coerceBool(Object v, boolean def) {
-        if (v instanceof Boolean b) return b;
-        if (v instanceof Number n)  return n.intValue() != 0;
-        if (v instanceof String s)  return switch (s.strip().toLowerCase()) {
-            case "true","1","yes","on" -> true;
-            case "false","0","no","off" -> false;
-            default -> def;
-        };
-        return def;
-    }
 
     @PreDestroy
     public void shutdown() { scheduler.shutdownNow(); }

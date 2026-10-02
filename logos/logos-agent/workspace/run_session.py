@@ -1255,19 +1255,40 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
     )
     if process.returncode != 0:
         # An existing pull request for this branch is not a failure: a retried
-        # session should reuse it.
+        # session reuses it. A retry usually changed what the change does —
+        # "refuse it" becomes "serve it" — so bring the title and body back in
+        # line with the commit subject this run wrote. Without this the pull
+        # request keeps the first run's words: the one titled "Refuse X" that,
+        # after its second round, is the one that serves X.
         existing = run(
-            ["gh", "pr", "view", branch, "--repo", slug, "--json", "url", "--jq", ".url"],
+            ["gh", "pr", "view", branch, "--repo", slug, "--json", "number", "url"],
             cwd=CHECKOUT,
             check=False,
             quiet=True,
         )
-        url = existing.stdout.strip()
-        if url:
-            log(f"reusing existing pull request {url}")
-            return url
-        fail("could not open a pull request")
-        return None
+        try:
+            info = json.loads(existing.stdout)
+        except ValueError:
+            info = {}
+        number = info.get("number")
+        if not number:
+            fail("could not open a pull request")
+            return None
+        refreshed = run(
+            ["gh", "pr", "edit", str(number), "--repo", slug, "--title", title, "--body", body],
+            cwd=CHECKOUT,
+            check=False,
+            quiet=True,
+        )
+        url = str(info.get("url") or "")
+        if refreshed.returncode == 0:
+            log(f"reused existing pull request {url} and refreshed its title")
+        else:
+            # The pull request exists and the code is pushed; only its words
+            # could not be brought in line. Say so rather than claim a refresh
+            # that did not happen, but still hand over the link.
+            log(f"reused existing pull request {url}; could not refresh its title")
+        return url or None
 
     for line in process.stdout.splitlines():
         if line.startswith("https://"):

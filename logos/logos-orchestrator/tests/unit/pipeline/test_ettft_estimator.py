@@ -359,7 +359,7 @@ def test_warmth_state_running_with_queue():
 
 
 # ---------------------------------------------------------------------------
-# queue_wait: backend backlog must count, not just the orchestrator queue
+# queue_wait: application server backlog must count, not just the orchestrator queue
 # ---------------------------------------------------------------------------
 
 

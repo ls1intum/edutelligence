@@ -9,6 +9,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -18,7 +19,7 @@ import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
 /**
- * One team's activity view (issue #776).
+ * One team's activity view.
  *
  * The seed has team 2001 with one completed request (9001) on key 3001, and a
  * second request (9002) belonging to no team at all — which is what makes the
@@ -114,6 +115,26 @@ class TeamActivityControllerTest {
     }
 
     @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = "/sql/seed-operations-live-counts.sql",
+         executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void strandedRowsFallOutOfTheLiveCounts() throws Exception {
+        // A row without a response is only live while it could still be
+        // running: 9031 and 9032 are minutes old and count, 9030 and 9033 are
+        // beyond the in-flight horizon — a client or worker died mid-flight —
+        // and counting them would put days of dead traffic on every poll.
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.live.queued").value(1))
+           .andExpect(jsonPath("$.live.running").value(1))
+           .andExpect(jsonPath("$.live.finished").value(1))
+           .andExpect(jsonPath("$.live.failed").value(0));
+    }
+
+    @Test
     void itBreaksUsageDownByKey() throws Exception {
         mvc.perform(post("/logosdb/teams/2001/activity")
                 .with(TestJwt.adminUser())
@@ -196,6 +217,50 @@ class TeamActivityControllerTest {
                 .content("{\"user_id\": 1006}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.requests").isEmpty());
+    }
+
+    // ── Most Asked Questions ────────────────────────────────────────────────
+    // Counts alone answer "is anything happening"; this answers "what".
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = "/sql/seed-operations-most-asked-questions.sql",
+         executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void itGroupsAndCountsTheTeamsQuestions() throws Exception {
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           // 9020 and 9021 ask the same question under FULL logging: one
+           // entry, counted twice, ranked first. 9022 asks a different
+           // question but is BILLING-only, so it must not surface at all.
+           // 9023 uses the Responses API's bare-string input shape
+           // ({"input": "hello"}) rather than a messages array — it must
+           // still be normalized into its own ranked entry, not dropped.
+           .andExpect(jsonPath("$.most_asked_questions.length()").value(2))
+           .andExpect(jsonPath("$.most_asked_questions[0].question")
+               .value("What is the capital of France?"))
+           .andExpect(jsonPath("$.most_asked_questions[0].count").value(2))
+           .andExpect(jsonPath("$.most_asked_questions[1].question").value("hello"))
+           .andExpect(jsonPath("$.most_asked_questions[1].count").value(1))
+           // The ranking is a sample of the window, and the number that says
+           // how far back it reaches goes out with it, so the view can label
+           // it as one.
+           .andExpect(jsonPath("$.most_asked_sample_limit").value(10000));
+    }
+
+    @Test
+    void aTeamWithNoFullLoggingTrafficHasNoQuestions() throws Exception {
+        // 9001 and 9002 (the base seed) carry no privacy_level of FULL, so
+        // nothing was ever consented to be stored — an empty list is the
+        // honest answer, not an error.
+        mvc.perform(post("/logosdb/teams/2001/activity")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.most_asked_questions").isEmpty());
     }
 
     // ── Window ───────────────────────────────────────────────────────────────

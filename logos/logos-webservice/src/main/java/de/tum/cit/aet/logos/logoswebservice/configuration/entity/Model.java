@@ -37,8 +37,12 @@ public class Model {
      * that carries an override.
      */
     @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb", nullable = false)
+    @Column(name = "weight_overrides", columnDefinition = "jsonb", nullable = false)
     private Map<String, Boolean> weightOverrides = new HashMap<>();
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "profile_ratings", columnDefinition = "jsonb", nullable = false)
+    private Map<String, Integer> profileRatings = Map.of();
 
     public Integer getId() { return id; }
     public String getName() { return name; }
@@ -49,6 +53,7 @@ public class Model {
     public String getTags() { return tags; }
     public String getDescription() { return description; }
     public Map<String, Boolean> getWeightOverrides() { return weightOverrides; }
+    public Map<String, Integer> getProfileRatings() { return profileRatings; }
 
     public void setName(String name) { this.name = name; }
     public void setWeightLatency(Integer w) { this.weightLatency = w; }
@@ -58,4 +63,7 @@ public class Model {
     public void setTags(String tags) { this.tags = tags; }
     public void setDescription(String description) { this.description = description; }
     public void setWeightOverrides(Map<String, Boolean> weightOverrides) { this.weightOverrides = weightOverrides; }
+    public void setProfileRatings(Map<String, Integer> profileRatings) {
+        this.profileRatings = profileRatings != null ? profileRatings : Map.of();
+    }
 }

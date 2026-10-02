@@ -22,7 +22,7 @@ import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsSe
  * fallback to hide behind. The {@code /ws/stats/v2} handshake and
  * {@code /logosdb/latest_requests} apply the same rule to the same rows;
  * leaving these two open would let a caller read one team's spend that the
- * team activity endpoint (issue #776) refuses them. Team owners get their
+ * team activity endpoint refuses them. Team owners get their
  * slice there, scoped and checked.
  */
 @RestController
@@ -48,9 +48,12 @@ public class RequestLogStatsController {
         // unaffected.
         Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
         Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
+        Integer providerId = body.get("provider_id") instanceof Number n ? n.intValue() : null;
+        boolean errorsOnly = Boolean.TRUE.equals(body.get("errors_only"));
         try {
             return ResponseEntity.ok(
-                    requestLogStatsService.getRequestLogStats(startDate, endDate, targetBuckets, userId, teamId));
+                    requestLogStatsService.getRequestLogStats(
+                        startDate, endDate, targetBuckets, userId, teamId, providerId, errorsOnly));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -73,8 +76,12 @@ public class RequestLogStatsController {
         String endDate   = (String) body.get("end_date");
         // Narrows the requester list only. Absent means every requester in range.
         Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
+        Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
+        Integer providerId = body.get("provider_id") instanceof Number n ? n.intValue() : null;
+        boolean errorsOnly = Boolean.TRUE.equals(body.get("errors_only"));
         try {
-            return ResponseEntity.ok(requestLogStatsService.getScopeOptions(startDate, endDate, teamId));
+            return ResponseEntity.ok(requestLogStatsService.getScopeOptions(
+                startDate, endDate, teamId, userId, providerId, errorsOnly));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }

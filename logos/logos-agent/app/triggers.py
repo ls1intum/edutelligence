@@ -32,7 +32,7 @@ The trade is minutes of latency for work whose whole premise is "when the
 GPUs are idle anyway".
 
 **Remembered by reference, forever.** Every reaction is recorded on the
-session as the thing it reacted to — `issue-812`, `pr-772-assigned`,
+session as the thing it reacted to — `<issue-id>`, `pr-<number>-assigned`,
 `pr-772-review-5085681761`, `thread-772-3910035243`. A reference that
 already has a session is never queued again, so an issue that stays assigned
 does not produce a second pull request next week, and an answered question
@@ -89,6 +89,9 @@ CREATED_BY = "logos-agent (trigger)"
 
 # Where a session writes an answer for the runner to post.
 REPLY_FILE = "reply.md"
+# One directory per answered review: one file per inline comment, named
+# after the comment's id, so each answer can be posted into its own thread.
+REPLY_DIR = "replies"
 
 # The head of a pull request the pass could not read. Not the same as None:
 # None is an answer — the lookup succeeded and the head is confirmed not
@@ -107,7 +110,7 @@ def workspace_name(kind: str, number: int, title: str) -> str:
 
     The name is not decoration: it becomes part of the branch a session
     pushes (`logos/agent/<workspace>/session-42`) and the first column of
-    the workspace list. `auto-2` tells nobody anything; `issue-812-oom-on-
+    the workspace list. `auto-2` tells nobody anything; `<issue-id>-oom-on-
     startup` says what the checkout is for, in the branch as well as in the
     UI.
 
@@ -263,6 +266,10 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
     nothing in the body and everything in the inline comments, so a task
     built from the body alone would ask an agent to fix nothing in
     particular.
+
+    The comment's own id travels with it too. The answer goes back into the
+    comment's own thread, and the file that carries it is named after the
+    id — an agent that cannot name the comment cannot answer it.
     """
     rendered: list[str] = []
     for comment in comments:
@@ -273,10 +280,16 @@ def _inline_block(comments: list[dict[str, Any]]) -> str:
             continue
         if len(body) > MAX_COMMENT_CHARS:
             body = body[:MAX_COMMENT_CHARS] + " […]"
-        rendered.append(f"- {path}:{line}\n  {body}")
+        comment_id = comment.get("id")
+        prefix = f"[comment {comment_id}] " if isinstance(comment_id, int) else ""
+        rendered.append(f"- {prefix}{path}:{line}\n  {body}")
     if not rendered:
         return ""
-    return "Inline comments:\n\n" + "\n\n".join(rendered[:30]) + "\n\n"
+    # Every comment is shown, whatever the review carries: the answer is
+    # owed for each of them, and a comment the task never showed cannot be
+    # answered. A long review is a long task; an incomplete one is a
+    # session that can never deliver.
+    return "Inline comments:\n\n" + "\n\n".join(rendered) + "\n\n"
 
 
 async def review_request_task(number: int, title: str, body: str, requester: str, *, branch: str | None = None) -> str:
@@ -339,10 +352,16 @@ async def review_task(
         f"Check each point against the current code before you change anything — lines "
         f"move, and some of it may already be addressed. Fix what is still valid, add "
         f"regression coverage for it, and run the tests and linters of the part you "
-        f"touched. Write your reply to the review into `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` "
-        f"— in English, saying for each point what you changed and how you verified it, "
-        f"or why it needed no change; the runner posts it for you. Do not merge the pull "
-        f"request and do not force-push."
+        f"touched.\n\n"
+        f"Answer each inline comment where it was made: one file per comment under "
+        f"`$LOGOS_ARTIFACT_DIR/{REPLY_DIR}/`, named after the id the comment is listed "
+        f"with — `{REPLY_DIR}/<comment id>.md`. Each one in English, saying what you "
+        f"changed and how you verified it, or why it needed no change; the runner posts "
+        f"it into that comment's own thread, resolves the thread, and asks the reviewer "
+        f"to look at the pull request again. Only a point that no inline comment "
+        f"carries — one that lives in the review body alone — goes into "
+        f"`$LOGOS_ARTIFACT_DIR/{REPLY_FILE}`, where the runner posts it as a single "
+        f"comment. Do not merge the pull request and do not force-push."
     )
 
 
@@ -353,12 +372,18 @@ async def thread_task(
     *,
     branch: str | None,
     reading: bool = False,
+    other_inline: list[dict[str, Any]] | None = None,
 ) -> str:
     """The task text for comments addressed to the agent.
 
     The answer is the deliverable. Whether code changes at all is the
     comment's business: "why does this fail?" wants an explanation, "can you
     also handle X?" wants a commit. Saying so plainly beats guessing.
+
+    ``other_inline`` are the pull request's review comments that live in
+    *other* threads. The comment being answered often points at them — "act
+    on the reviewer's note" — and a task that carried only the answering
+    thread left the agent unable to see what it was asked to act on.
     """
     rendered = []
     for comment in comments[:MAX_THREAD_COMMENTS]:
@@ -370,6 +395,35 @@ async def thread_task(
         where = f" on {path}:{comment.get('line') or comment.get('original_line') or '?'}" if path else ""
         rendered.append(f"{author}{where} wrote:\n{body}")
     conversation = "\n\n---\n\n".join(rendered)
+    others = ""
+    if other_inline:
+        listed = []
+        # _get_all answers oldest-first, so the tail is the recent review
+        # the comment you are answering actually points at. Keep the newest
+        # MAX_THREAD_COMMENTS (still oldest-to-newest within the tail) rather
+        # than the stale head, which would drop the note that matters.
+        for comment in other_inline[-MAX_THREAD_COMMENTS:]:
+            author = str((comment.get("user") or {}).get("login") or "somebody")
+            body = str(comment.get("body") or "").strip()
+            if not body:
+                continue
+            if len(body) > MAX_COMMENT_CHARS:
+                body = body[:MAX_COMMENT_CHARS] + " […]"
+            path = comment.get("path")
+            where = f" on {path}:{comment.get('line') or comment.get('original_line') or '?'}" if path else ""
+            listed.append(f"{author}{where} wrote:\n{body}")
+        if listed:
+            others = (
+                "The comment you are answering refers to review comments on this pull "
+                "request that are not in your own thread. They are here so you can act on "
+                "what was asked rather than say you cannot see them:\n\n"
+                + "\n\n---\n\n".join(listed)
+                + (
+                    "\n\n[more review comments on this pull request were not included]"
+                    if len(other_inline) > MAX_THREAD_COMMENTS
+                    else ""
+                )
+            )
     if branch:
         place = (
             f"You are working in a checkout of that pull request's own branch `{branch}`. "
@@ -392,15 +446,17 @@ async def thread_task(
             "answer needs a code change, say what you would change and why, and leave it to "
             "the people on the thread."
         )
-    return await for_task(
-        f"You were asked something on #{number} ('{title}').\n\n"
-        f"{conversation}\n\n"
+    text = f"You were asked something on #{number} ('{title}').\n\n{conversation}\n\n"
+    if others:
+        text += others + "\n\n"
+    text += (
         f"Write your answer to `$LOGOS_ARTIFACT_DIR/{REPLY_FILE}` — the runner posts it in "
         f"the thread for you, so write it as the reply itself: English, to the point, no "
         f"preamble about being an agent. Answer what was actually asked; read the code "
         f"before you claim anything about it, and say plainly when you do not know. "
         f"{place}"
     )
+    return await for_task(text)
 
 
 class TriggerPoller:
@@ -416,6 +472,10 @@ class TriggerPoller:
         self._writers: dict[str, bool] = {}
         # Which numbers are pull requests, for the length of one pass.
         self._pulls: dict[int, dict[str, Any] | None] = {}
+        # Each pull request's inline comments, read once per pass: a pull
+        # request with several open threads would otherwise be listed once
+        # per thread.
+        self._inline: dict[int, list[dict[str, Any]]] = {}
         # Called after a pass queued something, so the work starts on the
         # next admission rather than at the scheduler's own tick. Set by the
         # service on startup; the poller does not import the session manager
@@ -502,6 +562,7 @@ class TriggerPoller:
         # pass is short enough that reading them once is honest.
         self._writers = {}
         self._pulls = {}
+        self._inline = {}
         candidates = await self._candidates(now)
         self._last_pass = now
         self._last_error = ""
@@ -960,6 +1021,46 @@ class TriggerPoller:
                 directed.append(comment)
         return directed
 
+    async def _readable_comments(self, comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The comments this session may read, once trusted work has been authorized.
+
+        Wider than :meth:`_trusted_comments`: the session was already handed a
+        branch by somebody who may direct a change, and the note it was told to
+        address may sit with a configured review app — in no team and pushing
+        nothing, but one the operator named. Reading what was asked is not
+        obeying a stranger, so a bot the repository already trusts comes over
+        the line. An untrusted account does not: this is where a foreign review
+        note would steer code, and the allowlist stays the wall.
+        """
+        readable = []
+        for comment in comments:
+            author = str((comment.get("user") or {}).get("login") or "")
+            if author and await self._worth_reading(author):
+                readable.append(comment)
+        return readable
+
+    async def _other_inline_comments(self, number: int, thread: dict[str, Any]) -> list[dict[str, Any]]:
+        """The pull request's inline comments that are not in this thread.
+
+        A thread the agent answers carries its own comments, but the comment
+        it answers often points at review notes in another thread — "address
+        the reviewer's comment" — which it was never shown. This hands over
+        the rest of the pull request's inline comments, so the agent acts on
+        what was asked rather than replying that it cannot see the other one.
+
+        The listing is fetched per pull request and kept for the pass; a
+        thread that cannot read it degrades to the thread alone rather than
+        losing the whole conversation.
+        """
+        if number not in self._inline:
+            try:
+                self._inline[number] = await github.pull_inline_comments(number)
+            except Exception as exc:
+                logger.info("could not read the inline comments of #%s: %s", number, exc)
+                self._inline[number] = []
+        here = {c.get("id") for c in (thread.get("comments") or []) if isinstance(c.get("id"), int)}
+        return [c for c in self._inline[number] if isinstance(c.get("id"), int) and c["id"] not in here]
+
     async def _pull_request(self, number: int) -> dict[str, Any] | None:
         """That number as a pull request, or None when it is an issue.
 
@@ -1081,7 +1182,7 @@ class TriggerPoller:
             # about something: asked on a pull request, the answer is about
             # that pull request's code, and it used to be written from a
             # checkout of the default branch by an agent that had never
-            # seen the diff. Its title was `#882` for the same reason.
+            # seen the diff. Its title was `` for the same reason.
             other = None if pull else await self._pull_request(number)
             title = pull["title"] if pull else str((other or {}).get("title") or f"#{number}")
             # About a pull request's code when it is one this runner
@@ -1145,6 +1246,23 @@ class TriggerPoller:
                     branch = None
                 else:
                     comments = directed
+            # An inline thread on a pull request is often answered "address
+            # the reviewer's note" — pointing at review comments that sit in
+            # other threads. Hand those over too, so the agent acts on what
+            # was asked rather than replying that it cannot see the other one.
+            other_inline = await self._other_inline_comments(number, thread) if inline and about_pull else []
+            if branch is not None and other_inline:
+                # A writable session hears people who may direct a change and
+                # the review apps the operator named, and no one else. The
+                # other threads' notes are foreign text the agent is about to
+                # be handed a push credential beside, and a stranger's review
+                # note steering a code change is the injection that filter
+                # exists to stop — so the allowlist stays the wall. A named
+                # review bot is over it: the session was already authorized to
+                # act, and the note it was told to address may well be the
+                # bot's. A read-only answer keeps every note: it can only be
+                # explained, not acted on.
+                other_inline = await self._readable_comments(other_inline)
             candidates.append(
                 {
                     # The reference names the conversation and its latest
@@ -1159,6 +1277,7 @@ class TriggerPoller:
                         comments,
                         branch=branch,
                         reading=about_pull,
+                        other_inline=other_inline,
                     ),
                     "branch": branch,
                     # A thread with no writer in it is answered in words:

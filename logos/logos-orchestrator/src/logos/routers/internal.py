@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import secrets
+from dataclasses import asdict
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
@@ -14,9 +15,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import logos.main as _main
 from logos.auth import AuthContext
-from logos.benchmarks.guidellm_runner import BENCHMARK_JOB_HEADER
-from logos.benchmarks.guidellm_runner import DATASET as BENCHMARK_DATASET
+from logos.batch_credential import issue_batch_credential
+from logos.benchmarks.batch_runner import run_benchmark_batch
+from logos.benchmarks.configuration import BenchmarkRunSettings
 from logos.benchmarks.guidellm_runner import (
+    BENCHMARK_JOB_HEADER,
     benchmark_affinity_headers,
     credential_transport_is_secure,
     extract_serving_configuration,
@@ -24,17 +27,28 @@ from logos.benchmarks.guidellm_runner import (
     resolve_benchmark_target,
     run_benchmark_job,
 )
+from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
+from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import (
+    BenchmarkLimitsRequest,
+    DatasetMetadataRequest,
+    DatasetSearchRequest,
+    HfReachabilityRequest,
     InternalAddLaneRequest,
     InternalBenchmarkRequest,
     InternalCalibrateRequest,
     InternalDeleteLaneRequest,
+    InternalDrainLaneRequest,
+    InternalLaneLoadStatusRequest,
     InternalSleepLaneRequest,
+    InternalStopCalibrationRequest,
     InternalWakeLaneRequest,
     RefreshPipelineRequest,
 )
 from logos.dbutils.types import Deployment
+from logos.hf_reachability import check_hf_reachability
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError
 from logos.logosnode_snapshot import _logosnode_snapshot_is_connected
 from logos.main import (
@@ -57,6 +71,7 @@ from logos.main import (
     _served_context_window_stats,
     refresh_pipeline_runtime_state,
 )
+from logos.request_content import sanitized_payload_for_logging
 
 logger = logging.getLogger("LogosLogger")
 
@@ -176,7 +191,24 @@ async def internal_refresh_pipeline(data: RefreshPipelineRequest, request: Reque
         # timeout. The pass refreshes runtime state itself once it finds
         # something, so nothing is lost by returning first.
         _main._cloud_model_sync.request_refresh()
+    if data.sync_cloud_models and _main._azure_deployment_sync is not None:
+        _main._azure_deployment_sync.request_refresh()
     return {"status": "ok"}
+
+
+@router.get("/internal/cloud_model_sync_status", tags=["admin"])
+async def internal_cloud_model_sync_status(request: Request):
+    """Whether a cloud model sync pass is running or queued, for the webservice.
+
+    A manual refresh is answered before its pass has written anything, and the
+    pass contacts every cloud upstream in turn — so "trigger accepted" is not
+    "done". The admin UI polls this until the pass the refresh requested has
+    finished, instead of guessing from unchanged model lists (the first write
+    can land at any moment, and a mid-pass snapshot can look stable).
+    """
+    _require_internal_secret(request, disabled_detail="Internal cloud model sync status endpoint disabled")
+    sync = _main._cloud_model_sync
+    return {"running": bool(sync is not None and sync.is_busy())}
 
 
 @router.get("/internal/provider_status", tags=["admin"])
@@ -202,6 +234,14 @@ async def internal_provider_status(request: Request):
         last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
         if isinstance(last_heartbeat, datetime.datetime):
             last_heartbeat = last_heartbeat.isoformat()
+        connected_at = runtime_snapshot.get("connected_at") if runtime_snapshot else None
+        if isinstance(connected_at, datetime.datetime):
+            connected_at = connected_at.isoformat()
+        # Self-reported by the worker — distinct from connected_at, so it
+        # reflects worker uptime even across bridge reconnects.
+        worker_started_at = (
+            (runtime_snapshot.get("runtime") or {}).get("process_started_at") if runtime_snapshot else None
+        )
         providers.append(
             {
                 "provider_id": provider_id,
@@ -210,10 +250,41 @@ async def internal_provider_status(request: Request):
                 "connected": connected,
                 "connection_state": "online" if connected else "offline",
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
+                "connected_at": connected_at if isinstance(connected_at, str) else None,
+                "worker_started_at": worker_started_at if isinstance(worker_started_at, str) else None,
                 "calibrating": _main._logosnode_registry.is_calibrating(provider_id),
             }
         )
     return {"providers": providers}
+
+
+@router.get("/internal/perf_trace/{request_id}", tags=["admin"])
+async def internal_perf_trace(request: Request, request_id: str):
+    """Fetch and consume the env-gated perf trace of one request (the benchmark).
+
+    Only available with ``LOGOS_PERF_TRACE`` enabled — then each request's
+    phase timings accumulate in memory and are exposed here exactly once
+    (take/pop semantics). The benchmark harness reads it to build the
+    nanosecond phase report; with tracing disabled the store is empty and
+    this endpoint always 404s.
+    """
+    _require_internal_secret(request, disabled_detail="Perf trace endpoint disabled")
+    from logos import perf_trace  # noqa: PLC0415 (keep the hot path import-free)
+
+    trace = perf_trace.take(request_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="No perf trace for request (tracing disabled or already taken)")
+    return trace
+
+
+@router.delete("/internal/perf_trace", tags=["admin"])
+async def internal_perf_trace_flush(request: Request):
+    """Drop all pending perf traces (benchmark harness cleanup)."""
+    _require_internal_secret(request, disabled_detail="Perf trace endpoint disabled")
+    from logos import perf_trace  # noqa: PLC0415
+
+    perf_trace.reset()
+    return {"status": "ok"}
 
 
 @router.get("/internal/model_context_windows", tags=["admin"])
@@ -236,6 +307,19 @@ async def internal_model_context_windows(request: Request):
         "windows": {model: entry["current_min"] for model, entry in stats.items() if "current_min" in entry},
         "stats": stats,
     }
+
+
+@router.post("/internal/hf_reachability", tags=["admin"])
+async def internal_hf_reachability(data: HfReachabilityRequest, request: Request):
+    """Whether the central HF_TOKEN can see a Hugging Face repository.
+
+    Provider-independent, so it needs no connected worker. ``status`` is
+    ``reachable``, ``rejected`` (with ``reason_code``) or ``unknown`` when the
+    Hub could not be asked; an ``unknown`` result is not a verdict to store.
+    """
+    _require_internal_secret(request)
+    result = await check_hf_reachability(data.hf_repo_id)
+    return JSONResponse(content=asdict(result))
 
 
 def _require_internal_secret(request: Request, disabled_detail: str = "Internal endpoint disabled") -> None:
@@ -271,6 +355,33 @@ async def internal_live_streams(request: Request):
     """
     _require_internal_secret(request)
     return {"streams": _live_streams.snapshot()}
+
+
+@router.post("/internal/batch_credentials", tags=["admin"])
+async def internal_batch_credentials(request: Request):
+    """A scoped credential for the batch proxy, in place of the user's key.
+
+    The Spring webservice proxies the UI's batch pages to the Batch API as
+    the caller's own key. The user's key is a long-lived secret and the
+    internal hop is plain HTTP in the shipped setup, so the webservice names
+    the key by id here (its ownership check already ran) and gets back a
+    short-lived credential bound to that one key. That credential — not the
+    key value — is what travels to the Batch API.
+    """
+    _require_internal_secret(request, disabled_detail="Internal batch credential endpoint disabled")
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    api_key_id = body.get("api_key_id") if isinstance(body, dict) else None
+    if isinstance(api_key_id, bool) or not isinstance(api_key_id, int):
+        raise HTTPException(status_code=400, detail="A batch credential needs an integer 'api_key_id'.")
+    with DBManager() as db:
+        row = db.get_api_key_by_id(api_key_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No such active API key: {api_key_id}.")
+    credential, expires_in = issue_batch_credential(api_key_id)
+    return {"credential": credential, "expires_in": expires_in}
 
 
 # How often the live-stream SSE connection checks for a changed snapshot. The
@@ -403,10 +514,46 @@ async def internal_compatibility_precheck(model_name: str, request: Request, pro
     return JSONResponse(status_code=200, content=jsonable_encoder({"model": model_name, "results": list(results)}))
 
 
+@router.post("/internal/model_benchmarks/datasets/search", tags=["admin"])
+async def internal_search_benchmark_datasets(data: DatasetSearchRequest, request: Request):
+    """Search public Hugging Face datasets for the benchmark picker."""
+    _require_internal_secret(request)
+    return await search_datasets(data.query, data.cursor)
+
+
+@router.post("/internal/model_benchmarks/datasets/metadata", tags=["admin"])
+async def internal_benchmark_dataset_metadata(data: DatasetMetadataRequest, request: Request):
+    """Inspect dataset columns and splits without downloading the dataset."""
+    _require_internal_secret(request)
+    return await dataset_metadata(data.dataset, data.subset, data.split)
+
+
+@router.post("/internal/model_benchmarks/limits", tags=["admin"])
+async def internal_benchmark_worker_limits(data: BenchmarkLimitsRequest, request: Request):
+    _require_internal_secret(request)
+    with DBManager() as db:
+        target = db.get_model_provider_benchmark_target(data.model_provider_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Provider-model pair not found")
+    snapshot = _main._logosnode_registry.peek_runtime_snapshot(int(target["provider_id"]))
+    if not _logosnode_snapshot_is_connected(snapshot):
+        raise HTTPException(status_code=503, detail="Worker is offline. Hardware limits are unavailable.")
+    return worker_limits(snapshot, str(target["model_name"]))
+
+
 @router.post("/internal/model_benchmarks/run", tags=["admin"])
 async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: Request):
-    """Queue a fixed GSM8K GuideLLM run for one exact provider-model pair."""
+    """Queue a configured GuideLLM run for one exact provider-model pair."""
     _require_internal_secret(request)
+
+    configurations = data.batch.configurations if data.batch else [data]
+    checked_datasets = {}
+    for settings in configurations:
+        key = (settings.dataset, settings.subset, settings.split)
+        if key not in checked_datasets:
+            checked_datasets[key] = await dataset_metadata(*key)
+        if settings.text_column not in checked_datasets[key]["text_columns"]:
+            raise HTTPException(status_code=400, detail="Select a valid text column for the dataset.")
 
     # One orchestrator process owns benchmark execution. Serialize the short
     # check-and-create section in memory so simultaneous starts cannot both
@@ -417,6 +564,12 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             raise HTTPException(status_code=404, detail="Provider-model pair not found")
         provider_id = int(target["provider_id"])
         provider_type = _normalize_provider_type(str(target.get("provider_type") or ""))
+        if any(s.serving_overrides.model_dump(exclude_none=True) for s in configurations) and (
+            provider_type != "logosnode" or _main._capacity_planner is None
+        ):
+            raise HTTPException(
+                status_code=400, detail="Serving overrides require a Logos worker with capacity planning"
+            )
         endpoint = str(target.get("target") or "").strip()
         if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
@@ -447,6 +600,11 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
                 raise HTTPException(status_code=503, detail="Provider has not sent its first status yet")
 
         model_name = str(target["model_name"])
+        try:
+            for settings in configurations:
+                validate_worker_overrides(settings.serving_overrides, worker_limits(runtime_snapshot, model_name))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         serving_configuration = extract_serving_configuration(runtime_snapshot, model_name)
         job_payload = {
             "model_provider_id": data.model_provider_id,
@@ -454,9 +612,7 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             "provider_name": target["provider_name"],
             "model_id": target["model_id"],
             "model_name": model_name,
-            "dataset": BENCHMARK_DATASET,
-            "subset": "main",
-            "split": "test",
+            **data.model_dump(exclude={"model_provider_id", "samples", "max_output_tokens"}),
             "samples": data.samples,
             "max_output_tokens": data.max_output_tokens,
             "provider_session_id": runtime_snapshot.get("session_id") if runtime_snapshot else None,
@@ -483,21 +639,50 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
         if is_internal_worker_benchmark
         else None
     )
-    worker_preparer = (
-        (lambda: _main._capacity_planner.prepare_benchmark_lane(provider_id, model_name))
-        if request_headers is not None and _main._capacity_planner is not None
-        else None
-    )
 
-    task = asyncio.create_task(
-        run_benchmark_job(
+    async def execute_run(
+        settings: BenchmarkRunSettings | InternalBenchmarkRequest,
+        progress: dict[str, int] | None = None,
+        finalize: bool = True,
+    ) -> int | None:
+        if request_headers is not None and _main._capacity_planner is not None:
+
+            async def worker_preparer() -> bool:
+                if not settings.serving_overrides.model_dump(exclude_none=True):
+                    return await _main._capacity_planner.prepare_benchmark_lane(provider_id, model_name)
+
+                def report_preparation_stage(stage: str) -> None:
+                    with DBManager() as db:
+                        db.update_job_status(
+                            job_id,
+                            JobStatus.RUNNING.value,
+                            result_payload={
+                                **(progress or {}),
+                                "stage": stage,
+                                "started_samples": 0,
+                                "total_samples": settings.samples,
+                            },
+                        )
+
+                return await _main._capacity_planner.prepare_configured_benchmark_lane(
+                    provider_id,
+                    model_name,
+                    settings.serving_overrides,
+                    progress_callback=report_preparation_stage,
+                )
+
+        else:
+            worker_preparer = None
+
+        return await run_benchmark_job(
             job_id=job_id,
             model_provider_id=data.model_provider_id,
             target=benchmark_target,
             model=model_name,
             api_key=None if is_internal_worker_benchmark else api_key or None,
-            samples=data.samples,
-            max_output_tokens=data.max_output_tokens,
+            samples=settings.samples,
+            settings=settings,
+            max_output_tokens=settings.max_output_tokens,
             serving_configuration=serving_configuration,
             serving_configuration_getter=lambda: extract_serving_configuration(
                 _main._logosnode_registry.peek_runtime_snapshot(provider_id), model_name
@@ -512,8 +697,10 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
                 if is_internal_worker_benchmark
                 else None
             ),
+            **({"batch_progress": progress, "finalize": finalize} if progress else {}),
         )
-    )
+
+    task = asyncio.create_task(run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data))
     _background_tasks.add(task)
     _benchmark_tasks.add(task)
     _benchmark_tasks_by_job[job_id] = task
@@ -617,6 +804,7 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
             user_id=None,
             environment=auth.environment,
             log_level=auth.log_level,
+            input_payload=sanitized_payload_for_logging(body),
             request_id=request_id,
         )
     log_id = int(log_result["log-id"])
@@ -651,12 +839,17 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
     sleep_level = (
         _main._calibration_orchestrator._config.sleep_level if _main._calibration_orchestrator is not None else 1
     )
+    skip_models = (
+        sorted(_main._calibration_orchestrator._capacity_skip_models(data.provider_id))
+        if _main._calibration_orchestrator is not None
+        else []
+    )
     pname = _resolve_provider_name(data.provider_id)
     try:
         await _main._logosnode_registry.send_command(
             data.provider_id,
             "start_calibration_session",
-            params={"sleep_level": sleep_level},
+            params={"sleep_level": sleep_level, "skip_models": skip_models},
             timeout_seconds=30,
         )
     except LogosNodeOfflineError as exc:
@@ -675,6 +868,51 @@ async def internal_logosnode_calibrate_uncalibrated(data: InternalCalibrateReque
         "count": len(models),
         "models": models,
     }
+
+
+@router.post("/internal/logosnode/stop_calibration", tags=["admin"])
+async def internal_logosnode_stop_calibration(data: InternalStopCalibrationRequest, request: Request):
+    """Cancel a worker's in-progress calibration session, called by Spring after JWT validation.
+
+    The worker owns the teardown via cancel_event; nothing partial is
+    written for the model in progress — it's just left uncalibrated for
+    a later session.
+    """
+    _require_internal_secret(request)
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    pname = _resolve_provider_name(data.provider_id)
+    try:
+        result = await _main._logosnode_registry.send_command(
+            data.provider_id,
+            "stop_calibration_session",
+            timeout_seconds=30,
+        )
+    except LogosNodeOfflineError as exc:
+        logger.warning("Internal stop-calibration: provider=%s offline: %s", pname, exc)
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    except LogosNodeCommandError as exc:
+        logger.warning("Internal stop-calibration: stop_calibration_session failed on provider=%s: %s", pname, exc)
+        return JSONResponse(status_code=409, content={"error": str(exc)})
+    was_active = bool(result.get("was_active", False))
+    current_model = result.get("current_model")
+    logger.info(
+        "Internal stop-calibration: provider=%s was_active=%s current_model=%s",
+        pname,
+        was_active,
+        current_model or "<none>",
+    )
+    result = {
+        "message": (
+            f"Calibration session on {pname} cancelled (was calibrating {current_model})"
+            if was_active
+            else f"No calibration session was running on {pname}"
+        ),
+        "was_active": was_active,
+        "current_model": current_model,
+    }
+    return JSONResponse(content=result, status_code=200)
 
 
 @router.post("/internal/logosnode/lanes/delete", tags=["admin"])
@@ -705,6 +943,23 @@ async def internal_logosnode_add_lane(data: InternalAddLaneRequest, request: Req
     if rejection is not None:
         raise HTTPException(status_code=409, detail=rejection)
 
+    # Admit before answering 202: the check-and-claim is atomic on the event
+    # loop, so a second click for the same model — or a load the planner is
+    # already bringing up — meets the marker now and gets a 409 the operator
+    # reads, instead of a 202 whose background task no-ops later and whose
+    # outcome the operator's poll would have to wait on. A refused click must
+    # not touch the recorded outcome either: it would reset a previous
+    # attempt's terminal state with no task left to settle it.
+    admission_rejection = _main._capacity_planner.manual_load_admission_rejection(data.provider_id, model)
+    if admission_rejection is not None:
+        raise HTTPException(status_code=409, detail=admission_rejection)
+
+    # Record "running" BEFORE answering, not only once the background task
+    # gets to it: the UI starts polling load_status as soon as it sees the 202,
+    # and a gap between the two would let it read the previous attempt's
+    # "failed" entry and show a stale failure for the fresh click.
+    _main._capacity_planner.record_manual_load_outcome(data.provider_id, model, "running")
+
     # Loading a model takes minutes (the planner budgets 1800 s for the command),
     # far beyond any caller's HTTP read timeout, and holding a servlet thread
     # open that long per load is its own problem. So kick it off and return: the
@@ -718,6 +973,41 @@ async def internal_logosnode_add_lane(data: InternalAddLaneRequest, request: Req
         status_code=202,
         content={"status": "accepted", "model": model, "provider_id": data.provider_id},
     )
+
+
+@router.post("/internal/logosnode/lanes/load_status", tags=["admin"])
+async def internal_logosnode_lane_load_status(data: InternalLaneLoadStatusRequest, request: Request):
+    """Outcome of the most recent manual load of a model, for the statistics UI.
+
+    The "Load lane" endpoint answers 202 and runs the load in the background,
+    where a refusal (no VRAM, worker rejection, ...) is currently only a log
+    line. The UI polls this endpoint while its "Loading …" note is up and
+    turns the note into the recorded error once the attempt is over.
+
+    ``status`` is ``"running" | "succeeded" | "failed" | "unknown"`` — unknown
+    means no manual load of this model is known to the planner (never clicked
+    here, the entry expired, or the orchestrator restarted in between), which
+    the UI must not render as a failure.
+    """
+    _require_internal_secret(request)
+
+    model = str(data.model or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    if _main._capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not ready")
+
+    # One shape for every answer — unknown included, with nulls — so the UI
+    # can read the fields without checking the status first.
+    outcome = _main._capacity_planner.get_manual_load_outcome(data.provider_id, model) or {}
+    return {
+        "status": outcome.get("status", "unknown"),
+        "model": model,
+        "provider_id": data.provider_id,
+        "lane_id": outcome.get("lane_id"),
+        "reason": outcome.get("reason"),
+        "updated_at": outcome.get("updated_at"),
+    }
 
 
 @router.post("/internal/logosnode/lanes/sleep", tags=["admin"])
@@ -768,6 +1058,60 @@ async def internal_logosnode_sleep_lane(data: InternalSleepLaneRequest, request:
         action="sleep_lane",
         params={"lane_id": data.lane_id, "level": 1, "mode": "wait"},
     )
+
+
+@router.post("/internal/logosnode/lanes/drain", tags=["admin"])
+async def internal_logosnode_drain_lane(data: InternalDrainLaneRequest, request: Request):
+    """Drain a busy lane, then sleep (or unload) it. Called by Spring after JWT validation.
+
+    The manual sleep button is withheld from a lane that is still serving —
+    a click there would block for the whole drain, and the worker's wait-mode
+    drain would still drop stragglers once its budget runs out. This is the
+    busy-lane counterpart: the planner marks the lane cold first, so no new
+    requests are routed to it, waits for the in-flight ones to finish, and
+    only then puts the lane to sleep — or unloads it when the host cannot
+    afford a resident sleeper, or the lane's backend has no sleep mode at
+    all. A lane that does not drain in time is left exactly as found: still
+    awake, still serving, still routable.
+
+    The ride is bounded by the planner's drain endpoint budget (the strict
+    wait plus the terminal step's own drain, command and confirmation all
+    spend one shared deadline), sized to stay under the servlet read timeout
+    Spring keeps open for this call — hence the synchronous answer instead of
+    a 202 with polling. The terminal step (sleep or unload) runs through the
+    planner's confirmed executor, so the answer only arrives once the worker
+    has actually reached the state, not merely accepted the command.
+    """
+    _require_internal_secret(request)
+
+    snap = _main._logosnode_registry.peek_runtime_snapshot(data.provider_id)
+    if snap is None:
+        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
+    if not snap.get("first_status_received"):
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Worker has not sent its first status yet"},
+        )
+    lanes = (snap.get("runtime") or {}).get("lanes") or []
+    lane = next(
+        (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id", "")) == data.lane_id),
+        None,
+    )
+    if lane is None:
+        return JSONResponse(status_code=404, content={"error": f"Lane '{data.lane_id}' not found on this worker"})
+    if _main._capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not ready")
+
+    result = await _main._capacity_planner.drain_lane_manually(data.provider_id, data.lane_id)
+    status = str(result.get("status") or "")
+    if status in ("slept", "unloaded"):
+        return JSONResponse(status_code=200, content=result)
+    if status == "drain_timeout":
+        return JSONResponse(
+            status_code=409,
+            content={"error": result.get("error") or "Lane did not drain in time"},
+        )
+    return JSONResponse(status_code=502, content={"error": result.get("error") or "Drain failed"})
 
 
 @router.post("/internal/logosnode/lanes/wake", tags=["admin"])

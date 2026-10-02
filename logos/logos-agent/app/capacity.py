@@ -84,25 +84,29 @@ async def read_load(
 ) -> Reading:
     """Ask the orchestrator how busy the serving lane we would use is.
 
+    Authenticated with the shared internal secret, not the Logos key: the
+    endpoint is gated like the orchestrator's /internal/* routes, because a
+    holder of any user key must not be able to read cluster state.
+
     ``lane`` holds the (provider id, model id) pairs the runner's key can be
     served by. ``None`` asks for the fleet-wide figure, which is what this
     answered before it knew about lanes; an empty set says the key reaches
     nothing at all, which is not the same question and is refused.
     """
-    if not settings.agent_api_key:
+    if not settings.internal_secret:
         return Reading(
             load=1.0,
             busy_slots=0,
             total_slots=0,
             queue_total=0,
             ok=False,
-            detail="LOGOS_AGENT_API_KEY not configured",
+            detail="LOGOS_INTERNAL_SECRET not configured",
         )
 
     url = f"{settings.orchestrator_url.rstrip('/')}/logosdb/scheduler_state"
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
-            response = await client.get(url, headers={"Authorization": f"Bearer {settings.agent_api_key}"})
+            response = await client.get(url, headers={"Authorization": f"Bearer {settings.internal_secret}"})
         if response.status_code != 200:
             return Reading(
                 load=1.0,

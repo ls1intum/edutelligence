@@ -17,6 +17,7 @@ credential helper would run with that token in its environment.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -950,10 +951,7 @@ class TestCarryingTheConversation:
 class TestCommitSubjects:
     """One line, and about the change rather than about the request.
 
-    The first agent commit in production read `Logos`: Pull request #851
-    ('`Logos`: Serve short queued requests first and answer queue-wait tim —
-    the task's own first line, cut mid-word, with the whole task repeated
-    underneath it.
+    The fallback uses the session subject when no commit text is available.
     """
 
     def test_the_agent_writes_it(self, tmp_path, monkeypatch):
@@ -992,7 +990,7 @@ class TestCommitSubjects:
 
     def test_the_runner_s_sentence_is_the_fallback(self, tmp_path, monkeypatch):
         # Nothing written: what the session was for beats the task's first
-        # line, which for a handover is "Pull request #851 … has been
+        # line, which for a handover is "Pull request … has been
         # assigned to you".
         monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
         monkeypatch.setenv("LOGOS_SESSION_SUBJECT", "Address the review on #858")
@@ -1013,9 +1011,8 @@ class TestClosedIssues:
 
     The number arrives from the runner as the session's assigned issue, not
     read out of the task. The task renders the issue's body and its
-    conversation, and those point at other issues that are pointers, not
-    authorizations to close: the body must not turn a "see #948" into a
-    closing keyword.
+    conversation, and those can point at other issues without authorizing
+    the runner to close them.
     """
 
     def test_the_assigned_issue_is_named(self):
@@ -1139,7 +1136,7 @@ class TestHowAPullRequestIsOpened:
         run_session.open_pull_request("logos/agent/x", "main", task)
 
         body = calls[0][calls[0].index("--body") + 1]
-        # Only the assigned issue — not the #948 the task merely points at.
+        # Only the assigned issue, not unrelated references in the task.
         assert body == "closes #493"
 
     def test_the_title_still_describes_the_change(self, monkeypatch, tmp_path):
@@ -1150,6 +1147,104 @@ class TestHowAPullRequestIsOpened:
 
         title = calls[0][calls[0].index("--title") + 1]
         assert title == "`Logos`: Fit the KPI card sparkline to its slot"
+
+    @staticmethod
+    def reuse_capture(monkeypatch, tmp_path, *, number, url, commit_subject, edit_ok: bool = True):
+        """A `gh pr create` that fails because the pull request already exists.
+
+        The second (or later) iteration of a session hits this: the branch
+        already has a pull request, so the harness reuses it. That is the case
+        where the title used to go stale.
+        """
+        calls: list = []
+
+        class _Out:
+            def __init__(self, code: int, out: str):
+                self.returncode = code
+                self.stdout = out
+                self.stderr = ""
+
+        def fake_run(cmd, **_kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "pr", "create"]:
+                return _Out(1, "")  # a pull request for this branch already exists
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return _Out(0, json.dumps({"number": number, "url": url}))
+            if cmd[:3] == ["gh", "pr", "edit"]:
+                return _Out(0, "") if edit_ok else _Out(1, "")
+            return _Out(0, "")
+
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "x/y")
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
+        monkeypatch.delenv("LOGOS_SESSION_CLOSES", raising=False)
+        if commit_subject is not None:
+            (tmp_path / "commit.txt").write_text(commit_subject)
+        monkeypatch.setattr(run_session, "run", fake_run)
+        return calls
+
+    def test_a_reused_pull_request_gets_its_title_refreshed(self, monkeypatch, tmp_path):
+        # The first round refused the paths; the second serves them. The
+        # commit subject says so, and the pull request's title must follow —
+        # it is the thing a reviewer reads before opening the diff.
+        calls = self.reuse_capture(
+            monkeypatch,
+            tmp_path,
+            number=933,
+            url="https://github.com/x/y/pull/933",
+            commit_subject="Forward OpenAI Batch API calls to upstream providers",
+        )
+
+        url = run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert url == "https://github.com/x/y/pull/933"
+        edit = next(cmd for cmd in calls if cmd[:3] == ["gh", "pr", "edit"])
+        assert edit[edit.index("--title") + 1] == "`Logos`: Forward OpenAI Batch API calls to upstream providers"
+        assert str(933) in edit
+
+    def test_reusing_a_pull_request_still_closes_only_the_assigned_issue(self, monkeypatch, tmp_path):
+        calls = self.reuse_capture(
+            monkeypatch,
+            tmp_path,
+            number=493,
+            url="https://github.com/x/y/pull/493",
+            commit_subject="Fit the KPI card sparkline to its slot",
+        )
+        monkeypatch.setenv("LOGOS_SESSION_CLOSES", "493")
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        edit = next(cmd for cmd in calls if cmd[:3] == ["gh", "pr", "edit"])
+        assert edit[edit.index("--body") + 1] == "closes #493"
+
+    def test_no_pull_request_to_reuse_is_a_failure_not_a_reuse(self, monkeypatch, tmp_path):
+        # `gh pr create` failed and there is no existing pull request either:
+        # the branch never reached the remote. Say so, do not invent a reuse.
+        calls = self.reuse_capture(monkeypatch, tmp_path, number=None, url=None, commit_subject="Do the thing")
+
+        url = run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert url is None
+        assert not any(cmd[:3] == ["gh", "pr", "edit"] for cmd in calls)
+
+    def test_a_reused_pull_request_is_reported_even_when_the_refresh_fails(self, monkeypatch, tmp_path, capsys):
+        # The pull request exists and the code is pushed; only the title
+        # refresh failed. Hand over the link anyway — the work is out there —
+        # but say plainly the title did not move.
+        self.reuse_capture(
+            monkeypatch,
+            tmp_path,
+            number=933,
+            url="https://github.com/x/y/pull/933",
+            commit_subject="Serve the paths",
+            edit_ok=False,
+        )
+
+        url = run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert url == "https://github.com/x/y/pull/933"
+        out = capsys.readouterr().out
+        assert "could not refresh its title" in out
+        assert "and refreshed its title" not in out
 
 
 class TestWhatTheAgentIsTold:

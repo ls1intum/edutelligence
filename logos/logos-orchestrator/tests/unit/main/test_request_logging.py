@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -17,6 +18,8 @@ def _make_dummy_db(cost_micro_cents=None):
         ttft_calls = []
         payload_calls = []
         metric_calls = []
+        finalize_calls = []
+        store_calls = []
 
         def __enter__(self):
             return self
@@ -26,6 +29,56 @@ def _make_dummy_db(cost_micro_cents=None):
 
         def set_time_at_first_token(self, log_id):
             self.ttft_calls.append(log_id)
+
+        def finalize_billing_row(
+            self,
+            log_id,
+            usage,
+            *,
+            model_id=None,
+            provider_id=None,
+            service_tier=None,
+            set_first_token=False,
+            request_id=None,
+            result_status=None,
+            error_message=None,
+        ):
+            self.finalize_calls.append(
+                {
+                    "log_id": log_id,
+                    "usage": usage,
+                    "model_id": model_id,
+                    "provider_id": provider_id,
+                    "service_tier": service_tier,
+                    "set_first_token": set_first_token,
+                    "request_id": request_id,
+                    "result_status": result_status,
+                    "error_message": error_message,
+                }
+            )
+
+        def store_response_payload(
+            self,
+            log_id,
+            payload,
+            *,
+            policy_id=-1,
+            classified=None,
+            queue_depth_at_arrival=None,
+            utilization_at_arrival=None,
+            settle_cost=None,
+        ):
+            self.store_calls.append(
+                {
+                    "log_id": log_id,
+                    "payload": payload,
+                    "policy_id": policy_id,
+                    "classified": classified,
+                    "queue_depth_at_arrival": queue_depth_at_arrival,
+                    "utilization_at_arrival": utilization_at_arrival,
+                    "settle_cost": settle_cost,
+                }
+            )
 
         def set_response_payload(
             self,
@@ -133,10 +186,16 @@ def _make_pipeline(
     completion_calls=None,
     release_calls=None,
     sync_payloads=None,
+    provider_response_calls=None,
+    provider_call_calls=None,
+    stream_dispatch_stamps=None,
 ):
     completion_calls = completion_calls if completion_calls is not None else []
     release_calls = release_calls if release_calls is not None else []
     sync_payloads = sync_payloads if sync_payloads is not None else []
+    provider_response_calls = provider_response_calls if provider_response_calls is not None else []
+    provider_call_calls = provider_call_calls if provider_call_calls is not None else []
+    stream_dispatch_stamps = stream_dispatch_stamps if stream_dispatch_stamps is not None else []
 
     class DummyExecutor:
         async def execute_sync(self, url, headers, payload):  # noqa: ARG002
@@ -151,6 +210,12 @@ def _make_pipeline(
             on_headers=None,
             status=None,
         ):  # noqa: ARG002
+            if status is not None:
+                # Mirror the real executor: the dispatch instant is captured
+                # once the generator body starts (after preparation, before
+                # the send) — i.e. before the response headers fire.
+                status.dispatch_at = main.datetime.datetime.now(main.datetime.timezone.utc)
+                stream_dispatch_stamps.append(status.dispatch_at)
             if on_headers:
                 on_headers(stream_headers or {})
             if stream_error:
@@ -175,6 +240,25 @@ def _make_pipeline(
         @staticmethod
         def record_completion(**kwargs):
             completion_calls.append(kwargs)
+
+        @staticmethod
+        def record_provider_call(request_id, at=None):  # noqa: ARG004
+            provider_call_calls.append((request_id, at))
+
+        @staticmethod
+        def record_provider_response(request_id, at=None):  # noqa: ARG004
+            provider_response_calls.append((request_id, at))
+
+        @staticmethod
+        def settle_completion(**kwargs):
+            # The sync path settles on the event loop and defers only the DB
+            # write (write_completion) to the queue — same recorded kwargs.
+            completion_calls.append(kwargs)
+            return {}
+
+        @staticmethod
+        def write_completion(request_id, fields):  # noqa: ARG002
+            return None
 
     return DummyPipeline(), completion_calls, release_calls
 
@@ -212,7 +296,7 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -261,11 +345,444 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_a_stream_read_to_the_end_stamps_the_last_chunk_arrival(monkeypatch):
+    """A completed stream stamps its response at the last chunk's arrival — a
+    real instant captured off the client's pace — not ``None``."""
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        yield b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
+        raising=False,
+    )
+    pipeline, _c, _r = _make_pipeline(provider_response_calls=provider_response_calls)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-stamp",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    await _read_stream_response(response)
+
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-stamp"
+    assert at is not None, "a completed stream stamps the last chunk's arrival"
+    assert isinstance(at, main.datetime.datetime)
+    assert at.tzinfo == main.datetime.timezone.utc
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk(monkeypatch):
+    """A stream that produced a chunk and then failed stamps the response at
+    the failure instant the arrival pump captured upstream — not the earlier
+    chunk's arrival and not the record time. A worker that stalls after the
+    last token (a timeout waiting for ``stream_end``) must count that wait, so
+    the stamped instant is clearly after the last chunk's arrival."""
+    provider_response_calls = []
+    source_time: dict = {}
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        yield b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'
+        # The last chunk is out; now stall (a timeout waiting for stream_end)
+        # before the failure is observed, so the failure instant is clearly
+        # after the chunk's arrival.
+        source_time["chunk"] = main.datetime.datetime.now(main.datetime.timezone.utc)
+        await asyncio.sleep(0.02)
+        raise RuntimeError("worker stream died mid-stream")
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
+        raising=False,
+    )
+    pipeline, _c, _r = _make_pipeline(provider_response_calls=provider_response_calls)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        42,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-stamp-fail",
+            "provider_type": "logosnode",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    with pytest.raises(RuntimeError, match="died mid-stream"):
+        await _read_stream_response(response)
+
+    # The failure is stamped at the failure instant the pump captured upstream:
+    # a real instant, at/after the last chunk's arrival (the stalled interval
+    # is provider run time) — not None and not the record time.
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-stamp-fail"
+    assert isinstance(at, main.datetime.datetime)
+    assert at >= source_time["chunk"]
+
+
+@pytest.mark.asyncio
+async def test_logosnode_sync_stamps_the_response_before_post_provider_processing(monkeypatch):
+    """The LogosNode sync response stamp is captured the moment send_command
+    returns — before logos merges the worker's perf trace and decodes the
+    body. A post-provider delay (here a slowed merge_worker) must not appear
+    in the stamp, so ``at`` is both present and earlier than the merge."""
+    import contextlib
+
+    provider_response_calls = []
+    t_send_return: dict = {}
+    merge_state: dict = {}
+
+    class _FakePerfTrace:
+        def phase(self, request_id, name):  # noqa: ARG002
+            return contextlib.nullcontext()
+
+        def merge_worker(self, request_id, perf):  # noqa: ARG002
+            main.time.sleep(0.02)
+            merge_state["at"] = main.datetime.datetime.now(main.datetime.timezone.utc)
+
+    async def fake_send_command(**kwargs):  # noqa: ARG001
+        t_send_return["at"] = main.datetime.datetime.now(main.datetime.timezone.utc)
+        return {"status_code": 200, "body": {"choices": [{"message": {"content": "hi"}}]}, "headers": {}}
+
+    class _FakeWriteQueue:
+        def enqueue(self, *args, **kwargs):  # noqa: ARG002
+            return None
+
+    class _FakeWriteQueueFactory:
+        def get_write_queue(self):
+            return _FakeWriteQueue()
+
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=fake_send_command), raising=False)
+    monkeypatch.setattr(main, "perf_trace", _FakePerfTrace(), raising=False)
+    monkeypatch.setattr(main, "write_queue", _FakeWriteQueueFactory(), raising=False)
+    pipeline, _c, _r = _make_pipeline(provider_response_calls=provider_response_calls)
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    context = SimpleNamespace(
+        provider_type="logosnode",
+        lane_id="lane-1",
+        model_name="model",
+        anthropic_dialect=None,
+        messages_upstream=False,
+        forward_url="http://upstream",
+    )
+    await main._sync_response(
+        context,
+        {"model": "model", "messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-sync",
+            "provider_type": "logosnode",
+            "is_cold_start": False,
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+        },
+    )
+
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-sync"
+    assert at is not None, "the sync path must pin the response instant, not fall back to the record time"
+    # Captured right after send_command returns…
+    assert at >= t_send_return["at"]
+    # …and before the (deliberately delayed) post-provider perf merge. A tight
+    # upper bound here would be flaky under CI scheduler jitter; the ordering
+    # against the 20 ms merge is what proves the stamp precedes the merge.
+    assert at < merge_state["at"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_stamps_the_instants_the_executor_captured(monkeypatch):
+    """The cloud sync path stamps the call and response from the instants the
+    executor captured — after request preparation and before response
+    parsing — not from the record time. The captured instants are
+    deliberately in the past: if the path stamped now, these exact-value
+    assertions would fail."""
+    provider_call_calls = []
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    t0 = main.datetime.datetime.now(main.datetime.timezone.utc)
+    pipeline, _c, _r = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=True,
+            response={"choices": [{"message": {"content": "hi"}}]},
+            error=None,
+            usage={},
+            is_streaming=False,
+            headers=None,
+            dispatch_at=t0 - main.datetime.timedelta(seconds=1),
+            response_at=t0 - main.datetime.timedelta(seconds=0.5),
+        ),
+        provider_call_calls=provider_call_calls,
+        provider_response_calls=provider_response_calls,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    await main._sync_response(
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-sync-cloud",
+            "provider_type": "cloud",
+            "is_cold_start": False,
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+        },
+    )
+
+    assert provider_call_calls == [("req-sync-cloud", t0 - main.datetime.timedelta(seconds=1))]
+    assert provider_response_calls == [("req-sync-cloud", t0 - main.datetime.timedelta(seconds=0.5))]
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_preparation_failure_stamps_no_call(monkeypatch):
+    """When the executor's request preparation fails, no HTTP dispatch
+    happened: the call stamp stays off (the stats split falls back to the
+    scheduling-based cut), and the response stamp falls back to the record
+    time — the instant the failure was observed."""
+    provider_call_calls = []
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, _c, _r = _make_pipeline(
+        sync_result=ExecutionResult(
+            success=False,
+            response=None,
+            error="OSError: multipart decode failed",
+            usage={},
+            is_streaming=False,
+            headers=None,
+            dispatch_at=None,
+            response_at=None,
+        ),
+        provider_call_calls=provider_call_calls,
+        provider_response_calls=provider_response_calls,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    before = main.datetime.datetime.now(main.datetime.timezone.utc)
+    await main._sync_response(
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-sync-prep-fail",
+            "provider_type": "cloud",
+            "is_cold_start": False,
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+        },
+    )
+    after = main.datetime.datetime.now(main.datetime.timezone.utc)
+
+    assert provider_call_calls == [], "a preparation failure must not record a provider call"
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-sync-prep-fail"
+    assert isinstance(at, main.datetime.datetime)
+    assert before <= at <= after
+
+
+@pytest.mark.asyncio
+async def test_cloud_streaming_stamps_the_call_from_the_executor_dispatch_instant(monkeypatch):
+    """The cloud streaming call stamp comes from the dispatch instant the
+    executor captured (after request preparation, before the send) — not from
+    the record time."""
+    provider_call_calls = []
+    provider_response_calls = []
+    stream_dispatch_stamps = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, _c, _r = _make_pipeline(
+        stream_chunks=[b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n'],
+        provider_call_calls=provider_call_calls,
+        provider_response_calls=provider_response_calls,
+        stream_dispatch_stamps=stream_dispatch_stamps,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_type="cloud",
+            lane_id=None,
+            model_name="model",
+            forward_url="http://cloud",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-stream-cloud",
+            "provider_type": "cloud",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    await _read_stream_response(response)
+
+    assert len(stream_dispatch_stamps) == 1
+    assert provider_call_calls == [("req-stream-cloud", stream_dispatch_stamps[0])]
+
+
+@pytest.mark.asyncio
+async def test_cloud_streaming_closing_after_done_preserves_the_response_stamp(monkeypatch):
+    """Clients that close at the [DONE] yield must still get a provider-response
+    stamp. Without it, finalization records success but statistics fall back to
+    completion time and include post-provider billing delay."""
+    provider_response_calls = []
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    pipeline, completion_calls, _ = _make_pipeline(
+        stream_chunks=[
+            b'data: {"id":"c1","choices":[{"delta":{"content":"hi"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ],
+        provider_response_calls=provider_response_calls,
+    )
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_type="cloud",
+            lane_id=None,
+            model_name="model",
+            forward_url="http://cloud",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-close-after-done",
+            "provider_type": "cloud",
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+            "is_cold_start": False,
+        },
+    )
+    body = response.body_iterator
+    # Drain both upstream frames, then close — the GeneratorExit path that
+    # used to skip the post-loop stamp.
+    await body.__anext__()
+    await body.__anext__()
+    await body.aclose()
+
+    assert completion_calls[-1]["result_status"] == "success"
+    assert len(provider_response_calls) == 1
+    request_id, at = provider_response_calls[0]
+    assert request_id == "req-close-after-done"
+    assert at is not None, "closing after [DONE] must preserve the response stamp"
+    assert isinstance(at, main.datetime.datetime)
+
+
+@pytest.mark.asyncio
 async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     # vLLM lanes report usage.prompt_tokens_details.cached_tokens (the worker
     # starts them with --enable-prompt-tokens-details); the orchestrator must
     # relay it to the application and log it the same way as the cloud
-    # provider's cached count (#813).
+    # provider's cached count.
     dummy_db = _make_dummy_db()
     monkeypatch.setattr(main, "DBManager", dummy_db)
     monkeypatch.setattr(
@@ -297,7 +814,7 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None),
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
         {"messages": [{"role": "user", "content": "hi"}]},
         43,
         12,
@@ -331,7 +848,7 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
 async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
     # The lane's usage.prompt_tokens_details must reach the application in
     # the response and land in the request log as prompt_cached_tokens,
-    # mirroring the cloud path (#813).
+    # mirroring the cloud path.
     dummy_db = _make_dummy_db()
     monkeypatch.setattr(main, "DBManager", dummy_db)
     monkeypatch.setattr(
@@ -367,7 +884,13 @@ async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="local-model",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
         44,
         12,
@@ -382,7 +905,61 @@ async def test_sync_local_response_keeps_cached_token_details(monkeypatch):
 
     content = json.loads(response.body)
     assert content["usage"]["prompt_tokens_details"]["cached_tokens"] == 6
-    assert dummy_db.payload_calls[0]["usage"]["prompt_cached_tokens"] == 6
+    assert dummy_db.finalize_calls[0]["usage"]["prompt_cached_tokens"] == 6
+
+
+@pytest.mark.asyncio
+async def test_sync_response_settles_cost_on_the_queued_write(monkeypatch):
+    #  O14: the derived settled-cost snapshot must not take a second
+    # synchronous commit off the response path — it rides the queued
+    # payload write, which only reads what the billing commit made durable.
+    dummy_db = _make_dummy_db()
+    monkeypatch.setattr(main, "DBManager", dummy_db)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    async def send_command(**kwargs):  # noqa: ARG001
+        return {
+            "status_code": 200,
+            "body": {
+                "id": "cmpl-1",
+                "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14},
+            },
+            "headers": {"content-type": "application/json"},
+        }
+
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_command=send_command),
+        raising=False,
+    )
+    pipeline, _, _ = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    response = await main._sync_response(
+        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model", anthropic_dialect=None),
+        {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
+        45,
+        12,
+        27,
+        -1,
+        {"classified": True},
+        scheduling_stats={
+            "request_id": "req-sync-settle",
+            "provider_type": "logosnode",
+        },
+    )
+
+    assert response.status_code == 200
+    assert dummy_db.finalize_calls[0]["result_status"] == "success"
+    assert len(dummy_db.store_calls) == 1
+    assert dummy_db.store_calls[0]["settle_cost"] is True
 
 
 @pytest.mark.asyncio
@@ -409,7 +986,10 @@ async def test_cloud_streaming_response_returns_eur_cost_in_terminal_usage(monke
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         62,
@@ -456,7 +1036,10 @@ async def test_cloud_streaming_delta_frames_get_no_interim_cost(monkeypatch):
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         62,
@@ -504,7 +1087,10 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
 
     response = await main._sync_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         63,
@@ -517,7 +1103,7 @@ async def test_cloud_sync_response_returns_eur_cost(monkeypatch):
     body = json.loads(response.body)
     assert body["usage"]["cost"] == 0.00012345
     assert body["usage"]["cost_currency"] == "USD"
-    assert dummy_db.payload_calls[0]["usage"] == {
+    assert dummy_db.finalize_calls[0]["usage"] == {
         "prompt_tokens": 10,
         "completion_tokens": 5,
         "total_tokens": 15,
@@ -555,7 +1141,10 @@ async def test_cloud_sync_duration_only_response_still_prices_live(monkeypatch):
 
     response = await main._sync_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/audio/transcriptions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/audio/transcriptions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"file": "audio"},
         64,
@@ -608,7 +1197,10 @@ async def test_pre_stream_error_records_failure_and_releases_scheduler(
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         58,
@@ -733,7 +1325,10 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         59,
@@ -802,7 +1397,12 @@ async def test_http_ndjson_response_preserves_content_type_and_does_not_append_s
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="local", forward_url="http://worker:8000/api/chat", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="local",
+            forward_url="http://worker:8000/api/chat",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"model": "local"},
         60,
         12,
@@ -854,7 +1454,10 @@ async def test_http_sse_response_delimits_recovery_after_partial_first_chunk(mon
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_type="cloud", forward_url="https://provider.test/v1/chat/completions", anthropic_dialect=None
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         61,
@@ -945,7 +1548,9 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "bad"}]},
         55,
         1,
@@ -964,7 +1569,13 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
     assert response.status_code == 500
     assert response.headers["x-request-id"] == "req-sync-error"
     assert dummy_db.ttft_calls == []
-    assert dummy_db.payload_calls[0]["payload"] == {"error": "bad request"}
+    assert dummy_db.finalize_calls[0]["set_first_token"] is False
+    # The terminal status rides the billing UPDATE itself — one write, no
+    # follow-up metrics UPDATE on the sync path.
+    assert dummy_db.finalize_calls[0]["result_status"] == "error"
+    assert dummy_db.finalize_calls[0]["error_message"] == "bad request"
+    assert dummy_db.metric_calls == []
+    assert dummy_db.store_calls[0]["payload"] == {"error": "bad request"}
     assert completion_calls == [
         {
             "request_id": "req-sync-error",
@@ -1010,7 +1621,9 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     result = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "job"}]},
         56,
         1,
@@ -1028,8 +1641,11 @@ async def test_sync_response_async_job_success_logs_usage(monkeypatch):
     )
 
     assert result["status_code"] == 200
-    assert dummy_db.ttft_calls == [56]
-    assert dummy_db.payload_calls[0]["usage"] == {
+    # The first-token timestamp merged into the response write , so the
+    # sync path no longer issues its own UPDATE for it.
+    assert dummy_db.ttft_calls == []
+    assert dummy_db.finalize_calls[0]["set_first_token"] is True
+    assert dummy_db.finalize_calls[0]["usage"] == {
         "prompt_tokens": 11,
         "completion_tokens": 13,
         "total_tokens": 24,
@@ -1083,7 +1699,9 @@ async def test_sync_response_async_job_base64_encodes_binary_body(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     result = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         {"model": "audio-binary-model"},
         58,
         1,
@@ -1139,6 +1757,7 @@ async def test_sync_response_async_job_preserves_binary_logosnode_body(monkeypat
             lane_id="lane-a",
             model_name="audio-binary-model",
             anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {
             "model": "audio-binary-model",
@@ -1203,7 +1822,11 @@ async def test_sync_response_rejects_invalid_logosnode_binary_metadata(monkeypat
 
     result = await main._sync_response(
         SimpleNamespace(
-            provider_type="logosnode", lane_id="lane-a", model_name="audio-binary-model", anthropic_dialect=None
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="audio-binary-model",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {"model": "audio-binary-model"},
         60,
@@ -1251,7 +1874,11 @@ async def test_sync_local_worker_translation_does_not_add_stream_field(monkeypat
 
     result = await main._sync_response(
         SimpleNamespace(
-            provider_type="logosnode", lane_id="lane-a", model_name="audio-translation-model", anthropic_dialect=None
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="audio-translation-model",
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         {
             "model": "audio-translation-model",
@@ -1315,7 +1942,9 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
     }
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         payload,
         57,
         1,
@@ -1333,7 +1962,7 @@ async def test_sync_whisper_text_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "text/plain; charset=utf-8"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
+    assert dummy_db.finalize_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio
@@ -1373,7 +2002,9 @@ async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_a
         fields.append(["response_format", response_format])
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         payload,
         57,
         1,
@@ -1391,7 +2022,7 @@ async def test_sync_whisper_json_uses_metered_verbose_response(monkeypatch, is_a
         assert response.headers["content-type"] == "application/json"
     assert sync_payloads[0]["response_format"] == "verbose_json"
     assert ["response_format", "verbose_json"] in sync_payloads[0]["_logos_multipart"]["fields"]
-    assert dummy_db.payload_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
+    assert dummy_db.finalize_calls[0]["usage"] == {"audio_milliseconds": 1250, "billed_requests": 1}
 
 
 @pytest.mark.asyncio
@@ -1418,7 +2049,9 @@ async def test_sync_whisper_rejects_unmetered_raw_upstream_response(monkeypatch)
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="cloud", forward_url="http://cloud", anthropic_dialect=None, messages_upstream=False
+        ),
         {
             "model": "whisper-1",
             "response_format": "text",
@@ -1484,7 +2117,7 @@ async def test_proxy_sync_response_logs_status_and_skips_ttft_on_error(monkeypat
 
 
 # ---------------------------------------------------------------------------
-# _log_request_completion — prefix-cache hit rate field (issue 748)
+# _log_request_completion — prefix-cache hit rate field
 # ---------------------------------------------------------------------------
 
 

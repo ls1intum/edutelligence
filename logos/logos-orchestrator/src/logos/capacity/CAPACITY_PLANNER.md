@@ -277,7 +277,7 @@ planner-<sanitized>-3      # replica 3
 
 In the cold-load branch of `_compute_demand_actions`, the first lane of a model on a worker keeps the full load semantics (demand floor, queued requests, announced use, eviction allowed). An **additional** lane on a worker that already runs the model awake is speculative scale-out and gets the same deal as the cross-provider replication pass (`_compute_replication_actions`):
 
-- behind `LOGOS_REPLICATE_ON_FREE_VRAM` (default off),
+- enabled by `LOGOS_REPLICATE_ON_FREE_VRAM` (on by default; set to `false` to opt out),
 - sustained demand: `eff ≥ DEMAND_REPLICATION_FLOOR` (2.0),
 - free VRAM **without eviction** — an extra copy must never push out another model's lane.
 
@@ -288,6 +288,8 @@ A replica load can also fail after the worker accepted it — the lane lands in 
 The cooldown alone is not enough: it expires on a timer (120s), but a confirmation timeout can leave the lane stuck in `starting` — and holding its id — long after that. The failure therefore also sets a persistent per-lane marker that follows the lane, not the clock: the lane does not count as an active copy of the model, the cold-load gate keeps skipping the model, and the cycle reconciliation (`_reconcile_load_failures`) re-arms the cooldown every cycle while the lane sits in `starting` with a marker. The marker drops only when the lane reaches a serving state (the load finished after all) or leaves the worker, so the backoff ends exactly when the model is servable again.
 
 The operator "Load lane" path (`load_lane_manually`) adds one lane of the next free replica id with no count to enforce — the plannability/capacity checks and the worker's own VRAM are the gate — so a second click for an already-loaded model is no longer rejected as "lane already exists".
+
+The operator "Drain" path (`drain_lane_manually`) is the busy-lane counterpart of the manual sleep: it cold-marks the lane (no new requests routed to it), waits the bounded `DRAIN_TIMEOUT_SECONDS` for the in-flight ones to finish, then hands the terminal step to the confirmed executor — a `sleep_l1`, or a `stop` when the host-RAM headroom check fails or the lane's backend reports `sleep_state=unsupported`. Routing the terminal step through the executor keeps the manual path consistent with a planned one: it syncs the desired-lane set, keeps the VRAM ledger current, and waits for the worker to actually confirm the state, so the path never reports `slept`/`unloaded` on the strength of a command that was merely sent. The whole run holds the per-lane lock the executor's own stop/sleep actions take, so a planned reclaim of the lane cannot interleave a second terminal command under the drain. The whole run is also budgeted by `DRAIN_ENDPOINT_BUDGET_SECONDS` (115s, kept under the webservice's 130s read timeout on this synchronous call): the strict wait takes its `DRAIN_TIMEOUT_SECONDS` of it, and the remainder is carried into the executor as a shared deadline, so the terminal step's own drain, command, and confirmation spend one pot instead of stacking their full per-step budgets on top of the first wait. A lane that does not drain in time is left exactly as found. The manual path clears its cold mark on every exit (unlike the executor's reclaim sleeps, which keep theirs until a wake clears them), because the manual wake endpoint dispatches the command directly and would otherwise strand a woken lane outside the rotation.
 
 ---
 

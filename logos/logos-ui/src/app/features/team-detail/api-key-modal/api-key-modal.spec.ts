@@ -45,10 +45,15 @@ describe('ApiKeyModalComponent', () => {
     component.key = key;
     component.canEdit = true;
     fixture.detectChanges();
+    // The dialog opens via a CDK Dialog signal effect and renders its content
+    // into an overlay appended to document.body, not the fixture's own DOM
+    // subtree; whenStable() flushes that effect before tests query the DOM.
+    await fixture.whenStable();
   });
 
   it('allows an editor to enable custom permissions', () => {
-    const toggle: HTMLButtonElement = fixture.nativeElement.querySelector('.toggle-btn');
+    const toggle: HTMLButtonElement | null = document.querySelector('.toggle-btn');
+    if (!toggle) throw new Error('toggle button not found');
 
     expect(toggle.disabled).toBe(false);
     toggle.click();
@@ -65,6 +70,56 @@ describe('ApiKeyModalComponent', () => {
 
     expect(teamService.setApiKeyProviderPermissions).toHaveBeenCalledWith(42, [10]);
     expect(teamService.setApiKeyModelPermissions).toHaveBeenCalledWith(42, [20]);
+  });
+
+  describe('developer SLA inheritance reset', () => {
+    it('offers a reset action that saves default_priority 0 for developer keys', async () => {
+      const developerKey: TeamApiKey = {
+        ...key,
+        default_priority: 1,
+      };
+      component.key = developerKey;
+      component.team = { id: 1, name: 't', priority: 10 } as never;
+      component.ngOnChanges({
+        visible: new SimpleChange(false, true, false),
+        key: new SimpleChange(null, developerKey, false),
+      });
+      await fixture.whenStable();
+
+      expect(component.fSla()).toBe('ux-background');
+      // Placeholder must reflect team inheritance (10 → critical), not the
+      // key's current explicit background tier.
+      expect(component.inheritedEffectiveSla()).toBe('ux-critical');
+      expect(component.canResetDeveloperSla()).toBe(true);
+
+      component.resetDeveloperSlaToInherited();
+      expect(component.fSla()).toBe('');
+      expect(component.canResetDeveloperSla()).toBe(false);
+
+      await component.save();
+
+      expect(teamService.updateApiKey).toHaveBeenCalledWith(
+        42,
+        expect.objectContaining({ default_priority: 0 }),
+      );
+    });
+
+    it('does not offer the reset action for application keys', async () => {
+      const appKey: TeamApiKey = {
+        ...key,
+        key_type: 'application',
+        default_priority: 5,
+      };
+      component.key = appKey;
+      component.ngOnChanges({
+        visible: new SimpleChange(false, true, false),
+        key: new SimpleChange(null, appKey, false),
+      });
+      await fixture.whenStable();
+
+      expect(component.fSla()).toBe('ux-high-prio');
+      expect(component.canResetDeveloperSla()).toBe(false);
+    });
   });
 
   describe('rotation', () => {
@@ -87,7 +142,7 @@ describe('ApiKeyModalComponent', () => {
 
       // Reopening the modal re-runs initForm via ngOnChanges, resetting the
       // transient form state; the displayed value must come from the (now
-      // rotated) key object, not a stale pre-rotation value (issue #733).
+      // rotated) key object, not a stale pre-rotation value.
       component.ngOnChanges({
         visible: new SimpleChange(false, true, false),
         key: new SimpleChange(null, key, false),

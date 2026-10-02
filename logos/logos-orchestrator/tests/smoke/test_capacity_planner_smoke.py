@@ -3,7 +3,10 @@ Capacity planner smoke tests.
 
 These tests require a **running Logos deployment** (logos-orchestrator + at least one
 logosnode worker) reachable at `--api-base` (default http://localhost:18080) with
-a valid `--logos-key`.  They verify end-to-end lane lifecycle flows by:
+a valid `--logos-key` (inference requests) and `--internal-secret` (defaults to the
+LOGOS_INTERNAL_SECRET env var). Lane-state polling reads /logosdb/scheduler_state,
+which is gated on the shared internal secret. They verify end-to-end lane lifecycle
+flows by:
 
   1. Sending real HTTP requests that drive demand scores.
   2. Polling /logosdb/scheduler_state to observe lane state transitions.
@@ -26,8 +29,10 @@ deployment, not production.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -44,6 +49,11 @@ def pytest_addoption(parser):
         help="Base URL of the running Logos server",
     )
     parser.addoption("--logos-key", default=None, help="Logos API key for authentication")
+    parser.addoption(
+        "--internal-secret",
+        default=os.environ.get("LOGOS_INTERNAL_SECRET", ""),
+        help="Shared orchestrator internal secret (gates /logosdb/scheduler_state)",
+    )
     parser.addoption(
         "--smoke-model",
         default=None,
@@ -73,6 +83,11 @@ def logos_key(request) -> Optional[str]:
 
 
 @pytest.fixture(scope="session")
+def internal_secret(request) -> str:
+    return request.config.getoption("--internal-secret")
+
+
+@pytest.fixture(scope="session")
 def smoke_model(request) -> Optional[str]:
     return request.config.getoption("--smoke-model")
 
@@ -95,14 +110,44 @@ def client(api_base) -> httpx.Client:
     return httpx.Client(base_url=api_base, timeout=60.0)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _reject_cleartext_internal_secret_transport(api_base, internal_secret):
+    """
+    Refuse to run when the shared internal secret would cross a non-loopback
+    link in cleartext.
+
+    /logosdb/scheduler_state is gated on LOGOS_INTERNAL_SECRET, and these tests
+    send it as a Bearer token to --api-base. A non-loopback plain-HTTP base lets
+    an on-path attacker capture the secret and reuse it against the internal
+    endpoints. Plain HTTP is only acceptable for loopback bases; a remote
+    deployment must be HTTPS (or a local tunnel that lands on loopback, e.g.
+    http://127.0.0.1:18443). Mirrors the guard in the performance workload
+    runner (tests/performance/run_api_workload.py).
+    """
+    if not internal_secret:
+        return  # nothing sensitive in flight; the scheduler_state calls will 401
+    parsed = urlparse(api_base)
+    if parsed.scheme.lower() == "http" and (parsed.hostname or "") not in {"", "localhost", "127.0.0.1", "0.0.0.0"}:
+        pytest.fail(
+            f"--api-base {api_base} uses plain HTTP for a non-loopback host. "
+            "The shared internal secret would cross that link in cleartext and "
+            "could be captured. Use an HTTPS base, or a local tunnel "
+            "(e.g. http://127.0.0.1:18443) port-forwarding to the orchestrator.",
+            pytrace=False,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def get_scheduler_state(client: httpx.Client, headers: dict) -> dict:
-    """Fetch /logosdb/scheduler_state."""
-    resp = client.get("/logosdb/scheduler_state", headers=headers)
+def get_scheduler_state(client: httpx.Client, internal_secret: str) -> dict:
+    """Fetch /logosdb/scheduler_state (gated on the shared internal secret)."""
+    resp = client.get(
+        "/logosdb/scheduler_state",
+        headers={"Authorization": f"Bearer {internal_secret}"},
+    )
     resp.raise_for_status()
     return resp.json()
 
@@ -120,7 +165,7 @@ def find_lane(state: dict, model_name: str) -> Optional[dict]:
 
 def poll_lane_state(
     client: httpx.Client,
-    headers: dict,
+    internal_secret: str,
     model_name: str,
     desired_states: list[str],
     timeout_s: float,
@@ -134,7 +179,7 @@ def poll_lane_state(
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
-            state = get_scheduler_state(client, headers)
+            state = get_scheduler_state(client, internal_secret)
             lane = find_lane(state, model_name)
             if lane and lane.get("runtime_state") in desired_states:
                 return lane
@@ -165,15 +210,15 @@ def send_chat_request(
 # ---------------------------------------------------------------------------
 
 
-def test_server_is_reachable(client, http_headers):
+def test_server_is_reachable(client, internal_secret):
     """Smoke: Logos server responds to health / scheduler_state."""
-    state = get_scheduler_state(client, http_headers)
+    state = get_scheduler_state(client, internal_secret)
     assert "logosnode" in state, "scheduler_state missing 'logosnode' key"
 
 
-def test_at_least_one_worker_connected(client, http_headers):
+def test_at_least_one_worker_connected(client, internal_secret):
     """Smoke: At least one logosnode worker is registered and has lanes."""
-    state = get_scheduler_state(client, http_headers)
+    state = get_scheduler_state(client, internal_secret)
     providers = (state.get("logosnode") or {}).get("providers") or {}
     assert providers, "No logosnode providers connected — is a worker running?"
 
@@ -187,7 +232,7 @@ def test_at_least_one_worker_connected(client, http_headers):
     condition=False,  # always attempt; skip via missing --smoke-model
     reason="requires --smoke-model",
 )
-def test_demand_accumulates_and_planner_reacts(client, http_headers, smoke_model, planner_cycle_s):
+def test_demand_accumulates_and_planner_reacts(client, http_headers, internal_secret, smoke_model, planner_cycle_s):
     """
     Send several requests for smoke_model and wait for the planner to react
     by waking or loading a lane within two cycle windows.
@@ -202,7 +247,7 @@ def test_demand_accumulates_and_planner_reacts(client, http_headers, smoke_model
         pytest.skip("--smoke-model not provided")
 
     # Record baseline
-    baseline = get_scheduler_state(client, http_headers)
+    baseline = get_scheduler_state(client, internal_secret)
     initial_lane = find_lane(baseline, smoke_model)
 
     # Send enough requests to push demand score above wake threshold
@@ -215,7 +260,7 @@ def test_demand_accumulates_and_planner_reacts(client, http_headers, smoke_model
     wait_s = planner_cycle_s * 2 + 30
     lane = poll_lane_state(
         client,
-        http_headers,
+        internal_secret,
         smoke_model,
         desired_states=["loaded", "running"],
         timeout_s=wait_s,
@@ -235,7 +280,7 @@ def test_demand_accumulates_and_planner_reacts(client, http_headers, smoke_model
 # ---------------------------------------------------------------------------
 
 
-def test_wake_from_sleep_completes_within_timeout(client, http_headers, smoke_model, planner_cycle_s):
+def test_wake_from_sleep_completes_within_timeout(client, http_headers, internal_secret, smoke_model, planner_cycle_s):
     """
     If smoke_model lane is currently sleeping, a request must trigger a wake
     and the lane must be ready within REQUEST_WAKE_TIMEOUT_SECONDS (30 s).
@@ -249,7 +294,7 @@ def test_wake_from_sleep_completes_within_timeout(client, http_headers, smoke_mo
     if not smoke_model:
         pytest.skip("--smoke-model not provided")
 
-    state = get_scheduler_state(client, http_headers)
+    state = get_scheduler_state(client, internal_secret)
     lane = find_lane(state, smoke_model)
     if not lane or lane.get("runtime_state") not in ("sleeping",):
         pytest.skip(f"No sleeping lane for '{smoke_model}' — cannot test wake path")
@@ -262,7 +307,7 @@ def test_wake_from_sleep_completes_within_timeout(client, http_headers, smoke_mo
     # Also confirm via scheduler_state that the lane is now awake
     woken_lane = poll_lane_state(
         client,
-        http_headers,
+        internal_secret,
         smoke_model,
         desired_states=["loaded", "running"],
         timeout_s=35.0,
@@ -270,7 +315,7 @@ def test_wake_from_sleep_completes_within_timeout(client, http_headers, smoke_mo
 
     assert resp.status_code in (200, 201) or woken_lane is not None, (
         f"Wake did not complete within 35 s. HTTP {resp.status_code}. "
-        f"Lane state: {find_lane(get_scheduler_state(client, http_headers), smoke_model)}"
+        f"Lane state: {find_lane(get_scheduler_state(client, internal_secret), smoke_model)}"
     )
 
 
@@ -279,7 +324,9 @@ def test_wake_from_sleep_completes_within_timeout(client, http_headers, smoke_mo
 # ---------------------------------------------------------------------------
 
 
-def test_preemptive_load_then_sleep_creates_sleeping_lane(client, http_headers, smoke_model, planner_cycle_s):
+def test_preemptive_load_then_sleep_creates_sleeping_lane(
+    client, http_headers, internal_secret, smoke_model, planner_cycle_s
+):
     """
     After demand builds for smoke_model (but not enough to load immediately),
     the preemptive path should load it and immediately sleep it so the next
@@ -300,7 +347,7 @@ def test_preemptive_load_then_sleep_creates_sleeping_lane(client, http_headers, 
     wait_s = planner_cycle_s * 3 + 30
     lane = poll_lane_state(
         client,
-        http_headers,
+        internal_secret,
         smoke_model,
         desired_states=["sleeping", "loaded", "running"],
         timeout_s=wait_s,
@@ -317,7 +364,7 @@ def test_preemptive_load_then_sleep_creates_sleeping_lane(client, http_headers, 
 # ---------------------------------------------------------------------------
 
 
-def test_demand_score_visible_in_scheduler_state(client, http_headers, smoke_model):
+def test_demand_score_visible_in_scheduler_state(client, http_headers, internal_secret, smoke_model):
     """
     After sending requests for smoke_model, the demand score must be > 0
     in the scheduler_state debug payload.
@@ -332,7 +379,7 @@ def test_demand_score_visible_in_scheduler_state(client, http_headers, smoke_mod
             pass
 
     # Give demand tracker a moment to record (synchronous, no wait needed)
-    state = get_scheduler_state(client, http_headers)
+    state = get_scheduler_state(client, internal_secret)
 
     # demand scores live under logosnode.demand or at top-level depending on version
     demand = (state.get("logosnode") or {}).get("demand") or state.get("demand") or {}
@@ -353,7 +400,7 @@ def test_demand_score_visible_in_scheduler_state(client, http_headers, smoke_mod
 # ---------------------------------------------------------------------------
 
 
-def test_idle_lane_sleeps_after_threshold(client, http_headers, smoke_model, planner_cycle_s):
+def test_idle_lane_sleeps_after_threshold(client, http_headers, internal_secret, smoke_model, planner_cycle_s):
     """
     If smoke_model lane is loaded and has been idle, the planner must issue
     sleep_l1 after IDLE_SLEEP_L1 = 300 s.  This test does not wait 5 minutes;
@@ -365,7 +412,7 @@ def test_idle_lane_sleeps_after_threshold(client, http_headers, smoke_model, pla
     if not smoke_model:
         pytest.skip("--smoke-model not provided")
 
-    state = get_scheduler_state(client, http_headers)
+    state = get_scheduler_state(client, internal_secret)
     lane = find_lane(state, smoke_model)
 
     if not lane:
@@ -379,7 +426,7 @@ def test_idle_lane_sleeps_after_threshold(client, http_headers, smoke_model, pla
     if runtime_state in ("loaded", "running"):
         # Check again after one extra cycle to ensure the planner is running
         time.sleep(planner_cycle_s + 5)
-        state2 = get_scheduler_state(client, http_headers)
+        state2 = get_scheduler_state(client, internal_secret)
         lane2 = find_lane(state2, smoke_model)
         assert lane2 is not None, "Lane disappeared unexpectedly"
         # We cannot assert it's sleeping without waiting 5 min — just confirm the

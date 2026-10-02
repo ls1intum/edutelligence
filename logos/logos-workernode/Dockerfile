@@ -61,7 +61,17 @@
 # =============================================================================
 
 ARG BASE_IMAGE=ubuntu:24.04
-ARG VLLM_PIP_SPEC="vllm==v0.29.0"
+# The [audio] extra is required, not cosmetic: the speech-to-text endpoints
+# (/v1/audio/transcriptions, /v1/audio/translations) decode uploads through
+# vllm.multimodal.media.audio.load_audio, whose only two backends are
+# soundfile (primary) and av/PyAV (fallback, and the resampler to Whisper's
+# 16 kHz for any input that isn't already at that rate). Both ship solely in
+# this extra; without them every upload fails with the same opaque 400,
+# "Invalid or unsupported audio file." (PyAV bundles FFmpeg, so no ffmpeg apt
+# package is needed.) Extras must precede the version specifier (PEP 508):
+# vllm[audio]==vX.Y.Z parses, vllm==vX.Y.Z[audio] does not. The hourly
+# "Logos - Update vLLM" workflow carries the extra over when it bumps the pin.
+ARG VLLM_PIP_SPEC="vllm[audio]==v0.30.0"
 # TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
 # installs, which already includes CUDA support matching its nvidia-* deps.
 # Only set this to override with a specific CUDA wheel index (e.g.
@@ -86,9 +96,6 @@ FROM ghcr.io/astral-sh/uv:0.12.5 AS uv
 #   headers come from vLLM's pip dependency tree (see design notes above).
 # ---------------------------------------------------------------------------
 FROM ${BASE_IMAGE}
-ARG VLLM_PIP_SPEC
-ARG TORCH_INDEX_URL
-ARG NCCL_PIP_SPEC
 
 # ── Python ────────────────────────────────────────────────────────────────────
 # Install Python 3.12 on bases that ship without Python (ubuntu:24.04).
@@ -127,10 +134,10 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
 ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
-COPY requirements.txt /tmp/requirements.txt
-RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
-    uv pip install --no-cache -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+# Version changes keep the Python and APT layers cached.
+ARG VLLM_PIP_SPEC
+ARG TORCH_INDEX_URL
+ARG NCCL_PIP_SPEC
 
 RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
     set -e \
@@ -170,6 +177,12 @@ RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
     # Strip test/benchmark payloads
     && { find /opt/venv -type d \( -name 'tests' -o -name 'test' -o -name 'benchmarks' \) \
          -path '*/torch/*' -exec rm -rf {} + || true; }
+
+# Requirement changes keep the vLLM layer cached.
+COPY requirements.txt /tmp/requirements.txt
+RUN --mount=type=bind,from=uv,source=/uv,target=/usr/local/bin/uv \
+    uv pip install --no-cache -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # ── CUDA toolkit prefix from the pip wheels ───────────────────────────────────
 # CUDA_HOME/PATH make FlashInfer & friends resolve nvcc/headers/libs from the

@@ -45,6 +45,7 @@ const KEY: MyKey = {
   used_micro_cents: 0,
   settings: null,
   last_used_at: null,
+  rate_limit_usage: null,
   team: {
     id: 1,
     name: 'a team',

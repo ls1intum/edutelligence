@@ -32,4 +32,10 @@ pipeline = RequestPipeline(classifier, scheduler, executor, context_resolver, re
 
 ## Notes
 - Queue wait = `timestamp_forwarding - timestamp_request`; duration = `timestamp_response - timestamp_forwarding`.
+- Most lifecycle fields are buffered and flushed in the single completion UPDATE.
+  `model_id`, `provider_id`, and `scheduled_ts` are also written eagerly (via the
+  write-behind queue) so the statistics recent-requests feed can show the
+  requested model (and Queued → Running) while the request is still in flight.
+  Deferred (`_PendingLog`) rows are inserted on that same queue first so the
+  identity UPDATEs find a matching `request_id`.
 - The legacy `request_events` table has been retired. Runtime writes land on `log_entry`.

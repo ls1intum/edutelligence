@@ -26,9 +26,21 @@ class PriorityQueueManager:
     """Thread-safe priority queue manager keyed by ``model_id``.
 
     Maintains separate priority heaps per model:
-        queues[model_id][Priority.HIGH] = [(neg_priority, ts, entry_id, QueueEntry), ...]
+        queues[model_id][Priority.HIGH] = [(-raw_priority, -role_rank, ts, entry_id, QueueEntry), ...]
         queues[model_id][Priority.NORMAL] = [...]
         queues[model_id][Priority.LOW] = [...]
+
+    Ordering inside the queue:
+    1. ``-raw_priority``: the full-precision priority the request resolved to
+       (team > key > policy scale, 1..10). Bucket choice (LOW/NORMAL/HIGH)
+       still comes from ``Priority.from_int(raw_priority)``; the raw value
+       refines ordering *within* a bucket, so a team priority of 7 dequeues
+       before a plain 5 in NORMAL.
+    2. ``-role_rank``: the caller's queue tiebreak rank (application keys
+       before admin keys before developer traffic, see
+       pipeline.queue_role_rank) — the default intra-team ordering
+       application > app admin > developer.
+    3. ``ts``: FIFO for equal priority and rank.
 
     Design principles:
     - Pure queue operations — no scheduling policy.
@@ -43,8 +55,9 @@ class PriorityQueueManager:
     """
 
     def __init__(self):
-        # queues[model_id][priority] = heap of (-priority, ts, entry_id, QueueEntry)
-        self._queues: Dict[int, Dict[Priority, List[Tuple[int, float, str, QueueEntry]]]] = defaultdict(
+        # queues[model_id][priority] = heap of
+        # (-raw_priority, -role_rank, ts, entry_id, QueueEntry)
+        self._queues: Dict[int, Dict[Priority, List[Tuple[int, int, float, str, QueueEntry]]]] = defaultdict(
             lambda: {
                 Priority.LOW: [],
                 Priority.NORMAL: [],
@@ -68,12 +81,21 @@ class PriorityQueueManager:
         priority: Priority = Priority.NORMAL,
         is_cold_at_queue: bool = False,
         provider_affinity: int | None = None,
+        raw_priority: int | None = None,
+        role_rank: int = 0,
     ) -> str:
         """Add a task to the priority queue for ``model_id``.
 
         ``provider_id`` is accepted but ignored (back-compat). Unless
         ``provider_affinity`` is set, any provider with capability for
         ``model_id`` can later dispatch this task.
+
+        ``raw_priority`` is the full-precision priority the request resolved
+        to (1..10 scale); it refines the ordering inside the bucket that
+        ``priority`` (``Priority.from_int(raw_priority)``) selects. Defaults
+        to ``int(priority)``. ``role_rank`` is the caller's tiebreak rank
+        within equal priority (see pipeline.queue_role_rank); 0 = unknown
+        caller, which waits behind interactive traffic.
         """
         with self._lock:
             self._entry_counter += 1
@@ -85,13 +107,16 @@ class PriorityQueueManager:
                 model_id=model_id,
                 original_priority=priority,
                 current_priority=priority,
+                raw_priority=int(raw_priority if raw_priority is not None else priority),
+                role_rank=role_rank,
                 enqueue_time=datetime.now(),
                 is_cold_at_queue=is_cold_at_queue,
                 provider_affinity=provider_affinity,
             )
 
             heap_entry = (
-                -int(priority),
+                -entry.raw_priority,
+                -entry.role_rank,
                 datetime.now().timestamp(),
                 entry_id,
                 entry,
@@ -156,7 +181,12 @@ class PriorityQueueManager:
         eligible_index = next(
             (
                 index
-                for index, (_, _, _, candidate) in sorted(enumerate(queue), key=lambda item: item[1][:3])
+                for index, (*_ordering, candidate) in sorted(
+                    # Order by the heap's leading keys:
+                    # (-raw_priority, -role_rank, ts, entry_id).
+                    enumerate(queue),
+                    key=lambda item: item[1][:4],
+                )
                 if provider_id is None or candidate.provider_affinity in (None, provider_id)
             ),
             None,
@@ -164,7 +194,7 @@ class PriorityQueueManager:
         if eligible_index is None:
             return None, None
 
-        _, _, entry_id, entry = queue[eligible_index]
+        _, _, _, entry_id, entry = queue[eligible_index]
         if eligible_index == 0:
             heapq.heappop(queue)
         else:
@@ -191,7 +221,7 @@ class PriorityQueueManager:
             for priority in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
                 queue = self._queues[model_id][priority]
                 if queue:
-                    _, _, _, entry = queue[0]
+                    _, _, _, _, entry = queue[0]
                     return entry.task, priority
             return None
 
@@ -208,7 +238,7 @@ class PriorityQueueManager:
 
             current_queue = self._queues[model_id][current_priority]
             entry_to_move = None
-            for i, (_, _, eid, entry) in enumerate(current_queue):
+            for i, (_, _, _, eid, entry) in enumerate(current_queue):
                 if eid == entry_id:
                     entry_to_move = entry
                     del current_queue[i]
@@ -221,9 +251,14 @@ class PriorityQueueManager:
                 return False
 
             entry_to_move.escalate(new_priority)
+            # Escalation changes the bucket, not the caller: keep the entry's
+            # raw priority and role rank so its position inside the new
+            # bucket matches where it would have sat.
+            entry_to_move.raw_priority = int(new_priority)
 
             heap_entry = (
-                -int(new_priority),
+                -entry_to_move.raw_priority,
+                -entry_to_move.role_rank,
                 datetime.now().timestamp(),
                 entry_id,
                 entry_to_move,
@@ -278,7 +313,7 @@ class PriorityQueueManager:
 
         with self._lock:
             queue = self._queues[model_id][priority]
-            entries = [entry for (_, _, _, entry) in queue]
+            entries = [entry for (*_, entry) in queue]
             entries.sort(key=lambda e: e.enqueue_time)
             return entries
 
@@ -289,8 +324,8 @@ class PriorityQueueManager:
                 return None
             model_id, priority = self._entry_lookup[entry_id]
             queue = self._queues[model_id][priority]
-            for _, _, eid, entry in queue:
-                if eid == entry_id:
+            for (*_, entry) in queue:
+                if entry.entry_id == entry_id:
                     return entry
             return None
 
@@ -301,7 +336,7 @@ class PriorityQueueManager:
                 return False
             model_id, priority = self._entry_lookup[entry_id]
             queue = self._queues[model_id][priority]
-            for i, (_, _, eid, _) in enumerate(queue):
+            for i, (_, _, _, eid, _) in enumerate(queue):
                 if eid == entry_id:
                     del queue[i]
                     heapq.heapify(queue)
@@ -340,7 +375,7 @@ class PriorityQueueManager:
             if not model_queues:
                 return False
             for queue in model_queues.values():
-                for _neg_pri, _ts, _eid, entry in queue:
+                for (*_, entry) in queue:
                     eligible = provider_id is None or entry.provider_affinity in (None, provider_id)
                     if eligible and entry.is_cold_at_queue:
                         return True

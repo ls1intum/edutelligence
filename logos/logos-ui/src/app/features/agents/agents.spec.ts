@@ -17,7 +17,7 @@ import { Agents } from './agents';
 /**
  * The agents page groups the list into "active" and "finished", and it only
  * keeps polling the runner while something in that list can still change.
- * Both read off the same status set as the backend, so a status the runner
+ * Both read off the same status set as the application service, so a status the runner
  * treats as active but the page does not would sit under Finished — stale,
  * and no longer refreshed — until a manual reload.
  */
@@ -167,7 +167,7 @@ describe('Agents', () => {
 
   describe('grouping', () => {
     it('keeps a finalizing session in the active group', async () => {
-      // The backend counts finalizing as active (it still occupies the
+      // the application server counts finalizing as active (it still occupies the
       // workspace); the page must too, or the row renders under Finished
       // while the runner is still pushing its work.
       expect(ACTIVE_SESSION_STATUSES).toContain('finalizing');

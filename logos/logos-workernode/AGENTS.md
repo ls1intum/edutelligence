@@ -1,11 +1,18 @@
-# AGENTS.md
+# AGENTS.md — logos-workernode
 
-Legacy architecture notes in this file were deprecated on 2026-03-10.
+Python control plane for GPU worker nodes: starts one vLLM lane per configured model, holds a websocket bridge to `logos-orchestrator` (`logosnode_registry.py` on the orchestrator side), reports runtime/device/lane status for warm/cold scheduling, and auto-calibrates per-model VRAM profiles.
 
-Use these files as the current source of truth:
-- `README.md` for project overview and current API surface.
-- `LANES.md` for lane operations (vLLM lanes).
-- `TESTING.md` for benchmark and runbook commands.
-- `logos_worker_node/models.py` for exact request/response schemas (`admin_api.py`, referenced here before, no longer exists — schemas live in `models.py` alone now).
+Sources of truth:
 
-If any historical notes elsewhere conflict with runtime behavior, follow the code and the docs above.
+- `README.md` — overview, configuration split (`.env` credentials vs `config.yml` hardware — never mix them), chat templates.
+- `LANES.md` — lane operations (vLLM lane lifecycle).
+- `TESTING.md` — benchmark and runbook commands.
+- `logos_worker_node/models.py` — exact request/response schemas (`admin_api.py` no longer exists; schemas live in `models.py` alone).
+
+If any historical note conflicts with runtime behavior, follow the code and the docs above.
+
+## Notes for agents
+
+- Calibration results persist in the worker's state directory and flow to Logos over the existing websocket heartbeat — no extra worker-side configuration.
+- Tests run through the shared `logos_test.yml` CI job together with the orchestrator suite; a change touching both needs both green.
+- The `logos/e2e` tier-1 suite drives the real `logos_worker_node` against simulated GPUs (`gpusim`) — run it when changing GPU-compatibility decisions (`../e2e/AGENTS.md`).

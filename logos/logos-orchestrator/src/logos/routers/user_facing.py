@@ -14,12 +14,14 @@ from fastapi.responses import JSONResponse, Response
 
 import logos.main as _main
 from logos.auth import authenticate_api_key
+from logos.batch_api import handle_batch_api_request
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.errors import coerce_upstream_error
 from logos.jobs.job_service import JobService
 from logos.logosnode_snapshot import _resolve_requested_model_name
 from logos.main import _model_context_fields, _served_context_window_stats, handle_sync_request, submit_job_request
+from logos.responses import get_client_ip
 
 logger = logging.getLogger("LogosLogger")
 
@@ -48,7 +50,7 @@ async def list_models(request: Request):
     Returns:
         JSONResponse matching the OpenAI GET /v1/models spec.
     """
-    auth = authenticate_api_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
     with DBManager() as db:
         models = db.get_models_for_api_key(auth.api_key_id)
@@ -113,7 +115,7 @@ async def retrieve_model(model_id: str, request: Request):
     Raises:
         HTTPException(404): Model not found or user lacks access.
     """
-    auth = authenticate_api_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
     with DBManager() as db:
         model = db.get_model_for_api_key(auth.api_key_id, model_id)
@@ -178,7 +180,7 @@ async def warmup_model(model_id: str, request: Request):
     Deliberately not "send a tiny request": that bills the caller, occupies a
     slot, and returns a completion nobody wanted.
     """
-    auth = authenticate_api_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
     model_name = _resolve_accessible_model_name(auth.api_key_id, model_id)
     if model_name is None:
         raise HTTPException(status_code=404, detail="Model not found or access denied")
@@ -313,6 +315,44 @@ async def create_audio_translation(request: Request):
     return await handle_sync_request("v1/audio/translations", request)
 
 
+# ---------------------------------------------------------------------------
+# OpenAI Batch API (files + batches)
+#
+# Registered ahead of the POST-only catch-alls, which cannot answer the GET and
+# DELETE half of the lifecycle. Every operation is served by
+# logos.batch_api.handle_batch_api_request: authenticate, authorise, forward to
+# the provider's Batch API, account for the result.
+# ---------------------------------------------------------------------------
+
+_BATCH_API_ROUTES = (
+    ("POST", "files"),
+    ("GET", "files"),
+    ("GET", "files/{file_id}"),
+    ("GET", "files/{file_id}/content"),
+    ("DELETE", "files/{file_id}"),
+    ("POST", "batches"),
+    ("GET", "batches"),
+    ("GET", "batches/{batch_id}"),
+    ("POST", "batches/{batch_id}/cancel"),
+)
+
+
+async def _batch_api_route(request: Request):
+    """Serve one Batch API operation under any proxy prefix."""
+    return await handle_batch_api_request(request)
+
+
+for _batch_prefix in ("v1", "openai", "jobs/v1", "jobs/openai"):
+    for _batch_method, _batch_path in _BATCH_API_ROUTES:
+        router.add_api_route(
+            f"/{_batch_prefix}/{_batch_path}",
+            _batch_api_route,
+            methods=[_batch_method],
+            tags=["batch"],
+            include_in_schema=_batch_prefix == "v1",
+        )
+
+
 @router.post("/v1/{path:path}", tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
@@ -354,14 +394,15 @@ async def logos_service_long_sync(request: Request, path: str = None):
 
 
 # vLLM non-prefixed endpoints (not part of OpenAI API spec, but user-facing).
-# These are canonical paths for pooling, scoring, reranking, and tokenization.
+# These are canonical paths for pooling, scoring, reranking, classification,
+# and tokenization.
 async def _handle_vllm_native(request: Request):
     """Forward to vLLM using the original request path."""
     path = request.url.path.lstrip("/")
     return await handle_sync_request(path, request)
 
 
-for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
+for _vllm_path in ("/pooling", "/score", "/rerank", "/classify", "/tokenize", "/detokenize"):
     router.add_api_route(
         _vllm_path,
         _handle_vllm_native,
@@ -423,7 +464,7 @@ async def get_job_status(job_id: int, request: Request):
     Uses team-based authorization - you can only view jobs created by your current team.
     Logos Admins can view all jobs.
     """
-    auth = authenticate_api_key(dict(request.headers))
+    auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
     job = JobService.fetch(job_id)
     if job is None:

@@ -160,4 +160,22 @@ describe('Shell', () => {
       );
     });
   });
+
+  describe('isNavActive', () => {
+    it('highlights Teams for both the list and team-detail routes', () => {
+      const teams = { path: '/team-management' } as const;
+      const models = { path: '/models' } as const;
+
+      Object.defineProperty(component['router'], 'url', { get: () => '/teams/42', configurable: true });
+      expect(component.isNavActive(teams as never)).toBe(true);
+      expect(component.isNavActive(models as never)).toBe(false);
+
+      Object.defineProperty(component['router'], 'url', { get: () => '/team-management', configurable: true });
+      expect(component.isNavActive(teams as never)).toBe(true);
+
+      Object.defineProperty(component['router'], 'url', { get: () => '/models', configurable: true });
+      expect(component.isNavActive(teams as never)).toBe(false);
+      expect(component.isNavActive(models as never)).toBe(true);
+    });
+  });
 });

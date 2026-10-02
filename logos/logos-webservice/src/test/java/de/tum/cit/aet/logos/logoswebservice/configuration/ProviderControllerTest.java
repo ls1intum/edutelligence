@@ -1,8 +1,18 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+
+import javax.sql.DataSource;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -15,12 +25,22 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 
@@ -41,10 +61,22 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 class ProviderControllerTest {
 
     @Autowired MockMvc mvc;
+    @Autowired JdbcTemplate jdbc;
+    @Autowired DataSource dataSource;
     @MockitoBean JwtDecoder jwtDecoder;
     // Mocked so the price refresh triggered by connect_model_provider does not
     // reach the live litellm catalog during tests.
     @MockitoBean PriceUpdaterService priceUpdaterService;
+    // Mocked so stopCalibration/calibrateUncalibrated tests never make a real
+    // outbound call to an orchestrator — only the request-body binding into
+    // OrchestratorWorkerAdminClient's int/String args is under test here.
+    @MockitoBean OrchestratorWorkerAdminClient workerAdminClient;
+    // Mocked so tests can assert what the endpoint announces to the
+    // orchestrator instead of sending nothing (no orchestrator URL in tests).
+    @MockitoBean OrchestratorNotificationService orchestratorNotificationService;
+    // Mocked so the status endpoint is testable without an orchestrator URL.
+    @MockitoBean OrchestratorModelSyncClient modelSyncClient;
+    @MockitoBean ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
 
     @Test
     void getProviders_adminReturnsAllProviders() throws Exception {
@@ -160,6 +192,91 @@ class ProviderControllerTest {
     }
 
     @Test
+    void deleteProvider_refusedWhileABatchStillRunsOrOwesItsSettlement() throws Exception {
+        // The upstream job outlives the providers table: cascading the
+        // ownership row away would make it unreachable and its spend
+        // unbillable, so the deletion is refused until it is settled.
+        jdbc.update(
+            "INSERT INTO batch_objects (kind, upstream_id, provider_id, team_id, execution, status, created_at, updated_at) "
+                + "VALUES ('batch', 'batch_delete_guard', 6001, 2001, 'provider', 'in_progress', now(), now())");
+        try {
+            mvc.perform(post("/logosdb/delete_provider")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"provider_id\":6001}"))
+               .andExpect(status().isConflict())
+               .andExpect(jsonPath("$.detail").value(containsString("not yet settled")));
+        } finally {
+            jdbc.update("DELETE FROM batch_objects WHERE upstream_id = 'batch_delete_guard'");
+        }
+    }
+
+    @Test
+    void deleteProvider_allowedOnceTheBatchesAreSettled() throws Exception {
+        // A terminal, metered batch is safe to cascade away with the
+        // provider: nothing runs on it any more and its spend is booked.
+        jdbc.update(
+            "INSERT INTO batch_objects (kind, upstream_id, provider_id, team_id, execution, status, settled_at, created_at, updated_at) "
+                + "VALUES ('batch', 'batch_delete_settled', 6001, 2001, 'provider', 'completed', now(), now(), now())");
+        try {
+            mvc.perform(post("/logosdb/delete_provider")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"provider_id\":6001}"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.result").value("Deleted Provider."));
+        } finally {
+            // The cascade removed the settled row with the provider, so this
+            // only covers a failed run where the provider still exists.
+            jdbc.update("DELETE FROM batch_objects WHERE upstream_id = 'batch_delete_settled'");
+        }
+    }
+
+    @Test
+    void deleteProvider_serializesWithAConcurrentBatchRegistration() throws Exception {
+        // The count alone has a window: a registration could commit its
+        // unsettled batch after the count returns zero and before the delete,
+        // and the cascade would then erase its row while the upstream job
+        // keeps running. The provider row lock closes the window — the
+        // registration's FK check waits on the delete, and once the
+        // registration is committed the count sees it and refuses.
+        CountDownLatch registrationInFlight = new CountDownLatch(1);
+        Thread inserter = new Thread(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                conn.setAutoCommit(false);
+                try (PreparedStatement ps = conn.prepareStatement(
+                    "INSERT INTO batch_objects (kind, upstream_id, provider_id, team_id, execution, status, created_at, updated_at) "
+                        + "VALUES ('batch', 'batch_delete_race', 6001, 2001, 'provider', 'validating', now(), now())")) {
+                    ps.executeUpdate();
+                }
+                registrationInFlight.countDown();
+                // Hold the FK lock while the delete is in flight; only then
+                // commit, so the delete is forced to wait and see the batch.
+                Thread.sleep(1500);
+                conn.commit();
+            } catch (Exception ignored) {
+                // The thread must not kill the test on the way down.
+            }
+        });
+        inserter.start();
+        assertTrue(registrationInFlight.await(10, TimeUnit.SECONDS), "the concurrent registration did not start");
+        try {
+            mvc.perform(post("/logosdb/delete_provider")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"provider_id\":6001}"))
+               .andExpect(status().isConflict());
+            // The provider survived with its batch: the ownership row (and
+            // with it the billing state) is intact.
+            assertEquals(1, jdbc.queryForObject(
+                "SELECT count(*) FROM batch_objects WHERE upstream_id = 'batch_delete_race'", Integer.class));
+        } finally {
+            inserter.join(15_000);
+            jdbc.update("DELETE FROM batch_objects WHERE upstream_id = 'batch_delete_race'");
+        }
+    }
+
+    @Test
     void connectModelProvider_createsLink() throws Exception {
         mvc.perform(post("/logosdb/connect_model_provider")
                 .with(TestJwt.logosAdmin())
@@ -182,6 +299,7 @@ class ProviderControllerTest {
         // asynchronously and only after the catalogue price refresh committed,
         // so wait for the price refresh to be observed.
         verify(priceUpdaterService, timeout(5000)).updatePricesForModel(eq(5002), anyString());
+        verify(modelCapabilitiesUpdaterService).updateCapabilitiesForModelAsync(5002, "gpt-3.5");
     }
 
     @Test
@@ -213,6 +331,93 @@ class ProviderControllerTest {
                 .content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.totalProviders").isNumber());
+    }
+
+    @Test
+    void refreshModels_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+        verify(orchestratorNotificationService, never()).notifyRefresh(anyBoolean(), anyBoolean());
+    }
+
+    @Test
+    void refreshModels_triggersCloudModelSync() throws Exception {
+        when(orchestratorNotificationService.sendRefreshSync(false, true)).thenReturn(true);
+
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Model refresh triggered."));
+
+        // syncCloudModels must be true: a plain pipeline refresh would leave
+        // the upstream listings unread until the next 15-minute interval.
+        verify(orchestratorNotificationService).sendRefreshSync(false, true);
+    }
+
+    @Test
+    void refreshModels_reports503WhenTheOrchestratorCouldNotBeReached() throws Exception {
+        // The mock's default false: the pass was never handed over, so a 200
+        // would leave the UI polling a completion status that can never come.
+        mvc.perform(post("/logosdb/refresh_models")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isServiceUnavailable())
+           .andExpect(jsonPath("$.error").value(containsString("orchestrator")));
+    }
+
+    @Test
+    void modelSyncStatus_requiresLogosAdmin() throws Exception {
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void modelSyncStatus_reportsTheOrchestratorState() throws Exception {
+        when(modelSyncClient.isSyncRunning()).thenReturn(true);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running").value(true));
+    }
+
+    @Test
+    void modelSyncStatus_reportsExplicitIdle() throws Exception {
+        when(modelSyncClient.isSyncRunning()).thenReturn(false);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running").value(false));
+    }
+
+    @Test
+    void modelSyncStatus_reportsUnknownWhenTheStatusCouldNotBeRead() throws Exception {
+        // null: the orchestrator did not answer. The UI settles an accepted
+        // refresh only on an explicit false, so the endpoint has to be able
+        // to express "unknown" — collapsing it to false would end the wait
+        // on a transient failure.
+        when(modelSyncClient.isSyncRunning()).thenReturn(null);
+
+        mvc.perform(post("/logosdb/model_sync_status")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.running", nullValue()));
     }
 
     @Test
@@ -291,5 +496,37 @@ class ProviderControllerTest {
                 .content("{\"lane_id\":\"lane-1\"}"))
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+    }
+
+    @Test
+    void stopCalibration_bindsSnakeCaseProviderIdFromRequestBody() throws Exception {
+        // StopCalibrationRequestDTO.providerId() must actually be populated
+        // from the UI's snake_case "provider_id" body — a prior review
+        // thread questioned whether the app's custom ObjectMapper bean
+        // (JacksonConfig) still honours spring.jackson.property-naming-
+        // strategy=SNAKE_CASE. Asserting the int reaching
+        // OrchestratorWorkerAdminClient proves the binding, independent of
+        // internal Spring wiring details.
+        when(workerAdminClient.stopCalibration(6001))
+            .thenReturn(ResponseEntity.ok(Map.of("was_active", false)));
+
+        mvc.perform(post("/logosdb/providers/logosnode/stop_calibration")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.was_active").value(false));
+
+        verify(workerAdminClient).stopCalibration(eq(6001));
+    }
+
+    @Test
+    void stopCalibration_requiresProviderId() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/stop_calibration")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id is required"));
     }
 }

@@ -62,7 +62,11 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           BRANCH: ${{ steps.version.outputs.branch }}
         run: |
-          CURRENT=$(sed -nE 's/^ARG VLLM_PIP_SPEC="vllm==v?([^"]+)"$/\1/p' "$DOCKERFILE")
+          # The pin may carry extras (vllm[audio]==vX.Y.Z). Capture only the
+          # version: matching the extras as part of it would make the pin never
+          # compare equal to the PyPI version, and this workflow would open the
+          # same "update" PR every hour.
+          CURRENT=$(sed -nE 's/^ARG VLLM_PIP_SPEC="vllm(\[[^]]*\])?==v?([0-9][0-9a-z.]*)"$/\2/p' "$DOCKERFILE")
           echo "Current pin: v$CURRENT"
           if [ "$CURRENT" = "$VERSION" ]; then
             echo "Dockerfile already pins vllm==v$VERSION — nothing to do."
@@ -81,8 +85,13 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          sed -i -E "s|^ARG VLLM_PIP_SPEC=.*$|ARG VLLM_PIP_SPEC=\"vllm==v$VERSION\"|" "$DOCKERFILE"
-          grep -F "vllm==v$VERSION" "$DOCKERFILE" >/dev/null || {
+          # Carry the current extras (e.g. [audio]) over to the new pin.
+          # Rewriting the line as a bare "vllm==v<version>" would silently
+          # uninstall the features that depend on them — the [audio] extra is
+          # what makes /v1/audio/transcriptions able to decode uploads at all.
+          EXTRA=$(sed -nE 's/^ARG VLLM_PIP_SPEC="vllm(\[[^]]*\])?==.*"$/\1/p' "$DOCKERFILE")
+          sed -i -E "s|^ARG VLLM_PIP_SPEC=.*$|ARG VLLM_PIP_SPEC=\"vllm${EXTRA}==v$VERSION\"|" "$DOCKERFILE"
+          grep -F "vllm${EXTRA}==v$VERSION" "$DOCKERFILE" >/dev/null || {
             echo "::error::Failed to update VLLM_PIP_SPEC in $DOCKERFILE"
             exit 1
           }
@@ -133,7 +142,7 @@ jobs:
 
           ## Description
 
-          Updates the \`VLLM_PIP_SPEC\` build arg default in \`$DOCKERFILE\` to \`vllm==v$VERSION\`, and the \`VLLM_REASONING_EFFORT_VALUES\` snapshot label in \`$EFFORT_MODULE\` alongside it. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
+          Bumps the version in the \`VLLM_PIP_SPEC\` build arg default in \`$DOCKERFILE\` to v$VERSION — extras carried by the pin (e.g. \`[audio]\`, which the speech-to-text endpoints need) are preserved — and the \`VLLM_REASONING_EFFORT_VALUES\` snapshot label in \`$EFFORT_MODULE\` alongside it. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
 
           Please check the release notes for new \`ChatCompletionRequest.reasoning_effort\` values: only the label is bumped automatically, the tuple is not. Runtime normalization is unaffected either way — unknown values fall back to the template family's default.
 
