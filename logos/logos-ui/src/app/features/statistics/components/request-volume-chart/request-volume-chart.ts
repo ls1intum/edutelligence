@@ -97,6 +97,8 @@ export interface LegendItem {
   key: string;
   label: string;
   color: string;
+  /** The model behind this series no longer exists; the legend shows a trash marker. */
+  deleted?: boolean;
 }
 
 type ViewMode = 'provider' | 'model';
@@ -117,6 +119,8 @@ export class RequestVolumeChartComponent implements OnChanges {
   @Input() modelSeriesMap: Record<string, DataPoint[]> = {};
   @Input() modelLabelById: Record<string, string> = {};
   @Input() modelColors: Record<string, string> = {};
+  /** Series keys whose model was deleted; the legend marks those entries. */
+  @Input() modelDeletedKeys: Set<string> = new Set();
   /** Width of each volume bar in ms; drives explicit range labels in tooltips. */
   @Input() bucketMs = 0;
   @Input() resetZoomTrigger = 0;
@@ -169,6 +173,7 @@ export class RequestVolumeChartComponent implements OnChanges {
   private readonly _modelMap = signal<Record<string, DataPoint[]>>({});
   private readonly _modelLbl = signal<Record<string, string>>({});
   private readonly _modelClr = signal<Record<string, string>>({});
+  private readonly _modelDeletedKeys = signal<Set<string>>(new Set());
   private readonly _bucketMs = signal(0);
 
   // ── Mode switch options ─────────────────────────────────────────────────
@@ -334,10 +339,12 @@ export class RequestVolumeChartComponent implements OnChanges {
     const modelClr = this._modelClr();
 
     if (mode === 'model') {
+      const deleted = this._modelDeletedKeys();
       return Object.keys(modelMap).map((id, idx) => ({
         key: id,
         label: modelLbl[id] ?? id,
         color: modelClr[id] ?? seriesColor(idx),
+        deleted: deleted.has(id),
       }));
     }
     // Provider view: cloud/local bars only.
@@ -407,6 +414,7 @@ export class RequestVolumeChartComponent implements OnChanges {
     if (changes['modelSeriesMap']) this._modelMap.set(this.modelSeriesMap);
     if (changes['modelLabelById']) this._modelLbl.set(this.modelLabelById);
     if (changes['modelColors']) this._modelClr.set(this.modelColors);
+    if (changes['modelDeletedKeys']) this._modelDeletedKeys.set(this.modelDeletedKeys);
     if (changes['bucketMs']) this._bucketMs.set(this.bucketMs);
 
     if (changes['resetZoomTrigger'] && !changes['resetZoomTrigger'].firstChange) {

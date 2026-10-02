@@ -61,6 +61,28 @@ and set per-key limits / model permissions.
 
 ![Team detail — Application Keys](/img/roles/team-detail-application-keys.png)
 
+### Repositories
+
+GitHub repositories this team's applications live in. Owners link a repository
+URL, branch, and optional path filters; for private repos they can paste a
+read-only deploy key. From the same tab they can run a heuristic scan or queue
+a LogosOSSAgent analysis session. Linking alone does not start analysis.
+
+![Team detail — Repositories](/img/roles/team-detail-repositories.png)
+
+### Workflows
+
+Latest AI-workflow analyses for the team's linked repositories: Mermaid
+diagrams of detected flows and per-call **SLA** plus **objective priority**
+recommendations (ordered latency / quality / price). Owners (and Logos Admins)
+can **Accept** a recommendation (optionally binding an application key),
+**Override** SLA or priority order, or **Reject** it. Accepting or overriding
+can update that key's queue priority so the orchestrator serves traffic
+accordingly. When a detected model has Likert profile ratings, a spider chart
+is shown beside the recommendation.
+
+![Team detail — Workflows](/img/roles/team-detail-workflows.png)
+
 ### Models {#team-models}
 
 Which catalogue models this team may use.

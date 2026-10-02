@@ -451,7 +451,7 @@ class GatewayCloudBillingEndToEndTest {
     }
 
     private int admit(Fixture f, byte[] body) {
-        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), null, body);
+        Integer id = accounting.admitAndReserve(f.key(), f.deployment(), body);
         assertThat(id).isNotNull();
         assertThat(settledCost(id)).isEqualTo(RESERVATION);
         return id;

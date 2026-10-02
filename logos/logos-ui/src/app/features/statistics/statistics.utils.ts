@@ -7,6 +7,29 @@ import type {
 } from './statistics.models';
 import { cssVar } from './statistics.constants';
 
+/**
+ * The stable identity of a model in the statistics charts.
+ *
+ * Live models are keyed by their database id, so a rename keeps its series.
+ * A deleted model's rows lost that id, so the key falls back to the name the
+ * delete captured. At most one bucket holds that name: the aggregate groups
+ * by (model_id, model_name), and two live models never carry the same name.
+ * Two generations with the same name (delete, re-add under it, delete again)
+ * merge into that one bucket — no finer distinction is left in the data.
+ *
+ * The two shapes carry distinct fixed prefixes. Without them a deleted model
+ * named "42" would share a key with live model id 42 and merge its usage
+ * into the live series, and a raw name could land on an inherited property
+ * of the plain-object maps the chart builds ("constructor", "__proto__", …).
+ */
+export function modelSeriesKey(modelId: number | null | undefined, modelName: string | null | undefined): string {
+  if (modelId != null) return `model-${modelId}`;
+  if (modelName && modelName.trim() !== '') return `deleted-${modelName}`;
+  // Rows with neither id nor name never reach the per-model views (the
+  // queries filter them out); the total key just keeps this function total.
+  return 'deleted-unknown';
+}
+
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
 
 export type RequestStage = 'queued' | 'executing' | 'complete';
@@ -683,6 +706,18 @@ export const extractProviderHostRamMb = (
     reported: true,
   };
 };
+
+/**
+ * Whether a provider's device reports a single unified memory pool — Apple
+ * Silicon (Metal) has no separate VRAM at all, GPU and CPU draw from the same
+ * bytes. The statistics page must not show such a worker a "VRAM" pie next to
+ * a "RAM" pie: the two charts would describe the same pool twice, and the
+ * VRAM total is a wired-down budget heuristic rather than a real pool. Gated
+ * on device_mode because it is the flag the worker sets for exactly this
+ * hardware; the page then shows one "Unified memory" chart instead.
+ */
+export const isUnifiedMemoryProvider = (sample: VramV2Sample | null | undefined): boolean =>
+  sample?.scheduler_signals?.provider?.device_mode === 'metal';
 
 export const buildVramSignature = (
   providers: VramProviderPayload[]

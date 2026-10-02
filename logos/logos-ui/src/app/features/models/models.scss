@@ -191,6 +191,30 @@
   &--short { max-width: 120px; }
 }
 
+.form-section-label--mt {
+  margin-top: 12px;
+}
+
+.form-hint {
+  margin: 0 0 8px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  line-height: 1.4;
+}
+
+.profile-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.profile-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 
 @media (max-width: 768px) {
   .models { padding: 24px 16px 32px; }

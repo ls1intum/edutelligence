@@ -47,7 +47,10 @@ export type RequestLogStats = {
   };
   statusCounts: Record<string, number>;
   modelBreakdown: Array<{
-    modelId: number;
+    /** null marks a deleted model: the usage survives under modelName. */
+    modelId: number | null;
+    /** Set on deleted-model entries so the UI can show the trash marker. */
+    modelDeleted?: boolean;
     modelName: string;
     requestCount: number;
     avgQueueSeconds: number | null;
@@ -66,7 +69,7 @@ export type RequestLogStats = {
   }>;
   modelTimeSeries?: Array<{
     timestamp: number; // Unix ts (ms)
-    modelId: number;
+    modelId: number | null; // null for deleted models
     modelName: string;
     count: number;
   }>;

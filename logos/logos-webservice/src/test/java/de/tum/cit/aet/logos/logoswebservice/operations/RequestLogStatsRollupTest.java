@@ -1,5 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.operations;
 
+import java.sql.Connection;
+import java.sql.Statement;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -16,6 +18,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
+
+import org.assertj.core.data.Offset;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsRefreshService;
@@ -367,5 +371,184 @@ class RequestLogStatsRollupTest {
         assertThat(refreshService.refreshNow()).isTrue();
         assertThat(rollupRowCount()).isEqualTo(afterFirst);
         assertThat(stats(query(24, null, null)).get("totals")).isEqualTo(once.get("totals"));
+    }
+
+    @Test
+    void the_run_window_uses_the_provider_call_and_response_stamps_not_the_old_split() {
+        // The rest of this class's seed never sets timestamp_provider_call or
+        // timestamp_provider_response, so it only ever exercises the COALESCE
+        // fallback (the pre-migration split). This test drives the new path:
+        // rows whose provider-call / provider-response instants differ from
+        // both the forwarding and the completion instant, one in a completed
+        // hour (rollup branch) and one in the running hour (live tail).
+        //
+        // Both rows share the same deltas, so the scoped average is exact:
+        //   request -> forwarding   +5s   (scheduling wait)
+        //   forwarding -> call      +5s   (rate-limit / budget wait = queue)
+        //   call -> response(=resp) +4s   (the provider's own time = run)
+        //   response -> completion  +6s   (post-provider billing tail)
+        // The new split reads queue = call - request = 10s, run = resp - call
+        // = 4s. The old split would read queue = 5s, run = 15s — so asserting
+        // 10 / 4 proves the new columns, not the fallback, produced the figure.
+        jdbc.update("""
+            INSERT INTO providers (id, name, base_url, provider_type, privacy_level, auth_name, auth_format)
+            VALUES (6901, 'rollup-provider-window', 'https://api.example.com', 'cloud',
+                    'CLOUD_NOT_IN_EU_BY_US_PROVIDER', 'Authorization', 'Bearer {}')
+            """);
+        try {
+            jdbc.update("""
+                INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
+                                       timestamp_request, timestamp_forwarding, timestamp_provider_call,
+                                       timestamp_provider_response, timestamp_response,
+                                       was_cold_start, user_id, team_id)
+                VALUES
+                  (9420, 'roll-win-closed', 3001, 5001, 6901, 'success',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '5 seconds',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '10 seconds',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '14 seconds',
+                   date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '20 seconds',
+                   false, 1001, 2001),
+                  (9421, 'roll-win-live', 3001, 5001, 6901, 'success',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes 5 seconds',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes 10 seconds',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes 14 seconds',
+                   date_trunc('hour', NOW()) + INTERVAL '3 minutes 20 seconds',
+                   false, 1001, 2001)
+                """);
+
+            // Scoped to provider 6901, so only these two rows count and the
+            // average is exact regardless of the rest of the seed.
+            Map<String, Object> live = stats(
+                statsService.getRequestLogStats(start(), end(), 24, null, null, 6901, false));
+            Map<String, Object> liveTotals = (Map<String, Object>) live.get("totals");
+            assertThat(((Number) liveTotals.get("requests")).longValue()).isEqualTo(2L);
+            assertThat((Double) liveTotals.get("avgQueueSeconds"))
+                .isCloseTo(10.0, Offset.offset(0.001));
+            assertThat((Double) liveTotals.get("avgRunSeconds"))
+                .isCloseTo(4.0, Offset.offset(0.001));
+
+            // The closed hour now comes from the rollup, the running hour from
+            // the live tail — and the two must agree on the new split.
+            populateRollup();
+            Map<String, Object> merged = stats(
+                statsService.getRequestLogStats(start(), end(), 24, null, null, 6901, false));
+            Map<String, Object> mergedTotals = (Map<String, Object>) merged.get("totals");
+            assertThat(((Number) mergedTotals.get("requests")).longValue()).isEqualTo(2L);
+            assertThat((Double) mergedTotals.get("avgQueueSeconds"))
+                .isCloseTo(10.0, Offset.offset(0.001));
+            assertThat((Double) mergedTotals.get("avgRunSeconds"))
+                .isCloseTo(4.0, Offset.offset(0.001));
+            assertThat(merged.get("totals")).isEqualTo(live.get("totals"));
+        } finally {
+            jdbc.update("DELETE FROM log_entry WHERE id IN (9420, 9421)");
+            jdbc.update("DELETE FROM providers WHERE id = 6901");
+        }
+    }
+
+    @Test
+    void deleting_a_model_moves_its_usage_to_a_named_orphan_bucket() {
+        // The delete must not drop the usage from the per-model views: the
+        // BEFORE DELETE trigger stamps the captured name on every row of the
+        // model before the FK drops the id, the rows go dirty, and the next
+        // pass re-rolls their hours into the (no id, name) grain. Deleting
+        // before the rollup is populated keeps the "live" side of this class's
+        // invariant a pure log_entry read.
+        assertRollupIsEmpty();
+        jdbc.update("DELETE FROM models WHERE id = 5001");
+
+        // The trigger ran before the FK nulled the id: every row of the model
+        // carries the name now, and none carries the id any more.
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry WHERE model_id IS NULL AND model_name = 'gpt-4'",
+                Integer.class)).isEqualTo(7);
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry WHERE model_id IS NOT NULL AND model_name IS NOT NULL",
+                Integer.class)).isZero();
+
+        Map<String, Object> live = stats(query(24, null, null));
+
+        populateRollup();
+        Map<String, Object> merged = stats(query(24, null, null));
+
+        assertThat(merged.get("modelBreakdown")).isEqualTo(live.get("modelBreakdown"));
+        assertThat(merged.get("modelTimeSeries")).isEqualTo(live.get("modelTimeSeries"));
+
+        // The rollup holds the orphan bucket, named - not one anonymous
+        // no-model bucket that every deleted model would share.
+        assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry_hourly_stats"
+                + " WHERE model_id IS NULL AND model_name = 'gpt-4'",
+                Integer.class)).isGreaterThan(0);
+
+        List<Map<String, Object>> breakdown = (List<Map<String, Object>>) merged.get("modelBreakdown");
+        assertThat(breakdown).hasSize(1);
+        Map<String, Object> entry = breakdown.get(0);
+        assertThat(entry.get("modelId")).isNull();
+        assertThat(entry.get("modelName")).isEqualTo("gpt-4");
+        assertThat((Boolean) entry.get("modelDeleted")).isTrue();
+        assertThat(((Number) entry.get("requestCount")).longValue()).isEqualTo(7L);
+    }
+
+    @Test
+    void a_delete_longer_than_the_write_lag_still_reaches_the_rollup() throws Exception {
+        // The write lag is the pass's guard against writers its snapshot
+        // cannot see yet, and it only holds for writers shorter than the lag.
+        // The delete trigger can outlive it: it rewrites every usage row of
+        // the model in the delete's own transaction. While the delete is
+        // open, a pass advances its watermark past the delete's updated_at
+        // stamp without ever seeing the rows, and no later pass looks at
+        // updated_at before the stamp again. The hours the trigger enqueued
+        // with the delete are what brings them back.
+        assertRollupIsEmpty();
+        populateRollup();
+
+        try (Connection connection = jdbc.getDataSource().getConnection()) {
+            connection.setAutoCommit(false);
+            try (Statement statement = connection.createStatement()) {
+                statement.execute("DELETE FROM models WHERE id = 5001");
+            }
+
+            // The poison: a pass while the delete is still open. Its cutoff
+            // (the write lag is zero in this class) is past the delete's
+            // transaction timestamp, but its snapshot cannot see the
+            // trigger's rows, so it advances the watermark past a change it
+            // never saw. The rolled-up hours still carry the old model id -
+            // this is the state the updated_at mechanism alone can never
+            // repair.
+            assertThat(refreshService.refreshNow()).isTrue();
+            assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM log_entry_hourly_stats WHERE model_id = 5001",
+                Integer.class)).isGreaterThan(0);
+
+            connection.commit();
+        }
+
+        // The queue rows committed with the delete name the hours explicitly,
+        // so the next pass re-rolls them and empties the queue.
+        assertThat(refreshService.refreshNow()).isTrue();
+
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM log_entry_rollup_dirty_hours", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM log_entry_hourly_stats WHERE model_id = 5001",
+            Integer.class)).isZero();
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM log_entry_hourly_stats"
+            + " WHERE model_id IS NULL AND model_name = 'gpt-4'",
+            Integer.class)).isGreaterThan(0);
+
+        Map<String, Object> merged = stats(query(24, null, null));
+        List<Map<String, Object>> breakdown = (List<Map<String, Object>>) merged.get("modelBreakdown");
+        assertThat(breakdown).hasSize(1);
+        Map<String, Object> entry = breakdown.get(0);
+        assertThat(entry.get("modelId")).isNull();
+        assertThat(entry.get("modelName")).isEqualTo("gpt-4");
+        assertThat((Boolean) entry.get("modelDeleted")).isTrue();
+        assertThat(((Number) entry.get("requestCount")).longValue()).isEqualTo(7L);
     }
 }
