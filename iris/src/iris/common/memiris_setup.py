@@ -140,12 +140,21 @@ def _convert_iris_model_to_memiris_llm(
             # Memiris issues its own requests, so it needs the same per-model
             # request settings Iris applies; otherwise a reasoning model
             # configured to think (e.g. Qwen3.8 on vLLM) would run without it.
+            # Memiris only speaks chat completions: models routed through the
+            # Responses API (which reject reasoning_effort with tools on chat
+            # completions) keep the provider's default effort there.
+            forward_effort = (
+                model.supports_reasoning_effort and not model.use_responses_api
+            )
             chat_options = {
-                "reasoning_effort": (
-                    model.reasoning_effort if model.supports_reasoning_effort else None
-                ),
+                "reasoning_effort": model.reasoning_effort if forward_effort else None,
                 "extra_body": model.extra_body,
-                "supports_temperature": model.supports_temperature,
+                # Only an explicit flag overrides Memiris's own name-based default.
+                "supports_temperature": (
+                    model.supports_temperature
+                    if "supports_temperature" in model.model_fields_set
+                    else None
+                ),
             }
         return OpenAiLanguageModel(
             model=model.model,

@@ -173,3 +173,22 @@ def test_leading_system_rewrite_is_opt_in():
         "user",
         "user",
     ]
+
+
+def test_reasoning_token_allowance_extends_pipeline_budgets():
+    model = _build_model(reasoning_token_allowance=4096)
+    assert _chat_params(model, max_tokens=30)["max_completion_tokens"] == 4126
+    assert "max_completion_tokens" not in _chat_params(model)
+    responses_model = _build_model(
+        reasoning_token_allowance=100, use_responses_api=True
+    )
+    params = (
+        responses_model._create_responses_params(  # pylint: disable=protected-access
+            [], CompletionArguments(max_tokens=30), tools=None
+        )
+    )
+    assert params["max_output_tokens"] == 130
+
+
+def test_reasoning_token_allowance_defaults_to_unchanged_budgets():
+    assert _chat_params(_build_model(), max_tokens=30)["max_completion_tokens"] == 30

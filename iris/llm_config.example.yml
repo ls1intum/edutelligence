@@ -234,6 +234,8 @@
     chat_template_kwargs:
       enable_thinking: true
   leading_system_message_only: true
+  # Added to every pipeline's max_tokens: the output limit covers reasoning too.
+  reasoning_token_allowance: 4096
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
 # Logos queues requests by the priority of the calling API key. To let

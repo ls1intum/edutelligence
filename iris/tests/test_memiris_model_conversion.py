@@ -4,7 +4,10 @@ from unittest.mock import MagicMock, patch
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common import memiris_setup  # noqa: E402
 from iris.llm import OllamaModel  # noqa: E402
-from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
+from iris.llm.external.openai_chat import (  # noqa: E402
+    AzureOpenAIChatModel,
+    DirectOpenAIChatModel,
+)
 from iris.pipeline.shared.confidence_scoring import is_large_model  # noqa: E402
 
 QWEN_THINKING = {"chat_template_kwargs": {"enable_thinking": True}}
@@ -71,3 +74,35 @@ def test_qwen38_uses_the_large_model_confidence_prompt():
     assert is_large_model("Qwen/Qwen3.8-27B")
     assert is_large_model("openai/gpt-oss-120b")
     assert not is_large_model("google/gemma-3-12b-it")
+
+
+def test_responses_api_models_keep_provider_default_effort_in_memiris():
+    converted = _convert(
+        AzureOpenAIChatModel(
+            id="gpt-5.5",
+            type="azure_chat",
+            model="gpt-5.5",
+            api_key="sk-test",  # pragma: allowlist secret
+            endpoint="https://example.openai.azure.com/",
+            azure_deployment="gpt-5.5",
+            api_version="2025-04-01-preview",
+            supports_temperature=False,
+            supports_reasoning_effort=True,
+            reasoning_effort="medium",
+            use_responses_api=True,
+        )
+    )
+    assert converted._reasoning_effort is None
+    assert converted._supports_temperature is False
+
+
+def test_gpt5_entry_without_temperature_flag_keeps_memiris_default():
+    converted = _convert(
+        DirectOpenAIChatModel(
+            id="gpt-5-mini",
+            type="openai_chat",
+            model="gpt-5-mini",
+            api_key="sk-test",  # pragma: allowlist secret
+        )
+    )
+    assert converted._supports_temperature is False

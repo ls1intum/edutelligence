@@ -74,6 +74,10 @@ def test_langchain_client_carries_reasoning_settings():
     [
         ("gpt-oss:120b", "high"),
         ("qwen3.8:27b", True),
+        ("qwen3.6:35b-a3b", True),
+        ("qwen3-coder:30b", None),
+        ("qwen3.5-coder:32b", None),
+        ("qwen3-embedding:8b", None),
         ("gemma3:27b", None),
     ],
 )

@@ -31,9 +31,13 @@ def _default_think(model: str) -> Optional[Union[bool, str]]:
     """Default ``think`` value for models whose family needs an explicit one."""
     if model.startswith("gpt-oss"):
         return "high"
-    if model.startswith("qwen3"):
-        # Qwen3 thinks by default; LangChain's ChatOllama keeps the <think>
-        # block inside the message content unless reasoning is set explicitly.
+    if model.startswith("qwen3.") and not any(
+        variant in model for variant in ("coder", "embed")
+    ):
+        # Qwen3 point releases (3.5, 3.6, 3.8, ...) think by default; LangChain's
+        # ChatOllama keeps the <think> block inside the message content unless
+        # reasoning is set explicitly. Coder and embedding variants cannot
+        # think, and Ollama rejects think=True for them.
         return True
     return None
 

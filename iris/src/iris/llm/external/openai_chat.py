@@ -34,7 +34,7 @@ from openai.types.chat.chat_completion_message_function_tool_call import (
 )
 from openai.types.shared import ReasoningEffort
 from openai.types.shared_params import ResponseFormatJSONObject
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.tracing import observe
@@ -646,6 +646,10 @@ class OpenAIChatModel(ChatModel):
     # Set for models whose chat template rejects system messages after the
     # first message (Qwen3.x); see keep_system_messages_leading.
     leading_system_message_only: bool = False
+    # Tokens added to a pipeline's max_tokens before it is sent. The output
+    # limit also covers reasoning, so a reasoning model would otherwise spend a
+    # tight budget (e.g. 30 tokens for a session title) before answering.
+    reasoning_token_allowance: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_logprobs_config(self):
@@ -689,6 +693,9 @@ class OpenAIChatModel(ChatModel):
                 ) from error
 
         return self
+
+    def _output_token_limit(self, max_tokens: int) -> int:
+        return max_tokens + self.reasoning_token_allowance
 
     def _effective_reasoning_effort(
         self,
@@ -874,7 +881,7 @@ class OpenAIChatModel(ChatModel):
             params["reasoning"] = {"effort": effective_reasoning_effort}
 
         if arguments.max_tokens is not None:
-            params["max_output_tokens"] = arguments.max_tokens
+            params["max_output_tokens"] = self._output_token_limit(arguments.max_tokens)
 
         if arguments.response_format == "JSON":
             params["text"] = {"format": {"type": "json_object"}}
@@ -1034,7 +1041,9 @@ class OpenAIChatModel(ChatModel):
                     params["reasoning_effort"] = effective_reasoning_effort
 
                 if arguments.max_tokens is not None:
-                    params["max_completion_tokens"] = arguments.max_tokens
+                    params["max_completion_tokens"] = self._output_token_limit(
+                        arguments.max_tokens
+                    )
 
                 # Token-level log-probabilities are requested only when the
                 # caller opts in and the model declares support. They are
