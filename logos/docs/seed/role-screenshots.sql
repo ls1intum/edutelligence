@@ -722,6 +722,7 @@ UPDATE ai_llm_call_recommendations cur
 -- Same proposal as yesterday's accepted one: the review carries over.
 UPDATE ai_llm_call_recommendations cur
    SET review_status = prev.review_status,
+       review_carried_over = TRUE,
        confirmed_sla = prev.confirmed_sla,
        confirmed_objective_priority = prev.confirmed_objective_priority,
        reviewed_at = prev.reviewed_at

@@ -14,10 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from . import controls, db, github, model_policy
 from .config import settings
@@ -26,6 +27,8 @@ from .schemas import ACTIVE_STATUSES, SessionStatus
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_S = 300.0
+# A queued analysis row is attached to its session within one queue call.
+UNATTACHED_SLOT_TTL = timedelta(minutes=10)
 CREATED_BY = "logos-agent (analysis)"
 # Below issue (50) / comment (70) so application analysis yields to Logos work.
 ANALYSIS_PRIORITY = 10
@@ -166,8 +169,10 @@ class AnalysisPoller:
             if session_id is not None:
                 queued.append(session_id)
         if self._nightly_due(now):
-            self._nightly_done_for = now.date()
             queued.extend(await self._nightly_pass())
+            # Only a pass that got through counts: one that raised is retried
+            # by the next poll within the same hour.
+            self._nightly_done_for = now.date()
         if not queued:
             return []
         if queued and self.on_queued is not None:
@@ -288,6 +293,20 @@ class AnalysisPoller:
                     """),
                 {"now": datetime.now(timezone.utc)},
             )
+            # A claimed slot whose session never got attached (the runner died
+            # in between) would block the repository for good.
+            await conn.execute(
+                text("""
+                    UPDATE ai_workflow_analyses
+                       SET status = 'failed',
+                           error = COALESCE(error, 'queued without a session'),
+                           finished_at = COALESCE(finished_at, :now)
+                     WHERE status = 'queued'
+                       AND agent_session_id IS NULL
+                       AND started_at < :stale_before
+                    """),
+                {"now": datetime.now(timezone.utc), "stale_before": datetime.now(timezone.utc) - UNATTACHED_SLOT_TTL},
+            )
             await conn.commit()
 
     async def _links_needing_analysis(self) -> list[dict[str, Any]]:
@@ -343,8 +362,18 @@ class AnalysisPoller:
         paths_label = ", ".join(paths) if isinstance(paths, list) and paths else "(entire repository)"
         trigger_ref = f"team-repository:{link_id}"
 
+        # The analysis row first: the partial unique index on in-flight
+        # analyses admits one per repository across this poller and the
+        # webservice's individual and bulk queueing, so a lost race ends here,
+        # before any session exists.
+        analysis_id = await self._insert_queued_analysis(team_id, link_id)
+        if analysis_id is None:
+            logger.info("analysis of %s already queued or running; not queueing another", repo_slug)
+            return None
+
         workspace_id = await self._ensure_workspace(team_id, link_id, branch)
         if workspace_id is None:
+            await self._drop_queued_analysis(analysis_id)
             return None
 
         task = ANALYSIS_TASK.format(
@@ -374,16 +403,10 @@ class AnalysisPoller:
             )
         except ValueError as exc:
             logger.warning("could not queue analysis for team_repository %s: %s", link_id, exc)
+            await self._drop_queued_analysis(analysis_id)
             return None
 
-        try:
-            await self._insert_queued_analysis(team_id, link_id, session_id)
-        except Exception as exc:
-            logger.warning(
-                "queued session %s but could not insert ai_workflow_analyses: %s",
-                session_id,
-                exc,
-            )
+        await self._attach_session(analysis_id, session_id)
 
         self._queued_total += 1
         logger.info("queued analysis session %s for %s", session_id, repo_slug)
@@ -424,21 +447,42 @@ class AnalysisPoller:
                 return None
             return int(row["id"])
 
-    async def _insert_queued_analysis(self, team_id: int, link_id: int, session_id: int) -> None:
+    async def _insert_queued_analysis(self, team_id: int, link_id: int) -> int | None:
+        """Claim the repository's in-flight slot, or None when another writer holds it."""
+        async with db.sessionmaker()() as conn:
+            try:
+                analysis_id = (
+                    await conn.execute(
+                        text("""
+                            INSERT INTO ai_workflow_analyses
+                                (team_id, team_repository_id, status, source, started_at)
+                            VALUES
+                                (:team_id, :repo_id, 'queued', 'agent', :now)
+                            RETURNING id
+                            """),
+                        {"team_id": team_id, "repo_id": link_id, "now": datetime.now(timezone.utc)},
+                    )
+                ).scalar_one()
+            except IntegrityError:
+                await conn.rollback()
+                return None
+            await conn.commit()
+        return int(analysis_id)
+
+    async def _attach_session(self, analysis_id: int, session_id: int) -> None:
         async with db.sessionmaker()() as conn:
             await conn.execute(
-                text("""
-                    INSERT INTO ai_workflow_analyses
-                        (team_id, team_repository_id, status, source, agent_session_id, started_at)
-                    VALUES
-                        (:team_id, :repo_id, 'queued', 'agent', :session_id, :now)
-                    """),
-                {
-                    "team_id": team_id,
-                    "repo_id": link_id,
-                    "session_id": session_id,
-                    "now": datetime.now(timezone.utc),
-                },
+                text("UPDATE ai_workflow_analyses SET agent_session_id = :session_id WHERE id = :id"),
+                {"session_id": session_id, "id": analysis_id},
+            )
+            await conn.commit()
+
+    async def _drop_queued_analysis(self, analysis_id: int) -> None:
+        """Release a claimed slot whose session could not be created."""
+        async with db.sessionmaker()() as conn:
+            await conn.execute(
+                text("DELETE FROM ai_workflow_analyses WHERE id = :id AND agent_session_id IS NULL"),
+                {"id": analysis_id},
             )
             await conn.commit()
 

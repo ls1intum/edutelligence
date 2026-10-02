@@ -90,7 +90,10 @@ already accepted, overrode to, or rejected for a call site, that decision is
 kept ("Kept from the previous analysis"). When it recommends something else,
 the call site is **pending** again and shows the earlier decision next to the
 new proposal ("Was accepted: ux-critical · latency › quality › price"); key
-priorities change only when you review it.
+priorities change only when you review it. A decision survives analyses you
+have not reviewed yet: the earlier one is still what is shown and carried
+over. If a newer analysis arrived while the tab was open, reviewing an
+outdated proposal is refused — reload the tab.
 
 The analysis often cannot tell which model a call site uses (it is usually
 configuration, not code), so the **Model** column is a picker: choose the model

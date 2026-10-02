@@ -201,6 +201,8 @@ export interface AiLlmCallRecommendation {
   reviewed_at?: string | null;
   /** The owner picked detected_model; re-analyses keep it. */
   model_set_by_owner?: boolean;
+  /** The review was carried over from an earlier decision by a re-analysis. */
+  review_carried_over?: boolean;
   /** The owner's decision on the recommendation this one succeeds, when there was one. */
   previous?: PreviousDecision | null;
 }

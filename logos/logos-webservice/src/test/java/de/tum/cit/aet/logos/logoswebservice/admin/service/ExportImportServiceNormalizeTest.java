@@ -70,6 +70,7 @@ class ExportImportServiceNormalizeTest {
         List<Map<String, Object>> out =
             service.normalizeImportRows("ai_llm_call_recommendations", List.of(row));
         assertEquals(false, out.get(0).get("model_set_by_owner"));
+        assertEquals(false, out.get(0).get("review_carried_over"));
     }
 
     @Test

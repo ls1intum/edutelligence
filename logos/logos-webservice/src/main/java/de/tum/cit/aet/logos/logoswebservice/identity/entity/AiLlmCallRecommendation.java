@@ -71,6 +71,9 @@ public class AiLlmCallRecommendation {
     /** The owner picked {@link #detectedModel}; the next analysis keeps it. */
     @Column(nullable = false)
     private boolean modelSetByOwner;
+    /** The review was copied from an earlier decision by a re-analysis, not made on this row. */
+    @Column(nullable = false)
+    private boolean reviewCarriedOver;
 
     public Integer getId() { return id; }
     public Integer getAnalysisId() { return analysisId; }
@@ -94,6 +97,7 @@ public class AiLlmCallRecommendation {
     public Instant getReviewedAt() { return reviewedAt; }
     public Integer getPreviousRecommendationId() { return previousRecommendationId; }
     public boolean isModelSetByOwner() { return modelSetByOwner; }
+    public boolean isReviewCarriedOver() { return reviewCarriedOver; }
 
     public void setAnalysisId(Integer analysisId) { this.analysisId = analysisId; }
     public void setWorkflowId(Integer workflowId) { this.workflowId = workflowId; }
@@ -120,4 +124,5 @@ public class AiLlmCallRecommendation {
         this.previousRecommendationId = previousRecommendationId;
     }
     public void setModelSetByOwner(boolean modelSetByOwner) { this.modelSetByOwner = modelSetByOwner; }
+    public void setReviewCarriedOver(boolean reviewCarriedOver) { this.reviewCarriedOver = reviewCarriedOver; }
 }

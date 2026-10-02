@@ -31,9 +31,11 @@ class _Result:
 
 
 class _Conn:
-    def __init__(self, *, link_slug: str = "acme/repo", previous=None, analysed_commit=None):
+    def __init__(self, *, link_slug: str = "acme/repo", previous=None, analysed_commit=None, decisions=None):
         self.statements: list[tuple[str, dict]] = []
         self.previous = previous or []
+        # start_id -> decision row; by default a reviewed row is its own decision.
+        self.decisions = decisions
         self.analysed_commit = analysed_commit
         self._next_analysis_id = 9
         self._next_workflow_id = 100
@@ -49,6 +51,10 @@ class _Conn:
         text_sql = " ".join(str(sql).split())
         params = params or {}
         self.statements.append((text_sql, params))
+        if "WITH RECURSIVE chain" in text_sql:
+            if self.decisions is not None:
+                return _Result([{"start_id": k, **v} for k, v in self.decisions.items()])
+            return _Result([{"start_id": p["id"], **p} for p in self.previous if p["review_status"] != "pending"])
         if "FROM ai_llm_call_recommendations r" in text_sql:
             return _Result([dict(p) for p in self.previous])
         if "SELECT commit_sha FROM ai_workflow_analyses" in text_sql:
@@ -278,11 +284,15 @@ def _one_rec_payload(**rec):
     }
 
 
-async def _ingest_with_previous(monkeypatch, previous, payload):
-    conn = _Conn(previous=previous)
+async def _ingest_all(monkeypatch, previous, payload, decisions=None):
+    conn = _Conn(previous=previous, decisions=decisions)
     monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
     await analysis_ingest.upsert_analysis(session_id=5, team_repository_id=11, payload=payload)
-    return next(p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql)
+    return [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql]
+
+
+async def _ingest_with_previous(monkeypatch, previous, payload, decisions=None):
+    return (await _ingest_all(monkeypatch, previous, payload, decisions))[0]
 
 
 async def test_reanalysis_keeps_an_unchanged_decision(monkeypatch):
@@ -291,6 +301,7 @@ async def test_reanalysis_keeps_an_unchanged_decision(monkeypatch):
     assert json.loads(rec["confirmed_priority"]) == ["latency", "quality", "price"]
     assert rec["api_key_id"] == 33
     assert rec["previous_id"] == 501
+    assert rec["carried_over"] is True
 
 
 async def test_reanalysis_proposes_a_change_instead_of_overwriting(monkeypatch):
@@ -299,6 +310,7 @@ async def test_reanalysis_proposes_a_change_instead_of_overwriting(monkeypatch):
     assert rec["confirmed_sla"] is None
     assert rec["api_key_id"] is None
     assert rec["previous_id"] == 501  # the UI shows the previous decision beside the proposal
+    assert rec["carried_over"] is False
 
 
 async def test_reanalysis_keeps_a_rejection_of_the_same_proposal(monkeypatch):
@@ -343,3 +355,49 @@ async def test_unchanged_claim_at_another_commit_is_a_failure(tmp_path, monkeypa
     conn = await _ingest_unchanged(tmp_path, monkeypatch, claimed="b" * 40, analysed="a" * 40)
     assert not any("SET status = 'skipped'" in sql for sql, _ in conn.statements)
     assert any("SET status = 'failed'" in sql for sql, _ in conn.statements)
+
+
+async def test_an_added_call_site_in_the_same_file_does_not_take_the_existing_review(monkeypatch):
+    payload = _one_rec_payload()
+    payload["workflows"].append({"name": "summary", "diagram_mermaid": "flowchart TD\n  A", "sort_order": 1})
+    # The new workflow is listed first and sits nearer the old line.
+    payload["recommendations"].insert(
+        0, {"workflow": "summary", "file_path": "src/llm.py", "start_line": 12, "recommended_sla": "ux-critical"}
+    )
+    summary, chat = await _ingest_all(monkeypatch, [_previous()], payload)
+    assert chat["review_status"] == "accepted" and chat["previous_id"] == 501
+    assert summary["review_status"] == "pending" and summary["previous_id"] is None
+
+
+async def test_ambiguous_rows_in_one_file_stay_pending(monkeypatch):
+    payload = _one_rec_payload(workflow="")
+    payload["recommendations"].append({"file_path": "src/llm.py", "start_line": 90, "recommended_sla": "ux-critical"})
+    previous = [_previous(workflow_name=None), _previous(id=502, start_line=95, workflow_name=None)]
+    recs = await _ingest_all(monkeypatch, previous, payload)
+    assert [r["previous_id"] for r in recs] == [None, None]
+    assert all(r["review_status"] == "pending" for r in recs)
+
+
+async def test_the_decision_before_an_unreviewed_proposal_still_counts(monkeypatch):
+    # A accepted ux-critical; B proposed ux-background and is still pending; the new
+    # analysis proposes ux-critical again -> A's review comes back.
+    b_row = _previous(id=601, review_status="pending", confirmed_sla=None, confirmed_objective_priority=None)
+    a_decision = {k: v for k, v in _previous(id=600).items() if k not in ("file_path", "start_line", "workflow_name")}
+    rec = await _ingest_with_previous(monkeypatch, [b_row], _one_rec_payload(), decisions={601: a_decision})
+    assert rec["previous_id"] == 601
+    assert rec["review_status"] == "accepted"
+    assert rec["api_key_id"] == 33
+    assert rec["carried_over"] is True
+
+
+def test_match_recommendations_prefers_the_same_workflow_then_the_nearest_line():
+    previous = [
+        {"id": 1, "file_path": "a.py", "workflow_name": "chat", "start_line": 10},
+        {"id": 2, "file_path": "a.py", "workflow_name": "chat", "start_line": 50},
+    ]
+    current = [
+        {"file_path": "a.py", "workflow_name": "chat", "start_line": 48},
+        {"file_path": "a.py", "workflow_name": "chat", "start_line": 12},
+    ]
+    matched = analysis_ingest.match_recommendations(previous, current)
+    assert {i: m["id"] for i, m in matched.items()} == {0: 2, 1: 1}

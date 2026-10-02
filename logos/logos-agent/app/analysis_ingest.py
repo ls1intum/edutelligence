@@ -31,6 +31,8 @@ OBJECTIVE_KEYS = ("latency", "quality", "price")
 DEFAULT_OBJECTIVE_PRIORITY = list(OBJECTIVE_KEYS)
 # Cap memory: an agent-written artifact must not exhaust the runner.
 MAX_ANALYSIS_BYTES = 2 * 1024 * 1024
+# Bound on walking pending predecessors back to the last reviewed decision.
+MAX_ANCESTOR_HOPS = 50
 
 
 def objective_priority_for_sla(sla: str) -> list[str]:
@@ -357,6 +359,7 @@ async def upsert_analysis(
                     if isinstance(nested_rec, dict):
                         recommendations.append({**nested_rec, "workflow": name})
 
+        parsed: list[dict[str, Any]] = []
         for raw in recommendations:
             if not isinstance(raw, dict):
                 continue
@@ -366,59 +369,75 @@ async def upsert_analysis(
             sla = str(raw.get("recommended_sla") or "").strip()
             if sla not in VALID_SLAS:
                 sla = "ux-high-prio"
-            priority = normalize_objective_priority(raw.get("objective_priority"), sla=sla)
             workflow_name = str(raw.get("workflow") or raw.get("workflow_name") or "").strip()
-            workflow_id = workflow_ids.get(workflow_name) if workflow_name else None
-            # Never trust a numeric workflow_id from the artifact — it could
-            # point at another analysis/team. Resolve only via names created
-            # for this ingest.
             flags = raw.get("traffic_flags")
-            flags_json = json.dumps(flags if isinstance(flags, dict) else {})
             confidence = raw.get("confidence")
             try:
                 confidence_f = float(confidence) if confidence is not None else 0.5
             except (TypeError, ValueError):
                 confidence_f = 0.5
-            start_line = _int_or_none(raw.get("start_line"))
-            detected_model = _str_or_none(raw.get("detected_model"))
-            previous = _match_previous(previous_recs, file_path, workflow_name, start_line)
-            review = carried_review(previous, sla=sla, priority=priority)
-            if previous is not None and previous["model_set_by_owner"]:
-                # The owner said which model this call site uses; the analysis guessing
-                # again must not replace that.
-                detected_model = previous["detected_model"]
+            parsed.append(
+                {
+                    "file_path": file_path,
+                    "workflow_name": workflow_name,
+                    # Never trust a numeric workflow_id from the artifact — it could
+                    # point at another analysis/team. Resolve only via names created
+                    # for this ingest.
+                    "workflow_id": workflow_ids.get(workflow_name) if workflow_name else None,
+                    "start_line": _int_or_none(raw.get("start_line")),
+                    "end_line": _int_or_none(raw.get("end_line")),
+                    "code_url": _str_or_none(raw.get("code_url")),
+                    "detected_model": _str_or_none(raw.get("detected_model")),
+                    "sla": sla,
+                    "priority": normalize_objective_priority(raw.get("objective_priority"), sla=sla),
+                    "confidence": confidence_f,
+                    "justification": str(raw.get("justification") or ""),
+                    "flags": json.dumps(flags if isinstance(flags, dict) else {}),
+                }
+            )
+
+        predecessors = match_recommendations(previous_recs, parsed)
+        for index, rec in enumerate(parsed):
+            previous = predecessors.get(index)
+            review = carried_review(
+                previous.get("decision") if previous else None, sla=rec["sla"], priority=rec["priority"]
+            )
+            owner_model = previous is not None and bool(previous["model_set_by_owner"])
             await conn.execute(
                 text("""
                     INSERT INTO ai_llm_call_recommendations
                         (analysis_id, workflow_id, team_id, file_path, start_line, end_line,
                          code_url, detected_model, model_set_by_owner, recommended_sla, objective_priority,
-                         confidence, justification, traffic_flags, review_status,
+                         confidence, justification, traffic_flags, review_status, review_carried_over,
                          confirmed_sla, confirmed_objective_priority, api_key_id, reviewed_by, reviewed_at,
                          previous_recommendation_id)
                     VALUES
                         (:analysis_id, :workflow_id, :team_id, :file_path, :start_line, :end_line,
                          :code_url, :detected_model, :model_set_by_owner, :sla, CAST(:priority AS jsonb),
-                         :confidence, :justification, CAST(:flags AS jsonb), :review_status,
+                         :confidence, :justification, CAST(:flags AS jsonb), :review_status, :carried_over,
                          :confirmed_sla, CAST(:confirmed_priority AS jsonb), :api_key_id, :reviewed_by, :reviewed_at,
                          :previous_id)
                     """),
                 {
                     **review,
-                    "model_set_by_owner": bool(previous is not None and previous["model_set_by_owner"]),
-                    "previous_id": previous["id"] if previous is not None else None,
+                    "carried_over": review["review_status"] != "pending",
                     "analysis_id": analysis_id,
-                    "workflow_id": workflow_id,
                     "team_id": team_id,
-                    "file_path": file_path,
-                    "start_line": start_line,
-                    "end_line": _int_or_none(raw.get("end_line")),
-                    "code_url": _str_or_none(raw.get("code_url")),
-                    "detected_model": detected_model,
-                    "sla": sla,
-                    "priority": json.dumps(priority),
-                    "confidence": confidence_f,
-                    "justification": str(raw.get("justification") or ""),
-                    "flags": flags_json,
+                    "workflow_id": rec["workflow_id"],
+                    "file_path": rec["file_path"],
+                    "start_line": rec["start_line"],
+                    "end_line": rec["end_line"],
+                    "code_url": rec["code_url"],
+                    # The owner said which model this call site uses; the analysis
+                    # guessing again must not replace that.
+                    "detected_model": previous["detected_model"] if owner_model else rec["detected_model"],
+                    "model_set_by_owner": owner_model,
+                    "previous_id": previous["id"] if previous is not None else None,
+                    "sla": rec["sla"],
+                    "priority": json.dumps(rec["priority"]),
+                    "confidence": rec["confidence"],
+                    "justification": rec["justification"],
+                    "flags": rec["flags"],
                 },
             )
         await conn.commit()
@@ -432,16 +451,19 @@ async def upsert_analysis(
 
 
 async def _previous_recommendations(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
-    """Recommendations of the latest other succeeded analysis of this repository."""
+    """Recommendations of the latest other succeeded analysis of this repository.
+
+    Each carries ``decision``: its nearest reviewed ancestor (itself when it was
+    reviewed), found through pending predecessors, so an earlier decision is not
+    lost because a changed proposal sat unreviewed while the next analysis ran.
+    The caller holds the repository row lock; owner edits take it too.
+    """
     rows = (
         (
             await conn.execute(
                 text("""
                     SELECT r.id, r.file_path, r.start_line, w.name AS workflow_name,
-                           r.review_status, r.recommended_sla, r.objective_priority,
-                           r.confirmed_sla, r.confirmed_objective_priority,
-                           r.api_key_id, r.reviewed_by, r.reviewed_at,
-                           r.detected_model, r.model_set_by_owner
+                           r.review_status, r.detected_model, r.model_set_by_owner
                       FROM ai_llm_call_recommendations r
                       LEFT JOIN ai_workflows w ON w.id = r.workflow_id
                      WHERE r.analysis_id = (
@@ -460,30 +482,82 @@ async def _previous_recommendations(conn: Any, team_repository_id: int, analysis
         .mappings()
         .all()
     )
-    return [{**dict(r), "_used": False} for r in rows]
+    previous = [dict(r) for r in rows]
+    if not previous:
+        return []
+    decisions = (
+        (
+            await conn.execute(
+                text("""
+                    WITH RECURSIVE chain AS (
+                        SELECT r.id AS start_id, r.id, r.review_status, r.previous_recommendation_id, 0 AS depth
+                          FROM ai_llm_call_recommendations r
+                         WHERE r.id = ANY(:ids)
+                        UNION ALL
+                        SELECT c.start_id, r.id, r.review_status, r.previous_recommendation_id, c.depth + 1
+                          FROM chain c
+                          JOIN ai_llm_call_recommendations r ON r.id = c.previous_recommendation_id
+                         WHERE c.review_status = 'pending' AND c.depth < :max_hops
+                    )
+                    SELECT DISTINCT ON (c.start_id) c.start_id,
+                           d.id, d.review_status, d.recommended_sla, d.objective_priority,
+                           d.confirmed_sla, d.confirmed_objective_priority,
+                           d.api_key_id, d.reviewed_by, d.reviewed_at
+                      FROM chain c
+                      JOIN ai_llm_call_recommendations d ON d.id = c.id
+                     WHERE c.review_status <> 'pending'
+                     ORDER BY c.start_id, c.depth
+                    """),
+                {"ids": [int(p["id"]) for p in previous], "max_hops": MAX_ANCESTOR_HOPS},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    by_start = {int(d["start_id"]): dict(d) for d in decisions}
+    for p in previous:
+        p["decision"] = by_start.get(int(p["id"]))
+    return previous
 
 
-def _match_previous(
-    previous: list[dict[str, Any]], file_path: str, workflow_name: str, start_line: int | None
-) -> dict[str, Any] | None:
-    """The unused previous recommendation for the same call site, if any.
+def match_recommendations(previous: list[dict[str, Any]], current: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Pair new recommendations with the ones they succeed, conservatively.
 
-    Same file is required; the same workflow wins over another one, then the
-    nearest line (code moves between commits). Each previous row is matched once.
+    The whole set is matched before anything is carried over, so an added call
+    site cannot take an existing one's predecessor. First the same file and
+    the same workflow, nearest line first. Then, per file, a remaining pair is
+    matched only when it is the single unmatched row on both sides. Anything
+    else — new, removed or ambiguous — stays without a predecessor (pending).
+    Returns current index → previous row.
     """
-    candidates = [p for p in previous if not p["_used"] and p["file_path"] == file_path]
-    if not candidates:
-        return None
+    used: set[int] = set()
+    matched: dict[int, dict[str, Any]] = {}
 
-    def distance(p: dict[str, Any]) -> tuple[int, int]:
-        same_workflow = 0 if workflow_name and p["workflow_name"] == workflow_name else 1
-        if start_line is None or p["start_line"] is None:
-            return same_workflow, 0
-        return same_workflow, abs(int(p["start_line"]) - start_line)
+    def line_gap(cur: dict[str, Any], prev: dict[str, Any]) -> int:
+        if cur["start_line"] is None or prev["start_line"] is None:
+            return 0
+        return abs(int(prev["start_line"]) - int(cur["start_line"]))
 
-    best = min(candidates, key=distance)
-    best["_used"] = True
-    return best
+    pairs = [
+        (line_gap(cur, prev), ci, pi)
+        for ci, cur in enumerate(current)
+        for pi, prev in enumerate(previous)
+        if cur["workflow_name"]
+        and prev["file_path"] == cur["file_path"]
+        and prev["workflow_name"] == cur["workflow_name"]
+    ]
+    for _gap, ci, pi in sorted(pairs):
+        if ci not in matched and pi not in used:
+            matched[ci] = previous[pi]
+            used.add(pi)
+
+    for file_path in {cur["file_path"] for cur in current}:
+        open_current = [ci for ci, cur in enumerate(current) if cur["file_path"] == file_path and ci not in matched]
+        open_previous = [pi for pi, prev in enumerate(previous) if prev["file_path"] == file_path and pi not in used]
+        if len(open_current) == 1 and len(open_previous) == 1:
+            matched[open_current[0]] = previous[open_previous[0]]
+            used.add(open_previous[0])
+    return matched
 
 
 def _priority_list(raw: Any, *, sla: str) -> list[str]:
@@ -496,7 +570,7 @@ def _priority_list(raw: Any, *, sla: str) -> list[str]:
 
 
 def carried_review(previous: dict[str, Any] | None, *, sla: str, priority: list[str]) -> dict[str, Any]:
-    """Review fields for a new recommendation, given the one it succeeds.
+    """Review fields for a new recommendation, given the last reviewed decision it inherits.
 
     A re-analysis proposes; it never overwrites a decision. When the new
     proposal is what the owner already confirmed (or already rejected), that

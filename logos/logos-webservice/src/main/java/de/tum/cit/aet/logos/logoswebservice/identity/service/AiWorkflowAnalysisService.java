@@ -10,11 +10,14 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
@@ -41,6 +44,7 @@ public class AiWorkflowAnalysisService {
 
     private static final Set<String> VALID_SLAS = Set.of("ux-critical", "ux-high-prio", "ux-background");
     private static final int MAX_MODEL_NAME_LENGTH = 200;
+    private static final int MAX_ANCESTOR_HOPS = 50;
     private static final Set<String> REVIEW_ACTIONS = Set.of("accept", "override", "reject");
 
     /**
@@ -108,6 +112,7 @@ public class AiWorkflowAnalysisService {
     private final ApiKeyAdminService apiKeyAdminService;
     private final RepoCredentialCrypto crypto;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate tx;
 
     public AiWorkflowAnalysisService(TeamMemberRepository teamMemberRepository,
                                      TeamRepository teamRepository,
@@ -119,7 +124,8 @@ public class AiWorkflowAnalysisService {
                                      ApiKeyRepository apiKeyRepository,
                                      ApiKeyAdminService apiKeyAdminService,
                                      RepoCredentialCrypto crypto,
-                                     JdbcTemplate jdbc) {
+                                     JdbcTemplate jdbc,
+                                     PlatformTransactionManager txManager) {
         this.teamMemberRepository = teamMemberRepository;
         this.teamRepository = teamRepository;
         this.repoLinkRepository = repoLinkRepository;
@@ -131,6 +137,7 @@ public class AiWorkflowAnalysisService {
         this.apiKeyAdminService = apiKeyAdminService;
         this.crypto = crypto;
         this.jdbc = jdbc;
+        this.tx = new TransactionTemplate(txManager);
     }
 
     public boolean isTeamOwner(int teamId, int userId) {
@@ -147,6 +154,9 @@ public class AiWorkflowAnalysisService {
         }
         List<TeamRepoLink> links = repoLinkRepository.findByTeamIdOrderByRepoSlugAsc(teamId);
         List<Map<String, Object>> repositories = new ArrayList<>();
+        // Pending work is what the latest analyses propose; a superseded
+        // analysis' unreviewed rows are not something to review any more.
+        List<Map<String, Object>> pending = new ArrayList<>();
         for (TeamRepoLink link : links) {
             Map<String, Object> repo = new LinkedHashMap<>();
             repo.put("id", link.getId());
@@ -164,7 +174,9 @@ public class AiWorkflowAnalysisService {
                 repo.put("workflows", workflows.stream().map(this::workflowToMap).toList());
                 List<AiLlmCallRecommendation> recs = recommendationRepository
                     .findByAnalysisIdOrderByIdAsc(analysis.getId());
-                repo.put("recommendations", recs.stream().map(this::recommendationToMap).toList());
+                List<Map<String, Object>> mapped = recs.stream().map(this::recommendationToMap).toList();
+                repo.put("recommendations", mapped);
+                mapped.stream().filter(m -> "pending".equals(m.get("review_status"))).forEach(pending::add);
             }
             else {
                 repo.put("latest_analysis", null);
@@ -174,13 +186,10 @@ public class AiWorkflowAnalysisService {
             repositories.add(repo);
         }
 
-        List<AiLlmCallRecommendation> pending = recommendationRepository
-            .findByTeamIdAndReviewStatusOrderByIdAsc(teamId, "pending");
-
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("team_id", teamId);
         result.put("repositories", repositories);
-        result.put("pending_recommendations", pending.stream().map(this::recommendationToMap).toList());
+        result.put("pending_recommendations", pending);
         return result;
     }
 
@@ -192,9 +201,7 @@ public class AiWorkflowAnalysisService {
     @Transactional
     public Map<String, Object> setRecommendationModel(int teamId, int recId,
                                                       SetRecommendationModelRequestDTO body) {
-        AiLlmCallRecommendation rec = recommendationRepository.lockByIdAndTeamId(recId, teamId)
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                "Recommendation not found"));
+        AiLlmCallRecommendation rec = lockCurrentRecommendation(teamId, recId);
         String model = body == null || body.model() == null ? null : body.model().trim();
         if (model != null && model.length() > MAX_MODEL_NAME_LENGTH) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
@@ -220,11 +227,10 @@ public class AiWorkflowAnalysisService {
                 "action must be accept, override, or reject");
         }
 
-        AiLlmCallRecommendation rec = recommendationRepository.lockByIdAndTeamId(recId, teamId)
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
-                "Recommendation not found"));
+        AiLlmCallRecommendation rec = lockCurrentRecommendation(teamId, recId);
 
         Instant now = Instant.now();
+        rec.setReviewCarriedOver(false);
         rec.setReviewedBy(reviewerUserId);
         rec.setReviewedAt(now);
 
@@ -353,14 +359,14 @@ public class AiWorkflowAnalysisService {
      * {@code trigger_kind=analysis}) and a matching {@code ai_workflow_analyses}
      * row in {@code queued} status.
      */
-    @Transactional
     public Map<String, Object> queueAgentAnalysis(int teamId, int linkId) {
         TeamRepoLink link = requireLink(teamId, linkId);
-        if (analysisInFlight(link.getId())) {
+        Map<String, Object> queued = queueUnlessInFlight(teamId, link);
+        if (queued == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "An analysis of " + link.getRepoSlug() + " is already queued or running");
         }
-        return queue(teamId, link);
+        return queued;
     }
 
     /**
@@ -372,12 +378,12 @@ public class AiWorkflowAnalysisService {
         List<String> queued = new ArrayList<>();
         List<String> inFlight = new ArrayList<>();
         for (TeamRepoLink link : repoLinkRepository.findAll(Sort.by("id"))) {
-            if (analysisInFlight(link.getId())) {
+            if (queueUnlessInFlight(link.getTeamId(), link) == null) {
                 inFlight.add(link.getRepoSlug());
-                continue;
             }
-            queue(link.getTeamId(), link);
-            queued.add(link.getRepoSlug());
+            else {
+                queued.add(link.getRepoSlug());
+            }
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("queued", queued.size());
@@ -386,15 +392,28 @@ public class AiWorkflowAnalysisService {
         return result;
     }
 
-    private boolean analysisInFlight(int linkId) {
-        Integer count = jdbc.queryForObject("""
-            SELECT count(*) FROM ai_workflow_analyses
-             WHERE team_repository_id = ? AND status IN ('queued', 'running')
-            """, Integer.class, linkId);
-        return count != null && count > 0;
+    /**
+     * Queue one analysis in its own transaction, or return null when one is
+     * already queued or running. The queued analysis row goes in first: the
+     * partial unique index on in-flight analyses (Liquibase 050) admits one per
+     * repository across this, the bulk path and the agent runner's nightly
+     * pass, and a refused insert rolls back before any session exists.
+     */
+    private Map<String, Object> queueUnlessInFlight(int teamId, TeamRepoLink link) {
+        try {
+            return tx.execute(status -> queue(teamId, link));
+        }
+        catch (DuplicateKeyException e) {
+            return null;
+        }
     }
 
     private Map<String, Object> queue(int teamId, TeamRepoLink link) {
+        Integer analysisId = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_analyses (team_id, team_repository_id, status, source, started_at)
+            VALUES (?, ?, 'queued', 'agent', CURRENT_TIMESTAMP)
+            RETURNING id
+            """, Integer.class, teamId, link.getId());
         int workspaceId = ensureAnalysisWorkspace(teamId, link);
 
         String pathsLabel = formatPaths(link.getPaths());
@@ -424,15 +443,9 @@ public class AiWorkflowAnalysisService {
             link.getRepoSlug(),
             link.getId());
 
-        Instant now = Instant.now();
-        AiWorkflowAnalysis analysis = new AiWorkflowAnalysis();
-        analysis.setTeamId(teamId);
-        analysis.setTeamRepositoryId(link.getId());
-        analysis.setStatus("queued");
-        analysis.setSource("agent");
-        analysis.setAgentSessionId(sessionId);
-        analysis.setStartedAt(now);
-        analysis = analysisRepository.save(analysis);
+        jdbc.update("UPDATE ai_workflow_analyses SET agent_session_id = ? WHERE id = ?", sessionId, analysisId);
+        AiWorkflowAnalysis analysis = analysisRepository.findById(analysisId)
+            .orElseThrow(() -> new IllegalStateException("queued analysis " + analysisId + " vanished"));
 
         Map<String, Object> result = analysisToMap(analysis);
         result.put("agent_session_id", sessionId);
@@ -536,8 +549,59 @@ public class AiWorkflowAnalysisService {
         m.put("reviewed_by", rec.getReviewedBy());
         m.put("reviewed_at", rec.getReviewedAt() != null ? rec.getReviewedAt().toString() : null);
         m.put("model_set_by_owner", rec.isModelSetByOwner());
+        m.put("review_carried_over", rec.isReviewCarriedOver());
         m.put("previous", previousDecision(rec));
         return m;
+    }
+
+    /**
+     * The nearest predecessor the owner reviewed. Unreviewed analyses in
+     * between are passed over, so an earlier decision is not lost because a
+     * changed proposal sat pending while the next analysis ran.
+     */
+    private Optional<AiLlmCallRecommendation> lastReviewedAncestor(AiLlmCallRecommendation rec) {
+        Integer next = rec.getPreviousRecommendationId();
+        for (int hops = 0; next != null && hops < MAX_ANCESTOR_HOPS; hops++) {
+            Optional<AiLlmCallRecommendation> prev = recommendationRepository.findById(next);
+            if (prev.isEmpty()) return Optional.empty();
+            if (!"pending".equals(prev.get().getReviewStatus())) return prev;
+            next = prev.get().getPreviousRecommendationId();
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Lock a recommendation for an owner edit, after its repository: the
+     * agent ingest takes the repository lock before it reads the decisions it
+     * carries over, so an edit either lands before that read or waits for the
+     * new analysis. An edit to a recommendation a newer analysis superseded
+     * is refused — the page is showing old proposals and must reload.
+     */
+    private AiLlmCallRecommendation lockCurrentRecommendation(int teamId, int recId) {
+        Integer repoId = jdbc.query("""
+            SELECT a.team_repository_id FROM ai_llm_call_recommendations r
+              JOIN ai_workflow_analyses a ON a.id = r.analysis_id
+             WHERE r.id = ? AND r.team_id = ?
+            """, rs -> rs.next() ? (Integer) rs.getObject(1) : null, recId, teamId);
+        if (repoId != null) {
+            jdbc.query("SELECT id FROM team_repositories WHERE id = ? FOR UPDATE", rs -> null, repoId);
+        }
+        AiLlmCallRecommendation rec = recommendationRepository.lockByIdAndTeamId(recId, teamId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "Recommendation not found"));
+        if (repoId != null) {
+            Integer latest = jdbc.query("""
+                SELECT id FROM ai_workflow_analyses
+                 WHERE team_repository_id = ? AND status = 'succeeded'
+                 ORDER BY finished_at DESC NULLS LAST, id DESC
+                 LIMIT 1
+                """, rs -> rs.next() ? rs.getInt(1) : null, repoId);
+            if (latest != null && !latest.equals(rec.getAnalysisId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A newer analysis replaced this recommendation; reload the Workflows tab");
+            }
+        }
+        return rec;
     }
 
     /**
@@ -546,9 +610,7 @@ public class AiWorkflowAnalysisService {
      * predecessor.
      */
     private Map<String, Object> previousDecision(AiLlmCallRecommendation rec) {
-        if (rec.getPreviousRecommendationId() == null) return null;
-        return recommendationRepository.findById(rec.getPreviousRecommendationId())
-            .filter(prev -> !"pending".equals(prev.getReviewStatus()))
+        return lastReviewedAncestor(rec)
             .map(prev -> {
                 Map<String, Object> p = new LinkedHashMap<>();
                 p.put("id", prev.getId());
