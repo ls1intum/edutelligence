@@ -436,7 +436,24 @@
               <i class="pi pi-folder" aria-hidden="true"></i> {{ session.workspace_name }}
             </span>
           }
-          <span class="session__duration">{{ duration(session) }}</span>
+          <span class="session__timings">
+            <span class="session__timing" title="Time waiting before the session started">
+              Queued {{ queueDuration(session) }}
+            </span>
+            @if (session.started_at) {
+              <span class="session__timing" title="Time from start to finish"
+                >Run {{ duration(session) }}</span
+              >
+            }
+            @if (session.finished_at) {
+              <span
+                class="session__timing"
+                [title]="'Finished ' + (session.finished_at | date: 'medium')"
+              >
+                Finished {{ finishedAgo(session) }} ago
+              </span>
+            }
+          </span>
         </span>
       </button>
 
