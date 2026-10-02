@@ -145,7 +145,8 @@ describe('AiTools model gating', () => {
     await build([model({ model_name: 'narrow', context_window_current_min: 32768 })]);
     component.chooseTool('claudecode');
 
-    const option = component.modelOptions()[0];
+    // [0] is the blank "Claude Code picks" option; real models follow.
+    const option = component.modelOptions()[1];
     expect(option.disabled).toBe(true);
     expect(option.label).toContain('32,768');
     expect(option.label).toContain('too small for Claude Code');
@@ -161,30 +162,41 @@ describe('AiTools model gating', () => {
     expect(component.modelUsable()).toBe(true);
   });
 
-  it('stops the wizard on the model step rather than generating a doomed install', async () => {
+  it('lets Claude Code continue without a pin when the only model is too narrow', async () => {
     await build([model({ model_name: 'narrow', context_window_current_min: 32768 })]);
     component.chooseTool('claudecode');
+
+    // No auto-pin: the wrapper lists models and the user picks with /model.
+    expect(component.modelChosen()).toBe(false);
+    expect(component.canOpen(4)).toBe(true);
+    expect(component.ready()).toBe(true);
+    // Step 3 stays on screen so the blank vs pin choice is explicit.
+    expect(component.isSkipped(3)).toBe(false);
+  });
+
+  it('blocks install when a too-narrow model is explicitly pinned for Claude Code', async () => {
+    await build([model({ model_name: 'narrow', context_window_current_min: 32768 })]);
+    component.chooseTool('claudecode');
+    component.selectModel('narrow');
 
     expect(component.modelChosen()).toBe(true);
     expect(component.modelUsable()).toBe(false);
     expect(component.claudeCodeFit()).toBe('unusable');
     expect(component.canOpen(4)).toBe(false);
     expect(component.ready()).toBe(false);
-    // With one model, step 3 is normally skipped as holding no decision — but
-    // it is where the explanation lives, so it must stay on screen.
-    expect(component.isSkipped(3)).toBe(false);
   });
 
-  it('pre-selects a model Claude Code can use instead of the first one', async () => {
+  it('does not auto-pin a model for Claude Code', async () => {
     await build([
       model({ model_name: 'narrow', context_window_current_min: 32768 }),
       model({ model_name: 'wide', context_window_current_min: 131072 }),
     ]);
     component.chooseTool('claudecode');
 
-    expect(component.selected()?.model_name).toBe('wide');
-    expect(component.modelUsable()).toBe(true);
+    expect(component.selected()).toBeNull();
+    expect(component.modelChosen()).toBe(false);
     expect(component.canOpen(4)).toBe(true);
+    expect(component.ready()).toBe(true);
   });
 
   it('moves off a blocked model when the tool is switched to Claude Code', async () => {
@@ -200,14 +212,16 @@ describe('AiTools model gating', () => {
     expect(component.selected()?.model_name).toBe('wide');
   });
 
-  it('keeps a wide model untouched by any of this', async () => {
+  it('keeps a wide model usable and never skips the Claude Code model step', async () => {
     await build([model({ model_name: 'wide', context_window_current_min: 131072 })]);
     component.chooseTool('claudecode');
+    component.selectModel('wide');
 
-    expect(component.modelOptions()[0].disabled).toBe(false);
-    expect(component.modelOptions()[0].label).toBe('wide');
+    expect(component.modelOptions()[0].value).toBe('');
+    expect(component.modelOptions()[1].disabled).toBe(false);
+    expect(component.modelOptions()[1].label).toBe('wide');
     expect(component.claudeCodeFit()).toBe('ok');
-    expect(component.isSkipped(3)).toBe(true);
+    expect(component.isSkipped(3)).toBe(false);
   });
 });
 
