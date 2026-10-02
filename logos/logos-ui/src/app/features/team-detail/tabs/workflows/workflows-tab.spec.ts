@@ -163,9 +163,31 @@ describe('WorkflowsTabComponent review actions', () => {
     await component.accept(pending);
     expect(reviewRecommendation).toHaveBeenLastCalledWith(7, 55, {
       action: 'accept',
-      api_key_id: undefined,
+      no_api_key: true,
       confirmed_objective_priority: ['latency', 'quality', 'price'],
     });
+  });
+
+  it('keeps the default key once a review has used it, even when priorities change', async () => {
+    const component = setup();
+    await component.load();
+    await component.accept(pending);
+    expect(reviewRecommendation).toHaveBeenLastCalledWith(
+      7,
+      55,
+      expect.objectContaining({ api_key_id: 12 }),
+    );
+
+    // The review dropped prod-chat's priority below staging; the key refresh
+    // must not move the next review to staging.
+    component.apiKeys = [key(3, 'staging', 5, 'staging'), key(12, 'prod-chat', 1, 'production')];
+    expect(component.reviewKeyValue()).toBe(12);
+    await component.accept(pending);
+    expect(reviewRecommendation).toHaveBeenLastCalledWith(
+      7,
+      55,
+      expect.objectContaining({ api_key_id: 12 }),
+    );
   });
 
   it('prefers a production key when priorities tie', () => {

@@ -37,20 +37,45 @@ export function quoteFlowchartLabels(source: string): string {
     .join('\n');
 }
 
+/**
+ * A[text] → A["text"] and A{text} → A{"text"}. Scans to the matching close so
+ * nested brackets stay inside the label (`A[arr[0] x]`). The special shapes
+ * `[(…)]`, `[[…]]`, `[/…/]`, `[\…\]` and `{{…}}` are left as written.
+ */
 function quoteNodeLabels(text: string): string {
-  return (
-    text
-      // A[text]  →  A["text"]   (not [( [[ [/ [\ shapes)
-      .replace(
-        /\b([A-Za-z0-9_]+)\[(?![(\[/\\])([^\]]*[^\]\s][^\]]*)\](?!\])/g,
-        (_, id, label) => `${id}["${label.trim()}"]`,
-      )
-      // A{text}  →  A{"text"}   (not {{ hexagons)
-      .replace(
-        /\b([A-Za-z0-9_]+)\{(?!\{)([^}]+)\}(?!\})/g,
-        (_, id, label) => `${id}{"${label.trim()}"}`,
-      )
-  );
+  const pairs: Record<string, string> = { '[': ']', '{': '}' };
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    const close = pairs[ch];
+    const prev = text[i - 1] ?? '';
+    const next = text[i + 1] ?? '';
+    const special = ch === '[' ? '([/\\'.includes(next) : next === '{';
+    if (!close || !/[A-Za-z0-9_]/.test(prev) || special) {
+      out += ch;
+      i++;
+      continue;
+    }
+    let depth = 0;
+    let end = -1;
+    for (let k = i; k < text.length; k++) {
+      if (text[k] === ch) depth++;
+      else if (text[k] === close && --depth === 0) {
+        end = k;
+        break;
+      }
+    }
+    const label = end < 0 ? '' : text.slice(i + 1, end).trim();
+    if (!label) {
+      out += ch;
+      i++;
+      continue;
+    }
+    out += `${ch}"${label}"${close}`;
+    i = end + 1;
+  }
+  return out;
 }
 
 function quoteEdgeLabels(text: string): string {

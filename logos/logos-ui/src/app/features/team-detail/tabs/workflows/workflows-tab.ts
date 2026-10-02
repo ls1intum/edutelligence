@@ -244,7 +244,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   async accept(rec: AiLlmCallRecommendation): Promise<void> {
     await this.review(rec, {
       action: 'accept',
-      api_key_id: this.reviewApiKeyId(),
+      ...this.keyPayload(),
       confirmed_objective_priority: this.priorityFor(rec),
     });
   }
@@ -255,7 +255,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
       action: 'override',
       confirmed_sla: sla,
       confirmed_objective_priority: this.priorityFor(rec),
-      api_key_id: this.reviewApiKeyId(),
+      ...this.keyPayload(),
     });
   }
 
@@ -267,9 +267,15 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     this.overrideSla.update((m) => ({ ...m, [recId]: value as KeySla }));
   }
 
-  private reviewApiKeyId(): number | undefined {
+  /**
+   * The key part of a review. The first review pins the default: a review
+   * changes that key's priority, and recomputing "highest priority" after the
+   * key refresh could otherwise hand the next review a different key.
+   */
+  private keyPayload(): { api_key_id: number } | { no_api_key: true } {
     const value = this.reviewKeyValue();
-    return typeof value === 'number' ? value : undefined;
+    if (this.reviewKeyPick() === null) this.reviewKeyPick.set(value);
+    return typeof value === 'number' ? { api_key_id: value } : { no_api_key: true };
   }
 
   private allRecs(): AiLlmCallRecommendation[] {
@@ -301,6 +307,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
       confirmed_sla?: RecommendedSla;
       confirmed_objective_priority?: ObjectiveKey[];
       api_key_id?: number;
+      no_api_key?: boolean;
     },
   ): Promise<void> {
     if (this.reviewingId() != null) return;

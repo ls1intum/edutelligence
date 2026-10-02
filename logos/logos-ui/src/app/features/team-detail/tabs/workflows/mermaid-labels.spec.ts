@@ -43,6 +43,12 @@ describe('quoteFlowchartLabels', () => {
     );
   });
 
+  it('keeps nested brackets inside one node label', () => {
+    expect(quoteFlowchartLabels('flowchart TD\n  A[arr[0] x] --> B{map{k}?}')).toBe(
+      'flowchart TD\n  A["arr[0] x"] --> B{"map{k}?"}',
+    );
+  });
+
   it('does not touch other diagram types', () => {
     const src = 'sequenceDiagram\n  A->>B: call (x)';
     expect(quoteFlowchartLabels(src)).toBe(src);

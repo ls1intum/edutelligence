@@ -265,7 +265,11 @@ public class AiWorkflowAnalysisService {
         rec.setConfirmedSla(confirmedSla);
         rec.setConfirmedObjectivePriority(confirmedPriority);
 
-        Integer apiKeyId = body.apiKeyId() != null ? body.apiKeyId() : rec.getApiKeyId();
+        boolean noKey = Boolean.TRUE.equals(body.noApiKey());
+        if (noKey) {
+            rec.setApiKeyId(null);
+        }
+        Integer apiKeyId = noKey ? null : body.apiKeyId() != null ? body.apiKeyId() : rec.getApiKeyId();
         if (apiKeyId != null) {
             var key = apiKeyRepository.findById(apiKeyId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
