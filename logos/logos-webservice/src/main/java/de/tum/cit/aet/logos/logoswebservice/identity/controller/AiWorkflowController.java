@@ -49,18 +49,6 @@ public class AiWorkflowController {
         return ResponseEntity.ok(service.listTeamWorkflows(teamId));
     }
 
-    @PostMapping("/teams/{teamId}/repositories/{linkId}/analyze")
-    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
-    public ResponseEntity<?> analyzeHeuristic(
-            @PathVariable Integer teamId,
-            @PathVariable Integer linkId,
-            @RequestAttribute("authContext") AuthContext auth) {
-        if (forbiddenForNonOwner(auth, teamId)) {
-            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
-        }
-        return ResponseEntity.ok(service.runHeuristicAnalysis(teamId, linkId));
-    }
-
     @PostMapping("/teams/{teamId}/repositories/{linkId}/analyze/agent")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> analyzeAgent(
