@@ -24,16 +24,20 @@ export function quoteFlowchartLabels(source: string): string {
         return line;
       }
       // Only the text between quoted labels is rewritten: a `|` or `]` inside
-      // "…" is part of that label, not syntax.
-      return line
-        .split(/("[^"]*")/)
-        .map((part, i) => (i % 2 === 1 ? part : quoteBareLabels(part)))
-        .join('');
+      // "…" is part of that label, not syntax. Node labels go first, and the
+      // line is split again before edge labels, so a `|` inside a node label
+      // quoted by the first pass is left alone.
+      const outsideQuotes = (text: string, rewrite: (part: string) => string) =>
+        text
+          .split(/("[^"]*")/)
+          .map((part, i) => (i % 2 === 1 ? part : rewrite(part)))
+          .join('');
+      return outsideQuotes(outsideQuotes(line, quoteNodeLabels), quoteEdgeLabels);
     })
     .join('\n');
 }
 
-function quoteBareLabels(text: string): string {
+function quoteNodeLabels(text: string): string {
   return (
     text
       // A[text]  →  A["text"]   (not [( [[ [/ [\ shapes)
@@ -46,7 +50,10 @@ function quoteBareLabels(text: string): string {
         /\b([A-Za-z0-9_]+)\{(?!\{)([^}]+)\}(?!\})/g,
         (_, id, label) => `${id}{"${label.trim()}"}`,
       )
-      // -->|text|  →  -->|"text"|
-      .replace(/\|([^|]+)\|/g, (_, label) => `|"${label.trim()}"|`)
   );
+}
+
+function quoteEdgeLabels(text: string): string {
+  // -->|text|  →  -->|"text"|
+  return text.replace(/\|([^|]+)\|/g, (_, label) => `|"${label.trim()}"|`);
 }

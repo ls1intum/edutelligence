@@ -37,6 +37,12 @@ describe('quoteFlowchartLabels', () => {
     expect(quoteFlowchartLabels(src)).toBe(src);
   });
 
+  it('keeps pipes inside a bare node label out of edge-label quoting', () => {
+    expect(quoteFlowchartLabels('flowchart TD\n  A[ingest | metadata | delete] -->|ok| B')).toBe(
+      'flowchart TD\n  A["ingest | metadata | delete"] -->|"ok"| B',
+    );
+  });
+
   it('does not touch other diagram types', () => {
     const src = 'sequenceDiagram\n  A->>B: call (x)';
     expect(quoteFlowchartLabels(src)).toBe(src);

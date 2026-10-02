@@ -244,6 +244,15 @@ class TeamRepoLinkControllerTest {
            .andExpect(jsonPath("$.detected_model").value("openai/gpt-oss-120b"))
            .andExpect(jsonPath("$.review_status").value("pending"));
 
+        // A review keeps the model; both write paths go through the same row lock.
+        mvc.perform(post("/admin/teams/2001/recommendations/" + recId + "/review")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"accept\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.review_status").value("accepted"))
+           .andExpect(jsonPath("$.detected_model").value("openai/gpt-oss-120b"));
+
         mvc.perform(put("/admin/teams/2001/recommendations/" + recId + "/model")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")

@@ -324,7 +324,7 @@ public class AiWorkflowAnalysisService {
     @Transactional
     public Map<String, Object> setRecommendationModel(int teamId, int recId,
                                                       SetRecommendationModelRequestDTO body) {
-        AiLlmCallRecommendation rec = recommendationRepository.findByIdAndTeamId(recId, teamId)
+        AiLlmCallRecommendation rec = recommendationRepository.lockByIdAndTeamId(recId, teamId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                 "Recommendation not found"));
         String model = body == null || body.model() == null ? null : body.model().trim();
@@ -350,7 +350,7 @@ public class AiWorkflowAnalysisService {
                 "action must be accept, override, or reject");
         }
 
-        AiLlmCallRecommendation rec = recommendationRepository.findByIdAndTeamId(recId, teamId)
+        AiLlmCallRecommendation rec = recommendationRepository.lockByIdAndTeamId(recId, teamId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                 "Recommendation not found"));
 

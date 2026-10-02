@@ -109,6 +109,8 @@
         @if (repo.recommendations.length > 0) {
           <div class="recs-section">
             <h4 class="recs-title">Recommendations</h4>
+            <!-- The review controls need the full grid width; scroll rather than clip. -->
+            <div class="recs-scroll">
             <app-data-table
               [columns]="recCols"
               [gridCols]="recGrid"
@@ -140,7 +142,7 @@
                         [attr.aria-label]="'Model used by recommendation ' + rec.id"
                         [ngModel]="rec.detected_model ?? ''"
                         (ngModelChange)="setModel(rec, $event)"
-                        [disabled]="savingModelId() === rec.id"
+                        [disabled]="savingModelId() != null"
                       >
                         <option value="">Unknown</option>
                         @for (name of modelOptions(rec); track name) {
@@ -243,6 +245,7 @@
                 </div>
               }
             </app-data-table>
+            </div>
           </div>
         } @else if (repo.latest_analysis) {
           <p class="repo-empty">No LLM-call recommendations in this analysis.</p>

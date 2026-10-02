@@ -215,6 +215,18 @@
   margin-top: 16px;
 }
 
+// Below 769px the shared table turns into cards and needs no minimum width.
+.recs-scroll {
+  overflow-x: auto;
+
+  @media (min-width: 769px) {
+    app-data-table {
+      display: block;
+      min-width: 63rem;
+    }
+  }
+}
+
 .recs-title {
   margin: 0 0 10px;
   font-size: var(--font-size-sm);
