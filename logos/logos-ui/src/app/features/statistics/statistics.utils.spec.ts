@@ -346,8 +346,17 @@ describe('formatUptime', () => {
 describe('describeWorkerVersion', () => {
   const commit = 'a3f9c21e0b7d4f65a1c2d3e4f5061728394a5b6c';
 
-  it('shows the first 8 characters and keeps the full commit as the tooltip', () => {
-    expect(describeWorkerVersion(commit, true)).toEqual({ label: 'version: a3f9c21e', title: commit });
+  it('shows the first 8 characters, with the full commit on its own line of the tooltip', () => {
+    expect(describeWorkerVersion(commit, true)).toEqual({
+      label: 'version: a3f9c21e',
+      title: `Commit this worker's image was built from:\n${commit}`,
+    });
+  });
+
+  it('keeps the whole commit on the last tooltip line, unshortened', () => {
+    const lines = describeWorkerVersion(commit, true)?.title.split('\n');
+    expect(lines).toHaveLength(2);
+    expect(lines?.[1]).toBe(commit);
   });
 
   it('says "unknown" for a worker that reports it was built outside CI', () => {

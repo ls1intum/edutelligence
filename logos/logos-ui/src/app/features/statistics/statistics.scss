@@ -285,16 +285,6 @@
   flex-shrink: 0;
 }
 
-// The commit the worker was built from; the tooltip carries the full value.
-.stats-glass-row__version {
-  align-self: center;
-  font-family: var(--font-family-mono, monospace);
-  font-size: var(--font-size-sm);
-  color: rgb(var(--color-typography-500));
-  white-space: nowrap;
-  cursor: help;
-}
-
 // ── Three-column panel layout ─────────────────────────────────────────────────
 .stats-panel-row {
   display: flex;
@@ -320,6 +310,13 @@
   .pi {
     font-size: var(--font-size-xs);
   }
+}
+
+// The commit a worker was built from: monospace like a hash, with a help
+// cursor because hovering it (and its info icon) explains the value.
+.stats-panel-badge--version {
+  font-family: var(--font-family-mono, monospace);
+  cursor: help;
 }
 
 // ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────

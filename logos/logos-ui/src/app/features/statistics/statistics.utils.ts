@@ -124,6 +124,8 @@ const SHORT_COMMIT_LENGTH = 8;
  * "unknown" is either reported explicitly (built outside CI) or implied by
  * silence (a worker that predates version reporting, or whose first status has
  * not arrived yet).
+ *
+ * `title` is the hover text behind the chip's info icon. For a commit it puts
  */
 export function describeWorkerVersion(
   checksum: string | null | undefined,
@@ -139,7 +141,10 @@ export function describeWorkerVersion(
       title: 'No version reported yet. Workers that predate version reporting never report one; redeploy to see it.',
     };
   }
-  return { label: `version: ${checksum.slice(0, SHORT_COMMIT_LENGTH)}`, title: checksum };
+  return {
+    label: `version: ${checksum.slice(0, SHORT_COMMIT_LENGTH)}`,
+    title: `Commit this worker's image was built from:\n${checksum}`,
+  };
 }
 
 // ── Recent-requests state filter ──────────────────────────────────────────────

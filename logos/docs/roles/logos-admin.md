@@ -22,9 +22,10 @@ recognizable as deleted.
 
 On the **Local Providers** tab, every worker node gets its own section with
 memory, lane health, and GPU metrics. The commit its image was built from is
-shown beside the worker's name as `version: <commit>` (hover for the full
-commit), so you can tell which workers have picked up an update. A worker that
-cannot report one shows `version: unknown`.
+shown beside the worker's name as `version: <commit>`, followed by an info icon
+whose hover text gives the full commit, so you can tell which workers have
+picked up an update. A worker that cannot report one shows `version: unknown`,
+and the same icon explains why.
 
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 

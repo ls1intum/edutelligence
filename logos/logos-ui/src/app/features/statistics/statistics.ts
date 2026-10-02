@@ -582,7 +582,6 @@ export class Statistics implements OnInit, OnDestroy {
     });
 
     return names.map((name) => {
-      const online = this._isProviderOnline(name);
       const sample = latestByProvider[name];
       const lanes = lanesByProvider[name] ?? {};
       const vram = extractProviderVramMb(sample);
@@ -595,9 +594,9 @@ export class Statistics implements OnInit, OnDestroy {
 
       return {
         name,
-        online,
+        online: this._isProviderOnline(name),
         calibrating: metaByName[name]?.calibrating === true,
-        versionChip: describeWorkerVersion(metaByName[name]?.worker_version_checksum, online),
+        versionChip: describeWorkerVersion(metaByName[name]?.worker_version_checksum, this._isProviderOnline(name)),
         lanes,
         hasLanes: Object.keys(lanes).length > 0,
         laneCount: Object.keys(lanes).length,
