@@ -1866,7 +1866,13 @@ async def _streaming_response(
                 on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
             )
 
+        unconsumed_cleanup = _UnconsumedStreamCleanup(None, _release)
+
         async def logosnode_streamer():
+            # Discard of a never-started body cannot run this generator's finally;
+            # claim the reserved slot as soon as the body runs.
+            if unconsumed_cleanup is not None:
+                unconsumed_cleanup.claim_for_streamer()
             stream_log = _StreamingLogAccumulator()
             error_message = None
             ttft_recorded = False
@@ -2037,11 +2043,13 @@ async def _streaming_response(
                 )
                 _release()
 
-        return StreamingResponse(
+        response = StreamingResponse(
             logosnode_streamer(),
             media_type="text/event-stream",
             headers=_decision_response_headers(request_id, scheduling_stats),
         )
+        response._logos_unconsumed_cleanup = unconsumed_cleanup
+        return response
 
     # ── HTTP executor path ────────────────────────────────────────────────
     stream_status = StreamingExecutionStatus()
@@ -4082,14 +4090,16 @@ async def _keepalive_streaming_response(request: Request, **execute_kwargs):
                     producer.cancel()
                 with suppress(asyncio.CancelledError, Exception):
                     await producer
-            if inner_iterator is not None:
+            # Always discard the settled response. Closing only a never-started
+            # body_iterator (e.g. cancel at the scheduling-comment yield before
+            # the producer enters http_streamer) bypasses its finally and would
+            # leave the prefetched upstream / reserved slot behind; discard runs
+            # the attached cleanup first, then closes the body.
+            if completed is not None:
+                await _discard_response(completed)
+            elif inner_iterator is not None:
                 with suppress(Exception):
                     await inner_iterator.aclose()
-            elif completed is not None:
-                # Cancelled after the pipeline finished but before ownership
-                # moved to the producer (e.g. mid phase-one keepalive yield):
-                # the HTTP path may already hold an open upstream connection.
-                await _discard_response(completed)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
