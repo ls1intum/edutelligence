@@ -171,7 +171,7 @@ export interface ModelCapability {
 
 export interface UpdateModelResponse {
   result: string;
-  /** Only present when the request carried a name, i.e. when a re-sync ran. */
+  /** Present after a rename re-sync and/or an inline capability override. */
   capabilities?: ModelCapabilityState;
 }
 

@@ -170,9 +170,46 @@ public class ModelService {
         ensureNameDoesNotCollideWithAlias(req.name());
         ensureNameIsUniqueAcrossModels(req.name(), req.modelId());
         modelRepository.save(model);
+        // Capability override shares this transaction with the model/alias write:
+        // apply it before saveAliases so an alias collision rolls the override back.
+        boolean capabilitiesChanged = applyCapabilityOverrideIfPresent(req);
         saveAliases(model.getId(), req.aliases());
         orchestratorNotificationService.notifyRefresh(true);
-        return Map.of("result", "Model updated");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("result", "Model updated");
+        if (capabilitiesChanged) {
+            result.put("capabilities", capabilitiesState(req.modelId()));
+        }
+        return result;
+    }
+
+    /**
+     * All-or-none capability fields on {@link UpdateModelRequestDTO}: every flag
+     * null means no change; otherwise all three must be present. Partial groups
+     * are rejected with 400 before any unboxing.
+     *
+     * @return true when an override was written
+     */
+    private boolean applyCapabilityOverrideIfPresent(UpdateModelRequestDTO req) {
+        Boolean functionCalling = req.supportsFunctionCalling();
+        Boolean vision = req.supportsVision();
+        Boolean reasoning = req.supportsReasoning();
+        boolean anyPresent = functionCalling != null || vision != null || reasoning != null;
+        boolean allPresent = functionCalling != null && vision != null && reasoning != null;
+        if (!anyPresent) {
+            return false;
+        }
+        if (!allPresent) {
+            throw new IllegalArgumentException(
+                "supports_function_calling, supports_vision, and supports_reasoning must all be set together");
+        }
+        modelCapabilitiesPersistenceService.setManualCapabilities(
+            req.modelId(),
+            functionCalling,
+            vision,
+            reasoning
+        );
+        return true;
     }
 
     @Transactional
@@ -420,18 +457,24 @@ public class ModelService {
         return capabilitiesState(modelId);
     }
 
-    @Transactional
+    /**
+     * Clears the manual override, then re-syncs from the catalog in a separate
+     * transaction. The clear commits first ({@code clearManualOverride} is
+     * {@code @Transactional} on the persistence service); the re-sync runs
+     * afterwards so a catalog failure cannot mark the clear rollback-only or
+     * 500 the reset after the override is already gone. Returns the post-sync
+     * state so the UI chips refresh immediately.
+     */
     public Map<String, Object> resetModelCapabilities(Integer modelId) {
-        // Read the name under the row lock: the re-sync below matches it against
-        // the persisted name, so a rename that lands between the two would
-        // otherwise make the re-sync a no-op.
-        Model model = modelRepository.findByIdForUpdate(modelId)
+        Model model = modelRepository.findById(modelId)
             .orElseThrow(() -> new IllegalArgumentException("Model not found: " + modelId));
+        String modelName = model.getName();
+        // Own transaction: commits before the re-sync below starts.
         modelCapabilitiesPersistenceService.clearManualOverride(modelId);
-        // Synchronous re-sync so the response (and the UI) reflects the catalog state
-        // immediately; the guard in the updater makes this a no-op only if the override
-        // was not actually cleared.
-        modelCapabilitiesUpdaterService.updateCapabilitiesForModel(modelId, model.getName());
+        // Synchronous re-sync so the response (and the UI) reflects the catalog
+        // state immediately. Runs after the clear has committed; failures are
+        // swallowed by the updater and leave the cleared override in place.
+        modelCapabilitiesUpdaterService.updateCapabilitiesForModel(modelId, modelName);
         return capabilitiesState(modelId);
     }
 

@@ -162,13 +162,16 @@ public class ModelController {
                 // inline rather than async: the response then carries the state
                 // the rename produced, and the client does not have to keep the
                 // flags of the old name on screen until the next full reload.
+                // When the same request also set a manual override, the sync
+                // sees manual_override=true and skips — the override from the
+                // transactional update wins.
                 modelCapabilitiesUpdaterService.updateCapabilitiesForModel(req.modelId(), req.name());
                 result.put("capabilities", modelService.capabilitiesState(req.modelId()));
             }
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             // "Model not found: ..." is a lookup miss; alias validation
-            // failures are bad input.
+            // failures and partial capability groups are bad input.
             int status = e.getMessage() != null && e.getMessage().startsWith("Model not found")
                 ? 404
                 : 400;

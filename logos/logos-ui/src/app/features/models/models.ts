@@ -362,6 +362,11 @@ export class Models implements OnInit {
     this.editLoading.set(true);
     this.editError.set('');
     const profile = this.editProfile();
+    const storedCaps = this.getCapabilities(target.id);
+    const capsChanged =
+      this.editCapFunctionCalling() !== (storedCaps?.supports_function_calling ?? false) ||
+      this.editCapVision() !== (storedCaps?.supports_vision ?? false) ||
+      this.editCapReasoning() !== (storedCaps?.supports_reasoning ?? false);
     const payload: UpdateModelPayload = {
       model_id: target.id,
       name: this.editName().trim() || undefined,
@@ -373,28 +378,20 @@ export class Models implements OnInit {
       weight_cost: this.editWtCost() ? Number(this.editWtCost()) : undefined,
       weight_quality: this.editWtQuality() ? Number(this.editWtQuality()) : undefined,
       profile_ratings: profile,
+      // Capability override rides the same update_model_info transaction as
+      // the name/alias write, so a duplicate-name rejection rolls both back.
+      ...(capsChanged
+        ? {
+            supports_function_calling: this.editCapFunctionCalling(),
+            supports_vision: this.editCapVision(),
+            supports_reasoning: this.editCapReasoning(),
+          }
+        : {}),
     };
-    const storedCaps = this.getCapabilities(target.id);
-    const capsChanged =
-      this.editCapFunctionCalling() !== (storedCaps?.supports_function_calling ?? false) ||
-      this.editCapVision() !== (storedCaps?.supports_vision ?? false) ||
-      this.editCapReasoning() !== (storedCaps?.supports_reasoning ?? false);
     try {
-      // Persist a changed capability override BEFORE the model info update:
-      // renaming the model triggers a catalog re-sync, which must see
-      // manual_override=true and therefore skip the row.
-      if (capsChanged) {
-        const caps = await this.modelService.setModelCapabilities(
-          target.id,
-          this.editCapFunctionCalling(),
-          this.editCapVision(),
-          this.editCapReasoning(),
-        );
-        this.applyCapabilityState(caps);
-      }
       const res = await this.modelService.updateModel(payload);
-      // A rename re-syncs the capabilities server-side; take the state the
-      // response reports so the chips never keep showing the old name's flags.
+      // Rename re-sync and/or an inline capability override both report state
+      // here so the chips never keep showing a stale or partially-saved row.
       if (res.capabilities) this.applyCapabilityState(res.capabilities);
       this.models.update((list) =>
         list.map((m) =>

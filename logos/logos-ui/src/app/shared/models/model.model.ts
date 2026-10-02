@@ -42,4 +42,8 @@ export interface UpdateModelPayload {
   weight_quality?: number;
   /** Full replacement map of Likert 1–5 ratings (empty object clears). */
   profile_ratings?: ModelProfileRatings;
+  /** When set, all three flags must be present; applied atomically with the model update. */
+  supports_function_calling?: boolean;
+  supports_vision?: boolean;
+  supports_reasoning?: boolean;
 }

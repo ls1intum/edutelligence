@@ -782,6 +782,91 @@ class ModelControllerTest {
     }
 
     @Test
+    void updateModelInfo_partialCapabilityFlagsReturn400() throws Exception {
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5002,\"supports_function_calling\":true,\"supports_vision\":false}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value(
+               "supports_function_calling, supports_vision, and supports_reasoning must all be set together"));
+
+        assertThat(modelCapabilitiesRepository.findByModelId(5002)).isEmpty();
+    }
+
+    @Test
+    void updateModelInfo_capabilityOverrideIsAtomicWithAliasRejection() throws Exception {
+        // Model 5001 already owns the alias 'taken-alias'. Updating 5002 with that
+        // alias AND a capability override must fail as one unit: the override must
+        // not survive the alias rejection (the bug the UI used to hit by calling
+        // set_model_capabilities before update_model_info).
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"aliases\":[\"taken-alias\"]}"))
+           .andExpect(status().isOk());
+
+        assertThat(modelCapabilitiesRepository.findByModelId(5002)).isEmpty();
+
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5002,\"aliases\":[\"taken-alias\"],"
+                    + "\"supports_function_calling\":true,\"supports_vision\":true,"
+                    + "\"supports_reasoning\":true}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+
+        assertThat(modelCapabilitiesRepository.findByModelId(5002))
+            .as("capability override must roll back with the rejected alias write")
+            .isEmpty();
+    }
+
+    @Test
+    void updateModelInfo_capabilityOverrideIsAtomicWithDuplicateNameRejection() throws Exception {
+        // Name uniqueness is checked before the capability write, so a colliding
+        // rename must leave 5002 without an override row — the same user-visible
+        // guarantee as rolling back a written override (covered by the alias test).
+        assertThat(modelCapabilitiesRepository.findByModelId(5002)).isEmpty();
+
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5002,\"name\":\"gpt-4\","
+                    + "\"supports_function_calling\":true,\"supports_vision\":true,"
+                    + "\"supports_reasoning\":true}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").exists());
+
+        assertThat(modelCapabilitiesRepository.findByModelId(5002))
+            .as("capability override must not persist when the rename is rejected")
+            .isEmpty();
+    }
+
+    @Test
+    void updateModelInfo_appliesCapabilityOverrideAtomically() throws Exception {
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5002,\"description\":\"caps via update\","
+                    + "\"supports_function_calling\":true,\"supports_vision\":false,"
+                    + "\"supports_reasoning\":true}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Model updated"))
+           .andExpect(jsonPath("$.capabilities.model_id").value(5002))
+           .andExpect(jsonPath("$.capabilities.supports_function_calling").value(true))
+           .andExpect(jsonPath("$.capabilities.supports_vision").value(false))
+           .andExpect(jsonPath("$.capabilities.supports_reasoning").value(true))
+           .andExpect(jsonPath("$.capabilities.manual_override").value(true));
+
+        ModelCapabilities caps = modelCapabilitiesRepository.findByModelId(5002).orElseThrow();
+        assertThat(caps.getSupportsFunctionCalling()).isTrue();
+        assertThat(caps.getSupportsVision()).isFalse();
+        assertThat(caps.getSupportsReasoning()).isTrue();
+        assertThat(caps.getManualOverride()).isTrue();
+    }
+
+    @Test
     void resetModelCapabilities_clearsOverrideAndResyncsFromCatalog() throws Exception {
         // Set a manual override that differs from the catalog (gpt-4 has
         // supports_function_calling=true and no vision/reasoning entries)
