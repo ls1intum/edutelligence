@@ -187,10 +187,12 @@ class TestWireShapes:
         assert dto.exclude_course_ids == [5]
 
     def test_lecture_search_request_parses_exclude_course_ids(self):
-        dto = LectureSearchRequestDTO(query="q", excludeCourseIds=[5])
+        dto = LectureSearchRequestDTO(
+            query="q", excludeCourseIds=[5], artemisBaseUrl="http://a"
+        )
         assert dto.exclude_course_ids == [5]
 
-        dto = LectureSearchRequestDTO(query="q")
+        dto = LectureSearchRequestDTO(query="q", artemisBaseUrl="http://a")
         assert dto.exclude_course_ids == []
 
     def test_request_parses_camel_case_entity_candidates(self):
@@ -555,7 +557,9 @@ class TestSemesterTwinDedup:
         )
 
         response = pipeline(
-            query="tell me about patterns", intent=SearchIntent.TRIGGER_AI
+            query="tell me about patterns",
+            intent=SearchIntent.TRIGGER_AI,
+            base_url="http://a",
         )
 
         assert response.sources == [lecture_a, lecture_b]
@@ -605,7 +609,9 @@ class TestSemesterTwinDedup:
         )
 
         response = pipeline(
-            query="what is deep learning", intent=SearchIntent.TRIGGER_AI
+            query="what is deep learning",
+            intent=SearchIntent.TRIGGER_AI,
+            base_url="http://a",
         )
 
         # rank_2 was cited FIRST in the text, so it becomes source 1 — the returned list
@@ -649,7 +655,9 @@ class TestSemesterTwinDedup:
         )
 
         response = pipeline(
-            query="tell me about patterns", intent=SearchIntent.TRIGGER_AI
+            query="tell me about patterns",
+            intent=SearchIntent.TRIGGER_AI,
+            base_url="http://a",
         )
 
         assert response.sources == [lecture_a]
@@ -703,7 +711,9 @@ class TestSemesterTwinDedup:
         )
 
         response = pipeline(
-            query="explain array indexing", intent=SearchIntent.TRIGGER_AI
+            query="explain array indexing",
+            intent=SearchIntent.TRIGGER_AI,
+            base_url="http://a",
         )
 
         assert response.sources == [source_1, source_2]
@@ -771,7 +781,9 @@ class TestLectureSearchRoute:
     for the access context to narrow itself."""
 
     def test_forwards_exclude_course_ids_to_the_retriever(self):
-        dto = LectureSearchRequestDTO(query="q", courseIds=[9], excludeCourseIds=[5])
+        dto = LectureSearchRequestDTO(
+            query="q", courseIds=[9], excludeCourseIds=[5], artemisBaseUrl="http://a"
+        )
         with (
             patch.object(search_router, "VectorDatabase"),
             patch.object(search_router, "LectureGlobalSearchRetrieval") as mock_cls,
