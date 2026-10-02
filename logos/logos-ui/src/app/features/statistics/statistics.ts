@@ -1091,6 +1091,23 @@ export class Statistics implements OnInit, OnDestroy {
       this.feedProviders.set(options.providers ?? []);
       this.feedModels.set(options.models ?? []);
 
+      // Feed multi-selects keep ids that vanish from the new option lists
+      // after a range or team change — the trigger still says "N models" and
+      // those ids keep filtering while they cannot be unchecked. Prune like
+      // the single-value requester/provider scope below.
+      const modelIds = new Set(this.feedModels().map((m) => String(m.id)));
+      const providerIds = new Set(this.feedProviders().map((p) => String(p.id)));
+      const keptModels = this.feedModelIds().filter((id) => modelIds.has(id));
+      const keptProviders = this.feedProviderIds().filter((id) => providerIds.has(id));
+      if (
+        keptModels.length !== this.feedModelIds().length ||
+        keptProviders.length !== this.feedProviderIds().length
+      ) {
+        this.feedModelIds.set(keptModels);
+        this.feedProviderIds.set(keptProviders);
+        this.applyFeedFilters();
+      }
+
       // The selected requester may not be in the new list — a different team, or
       // a range they were quiet in. Leaving them selected would hold the page on
       // a scope with no data and no visible cause, since the dropdown cannot

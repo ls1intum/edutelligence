@@ -628,18 +628,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             // request enqueued after page load would ever show up.
             String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
             Map<String, Object> payload;
-            if (state.feedModelIds.isEmpty() && state.feedProviderIds.isEmpty()) {
-                payload = requestLogService.getLatestRequests(
-                    state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                    state.scopeProviderId, state.scopeErrorsOnly,
-                    state.feedStatus, null, null, LATEST_REQUESTS_PUSH_SIZE, false);
-            } else {
-                payload = requestLogService.getLatestRequests(
-                    state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                    state.scopeProviderId, state.scopeErrorsOnly,
-                    state.feedStatus, null, null, LATEST_REQUESTS_PUSH_SIZE, false,
-                    state.feedModelIds, state.feedProviderIds);
-            }
+            payload = requestLogService.getLatestRequests(
+                state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                state.scopeProviderId, state.scopeErrorsOnly,
+                state.feedStatus, null, null, LATEST_REQUESTS_PUSH_SIZE, false,
+                state.feedModelIds, state.feedProviderIds);
             mergeLiveStreams(payload);
             String sig = requestsSig(payload);
             String idsSig = requestIdsSig(payload);
@@ -686,14 +679,10 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // Token values grow without the ids or the count moving, so
                 // the figure the last push carried stays valid in between.
                 if (state.hasFeedFilter() && (force || rowsChanged || selectionCountMoved)) {
-                    long total = state.feedModelIds.isEmpty() && state.feedProviderIds.isEmpty()
-                        ? requestLogService.countFeedRows(
-                            state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                            state.scopeProviderId, state.scopeErrorsOnly, state.feedStatus)
-                        : requestLogService.countFeedRows(
-                            state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                            state.scopeProviderId, state.scopeErrorsOnly, state.feedStatus,
-                            state.feedModelIds, state.feedProviderIds);
+                    long total = requestLogService.countFeedRows(
+                        state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
+                        state.scopeProviderId, state.scopeErrorsOnly, state.feedStatus,
+                        state.feedModelIds, state.feedProviderIds);
                     payload.put("total", total);
                 }
                 state.prevReqSig = sig;
