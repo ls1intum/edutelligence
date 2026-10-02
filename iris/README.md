@@ -58,6 +58,12 @@ Artemis supplies its configured `server.url`; this is a trusted server identity,
 not a value from the student's search input. Blank or missing identity is rejected.
 Deploy callers that send this field before enabling the secured Iris endpoint.
 
+Iris API keys are not bound to an Artemis instance. A valid key is a trusted service
+credential: it can already ingest, delete and retrieve for the `base_url` it sends.
+This check restricts results to the exact URL supplied by a trusted caller. It does
+not isolate instances from a holder of a valid key or a malicious Artemis operator.
+Binding keys to instances would be a separate change to the authentication contract.
+
 Search compares this identity byte-for-byte with the existing `base_url` tags before
 processing lecture content. Weaviate's word-tokenized URL filters only narrow the
 query; they do not establish ownership. URLs are not normalized or aliased, and
