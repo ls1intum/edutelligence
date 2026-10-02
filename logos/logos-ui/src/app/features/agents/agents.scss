@@ -548,3 +548,17 @@
   accent-color: rgb(var(--color-primary-500));
   cursor: pointer;
 }
+
+// Team repository analysis: hint and the manual "analyze everything" action.
+.repo-analysis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1.5rem;
+
+  .page-subtitle {
+    margin: 0;
+    flex: 1 1 32ch;
+  }
+}

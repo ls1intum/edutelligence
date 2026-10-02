@@ -140,6 +140,13 @@ async def ingest_session(session: dict[str, Any]) -> None:
         logger.warning("analysis session %s has no team_repository_id; skipping ingest", session_id)
         await mark_analysis_failed(session_id, "session has no team_repository_id")
         return
+    if payload.get("unchanged") is True:
+        await mark_analysis_unchanged(
+            session_id=session_id,
+            team_repository_id=int(team_repository_id),
+            commit_sha=_str_or_none(payload.get("commit_sha")),
+        )
+        return
     try:
         await upsert_analysis(
             session_id=session_id,
@@ -153,6 +160,47 @@ async def ingest_session(session: dict[str, Any]) -> None:
     except Exception as exc:
         logger.warning("analysis ingest for session %s failed: %s", session_id, exc)
         await mark_analysis_failed(session_id, str(exc))
+
+
+async def mark_analysis_unchanged(*, session_id: int, team_repository_id: int, commit_sha: str | None) -> None:
+    """Record a session that stopped because the repository did not change.
+
+    Only believed when the commit it names is the one the latest succeeded
+    analysis of that repository described; anything else is a session that
+    skipped its work, and is recorded as failed.
+    """
+    async with db.sessionmaker()() as conn:
+        previous = (
+            await conn.execute(
+                text("""
+                    SELECT commit_sha FROM ai_workflow_analyses
+                     WHERE team_repository_id = :repo AND status = 'succeeded'
+                     ORDER BY finished_at DESC NULLS LAST, id DESC
+                     LIMIT 1
+                    """),
+                {"repo": team_repository_id},
+            )
+        ).scalar_one_or_none()
+        if not commit_sha or not previous or commit_sha != previous:
+            await conn.rollback()
+            logger.warning(
+                "analysis session %s claimed unchanged at %s, latest analysed commit is %s",
+                session_id,
+                commit_sha,
+                previous,
+            )
+            await mark_analysis_failed(session_id, "reported unchanged, but not at the analysed commit")
+            return
+        await conn.execute(
+            text("""
+                UPDATE ai_workflow_analyses
+                   SET status = 'skipped', commit_sha = :sha, error = NULL, finished_at = :now
+                 WHERE agent_session_id = :session_id
+                """),
+            {"sha": commit_sha, "now": datetime.now(timezone.utc), "session_id": session_id},
+        )
+        await conn.commit()
+    logger.info("analysis session %s: repository unchanged at %s, skipped", session_id, commit_sha[:12])
 
 
 class ObsoleteLinkError(ValueError):
@@ -277,6 +325,8 @@ async def upsert_analysis(
                 {"id": analysis_id},
             )
 
+        previous_recs = await _previous_recommendations(conn, team_repository_id, int(analysis_id))
+
         workflow_ids: dict[str, int] = {}
         for index, raw in enumerate(workflows):
             if not isinstance(raw, dict):
@@ -329,26 +379,41 @@ async def upsert_analysis(
                 confidence_f = float(confidence) if confidence is not None else 0.5
             except (TypeError, ValueError):
                 confidence_f = 0.5
+            start_line = _int_or_none(raw.get("start_line"))
+            detected_model = _str_or_none(raw.get("detected_model"))
+            previous = _match_previous(previous_recs, file_path, workflow_name, start_line)
+            review = carried_review(previous, sla=sla, priority=priority)
+            if previous is not None and previous["model_set_by_owner"]:
+                # The owner said which model this call site uses; the analysis guessing
+                # again must not replace that.
+                detected_model = previous["detected_model"]
             await conn.execute(
                 text("""
                     INSERT INTO ai_llm_call_recommendations
                         (analysis_id, workflow_id, team_id, file_path, start_line, end_line,
-                         code_url, detected_model, recommended_sla, objective_priority,
-                         confidence, justification, traffic_flags, review_status)
+                         code_url, detected_model, model_set_by_owner, recommended_sla, objective_priority,
+                         confidence, justification, traffic_flags, review_status,
+                         confirmed_sla, confirmed_objective_priority, api_key_id, reviewed_by, reviewed_at,
+                         previous_recommendation_id)
                     VALUES
                         (:analysis_id, :workflow_id, :team_id, :file_path, :start_line, :end_line,
-                         :code_url, :detected_model, :sla, CAST(:priority AS jsonb),
-                         :confidence, :justification, CAST(:flags AS jsonb), 'pending')
+                         :code_url, :detected_model, :model_set_by_owner, :sla, CAST(:priority AS jsonb),
+                         :confidence, :justification, CAST(:flags AS jsonb), :review_status,
+                         :confirmed_sla, CAST(:confirmed_priority AS jsonb), :api_key_id, :reviewed_by, :reviewed_at,
+                         :previous_id)
                     """),
                 {
+                    **review,
+                    "model_set_by_owner": bool(previous is not None and previous["model_set_by_owner"]),
+                    "previous_id": previous["id"] if previous is not None else None,
                     "analysis_id": analysis_id,
                     "workflow_id": workflow_id,
                     "team_id": team_id,
                     "file_path": file_path,
-                    "start_line": _int_or_none(raw.get("start_line")),
+                    "start_line": start_line,
                     "end_line": _int_or_none(raw.get("end_line")),
                     "code_url": _str_or_none(raw.get("code_url")),
-                    "detected_model": _str_or_none(raw.get("detected_model")),
+                    "detected_model": detected_model,
                     "sla": sla,
                     "priority": json.dumps(priority),
                     "confidence": confidence_f,
@@ -364,6 +429,117 @@ async def upsert_analysis(
         len(workflow_ids),
     )
     return int(analysis_id)
+
+
+async def _previous_recommendations(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
+    """Recommendations of the latest other succeeded analysis of this repository."""
+    rows = (
+        (
+            await conn.execute(
+                text("""
+                    SELECT r.id, r.file_path, r.start_line, w.name AS workflow_name,
+                           r.review_status, r.recommended_sla, r.objective_priority,
+                           r.confirmed_sla, r.confirmed_objective_priority,
+                           r.api_key_id, r.reviewed_by, r.reviewed_at,
+                           r.detected_model, r.model_set_by_owner
+                      FROM ai_llm_call_recommendations r
+                      LEFT JOIN ai_workflows w ON w.id = r.workflow_id
+                     WHERE r.analysis_id = (
+                             SELECT a.id FROM ai_workflow_analyses a
+                              WHERE a.team_repository_id = :repo
+                                AND a.status = 'succeeded'
+                                AND a.id <> :current
+                              ORDER BY a.finished_at DESC NULLS LAST, a.id DESC
+                              LIMIT 1
+                           )
+                     ORDER BY r.id
+                    """),
+                {"repo": team_repository_id, "current": analysis_id},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return [{**dict(r), "_used": False} for r in rows]
+
+
+def _match_previous(
+    previous: list[dict[str, Any]], file_path: str, workflow_name: str, start_line: int | None
+) -> dict[str, Any] | None:
+    """The unused previous recommendation for the same call site, if any.
+
+    Same file is required; the same workflow wins over another one, then the
+    nearest line (code moves between commits). Each previous row is matched once.
+    """
+    candidates = [p for p in previous if not p["_used"] and p["file_path"] == file_path]
+    if not candidates:
+        return None
+
+    def distance(p: dict[str, Any]) -> tuple[int, int]:
+        same_workflow = 0 if workflow_name and p["workflow_name"] == workflow_name else 1
+        if start_line is None or p["start_line"] is None:
+            return same_workflow, 0
+        return same_workflow, abs(int(p["start_line"]) - start_line)
+
+    best = min(candidates, key=distance)
+    best["_used"] = True
+    return best
+
+
+def _priority_list(raw: Any, *, sla: str) -> list[str]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = None
+    return normalize_objective_priority(raw, sla=sla)
+
+
+def carried_review(previous: dict[str, Any] | None, *, sla: str, priority: list[str]) -> dict[str, Any]:
+    """Review fields for a new recommendation, given the one it succeeds.
+
+    A re-analysis proposes; it never overwrites a decision. When the new
+    proposal is what the owner already confirmed (or already rejected), that
+    review carries over unchanged. Anything else is pending, and the UI shows
+    it next to the previous decision.
+    """
+    pending: dict[str, Any] = {
+        "review_status": "pending",
+        "confirmed_sla": None,
+        "confirmed_priority": None,
+        "api_key_id": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+    if previous is None:
+        return pending
+    status = previous["review_status"]
+    if status in ("accepted", "overridden"):
+        confirmed_sla = previous["confirmed_sla"] or previous["recommended_sla"]
+        confirmed = _priority_list(
+            previous["confirmed_objective_priority"] or previous["objective_priority"], sla=confirmed_sla
+        )
+        if (sla, priority) != (confirmed_sla, confirmed):
+            return pending
+        return {
+            "review_status": status,
+            "confirmed_sla": confirmed_sla,
+            "confirmed_priority": json.dumps(confirmed),
+            "api_key_id": previous["api_key_id"],
+            "reviewed_by": previous["reviewed_by"],
+            "reviewed_at": previous["reviewed_at"],
+        }
+    if status == "rejected":
+        rejected_sla = previous["recommended_sla"]
+        if (sla, priority) != (rejected_sla, _priority_list(previous["objective_priority"], sla=rejected_sla)):
+            return pending
+        return {
+            **pending,
+            "review_status": "rejected",
+            "reviewed_by": previous["reviewed_by"],
+            "reviewed_at": previous["reviewed_at"],
+        }
+    return pending
 
 
 def _str_or_none(value: Any) -> str | None:

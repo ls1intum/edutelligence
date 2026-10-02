@@ -62,6 +62,13 @@ public class AiWorkflowController {
         return ResponseEntity.ok(service.queueAgentAnalysis(teamId, linkId));
     }
 
+    /** Queue an analysis of every linked repository (Logos Admins only). */
+    @PostMapping("/repositories/analyze")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> analyzeAll() {
+        return ResponseEntity.ok(service.queueAllAgentAnalyses());
+    }
+
     @PostMapping("/teams/{teamId}/recommendations/{recId}/review")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> reviewRecommendation(

@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import {
+  AnalyzeAllResult,
   Team, AdminUser, TeamDetail, TeamMember, TeamApiKey,
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
   ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
@@ -93,6 +94,11 @@ export class TeamManagementService {
     return firstValueFrom(
       this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze/agent`, {}),
     );
+  }
+
+  /** Queue an agent analysis of every linked repository (Logos Admins). */
+  analyzeAllRepositories(): Promise<AnalyzeAllResult> {
+    return firstValueFrom(this.http.post<AnalyzeAllResult>('/api/admin/repositories/analyze', {}));
   }
 
   /** Record which model a recommended call site uses; null clears it. */

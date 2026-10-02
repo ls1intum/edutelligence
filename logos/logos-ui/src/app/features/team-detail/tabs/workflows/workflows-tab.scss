@@ -435,3 +435,9 @@
     width: 100%;
   }
 }
+
+.previous-decision {
+  margin: 4px 0 0;
+  font-size: var(--font-size-2xs);
+  color: rgb(var(--nav-item-text));
+}

@@ -176,6 +176,10 @@ public class ExportImportService {
                     "objective_priority",
                     ObjectivePriority.forSla(sla == null ? null : String.valueOf(sla)));
             }
+            if ("ai_llm_call_recommendations".equals(table)
+                    && copy.get("model_set_by_owner") == null) {
+                copy.put("model_set_by_owner", false);
+            }
             out.add(copy);
         }
         return out;

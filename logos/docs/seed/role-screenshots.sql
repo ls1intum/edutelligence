@@ -50,18 +50,20 @@ WHERE created_by = 'docs-role-screenshots';
 -- Docs AI-workflow demo (commit_sha is the wipe namespace; short form abc123d).
 -- Do not delete team_repositories rows — on a shared DB the Logos team may
 -- already link the same slug for real use; only replace the docs analysis.
+-- abc122d is the earlier analysis whose reviews the current one carries over
+-- or re-proposes.
 DELETE FROM ai_llm_call_recommendations
 WHERE analysis_id IN (
     SELECT id FROM ai_workflow_analyses
-    WHERE commit_sha = 'abc123docsrolescreenshots'
+    WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots')
 );
 DELETE FROM ai_workflows
 WHERE analysis_id IN (
     SELECT id FROM ai_workflow_analyses
-    WHERE commit_sha = 'abc123docsrolescreenshots'
+    WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots')
 );
 DELETE FROM ai_workflow_analyses
-WHERE commit_sha = 'abc123docsrolescreenshots';
+WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots');
 
 DELETE FROM policies
 WHERE name LIKE 'Docs — %'
@@ -676,6 +678,57 @@ WHERE a.commit_sha = 'abc123docsrolescreenshots'
       SELECT 1 FROM ai_llm_call_recommendations rec
       WHERE rec.analysis_id = a.id AND rec.file_path = r.file_path
   );
+
+-- The analysis before it (yesterday), with the owner's reviews: one that the
+-- current analysis proposes again unchanged (kept), one it now proposes
+-- differently (pending, shown next to the earlier decision).
+INSERT INTO ai_workflow_analyses (
+    team_id, team_repository_id, commit_sha, status, source, finished_at
+)
+SELECT a.team_id, a.team_repository_id, 'abc122docsrolescreenshots', 'succeeded', 'agent',
+       now() - interval '1 day'
+FROM ai_workflow_analyses a
+WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_workflow_analyses p WHERE p.commit_sha = 'abc122docsrolescreenshots'
+  );
+
+INSERT INTO ai_llm_call_recommendations (
+    analysis_id, team_id, file_path, start_line, end_line, recommended_sla, objective_priority,
+    confidence, justification, review_status, confirmed_sla, confirmed_objective_priority, reviewed_at
+)
+SELECT p.id, p.team_id, r.file_path, r.line, r.line, r.sla, r.priority::jsonb, 0.7, r.why,
+       'accepted', r.sla, r.priority::jsonb, now() - interval '20 hours'
+FROM ai_workflow_analyses p
+JOIN (VALUES
+    ('logos/logos-agent/app/sessions.py', 1480, 'ux-high-prio', '["quality","latency","price"]',
+     'Async agent helper work.'),
+    ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 'ux-high-prio',
+     '["quality","latency","price"]', 'Team detail load.')
+) AS r(file_path, line, sla, priority, why) ON true
+WHERE p.commit_sha = 'abc122docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_llm_call_recommendations x WHERE x.analysis_id = p.id
+  );
+
+UPDATE ai_llm_call_recommendations cur
+   SET previous_recommendation_id = prev.id
+  FROM ai_llm_call_recommendations prev
+  JOIN ai_workflow_analyses pa ON pa.id = prev.analysis_id
+ WHERE pa.commit_sha = 'abc122docsrolescreenshots'
+   AND cur.analysis_id = (SELECT id FROM ai_workflow_analyses WHERE commit_sha = 'abc123docsrolescreenshots')
+   AND cur.file_path = prev.file_path;
+
+-- Same proposal as yesterday's accepted one: the review carries over.
+UPDATE ai_llm_call_recommendations cur
+   SET review_status = prev.review_status,
+       confirmed_sla = prev.confirmed_sla,
+       confirmed_objective_priority = prev.confirmed_objective_priority,
+       reviewed_at = prev.reviewed_at
+  FROM ai_llm_call_recommendations prev
+ WHERE cur.previous_recommendation_id = prev.id
+   AND cur.recommended_sla = prev.confirmed_sla
+   AND cur.objective_priority = prev.confirmed_objective_priority;
 
 COMMIT;
 

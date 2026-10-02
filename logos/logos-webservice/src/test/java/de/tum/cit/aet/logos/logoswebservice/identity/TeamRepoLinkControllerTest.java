@@ -242,6 +242,7 @@ class TeamRepoLinkControllerTest {
                 .content("{\"model\":\"  openai/gpt-oss-120b \"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.detected_model").value("openai/gpt-oss-120b"))
+           .andExpect(jsonPath("$.model_set_by_owner").value(true))
            .andExpect(jsonPath("$.review_status").value("pending"));
 
         // A review keeps the model; both write paths go through the same row lock.
@@ -307,6 +308,49 @@ class TeamRepoLinkControllerTest {
         org.assertj.core.api.Assertions.assertThat(
             jdbc.queryForObject("SELECT default_priority FROM api_keys WHERE id = 3001", Integer.class))
             .isEqualTo(7);
+    }
+
+    @Test
+    void queueAgentAnalysis_refusesASecondWhileOneIsInFlight() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/twice\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+
+        mvc.perform(post("/admin/teams/2001/repositories/" + linkId + "/analyze/agent")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.status").value("queued"));
+        mvc.perform(post("/admin/teams/2001/repositories/" + linkId + "/analyze/agent")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isConflict())
+           .andExpect(jsonPath("$.detail", containsString("already queued or running")));
+    }
+
+    @Test
+    void analyzeAll_queuesEveryLinkOnceAndIsLogosAdminOnly() throws Exception {
+        for (String repo : new String[] {"all-a", "all-b"}) {
+            mvc.perform(post("/admin/teams/2001/repositories")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"repo_url\":\"https://github.com/ls1intum/" + repo + "\"}"))
+               .andExpect(status().isOk());
+        }
+        int links = jdbc.queryForObject("SELECT count(*) FROM team_repositories", Integer.class);
+
+        mvc.perform(post("/admin/repositories/analyze").with(TestJwt.adminUser()))
+           .andExpect(status().isForbidden());
+        mvc.perform(post("/admin/repositories/analyze").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.queued").value(links))
+           .andExpect(jsonPath("$.already_in_flight").value(0));
+        mvc.perform(post("/admin/repositories/analyze").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.queued").value(0))
+           .andExpect(jsonPath("$.already_in_flight").value(links));
     }
 
     @Test

@@ -38,6 +38,32 @@
     </div>
   }
 
+  <!-- Team repository analysis: runs nightly on its own; this is the manual
+       "everything, now" for when the analysis task itself changed. -->
+  <div class="repo-analysis">
+    <p class="page-subtitle">
+      <i class="pi pi-sparkles" aria-hidden="true"></i>
+      Linked team repositories are re-analysed every night when their branch has new commits;
+      unchanged repositories are skipped. Results arrive as proposals on each team's Workflows tab.
+    </p>
+    <button
+      type="button"
+      class="btn btn--ghost"
+      (click)="analyzeAllRepositories()"
+      [disabled]="analyzingAll()"
+    >
+      @if (analyzingAll()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      } @else {
+        <i class="pi pi-sparkles" aria-hidden="true"></i>
+      }
+      Analyze all repositories
+    </button>
+    @if (analyzeAllMessage(); as msg) {
+      <span class="field__hint" role="status">{{ msg }}</span>
+    }
+  </div>
+
   @if (capacity(); as cap) {
     @if (!cap.models_local_only) {
       <div class="alert alert--error" role="alert">

@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -200,6 +201,8 @@ public class AiWorkflowAnalysisService {
                 "model must be at most " + MAX_MODEL_NAME_LENGTH + " characters");
         }
         rec.setDetectedModel(model == null || model.isEmpty() ? null : model);
+        // Clearing is a decision too: the next analysis must not refill it.
+        rec.setModelSetByOwner(true);
         recommendationRepository.save(rec);
         return recommendationToMap(rec);
     }
@@ -353,6 +356,45 @@ public class AiWorkflowAnalysisService {
     @Transactional
     public Map<String, Object> queueAgentAnalysis(int teamId, int linkId) {
         TeamRepoLink link = requireLink(teamId, linkId);
+        if (analysisInFlight(link.getId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "An analysis of " + link.getRepoSlug() + " is already queued or running");
+        }
+        return queue(teamId, link);
+    }
+
+    /**
+     * Queue an analysis of every linked repository that has none in flight.
+     * A manual run always analyses: it is how an admin gets fresh results
+     * after the analysis task itself changed, even on an unchanged commit.
+     */
+    public Map<String, Object> queueAllAgentAnalyses() {
+        List<String> queued = new ArrayList<>();
+        List<String> inFlight = new ArrayList<>();
+        for (TeamRepoLink link : repoLinkRepository.findAll(Sort.by("id"))) {
+            if (analysisInFlight(link.getId())) {
+                inFlight.add(link.getRepoSlug());
+                continue;
+            }
+            queue(link.getTeamId(), link);
+            queued.add(link.getRepoSlug());
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("queued", queued.size());
+        result.put("already_in_flight", inFlight.size());
+        result.put("message", queued.size() + " analyses queued, " + inFlight.size() + " already in flight");
+        return result;
+    }
+
+    private boolean analysisInFlight(int linkId) {
+        Integer count = jdbc.queryForObject("""
+            SELECT count(*) FROM ai_workflow_analyses
+             WHERE team_repository_id = ? AND status IN ('queued', 'running')
+            """, Integer.class, linkId);
+        return count != null && count > 0;
+    }
+
+    private Map<String, Object> queue(int teamId, TeamRepoLink link) {
         int workspaceId = ensureAnalysisWorkspace(teamId, link);
 
         String pathsLabel = formatPaths(link.getPaths());
@@ -493,6 +535,32 @@ public class AiWorkflowAnalysisService {
                 : null);
         m.put("reviewed_by", rec.getReviewedBy());
         m.put("reviewed_at", rec.getReviewedAt() != null ? rec.getReviewedAt().toString() : null);
+        m.put("model_set_by_owner", rec.isModelSetByOwner());
+        m.put("previous", previousDecision(rec));
         return m;
+    }
+
+    /**
+     * What the owner decided on the recommendation this one succeeds, so a
+     * changed proposal can be shown next to it. Null when there is no reviewed
+     * predecessor.
+     */
+    private Map<String, Object> previousDecision(AiLlmCallRecommendation rec) {
+        if (rec.getPreviousRecommendationId() == null) return null;
+        return recommendationRepository.findById(rec.getPreviousRecommendationId())
+            .filter(prev -> !"pending".equals(prev.getReviewStatus()))
+            .map(prev -> {
+                Map<String, Object> p = new LinkedHashMap<>();
+                p.put("id", prev.getId());
+                p.put("review_status", prev.getReviewStatus());
+                p.put("sla", prev.getConfirmedSla() != null ? prev.getConfirmedSla() : prev.getRecommendedSla());
+                p.put("objective_priority", ObjectivePriority.asStringList(
+                    prev.getConfirmedObjectivePriority() != null
+                        ? prev.getConfirmedObjectivePriority()
+                        : prev.getObjectivePriority()));
+                p.put("reviewed_at", prev.getReviewedAt() != null ? prev.getReviewedAt().toString() : null);
+                return p;
+            })
+            .orElse(null);
     }
 }

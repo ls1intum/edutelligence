@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Re-analysis proposes, it does not overwrite.
+
+         Repositories are re-analysed (nightly, or all at once by a Logos
+         Admin). A new analysis must not silently replace what an owner has
+         already decided:
+
+           * previous_recommendation_id links a recommendation to the one it
+             succeeds in the previous analysis of the same repository, so an
+             unchanged proposal can keep the owner's review and a changed one
+             can show what was confirmed before.
+           * model_set_by_owner marks a model the owner picked, so the next
+             analysis keeps it instead of its own guess.
+           * 'skipped' is an analysis that stopped because the branch head is
+             still the commit the previous analysis described. -->
+    <changeSet id="050-analysis-proposals" author="wasnertobias">
+        <sql><![CDATA[
+            ALTER TABLE ai_llm_call_recommendations
+                ADD COLUMN IF NOT EXISTS previous_recommendation_id INTEGER
+                    REFERENCES ai_llm_call_recommendations(id) ON DELETE SET NULL,
+                ADD COLUMN IF NOT EXISTS model_set_by_owner BOOLEAN NOT NULL DEFAULT FALSE;
+
+            ALTER TABLE ai_workflow_analyses
+                DROP CONSTRAINT IF EXISTS ai_workflow_analyses_status_check;
+            ALTER TABLE ai_workflow_analyses
+                ADD CONSTRAINT ai_workflow_analyses_status_check
+                CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'skipped'));
+        ]]></sql>
+        <rollback>
+            <sql>
+                DELETE FROM ai_workflow_analyses WHERE status = 'skipped';
+                ALTER TABLE ai_workflow_analyses
+                    DROP CONSTRAINT IF EXISTS ai_workflow_analyses_status_check;
+                ALTER TABLE ai_workflow_analyses
+                    ADD CONSTRAINT ai_workflow_analyses_status_check
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed'));
+                ALTER TABLE ai_llm_call_recommendations
+                    DROP COLUMN IF EXISTS model_set_by_owner,
+                    DROP COLUMN IF EXISTS previous_recommendation_id;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

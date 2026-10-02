@@ -63,6 +63,16 @@ class ExportImportServiceNormalizeTest {
     }
 
     @Test
+    void normalizeRecommendationsDefaultsModelSetByOwnerForOlderDumps() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", 9);
+        row.put("recommended_sla", "ux-critical");
+        List<Map<String, Object>> out =
+            service.normalizeImportRows("ai_llm_call_recommendations", List.of(row));
+        assertEquals(false, out.get(0).get("model_set_by_owner"));
+    }
+
+    @Test
     void normalizeEmptyRowsReturnsEmpty() {
         assertTrue(service.normalizeImportRows("models", null).isEmpty());
         assertTrue(service.normalizeImportRows("models", List.of()).isEmpty());

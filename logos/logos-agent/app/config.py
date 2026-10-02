@@ -282,6 +282,10 @@ class Settings:
     # restarted runner looks, how many self-queued sessions may be active —
     # is a constant in `triggers.py`, derived where it depends on anything.
     triggers_enabled: bool = _bool("LOGOS_AGENT_TRIGGERS_ENABLED", True)
+    # UTC hour of the nightly re-analysis of linked team repositories; -1
+    # turns it off. A repository whose branch head is still the commit its
+    # latest analysis described is not analysed again.
+    analysis_nightly_hour_utc: int = _int("LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC", 0)
 
     # --- storage ----------------------------------------------------------
     # Where session artefacts (logs, screenshots) are kept, on a volume shared

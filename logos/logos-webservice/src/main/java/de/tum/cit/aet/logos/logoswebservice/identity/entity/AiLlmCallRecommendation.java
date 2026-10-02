@@ -66,6 +66,11 @@ public class AiLlmCallRecommendation {
     private String confirmedSla;
     private Integer reviewedBy;
     private Instant reviewedAt;
+    /** The recommendation this one succeeds in the previous analysis of the same repository. */
+    private Integer previousRecommendationId;
+    /** The owner picked {@link #detectedModel}; the next analysis keeps it. */
+    @Column(nullable = false)
+    private boolean modelSetByOwner;
 
     public Integer getId() { return id; }
     public Integer getAnalysisId() { return analysisId; }
@@ -87,6 +92,8 @@ public class AiLlmCallRecommendation {
     public String getConfirmedSla() { return confirmedSla; }
     public Integer getReviewedBy() { return reviewedBy; }
     public Instant getReviewedAt() { return reviewedAt; }
+    public Integer getPreviousRecommendationId() { return previousRecommendationId; }
+    public boolean isModelSetByOwner() { return modelSetByOwner; }
 
     public void setAnalysisId(Integer analysisId) { this.analysisId = analysisId; }
     public void setWorkflowId(Integer workflowId) { this.workflowId = workflowId; }
@@ -109,4 +116,8 @@ public class AiLlmCallRecommendation {
     public void setConfirmedSla(String confirmedSla) { this.confirmedSla = confirmedSla; }
     public void setReviewedBy(Integer reviewedBy) { this.reviewedBy = reviewedBy; }
     public void setReviewedAt(Instant reviewedAt) { this.reviewedAt = reviewedAt; }
+    public void setPreviousRecommendationId(Integer previousRecommendationId) {
+        this.previousRecommendationId = previousRecommendationId;
+    }
+    public void setModelSetByOwner(boolean modelSetByOwner) { this.modelSetByOwner = modelSetByOwner; }
 }

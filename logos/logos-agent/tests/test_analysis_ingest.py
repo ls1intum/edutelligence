@@ -26,10 +26,15 @@ class _Result:
     def first(self):
         return self._value
 
+    def all(self):
+        return self._value or []
+
 
 class _Conn:
-    def __init__(self, *, link_slug: str = "acme/repo"):
+    def __init__(self, *, link_slug: str = "acme/repo", previous=None, analysed_commit=None):
         self.statements: list[tuple[str, dict]] = []
+        self.previous = previous or []
+        self.analysed_commit = analysed_commit
         self._next_analysis_id = 9
         self._next_workflow_id = 100
         self.link_slug = link_slug
@@ -44,6 +49,10 @@ class _Conn:
         text_sql = " ".join(str(sql).split())
         params = params or {}
         self.statements.append((text_sql, params))
+        if "FROM ai_llm_call_recommendations r" in text_sql:
+            return _Result([dict(p) for p in self.previous])
+        if "SELECT commit_sha FROM ai_workflow_analyses" in text_sql:
+            return _Result(self.analysed_commit)
         if "FROM team_repositories" in text_sql and "SELECT" in text_sql:
             return _Result({"team_id": 7, "repo_slug": self.link_slug})
         if "SELECT id FROM ai_workflow_analyses" in text_sql:
@@ -59,6 +68,9 @@ class _Conn:
         return _Result(None)
 
     async def commit(self):
+        return None
+
+    async def rollback(self):
         return None
 
 
@@ -224,3 +236,110 @@ async def test_ingest_rejects_fifo_without_hanging(tmp_path, monkeypatch, caplog
         await analysis_ingest.ingest_session({"id": 13, "team_repository_id": 1})
     assert "unsafe" in caplog.text or "regular file" in caplog.text
     assert any("UPDATE ai_workflow_analyses" in sql for sql, _ in conn.statements)
+
+
+def _previous(**overrides):
+    row = {
+        "id": 501,
+        "file_path": "src/llm.py",
+        "start_line": 12,
+        "workflow_name": "chat",
+        "review_status": "accepted",
+        "recommended_sla": "ux-critical",
+        "objective_priority": json.dumps(["latency", "quality", "price"]),
+        "confirmed_sla": "ux-critical",
+        "confirmed_objective_priority": json.dumps(["latency", "quality", "price"]),
+        "api_key_id": 33,
+        "reviewed_by": 4,
+        "reviewed_at": "2026-10-01T10:00:00Z",
+        "detected_model": None,
+        "model_set_by_owner": False,
+    }
+    row.update(overrides)
+    return row
+
+
+def _one_rec_payload(**rec):
+    return {
+        "commit_sha": "def456",
+        "workflows": [
+            {"name": "chat", "trigger_summary": "x", "diagram_mermaid": "flowchart TD\n  A", "sort_order": 0}
+        ],
+        "recommendations": [
+            {
+                "workflow": "chat",
+                "file_path": "src/llm.py",
+                "start_line": 10,
+                "recommended_sla": "ux-critical",
+                "detected_model": "gpt-guess",
+                **rec,
+            }
+        ],
+    }
+
+
+async def _ingest_with_previous(monkeypatch, previous, payload):
+    conn = _Conn(previous=previous)
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    await analysis_ingest.upsert_analysis(session_id=5, team_repository_id=11, payload=payload)
+    return next(p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql)
+
+
+async def test_reanalysis_keeps_an_unchanged_decision(monkeypatch):
+    rec = await _ingest_with_previous(monkeypatch, [_previous()], _one_rec_payload())
+    assert rec["review_status"] == "accepted"
+    assert json.loads(rec["confirmed_priority"]) == ["latency", "quality", "price"]
+    assert rec["api_key_id"] == 33
+    assert rec["previous_id"] == 501
+
+
+async def test_reanalysis_proposes_a_change_instead_of_overwriting(monkeypatch):
+    rec = await _ingest_with_previous(monkeypatch, [_previous()], _one_rec_payload(recommended_sla="ux-background"))
+    assert rec["review_status"] == "pending"
+    assert rec["confirmed_sla"] is None
+    assert rec["api_key_id"] is None
+    assert rec["previous_id"] == 501  # the UI shows the previous decision beside the proposal
+
+
+async def test_reanalysis_keeps_a_rejection_of_the_same_proposal(monkeypatch):
+    previous = _previous(review_status="rejected", confirmed_sla=None, confirmed_objective_priority=None)
+    rec = await _ingest_with_previous(monkeypatch, [previous], _one_rec_payload())
+    assert rec["review_status"] == "rejected"
+
+
+async def test_reanalysis_keeps_the_model_the_owner_picked(monkeypatch):
+    previous = _previous(review_status="pending", detected_model="openai/gpt-oss-120b", model_set_by_owner=True)
+    rec = await _ingest_with_previous(monkeypatch, [previous], _one_rec_payload())
+    assert rec["detected_model"] == "openai/gpt-oss-120b"
+    assert rec["model_set_by_owner"] is True
+    assert rec["review_status"] == "pending"
+
+
+async def test_a_new_call_site_starts_pending_without_a_predecessor(monkeypatch):
+    rec = await _ingest_with_previous(monkeypatch, [_previous(file_path="src/other.py")], _one_rec_payload())
+    assert rec["review_status"] == "pending"
+    assert rec["previous_id"] is None
+    assert rec["detected_model"] == "gpt-guess"
+
+
+async def _ingest_unchanged(tmp_path, monkeypatch, *, claimed, analysed):
+    _patch_artifact_root(monkeypatch, tmp_path)
+    session_dir = tmp_path / "77"
+    session_dir.mkdir()
+    (session_dir / "analysis.json").write_text(json.dumps({"unchanged": True, "commit_sha": claimed}), encoding="utf-8")
+    conn = _Conn(analysed_commit=analysed)
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    await analysis_ingest.ingest_session({"id": 77, "team_repository_id": 11, "repo_slug": "acme/repo"})
+    return conn
+
+
+async def test_unchanged_session_is_recorded_as_skipped(tmp_path, monkeypatch):
+    conn = await _ingest_unchanged(tmp_path, monkeypatch, claimed="a" * 40, analysed="a" * 40)
+    assert any("SET status = 'skipped'" in sql for sql, _ in conn.statements)
+    assert not any("INSERT INTO ai_workflows" in sql for sql, _ in conn.statements)
+
+
+async def test_unchanged_claim_at_another_commit_is_a_failure(tmp_path, monkeypatch):
+    conn = await _ingest_unchanged(tmp_path, monkeypatch, claimed="b" * 40, analysed="a" * 40)
+    assert not any("SET status = 'skipped'" in sql for sql, _ in conn.statements)
+    assert any("SET status = 'failed'" in sql for sql, _ in conn.statements)
