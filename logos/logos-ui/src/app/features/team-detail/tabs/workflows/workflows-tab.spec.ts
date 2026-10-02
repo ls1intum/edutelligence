@@ -19,6 +19,7 @@ vi.mock('mermaid', () => ({
 describe('WorkflowsTabComponent review actions', () => {
   const getTeamWorkflows = vi.fn();
   const reviewRecommendation = vi.fn();
+  const setRecommendationModel = vi.fn();
   const getModels = vi.fn();
 
   const pending: AiLlmCallRecommendation = {
@@ -67,21 +68,31 @@ describe('WorkflowsTabComponent review actions', () => {
     pending_recommendations: [pending],
   };
 
+  const key = (
+    id: number,
+    name: string,
+    default_priority: number,
+    environment?: string,
+  ): TeamApiKey => ({
+    id,
+    name,
+    default_priority,
+    environment,
+    monthly_budget_micro_cents: null,
+    cloud_rpm_limit: null,
+    cloud_tpm_limit: null,
+    local_rpm_limit: null,
+    local_tpm_limit: null,
+  });
   const apiKeys: TeamApiKey[] = [
-    {
-      id: 12,
-      name: 'prod-chat',
-      monthly_budget_micro_cents: null,
-      cloud_rpm_limit: null,
-      cloud_tpm_limit: null,
-      local_rpm_limit: null,
-      local_tpm_limit: null,
-    },
+    key(3, 'staging', 5, 'staging'),
+    key(12, 'prod-chat', 10, 'production'),
   ];
 
   beforeEach(() => {
     vi.clearAllMocks();
-    getTeamWorkflows.mockResolvedValue(payload);
+    // A copy per load: the component updates recommendations in place.
+    getTeamWorkflows.mockImplementation(async () => structuredClone(payload));
     reviewRecommendation.mockResolvedValue({ ...pending, review_status: 'accepted' });
     getModels.mockResolvedValue([
       {
@@ -101,7 +112,7 @@ describe('WorkflowsTabComponent review actions', () => {
       providers: [
         {
           provide: TeamManagementService,
-          useValue: { getTeamWorkflows, reviewRecommendation },
+          useValue: { getTeamWorkflows, reviewRecommendation, setRecommendationModel },
         },
         {
           provide: ModelManagementService,
@@ -126,7 +137,7 @@ describe('WorkflowsTabComponent review actions', () => {
     expect(component.pendingRecs()).toEqual([pending]);
   });
 
-  it('accepts a recommendation with the stored api_key_id and objective priority', async () => {
+  it('accepts with the highest-priority key and the objective priority by default', async () => {
     const component = setup();
     await component.load();
     await component.accept(pending);
@@ -137,16 +148,83 @@ describe('WorkflowsTabComponent review actions', () => {
     });
   });
 
-  it('accepts with a user-picked api key', async () => {
+  it('applies the one key picked for the whole tab, or none', async () => {
     const component = setup();
     await component.load();
-    component.setAcceptKey(55, '12');
+    component.setReviewKey('3');
     await component.accept({ ...pending, api_key_id: null });
-    expect(reviewRecommendation).toHaveBeenCalledWith(7, 55, {
+    expect(reviewRecommendation).toHaveBeenLastCalledWith(7, 55, {
       action: 'accept',
-      api_key_id: 12,
+      api_key_id: 3,
       confirmed_objective_priority: ['latency', 'quality', 'price'],
     });
+
+    component.setReviewKey('');
+    await component.accept(pending);
+    expect(reviewRecommendation).toHaveBeenLastCalledWith(7, 55, {
+      action: 'accept',
+      no_api_key: true,
+      confirmed_objective_priority: ['latency', 'quality', 'price'],
+    });
+  });
+
+  it('keeps the default key once a review has used it, even when priorities change', async () => {
+    const component = setup();
+    await component.load();
+    await component.accept(pending);
+    expect(reviewRecommendation).toHaveBeenLastCalledWith(
+      7,
+      55,
+      expect.objectContaining({ api_key_id: 12 }),
+    );
+
+    // The review dropped prod-chat's priority below staging; the key refresh
+    // must not move the next review to staging.
+    component.apiKeys = [key(3, 'staging', 5, 'staging'), key(12, 'prod-chat', 1, 'production')];
+    expect(component.reviewKeyValue()).toBe(12);
+    await component.accept(pending);
+    expect(reviewRecommendation).toHaveBeenLastCalledWith(
+      7,
+      55,
+      expect.objectContaining({ api_key_id: 12 }),
+    );
+  });
+
+  it('prefers a production key when priorities tie', () => {
+    const component = setup();
+    component.apiKeys = [key(4, 'dev', 10, 'development'), key(9, 'live', 10, 'production')];
+    expect(component.reviewKeyValue()).toBe(9);
+    component.apiKeys = [];
+    expect(component.reviewKeyValue()).toBe('');
+  });
+
+  it('saves a model the owner picks and offers the known models', async () => {
+    const component = setup();
+    await component.load();
+    setRecommendationModel.mockResolvedValue({ ...pending, detected_model: null });
+    expect(component.modelOptions({ ...pending, detected_model: 'custom-x' })).toEqual([
+      'custom-x',
+      'gpt-fast',
+    ]);
+
+    await component.setModel(component.pendingRecs()[0], 'gpt-fast');
+    expect(setRecommendationModel).not.toHaveBeenCalled(); // unchanged
+
+    await component.setModel(component.pendingRecs()[0], '');
+    expect(setRecommendationModel).toHaveBeenCalledWith(7, 55, null);
+    expect(component.pendingRecs()[0].detected_model).toBeNull();
+    expect(component.data()!.repositories[0].recommendations[0].detected_model).toBeNull();
+  });
+
+  it('quotes diagram labels before Mermaid sees them', () => {
+    const component = setup();
+    expect(
+      component.diagramSource({
+        id: 1,
+        name: 'chat',
+        diagram_mermaid: 'flowchart TD\n  A --> J[Title LLM (deferred)]',
+      } as never),
+    ).toBe('flowchart TD\n  A --> J["Title LLM (deferred)"]');
   });
 
   it('overrides with the selected SLA and reordered priority', async () => {

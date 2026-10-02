@@ -26,6 +26,7 @@ import {
 } from '../../../../shared/models/team.model';
 import { Model } from '../../../../shared/models/model.model';
 import { KeySla, SLA_OPTIONS } from '../key-sla';
+import { quoteFlowchartLabels } from './mermaid-labels';
 
 const OBJECTIVE_KEYS: ObjectiveKey[] = ['latency', 'quality', 'price'];
 
@@ -101,7 +102,9 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   reviewingId = signal<number | null>(null);
   overrideSla = signal<Record<number, KeySla>>({});
   overridePriority = signal<Record<number, ObjectiveKey[]>>({});
-  acceptKeyId = signal<Record<number, number | ''>>({});
+  /** The key Accept / Override apply to; null until the owner picks one (then the default applies). */
+  private reviewKeyPick = signal<number | '' | null>(null);
+  savingModelId = signal<number | null>(null);
   /** name/alias (lower) → model, for spider charts beside detected models */
   private modelsByName = signal<Map<string, Model>>(new Map());
 
@@ -114,8 +117,10 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     'Status',
     '',
   ];
+  // No `auto` track: every row is its own grid, so a content-sized column
+  // would size differently per row and drift away from the header.
   readonly recGrid =
-    'minmax(8rem, 1.4fr) minmax(7rem, 1fr) minmax(8rem, 1.2fr) minmax(4rem, 0.5fr) minmax(5rem, 0.6fr) minmax(10rem, auto)';
+    'minmax(10rem, 1.6fr) minmax(9rem, 1fr) minmax(9rem, 1fr) 6.5rem 7.5rem 21rem';
 
   ngOnChanges(): void {
     if (this.teamId) {
@@ -183,31 +188,74 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return ratings;
   }
 
+  /** Team keys, highest queue priority first; a production key wins a tie. */
+  keysByPriority(): TeamApiKey[] {
+    const isProd = (k: TeamApiKey) => /prod/i.test(k.environment ?? '') || /prod/i.test(k.name);
+    return [...this.apiKeys].sort(
+      (a, b) =>
+        (b.default_priority ?? 0) - (a.default_priority ?? 0) ||
+        Number(isProd(b)) - Number(isProd(a)) ||
+        a.id - b.id,
+    );
+  }
+
+  reviewKeyValue(): number | '' {
+    const picked = this.reviewKeyPick();
+    if (picked !== null) return picked;
+    return this.keysByPriority()[0]?.id ?? '';
+  }
+
+  setReviewKey(value: string | number): void {
+    const parsed = Number(value);
+    this.reviewKeyPick.set(value === '' || value == null || Number.isNaN(parsed) ? '' : parsed);
+  }
+
+  /** Model names to pick from, plus whatever the analysis guessed if Logos does not know it. */
+  modelOptions(rec: AiLlmCallRecommendation): string[] {
+    const names = new Set([...this.modelsByName().values()].map((m) => m.name));
+    const current = rec.detected_model?.trim();
+    if (current) names.add(current);
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }
+
+  async setModel(rec: AiLlmCallRecommendation, value: string): Promise<void> {
+    const model = value?.trim() || null;
+    if (model === (rec.detected_model ?? null) || this.savingModelId() != null) return;
+    this.savingModelId.set(rec.id);
+    this.actionError.set('');
+    try {
+      const saved = await this.teamService.setRecommendationModel(this.teamId, rec.id, model);
+      // Both lists hold their own copy of a pending recommendation.
+      for (const r of this.allRecs()) {
+        if (r.id === rec.id) r.detected_model = saved.detected_model ?? null;
+      }
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
+      this.actionError.set(typeof detail === 'string' ? detail : 'Failed to save the model.');
+    } finally {
+      this.savingModelId.set(null);
+    }
+  }
+
+  diagramSource(wf: AiWorkflow): string {
+    return quoteFlowchartLabels(wf.diagram_mermaid ?? '');
+  }
+
   async accept(rec: AiLlmCallRecommendation): Promise<void> {
-    const keyPick = this.acceptKeyId()[rec.id];
-    const apiKeyId =
-      typeof keyPick === 'number'
-        ? keyPick
-        : rec.api_key_id ?? undefined;
     await this.review(rec, {
       action: 'accept',
-      api_key_id: apiKeyId,
+      ...this.keyPayload(),
       confirmed_objective_priority: this.priorityFor(rec),
     });
   }
 
   async override(rec: AiLlmCallRecommendation): Promise<void> {
     const sla = this.overrideSla()[rec.id] ?? rec.recommended_sla;
-    const keyPick = this.acceptKeyId()[rec.id];
-    const apiKeyId =
-      typeof keyPick === 'number'
-        ? keyPick
-        : rec.api_key_id ?? undefined;
     await this.review(rec, {
       action: 'override',
       confirmed_sla: sla,
       confirmed_objective_priority: this.priorityFor(rec),
-      api_key_id: apiKeyId,
+      ...this.keyPayload(),
     });
   }
 
@@ -219,28 +267,25 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     this.overrideSla.update((m) => ({ ...m, [recId]: value as KeySla }));
   }
 
-  setAcceptKey(recId: number, value: string | number): void {
-    if (value === '' || value == null) {
-      this.acceptKeyId.update((m) => ({ ...m, [recId]: '' }));
-      return;
-    }
-    const parsed = Number(value);
-    this.acceptKeyId.update((m) => ({ ...m, [recId]: Number.isNaN(parsed) ? '' : parsed }));
+  /**
+   * The key part of a review. The first review pins the default: a review
+   * changes that key's priority, and recomputing "highest priority" after the
+   * key refresh could otherwise hand the next review a different key.
+   */
+  private keyPayload(): { api_key_id: number } | { no_api_key: true } {
+    const value = this.reviewKeyValue();
+    if (this.reviewKeyPick() === null) this.reviewKeyPick.set(value);
+    return typeof value === 'number' ? { api_key_id: value } : { no_api_key: true };
   }
 
-  keySelectValue(rec: AiLlmCallRecommendation): number | '' {
-    const picked = this.acceptKeyId()[rec.id];
-    if (picked !== undefined) return picked;
-    return rec.api_key_id ?? '';
+  private allRecs(): AiLlmCallRecommendation[] {
+    const data = this.data();
+    if (!data) return [];
+    return [...data.pending_recommendations, ...data.repositories.flatMap((r) => r.recommendations)];
   }
 
   private findRec(recId: number): AiLlmCallRecommendation | undefined {
-    const data = this.data();
-    if (!data) return undefined;
-    return (
-      data.pending_recommendations.find((r) => r.id === recId) ??
-      data.repositories.flatMap((r) => r.recommendations).find((r) => r.id === recId)
-    );
+    return this.allRecs().find((r) => r.id === recId);
   }
 
   private indexModels(models: Model[]): Map<string, Model> {
@@ -262,6 +307,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
       confirmed_sla?: RecommendedSla;
       confirmed_objective_priority?: ObjectiveKey[];
       api_key_id?: number;
+      no_api_key?: boolean;
     },
   ): Promise<void> {
     if (this.reviewingId() != null) return;
@@ -293,8 +339,23 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
       }
       const mod = await this.mermaidReady;
       const mermaid = mod.default;
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
-      await mermaid.run({ querySelector: '.workflows-tab .mermaid' });
+      // No "Syntax error" bomb in place of a diagram that does not parse.
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: 'strict',
+        theme: 'neutral',
+        suppressErrorRendering: true,
+      });
+      // One at a time: a diagram that still fails to parse keeps its source
+      // visible and must not stop the others from rendering.
+      const nodes = document.querySelectorAll<HTMLElement>('.workflows-tab .mermaid:not([data-processed])');
+      for (const node of Array.from(nodes)) {
+        try {
+          await mermaid.run({ nodes: [node] });
+        } catch {
+          // left as source text
+        }
+      }
     } catch {
       // Leave <pre class="mermaid"> source visible if render fails or mermaid is unavailable.
     }

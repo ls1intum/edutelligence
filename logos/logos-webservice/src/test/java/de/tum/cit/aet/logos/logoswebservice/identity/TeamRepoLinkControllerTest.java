@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -211,6 +212,101 @@ class TeamRepoLinkControllerTest {
             jdbc.queryForObject(
                 "SELECT count(*) FROM ai_workflow_analyses WHERE team_repository_id = ?",
                 Integer.class, linkId)).isZero();
+    }
+
+    @Test
+    void setRecommendationModel_storesAndClearsTheModel() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/model-pick\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+        Integer analysisId = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_analyses
+                (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            VALUES (2001, ?, 'abc', 'succeeded', 'agent', now())
+            RETURNING id
+            """, Integer.class, linkId);
+        Integer recId = jdbc.queryForObject("""
+            INSERT INTO ai_llm_call_recommendations
+                (analysis_id, team_id, file_path, recommended_sla)
+            VALUES (?, 2001, 'app/chat.py', 'ux-critical')
+            RETURNING id
+            """, Integer.class, analysisId);
+
+        mvc.perform(put("/admin/teams/2001/recommendations/" + recId + "/model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model\":\"  openai/gpt-oss-120b \"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.detected_model").value("openai/gpt-oss-120b"))
+           .andExpect(jsonPath("$.review_status").value("pending"));
+
+        // A review keeps the model; both write paths go through the same row lock.
+        mvc.perform(post("/admin/teams/2001/recommendations/" + recId + "/review")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"accept\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.review_status").value("accepted"))
+           .andExpect(jsonPath("$.detected_model").value("openai/gpt-oss-120b"));
+
+        mvc.perform(put("/admin/teams/2001/recommendations/" + recId + "/model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model\":\"\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.detected_model").doesNotExist());
+
+        mvc.perform(put("/admin/teams/2001/recommendations/999999/model")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model\":\"x\"}"))
+           .andExpect(status().isNotFound());
+
+        mvc.perform(put("/admin/teams/2001/recommendations/" + recId + "/model")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"model\":\"x\"}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void review_noApiKeyLeavesThePreviouslyLinkedKeyAlone() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/no-key\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+        Integer analysisId = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_analyses
+                (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            VALUES (2001, ?, 'abc', 'succeeded', 'agent', now())
+            RETURNING id
+            """, Integer.class, linkId);
+        jdbc.update("UPDATE api_keys SET default_priority = 7 WHERE id = 3001");
+        Integer recId = jdbc.queryForObject("""
+            INSERT INTO ai_llm_call_recommendations
+                (analysis_id, team_id, file_path, recommended_sla, api_key_id)
+            VALUES (?, 2001, 'app/batch.py', 'ux-background', 3001)
+            RETURNING id
+            """, Integer.class, analysisId);
+
+        mvc.perform(post("/admin/teams/2001/recommendations/" + recId + "/review")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"accept\",\"no_api_key\":true}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.review_status").value("accepted"))
+           .andExpect(jsonPath("$.api_key_id").doesNotExist());
+
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject("SELECT default_priority FROM api_keys WHERE id = 3001", Integer.class))
+            .isEqualTo(7);
     }
 
     @Test

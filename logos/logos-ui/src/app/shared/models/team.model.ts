@@ -220,6 +220,8 @@ export interface ReviewRecommendationPayload {
   confirmed_sla?: RecommendedSla;
   confirmed_objective_priority?: ObjectiveKey[];
   api_key_id?: number;
+  /** "No key": bind and re-prioritise no key, not even the one linked before. */
+  no_api_key?: boolean;
 }
 
 export interface StoreDeployKeyPayload {

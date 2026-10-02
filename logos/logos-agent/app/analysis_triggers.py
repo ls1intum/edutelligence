@@ -67,6 +67,11 @@ Schema for `/artifacts/analysis.json`:
   ]
 }}
 
+`diagram_mermaid` must parse with Mermaid 11: wrap every node and edge label
+in double quotes (`A["Session title LLM (deferred)"]`, `B{{"EXERCISE mode?"}}`,
+`A -->|"yes"| B`). Parentheses, brackets, braces, pipes or slashes inside an
+unquoted label are syntax errors and the diagram will not render.
+
 `objective_priority` is a full ranking of latency, quality, and price (most
 important first). It complements SLA: SLA is urgency/interactivity; the ranking
 says what to optimize for when choosing a model. If omitted, defaults are:

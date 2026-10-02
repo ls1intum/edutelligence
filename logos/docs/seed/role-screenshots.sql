@@ -622,7 +622,7 @@ WHERE t.name = 'Logos'
 INSERT INTO ai_workflow_analyses (
     team_id, team_repository_id, commit_sha, status, source, finished_at
 )
-SELECT t.id, tr.id, 'abc123docsrolescreenshots', 'succeeded', 'heuristic',
+SELECT t.id, tr.id, 'abc123docsrolescreenshots', 'succeeded', 'agent',
        now() - interval '5 minutes'
 FROM teams t
 JOIN team_repositories tr
@@ -641,7 +641,7 @@ SELECT a.id,
   A[Session succeeds] --> B{no_push?}
   B -->|yes| C[Skip remote push]
   C --> D[Write analysis.json]
-  D --> E[Ingest recommendations]
+  D --> E[Ingest recommendations (pending review)]
   B -->|no| F[Finalize + open PR]$mm$,
        0
 FROM ai_workflow_analyses a
@@ -660,13 +660,13 @@ SELECT a.id, w.id, a.team_id, r.file_path, r.start_line, r.end_line,
 FROM ai_workflow_analyses a
 JOIN ai_workflows w ON w.analysis_id = a.id
 JOIN (VALUES
-    ('logos/logos-agent/app/sessions.py', 1483, 1483, 'claude-opus',
+    ('logos/logos-agent/app/sessions.py', 1483, 1483, 'qwen-2.5-72b-instruct',
      'ux-high-prio', '["quality","latency","price"]', 0.72,
      'Async agent helper work — user is not blocked on the response.'),
     ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 115, 'claude-opus',
      'ux-critical', '["latency","quality","price"]', 0.81,
      'Interactive team detail load awaited by the signed-in owner.'),
-    ('logos/docs/seed/role-screenshots.sql', 1, 1, 'claude-opus',
+    ('logos/docs/seed/role-screenshots.sql', 1, 1, NULL,
      'ux-background', '["price","quality","latency"]', 0.66,
      'Offline seed / batch documentation path.')
 ) AS r(file_path, start_line, end_line, detected_model, recommended_sla, objective_priority, confidence, justification)
