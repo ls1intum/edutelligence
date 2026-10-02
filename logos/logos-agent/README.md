@@ -157,6 +157,35 @@ session's behaviour drift between builds.
 > failing. That is how the gateway once came up with nginx's stock
 > configuration and failed its health check forever.
 
+## Web search
+
+Claude Code sessions receive the `mcp__logos-search__web_search` tool. It
+searches DuckDuckGo through `POST /v1/web-search` on the orchestrator, reached
+over the session's existing model gateway. The MCP process uses the harness
+already installed in the session image and Python's standard library.
+Search needs no Anthropic token or additional package in the session.
+
+The tool accepts `query` (1–500 characters) and `max_results` (1–10, default
+5), and returns titles, target URLs, and snippets. The orchestrator contacts
+only DuckDuckGo's HTML search endpoint; it does not fetch result pages.
+Search traffic leaves from the orchestrator, which honors the standard
+`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` environment variables for a server or
+CIT proxy. Queries are sent to DuckDuckGo, so agents should avoid including
+credentials or private repository content in them. Search results are
+untrusted external data.
+
+This provides a self-hosted search integration, with DuckDuckGo supplying
+the index. It does not implement Anthropic's provider-native `WebSearch`
+tool. DuckDuckGo may rate limit or issue bot challenges; those return an
+explicit tool error. Empty results are reported separately. Search requests
+have bounded time, response size, and concurrency. They do not consume a
+model slot or produce model usage charges.
+
+Verify with `pytest tests/test_search_mcp.py` in `logos-agent/` and
+`pytest tests/unit/test_web_search.py` in `logos-orchestrator/`. In a session,
+ask the agent to search for Python asyncio documentation and check that the
+transcript shows `mcp__logos-search__web_search` and returns source URLs.
+
 ## What a session may and may not do
 
 **May:** read and change the working copy, run tests and linters, push a branch
