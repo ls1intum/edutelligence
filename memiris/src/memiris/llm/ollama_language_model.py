@@ -27,6 +27,17 @@ class ModelInfo:
         return cls(name=data.model or "unknown")
 
 
+def _default_think(model: str) -> Optional[Union[bool, str]]:
+    """Default ``think`` value for models whose family needs an explicit one."""
+    if model.startswith("gpt-oss"):
+        return "high"
+    if model.startswith("qwen3"):
+        # Qwen3 thinks by default; LangChain's ChatOllama keeps the <think>
+        # block inside the message content unless reasoning is set explicitly.
+        return True
+    return None
+
+
 class OllamaLanguageModel(AbstractLanguageModel):
     """Concrete language model adapter powered by Ollama."""
 
@@ -35,8 +46,16 @@ class OllamaLanguageModel(AbstractLanguageModel):
         model: str,
         host: Optional[str] = None,
         token: Optional[str] = None,
+        think: Optional[Union[bool, str]] = None,
     ) -> None:
+        """
+        Args:
+            think: Ollama ``think`` value. ``None`` picks the model family's
+                default: gpt-oss only accepts effort levels, Qwen3 models only
+                accept booleans.
+        """
         self._model = model
+        self._think = think if think is not None else _default_think(model)
         self.host = host or os.environ.get("OLLAMA_HOST")
         self.token = token or os.environ.get("OLLAMA_TOKEN")
 
@@ -62,14 +81,13 @@ class OllamaLanguageModel(AbstractLanguageModel):
             input=messages,
             model_parameters=options,
         ) as generation:
-            think = "high" if self._model.startswith("gpt-oss") else None
             response = self._client.chat(
                 self._model,
                 messages=messages,
                 format=response_format,
                 keep_alive=keep_alive,
                 options=options,
-                think=think,  # type: ignore
+                think=self._think,  # type: ignore
                 **kwargs,
             )
             generation.update(output=response.message, metadata=response)
@@ -84,7 +102,7 @@ class OllamaLanguageModel(AbstractLanguageModel):
             model=self._model,
             base_url=self.host,
             client_kwargs={"cookies": self._cookies},
-            reasoning="high" if self._model.startswith("gpt-oss") else None,  # type: ignore
+            reasoning=self._think,  # type: ignore
         )
 
     # --- Model lifecycle / admin ---

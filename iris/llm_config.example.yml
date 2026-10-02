@@ -211,6 +211,35 @@
 # any other value is a hard 400. For an OpenAI-compatible gpt-oss entry, use:
 # type: openai_chat, base_url: <logos-url>, supports_reasoning_effort: true,
 # reasoning_effort: medium, reasoning_effort_values: [low, medium, high].
+
+# ── Logos/vLLM models (local, OpenAI-compatible) ────────────────────────────
+# Qwen3.8 is a reasoning model: keep thinking on. Logos disables it unless a
+# request asks for it; `extra_body` enables it explicitly. The chat template
+# accepts only low|medium|xhigh as reasoning_effort (xhigh is its default, far
+# too slow for chat), so pin an explicit level. Thinking mode should not run
+# with the low temperatures Iris pipelines request, hence
+# supports_temperature: false (the model's own sampling defaults apply). Its
+# template rejects system messages after the first message, which Iris uses
+# for context switches, hence leading_system_message_only: true.
+- id: qwen3.8-27b
+  type: openai_chat
+  model: Qwen/Qwen3.8-27B
+  base_url: https://your-logos-instance/v1
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: medium
+  reasoning_effort_values: [low, medium, xhigh]
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: true
+  leading_system_message_only: true
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+# Logos queues requests by the priority of the calling API key. To let
+# interactive chat overtake background work (Memiris, ingestion), add a copy
+# of this entry with another id (e.g. qwen3.8-27b-background) and a second,
+# lower-priority Logos key, and reference that id from the background slots.
 - id: mxbai-embed-large
   type: ollama
   model: mxbai-embed-large:latest

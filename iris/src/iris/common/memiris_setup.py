@@ -122,7 +122,9 @@ def _convert_iris_model_to_memiris_llm(
         raise ValueError(f"Model with ID '{model_id}' not found in LlmManager")
 
     if isinstance(model, OllamaModel):
-        return OllamaLanguageModel(model.model, model.host, model.api_key)
+        return OllamaLanguageModel(
+            model.model, model.host, model.api_key, think=model.think
+        )
     elif isinstance(
         model,
         (
@@ -133,6 +135,18 @@ def _convert_iris_model_to_memiris_llm(
         ),
     ):
         is_azure = isinstance(model, (AzureOpenAIChatModel, AzureOpenAIEmbeddingModel))
+        chat_options: dict = {}
+        if isinstance(model, OpenAIChatModel):
+            # Memiris issues its own requests, so it needs the same per-model
+            # request settings Iris applies; otherwise a reasoning model
+            # configured to think (e.g. Qwen3.8 on vLLM) would run without it.
+            chat_options = {
+                "reasoning_effort": (
+                    model.reasoning_effort if model.supports_reasoning_effort else None
+                ),
+                "extra_body": model.extra_body,
+                "supports_temperature": model.supports_temperature,
+            }
         return OpenAiLanguageModel(
             model=model.model,
             api_key=model.api_key,
@@ -140,6 +154,7 @@ def _convert_iris_model_to_memiris_llm(
             azure=is_azure,
             azure_endpoint=getattr(model, "endpoint", None),
             api_version=getattr(model, "api_version", None),
+            **chat_options,
         )
     else:
         raise ValueError(
@@ -232,7 +247,7 @@ def _create_memory_sleep_pipeline(
         .set_memory_connection_repository(weaviate_client)
         .set_vectorizer(vectorizer)
         .set_group_size(25)
-        .set_max_threads(20)
+        .set_max_threads(settings.memiris.sleep_max_threads)
         .set_tool_llm(tool_llm)
         .set_response_llm(json_llm)
         .build()

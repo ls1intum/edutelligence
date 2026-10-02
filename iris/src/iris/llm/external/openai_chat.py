@@ -1,3 +1,4 @@
+import copy
 import json
 import time
 from datetime import datetime
@@ -177,6 +178,59 @@ def convert_to_open_ai_messages(
         openai_messages.append(openai_message)
 
     return openai_messages
+
+
+LATE_SYSTEM_MESSAGE_PREFIX = "[System note]"
+
+
+def keep_system_messages_leading(
+    messages: list[ChatCompletionMessageParam],
+) -> list[ChatCompletionMessageParam]:
+    """
+    Rewrite messages for chat templates that accept one system message, first.
+
+    Qwen3.x templates reject any system message that is not the first message
+    with a 400, but Iris places system messages inside the history (context
+    switches, command markers, earlier suggestions). Leading system messages
+    are merged into one; later ones become user messages at the same position,
+    marked so the model can still tell them apart from what the student wrote.
+    """
+    result: list[ChatCompletionMessageParam] = []
+    in_leading_block = True
+    for message in messages:
+        if message.get("role") != "system":
+            in_leading_block = False
+            result.append(message)
+            continue
+        parts = _content_parts(message.get("content"))
+        if in_leading_block:
+            if result:
+                merged = _content_parts(result[0].get("content")) + parts
+                result[0] = cast(
+                    ChatCompletionMessageParam, {"role": "system", "content": merged}
+                )
+            else:
+                result.append(message)
+            continue
+        result.append(
+            cast(
+                ChatCompletionMessageParam,
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": LATE_SYSTEM_MESSAGE_PREFIX}]
+                    + parts,
+                },
+            )
+        )
+    return result
+
+
+def _content_parts(content: Any) -> list[dict[str, Any]]:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return list(content)
 
 
 def convert_content_to_responses_format(content):
@@ -584,6 +638,14 @@ class OpenAIChatModel(ChatModel):
     # Only enable for native OpenAI/Azure endpoints that support /responses.
     # OpenAI-compatible base_url gateways such as vLLM should keep this false.
     use_responses_api: bool = False
+    # Provider-specific request fields merged into every request body, for
+    # settings the OpenAI API has no parameter for. Example: vLLM-served Qwen3
+    # models use `chat_template_kwargs: {enable_thinking: true}` so they keep
+    # reasoning even where the gateway's chat-template default disables it.
+    extra_body: Optional[Dict[str, Any]] = None
+    # Set for models whose chat template rejects system messages after the
+    # first message (Qwen3.x); see keep_system_messages_leading.
+    leading_system_message_only: bool = False
 
     @model_validator(mode="after")
     def validate_logprobs_config(self):
@@ -821,6 +883,9 @@ class OpenAIChatModel(ChatModel):
             params["tools"] = [convert_to_responses_tool(tool) for tool in tools]
             logger.debug("Using tools: %s", get_tool_names(tools))
 
+        if self.extra_body:
+            params["extra_body"] = copy.deepcopy(self.extra_body)
+
         return params
 
     def _create_responses_completion(
@@ -930,6 +995,8 @@ class OpenAIChatModel(ChatModel):
             responses_input = convert_to_responses_input(messages)
         else:
             messages = convert_to_open_ai_messages(messages)
+            if self.leading_system_message_only:
+                messages = keep_system_messages_leading(messages)
 
         for attempt in range(retries):
             try:
@@ -998,6 +1065,9 @@ class OpenAIChatModel(ChatModel):
                 if tools:
                     params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
                     logger.debug("Using tools: %s", get_tool_names(tools))
+
+                if self.extra_body:
+                    params["extra_body"] = copy.deepcopy(self.extra_body)
 
                 if arguments.stream_handler is not None:
                     return self._create_streamed_chat_completion(
