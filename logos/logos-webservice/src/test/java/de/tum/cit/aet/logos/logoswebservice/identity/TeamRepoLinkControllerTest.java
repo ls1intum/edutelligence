@@ -419,6 +419,39 @@ class TeamRepoLinkControllerTest {
     }
 
     @Test
+    void displayedRecommendationsStayEditableWhenAnAnalysisHasNoFinishTime() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/imported\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+        Integer finished = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_analyses (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            VALUES (2001, ?, 'done', 'succeeded', 'agent', now()) RETURNING id
+            """, Integer.class, linkId);
+        // e.g. from an import: succeeded, but no finish time, and a higher id
+        jdbc.update("""
+            INSERT INTO ai_workflow_analyses (team_id, team_repository_id, commit_sha, status, source)
+            VALUES (2001, ?, 'nofinish', 'succeeded', 'agent')
+            """, linkId);
+        Integer rec = jdbc.queryForObject("""
+            INSERT INTO ai_llm_call_recommendations (analysis_id, team_id, file_path, recommended_sla)
+            VALUES (?, 2001, 'app/x.py', 'ux-critical') RETURNING id
+            """, Integer.class, finished);
+
+        mvc.perform(get("/admin/teams/2001/workflows").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + rec + ")]").isNotEmpty());
+        mvc.perform(post("/admin/teams/2001/recommendations/" + rec + "/review")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"reject\"}"))
+           .andExpect(status().isOk());
+    }
+
+    @Test
     void queueing_isRefusedByTheInFlightIndexEvenWithoutThePrecheck() throws Exception {
         MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
                 .with(TestJwt.logosAdmin())
