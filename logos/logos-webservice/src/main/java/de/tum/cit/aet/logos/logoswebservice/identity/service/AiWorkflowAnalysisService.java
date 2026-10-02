@@ -395,6 +395,10 @@ public class AiWorkflowAnalysisService {
         if (body == null || body.privateKeyPem() == null || body.privateKeyPem().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "private_key_pem is required");
         }
+        if (!crypto.isConfigured()) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                "Private repository credentials are not enabled on this server");
+        }
         String pem = body.privateKeyPem().trim();
         if (!pem.contains("PRIVATE KEY")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
