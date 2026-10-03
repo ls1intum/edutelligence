@@ -43,6 +43,51 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     java.util.Optional<RequestPayloadProjection> findRequestPayloads(@Param("requestId") String requestId);
 
     /**
+     * Successful requests per team, for the public stats page.
+     *
+     * <p>Only settled successes are counted — the page shows what the platform
+     * actually delivered, not what it attempted. The join is left so a
+     * successful request whose key recorded no team still surfaces, under a
+     * null team id, instead of vanishing from the total.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.team_id AS teamId,
+               t.name     AS teamName,
+               COUNT(*)   AS requests
+        FROM log_entry le
+        LEFT JOIN teams t ON t.id = le.team_id
+        WHERE le.result_status = 'success'
+        GROUP BY le.team_id, t.name
+        ORDER BY COUNT(*) DESC, t.name
+        """, nativeQuery = true)
+    List<TeamRequestCountProjection> countSuccessfulByTeam();
+
+    /** Successful requests by API key type, for the public stats page. */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT ak.key_type::text AS keyType,
+               COUNT(*)          AS requests
+        FROM log_entry le
+        JOIN api_keys ak ON ak.id = le.api_key_id
+        WHERE le.result_status = 'success'
+        GROUP BY ak.key_type
+        """, nativeQuery = true)
+    List<KeyTypeRequestCountProjection> countSuccessfulByKeyType();
+
+    /** Successful requests by provider type, for the public stats page. */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT p.provider_type::text AS providerType,
+               COUNT(*)              AS requests
+        FROM log_entry le
+        JOIN providers p ON p.id = le.provider_id
+        WHERE le.result_status = 'success'
+        GROUP BY p.provider_type
+        """, nativeQuery = true)
+    List<ProviderTypeRequestCountProjection> countSuccessfulByProviderType();
+
+    /**
      * One team's requests by stage, right now.
      *
      * Stage is read off the timestamps rather than a status column, because

@@ -1,0 +1,180 @@
+@use 'styles/glass' as *;
+
+// Categorical series colors for this page's charts, per theme. The order is
+// fixed (slot 1 is always the first series, in every chart on the page) and
+// both sets are the validated categorical palette — run through the palette
+// validator against the panel surfaces below, never cycled past slot 8, and
+// the overflow "Other" slice takes no hue at all.
+.public-stats-page {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-other: #898781;
+
+  position: relative;
+  min-height: 100vh;
+  padding: 1.5rem;
+  background: rgb(var(--shell-background));
+
+  > * {
+    max-width: 64rem;
+    margin-inline: auto;
+  }
+}
+
+[data-theme='dark'] .public-stats-page {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0 1.5rem;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.brand-name {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--logo-name-color));
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 3rem 0;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-md);
+}
+
+.loading-pulse {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: rgb(var(--color-skeleton-fill) / var(--opacity-soft));
+  animation: loading-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes loading-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+// ── KPI tiles ─────────────────────────────────────────────────────────────────
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+
+  @media (max-width: 48rem) {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.kpi-tile {
+  @include glass-surface;
+  padding: 1.1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kpi-value {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--color-typography-0));
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.kpi-label {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-md);
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 1rem;
+  align-items: start;
+
+  @media (max-width: 56rem) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chart-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.chart-panel {
+  @include glass-surface;
+  padding: 1.25rem;
+}
+
+.chart-panel-head {
+  margin-bottom: 1rem;
+}
+
+.chart-title {
+  margin: 0 0 0.25rem;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+}
+
+.chart-hint {
+  margin: 0 0 0.75rem;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+}
+
+.chart-panel:has(.chart-panel-head) .chart-title {
+  margin-bottom: 0.75rem;
+}
+
+.page-footnote {
+  margin: 1.5rem 0 0;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+  text-align: center;
+}

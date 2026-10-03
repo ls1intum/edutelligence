@@ -49,15 +49,11 @@ class MemirisSettings(BaseModel):
      - enabled: Whether Memiris is enabled or not.
      - sleep_enabled: Whether the sleep functionality of Memiris is enabled or not.
      - llm_configuration: The configuration for the LLMs used by Memiris. Required if Memiris is enabled.
-     - sleep_max_threads: Maximum number of memory groups the sleep pipeline processes concurrently.
-       Each thread issues its own LLM requests, so keep this below the serving capacity of the
-       configured sleep models (local deployments have far fewer parallel slots than cloud APIs).
     """
 
     enabled: bool = Field(default=True)
     sleep_enabled: bool = Field(default=True)
     llm_configuration: Optional[MemirisLlmConfiguration] = Field(default=None)
-    sleep_max_threads: int = Field(default=20, ge=1)
 
     @model_validator(mode="after")
     def validate_llm_configuration_when_enabled(self):
