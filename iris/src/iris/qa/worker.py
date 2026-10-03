@@ -6,6 +6,7 @@ import json
 import math
 import os
 import sys
+import threading
 import traceback
 from contextlib import ExitStack
 from pathlib import Path
@@ -16,8 +17,10 @@ from unittest.mock import patch
 # pylint: disable=import-outside-toplevel,missing-class-docstring,protected-access
 
 
-def _request_token_estimate(messages: list[Any], tools: Any) -> int:
-    """Conservatively estimate request tokens before a paid model call."""
+def _request_token_upper_bound(messages: list[Any], tools: Any) -> int:
+    """Bound input tokens by the full UTF-8 request size plus framing room."""
+
+    from langchain_core.utils.function_calling import convert_to_openai_tool
 
     def serializable(value: Any) -> Any:
         if hasattr(value, "model_dump"):
@@ -26,11 +29,11 @@ def _request_token_estimate(messages: list[Any], tools: Any) -> int:
 
     payload = {
         "messages": [serializable(message) for message in messages],
-        "tools": [serializable(tool) for tool in (tools or [])],
+        "tools": [convert_to_openai_tool(tool) for tool in (tools or [])],
     }
-    return (
-        math.ceil(len(json.dumps(payload, default=str, ensure_ascii=False)) / 3) + 256
-    )
+    serialized = json.dumps(payload, default=str, ensure_ascii=False).encode("utf-8")
+    framing_room = 1_024 + 256 * (len(messages) + len(tools or []))
+    return len(serialized) + framing_room
 
 
 class _ScenarioRequestBudget:
@@ -40,6 +43,9 @@ class _ScenarioRequestBudget:
         self.ceiling = ceiling
         self.input_tokens = 0
         self.output_tokens = 0
+        self.reserved_input_tokens = 0
+        self.reserved_output_tokens = 0
+        self.lock = threading.Lock()
         self.stack = ExitStack()
 
     def __enter__(self):
@@ -50,34 +56,54 @@ class _ScenarioRequestBudget:
         original_executor = abstract_agent_pipeline.AgentExecutor
 
         def budgeted_chat(handler, messages, arguments, tools):
-            estimate = _request_token_estimate(messages, tools)
-            if self.input_tokens + estimate > self.ceiling.max_input_tokens:
-                raise RuntimeError(
-                    "Scenario input-token limit would be exceeded before model call"
+            estimate = _request_token_upper_bound(messages, tools)
+            with self.lock:
+                if (
+                    self.input_tokens + self.reserved_input_tokens + estimate
+                    > self.ceiling.max_input_tokens
+                ):
+                    raise RuntimeError(
+                        "Scenario input-token limit would be exceeded before model call"
+                    )
+                remaining_output = (
+                    self.ceiling.max_output_tokens
+                    - self.output_tokens
+                    - self.reserved_output_tokens
                 )
-            remaining_output = self.ceiling.max_output_tokens - self.output_tokens
-            if remaining_output <= 0:
-                raise RuntimeError(
-                    "Scenario output-token limit would be exceeded before model call"
+                if remaining_output <= 0:
+                    raise RuntimeError(
+                        "Scenario output-token limit would be exceeded "
+                        "before model call"
+                    )
+                request_limit = min(
+                    self.ceiling.max_output_tokens_per_call, remaining_output
                 )
-            request_limit = min(
-                self.ceiling.max_output_tokens_per_call, remaining_output
-            )
-            if arguments.max_tokens is None or arguments.max_tokens > request_limit:
-                arguments.max_tokens = request_limit
+                if arguments.max_tokens is None or arguments.max_tokens > request_limit:
+                    arguments.max_tokens = request_limit
+                self.reserved_input_tokens += estimate
+                self.reserved_output_tokens += request_limit
 
-            response = original_chat(handler, messages, arguments, tools)
+            try:
+                response = original_chat(handler, messages, arguments, tools)
+            except Exception:
+                with self.lock:
+                    self.reserved_input_tokens -= estimate
+                    self.reserved_output_tokens -= request_limit
+                raise
             usage = response.token_usage
             input_tokens = int(usage.num_input_tokens)
             output_tokens = int(usage.num_output_tokens)
-            if input_tokens < 0 or output_tokens < 0:
-                raise RuntimeError("Model returned negative token usage")
-            self.input_tokens += input_tokens
-            self.output_tokens += output_tokens
-            if self.input_tokens > self.ceiling.max_input_tokens:
-                raise RuntimeError("Scenario input-token limit was exceeded")
-            if self.output_tokens > self.ceiling.max_output_tokens:
-                raise RuntimeError("Scenario output-token limit was exceeded")
+            with self.lock:
+                self.reserved_input_tokens -= estimate
+                self.reserved_output_tokens -= request_limit
+                if input_tokens < 0 or output_tokens < 0:
+                    raise RuntimeError("Model returned negative token usage")
+                self.input_tokens += input_tokens
+                self.output_tokens += output_tokens
+                if self.input_tokens > self.ceiling.max_input_tokens:
+                    raise RuntimeError("Scenario input-token limit was exceeded")
+                if self.output_tokens > self.ceiling.max_output_tokens:
+                    raise RuntimeError("Scenario output-token limit was exceeded")
             return response
 
         def budgeted_executor(*args, **kwargs):

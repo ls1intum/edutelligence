@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import subprocess
+import threading
 from collections import Counter
 from decimal import Decimal
 from pathlib import Path
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from iris.qa.cost import BudgetGuard, ModelRate, SpendLedger
+from iris.qa.cost import BudgetExceeded, BudgetGuard, ModelRate, SpendLedger
 from iris.qa.evaluate import Rating, evaluation_from_worker
 from iris.qa.loader import load_suite
 from iris.qa.planning import build_cost_plan, trial_reserve
@@ -91,7 +92,7 @@ def test_request_budget_caps_each_call_and_agent_iterations(monkeypatch):
     monkeypatch.setattr(abstract_agent_pipeline, "AgentExecutor", fake_executor)
     ceiling = TokenCeiling(
         max_agent_turns=2,
-        max_input_tokens=1_000,
+        max_input_tokens=10_000,
         max_output_tokens=150,
         max_output_tokens_per_call=100,
     )
@@ -111,6 +112,57 @@ def test_request_budget_caps_each_call_and_agent_iterations(monkeypatch):
         abstract_agent_pipeline.AgentExecutor(agent=object(), tools=[])
 
     assert executor_arguments["max_iterations"] == 2
+
+
+def test_request_budget_reserves_concurrent_output_capacity(monkeypatch):
+    importlib.import_module("iris.pipeline.pipeline")
+    # pylint: disable=import-outside-toplevel
+    from iris.llm import CompletionArguments
+    from iris.llm.request_handler.llm_request_handler import (
+        LlmRequestHandler,
+    )
+
+    # pylint: enable=import-outside-toplevel
+
+    barrier = threading.Barrier(2)
+    limits = []
+    errors = []
+
+    def fake_chat(handler, messages, arguments, tools):
+        del handler, messages, tools
+        limits.append(arguments.max_tokens)
+        barrier.wait(timeout=2)
+        return SimpleNamespace(
+            token_usage=SimpleNamespace(
+                num_input_tokens=100,
+                num_output_tokens=arguments.max_tokens,
+            )
+        )
+
+    def invoke():
+        try:
+            LlmRequestHandler.chat(
+                object(), [{"text": "parallel"}], CompletionArguments(), None
+            )
+        except Exception as error:  # pragma: no cover - assertion reports detail
+            errors.append(error)
+
+    monkeypatch.setattr(LlmRequestHandler, "chat", fake_chat)
+    ceiling = TokenCeiling(
+        max_agent_turns=2,
+        max_input_tokens=10_000,
+        max_output_tokens=150,
+        max_output_tokens_per_call=100,
+    )
+    with _ScenarioRequestBudget(ceiling):
+        threads = [threading.Thread(target=invoke) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=3)
+
+    assert not errors
+    assert sorted(limits) == [50, 100]
 
 
 def test_paid_run_records_reservation_before_worker_timeout(tmp_path, monkeypatch):
@@ -158,6 +210,9 @@ def test_verified_usage_atomically_replaces_reservation(tmp_path):
         model=rate.model,
         cost_usd=Decimal("1"),
     )
+    assert ledger.has_reservation(
+        run_id="run", scenario_id="scenario", pipeline="trial-upper-bound"
+    )
 
     guard.reconcile_reservation(
         reservation=reservation,
@@ -168,6 +223,33 @@ def test_verified_usage_atomically_replaces_reservation(tmp_path):
     assert len(records) == 1
     assert records[0].reservation is False
     assert records[0].input_tokens == 100
+    assert ledger.total() == Decimal("0.00020000")
+    assert not ledger.has_reservation(
+        run_id="run", scenario_id="scenario", pipeline="trial-upper-bound"
+    )
+
+
+def test_verified_overspend_replaces_lower_reservation_before_stopping(tmp_path):
+    ledger = SpendLedger(tmp_path / "spend.jsonl")
+    guard = BudgetGuard(ledger, Decimal("30"))
+    rate = ModelRate("gpt-5.4-mini", Decimal("1"), Decimal("2"))
+    reservation = guard.record_reservation(
+        run_id="run",
+        scenario_id="scenario",
+        pipeline="trial-upper-bound",
+        model=rate.model,
+        cost_usd=Decimal("0.0001"),
+    )
+
+    with pytest.raises(BudgetExceeded, match="exceeds reserved upper bound"):
+        guard.reconcile_reservation(
+            reservation=reservation,
+            usage=[("chat", rate, 100, 50)],
+        )
+
+    records = ledger.records()
+    assert len(records) == 1
+    assert records[0].reservation is False
     assert ledger.total() == Decimal("0.00020000")
 
 

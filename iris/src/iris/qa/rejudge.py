@@ -82,7 +82,12 @@ def rejudge_saved_runs(
                 reserve = rate_card.judge.cost(
                     JUDGE_INPUT_CEILING, JUDGE_OUTPUT_CEILING
                 )
-                if interrupted_call:
+                prior_reservation_exists = ledger.has_reservation(
+                    run_id=f"rejudge-{output_root.name}",
+                    scenario_id=identity[1],
+                    pipeline="qa-rejudge-upper-bound",
+                )
+                if interrupted_call and not prior_reservation_exists:
                     guard.record_reservation(
                         run_id=f"rejudge-{output_root.name}",
                         scenario_id=identity[1],

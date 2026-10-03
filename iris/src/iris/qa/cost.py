@@ -88,6 +88,15 @@ class SpendLedger:
     def total(self) -> Decimal:
         return sum((Decimal(record.cost_usd) for record in self.records()), Decimal(0))
 
+    def has_reservation(self, *, run_id: str, scenario_id: str, pipeline: str) -> bool:
+        return any(
+            record.reservation
+            and record.run_id == run_id
+            and record.scenario_id == scenario_id
+            and record.pipeline == pipeline
+            for record in self.records()
+        )
+
     def append(self, record: UsageRecord) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(
@@ -252,9 +261,10 @@ class BudgetGuard:
         actual_cost = sum((Decimal(record.cost_usd) for record in records), Decimal(0))
         reserved_cost = Decimal(reservation.cost_usd)
         if actual_cost > reserved_cost:
+            self.ledger.replace_reservation(reservation, records)
             raise BudgetExceeded(
                 f"Verified usage ${actual_cost:.4f} exceeds reserved upper bound "
-                f"${reserved_cost:.4f}; keeping reservation"
+                f"${reserved_cost:.4f}; the known usage remains accounted"
             )
         self.ledger.replace_reservation(reservation, records)
         if self.ledger.total() > self.hard_limit_usd:
