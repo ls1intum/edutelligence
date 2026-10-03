@@ -34,6 +34,17 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
 
     cost_per_million_input_token: float = 0
     cost_per_million_output_token: float = 0
+    # Rates for the parts of the input the provider read from or wrote to its
+    # prompt cache. Reads are discounted; writes cost extra on models that bill
+    # them (GPT-5.6 and later). Zero for providers without such billing.
+    cost_per_million_cached_input_token: float = 0
+    cost_per_million_cache_write_input_token: float = 0
+    # Long-context price tier: above this many input tokens the provider bills
+    # the whole request at multiplied rates (GPT-6: 2x input and cache rates,
+    # 1.5x output). None means the model has no such tier.
+    long_context_threshold_tokens: Optional[int] = None
+    long_context_input_cost_multiplier: float = 1.0
+    long_context_output_cost_multiplier: float = 1.0
     # Whether the model exposes token-level log-probabilities. When True, a
     # pipeline can request them via CompletionArguments.logprobs and derive a
     # confidence score from the returned values. Defaults to False so models
