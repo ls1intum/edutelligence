@@ -3929,6 +3929,21 @@ async def test_sync_command_is_idempotent_and_spares_the_model_under_calibration
 
 
 @pytest.mark.asyncio
+async def test_a_push_that_changes_nothing_skips_the_status_rebuild(tmp_path):
+    """The push after every hello repeats what the worker holds; rebuilding
+    the status would still probe every lane."""
+    client = _central_client(tmp_path)
+    profile = {"base_residency_mb": 5.0, "sync_revision": 3, "calibration_id": 4}
+    first = await client._execute_command("sync_model_profiles", {"profiles": {"org/ready": profile}})  # noqa: SLF001
+    marks = client._app.state.lane_manager._status_dirty_marks  # noqa: SLF001
+    again = await client._execute_command("sync_model_profiles", {"profiles": {"org/ready": profile}})  # noqa: SLF001
+
+    assert first["replaced"] == ["org/ready"]
+    assert again == {"ok": True, "replaced": []}
+    assert client._app.state.lane_manager._status_dirty_marks == marks  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_status_echo_carries_the_central_sync_contract(tmp_path):
     """The orchestrator stores an echo only with sync_revision present, keeps
     overridden fields out of the database, and compares key hashes."""

@@ -348,3 +348,49 @@ def test_a_rolled_back_status_is_not_remembered_as_stored():
     logosnode_mod._persist_model_profiles(retry, 1, {"org/model": dict(_CALIBRATED)})
     assert len(retry.persisted) == 1
     assert len(retry.calibrations) == 1
+
+
+def test_a_loaded_lane_rewrites_its_row_only_once_per_flush_interval(monkeypatch):
+    """Every status of a loaded lane bumps the measurement counters; those
+    alone are written lazily, a real change at once."""
+    clock = [1000.0]
+    monkeypatch.setattr(logosnode_mod.time, "monotonic", lambda: clock[0])
+    db = _FakeDB()
+
+    def _echo(count: int, loaded: float = 15000.0) -> dict:
+        return {
+            "loaded_vram_mb": loaded,
+            "measurement_count": count,
+            "last_measured_epoch": float(count),
+            "sync_revision": 2,
+        }
+
+    logosnode_mod._persist_model_profiles(db, 1, {"org/model": _echo(1)})
+    clock[0] += 60
+    logosnode_mod._persist_model_profiles(db, 1, {"org/model": _echo(2)})
+    assert len(db.persisted) == 1
+    logosnode_mod._persist_model_profiles(db, 1, {"org/model": _echo(3, loaded=17000.0)})
+    assert len(db.persisted) == 2
+    clock[0] += logosnode_mod._profile_write_cache._flush_seconds  # noqa: SLF001
+    logosnode_mod._persist_model_profiles(db, 1, {"org/model": _echo(4, loaded=17000.0)})
+    assert len(db.persisted) == 3
+
+
+def test_resyncs_back_off_while_the_worker_keeps_rejecting(monkeypatch):
+    delays: list = []
+
+    async def _resync(provider_id, delay=0.0):
+        delays.append(delay)
+
+    monkeypatch.setattr(logosnode_mod, "_run_model_profile_resync", _resync)
+    monkeypatch.setattr(logosnode_mod, "_pending_resyncs", {})
+    monkeypatch.setattr(logosnode_mod, "_resync_rounds", {})
+
+    async def _run():
+        for _ in range(8):
+            logosnode_mod._schedule_model_profile_resync(1, ["org/model"])
+            await asyncio.sleep(0)
+            logosnode_mod._pending_resyncs.pop(1, None)
+
+    asyncio.run(_run())
+    assert delays == [5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 300.0, 300.0]

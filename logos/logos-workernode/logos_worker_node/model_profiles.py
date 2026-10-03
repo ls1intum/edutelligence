@@ -928,7 +928,7 @@ class ModelProfileRegistry:
             return {name: digest for name, (_, digest) in self._calibration_keys.items()}
 
     def replace_from_sync(self, profiles: dict[str, Any], skip: frozenset[str] = frozenset()) -> list[str]:
-        """Adopt profiles Logos sent; returns the models that were replaced.
+        """Adopt profiles Logos sent; returns the models whose record changed.
 
         Models absent from ``profiles`` keep their record. ``skip`` protects
         a model whose calibration is running: its result must not be
@@ -948,9 +948,14 @@ class ModelProfileRegistry:
                     # measured since, and only refresh the derived flags.
                     if revision < current.sync_revision or _awaits_snapshot(current):
                         continue
-                    current.calibration_id = _optional_int(data.get("calibration_id"))
-                    current.calibration_origin = data.get("calibration_origin")
-                    current.calibration_stale = data.get("calibration_stale")
+                    flags = (
+                        _optional_int(data.get("calibration_id")),
+                        data.get("calibration_origin"),
+                        data.get("calibration_stale"),
+                    )
+                    if flags == (current.calibration_id, current.calibration_origin, current.calibration_stale):
+                        continue
+                    current.calibration_id, current.calibration_origin, current.calibration_stale = flags
                 else:
                     self._profiles[name] = _record_from_dict(data)
                     self._apply_manual_overrides(name, self._profiles[name])

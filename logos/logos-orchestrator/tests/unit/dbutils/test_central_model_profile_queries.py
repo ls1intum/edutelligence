@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from logos.dbutils.dbmanager import (
     _CENTRAL_PROFILE_ROW,
+    _PERSIST_CENTRAL_PROFILE_SQL,
     _RESET_PROFILE_COLUMNS,
     DBManager,
     _model_profile_column_params,
@@ -41,16 +42,16 @@ def test_echo_is_only_applied_at_the_stored_revision():
     assert applied is False
     _sql, params = db.session.execute.call_args.args
     # Checked against the source: the unit-test conftest stubs sqlalchemy.
-    source = inspect.getsource(DBManager.persist_central_model_profile)
-    assert 'where="model_profiles.sync_revision = EXCLUDED.sync_revision"' in source
+    assert _PERSIST_CENTRAL_PROFILE_SQL.endswith("WHERE model_profiles.sync_revision = EXCLUDED.sync_revision")
     assert params["sync_revision"] == 3
     assert json.loads(params["profile"]) == {"base_residency_mb": 1.0}
     assert params["max_reported_context_length"] == 131072
 
 
 def test_echo_without_a_key_hash_keeps_the_reported_one():
-    source = inspect.getsource(DBManager.persist_central_model_profile)
-    assert "COALESCE(EXCLUDED.calibration_key_hash, model_profiles.calibration_key_hash)" in source
+    assert (
+        "COALESCE(EXCLUDED.calibration_key_hash, model_profiles.calibration_key_hash)" in _PERSIST_CENTRAL_PROFILE_SQL
+    )
 
 
 def test_upsert_sql_guards_and_keeps_the_context_high_water_mark():
@@ -125,3 +126,17 @@ def test_reset_is_a_revision_bump_that_keeps_the_context_high_water_mark():
     assert "DELETE" not in source
     assert "max_reported_context_length" not in _RESET_PROFILE_COLUMNS
     assert {"base_residency_mb", "residency_source", "last_measured_at"} <= set(_RESET_PROFILE_COLUMNS)
+
+
+def test_reported_key_hashes_are_updated_in_one_statement():
+    db = _db()
+    db.update_reported_calibration_keys(7, {"a": "H1", "b": "H2"})
+    assert db.session.execute.call_count == 1
+    _sql, params = db.session.execute.call_args.args
+    assert params == {"provider_id": 7, "model_names": ["a", "b"], "key_hashes": ["H1", "H2"]}
+
+
+def test_no_reported_key_hashes_cost_no_round_trip():
+    db = _db()
+    db.update_reported_calibration_keys(7, {})
+    db.session.execute.assert_not_called()

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 from typing import Any, Mapping
 
 SYNC_MODEL_PROFILES_ACTION = "sync_model_profiles"
@@ -96,6 +97,30 @@ def profile_digest(sync_revision: int, profile: Mapping[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+# Every status of a loaded lane bumps these and nudges the EMA floats, so
+# a digest over them changes each time; such changes are written lazily.
+VOLATILE_FIELDS = frozenset({"last_measured_epoch", "measurement_count"})
+VOLATILE_FLUSH_SECONDS = 300.0
+
+
+def _coarse(value: Any) -> Any:
+    if isinstance(value, float):
+        return float(f"{value:.3g}")
+    if isinstance(value, dict):
+        return {key: _coarse(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_coarse(item) for item in value]
+    return value
+
+
+def material_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of an echo whose change is written at once.
+
+    Floats keep three significant digits, so EMA jitter does not count.
+    """
+    return {key: _coarse(value) for key, value in profile.items() if key not in VOLATILE_FIELDS}
+
+
 def effective_profile(provider_id: int, row: Mapping[str, Any]) -> dict[str, Any]:
     """The profile a worker runs with, built from one model_profiles row.
 
@@ -141,22 +166,51 @@ class ProfileWriteCache:
     Statuses persist in worker threads while endpoints forget entries.
     """
 
-    def __init__(self) -> None:
-        self._digests: dict[tuple[int, str], str] = {}
+    def __init__(self, flush_seconds: float = VOLATILE_FLUSH_SECONDS) -> None:
+        # (provider, model) -> (digest, material digest, monotonic write time)
+        self._entries: dict[tuple[int, str], tuple[str, str | None, float]] = {}
+        self._flush_seconds = flush_seconds
         self._lock = threading.Lock()
 
-    def unchanged(self, provider_id: int, model_name: str, digest: str) -> bool:
-        with self._lock:
-            return self._digests.get((provider_id, model_name)) == digest
+    def unchanged(
+        self,
+        provider_id: int,
+        model_name: str,
+        digest: str,
+        material: str | None = None,
+        now: float | None = None,
+    ) -> bool:
+        """True when the stored row is current enough to skip this write.
 
-    def remember(self, provider_id: int, model_name: str, digest: str) -> None:
+        With ``material``, volatile-only changes wait for the flush interval.
+        """
         with self._lock:
-            self._digests[(provider_id, model_name)] = digest
+            entry = self._entries.get((provider_id, model_name))
+        if entry is None:
+            return False
+        stored, stored_material, written_at = entry
+        if stored == digest:
+            return True
+        if material is None or stored_material != material:
+            return False
+        return (time.monotonic() if now is None else now) - written_at < self._flush_seconds
+
+    def remember(
+        self,
+        provider_id: int,
+        model_name: str,
+        digest: str,
+        material: str | None = None,
+        now: float | None = None,
+    ) -> None:
+        written_at = time.monotonic() if now is None else now
+        with self._lock:
+            self._entries[(provider_id, model_name)] = (digest, material, written_at)
 
     def forget(self, provider_id: int, model_name: str | None = None) -> None:
         with self._lock:
             if model_name is not None:
-                self._digests.pop((provider_id, model_name), None)
+                self._entries.pop((provider_id, model_name), None)
                 return
-            for key in [k for k in self._digests if k[0] == provider_id]:
-                del self._digests[key]
+            for key in [k for k in self._entries if k[0] == provider_id]:
+                del self._entries[key]

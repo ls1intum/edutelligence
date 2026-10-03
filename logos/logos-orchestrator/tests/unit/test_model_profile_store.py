@@ -9,6 +9,7 @@ from logos.model_profile_store import (
     effective_profile,
     is_central_profile_payload,
     is_new_local_calibration,
+    material_profile,
     persistable_profile,
     profile_digest,
     reported_profile,
@@ -130,3 +131,20 @@ def test_write_cache_skips_unchanged_digests_per_model():
     assert cache.unchanged(1, "other", digest)
     cache.forget(1)
     assert not cache.unchanged(1, "other", digest)
+
+
+def test_material_profile_ignores_counters_and_float_jitter():
+    one = {"loaded_vram_mb": 15100.31, "measurement_count": 4, "last_measured_epoch": 1.0, "engine": "vllm"}
+    two = {"loaded_vram_mb": 15103.87, "measurement_count": 5, "last_measured_epoch": 2.0, "engine": "vllm"}
+    assert material_profile(one) == material_profile(two) == {"loaded_vram_mb": 15100.0, "engine": "vllm"}
+    assert material_profile({"loaded_vram_mb": 15300.0}) != material_profile(one)
+
+
+def test_volatile_only_changes_wait_for_the_flush_interval():
+    cache = ProfileWriteCache(flush_seconds=300.0)
+    cache.remember(1, "m", "d1", "material", now=0.0)
+    assert cache.unchanged(1, "m", "d1", now=10_000.0)
+    assert cache.unchanged(1, "m", "d2", "material", now=299.0)
+    assert not cache.unchanged(1, "m", "d2", "material", now=300.0)
+    assert not cache.unchanged(1, "m", "d2", "other", now=1.0)
+    assert not cache.unchanged(1, "m", "d2", now=1.0)

@@ -1098,3 +1098,13 @@ def test_sync_at_a_newer_revision_replaces_the_record():
     registry.replace_from_sync({"org/m": {"calibration_unsupported": True, "sync_revision": 2}})
     registry.replace_from_sync({"org/m": {"sync_revision": 3}})
     assert registry.get_profile("org/m").calibration_unsupported is None
+
+
+def test_sync_reports_a_model_only_when_its_record_changed():
+    registry = ModelProfileRegistry()
+    push = {"org/m": {"sync_revision": 3, "calibration_id": 7}}
+    assert registry.replace_from_sync(push) == ["org/m"]
+    assert registry.replace_from_sync(push) == []
+    assert registry.replace_from_sync(
+        {"org/m": {"sync_revision": 3, "calibration_id": 7, "calibration_stale": True}}
+    ) == ["org/m"]

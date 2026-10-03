@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -48,6 +49,7 @@ from logos.model_profile_store import (
     effective_profile,
     is_central_profile_payload,
     is_new_local_calibration,
+    material_profile,
     persistable_profile,
     profile_digest,
     reported_profile,
@@ -71,6 +73,22 @@ _recorded_calibrations: dict[tuple[int, str], float] = {}
 _pending_resyncs: dict[int, set[str]] = {}
 # Lets a push that is already in flight land before a rejected echo re-sends.
 _RESYNC_DELAY_SECONDS = 5.0
+# A worker that keeps rejecting pushes (its revision ahead of a restored
+# database, a model it is calibrating) is re-sent ever more rarely.
+_RESYNC_MAX_DELAY_SECONDS = 300.0
+# provider_id -> resyncs since its echoes were last accepted
+_resync_rounds: dict[int, int] = {}
+# provider_id -> newest status not yet written (sample, count-only flag)
+_unsaved_samples: dict[int, tuple[Dict[str, Any], bool]] = {}
+# provider_id -> the task writing its statuses, one at a time
+_sample_writers: dict[int, asyncio.Task] = {}
+# provider_id -> runtime timestamp of its previous status
+_last_runtime_ts: dict[int, Any] = {}
+# provider_id -> monotonic time its last snapshot write started
+_last_snapshot_at: dict[int, float] = {}
+# A request count change resends the last status with new counters only,
+# twice per request; the database keeps at most one of those per interval.
+_COUNT_ONLY_SNAPSHOT_SECONDS = 5.0
 
 
 def _validated_vllm_metrics_text(value: Any, *, provider_id: int) -> str | None:
@@ -133,29 +151,53 @@ async def _capture_logosnode_provider_snapshot(
     )
     if sample is None:
         return
-    # Database round trips must not stall the loop every worker shares.
-    persisted = await asyncio.to_thread(_persist_logosnode_status, provider_id, sample)
-    if persisted is None:
+    # Scheduler signals read every status from memory; only the database
+    # write below is coalesced and runs off the receive loop.
+    await _main._logosnode_registry.record_runtime_sample(provider_id, sample)
+    runtime_ts = runtime.get("timestamp")
+    count_only = runtime_ts is not None and _last_runtime_ts.get(provider_id) == runtime_ts
+    _last_runtime_ts[provider_id] = runtime_ts
+    last_write = _last_snapshot_at.get(provider_id)
+    if count_only and last_write is not None and time.monotonic() - last_write < _COUNT_ONLY_SNAPSHOT_SECONDS:
         return
-    snapshot_id, changed_models, rejected_models = persisted
-    if changed_models:
-        _schedule_model_profile_push(provider_id, changed_models)
-    if rejected_models:
-        _schedule_model_profile_resync(provider_id, rejected_models)
-
-    sample["snapshot_id"] = snapshot_id
-    # Keep a strong reference: an unheld task can be garbage-collected before
-    # it runs, which would silently drop the runtime sample.
-    task = asyncio.create_task(_main._logosnode_registry.record_runtime_sample(provider_id, sample))
+    pending = _unsaved_samples.get(provider_id)
+    # A status replaced before its write still owes its profiles.
+    _unsaved_samples[provider_id] = (sample, count_only and (pending is None or pending[1]))
+    if provider_id in _sample_writers:
+        return
+    task = asyncio.create_task(_write_status_samples(provider_id))
+    _sample_writers[provider_id] = task
     _main._background_tasks.add(task)
     task.add_done_callback(_main._background_tasks.discard)
 
 
-def _persist_logosnode_status(provider_id: int, sample: Dict[str, Any]) -> tuple[int, list[str], list[str]] | None:
+async def _write_status_samples(provider_id: int) -> None:
+    """Write a worker's statuses one at a time, newest first, older dropped."""
+    try:
+        while (entry := _unsaved_samples.pop(provider_id, None)) is not None:
+            sample, count_only = entry
+            _last_snapshot_at[provider_id] = time.monotonic()
+            persisted = await asyncio.to_thread(_persist_logosnode_status, provider_id, sample, count_only)
+            if persisted is None:
+                continue
+            changed_models, rejected_models = persisted
+            if changed_models:
+                _schedule_model_profile_push(provider_id, changed_models)
+            if rejected_models:
+                _schedule_model_profile_resync(provider_id, rejected_models)
+            elif not count_only:
+                _resync_rounds.pop(provider_id, None)
+    finally:
+        _sample_writers.pop(provider_id, None)
+
+
+def _persist_logosnode_status(
+    provider_id: int, sample: Dict[str, Any], count_only: bool = False
+) -> tuple[list[str], list[str]] | None:
     """Store one status sample; None when even the snapshot failed.
 
-    Returns the snapshot id and, as in ``_persist_model_profiles``, the models
-    the worker must be sent.
+    Returns, as ``_persist_model_profiles``, the models the worker must be
+    sent. A count-only status repeats profiles that are already stored.
     """
     timestamp = _parse_iso_datetime(sample.get("timestamp"))
     used_bytes = int(float(sample.get("used_vram_mb") or 0.0) * 1024 * 1024)
@@ -167,12 +209,16 @@ def _persist_logosnode_status(provider_id: int, sample: Dict[str, Any]) -> tuple
     free_bytes = None
     if free_vram_mb is not None:
         free_bytes = int(float(free_vram_mb or 0.0) * 1024 * 1024)
+    runtime_payload = sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}
+    # Profiles live in model_profiles; copying them into every snapshot only
+    # grew a column nothing reads.
+    snapshot_payload = {key: value for key, value in runtime_payload.items() if key != "model_profiles"}
 
     changed_models: list[str] = []
     rejected_models: list[str] = []
     try:
         with DBManager() as db:
-            snapshot_id = db.insert_provider_snapshot(
+            db.insert_provider_snapshot(
                 provider_id=provider_id,
                 snapshot_ts=timestamp,
                 total_models_loaded=int(sample.get("models_loaded") or 0),
@@ -181,31 +227,26 @@ def _persist_logosnode_status(provider_id: int, sample: Dict[str, Any]) -> tuple
                 free_memory_bytes=free_bytes,
                 loaded_models=list(sample.get("loaded_models") or []),
                 snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
-                runtime_payload=(
-                    sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}
-                ),
+                runtime_payload=snapshot_payload,
                 scheduler_signals=(
                     sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {}
                 ),
                 poll_success=True,
             )
-            # Persist calibrated model profiles into the dedicated table
-            runtime_payload = sample.get("runtime_payload")
-            if isinstance(runtime_payload, dict):
-                model_profiles = runtime_payload.get("model_profiles")
-                if isinstance(model_profiles, dict) and model_profiles:
-                    try:
-                        changed_models, rejected_models = _persist_model_profiles(db, provider_id, model_profiles)
-                    except Exception:
-                        db.session.rollback()
-                        logger.warning(
-                            "Failed to upsert model profiles for provider %s, the "
-                            "entire row update (base_residency_mb, loaded_vram_mb, "
-                            "kv_budget_mb, measurement_count, last_measured_at) is "
-                            "lost until this recovers",
-                            _resolve_provider_name(provider_id),
-                            exc_info=True,
-                        )
+            model_profiles = runtime_payload.get("model_profiles")
+            if not count_only and isinstance(model_profiles, dict) and model_profiles:
+                try:
+                    changed_models, rejected_models = _persist_model_profiles(db, provider_id, model_profiles)
+                except Exception:
+                    db.session.rollback()
+                    logger.warning(
+                        "Failed to upsert model profiles for provider %s, the "
+                        "entire row update (base_residency_mb, loaded_vram_mb, "
+                        "kv_budget_mb, measurement_count, last_measured_at) is "
+                        "lost until this recovers",
+                        _resolve_provider_name(provider_id),
+                        exc_info=True,
+                    )
     except Exception:
         # Persisting a VRAM snapshot must never drop the worker's live session.
         # A missing table (the webservice migration that renames it has not run
@@ -219,7 +260,7 @@ def _persist_logosnode_status(provider_id: int, sample: Dict[str, Any]) -> tuple
             exc_info=True,
         )
         return None
-    return snapshot_id, changed_models, rejected_models
+    return changed_models, rejected_models
 
 
 def _persist_model_profiles(
@@ -233,9 +274,10 @@ def _persist_model_profiles(
     if not is_central_profile_payload(model_profiles):
         _mirror_local_profiles(db, provider_id, model_profiles)
         return [], []
+    now = time.monotonic()
     changed: list[str] = []
     rejected: list[str] = []
-    written: dict[str, str] = {}
+    written: dict[str, tuple[str, str]] = {}
     recorded: dict[str, float] = {}
     for model_name, echoed in model_profiles.items():
         if not isinstance(echoed, dict):
@@ -247,13 +289,14 @@ def _persist_model_profiles(
         stored = persistable_profile(echoed)
         key_hash = echoed.get("calibration_key_hash") or None
         digest = profile_digest(revision, echoed)
-        if not _profile_write_cache.unchanged(provider_id, model_name, digest):
+        material = profile_digest(revision, material_profile(echoed))
+        if not _profile_write_cache.unchanged(provider_id, model_name, digest, material, now):
             if not db.persist_central_model_profile(
                 provider_id, model_name, stored, reported_profile(echoed), revision, key_hash
             ):
                 rejected.append(model_name)
                 continue
-            written[model_name] = digest
+            written[model_name] = (digest, material)
         if not is_new_local_calibration(echoed):
             continue
         epoch = float(echoed["last_measured_epoch"])
@@ -272,8 +315,8 @@ def _persist_model_profiles(
             changed.append(model_name)
     db.session.commit()
     # Only now: a rolled-back write must not count as stored.
-    for model_name, digest in written.items():
-        _profile_write_cache.remember(provider_id, model_name, digest)
+    for model_name, (digest, material) in written.items():
+        _profile_write_cache.remember(provider_id, model_name, digest, material, now)
     for model_name in changed:
         _profile_write_cache.forget(provider_id, model_name)
     for model_name, epoch in recorded.items():
@@ -351,21 +394,25 @@ def _schedule_model_profile_push(
 def _schedule_model_profile_resync(provider_id: int, model_names: list[str]) -> None:
     """Re-send profiles a worker has not adopted, e.g. after a failed push.
 
-    Every status repeats the rejected echo; all of them share one push.
+    Every status repeats the rejected echo; all of them share one push, and
+    each further round without an accepted echo waits twice as long.
     """
     pending = _pending_resyncs.get(provider_id)
     if pending is not None:
         pending.update(model_names)
         return
     _pending_resyncs[provider_id] = set(model_names)
-    task = asyncio.create_task(_run_model_profile_resync(provider_id))
+    rounds = _resync_rounds.get(provider_id, 0)
+    _resync_rounds[provider_id] = rounds + 1
+    delay = min(_RESYNC_DELAY_SECONDS * 2 ** min(rounds, 16), _RESYNC_MAX_DELAY_SECONDS)
+    task = asyncio.create_task(_run_model_profile_resync(provider_id, delay))
     _main._background_tasks.add(task)
     task.add_done_callback(_main._background_tasks.discard)
 
 
-async def _run_model_profile_resync(provider_id: int) -> None:
+async def _run_model_profile_resync(provider_id: int, delay: float = _RESYNC_DELAY_SECONDS) -> None:
     try:
-        await asyncio.sleep(_RESYNC_DELAY_SECONDS)
+        await asyncio.sleep(delay)
     finally:
         model_names = _pending_resyncs.pop(provider_id, set())
     if model_names:

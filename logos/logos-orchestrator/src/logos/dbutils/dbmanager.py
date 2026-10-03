@@ -353,6 +353,24 @@ def _upsert_model_profile_sql(
     return f"{sql} WHERE {where}" if where else sql
 
 
+# Built once: these run for every changed profile of every worker status.
+_MIRROR_PROFILE_SQL = _upsert_model_profile_sql()
+_PERSIST_CENTRAL_PROFILE_SQL = _upsert_model_profile_sql(
+    extra={
+        "profile": "CAST(:profile AS jsonb)",
+        "calibration_key_hash": ":calibration_key_hash",
+        "sync_revision": ":sync_revision",
+    },
+    conflict_set={
+        "profile": "EXCLUDED.profile",
+        # An echo without a key must not erase the one hello
+        # reported; staleness and sharing are judged on it.
+        "calibration_key_hash": "COALESCE(EXCLUDED.calibration_key_hash, model_profiles.calibration_key_hash)",
+    },
+    where="model_profiles.sync_revision = EXCLUDED.sync_revision",
+)
+
+
 # Snapshot the settled cost of a finalised request into log_entry so a later
 # catalogue refresh cannot rewrite completed budget history. Deliberately carries
 # no ``settled_cost_micro_cents IS NULL`` guard: finalisation is retryable, and a
@@ -1780,7 +1798,7 @@ class DBManager:
         if not profiles:
             return 0
 
-        sql = text(_upsert_model_profile_sql())
+        sql = text(_MIRROR_PROFILE_SQL)
         count = 0
         for model_name, data in profiles.items():
             if not isinstance(data, dict):
@@ -1807,24 +1825,7 @@ class DBManager:
         ``profile`` excludes operator overrides, the typed columns mirror
         ``reported``. False on an outdated echo; the caller commits.
         """
-        sql = text(
-            _upsert_model_profile_sql(
-                extra={
-                    "profile": "CAST(:profile AS jsonb)",
-                    "calibration_key_hash": ":calibration_key_hash",
-                    "sync_revision": ":sync_revision",
-                },
-                conflict_set={
-                    "profile": "EXCLUDED.profile",
-                    # An echo without a key must not erase the one hello
-                    # reported; staleness and sharing are judged on it.
-                    "calibration_key_hash": (
-                        "COALESCE(EXCLUDED.calibration_key_hash, model_profiles.calibration_key_hash)"
-                    ),
-                },
-                where="model_profiles.sync_revision = EXCLUDED.sync_revision",
-            )
-        )
+        sql = text(_PERSIST_CENTRAL_PROFILE_SQL)
         result = self.session.execute(
             sql,
             {
@@ -1981,15 +1982,22 @@ class DBManager:
 
     def update_reported_calibration_keys(self, provider_id: int, key_hashes: Dict[str, str]) -> None:
         """Record the calibration key each model has on the node right now."""
-        for model_name, key_hash in key_hashes.items():
-            self.session.execute(
-                text("""
-                    UPDATE model_profiles SET calibration_key_hash = :key_hash
-                    WHERE provider_id = :provider_id AND model_name = :model_name
-                      AND calibration_key_hash IS DISTINCT FROM :key_hash
-                """),
-                {"provider_id": provider_id, "model_name": model_name, "key_hash": key_hash},
-            )
+        if not key_hashes:
+            return
+        self.session.execute(
+            text("""
+                UPDATE model_profiles mp SET calibration_key_hash = k.key_hash
+                FROM unnest(CAST(:model_names AS text[]), CAST(:key_hashes AS text[]))
+                     AS k(model_name, key_hash)
+                WHERE mp.provider_id = :provider_id AND mp.model_name = k.model_name
+                  AND mp.calibration_key_hash IS DISTINCT FROM k.key_hash
+            """),
+            {
+                "provider_id": provider_id,
+                "model_names": list(key_hashes),
+                "key_hashes": list(key_hashes.values()),
+            },
+        )
         self.session.commit()
 
     def import_legacy_model_profiles(

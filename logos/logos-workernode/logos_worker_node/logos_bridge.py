@@ -978,6 +978,10 @@ class LogosBridgeClient:
         replaced = self._app.state.model_profiles.replace_from_sync(
             profiles, skip=frozenset({calibrating}) if calibrating else frozenset()
         )
+        if not replaced:
+            # The push after every hello usually changes nothing; a status
+            # rebuild would still probe every lane.
+            return {"ok": True, "replaced": replaced}
         self._announce_calibrated_capabilities()
         lane_manager = getattr(self._app.state, "lane_manager", None)
         if lane_manager is not None:
