@@ -3,7 +3,7 @@
 # pylint: skip-file
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
@@ -58,129 +58,6 @@ def test_fail_sends_only_usage_not_sent_before():
     callback.fail("suggestions down", tokens=[answer, title])
 
     assert _input_counts(outbox[1]) == [7]
-
-
-class _FakeArtemis:
-    """Mirrors AbstractIrisChatSessionService: a repeated answer is ignored with all its tokens."""
-
-    def __init__(self):
-        self.has_answer = False
-        self.recorded: list[int] = []
-
-    def handle(self, payload):
-        if payload.get("result") is not None and payload.get("final") is not False:
-            if self.has_answer:
-                return
-            self.has_answer = True
-        self.recorded += [token["numInputTokens"] for token in payload["tokens"] or []]
-
-
-def _callback_against(artemis, delivered):
-    """``delivered`` scripts, per POST, (reaches Artemis, Iris sees success)."""
-    callback = ChatRunCallback(run_id="run-1", base_url="http://artemis")
-    script = list(delivered)
-
-    def send(payload, **_kwargs):
-        reaches, succeeds = script.pop(0) if script else (True, True)
-        if reaches:
-            artemis.handle(payload)
-        return succeeds
-
-    callback._send_status_payload = send
-    return callback
-
-
-def _run_lost_result(artemis, first_post_reaches: bool):
-    answer = TokenUsageDTO(numInputTokens=100)
-    title = TokenUsageDTO(numInputTokens=7)
-    suggestion = TokenUsageDTO(numInputTokens=3)
-    callback = _callback_against(
-        artemis, [(first_post_reaches, False), (False, False), (False, False)]
-    )
-    with patch("iris.web.status.status_update.time.sleep"):
-        callback.send_result("answer", tokens=[answer])
-        callback.send_suggestions(["s"])
-        callback.finish(tokens=[answer, title, suggestion])
-
-
-def test_answer_stored_despite_lost_responses_is_billed_once_with_later_usage():
-    artemis = _FakeArtemis()
-
-    _run_lost_result(artemis, first_post_reaches=True)
-
-    assert sorted(artemis.recorded) == [3, 7, 100]
-
-
-def test_answer_that_never_arrived_is_resent_and_billed_once():
-    artemis = _FakeArtemis()
-
-    _run_lost_result(artemis, first_post_reaches=False)
-
-    assert artemis.has_answer
-    assert sorted(artemis.recorded) == [3, 7, 100]
-
-
-def test_usage_appended_to_the_callers_list_is_not_lost_with_the_answer():
-    artemis = _FakeArtemis()
-    tokens = [TokenUsageDTO(numInputTokens=100)]
-    callback = _callback_against(
-        artemis, [(True, False), (False, False), (False, False)]
-    )
-
-    with patch("iris.web.status.status_update.time.sleep"):
-        callback.send_result("answer", tokens=tokens)
-        tokens.append(TokenUsageDTO(numInputTokens=7))
-        tokens.append(TokenUsageDTO(numInputTokens=3))
-        callback.send_suggestions(["s"])
-        callback.finish(tokens=tokens)
-
-    assert sorted(artemis.recorded) == [3, 7, 100]
-
-
-def test_terminal_update_after_failed_resends_keeps_newer_usage_apart():
-    artemis = _FakeArtemis()
-    tokens = [TokenUsageDTO(numInputTokens=100)]
-    lost = [(True, False)] + [(False, False)] * 5
-    callback = _callback_against(artemis, lost)
-
-    with patch("iris.web.status.status_update.time.sleep"):
-        callback.send_result("answer", tokens=tokens)
-        tokens.append(TokenUsageDTO(numInputTokens=7))
-        callback.finish(tokens=tokens)
-
-    assert sorted(artemis.recorded) == [7, 100]
-
-
-def test_usage_only_update_is_not_retried():
-    """A usage-only update that reached Artemis but lost its response is not sent again."""
-    artemis = _FakeArtemis()
-    tokens = [TokenUsageDTO(numInputTokens=100)]
-    # send_result: stored, response lost; three resends lost; usage-only update
-    # reaches Artemis but its response is lost; terminal update succeeds.
-    script = [(True, False), (False, False), (False, False)]
-    script += [(False, False)] * 3 + [(True, False)]
-    callback = _callback_against(artemis, script)
-
-    with patch("iris.web.status.status_update.time.sleep"):
-        callback.send_result("answer", tokens=tokens)
-        tokens.append(TokenUsageDTO(numInputTokens=7))
-        callback.finish(tokens=tokens)
-
-    assert sorted(artemis.recorded) == [7, 100]
-
-
-def test_resent_answer_goes_alone_before_the_update_that_triggered_it():
-    answer = TokenUsageDTO(numInputTokens=100)
-    title = TokenUsageDTO(numInputTokens=7)
-    callback, outbox = _callback_with_outbox(results=[False, False, False])
-
-    with patch("iris.web.status.status_update.time.sleep"):
-        callback.send_result("answer", tokens=[answer])
-        callback.finish(tokens=[answer, title])
-
-    resent, terminal = outbox[-2], outbox[-1]
-    assert resent["result"] == "answer" and _input_counts(resent) == [100]
-    assert terminal["result"] is None and _input_counts(terminal) == [7]
 
 
 def test_equal_but_separate_usages_are_both_sent():

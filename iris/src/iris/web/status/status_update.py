@@ -395,9 +395,7 @@ class ChatRunCallback(StatusCallback):
         fields = {
             "result": final_result,
             "final": True,
-            # A copy: callers keep appending to their list, and a held-back answer
-            # must carry only the usage that belongs to it.
-            "tokens": list(tokens or []),
+            "tokens": tokens or [],
         }
         if accessed_memories is not None:
             fields["accessed_memories"] = self._memory_dtos(accessed_memories)
@@ -503,17 +501,10 @@ class ChatRunCallback(StatusCallback):
             self._reject_after_terminal(run_state.value.lower())
             return False
 
-        terminal_send = run_state != RunStateEnum.RUNNING
-        if self._undelivered_result_fields is not None:
-            self._drain_running_updates()
-            self._resend_undelivered_result()
-
         fields, carried_result = self._merge_undelivered_result(fields)
         new_tokens: list[TokenUsageDTO] = []
-        if "tokens" in fields or carried_result:
-            new_tokens = self._undelivered_tokens(fields.get("tokens"))
-            if carried_result:
-                new_tokens = self._answer_usage_only(new_tokens, terminal_send)
+        if "tokens" in fields:
+            new_tokens = self._undelivered_tokens(fields["tokens"])
             fields = {**fields, "tokens": new_tokens}
 
         # A terminal send is the LAST chance to deliver an answer that a prior
@@ -526,6 +517,7 @@ class ChatRunCallback(StatusCallback):
 
         payload = self._payload(run_state=run_state, error=error, **fields)
 
+        terminal_send = run_state != RunStateEnum.RUNNING
         if terminal_send:
             self._mark_terminal_sent()
         self._drain_running_updates()
@@ -543,46 +535,6 @@ class ChatRunCallback(StatusCallback):
         finally:
             if terminal_send:
                 self._shutdown_running_update_executor()
-
-    def _answer_usage_only(
-        self, tokens: list[TokenUsageDTO], terminal_send: bool
-    ) -> list[TokenUsageDTO]:
-        """Keep newer usage out of an update that repeats the held-back answer.
-
-        Artemis drops every token of an update whose answer it already stored. A
-        running update leaves newer usage for a later update. Before a terminal
-        update, the newer usage goes out alone first; only if that fails does the
-        terminal update carry it, as the last chance. The usage-only update is sent
-        once: Artemis records every copy it receives, and only an update that repeats
-        the answer is deduplicated, so a retry could bill the same usage twice.
-        """
-        answer_tokens = (self._undelivered_result_fields or {}).get("tokens") or []
-        answer_usage = [t for t in tokens if any(t is a for a in answer_tokens)]
-        newer_usage = [t for t in tokens if not any(t is a for a in answer_tokens)]
-        if not terminal_send or not newer_usage:
-            return answer_usage
-        payload = self._payload(run_state=RunStateEnum.RUNNING, tokens=newer_usage)
-        if self._send_status_payload(payload):
-            self._delivered_tokens.extend(newer_usage)
-            return answer_usage
-        return answer_usage + newer_usage
-
-    def _resend_undelivered_result(self) -> None:
-        """Retry an answer that send_result() could not hand off, on its own.
-
-        Artemis may have stored the answer although Iris saw no response. It then
-        ignores the repeated answer together with every token of that update, so the
-        answer goes alone with only its own usage, and the caller's newer usage
-        follows in a separate update that Artemis always records.
-        """
-        fields = self._undelivered_result_fields or {}
-        answer_tokens = self._undelivered_tokens(fields.get("tokens"))
-        payload = self._payload(
-            run_state=RunStateEnum.RUNNING, **{**fields, "tokens": answer_tokens}
-        )
-        if self._send_payload_with_backoff(payload, self._DELIVERY_RETRY_ATTEMPTS):
-            self._undelivered_result_fields = None
-            self._delivered_tokens.extend(answer_tokens)
 
     def _undelivered_tokens(
         self, tokens: Optional[list[TokenUsageDTO]]

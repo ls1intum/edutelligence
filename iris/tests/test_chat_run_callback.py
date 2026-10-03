@@ -48,10 +48,7 @@ def test_send_result_retries_then_succeeds():
     assert post.call_args.kwargs["json"]["result"] == "answer"
 
 
-def test_undelivered_result_is_resent_alone_before_next_send():
-    """An answer that send_result() could not hand off goes out again on its own
-    before the next update, so Artemis can record that update's tokens even if
-    it had stored the answer already."""
+def test_undelivered_result_rides_next_send():
     cb = _callback()
     with (
         patch("requests.post") as post,
@@ -63,15 +60,11 @@ def test_undelivered_result_is_resent_alone_before_next_send():
             requests.RequestException(),
             _ok(),
             _ok(),
-            _ok(),
         ]
         assert cb.send_result("answer", tokens=[]) is False
         assert cb.send_suggestions(["s1"]) is True
-        resent_body = post.call_args_list[-2].kwargs["json"]
-        assert resent_body["result"] == "answer"
-        assert resent_body["runState"] == "RUNNING"
         suggestions_body = post.call_args.kwargs["json"]
-        assert suggestions_body["result"] is None
+        assert suggestions_body["result"] == "answer"
         assert suggestions_body["suggestions"] == ["s1"]
 
         assert cb.finish() is True
@@ -80,9 +73,9 @@ def test_undelivered_result_is_resent_alone_before_next_send():
 
 
 def test_terminal_finish_retries_carried_result_on_transient_failure():
-    """If send_result exhausted its retries, the finish is the last chance to
-    deliver the carried answer, so the answer is retried with the same backoff
-    before the terminal update instead of being dropped on one failure."""
+    """If send_result exhausted its retries, the terminal finish is the last
+    chance to deliver the carried answer, so it must retry with the same
+    backoff instead of dropping it on a single transient failure."""
     cb = _callback()
     with (
         patch("requests.post") as post,
@@ -93,43 +86,24 @@ def test_terminal_finish_retries_carried_result_on_transient_failure():
             requests.RequestException(),
             requests.RequestException(),
             requests.RequestException(),
-            # answer resent before finish: fail, fail, then succeed.
+            # finish (carrying the answer): fail, fail, then succeed.
             requests.RequestException(),
             requests.RequestException(),
-            _ok(),
-            # finish itself.
             _ok(),
         ]
         assert cb.send_result("answer", tokens=[]) is False
         assert cb.finish() is True
 
-    assert post.call_count == 7
-    # Same backoff schedule (1s, 2s) for both the send_result and the resend.
+    assert post.call_count == 6
+    # Same backoff schedule (1s, 2s) for both the send_result and the finish
+    # retry runs.
     assert [call.args[0] for call in sleep.call_args_list] == [1, 2, 1, 2]
-    resent_body = post.call_args_list[-2].kwargs["json"]
-    assert resent_body["result"] == "answer"
-    assert resent_body["final"] is True
-    finish_body = post.call_args.kwargs["json"]
-    assert finish_body["runState"] == "FINISHED"
-    assert finish_body["result"] is None
-    # A successful delivery clears the carried answer.
-    assert cb._undelivered_result_fields is None  # pylint: disable=protected-access
-
-
-def test_terminal_finish_carries_answer_when_resend_fails():
-    """If even the resend fails, the terminal update still carries the answer."""
-    cb = _callback()
-    with (
-        patch("requests.post") as post,
-        patch("time.sleep"),
-    ):
-        post.side_effect = [requests.RequestException()] * 6 + [_ok()]
-        assert cb.send_result("answer", tokens=[]) is False
-        assert cb.finish() is True
-
     finish_body = post.call_args.kwargs["json"]
     assert finish_body["runState"] == "FINISHED"
     assert finish_body["result"] == "answer"
+    assert finish_body["final"] is True
+    # A successful terminal delivery clears the carried answer.
+    assert cb._undelivered_result_fields is None  # pylint: disable=protected-access
 
 
 def test_terminal_finish_without_carried_result_is_single_shot():
