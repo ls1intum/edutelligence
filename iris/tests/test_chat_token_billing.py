@@ -120,6 +120,37 @@ def test_answer_that_never_arrived_is_resent_and_billed_once():
     assert sorted(artemis.recorded) == [3, 7, 100]
 
 
+def test_usage_appended_to_the_callers_list_is_not_lost_with_the_answer():
+    artemis = _FakeArtemis()
+    tokens = [TokenUsageDTO(numInputTokens=100)]
+    callback = _callback_against(
+        artemis, [(True, False), (False, False), (False, False)]
+    )
+
+    with patch("iris.web.status.status_update.time.sleep"):
+        callback.send_result("answer", tokens=tokens)
+        tokens.append(TokenUsageDTO(numInputTokens=7))
+        tokens.append(TokenUsageDTO(numInputTokens=3))
+        callback.send_suggestions(["s"])
+        callback.finish(tokens=tokens)
+
+    assert sorted(artemis.recorded) == [3, 7, 100]
+
+
+def test_terminal_update_after_failed_resends_keeps_newer_usage_apart():
+    artemis = _FakeArtemis()
+    tokens = [TokenUsageDTO(numInputTokens=100)]
+    lost = [(True, False)] + [(False, False)] * 5
+    callback = _callback_against(artemis, lost)
+
+    with patch("iris.web.status.status_update.time.sleep"):
+        callback.send_result("answer", tokens=tokens)
+        tokens.append(TokenUsageDTO(numInputTokens=7))
+        callback.finish(tokens=tokens)
+
+    assert sorted(artemis.recorded) == [7, 100]
+
+
 def test_resent_answer_goes_alone_before_the_update_that_triggered_it():
     answer = TokenUsageDTO(numInputTokens=100)
     title = TokenUsageDTO(numInputTokens=7)
