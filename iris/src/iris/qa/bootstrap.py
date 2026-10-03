@@ -167,6 +167,8 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
         "IRIS_QA_GPT_56_LUNA_DEPLOYMENT": requested_deployments["gpt-5.6-luna"],
         "IRIS_QA_JUDGE_DEPLOYMENT": requested_deployments["gpt-5.4"],
     }
+    for name in LOGOS_ENVIRONMENT_NAMES:
+        os.environ.pop(name, None)
     if logos_entries:
         unique_logos_entries = {
             item for entries in logos_entries.values() for item in entries
@@ -193,9 +195,6 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
                     f"for {model}"
                 )
             configured[str(LOGOS_CANDIDATES[model]["model_env"])] = model
-    else:
-        for name in LOGOS_ENVIRONMENT_NAMES:
-            os.environ.pop(name, None)
     os.environ.update(configured)
     metadata = {
         "endpoint": endpoint,

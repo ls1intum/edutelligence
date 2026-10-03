@@ -320,6 +320,37 @@ def test_local_llm_config_loads_logos_gpt_6_candidates(tmp_path):
     assert os.environ["IRIS_QA_GPT_6_LUNA_MODEL"] == "gpt-6-luna"
 
 
+def test_local_llm_config_clears_absent_logos_candidates(tmp_path, monkeypatch):
+    monkeypatch.setenv("IRIS_QA_GPT_61_SOL_MODEL", "stale-sol")
+    monkeypatch.setenv("IRIS_QA_GPT_6_LUNA_MODEL", "stale-luna")
+    path = tmp_path / "llm-config.yml"
+    path.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "type": "azure_chat",
+                    "model": "gpt-5.4",
+                    "endpoint": "https://qa.openai.azure.com",
+                    "api_key": "azure-test-key",  # pragma: allowlist secret
+                    "azure_deployment": "judge",
+                },
+                {
+                    "type": "openai_chat",
+                    "model": "openai/gpt-oss-120b",
+                    "base_url": "https://logos.aet.cit.tum.de/v1",
+                    "api_key": "logos-test-key",  # pragma: allowlist secret
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    apply_local_llm_config(path)
+
+    assert "IRIS_QA_GPT_61_SOL_MODEL" not in os.environ
+    assert "IRIS_QA_GPT_6_LUNA_MODEL" not in os.environ
+
+
 def test_local_llm_config_rejects_non_logos_gpt_oss_route(tmp_path):
     path = tmp_path / "llm-config.yml"
     path.write_text(
