@@ -7,6 +7,7 @@ last — a router included after the catch-all would be unreachable for any
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -29,6 +30,105 @@ router = APIRouter()
 
 _SERVER_START_TIME = int(time.time())
 
+# RFC 3339 rendering of the start time, for the Anthropic models shape whose
+# ``created_at`` is a datetime string (the OpenAI shape uses the bare epoch int).
+_SERVER_START_TIME_ISO = datetime.fromtimestamp(_SERVER_START_TIME, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# The header every Anthropic SDK / Claude Code request carries; OpenAI clients
+# never send it. It is how one shared GET /v1/models answers both dialects.
+_ANTHROPIC_VERSION_HEADER = "anthropic-version"
+
+
+def _anthropic_entries(models: list[dict], stats: dict) -> list[tuple[str, str, Optional[str]]]:
+    """(id, model_name, description) rows for the Anthropic listing.
+
+    Mirrors the OpenAI listing exactly: every accessible model plus each alias
+    that resolves to a single accessible model. ``model_name`` is the canonical
+    name the context-window stats are keyed by, so an alias carries the window
+    of the model it points at.
+    """
+    # An alias that (case-insensitively) belongs to more than one accessible
+    # model cannot be resolved at request time, so it is not advertised.
+    alias_owners: dict[str, set[str]] = {}
+    for model in models:
+        for alias in model.get("aliases") or []:
+            alias_owners.setdefault(str(alias).strip().lower(), set()).add(model["name"])
+
+    entries: list[tuple[str, str, Optional[str]]] = []
+    for model in models:
+        name = model["name"]
+        description = model.get("description")
+        entries.append((name, name, description))
+        seen: set[str] = set()
+        for alias in model.get("aliases") or []:
+            key = str(alias).strip().lower()
+            if key in seen or len(alias_owners.get(key, set())) != 1:
+                continue
+            seen.add(key)
+            entries.append((str(alias), name, description))
+    return entries
+
+
+def _anthropic_model_info(model_id: str, model_name: str, description: Optional[str], stats: dict) -> dict:
+    """One ``BetaModelInfo`` object for the Anthropic models listing."""
+    fields = _model_context_fields(stats.get(model_name))
+    # The guaranteed window a request is sure to get (the smallest served),
+    # falling back to the widest the model is ever served with, else unknown.
+    max_input = fields.get("max_model_len") or fields.get("max_model_len_overall")
+    return {
+        "type": "model",
+        "id": model_id,
+        "display_name": description or model_id,
+        "created_at": _SERVER_START_TIME_ISO,
+        "max_input_tokens": max_input,
+        "max_tokens": None,
+        "capabilities": None,
+        "allowed_fallback_models": None,
+    }
+
+
+def _parse_models_limit(raw: Optional[str]) -> Optional[int]:
+    """The ``limit`` query param clamped to the API's 1..1000 range, or None."""
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(value, 1000))
+
+
+def _anthropic_models_response(
+    models: list[dict], stats: dict, limit: Optional[int], after_id: Optional[str]
+) -> JSONResponse:
+    """The Anthropic ``GET /v1/models`` envelope over the accessible models.
+
+    Logos lists are small, so ``limit`` defaults to "everything" (``has_more``
+    stays false) rather than the Anthropic API's 20 — a client that does not
+    paginate would otherwise silently miss models. ``after_id`` is a cursor into
+    the (stable, id-ordered) listing.
+    """
+    entries = _anthropic_entries(models, stats)
+    if after_id:
+        for index, (entry_id, _, _) in enumerate(entries):
+            if entry_id == after_id:
+                entries = entries[index + 1 :]
+                break
+        # A stale/unknown cursor starts the list rather than erroring.
+    total = len(entries)
+    page = entries[:limit] if limit is not None else entries
+    data = [
+        _anthropic_model_info(entry_id, model_name, description, stats) for entry_id, model_name, description in page
+    ]
+    return JSONResponse(
+        content={
+            "data": data,
+            "first_id": data[0]["id"] if data else None,
+            "last_id": data[-1]["id"] if data else None,
+            "has_more": len(page) < total,
+        }
+    )
+
 
 @router.get("/v1/models", tags=["user-facing"])
 @router.get("/openai/models", tags=["user-facing"], include_in_schema=False)
@@ -39,8 +139,17 @@ async def list_models(request: Request):
     Also served under /openai/models: the /openai prefix mirrors /v1, and the
     POST catch-all alias cannot answer this GET.
 
-    Returns an OpenAI-compatible response listing all models the user's
-    current API key has access to (Union of Team models and specific API Key models).
+    Answers in the dialect the caller speaks:
+
+    * With the mandatory ``anthropic-version`` header (every Anthropic SDK and
+      Claude Code request carries it) the response is the Anthropic models
+      shape (``data`` of ``BetaModelInfo`` plus ``first_id``/``last_id``/
+      ``has_more``), so a Messages client can discover the models it may use
+      and switch between them on demand.
+    * Otherwise it is the OpenAI-compatible response listing all models the
+      user's current API key has access to (Union of Team models and specific
+      API Key models).
+
     Stored aliases of an accessible model are listed as additional model ids
     right after their model, so logical names (e.g. 'local-most-powerful')
     can be discovered and used directly in requests. An alias that belongs to
@@ -48,7 +157,8 @@ async def list_models(request: Request):
     advertising it would promise a model id that retrieval rejects.
 
     Returns:
-        JSONResponse matching the OpenAI GET /v1/models spec.
+        JSONResponse matching the OpenAI GET /v1/models spec, or the Anthropic
+        models shape when the caller sends ``anthropic-version``.
     """
     auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
@@ -56,6 +166,15 @@ async def list_models(request: Request):
         models = db.get_models_for_api_key(auth.api_key_id)
 
     stats = _served_context_window_stats()
+
+    if _ANTHROPIC_VERSION_HEADER in request.headers:
+        return _anthropic_models_response(
+            models,
+            stats,
+            _parse_models_limit(request.query_params.get("limit")),
+            request.query_params.get("after_id"),
+        )
+
     # An alias that (case-insensitively) belongs to more than one accessible
     # model cannot be resolved at request time, so it is not advertised.
     alias_owners: dict[str, set[str]] = {}

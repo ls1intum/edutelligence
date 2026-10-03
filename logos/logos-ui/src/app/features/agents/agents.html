@@ -427,10 +427,33 @@
         <span [class]="statusClass(session.status)">{{ statusLabel(session) }}</span>
         <span class="session__task">{{ taskPreview(session.task) }}</span>
         <span class="session__meta">
-          <span class="session__workspace" title="The working copy this session runs in">
-            <i class="pi pi-folder" aria-hidden="true"></i> {{ session.workspace_name }}
+          @if (analysisTarget(session); as target) {
+            <span class="session__workspace" title="The team repository this session analyses">
+              <i class="pi pi-github" aria-hidden="true"></i> {{ target }}
+            </span>
+          } @else {
+            <span class="session__workspace" title="The working copy this session runs in">
+              <i class="pi pi-folder" aria-hidden="true"></i> {{ session.workspace_name }}
+            </span>
+          }
+          <span class="session__timings">
+            <span class="session__timing" title="Time waiting before the session started">
+              Queued {{ queueDuration(session) }}
+            </span>
+            @if (session.started_at) {
+              <span class="session__timing" title="Time from start to finish"
+                >Run {{ duration(session) }}</span
+              >
+            }
+            @if (session.finished_at) {
+              <span
+                class="session__timing"
+                [title]="'Finished ' + (session.finished_at | date: 'medium')"
+              >
+                Finished {{ finishedAgo(session) }} ago
+              </span>
+            }
           </span>
-          <span class="session__duration">{{ duration(session) }}</span>
         </span>
       </button>
 
@@ -484,6 +507,23 @@
                 }
               </dd>
             </div>
+            @if (session.trigger_kind === 'analysis' && session.repo_slug) {
+              <div>
+                <dt>Analyses</dt>
+                <dd>
+                  <a
+                    [href]="'https://github.com/' + session.repo_slug"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {{ session.repo_slug }}
+                  </a>
+                  <span class="field__hint">{{
+                    session.team_name ? 'team ' + session.team_name : 'link removed'
+                  }}</span>
+                </dd>
+              </div>
+            }
             <div>
               <dt>Model</dt>
               <dd>{{ session.model ?? 'runner default' }}</dd>

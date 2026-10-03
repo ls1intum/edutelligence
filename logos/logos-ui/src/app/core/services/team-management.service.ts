@@ -89,15 +89,23 @@ export class TeamManagementService {
     );
   }
 
-  analyzeRepositoryHeuristic(teamId: number, linkId: number): Promise<unknown> {
-    return firstValueFrom(
-      this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze`, {}),
-    );
-  }
-
   analyzeRepositoryAgent(teamId: number, linkId: number): Promise<unknown> {
     return firstValueFrom(
       this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze/agent`, {}),
+    );
+  }
+
+  /** Record which model a recommended call site uses; null clears it. */
+  setRecommendationModel(
+    teamId: number,
+    recId: number,
+    model: string | null,
+  ): Promise<AiLlmCallRecommendation> {
+    return firstValueFrom(
+      this.http.put<AiLlmCallRecommendation>(
+        `/api/admin/teams/${teamId}/recommendations/${recId}/model`,
+        { model },
+      ),
     );
   }
 

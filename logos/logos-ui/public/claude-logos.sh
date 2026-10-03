@@ -9,8 +9,12 @@
 #   claude-logos -p "..."             headless / one-shot
 #   claude-logos --resume             every claude flag is passed through unchanged
 #
-#   claude-logos --check              show the connection, the model and how much
-#                                     context this session would get, then exit
+#   claude-logos --check              show the connection, the model (if pinned) and
+#                                     how much context this session would get, then exit
+#
+# LOGOS_MODEL is optional. When set, every Claude Code model slot is pinned to it
+# (previous behaviour). When unset, Claude Code discovers Logos models via
+# GET /v1/models (Anthropic shape) and can switch with /model.
 #   claude-logos --install            install to ~/.local/bin (reads config from stdin)
 #   claude-logos --update             replace this wrapper with the current one
 #   claude-logos --uninstall          remove the wrapper, its config and its key
@@ -34,7 +38,7 @@ set -euo pipefail
 # version string: the comparison is a single `-gt` that cannot misread anything,
 # where sorting "1.10" against "1.9" needs care to get right. The date is here for
 # people; only the number is compared.
-CLAUDE_LOGOS_VERSION=3          # 2026-09-07
+CLAUDE_LOGOS_VERSION=5          # 2026-10-02
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -52,7 +56,7 @@ VERSION_STATE_FILE="$CONFIG_DIR/latest-revision"
 # KEY=value lines. Environment variables win over it so a single invocation can be
 # redirected without editing anything:
 #
-#   LOGOS_MODEL=openai/gpt-oss-120b claude-logos
+#   LOGOS_MODEL=openai/gpt-oss-120b claude-logos   # optional pin; omit to pick in Claude Code
 #
 if [[ -r "$CONFIG_FILE" ]]; then
   # Read as data, not as shell: a stray backtick or $(...) in a value must not run.
@@ -558,13 +562,22 @@ LOGOS_CONTEXT_MAX=0
 CONTEXT_ORIGIN="estimate"
 KNOWN_MODEL_IDS=""
 
-if [[ -z "$LOGOS_MODEL" ]]; then
-  die "no model configured
-  Set one in $CONFIG_FILE (LOGOS_MODEL=…), or per invocation:
-    LOGOS_MODEL=<model> claude-logos"
+# A pinned model is optional. With one, size the session against that model and
+# force every Claude Code alias at it. Without one, Claude Code lists Logos
+# models (Anthropic GET /v1/models) and the user switches with /model.
+HAS_PINNED_MODEL=0
+[[ -n "$LOGOS_MODEL" ]] && HAS_PINNED_MODEL=1
+
+probe_result=""
+if (( HAS_PINNED_MODEL )); then
+  probe_result="$(context_probe)"
+else
+  # Still learn the key's model ids for the "new model" notice and --check.
+  _ids="$(model_ids_probe | tr '\n' '\t')"
+  probe_result=$'ids\t'"${_ids}"
 fi
 
-probe_result="$(context_probe)"
+if (( HAS_PINNED_MODEL )); then
 case "$probe_result" in
   window*)
     IFS=$'\t' read -r _ LOGOS_CONTEXT_TOKENS LOGOS_CONTEXT_GUARANTEED LOGOS_CONTEXT_AVAILABLE \
@@ -641,6 +654,21 @@ AFFORDABLE_OUTPUT_TOKENS=$(( LOGOS_CONTEXT_TOKENS - LOGOS_CONTEXT_HEADROOM - 130
 if (( HARD_STOP_AT < CLAUDE_CODE_BASE_PROMPT_TOKENS )); then
   CONTEXT_TOO_SMALL=1
 fi
+else
+  # No pin: Claude Code sizes each model from List Models (`max_input_tokens`).
+  CONTEXT_TOO_SMALL=0
+  CONTEXT_FOR_CLI=0
+  COMPACT_AT=0
+  HARD_STOP_AT=0
+  LOGOS_CONTEXT_HEADROOM="${LOGOS_CONTEXT_HEADROOM:-0}"
+  case "$probe_result" in
+    ids*)
+      KNOWN_MODEL_IDS="${probe_result#ids}"
+      KNOWN_MODEL_IDS="${KNOWN_MODEL_IDS//$'\t'/ }"
+      KNOWN_MODEL_IDS="${KNOWN_MODEL_IDS# }"
+      ;;
+  esac
+fi
 
 # Group digits in threes. printf "%'d" would do this, but only under a locale
 # that defines a thousands separator — under LANG=C, which is what a login shell
@@ -658,8 +686,18 @@ thousands() {
 }
 
 context_report() {
-  printf 'model    : %s\n' "$LOGOS_MODEL"
+  if (( HAS_PINNED_MODEL )); then
+    printf 'model    : %s\n' "$LOGOS_MODEL"
+  else
+    printf 'model    : (Claude Code picks via GET /v1/models — set LOGOS_MODEL to pin a default)\n'
+  fi
   printf 'logos    : %s\n' "$LOGOS_URL"
+  if (( ! HAS_PINNED_MODEL )); then
+    if [[ -n "$KNOWN_MODEL_IDS" ]]; then
+      printf 'available : %s\n' "$KNOWN_MODEL_IDS"
+    fi
+    return 0
+  fi
   if [[ "$CONTEXT_ORIGIN" == "estimate" ]]; then
     printf 'context  : %s tokens (an estimate — Logos reports no size for this model)\n' \
       "$(thousands "$LOGOS_CONTEXT_TOKENS")"
@@ -733,16 +771,31 @@ export ANTHROPIC_BASE_URL="$LOGOS_URL"
 export ANTHROPIC_AUTH_TOKEN="$LOGOS_KEY"
 unset ANTHROPIC_API_KEY
 
-# Point every model slot at the same Logos model: the primary one, the small/fast slot
-# used for background tasks, and the aliases behind /model.
-export ANTHROPIC_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_DEFAULT_FABLE_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_SMALL_FAST_MODEL="$LOGOS_MODEL"   # pre-2.x name, harmless if ignored
-
-export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CONTEXT_FOR_CLI"
+# When a model is pinned, force every Claude Code slot at it (previous behaviour).
+# When it is not, clear any inherited pin/context so Claude Code discovers Logos
+# models via GET /v1/models and can switch with /model — an inherited
+# ANTHROPIC_MODEL would otherwise still select that id.
+if (( HAS_PINNED_MODEL )); then
+  export ANTHROPIC_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_DEFAULT_SONNET_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_DEFAULT_OPUS_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_DEFAULT_FABLE_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_SMALL_FAST_MODEL="$LOGOS_MODEL"   # pre-2.x name, harmless if ignored
+  export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CONTEXT_FOR_CLI"
+else
+  unset ANTHROPIC_MODEL \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL \
+    ANTHROPIC_DEFAULT_SONNET_MODEL \
+    ANTHROPIC_DEFAULT_OPUS_MODEL \
+    ANTHROPIC_DEFAULT_FABLE_MODEL \
+    ANTHROPIC_SMALL_FAST_MODEL \
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS
+  # Opt into gateway List Models -> /model. Requires Claude Code >= 2.1.257 when
+  # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set (older builds suppress
+  # discovery under that flag).
+  export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
+fi
 export CLAUDE_CODE_MAX_OUTPUT_TOKENS="$LOGOS_MAX_OUTPUT_TOKENS"
 # Keep telemetry, model discovery and other non-inference calls off api.anthropic.com,
 # so the only traffic leaving this machine goes to Logos.
@@ -779,7 +832,9 @@ command -v claude >/dev/null 2>&1 || die "claude is not on your PATH — install
 # Ask Logos to get the model ready before handing over. Backgrounded and
 # best-effort: the session must not wait on it, and a warm-up that fails changes
 # nothing except that the first request pays for the load itself.
-trigger_warmup &
+if (( HAS_PINNED_MODEL )); then
+  trigger_warmup &
+fi
 
 # Say how much room this session got. It changes between runs without anything the
 # user having changed, so printing it is the difference between "Claude Code
