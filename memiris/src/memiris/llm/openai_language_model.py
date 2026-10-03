@@ -6,7 +6,6 @@ Includes a LangChain ChatOpenAI adapter via `langchain_openai`.
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import os
@@ -38,28 +37,9 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         azure: bool = False,
         azure_endpoint: Optional[str] = None,
         api_version: Optional[str] = None,
-        reasoning_effort: Optional[str] = None,
-        extra_body: Optional[Dict[str, Any]] = None,
-        supports_temperature: Optional[bool] = None,
     ) -> None:
-        """
-        Args:
-            reasoning_effort: Sent as ``reasoning_effort`` on every request when set.
-            extra_body: Provider-specific fields merged into every request body,
-                e.g. ``{"chat_template_kwargs": {"enable_thinking": True}}`` for
-                vLLM-served Qwen3 models.
-            supports_temperature: Whether the model accepts ``temperature``.
-                ``None`` keeps the name-based default (GPT-5 models reject it).
-        """
         self._model = model
         self._azure = azure
-        self._reasoning_effort = reasoning_effort
-        self._extra_body = copy.deepcopy(extra_body) if extra_body else None
-        self._supports_temperature = (
-            supports_temperature
-            if supports_temperature is not None
-            else not model.startswith("gpt-5")
-        )
         self._api_key = (
             api_key
             or os.environ.get("OPENAI_API_KEY")
@@ -216,12 +196,10 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         payload: Dict[str, Any] = {}
         if options:
             payload.update({k: v for k, v in options.items() if k != "temperature"})
-            if options.get("temperature") is not None and self._supports_temperature:
+            if options.get("temperature") is not None and not self._model.startswith(
+                "gpt-5"
+            ):
                 payload["temperature"] = options["temperature"]
-        if self._reasoning_effort is not None:
-            payload["reasoning_effort"] = self._reasoning_effort
-        if self._extra_body:
-            payload["extra_body"] = copy.deepcopy(self._extra_body)
         if kwargs:
             payload.update(kwargs)
         payload = {k: v for k, v in payload.items() if v is not None}
@@ -260,24 +238,17 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         return WrappedEmbeddingResponse.from_openai_embedding(resp)
 
     def langchain_client(self) -> Union[ChatOpenAI, AzureChatOpenAI]:
-        request_options: Dict[str, Any] = {}
-        if self._reasoning_effort is not None:
-            request_options["reasoning_effort"] = self._reasoning_effort
-        if self._extra_body:
-            request_options["extra_body"] = copy.deepcopy(self._extra_body)
         if self._azure:
             return AzureChatOpenAI(
                 model=self._model,
                 api_key=self._api_key,  # type: ignore
                 azure_endpoint=self._azure_endpoint,
                 api_version=self._api_version,
-                **request_options,
             )
         return ChatOpenAI(
             model=self._model,
             api_key=self._api_key,  # type: ignore
             base_url=self._base_url,
-            **request_options,
         )
 
     def ensure_present(self) -> None:
