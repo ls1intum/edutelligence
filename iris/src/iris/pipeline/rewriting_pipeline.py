@@ -102,7 +102,7 @@ class RewritingPipeline(Pipeline):
             [prompt], CompletionArguments(temperature=0.4), tools=None
         )
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
-        response = response.contents[0].text_content.strip()
+        response = response.contents[0].text_content
 
         # remove ``` from start and end if exists
         if response.startswith("```") and response.endswith("```"):
@@ -170,7 +170,7 @@ class RewritingPipeline(Pipeline):
         )
 
         self._append_tokens(response.token_usage, PipelineEnum.IRIS_REWRITING_PIPELINE)
-        result = response.contents[0].text_content.strip()
+        result = response.contents[0].text_content
 
         if result.startswith("```json"):
             result = result.removeprefix("```json").removesuffix("```").strip()
