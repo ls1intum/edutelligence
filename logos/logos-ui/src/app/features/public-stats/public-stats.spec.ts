@@ -5,6 +5,22 @@ import { describe, expect, it } from 'vitest';
 import { PublicStats as PublicStatsPage } from './public-stats';
 import { PublicStats, PublicStatsService } from './public-stats.service';
 
+// The header's theme toggle asks the platform for the preferred color scheme
+// on first render; jsdom has no matchMedia, so give it one that answers light.
+if (!window.matchMedia) {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}
+
 function stats(overrides: Partial<PublicStats> = {}): PublicStats {
   return {
     students: 5,

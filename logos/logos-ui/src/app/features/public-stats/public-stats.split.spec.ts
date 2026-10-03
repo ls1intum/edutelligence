@@ -1,4 +1,4 @@
-import { Component } from '@angular/core';
+import { Component, ComponentRef } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
 import { PublicStatsSplit } from './public-stats.split';
@@ -9,10 +9,7 @@ const segments: ChartSlice[] = [
   { key: 'cloud', label: 'Cloud', value: 3, color: 'var(--series-2)', hidden: false },
 ];
 
-function split(): {
-  fixture: ReturnType<typeof TestBed.createComponent<HostComponent>>;
-  host: HostComponent;
-} {
+function split(): { fixture: ComponentRef<HostComponent>; host: HostComponent } {
   const fixture = TestBed.createComponent(HostComponent);
   fixture.detectChanges();
   return { fixture, host: fixture.componentInstance };

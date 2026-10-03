@@ -1,4 +1,4 @@
-import { Component } from '@angular/core';
+import { Component, ComponentRef } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
 import { PublicStatsPie } from './public-stats.pie';
@@ -10,10 +10,7 @@ const slices: ChartSlice[] = [
   { key: 'c', label: 'Gamma', value: 2, color: 'var(--series-3)', hidden: true },
 ];
 
-function pie(): {
-  fixture: ReturnType<typeof TestBed.createComponent<HostComponent>>;
-  host: HostComponent;
-} {
+function pie(): { fixture: ComponentRef<HostComponent>; host: HostComponent } {
   const fixture = TestBed.createComponent(HostComponent);
   fixture.detectChanges();
   return { fixture, host: fixture.componentInstance };
