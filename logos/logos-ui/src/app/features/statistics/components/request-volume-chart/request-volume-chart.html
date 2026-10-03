@@ -127,6 +127,9 @@
         >
           <span class="rvc-legend__dot" [style.background]="item.color" aria-hidden="true"></span>
           {{ item.label }}
+          @if (item.deleted) {
+            <i class="pi pi-trash rvc-legend__trash" aria-hidden="true" title="Model deleted"></i>
+          }
         </button>
       }
     </div>

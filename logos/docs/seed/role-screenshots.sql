@@ -47,6 +47,22 @@ WHERE created_by = 'docs-role-screenshots';
 DELETE FROM agent_workspaces
 WHERE created_by = 'docs-role-screenshots';
 
+-- Docs AI-workflow demo (commit_sha is the wipe namespace; short form abc123d).
+-- Do not delete team_repositories rows — on a shared DB the Logos team may
+-- already link the same slug for real use; only replace the docs analysis.
+DELETE FROM ai_llm_call_recommendations
+WHERE analysis_id IN (
+    SELECT id FROM ai_workflow_analyses
+    WHERE commit_sha = 'abc123docsrolescreenshots'
+);
+DELETE FROM ai_workflows
+WHERE analysis_id IN (
+    SELECT id FROM ai_workflow_analyses
+    WHERE commit_sha = 'abc123docsrolescreenshots'
+);
+DELETE FROM ai_workflow_analyses
+WHERE commit_sha = 'abc123docsrolescreenshots';
+
 DELETE FROM policies
 WHERE name LIKE 'Docs — %'
    OR name IN (
@@ -253,6 +269,32 @@ FROM (VALUES
 ) AS v(name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
 WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = v.name);
 
+UPDATE models SET profile_ratings = v.ratings::jsonb
+FROM (VALUES
+    ('llama-3.1-8b-instruct', '{"latency":5,"quality":3,"price":4}'),
+    ('qwen-2.5-72b-instruct', '{"latency":2,"quality":5,"price":2}'),
+    ('mistral-small-3.2-24b', '{"latency":4,"quality":3,"price":5}')
+) AS v(name, ratings)
+WHERE models.name = v.name
+  AND (models.profile_ratings IS NULL OR models.profile_ratings = '{}'::jsonb);
+
+-- Retired demo model: created here, given usage below, then deleted at the
+-- end of the seed. The delete trigger stamps its name onto the usage rows,
+-- so the statistics page shows the usage as a trash-marked deleted-model
+-- entry. Catalog-only on purpose (no providers, no permissions): it never
+-- appears in the model list or in routing.
+--
+-- The description carries the [docs-role-screenshots] marker. On a shared
+-- development database a real model may already use the name gpt-4o-mini
+-- (perhaps with no provider link yet); the marker is what scopes the usage
+-- insert and the delete below to the row this seed run created, so an
+-- existing model of the same name is neither polluted with demo usage nor
+-- removed.
+INSERT INTO models (name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
+SELECT 'gpt-4o-mini', 0, 0, 0, 0, 'chat',
+       'Fast general-purpose model. [docs-role-screenshots]'
+WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = 'gpt-4o-mini');
+
 INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning)
 SELECT m.id,
        true,
@@ -432,6 +474,46 @@ JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
 JOIN models m ON m.name = 'mistral-small-3.2-24b'
 JOIN providers p ON p.name = 'Docs Cloud (EU)';
 
+-- Usage on the model this seed retires: spread across the last ten days so
+-- the statistics page's default window shows a deleted-model entry.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-retired-' || g.n,
+    k.id, m.id, p.id, 'success',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval,
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '1 second',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '1.2 seconds',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '2 seconds',
+    (g.n % 12 = 0),
+    0,
+    k.user_id,
+    k.team_id,
+    'docs-role-screenshots',
+    true,
+    true,
+    60000 + (g.n * 9000)
+FROM generate_series(1, 12) AS g(n)
+JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
+JOIN models m ON m.name = 'gpt-4o-mini'
+             AND m.description LIKE '%[docs-role-screenshots]'
+JOIN providers p ON p.name = 'Docs Local Worker';
+
+-- Retire the demo model. The BEFORE DELETE trigger stamps the model name onto
+-- every usage row before the foreign key nulls the id, so the statistics
+-- page keeps showing the usage under the model's former name — flagged
+-- deleted. The marker (not just the name, and not just a missing provider
+-- link, which the schema does not guarantee) scopes the delete to the row
+-- this seed run created, so a real model of the same name on a shared
+-- development database is never removed.
+DELETE FROM models m
+WHERE m.name = 'gpt-4o-mini'
+  AND m.description LIKE '%[docs-role-screenshots]';
+
 INSERT INTO usage_tokens (type_id, log_entry_id, token_count)
 SELECT tt.id, le.id, 350 + (le.id % 200)
 FROM log_entry le
@@ -523,6 +605,78 @@ WHERE NOT EXISTS (
     WHERE a.created_by = 'docs-role-screenshots' AND a.task = s.task
 );
 
+-- Team → Repositories / Workflows tabs (role-guide PNGs).
+INSERT INTO team_repositories (team_id, repo_url, repo_slug, branch, paths)
+SELECT t.id,
+       'https://github.com/ls1intum/edutelligence.git',
+       'ls1intum/edutelligence',
+       'main',
+       '["logos/logos-agent/app"]'::jsonb
+FROM teams t
+WHERE t.name = 'Logos'
+  AND NOT EXISTS (
+      SELECT 1 FROM team_repositories tr
+      WHERE tr.team_id = t.id AND tr.repo_slug = 'ls1intum/edutelligence'
+  );
+
+INSERT INTO ai_workflow_analyses (
+    team_id, team_repository_id, commit_sha, status, source, finished_at
+)
+SELECT t.id, tr.id, 'abc123docsrolescreenshots', 'succeeded', 'agent',
+       now() - interval '5 minutes'
+FROM teams t
+JOIN team_repositories tr
+  ON tr.team_id = t.id AND tr.repo_slug = 'ls1intum/edutelligence'
+WHERE t.name = 'Logos'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_workflow_analyses a
+      WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  );
+
+INSERT INTO ai_workflows (analysis_id, name, trigger_summary, diagram_mermaid, sort_order)
+SELECT a.id,
+       'Agent session finalize',
+       'HTTP / agent session completion',
+       $mm$flowchart TD
+  A[Session succeeds] --> B{no_push?}
+  B -->|yes| C[Skip remote push]
+  C --> D[Write analysis.json]
+  D --> E[Ingest recommendations (pending review)]
+  B -->|no| F[Finalize + open PR]$mm$,
+       0
+FROM ai_workflow_analyses a
+WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_workflows w WHERE w.analysis_id = a.id
+  );
+
+INSERT INTO ai_llm_call_recommendations (
+    analysis_id, workflow_id, team_id, file_path, start_line, end_line,
+    detected_model, recommended_sla, objective_priority, confidence, justification, review_status
+)
+SELECT a.id, w.id, a.team_id, r.file_path, r.start_line, r.end_line,
+       r.detected_model, r.recommended_sla, r.objective_priority::jsonb,
+       r.confidence, r.justification, 'pending'
+FROM ai_workflow_analyses a
+JOIN ai_workflows w ON w.analysis_id = a.id
+JOIN (VALUES
+    ('logos/logos-agent/app/sessions.py', 1483, 1483, 'qwen-2.5-72b-instruct',
+     'ux-high-prio', '["quality","latency","price"]', 0.72,
+     'Async agent helper work — user is not blocked on the response.'),
+    ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 115, 'claude-opus',
+     'ux-critical', '["latency","quality","price"]', 0.81,
+     'Interactive team detail load awaited by the signed-in owner.'),
+    ('logos/docs/seed/role-screenshots.sql', 1, 1, NULL,
+     'ux-background', '["price","quality","latency"]', 0.66,
+     'Offline seed / batch documentation path.')
+) AS r(file_path, start_line, end_line, detected_model, recommended_sla, objective_priority, confidence, justification)
+  ON true
+WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_llm_call_recommendations rec
+      WHERE rec.analysis_id = a.id AND rec.file_path = r.file_path
+  );
+
 COMMIT;
 
 SELECT 'docs role-screenshots seed applied' AS status,
@@ -531,5 +685,18 @@ SELECT 'docs role-screenshots seed applied' AS status,
        )) AS models,
        (SELECT count(*) FROM policies WHERE name LIKE 'Docs — %') AS policies,
        (SELECT count(*) FROM log_entry WHERE environment = 'docs-role-screenshots') AS log_entries,
+       (SELECT count(*) FROM log_entry
+        WHERE environment = 'docs-role-screenshots'
+          AND model_id IS NULL AND model_name = 'gpt-4o-mini') AS deleted_model_entries,
        (SELECT count(*) FROM batch_objects WHERE upstream_id LIKE 'batch_docs_%') AS batches,
-       (SELECT count(*) FROM agent_sessions WHERE created_by = 'docs-role-screenshots') AS agent_sessions;
+       (SELECT count(*) FROM agent_sessions WHERE created_by = 'docs-role-screenshots') AS agent_sessions,
+       (SELECT count(*) FROM team_repositories tr
+        JOIN teams t ON t.id = tr.team_id
+        WHERE t.name = 'Logos' AND tr.repo_slug = 'ls1intum/edutelligence') AS team_repos,
+       (SELECT count(*) FROM ai_workflow_analyses
+        WHERE commit_sha = 'abc123docsrolescreenshots') AS ai_analyses,
+       (SELECT count(*) FROM ai_llm_call_recommendations
+        WHERE analysis_id IN (
+            SELECT id FROM ai_workflow_analyses
+            WHERE commit_sha = 'abc123docsrolescreenshots'
+        )) AS ai_recommendations;

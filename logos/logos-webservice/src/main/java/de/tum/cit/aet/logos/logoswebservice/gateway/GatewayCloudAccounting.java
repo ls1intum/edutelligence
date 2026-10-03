@@ -5,27 +5,37 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Budget-visible accounting for the direct-cloud path.
  *
- * <p>{@link #admitAndReserve} locks the API key row, checks budget, optionally
- * enforces a shared RPM window from {@code log_entry}, then inserts an in-flight
- * reservation ({@code result_status IS NULL}) so concurrent admissions cannot
- * both pass the same check. {@link #reconcileStale} zeros abandoned rows after
- * process loss.
+ * <p>{@link #admitAndReserve} checks the budget from the short-TTL snapshot,
+ * then inserts an in-flight reservation ({@code result_status IS NULL}) and
+ * after commit adds it to this instance's snapshot. Cloud RPM/TPM are enforced
+ * separately in Redis ({@link GatewayCloudRateLimiter}) before this method runs.
+ * Nothing on this path locks a shared row or touches more than the key's own
+ * recent rows: requests on one key run concurrently, across threads and across
+ * replicas, and their cost does not grow with the size of the log. The budget
+ * is approximate by design — see {@link GatewayBudgetService} for the
+ * overshoot bound.
+ *
+ * <p>{@link #reconcileStale} zeros reservations abandoned after process loss.
+ * It sweeps the whole table (bounded by the partial index on in-flight gateway
+ * rows), so it runs on a schedule rather than inside a request.
  *
  * <p>On success the reservation is replaced by the real charge: the reported
  * token counts are written to {@code usage_tokens} and the row is un-finalized,
@@ -66,46 +76,23 @@ public class GatewayCloudAccounting {
     }
 
     /**
-     * Atomically check budget (and optional shared RPM) then insert an in-flight
-     * reservation. Serializes per API key via {@code SELECT … FOR UPDATE}.
+     * Check budget then insert an in-flight reservation.
      *
-     * @param sharedRpmLimit per-key cloud RPM across replicas, or {@code null}
-     * @param requestBody    the forwarded request, stored when the key logs payloads
+     * <p>Deliberately lock-free. A per-key row lock here would serialize every
+     * request on that key for the whole admission, on every replica at once;
+     * the reservation row is what makes concurrent budget admissions visible
+     * to each other, and the insert is atomic on its own. Two requests on the
+     * same key that are admitted in the same instant may both pass the budget
+     * check — the overshoot that admits is one reservation per such request,
+     * the bound the budget already documents. Cloud RPM/TPM are claimed in
+     * Redis before this method is called.
+     *
+     * @param requestBody the forwarded request, stored when the key logs payloads
      * @return log_entry id, or {@code null} when reservation amount is 0
      */
     @Transactional
-    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
-                                   Integer sharedRpmLimit, byte[] requestBody) {
-        MapSqlParameterSource lockParams = new MapSqlParameterSource("aki", key.id());
-        Integer locked = jdbc.query("""
-            SELECT id FROM api_keys WHERE id = :aki FOR UPDATE
-            """, lockParams, rs -> rs.next() ? rs.getInt(1) : null);
-        if (locked == null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or missing API key");
-        }
-
-        reconcileStale();
-        budgetService.invalidateUsageCache(key);
+    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment, byte[] requestBody) {
         budgetService.enforceCloudBudget(key);
-
-        if (sharedRpmLimit != null && sharedRpmLimit > 0) {
-            MapSqlParameterSource rpmParams = new MapSqlParameterSource()
-                .addValue("aki", key.id())
-                .addValue("window", GatewayCloudRateLimiter.WINDOW_SECONDS);
-            Integer recent = jdbc.queryForObject("""
-                SELECT COUNT(*)::int
-                FROM log_entry
-                WHERE api_key_id = :aki
-                  AND request_id LIKE 'gw-%%'
-                  AND timestamp_request > NOW() - make_interval(secs => :window)
-                """, rpmParams, Integer.class);
-            if (recent != null && recent >= sharedRpmLimit) {
-                throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS,
-                    "RPM limit reached (" + sharedRpmLimit + "/"
-                        + GatewayCloudRateLimiter.WINDOW_SECONDS + "s)");
-            }
-        }
 
         if (reservationMicroCents <= 0) {
             return null;
@@ -139,8 +126,23 @@ public class GatewayCloudAccounting {
             )
             """, params, keys, new String[] {"id"});
         Number id = keys.getKey();
-        budgetService.invalidateUsageCache(key);
+        // Bump the snapshot only after commit so a concurrent refresh cannot
+        // SELECT before the row is visible and then overwrite the bump.
+        noteReservationAfterCommit(key, reservationMicroCents);
         return id == null ? null : id.intValue();
+    }
+
+    private void noteReservationAfterCommit(GatewayKey key, long microCents) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    budgetService.noteReservation(key, microCents);
+                }
+            });
+        } else {
+            budgetService.noteReservation(key, microCents);
+        }
     }
 
     /**
@@ -374,7 +376,17 @@ public class GatewayCloudAccounting {
     /**
      * Zero gateway reservations abandoned after process loss (no response,
      * still in-flight past the stale window).
+     *
+     * <p>Runs on a fixed delay on every replica; the update is idempotent, so
+     * replicas sweeping at once only cost each other a no-op. The predicate is
+     * the one {@code idx_log_entry_gateway_in_flight} is defined on, which keeps
+     * the sweep proportional to the rows still in flight rather than to the
+     * table.
      */
+    @Scheduled(
+        initialDelayString = "${logos.gateway.budget-reservation-reconcile-seconds:60}",
+        fixedDelayString = "${logos.gateway.budget-reservation-reconcile-seconds:60}",
+        timeUnit = TimeUnit.SECONDS)
     public void reconcileStale() {
         jdbc.update("""
             UPDATE log_entry
@@ -384,10 +396,10 @@ public class GatewayCloudAccounting {
                    cost_finalized = TRUE,
                    error_message = 'gateway reservation abandoned (stale)'
              WHERE result_status IS NULL
+               AND request_id LIKE 'gw-%'
                AND cost_finalized = TRUE
                AND settled_cost_micro_cents IS NOT NULL
                AND settled_cost_micro_cents > 0
-               AND request_id LIKE 'gw-%%'
                AND timestamp_response IS NULL
                AND timestamp_request < NOW() - make_interval(mins => :mins)
             """, new MapSqlParameterSource("mins", staleAfterMinutes));

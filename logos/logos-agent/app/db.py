@@ -564,6 +564,9 @@ async def create_session(
     reaction_target: str | None = None,
     priority: int = 50,
     priority_reason: str | None = None,
+    repo_url: str | None = None,
+    repo_slug: str | None = None,
+    team_repository_id: int | None = None,
 ) -> int:
     async with sessionmaker()() as db:
         # Lock the workspace row before inserting. delete_workspace takes
@@ -589,14 +592,16 @@ async def create_session(
                         (workspace_id, task, model, status, created_by,
                          open_pull_request, deploy_to_dev, screenshot_paths,
                          no_push, trigger_kind, trigger_ref, branch_name,
-                         reply_target, reaction_target, priority, priority_reason)
+                         reply_target, reaction_target, priority, priority_reason,
+                         repo_url, repo_slug, team_repository_id)
                     VALUES
                         (:workspace_id, :task, :model, 'queued', :created_by,
                          :open_pr, :deploy, CAST(:paths AS jsonb),
                          :no_push, :trigger_kind, :trigger_ref, :branch,
                          :reply_target,
                          :reaction_target,
-                         :priority, :priority_reason)
+                         :priority, :priority_reason,
+                         :repo_url, :repo_slug, :team_repository_id)
                     RETURNING id
                     """),
                 {
@@ -622,6 +627,11 @@ async def create_session(
                     "reaction_target": reaction_target,
                     "priority": priority,
                     "priority_reason": priority_reason,
+                    # Per-session repository target (Liquibase 043). NULL keeps
+                    # the runner's global LOGOS_AGENT_REPO_* settings.
+                    "repo_url": repo_url,
+                    "repo_slug": repo_slug,
+                    "team_repository_id": team_repository_id,
                 },
             )
         ).scalar_one()
@@ -826,6 +836,8 @@ _SESSION_SELECT = """
            s.screenshot_paths, s.no_push, s.trigger_kind, s.trigger_ref,
            s.reply_target, s.reaction_target,
            s.priority, s.priority_reason, s.environment_notes,
+           s.repo_url, s.repo_slug, s.team_repository_id,
+           t.name AS team_name,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,
@@ -833,6 +845,8 @@ _SESSION_SELECT = """
              WHERE e.session_id = s.id AND e.kind = 'screenshot') AS screenshot_count
       FROM agent_sessions s
       JOIN agent_workspaces w ON w.id = s.workspace_id
+      LEFT JOIN team_repositories tr ON tr.id = s.team_repository_id
+      LEFT JOIN teams t ON t.id = tr.team_id
 """
 
 

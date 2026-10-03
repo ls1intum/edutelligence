@@ -1154,6 +1154,7 @@ class LogosNodeRuntimeRegistry:
         params: dict[str, Any] | None = None,
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
+        on_sent: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         loop = asyncio.get_running_loop()
@@ -1201,6 +1202,11 @@ class LogosNodeRuntimeRegistry:
             session.pending_commands.pop(cmd_id, None)
             _undo_optimistic_calibration_mark()
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
+
+        # The command is on the wire; session acquisition and the send lock no
+        # longer belong to the provider's own window.
+        if on_sent is not None:
+            on_sent()
 
         try:
             result = await asyncio.wait_for(fut, timeout=max(1, timeout_seconds))
@@ -1257,6 +1263,7 @@ class LogosNodeRuntimeRegistry:
         params: dict[str, Any] | None = None,
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
+        on_sent: Callable[[], None] | None = None,
     ) -> AsyncIterator[bytes]:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         cmd_id = str(uuid.uuid4())
@@ -1275,6 +1282,11 @@ class LogosNodeRuntimeRegistry:
         except Exception as exc:  # noqa: BLE001
             session.pending_streams.pop(cmd_id, None)
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
+
+        # The command is on the wire; session acquisition and the send lock no
+        # longer belong to the provider's own window.
+        if on_sent is not None:
+            on_sent()
 
         # Whether the worker told us the stream is over. False means we are
         # unwinding early — the consumer went away — and the worker is still
