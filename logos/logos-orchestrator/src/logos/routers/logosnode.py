@@ -178,7 +178,12 @@ async def _write_status_samples(provider_id: int) -> None:
         while (entry := _unsaved_samples.pop(provider_id, None)) is not None:
             sample, count_only = entry
             _last_snapshot_at[provider_id] = time.monotonic()
-            persisted = await asyncio.to_thread(_persist_logosnode_status, provider_id, sample, count_only)
+            try:
+                persisted = await asyncio.to_thread(_persist_logosnode_status, provider_id, sample, count_only)
+            except Exception:
+                # A malformed sample must not end the writer for later ones.
+                logger.warning("Dropping an unwritable status of provider %s", provider_id, exc_info=True)
+                continue
             if persisted is None:
                 continue
             changed_models, rejected_models = persisted

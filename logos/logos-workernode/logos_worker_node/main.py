@@ -144,9 +144,8 @@ async def _load_central_profiles(
 ) -> None:
     """Fill the registry from Logos before any lane or cache plan reads it.
 
-    Profiles are stored only in Logos' database, so without Logos the worker
-    has none to start lanes with: it waits instead of guessing. A worker with
-    the Logos bridge disabled has no store at all and starts empty.
+    Profiles live only in Logos' database, so the worker waits for Logos
+    instead of guessing; with the bridge disabled it starts empty.
     """
     snapshot = await gpu_collector.get_snapshot()
     config_path = LogosBridgeClient._resolve_config_path()

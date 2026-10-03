@@ -5195,11 +5195,10 @@ async def _calibration_status_for_provider(
     provider_id: int,
     models: list[str],
 ) -> Optional[tuple[set[str], list[str]]]:
-    """Return (done, pending) benchmark models for one provider.
+    """Return (done, pending) benchmark models from the worker's live status.
 
-    Profiles live in Logos, which reports them with the worker's runtime
-    snapshot. None when that is unavailable (e.g. the worker is stopped):
-    unknown is not uncalibrated, and must never trigger a profile reset.
+    None when it is unavailable (e.g. the worker is stopped): unknown is not
+    uncalibrated, and must never trigger a profile reset.
     """
     try:
         r = await client.post(

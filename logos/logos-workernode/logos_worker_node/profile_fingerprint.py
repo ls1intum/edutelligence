@@ -12,7 +12,7 @@ import logging
 from typing import Any, Iterable
 
 from logos_worker_node.metal import is_metal_backend
-from logos_worker_node.models import AppConfig, DeviceInfo, model_can_sleep
+from logos_worker_node.models import AppConfig, DeviceInfo, MetalConfig, model_can_sleep
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ def compute_calibration_key(
     return key
 
 
-def _metal_engine_settings(metal_config: Any) -> dict[str, Any]:
+def _metal_engine_settings(metal_config: MetalConfig) -> dict[str, Any]:
     """The node-wide Metal knobs calibration and serving both apply.
 
     The key is stored in clear, so free-form env overrides only as a hash.

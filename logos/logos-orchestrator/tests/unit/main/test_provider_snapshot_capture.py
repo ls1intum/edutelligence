@@ -184,3 +184,25 @@ def test_an_accepted_status_ends_the_resync_backoff(monkeypatch, registry):
     _capture({"timestamp": _TS})
 
     assert 7 not in logosnode_mod._resync_rounds
+
+
+def test_a_malformed_status_does_not_stop_the_writer(monkeypatch, registry):
+    db = _SnapshotDB()
+    _patched_capture(monkeypatch, db)
+    original = logosnode_mod._persist_logosnode_status
+
+    def _flaky(provider_id, sample, count_only=False):
+        if sample["runtime_payload"].get("bad"):
+            raise ValueError("malformed")
+        return original(provider_id, sample, count_only)
+
+    monkeypatch.setattr(logosnode_mod, "_persist_logosnode_status", _flaky)
+
+    async def _run():
+        await logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": _TS, "bad": True})
+        await asyncio.sleep(0)
+        await logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:01+00:00"})
+        await asyncio.gather(*list(logosnode_mod._sample_writers.values()))
+
+    asyncio.run(_run())
+    assert len(db.inserts) == 1
