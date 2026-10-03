@@ -30,7 +30,7 @@ from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.model_cache import ModelRamCache, _DisabledModelRamCache, create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import ProcessState, model_can_sleep
-from logos_worker_node.profile_fingerprint import cached_vllm_version, calibration_keys
+from logos_worker_node.profile_fingerprint import cached_vllm_version, calibration_keys, serving_vllm_binary
 from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
 from logos_worker_node.vllm_compat import _DEFAULT_VLLM
 
@@ -153,7 +153,9 @@ async def _load_central_profiles(
     plans = plans_from_config(config_path) if config_path.exists() else []
     models = list(cfg.logos.configured_models) if cfg.logos else []
     model_profiles.set_calibration_keys(
-        calibration_keys(cfg, plans, models, list(snapshot.devices), cached_vllm_version(_DEFAULT_VLLM))
+        calibration_keys(
+            cfg, plans, models, list(snapshot.devices), cached_vllm_version(serving_vllm_binary(cfg, _DEFAULT_VLLM))
+        )
     )
     if not (cfg.logos and cfg.logos.enabled):
         logger.info("Logos bridge disabled — starting without model profiles")

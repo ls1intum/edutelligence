@@ -50,6 +50,7 @@ from logos.model_profile_store import (
     is_central_profile_payload,
     is_new_local_calibration,
     material_profile,
+    overridden_fields,
     persistable_profile,
     profile_digest,
     reported_profile,
@@ -292,7 +293,13 @@ def _persist_model_profiles(
         material = profile_digest(revision, material_profile(echoed))
         if not _profile_write_cache.unchanged(provider_id, model_name, digest, material, now):
             if not db.persist_central_model_profile(
-                provider_id, model_name, stored, reported_profile(echoed), revision, key_hash
+                provider_id,
+                model_name,
+                stored,
+                reported_profile(echoed),
+                revision,
+                key_hash,
+                overridden_fields(echoed),
             ):
                 rejected.append(model_name)
                 continue

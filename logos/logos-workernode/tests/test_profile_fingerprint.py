@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from logos_worker_node.models import AppConfig, DeviceInfo
@@ -71,11 +73,17 @@ def test_gpu_count_is_left_out_so_tp_stays_comparable():
     assert _key(plan, [_gpu(0), _gpu(1)]) == _key(plan, [_gpu(0), _gpu(1), _gpu(2), _gpu(3)])
 
 
-def test_only_the_calibration_slice_counts():
-    """3 GPUs calibrate on the power-of-two slice 0,1; a different leftover
-    GPU 2 is never touched and must not split the key."""
+def test_every_gpu_counts_for_an_unpinned_plan():
+    """Calibration prefers idle GPUs, so a probe may run on GPU 2; replacing
+    it with another class must mark the calibration stale."""
     plan = {"model": "org/m"}
+    assert _key(plan, [_gpu(0), _gpu(1), _gpu(2)]) != _key(plan, [_gpu(0), _gpu(1), _gpu(2, name="Other GPU")])
+
+
+def test_only_the_pinned_gpus_count_for_a_pinned_plan():
+    plan = {"model": "org/m", "gpu_devices": "0,1"}
     assert _key(plan, [_gpu(0), _gpu(1), _gpu(2)]) == _key(plan, [_gpu(0), _gpu(1), _gpu(2, name="Other GPU")])
+    assert _key(plan, [_gpu(0), _gpu(1), _gpu(2)]) != _key(plan, [_gpu(0), _gpu(1, name="Other GPU"), _gpu(2)])
 
 
 def test_models_without_a_plan_get_a_bare_key():
@@ -94,3 +102,31 @@ def test_unknown_vllm_version_is_probed_again(monkeypatch):
     assert profile_fingerprint.cached_vllm_version("vllm") == ""
     assert profile_fingerprint.cached_vllm_version("vllm") == "0.30.0"
     assert profile_fingerprint.cached_vllm_version("vllm") == "0.30.0"
+
+
+def test_metal_engine_settings_change_the_key(monkeypatch):
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    plan = {"model": "org/m"}
+    reference = _key(plan, [_gpu(0)])
+    for change in ({"memory_fraction": 0.5}, {"use_paged_attention": False}, {"env_overrides": {"VLLM_METAL_X": "1"}}):
+        cfg = AppConfig.model_validate({"engines": {"metal": change}})
+        assert _key(plan, [_gpu(0)], cfg=cfg) != reference
+    secret = AppConfig.model_validate({"engines": {"metal": {"env_overrides": {"HF_TOKEN": "hf_secret123"}}}})
+    assert "hf_secret123" not in json.dumps(compute_calibration_key(secret, plan, [_gpu(0)], "0"))
+
+
+def test_cuda_keys_carry_no_metal_settings():
+    cfg = AppConfig.model_validate({"engines": {"metal": {"memory_fraction": 0.5}}})
+    assert _key({"model": "org/m"}, [_gpu(0)], cfg=cfg) == _key({"model": "org/m"}, [_gpu(0)])
+
+
+def test_metal_versions_come_from_the_metal_binary(monkeypatch, tmp_path):
+    from logos_worker_node.profile_fingerprint import serving_vllm_binary
+
+    binary = tmp_path / "vllm"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    cfg = AppConfig.model_validate({"engines": {"metal": {"vllm_binary": str(binary)}}})
+    assert serving_vllm_binary(cfg, "vllm") == "vllm"
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    assert serving_vllm_binary(cfg, "vllm") == str(binary)

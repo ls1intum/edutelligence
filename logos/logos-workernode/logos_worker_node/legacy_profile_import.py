@@ -39,7 +39,12 @@ def read_legacy_profiles(state_dir: Path) -> dict[str, Any] | None:
             logger.exception("Could not read %s; its profiles are not handed over", profiles_path)
     unsupported: dict[str, str] = {}
     if unsupported_path.exists():
-        for line in unsupported_path.read_text(encoding="utf-8").splitlines():
+        try:
+            lines = unsupported_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            logger.exception("Could not read %s; its verdicts are not handed over", unsupported_path)
+            lines = []
+        for line in lines:
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             parts = line.split("\t")

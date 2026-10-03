@@ -140,3 +140,8 @@ def test_no_reported_key_hashes_cost_no_round_trip():
     db = _db()
     db.update_reported_calibration_keys(7, {})
     db.session.execute.assert_not_called()
+
+
+def test_an_echo_keeps_the_stored_values_of_overridden_fields():
+    assert "FROM jsonb_each(model_profiles.profile)" in _PERSIST_CENTRAL_PROFILE_SQL
+    assert ":overridden_fields" in _PERSIST_CENTRAL_PROFILE_SQL

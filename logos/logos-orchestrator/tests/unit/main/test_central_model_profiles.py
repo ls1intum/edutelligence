@@ -60,8 +60,11 @@ class _FakeDB:
     def upsert_model_profiles(self, provider_id, profiles):
         self.legacy_upserts.append((provider_id, profiles))
 
-    def persist_central_model_profile(self, provider_id, model_name, profile, reported, revision, key_hash):
+    def persist_central_model_profile(
+        self, provider_id, model_name, profile, reported, revision, key_hash, overridden_fields=None
+    ):
         self.persisted.append((provider_id, model_name, profile, revision, key_hash))
+        self.overridden = overridden_fields
         self.reported = reported
         return self.accept
 
@@ -394,3 +397,11 @@ def test_resyncs_back_off_while_the_worker_keeps_rejecting(monkeypatch):
 
     asyncio.run(_run())
     assert delays == [5.0, 10.0, 20.0, 40.0, 80.0, 160.0, 300.0, 300.0]
+
+
+def test_overridden_fields_are_passed_on_so_their_stored_values_survive():
+    db = _FakeDB()
+    echo = {"max_context_length": 32768, "overridden_fields": ["max_context_length"], "sync_revision": 1}
+    logosnode_mod._persist_model_profiles(db, 1, {"org/model": echo})
+    assert db.persisted[0][2] == {}
+    assert db.overridden == ["max_context_length"]

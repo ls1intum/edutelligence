@@ -5194,22 +5194,25 @@ async def _calibration_status_for_provider(
     logos_key: str,
     provider_id: int,
     models: list[str],
-) -> tuple[set[str], list[str]]:
+) -> Optional[tuple[set[str], list[str]]]:
     """Return (done, pending) benchmark models for one provider.
 
     Profiles live in Logos, which reports them with the worker's runtime
-    snapshot. A worker that is not connected counts as nothing done.
+    snapshot. None when that is unavailable (e.g. the worker is stopped):
+    unknown is not uncalibrated, and must never trigger a profile reset.
     """
-    profiles: dict = {}
     try:
         r = await client.post(
             f"{admin_url}/logosdb/providers/logosnode/status",
             json={"provider_id": provider_id, "logos_key": logos_key},
         )
-        if r.status_code == 200:
-            profiles = ((r.json() or {}).get("runtime") or {}).get("model_profiles") or {}
     except Exception as exc:
         print(f"  [calib] provider {provider_id}: status request failed: {exc}", file=sys.stderr)
+        return None
+    if r.status_code != 200:
+        print(f"  [calib] provider {provider_id}: status unavailable (HTTP {r.status_code})", file=sys.stderr)
+        return None
+    profiles = ((r.json() or {}).get("runtime") or {}).get("model_profiles") or {}
     done = {model for model in models if _profile_is_calibrated(profiles.get(model))}
     return done, [model for model in models if model not in done]
 
@@ -5238,7 +5241,12 @@ async def _wait_for_calibration_complete(
             all_done = True
             print(f"  [calib] progress @ {time.strftime('%H:%M:%S')}:")
             for pid in provider_ids:
-                done, pending = await _calibration_status_for_provider(client, admin_url, logos_key, pid, models)
+                status = await _calibration_status_for_provider(client, admin_url, logos_key, pid, models)
+                if status is None:
+                    print(f"    provider {pid}: status unavailable")
+                    all_done = False
+                    continue
+                done, pending = status
                 line = f"    provider {pid}: {len(done)}/{len(models)} done"
                 if pending:
                     line += f"  | pending: {', '.join(pending)}"
@@ -5460,9 +5468,16 @@ async def _ensure_calibration_complete_all_nodes(
     print("\n[Ensure-Calibrate] Checking calibration status on all providers ...")
     pending_by_provider: dict[int, list[str]] = {}
     pending_anywhere: set[str] = set()
+    unavailable: list[int] = []
     async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
         for pid in provider_ids:
-            done, pending = await _calibration_status_for_provider(client, admin_url, logos_key, pid, models)
+            status = await _calibration_status_for_provider(client, admin_url, logos_key, pid, models)
+            if status is None:
+                # Typically a stopped worker: calibrate it, but reset nothing.
+                unavailable.append(pid)
+                print(f"  [calib] provider {pid}: status unavailable — no profile is reset there")
+                continue
+            done, pending = status
             pending_by_provider[pid] = pending
             line = f"  [calib] provider {pid}: {len(done)}/{len(models)} calibrated"
             if pending:
@@ -5480,14 +5495,16 @@ async def _ensure_calibration_complete_all_nodes(
         )
         return False
 
-    if not pending_anywhere:
+    if not pending_anywhere and not unavailable:
         print("[Ensure-Calibrate] All benchmark models already calibrated on all providers — nothing to do.")
         return True
 
     print("\n" + "=" * 58)
     print("  [Ensure-Calibrate] Finishing calibration for incomplete models")
     print("=" * 58)
-    print(f"  Incomplete across nodes: {', '.join(sorted(pending_anywhere))}")
+    print(f"  Incomplete across nodes: {', '.join(sorted(pending_anywhere)) or '-'}")
+    if unavailable:
+        print(f"  Status unavailable (calibrated, not reset): {', '.join(map(str, unavailable))}")
 
     # Stop first: the sleep-mode override is only read at startup.
     _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)

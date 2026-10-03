@@ -262,6 +262,37 @@ def test_ensure_calibration_resets_incomplete_then_triggers_with_sleep_on():
     assert order.index("sleep") < order.index("start")
 
 
+def test_ensure_calibration_never_resets_a_provider_whose_status_is_unknown():
+    """A stopped worker answers /status with 503; treating that as
+    "nothing calibrated" would wipe every valid profile it has."""
+    with (
+        patch.object(bm, "_calibration_status_for_provider", new=AsyncMock(return_value=None)),
+        patch.object(bm, "_stop_workernode_via_ssh"),
+        patch.object(bm, "_reset_profiles_via_rest", new=AsyncMock(return_value=[])) as reset,
+        patch.object(bm, "_set_logos_sleep_mode_via_ssh"),
+        patch.object(bm, "_start_workernode_via_ssh"),
+        patch.object(bm, "_trigger_calibration_via_rest", new=AsyncMock(return_value=True)) as trig,
+        patch.object(bm, "_wait_for_calibration_complete", new=AsyncMock(return_value=True)) as wait,
+    ):
+        ok = asyncio.run(
+            bm._ensure_calibration_complete_all_nodes(
+                ["h1"], "u", None, "/opt/wn", ["m1"], 10.0, "https://x", "k", [3], 443, True
+            )
+        )
+    assert ok is True
+    reset.assert_not_awaited()
+    trig.assert_awaited_once()
+    wait.assert_awaited_once()
+
+
+def test_an_unavailable_status_is_reported_as_unknown_not_pending():
+    client = MagicMock()
+    client.post = AsyncMock(return_value=MagicMock(status_code=503))
+    assert asyncio.run(bm._calibration_status_for_provider(client, "https://x", "k", 3, ["m1"])) is None
+    client.post = AsyncMock(side_effect=OSError("refused"))
+    assert asyncio.run(bm._calibration_status_for_provider(client, "https://x", "k", 3, ["m1"])) is None
+
+
 def test_ensure_calibration_fails_without_provider_ids():
     # Pending models but no provider IDs → cannot trigger, must not hang/pass.
     with (

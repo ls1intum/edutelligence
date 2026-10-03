@@ -54,15 +54,18 @@ def gpu_classes(devices: Iterable[DeviceInfo]) -> list[dict[str, Any]]:
 
 
 def calibration_devices(plan: dict[str, Any], devices: list[DeviceInfo]) -> list[DeviceInfo]:
-    """The GPUs a calibration of this plan runs on."""
-    from logos_worker_node.calibration import calibration_gpu_slice, parse_gpu_indices  # noqa: PLC0415
+    """The GPUs whose classes a calibration of this plan depends on.
+
+    An unpinned plan may be probed on whichever GPUs are idle and served on
+    any of them later, so every GPU of the node counts.
+    """
+    from logos_worker_node.calibration import parse_gpu_indices  # noqa: PLC0415
 
     indexed = {int((d.extra or {}).get("index", -1)): d for d in devices if (d.extra or {}).get("index") is not None}
-    if not indexed:
-        return list(devices)
     pinned = parse_gpu_indices(str(plan.get("gpu_devices") or ""))
-    indices = pinned if pinned is not None else calibration_gpu_slice(len(indexed))
-    return [indexed[i] for i in indices if i in indexed]
+    if not indexed or pinned is None:
+        return list(devices)
+    return [indexed[i] for i in pinned if i in indexed]
 
 
 def compute_calibration_key(
@@ -73,7 +76,7 @@ def compute_calibration_key(
 ) -> dict[str, Any]:
     model_name = str(plan.get("model") or "")
     metal = is_metal_backend()
-    return {
+    key = {
         "schema": _KEY_SCHEMA,
         "backend": "metal" if metal else "cuda",
         "gpus": gpu_classes(calibration_devices(plan, devices)),
@@ -82,6 +85,35 @@ def compute_calibration_key(
         "sleep_enabled": (not metal) and model_can_sleep(cfg, model_name),
         "plan_hash": plan_hash(plan),
     }
+    if metal and cfg.engines:
+        key["metal"] = _metal_engine_settings(cfg.engines.metal)
+    return key
+
+
+def _metal_engine_settings(metal_config: Any) -> dict[str, Any]:
+    """The node-wide Metal knobs calibration and serving both apply.
+
+    The key is stored in clear, so free-form env overrides only as a hash.
+    """
+    return {
+        "memory_fraction": metal_config.memory_fraction,
+        "use_paged_attention": metal_config.use_paged_attention,
+        "multimodal_mode": metal_config.multimodal_mode,
+        "env_overrides_hash": hashlib.sha256(_canonical(metal_config.env_overrides).encode("utf-8")).hexdigest(),
+    }
+
+
+def serving_vllm_binary(cfg: AppConfig, default_binary: str) -> str:
+    """The vllm CLI whose version a calibration on this node depends on.
+
+    Metal serves from its own venv, never from the worker's environment.
+    """
+    if not is_metal_backend():
+        return default_binary
+    from logos_worker_node.metal import resolve_metal_vllm_binary  # noqa: PLC0415
+
+    worker_binary = cfg.engines.metal.vllm_binary if cfg.engines else ""
+    return resolve_metal_vllm_binary(default_binary, worker_binary) or default_binary
 
 
 def calibration_keys(

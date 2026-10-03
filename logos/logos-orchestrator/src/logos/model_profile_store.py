@@ -63,13 +63,15 @@ def reported_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in profile.items() if key not in SYNC_METADATA_FIELDS}
 
 
-def persistable_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
-    """The part of a worker echo that belongs in ``model_profiles.profile``.
-
-    Overrides come from the worker's config.yml and are no measurement.
-    """
+def overridden_fields(profile: Mapping[str, Any]) -> list[str]:
+    """Fields the worker's config.yml overrides; they are no measurement."""
     overridden = profile.get("overridden_fields")
-    skip = {str(field) for field in overridden} if isinstance(overridden, list) else set()
+    return sorted({str(field) for field in overridden}) if isinstance(overridden, list) else []
+
+
+def persistable_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """The part of a worker echo that belongs in ``model_profiles.profile``."""
+    skip = set(overridden_fields(profile))
     return {key: value for key, value in reported_profile(profile).items() if key not in skip}
 
 

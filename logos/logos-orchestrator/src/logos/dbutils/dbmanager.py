@@ -362,7 +362,13 @@ _PERSIST_CENTRAL_PROFILE_SQL = _upsert_model_profile_sql(
         "sync_revision": ":sync_revision",
     },
     conflict_set={
-        "profile": "EXCLUDED.profile",
+        # The echo leaves out what config.yml overrides; keep the measured
+        # value stored beneath, so dropping the override restores it.
+        "profile": (
+            "EXCLUDED.profile || COALESCE((SELECT jsonb_object_agg(kept.key, kept.value) "
+            "FROM jsonb_each(model_profiles.profile) AS kept "
+            "WHERE kept.key = ANY(CAST(:overridden_fields AS text[]))), '{}'::jsonb)"
+        ),
         # An echo without a key must not erase the one hello
         # reported; staleness and sharing are judged on it.
         "calibration_key_hash": "COALESCE(EXCLUDED.calibration_key_hash, model_profiles.calibration_key_hash)",
@@ -1819,6 +1825,7 @@ class DBManager:
         reported: Dict[str, Any],
         sync_revision: int,
         calibration_key_hash: Optional[str],
+        overridden_fields: Optional[List[str]] = None,
     ) -> bool:
         """Store a worker's echoed profile unless a central change is newer.
 
@@ -1835,6 +1842,7 @@ class DBManager:
                 "profile": _json_for_jsonb(profile),
                 "calibration_key_hash": calibration_key_hash,
                 "sync_revision": int(sync_revision),
+                "overridden_fields": list(overridden_fields or []),
             },
         )
         return bool(result.rowcount)
