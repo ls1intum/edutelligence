@@ -110,6 +110,10 @@ def _run_pipeline(pipeline: ChatPipeline, callback: MagicMock) -> None:
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
         patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
+        patch(
+            "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
+            return_value=None,
+        ),
         patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
         patch("iris.pipeline.chat.chat_pipeline.mcq_post_agent_hook"),
     ):

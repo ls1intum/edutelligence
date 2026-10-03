@@ -607,6 +607,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             }
         )
 
+    def supports_compaction(self) -> bool:
+        """The chat callback hands compactions to Artemis, which stores them."""
+        return True
+
     def get_token_pipeline(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],

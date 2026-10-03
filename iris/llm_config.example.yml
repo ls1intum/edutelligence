@@ -111,6 +111,11 @@
 # only when the provider really doesn't bill those tokens (e.g. local models).
 # `long_context_threshold_tokens` plus the two multipliers model a long-context
 # price tier: above the threshold the whole request uses the multiplied rates.
+# `max_input_tokens` turns on auto-compaction for the chat: Iris sends the whole
+# history and, once a prompt is above `compaction_threshold_tokens` (default:
+# half of `max_input_tokens`), it summarizes the older messages. Keep the
+# threshold below the long-context tier. Without `max_input_tokens`, the chat
+# keeps its window of the last 15 messages.
 - id: oai-gpt-6-luna
   type: openai_chat
   model: gpt-6-luna
@@ -126,6 +131,8 @@
   long_context_threshold_tokens: 272000
   long_context_input_cost_multiplier: 2.0
   long_context_output_cost_multiplier: 1.5
+  max_input_tokens: 922000
+  compaction_threshold_tokens: 245000
 
 # ── Azure example (GPT 5 Mini) ──────────────────────────────────────────────
 - id: azure-gpt-5-mini

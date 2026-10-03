@@ -19,6 +19,8 @@ class IrisMessageRole(str, Enum):
     ARTIFACT = "ARTIFACT"
     COMMAND = "COMMAND"
     CTXSWAP = "CTXSWAP"
+    # Stored summary of the earlier conversation (see pipeline/shared/compaction.py).
+    COMPACTION = "COMPACTION"
 
 
 class PyrisMessage(BaseModel):

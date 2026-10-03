@@ -14,6 +14,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
+from iris.domain.data.compaction_dto import CompactionDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
@@ -21,6 +22,18 @@ from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline import Pipeline
 from iris.pipeline.shared.activity_callback_handler import ActivityCallbackHandler
 from iris.pipeline.shared.activity_tracker import ActivityTracker
+from iris.pipeline.shared.compaction import (
+    CompactionSettings,
+    ToolOutputBudget,
+    compaction_boundary,
+    compaction_instruction,
+    fit_to_budget,
+    get_compaction_settings,
+    should_compact,
+    split_history,
+    summary_message_text,
+    without_compactions,
+)
 from iris.pipeline.shared.utils import generate_structured_tools_from_functions
 from iris.tracing import (
     TracingContext,
@@ -78,6 +91,12 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     deferred_session_title_delivered: bool
     partial_result_sender: Optional[PartialResultSender]
     activity_tracker: ActivityTracker
+    system_prompt: str
+    # Auto-compaction: the model's size limits (None = fixed history window), the
+    # newest stored summary, and the input size of the turn's first agent call.
+    compaction_settings: Optional[CompactionSettings]
+    compaction_summary: Optional[str]
+    first_prompt_tokens: Optional[int]
 
 
 def _escape_template_braces(text: str) -> str:
@@ -190,6 +209,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """Return the pipeline that the agent's own LLM calls are billed to."""
         return PipelineEnum.NOT_SET
 
+    def supports_compaction(self) -> bool:
+        """
+        Return True if the run's callback can hand a compaction to Artemis.
+
+        Compaction then runs for models with max_input_tokens in their config.
+        """
+        return False
+
     @abstractmethod
     def get_memiris_tenant(self, dto: DTO) -> str:
         """Return the Memiris tenant identifier for the current user."""
@@ -263,6 +290,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return
         usage.pipeline = self.get_token_pipeline(state)
         state.tokens.append(usage)
+        if getattr(state, "first_prompt_tokens", None) is None:
+            state.first_prompt_tokens = usage.num_input_tokens
 
     def get_agent_params(  # pylint: disable=unused-argument
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
@@ -365,6 +394,16 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Subclasses can override to customize how history is injected.
         """
         prefix_messages = [("system", _escape_template_braces(system_prompt))]
+        summary = getattr(state, "compaction_summary", None)
+        if summary:
+            # A user message, not a system message: the summary is built from student
+            # messages and tool output, so it must not gain system authority.
+            prefix_messages.append(
+                (
+                    "human",
+                    _escape_template_braces(summary_message_text(summary)),
+                )
+            )
         history_lc_messages = [
             convert_iris_message_to_langchain_message(message)
             for message in state.message_history
@@ -521,6 +560,94 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     len(final_output) if final_output else 0,
                 )
         return final_output
+
+    def _load_history(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> list[PyrisMessage]:
+        """
+        Return the history for the agent prompt.
+
+        COMPACTION messages are removed from the DTO, so side pipelines never see them.
+        With compaction, the agent gets every message after the newest summary.
+        Otherwise it gets the fixed window of recent messages.
+        """
+        chat_history: list[PyrisMessage] = getattr(state.dto, "chat_history", []) or []
+        split = split_history(chat_history)
+        if chat_history:
+            state.dto.chat_history = without_compactions(chat_history)
+        if state.compaction_settings is None:
+            return self.get_recent_history_from_dto(state)
+        state.compaction_summary = split.summary
+        return fit_to_budget(
+            split.messages, state.compaction_settings.history_budget_bytes
+        )
+
+    def _start_compaction(
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+        holder: dict[str, Any],
+    ) -> Optional[Thread]:
+        """
+        Start a summary of the older history if this turn's prompt was too large.
+
+        The request reuses the agent's system prompt, tools and history, so the
+        provider reads most of it from the prompt cache. The result goes into holder.
+        """
+        settings = state.compaction_settings
+        if settings is None or state.first_prompt_tokens is None:
+            return None
+        messages = state.message_history
+        boundary = compaction_boundary(messages)
+        if boundary is None:
+            return None
+        output_tokens = getattr(
+            getattr(state.llm, "tokens", None), "num_output_tokens", 0
+        )
+        if not should_compact(
+            state.first_prompt_tokens + output_tokens, settings, messages[:boundary]
+        ):
+            return None
+
+        covers_through_message_id = messages[boundary - 1].id
+        instruction = compaction_instruction(messages[boundary])
+        model_id = state.llm.request_handler.model_id
+
+        def run() -> None:
+            try:
+                llm = IrisLangchainChatModel(
+                    request_handler=LlmRequestHandler(model_id=model_id),
+                    completion_args=CompletionArguments(
+                        temperature=0.5, tool_choice="none"
+                    ),
+                )
+                if state.tools:
+                    llm.bind_tools(
+                        generate_structured_tools_from_functions(state.tools)
+                    )
+                prompt = self.assemble_prompt_with_history(
+                    state, state.system_prompt, turn_context=instruction
+                )
+                response = llm.invoke(prompt.format_messages(agent_scratchpad=[]))
+                if llm.tokens is not None:
+                    llm.tokens.pipeline = PipelineEnum.IRIS_CHAT_COMPACTION
+                    holder["tokens"] = llm.tokens
+                summary = _visible_content_text(response.content).strip()
+                if summary:
+                    holder["compaction"] = CompactionDTO(
+                        summary=summary,
+                        covers_through_message_id=covers_through_message_id,
+                    )
+                    logger.info(
+                        "Compaction done | covers_through=%s summary_length=%d",
+                        covers_through_message_id,
+                        len(summary),
+                    )
+            except Exception as exc:
+                logger.exception("Compaction failed", exc_info=exc)
+
+        thread = Thread(target=run, name="iris-compaction", daemon=True)
+        thread.start()
+        return thread
 
     def _create_partial_result_sender(
         self,
@@ -717,6 +844,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.deferred_session_title = None
         state.deferred_session_title_delivered = False
         state.partial_result_sender = None
+        state.system_prompt = ""
+        state.compaction_settings = None
+        state.compaction_summary = None
+        state.first_prompt_tokens = None
+        compaction_thread: Optional[Thread] = None
+        compaction_holder: dict[str, Any] = {}
         state.activity_tracker = ActivityTracker(
             getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
         )
@@ -732,21 +865,21 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.callback.update()
 
         try:
-            # 1. Prepare message history, user query, LLM, prompt and tools
-            state.message_history = _filter_empty_messages(
-                self.get_recent_history_from_dto(state)
-            )
-            user_query = self.get_text_of_latest_user_message(state)
-
-            # Create LLM from variant's model selection (local/cloud)
-            completion_args = CompletionArguments(temperature=0.5)
-
+            # 1. Select the model, then prepare history, user query, LLM, prompt and tools
             selected_version = state.variant.model("chat", local)
             if not selected_version:
                 env = "local" if local else "cloud"
                 raise ValueError(
                     f"Variant {state.variant.id} has empty chat model for {env}"
                 )
+            if self.supports_compaction():
+                state.compaction_settings = get_compaction_settings(selected_version)
+
+            state.message_history = _filter_empty_messages(self._load_history(state))
+            user_query = self.get_text_of_latest_user_message(state)
+
+            # Create LLM from variant's model selection (local/cloud)
+            completion_args = CompletionArguments(temperature=0.5)
 
             state.llm = IrisLangchainChatModel(
                 request_handler=LlmRequestHandler(model_id=selected_version),
@@ -757,6 +890,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 self.prepare_state(state)
             with timed_span(pipeline_name, "build_system_message", start_time):
                 system_message = self.build_system_message(state)
+                state.system_prompt = system_message
                 turn_context = self.build_turn_context_message(  # pylint: disable=assignment-from-none
                     state
                 )
@@ -767,6 +901,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             # Load tools for both local and cloud models
             with timed_span(pipeline_name, "build_tools", start_time):
                 state.tools = self.get_tools(state)
+                if state.compaction_settings is not None:
+                    budget = ToolOutputBudget(
+                        state.compaction_settings.tool_output_result_bytes,
+                        state.compaction_settings.tool_output_turn_bytes,
+                    )
+                    state.tools = [budget.wrap(tool) for tool in state.tools]
 
             if local:
                 logger.info("Using local model with tool calling support")
@@ -798,6 +938,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 if state.partial_result_sender is not None:
                     state.partial_result_sender.stop()
 
+            # Runs next to the post agent hook and memory creation, off the answer's path.
+            compaction_thread = self._start_compaction(state, compaction_holder)
+
             # 7.3. Run post agent hook
             with timed_span(pipeline_name, "post_agent_hook", start_time):
                 self.post_agent_hook(state)
@@ -810,19 +953,23 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 else state.deferred_session_title
             )
 
-            # 8. Wait for the memory creation to finish if enabled
+            # 8. Wait for compaction and memory creation to finish if enabled
+            finish_fields: dict[str, Any] = {}
+            if compaction_thread is not None:
+                compaction_thread.join()
+                self._track_tokens(state, compaction_holder.get("tokens"))
+                if "compaction" in compaction_holder:
+                    finish_fields["compaction"] = compaction_holder["compaction"]
             if state.memiris_memory_creation_thread:
                 state.memiris_memory_creation_thread.join()
-                state.callback.finish(
-                    created_memories=state.memiris_memory_creation_storage,
-                    session_title=deferred_title,
-                    tokens=state.tokens,
+                finish_fields["created_memories"] = (
+                    state.memiris_memory_creation_storage
                 )
-            else:
-                state.callback.finish(
-                    session_title=deferred_title,
-                    tokens=state.tokens,
-                )
+            state.callback.finish(
+                session_title=deferred_title,
+                tokens=state.tokens,
+                **finish_fields,
+            )
 
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.info(

@@ -990,6 +990,8 @@ class OpenAIChatModel(ChatModel):
         if tools:
             params["tools"] = [convert_to_responses_tool(tool) for tool in tools]
             logger.debug("Using tools: %s", get_tool_names(tools))
+            if arguments.tool_choice is not None:
+                params["tool_choice"] = arguments.tool_choice
 
         if self.extra_body:
             params["extra_body"] = copy.deepcopy(self.extra_body)
@@ -1175,6 +1177,8 @@ class OpenAIChatModel(ChatModel):
                 if tools:
                     params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
                     logger.debug("Using tools: %s", get_tool_names(tools))
+                    if arguments.tool_choice is not None:
+                        params["tool_choice"] = arguments.tool_choice
 
                 if self.extra_body:
                     params["extra_body"] = copy.deepcopy(self.extra_body)

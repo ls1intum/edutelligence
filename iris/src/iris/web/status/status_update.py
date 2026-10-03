@@ -446,6 +446,7 @@ class ChatRunCallback(StatusCallback):
         tokens=None,
         activities=None,
         activity_seq=None,
+        compaction=None,
     ) -> bool:
         fields: dict[str, Any] = {}
         if session_title is not None:
@@ -458,6 +459,8 @@ class ChatRunCallback(StatusCallback):
             fields["activities"] = activities
         if activity_seq is not None:
             fields["activity_seq"] = activity_seq
+        if compaction is not None:
+            fields["compaction"] = compaction
         return self._send_chat_fields(fields, run_state=RunStateEnum.FINISHED)
 
     def fail(

@@ -47,6 +47,12 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
     long_context_threshold_tokens: Optional[int] = None
     long_context_input_cost_multiplier: float = 1.0
     long_context_output_cost_multiplier: float = 1.0
+    # Context size of the model. When set, the chat sends its whole history and
+    # summarizes the older part once a prompt goes above
+    # compaction_threshold_tokens (default: half of max_input_tokens). When not
+    # set, the chat keeps its fixed window of recent messages.
+    max_input_tokens: Optional[int] = None
+    compaction_threshold_tokens: Optional[int] = None
     # Whether the model exposes token-level log-probabilities. When True, a
     # pipeline can request them via CompletionArguments.logprobs and derive a
     # confidence score from the returned values. Defaults to False so models
