@@ -16,7 +16,7 @@ import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
+from logos.dbutils.dbmanager import DBManager, _upsert_model_profile_sql, derived_reported_context_length
 
 
 def _db():
@@ -100,9 +100,9 @@ def test_upsert_derives_and_binds_the_reported_length():
     # GREATEST with a NULL argument returns NULL in Postgres. (Checked against
     # the source rather than the sqlalchemy object: the unit-test conftest
     # stubs sqlalchemy, so text() calls come back as None here.)
-    source = inspect.getsource(DBManager.upsert_model_profiles)
-    assert "GREATEST(" in source
-    assert "COALESCE(model_profiles.max_reported_context_length, 0)" in source
+    sql = _upsert_model_profile_sql()
+    assert "GREATEST(" in sql
+    assert "COALESCE(model_profiles.max_reported_context_length, 0)" in sql
 
 
 def test_upsert_of_a_context_unknown_profile_binds_zero():

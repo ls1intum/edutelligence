@@ -47,7 +47,7 @@ loads. This makes runs reproducible regardless of leftovers from a previous run.
 ## Per-model vLLM run parameters
 
 Identical across `logos-*`, `ray`, and `kserve` (source: the workernode’s
-calibrated `model_profiles.yml`). Defined in `benchmark_logos.py` as
+calibrated profile Logos stores for it). Defined in `benchmark_logos.py` as
 `_FRAMEWORK_MODEL_PARAMS`.
 
 | Model                              | `tensor_parallel_size` | `max_model_len` |
@@ -77,7 +77,7 @@ computes its own per load. All values are reported alongside results.
 - Logos orchestrator + Traefik running (the harness does not tear these down).
 - Logos workernode docker stack on each GPU node (`/opt/logos-workernode`,
   `docker compose`). The harness starts/stops it and toggles sleep mode.
-- A valid `--logos-key`. Models calibrated (`model_profiles.yml`); run with
+- A valid `--logos-key`. Models calibrated (profiles in Logos); run with
   `SKIP_CALIBRATION=1` to reuse the existing calibration.
 
 ### Ray Serve scenario

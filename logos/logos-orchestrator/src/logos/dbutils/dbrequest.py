@@ -42,6 +42,38 @@ class LogosNodeStatusRequest(LogosKeyModel):
     provider_id: int
 
 
+# Far above any node's model count; bounds what one request can write.
+_MAX_PROFILE_MODELS = 1000
+
+
+class LogosNodeLegacyProfileImport(BaseModel):
+    model_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
+    unsupported_models: dict[str, str] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
+
+
+class LogosNodeModelProfilesRequest(BaseModel):
+    shared_key: str
+    # model name -> calibration key hash the worker computes for it right now
+    calibration_key_hashes: dict[str, str] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
+    legacy_import: LogosNodeLegacyProfileImport | None = None
+
+
+class LogosNodeClearUnsupportedRequest(LogosKeyModel):
+    provider_id: int
+    model_name: str
+
+
+class LogosNodeResetProfilesRequest(LogosKeyModel):
+    provider_id: int
+    # None resets every profile of the node
+    model_names: list[str] | None = None
+
+
+class LogosNodeInvalidateCalibrationRequest(LogosKeyModel):
+    calibration_id: int
+    reason: str = "invalidated by admin"
+
+
 class LogosNodeApplyLanesRequest(LogosKeyModel):
     provider_id: int
     lanes: list[dict[str, Any]]

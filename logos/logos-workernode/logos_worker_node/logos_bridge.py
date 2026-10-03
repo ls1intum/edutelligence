@@ -330,7 +330,7 @@ class LogosBridgeClient:
                 return
             await asyncio.sleep(backoff)
 
-    async def _authenticate(self) -> dict[str, Any]:
+    def _logos_base_url(self) -> str:
         logos_url = (self._cfg.logos_url or "").rstrip("/")
         if not logos_url:
             raise RuntimeError("logos.logos_url must be configured when logos.enabled=true")
@@ -341,7 +341,32 @@ class LogosBridgeClient:
             raise RuntimeError("logos.logos_url uses http but logos.allow_insecure_http is false")
         if not self._cfg.shared_key:
             raise RuntimeError("logos.shared_key (LOGOS_API_KEY) is required")
+        return logos_url
 
+    async def fetch_model_profiles(
+        self,
+        calibration_key_hashes: dict[str, str],
+        legacy_import: dict[str, Any] | None,
+    ) -> dict[str, dict[str, Any]]:
+        """This node's profiles from Logos, the only place they are stored."""
+        url = f"{self._logos_base_url()}/logosdb/providers/logosnode/model-profiles"
+        payload: dict[str, Any] = {
+            "shared_key": self._cfg.shared_key,
+            "calibration_key_hashes": calibration_key_hashes,
+        }
+        if legacy_import is not None:
+            payload["legacy_import"] = legacy_import
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=payload)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"/model-profiles rejected with HTTP {resp.status_code}: {resp.text}")
+        profiles = (resp.json() if resp.content else {}).get("profiles")
+        if not isinstance(profiles, dict):
+            raise RuntimeError("Logos model-profiles response has no profiles mapping")
+        return profiles
+
+    async def _authenticate(self) -> dict[str, Any]:
+        logos_url = self._logos_base_url()
         auth_url = f"{logos_url}/logosdb/providers/logosnode/auth"
         payload = {
             "shared_key": self._cfg.shared_key,
@@ -526,6 +551,9 @@ class LogosBridgeClient:
             max_lanes = self._app.state.config.worker.max_lanes
         if hasattr(self._app, "state") and hasattr(self._app.state, "lane_manager"):
             static_lane_ids = sorted(self._app.state.lane_manager._static_lane_ids)
+        calibration_key_hashes: dict[str, str] = {}
+        if hasattr(self._app, "state") and hasattr(self._app.state, "model_profiles"):
+            calibration_key_hashes = self._app.state.model_profiles.calibration_key_hashes()
         await self._send_json(
             ws,
             {
@@ -545,6 +573,7 @@ class LogosBridgeClient:
                 # start clears it, and reporting that as live would exclude this
                 # worker from placement for as long as no new session begins.
                 "calibrating": self._calibration_session_is_live(),
+                "calibration_key_hashes": calibration_key_hashes,
                 "actions": [
                     "infer",
                     "infer_stream",
@@ -563,6 +592,7 @@ class LogosBridgeClient:
                     "reconfigure_lane",
                     "start_calibration_session",
                     "stop_calibration_session",
+                    "sync_model_profiles",
                 ],
             },
         )
@@ -923,6 +953,8 @@ class LogosBridgeClient:
                 status = await lane_manager.reconfigure_lane(lane_id, updates)
             return status.model_dump(mode="json")
 
+        if action == "sync_model_profiles":
+            return self._handle_sync_model_profiles(params)
         if action == "start_calibration_session":
             return await self._handle_start_calibration_session(params)
         if action == "stop_calibration_session":
@@ -933,6 +965,43 @@ class LogosBridgeClient:
             return await self._handle_run_compatibility_precheck(params)
 
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _handle_sync_model_profiles(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Adopt profiles Logos changed centrally (a new calibration snapshot,
+        a cleared verdict, an invalidation). Idempotent: a re-sent push
+        replaces the same records again."""
+        profiles = params.get("profiles")
+        if not isinstance(profiles, dict):
+            return {"ok": False, "error": "'profiles' must be a mapping"}
+        session = self._active_calibration_session
+        calibrating = session.current_model if session is not None and self._calibration_session_is_live() else None
+        replaced = self._app.state.model_profiles.replace_from_sync(
+            profiles, skip=frozenset({calibrating}) if calibrating else frozenset()
+        )
+        if not replaced:
+            # The push after every hello usually changes nothing; a status
+            # rebuild would still probe every lane.
+            return {"ok": True, "replaced": replaced}
+        self._announce_calibrated_capabilities()
+        lane_manager = getattr(self._app.state, "lane_manager", None)
+        if lane_manager is not None:
+            lane_manager._mark_status_dirty()  # noqa: SLF001
+        return {"ok": True, "replaced": replaced}
+
+    def _announce_calibrated_capabilities(self) -> None:
+        """Add configured models that now have a profile to the capabilities.
+
+        Models are only ever added here, mirroring the re-announce after a
+        calibration; startup decides which models are left out.
+        """
+        model_profiles = self._app.state.model_profiles
+        current = list(self._cfg.capabilities_models)
+        for model_name in self._cfg.configured_models:
+            profile = model_profiles.get_profile(model_name)
+            if model_name not in current and profile is not None and (profile.base_residency_mb or 0) > 0:
+                current.append(model_name)
+                logger.info("[Profiles] Announcing %s to Logos — it has a profile now", model_name)
+        self._cfg.capabilities_models = current
 
     def _current_event_ids(self) -> frozenset[str]:
         lane_manager = getattr(self._app.state, "lane_manager", None)
@@ -970,7 +1039,8 @@ class LogosBridgeClient:
         restart. Returns None (and warns) on failure."""
         if self._vllm_quant_methods is not None:
             return self._vllm_quant_methods
-        from logos_worker_node.calibration import _DEFAULT_VLLM, query_vllm_quantization_methods  # noqa: PLC0415
+        from logos_worker_node.calibration import query_vllm_quantization_methods  # noqa: PLC0415
+        from logos_worker_node.vllm_compat import _DEFAULT_VLLM  # noqa: PLC0415
 
         try:
             self._vllm_quant_methods = await asyncio.to_thread(query_vllm_quantization_methods, _DEFAULT_VLLM)
@@ -994,25 +1064,8 @@ class LogosBridgeClient:
             logger.warning("[Precheck] failed to persist result for %s", model_name, exc_info=True)
 
     async def _persist_permanent_unsupported(self, model_name: str, reason_code: str, description: str) -> None:
-        """Writes calibration_unsupported_models.txt first, then mirrors
-        the flag onto the profile. Skipping the file write lets the next
-        heartbeat's reconciliation (runtime.build_runtime_status) silently
-        clear the profile flag again — see calibration.py's own fatal-error path."""
-        from logos_worker_node.calibration import (  # noqa: PLC0415
-            _UNSUPPORTED_MODELS_FILE,
-            UnsupportedModelEntry,
-            _record_unsupported_model,
-        )
-        from logos_worker_node.config import get_state_dir  # noqa: PLC0415
-
-        path = get_state_dir() / "calibration_logs" / _UNSUPPORTED_MODELS_FILE
-        entry = UnsupportedModelEntry(
-            model=model_name,
-            reason_code=reason_code,
-            recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            description=description,
-        )
-        await self._persist_precheck(model_name, _record_unsupported_model, path, entry)
+        """Flag the model unsupported; Logos stores it from the next status."""
+        logger.warning("[Precheck] %s is permanently unsupported here (%s): %s", model_name, reason_code, description)
         await self._persist_precheck(
             model_name, self._app.state.model_profiles.mark_calibration_unsupported, model_name, True, reason_code
         )
@@ -1709,8 +1762,7 @@ class LogosBridgeClient:
             # session driver re-checks model_can_sleep before each model,
             # persists the new flag, and calibrates it at sleep_level 0. That
             # run leaves the sleep fields null by design, so they must not
-            # count as missing here either. Mirrors
-            # main.py::_auto_calibrate_if_needed.
+            # count as missing here either.
             if session_sleep_level <= 0 or not model_can_sleep(cfg, model_name):
                 sleep_na = True
             collapsed_envelope = (
@@ -1736,6 +1788,9 @@ class LogosBridgeClient:
                 # the model a candidate until a real calibration/measurement
                 # replaces it, or it never gets probed once a precheck runs.
                 or (profile is not None and profile.residency_source == "hf")
+                # Measured under another hardware/vLLM/config key: keeps
+                # serving, but this window re-measures it.
+                or (profile is not None and bool(profile.calibration_stale))
             )
             if needs_calib:
                 ordered.append(model_name)
@@ -1772,21 +1827,16 @@ class LogosBridgeClient:
         try:
             from logos_worker_node.calibration import (  # noqa: PLC0415
                 _CALIBRATION_PORT,
-                _DEFAULT_VLLM,
                 _READY_TIMEOUT_S,
-                ProfileStoreUnreadableError,
                 _plan_needs_gpu_pin,
                 calibrate_with_tp_escalation,
                 extract_revision_arg,
-                is_model_unsupported,
-                load_existing_profiles,
-                merge_profile,
                 plans_from_config,
                 result_to_profile_dict,
-                save_profiles,
             )
             from logos_worker_node.calibration_metal import calibrate_model_metal  # noqa: PLC0415
             from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+            from logos_worker_node.vllm_compat import _DEFAULT_VLLM  # noqa: PLC0415
 
             cfg = self._app.state.config
             model_profiles = self._app.state.model_profiles
@@ -1796,27 +1846,13 @@ class LogosBridgeClient:
                 logger.info("[Calibration] No uncalibrated models to process — session is a no-op")
                 return
 
-            state_dir = get_state_dir()
-            profiles_path = state_dir / "model_profiles.yml"
-            log_dir = state_dir / "calibration_logs"
+            log_dir = get_state_dir() / "calibration_logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             nccl_p2p = cfg.engines.vllm.nccl_p2p_available if cfg.engines else False
             _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
 
             # Resolve plans once — the kv-cache ceilings come from config.yml.
-            import os as _os  # noqa: PLC0415
-            from pathlib import Path  # noqa: PLC0415
-
-            config_path_str = _os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
-            if config_path_str:
-                config_path = Path(config_path_str)
-            else:
-                for candidate in [Path("/app/config.yml"), Path("config.yml")]:
-                    if candidate.resolve().is_file():
-                        config_path = candidate
-                        break
-                else:
-                    config_path = Path("config.yml")
+            config_path = self._resolve_config_path()
             all_plans = plans_from_config(config_path) if config_path.exists() else []
             plan_by_model = {p["model"]: p for p in all_plans}
 
@@ -1862,43 +1898,6 @@ class LogosBridgeClient:
                         **plan,
                         "gpu_devices": ",".join(str(i) for i in sorted(calibration_gpus)),
                     }
-
-                # Pre-flight: persistent unsupported flag.
-                _unsupported = None
-                try:
-                    _unsupported = is_model_unsupported(log_dir, model_name)
-                except Exception:  # noqa: BLE001
-                    logger.debug("[Calibration] unsupported-list lookup failed", exc_info=True)
-                if _unsupported is not None:
-                    model_profiles.mark_calibration_unsupported(model_name, True, _unsupported.reason_code)
-                    logger.warning(
-                        "[Calibration] Skipping %s — on unsupported list (reason=%s)",
-                        model_name,
-                        _unsupported.reason_code,
-                    )
-                    self._record_calibration_event(
-                        "calibration_model_skipped",
-                        model=model_name,
-                        details=f"unsupported reason={_unsupported.reason_code}",
-                    )
-                    from logos_worker_node.hf_model_info import (  # noqa: PLC0415
-                        REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
-                        REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
-                    )
-
-                    # A vLLM load failure keeps the row of the probe that
-                    # found it; only a precheck verdict has no row of its own.
-                    if _unsupported.reason_code in (
-                        REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
-                        REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
-                    ):
-                        self._record_precheck_rejection(
-                            model_name,
-                            _unsupported.reason_code,
-                            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
-                            gpu_devices=str(plan.get("gpu_devices") or ""),
-                        )
-                    continue
 
                 # Pre-flight: sleep gate. If the worker config forbids sleep
                 # for this model (worker kill switch or per-model override),
@@ -2086,47 +2085,13 @@ class LogosBridgeClient:
                     break
 
                 if result.success:
-                    # An unreadable store aborts the write: load_existing_profiles
-                    # used to answer with an empty dict, and saving that back
-                    # replaced every profile on the node with this one result.
-                    # Losing one measurement is recoverable; losing the file is
-                    # not, because a model without base_residency_mb is never
-                    # announced as a capability and a model that cannot sleep
-                    # here would keep failing to be re-measured.
-                    try:
-                        existing = load_existing_profiles(profiles_path)
-                    except ProfileStoreUnreadableError as exc:
-                        logger.error(
-                            "[Calibration] %s calibrated, but %s is unreadable (%s) — "
-                            "keeping the file untouched. Fix or remove it; this model "
-                            "re-calibrates on the next session.",
-                            model_name,
-                            profiles_path,
-                            exc,
-                        )
-                        self._record_calibration_event(
-                            "calibration_model_failed",
-                            model=model_name,
-                            details=f"profile store unreadable: {exc}",
-                        )
-                        continue
-                    existing[model_name] = merge_profile(
-                        existing.get(model_name),
-                        result_to_profile_dict(result),
-                    )
-                    save_profiles(profiles_path, existing)
-                    model_profiles._load_persisted()  # noqa: SLF001
-                    # Models that were pruned from capabilities at startup
-                    # because they had no profile must be re-announced now
-                    # that they're calibrated; otherwise the server never
-                    # learns the worker can serve them.
-                    if model_name not in self._cfg.capabilities_models:
-                        self._cfg.capabilities_models = list(self._cfg.capabilities_models) + [model_name]
-                        logger.info(
-                            "[Calibration] Re-announcing %s to Logos (capabilities now: %d model(s))",
-                            model_name,
-                            len(self._cfg.capabilities_models),
-                        )
+                    # Logos snapshots it from the next runtime status (pushed
+                    # right below) and answers with its calibration_id.
+                    model_profiles.apply_calibration_result(model_name, result_to_profile_dict(result))
+                    # Models pruned from capabilities at startup for lack of a
+                    # profile must be announced now, or Logos never learns the
+                    # worker can serve them.
+                    self._announce_calibrated_capabilities()
                     logger.info(
                         "[Calibration] Completed model=%s base_residency=%.0f MB",
                         model_name,
@@ -2236,7 +2201,7 @@ class LogosBridgeClient:
             from pathlib import Path  # noqa: PLC0415
 
             from logos_worker_node import sharded_checkpoint as sc  # noqa: PLC0415
-            from logos_worker_node.calibration import _DEFAULT_VLLM  # noqa: PLC0415
+            from logos_worker_node.vllm_compat import _DEFAULT_VLLM  # noqa: PLC0415
 
             vc_engine = cfg.engines.vllm if cfg.engines else None
             if vc_engine is None:

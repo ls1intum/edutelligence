@@ -70,8 +70,10 @@ jump is a normal event. Back up the persistent volumes first (see the
 
 Worker nodes update the same way from their worker directory: bump
 `IMAGE_TAG` in the worker's `.env`, then `docker compose pull` and
-`docker compose up -d`. Lane configuration and calibrated model profiles
-persist in the worker's `data/` volume, so an update does not reset them.
+`docker compose up -d`. Lane configuration persists in the worker's `data/`
+volume and calibrated model profiles in the Logos database, so an update
+resets neither. Update the core node first: a worker does not start any lane
+until Logos hands it its profiles.
 
 ## Security & rate limiting
 

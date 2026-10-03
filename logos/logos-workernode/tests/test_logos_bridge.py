@@ -1106,7 +1106,7 @@ def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_o
     cfg = AppConfig(**cfg_dict)
     app = _DummyApp()
     app.state.config = cfg
-    app.state.model_profiles = ModelProfileRegistry(state_dir=tmp_path)
+    app.state.model_profiles = ModelProfileRegistry()
     app.state.model_cache = None
     # Minimal lane_manager stub: event_log + destroy_all + _mark_status_dirty.
     # The session driver records calibration_* events onto event_log directly
@@ -1818,52 +1818,6 @@ async def test_hf_precheck_records_nonexistent_repo_as_its_own_row_in_a_session(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("reason_code", "expect_row"),
-    [("unsupported-architecture", False), ("insufficient-vram-for-weights", True)],
-)
-async def test_unsupported_list_skip_writes_precheck_row_only_for_precheck_reasons(
-    tmp_path, monkeypatch, reason_code, expect_row
-):
-    """A vLLM load failure on the unsupported list keeps the row of the probe
-    that found it; re-recording it as an HF precheck row would move it to the
-    wrong checklist phase."""
-    from logos_worker_node import config as _wcfg
-    from logos_worker_node.calibration import _UNSUPPORTED_MODELS_FILE, UnsupportedModelEntry, _record_unsupported_model
-
-    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
-    _record_unsupported_model(
-        tmp_path / "calibration_logs" / _UNSUPPORTED_MODELS_FILE,
-        UnsupportedModelEntry(
-            model="org/listed-model",
-            reason_code=reason_code,
-            recorded_at="2026-09-28T00:00:00Z",
-            description="test entry",
-        ),
-    )
-    app = _make_app_for_calibration(tmp_path)
-    cfg = LogosConfig(
-        enabled=True,
-        logos_url="https://logos.example",
-        shared_key="secret",
-        configured_models=["org/listed-model"],
-    )
-    client = LogosBridgeClient(app, cfg)
-    monkeypatch.setattr(
-        "logos_worker_node.calibration.calibrate_with_tp_escalation",
-        MagicMock(side_effect=AssertionError("must not probe a listed model")),
-    )
-    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
-
-    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
-    assert response["ok"] is True
-    await _drain_session(client)
-
-    events = [e for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"]  # noqa: SLF001
-    assert bool(events) is expect_row
-
-
-@pytest.mark.asyncio
 async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatch):
     """A model whose HF-reported weights fit gets _hf_weight_bytes/_hf_max_tp_ceiling
     injected into the plan, and its profile is seeded with the HF estimate."""
@@ -2191,7 +2145,6 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
     identical response for a private repo this token just can't see, so
     this must stay a candidate, not a permanent verdict (like gating)."""
     from logos_worker_node import config as _wcfg
-    from logos_worker_node.calibration import is_model_unsupported
     from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED, HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
@@ -2219,12 +2172,8 @@ async def test_run_compatibility_precheck_skips_nonexistent_repo_without_queryin
     gpu_query.assert_not_called()
     profile = app.state.model_profiles.get_profile("org/does-not-exist")
     assert profile is None or profile.calibration_unsupported is not True
+    # A token added later must let a private-but-real model calibrate normally.
     assert client._list_uncalibrated_models() == ["org/does-not-exist"]  # noqa: SLF001
-
-    # Never lands in the authoritative registry either — a token added
-    # later must let a private-but-real model calibrate normally.
-    log_dir = tmp_path / "calibration_logs"
-    assert is_model_unsupported(log_dir, "org/does-not-exist") is None
 
     # An on-demand check must not replace the node's last calibration row.
     assert not [e for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"]  # noqa: SLF001
@@ -2514,14 +2463,12 @@ async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, m
     — daytime congestion isn't a permanent node property. A model too big
     even for an empty node IS marked unsupported — that's a real verdict."""
     from logos_worker_node import config as _wcfg
-    from logos_worker_node.calibration import is_model_unsupported
     from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS, HfModelMetadata
 
     monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
     app = _make_app_for_calibration(tmp_path)
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
     client = LogosBridgeClient(app, cfg)
-    log_dir = tmp_path / "calibration_logs"
 
     # 10 GB of weights: fits on an empty 24 GB GPU (total_mb), but not
     # alongside 20 GB already in live use (free_mb only 4 GB).
@@ -2540,7 +2487,6 @@ async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, m
     assert response["unsupported_reason"] is None
     profile = app.state.model_profiles.get_profile("org/model")
     assert profile.calibration_unsupported is not True
-    assert is_model_unsupported(log_dir, "org/model") is None
 
     # 200 GB of weights: doesn't fit even on an empty node — real
     # verdict this time.
@@ -2557,12 +2503,9 @@ async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, m
     assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
     profile = app.state.model_profiles.get_profile("org/too-big")
     assert profile.calibration_unsupported is True
-
-    # Must also land in the authoritative registry — see the model-not-found
-    # test's comment for why a profile-only flag isn't enough.
-    entry = is_model_unsupported(log_dir, "org/too-big")
-    assert entry is not None
-    assert entry.reason_code == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+    assert profile.calibration_unsupported_reason == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+    # Logos stores the verdict from the next status; the node keeps no list.
+    assert not list(tmp_path.rglob("*unsupported*"))
 
 
 @pytest.mark.asyncio
@@ -3329,15 +3272,15 @@ async def test_hello_reports_a_finished_session_as_not_calibrating(tmp_path, mon
 
 
 # ---------------------------------------------------------------------------
-# A calibration result is merged into the store, never written over it
+# A calibration result is merged into the profile, never written over it
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
-    """load_existing_profiles used to answer an unreadable store with an empty
-    dict, and saving that back replaced every profile on the node with this one
-    result. One lost measurement is recoverable; the file is not."""
+async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
+    """Fields the probe does not measure — here a host-RAM high-water mark and
+    a disk size recorded elsewhere — survive the result, and the result is
+    marked as a fresh local calibration for Logos to snapshot."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
     from logos_worker_node.hf_model_info import HfModelMetadata
@@ -3352,64 +3295,22 @@ async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
     )
     client = LogosBridgeClient(app, cfg)
 
-    profiles_path = tmp_path / "model_profiles.yml"
-    profiles_path.write_text("model_profiles:\n  org/other: {unterminated\n")
-    corrupt = profiles_path.read_text()
-
-    monkeypatch.setattr(
-        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
-        lambda *a, **k: HfModelMetadata(source="error:no-data"),
-    )
-    monkeypatch.setattr(
-        "logos_worker_node.calibration.calibrate_with_tp_escalation",
-        lambda plan, **kwargs: CalibrationResult(
-            model=plan["model"],
-            tensor_parallel_size=1,
-            gpu_devices="0",
-            kv_cache_sent_mb=2048.0,
-            success=True,
-            base_residency_mb=12345.0,
-            sleeping_residual_mb=512.0,
-        ),
-    )
-    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
-
-    assert (await client._handle_start_calibration_session({"sleep_level": 1}))["ok"] is True  # noqa: SLF001
-    await _drain_session(client)
-
-    assert profiles_path.read_text() == corrupt
-    events = [(e.event, e.details) for e in app.state.lane_manager._event_log]
-    assert any(e == "calibration_model_failed" and "unreadable" in d for e, d in events)
-    # The session still ends cleanly — the server must not be left waiting.
-    assert ("calibration_session_finished", "sleep_level=1") in events
-
-
-@pytest.mark.asyncio
-async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
-    """Fields the probe does not measure — here the sleep gate's flag and a
-    disk size recorded elsewhere — survive the write."""
-    from logos_worker_node import config as _wcfg
-    from logos_worker_node.calibration import CalibrationResult, load_existing_profiles, save_profiles
-    from logos_worker_node.hf_model_info import HfModelMetadata
-
-    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
-    app = _make_app_for_calibration(tmp_path)
-    cfg = LogosConfig(
-        enabled=True,
-        logos_url="https://logos.example",
-        shared_key="secret",
-        configured_models=["org/model-a"],
-    )
-    client = LogosBridgeClient(app, cfg)
-
-    profiles_path = tmp_path / "model_profiles.yml"
-    save_profiles(
-        profiles_path,
+    registry = app.state.model_profiles
+    registry.replace_from_sync(
         {
-            "org/model-a": {"base_residency_mb": 1.0, "disk_size_bytes": 42, "sleep_mode_disabled": True},
-            "org/untouched": {"base_residency_mb": 22545.0},
-        },
+            "org/model-a": {
+                "base_residency_mb": 1.0,
+                "disk_size_bytes": 42,
+                "host_ram_mb": 31000.0,
+                "sync_revision": 4,
+                "calibration_id": 9,
+                "calibration_origin": "local",
+                "calibration_stale": True,
+            },
+            "org/untouched": {"base_residency_mb": 22545.0, "sync_revision": 1},
+        }
     )
+    registry.set_calibration_keys({"org/model-a": {"schema": 1, "plan_hash": "p"}})
 
     monkeypatch.setattr(
         "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
@@ -3432,11 +3333,21 @@ async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
     assert (await client._handle_start_calibration_session({"sleep_level": 1}))["ok"] is True  # noqa: SLF001
     await _drain_session(client)
 
-    stored = load_existing_profiles(profiles_path)
-    assert stored["org/model-a"]["base_residency_mb"] == 12345.0
-    assert stored["org/model-a"]["disk_size_bytes"] == 42
-    assert stored["org/model-a"]["sleep_mode_disabled"] is True
-    assert stored["org/untouched"]["base_residency_mb"] == 22545.0, "other models must be untouched"
+    echoed = registry.get_all_profiles()
+    model_a = echoed["org/model-a"]
+    assert model_a["base_residency_mb"] == 12345.0
+    assert model_a["disk_size_bytes"] == 42
+    assert model_a["host_ram_mb"] == 31000.0
+    # Logos recognises a fresh local calibration by exactly this shape.
+    assert model_a["residency_source"] == "calibrated"
+    assert model_a["calibration_origin"] == "local"
+    assert model_a["calibration_id"] is None
+    assert model_a["calibration_stale"] is False
+    assert model_a["calibration_key"] == {"schema": 1, "plan_hash": "p"}
+    assert model_a["calibration_key_hash"]
+    assert model_a["sync_revision"] == 4
+    assert echoed["org/untouched"]["base_residency_mb"] == 22545.0, "other models must be untouched"
+    assert not list(tmp_path.rglob("model_profiles.yml*")), "the node keeps no profile file"
 
 
 # ---------------------------------------------------------------------------
@@ -3904,3 +3815,206 @@ async def test_calibration_conversion_runs_when_nothing_blocks_it(tmp_path, monk
 
     await _run_conversion(client, _sharded_cfg({}), tmp_path)
     assert events == ["sharded_conversion_started", "sharded_conversion_failed"]
+
+
+# ---------------------------------------------------------------------------
+# Central profile protocol: hello, sync_model_profiles, status echo
+#
+# The worker keeps no profile file; Logos stores every profile. These tests
+# drive the bridge through the protocol the orchestrator speaks.
+# ---------------------------------------------------------------------------
+
+
+def _central_client(tmp_path) -> LogosBridgeClient:
+    app = _make_app_for_calibration(tmp_path)
+    app.state.lane_manager._static_lane_ids = set()
+    app.state.lane_manager._status_dirty_marks = 0
+
+    def _mark_dirty():
+        app.state.lane_manager._status_dirty_marks += 1
+
+    app.state.lane_manager._mark_status_dirty = _mark_dirty
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        capabilities_models=["org/ready", "org/pending"],
+    )
+    # Startup leaves models without a profile out of the capabilities.
+    cfg.capabilities_models = ["org/ready"]
+    app.state.model_profiles.set_calibration_keys({"org/ready": {"schema": 1}, "org/pending": {"schema": 1}})
+    return LogosBridgeClient(app, cfg)
+
+
+@pytest.mark.asyncio
+async def test_hello_offers_profile_sync_with_the_current_calibration_keys(tmp_path):
+    client = _central_client(tmp_path)
+    ws = _CollectWS()
+    await client._send_hello(ws)  # noqa: SLF001
+
+    hello = ws.frames[0]
+    assert "sync_model_profiles" in hello["actions"]
+    assert set(hello["calibration_key_hashes"]) == {"org/ready", "org/pending"}
+    assert hello["calibration_key_hashes"] == client._app.state.model_profiles.calibration_key_hashes()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_sync_command_adopts_profiles_and_announces_new_capabilities(tmp_path):
+    """A calibration snapshot Logos linked comes back with its id and new
+    revision; a model that now has a profile joins the capabilities."""
+    client = _central_client(tmp_path)
+    registry = client._app.state.model_profiles  # noqa: SLF001
+
+    response = await client._execute_command(  # noqa: SLF001
+        "sync_model_profiles",
+        {
+            "profiles": {
+                "org/pending": {
+                    "base_residency_mb": 15000.0,
+                    "residency_source": "calibrated",
+                    "sync_revision": 2,
+                    "calibration_id": 11,
+                    "calibration_origin": "local",
+                    "calibration_stale": False,
+                }
+            }
+        },
+    )
+
+    assert response == {"ok": True, "replaced": ["org/pending"]}
+    profile = registry.get_profile("org/pending")
+    assert (profile.sync_revision, profile.calibration_id) == (2, 11)
+    assert client._cfg.capabilities_models == ["org/ready", "org/pending"]  # noqa: SLF001
+    assert client._app.state.lane_manager._status_dirty_marks == 1  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_sync_command_resets_a_profile_emptied_centrally(tmp_path):
+    """Clearing the only verdict of an unsupported-only profile leaves just
+    a revision; the worker must drop the verdict, not ignore the entry."""
+    client = _central_client(tmp_path)
+    registry = client._app.state.model_profiles  # noqa: SLF001
+    registry.mark_calibration_unsupported("org/pending", True, "unsupported-architecture")
+
+    await client._execute_command(  # noqa: SLF001
+        "sync_model_profiles", {"profiles": {"org/pending": {"sync_revision": 5}}}
+    )
+
+    profile = registry.get_profile("org/pending")
+    assert profile.calibration_unsupported is None
+    assert profile.sync_revision == 5
+    assert "org/pending" in client._list_uncalibrated_models()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_sync_command_is_idempotent_and_spares_the_model_under_calibration(tmp_path):
+    client = _central_client(tmp_path)
+    registry = client._app.state.model_profiles  # noqa: SLF001
+    registry.apply_calibration_result("org/ready", {"base_residency_mb": 9000.0, "residency_source": "calibrated"})
+
+    never_finishes = asyncio.Event()
+    session = _CalibrationSession(sleep_level=1)
+    session.current_model = "org/ready"
+    session.task = asyncio.create_task(never_finishes.wait())
+    client._active_calibration_session = session  # noqa: SLF001
+    push = {"profiles": {"org/ready": {"base_residency_mb": 1.0, "sync_revision": 7}}}
+    try:
+        first = await client._execute_command("sync_model_profiles", push)  # noqa: SLF001
+        second = await client._execute_command("sync_model_profiles", push)  # noqa: SLF001
+    finally:
+        session.task.cancel()
+
+    assert first == second == {"ok": True, "replaced": []}
+    assert registry.get_profile("org/ready").base_residency_mb == 9000.0
+
+
+@pytest.mark.asyncio
+async def test_a_push_that_changes_nothing_skips_the_status_rebuild(tmp_path):
+    """The push after every hello repeats what the worker holds; rebuilding
+    the status would still probe every lane."""
+    client = _central_client(tmp_path)
+    profile = {"base_residency_mb": 5.0, "sync_revision": 3, "calibration_id": 4}
+    first = await client._execute_command("sync_model_profiles", {"profiles": {"org/ready": profile}})  # noqa: SLF001
+    marks = client._app.state.lane_manager._status_dirty_marks  # noqa: SLF001
+    again = await client._execute_command("sync_model_profiles", {"profiles": {"org/ready": profile}})  # noqa: SLF001
+
+    assert first["replaced"] == ["org/ready"]
+    assert again == {"ok": True, "replaced": []}
+    assert client._app.state.lane_manager._status_dirty_marks == marks  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_status_echo_carries_the_central_sync_contract(tmp_path):
+    """The orchestrator stores an echo only with sync_revision present, keeps
+    overridden fields out of the database, and compares key hashes."""
+    from logos_worker_node.model_profiles import ModelProfileRegistry
+
+    registry = ModelProfileRegistry(model_profile_overrides={"org/ready": {"max_context_length": 32768}})
+    registry.set_calibration_keys({"org/ready": {"schema": 1}})
+    registry.replace_from_sync({"org/ready": {"base_residency_mb": 5.0, "sync_revision": 3}})
+
+    echo = registry.get_all_profiles()["org/ready"]
+    assert echo["sync_revision"] == 3
+    assert echo["max_context_length"] == 32768
+    assert echo["overridden_fields"] == ["max_context_length"]
+    assert echo["calibration_key_hash"] == registry.calibration_key_hashes()["org/ready"]
+
+
+@pytest.mark.asyncio
+async def test_startup_fetch_posts_keys_and_legacy_files(tmp_path, monkeypatch):
+    client = _central_client(tmp_path)
+    posted: list = []
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+        text = ""
+
+        @staticmethod
+        def json():
+            return {"profiles": {"org/ready": {"base_residency_mb": 5.0, "sync_revision": 1}}}
+
+    class _Http:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def post(self, url, json=None):
+            posted.append((url, json))
+            return _Resp()
+
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=15.0: _Http())
+    legacy = {"model_profiles": {}, "unsupported_models": {"org/bad": "invalid-repo-id"}}
+
+    profiles = await client.fetch_model_profiles({"org/ready": "h"}, legacy)
+
+    assert profiles == {"org/ready": {"base_residency_mb": 5.0, "sync_revision": 1}}
+    url, body = posted[0]
+    assert url == "https://logos.example/logosdb/providers/logosnode/model-profiles"
+    assert body == {"shared_key": "secret", "calibration_key_hashes": {"org/ready": "h"}, "legacy_import": legacy}
+
+
+@pytest.mark.asyncio
+async def test_startup_fetch_rejects_an_orchestrator_without_central_profiles(tmp_path, monkeypatch):
+    client = _central_client(tmp_path)
+
+    class _Resp:
+        status_code = 404
+        content = b"Not Found"
+        text = "Not Found"
+
+    class _Http:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def post(self, url, json=None):
+            return _Resp()
+
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=15.0: _Http())
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        await client.fetch_model_profiles({}, None)

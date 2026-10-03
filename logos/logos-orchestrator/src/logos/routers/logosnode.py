@@ -1,10 +1,12 @@
 """Worker (LogosWorkerNode) provider endpoints under /logosdb/providers/logosnode."""
 
 import asyncio
+import datetime
 import json
 import logging
 import os
 import secrets
+import time
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -15,9 +17,13 @@ from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import (
     LogosNodeApplyLanesRequest,
     LogosNodeAuthRequest,
+    LogosNodeClearUnsupportedRequest,
     LogosNodeDeleteLaneRequest,
+    LogosNodeInvalidateCalibrationRequest,
+    LogosNodeModelProfilesRequest,
     LogosNodeReconfigureLaneRequest,
     LogosNodeRegisterRequest,
+    LogosNodeResetProfilesRequest,
     LogosNodeSleepLaneRequest,
     LogosNodeStatusRequest,
     LogosNodeWakeLaneRequest,
@@ -36,6 +42,19 @@ from logos.main import (
     _normalize_provider_type,
     _resolve_provider_name,
 )
+from logos.model_profile_store import (
+    SYNC_MODEL_PROFILES_ACTION,
+    ProfileWriteCache,
+    calibration_snapshot,
+    effective_profile,
+    is_central_profile_payload,
+    is_new_local_calibration,
+    material_profile,
+    overridden_fields,
+    persistable_profile,
+    profile_digest,
+    reported_profile,
+)
 from logos.role_auth import require_logos_admin_key
 
 logger = logging.getLogger("LogosLogger")
@@ -47,6 +66,30 @@ router = APIRouter()
 # per-worker payload so a misbehaving or compromised worker can't inflate the
 # orchestrator's own /metrics scrape with an unbounded blob.
 _MAX_VLLM_METRICS_BYTES = 4 * 1024 * 1024
+
+_profile_write_cache = ProfileWriteCache()
+# (provider_id, model) -> last_measured_epoch already snapshotted
+_recorded_calibrations: dict[tuple[int, str], float] = {}
+# provider_id -> models whose echo was rejected, awaiting one coalesced push
+_pending_resyncs: dict[int, set[str]] = {}
+# Lets a push that is already in flight land before a rejected echo re-sends.
+_RESYNC_DELAY_SECONDS = 5.0
+# A worker that keeps rejecting pushes (its revision ahead of a restored
+# database, a model it is calibrating) is re-sent ever more rarely.
+_RESYNC_MAX_DELAY_SECONDS = 300.0
+# provider_id -> resyncs since its echoes were last accepted
+_resync_rounds: dict[int, int] = {}
+# provider_id -> newest status not yet written (sample, count-only flag)
+_unsaved_samples: dict[int, tuple[Dict[str, Any], bool]] = {}
+# provider_id -> the task writing its statuses, one at a time
+_sample_writers: dict[int, asyncio.Task] = {}
+# provider_id -> runtime timestamp of its previous status
+_last_runtime_ts: dict[int, Any] = {}
+# provider_id -> monotonic time its last snapshot write started
+_last_snapshot_at: dict[int, float] = {}
+# A request count change resends the last status with new counters only,
+# twice per request; the database keeps at most one of those per interval.
+_COUNT_ONLY_SNAPSHOT_SECONDS = 5.0
 
 
 def _validated_vllm_metrics_text(value: Any, *, provider_id: int) -> str | None:
@@ -96,7 +139,7 @@ def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | N
             _cancel_benchmark_job(job_id, "Provider restarted or disconnected")
 
 
-def _capture_logosnode_provider_snapshot(
+async def _capture_logosnode_provider_snapshot(
     provider_id: int,
     runtime: Dict[str, Any],
 ) -> None:
@@ -109,7 +152,59 @@ def _capture_logosnode_provider_snapshot(
     )
     if sample is None:
         return
+    # Scheduler signals read every status from memory; only the database
+    # write below is coalesced and runs off the receive loop.
+    await _main._logosnode_registry.record_runtime_sample(provider_id, sample)
+    runtime_ts = runtime.get("timestamp")
+    count_only = runtime_ts is not None and _last_runtime_ts.get(provider_id) == runtime_ts
+    _last_runtime_ts[provider_id] = runtime_ts
+    last_write = _last_snapshot_at.get(provider_id)
+    if count_only and last_write is not None and time.monotonic() - last_write < _COUNT_ONLY_SNAPSHOT_SECONDS:
+        return
+    pending = _unsaved_samples.get(provider_id)
+    # A status replaced before its write still owes its profiles.
+    _unsaved_samples[provider_id] = (sample, count_only and (pending is None or pending[1]))
+    if provider_id in _sample_writers:
+        return
+    task = asyncio.create_task(_write_status_samples(provider_id))
+    _sample_writers[provider_id] = task
+    _main._background_tasks.add(task)
+    task.add_done_callback(_main._background_tasks.discard)
 
+
+async def _write_status_samples(provider_id: int) -> None:
+    """Write a worker's statuses one at a time, newest first, older dropped."""
+    try:
+        while (entry := _unsaved_samples.pop(provider_id, None)) is not None:
+            sample, count_only = entry
+            _last_snapshot_at[provider_id] = time.monotonic()
+            try:
+                persisted = await asyncio.to_thread(_persist_logosnode_status, provider_id, sample, count_only)
+            except Exception:
+                # A malformed sample must not end the writer for later ones.
+                logger.warning("Dropping an unwritable status of provider %s", provider_id, exc_info=True)
+                continue
+            if persisted is None:
+                continue
+            changed_models, rejected_models = persisted
+            if changed_models:
+                _schedule_model_profile_push(provider_id, changed_models)
+            if rejected_models:
+                _schedule_model_profile_resync(provider_id, rejected_models)
+            elif not count_only:
+                _resync_rounds.pop(provider_id, None)
+    finally:
+        _sample_writers.pop(provider_id, None)
+
+
+def _persist_logosnode_status(
+    provider_id: int, sample: Dict[str, Any], count_only: bool = False
+) -> tuple[list[str], list[str]] | None:
+    """Store one status sample; None when even the snapshot failed.
+
+    Returns, as ``_persist_model_profiles``, the models the worker must be
+    sent. A count-only status repeats profiles that are already stored.
+    """
     timestamp = _parse_iso_datetime(sample.get("timestamp"))
     used_bytes = int(float(sample.get("used_vram_mb") or 0.0) * 1024 * 1024)
     total_vram_mb = sample.get("total_vram_mb")
@@ -120,10 +215,16 @@ def _capture_logosnode_provider_snapshot(
     free_bytes = None
     if free_vram_mb is not None:
         free_bytes = int(float(free_vram_mb or 0.0) * 1024 * 1024)
+    runtime_payload = sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}
+    # Profiles live in model_profiles; copying them into every snapshot only
+    # grew a column nothing reads.
+    snapshot_payload = {key: value for key, value in runtime_payload.items() if key != "model_profiles"}
 
+    changed_models: list[str] = []
+    rejected_models: list[str] = []
     try:
         with DBManager() as db:
-            snapshot_id = db.insert_provider_snapshot(
+            db.insert_provider_snapshot(
                 provider_id=provider_id,
                 snapshot_ts=timestamp,
                 total_models_loaded=int(sample.get("models_loaded") or 0),
@@ -132,31 +233,26 @@ def _capture_logosnode_provider_snapshot(
                 free_memory_bytes=free_bytes,
                 loaded_models=list(sample.get("loaded_models") or []),
                 snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
-                runtime_payload=(
-                    sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}
-                ),
+                runtime_payload=snapshot_payload,
                 scheduler_signals=(
                     sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {}
                 ),
                 poll_success=True,
             )
-            # Persist calibrated model profiles into the dedicated table
-            runtime_payload = sample.get("runtime_payload")
-            if isinstance(runtime_payload, dict):
-                model_profiles = runtime_payload.get("model_profiles")
-                if isinstance(model_profiles, dict) and model_profiles:
-                    try:
-                        db.upsert_model_profiles(provider_id, model_profiles)
-                    except Exception:
-                        db.session.rollback()
-                        logger.warning(
-                            "Failed to upsert model profiles for provider %s, the "
-                            "entire row update (base_residency_mb, loaded_vram_mb, "
-                            "kv_budget_mb, measurement_count, last_measured_at) is "
-                            "lost until this recovers",
-                            _resolve_provider_name(provider_id),
-                            exc_info=True,
-                        )
+            model_profiles = runtime_payload.get("model_profiles")
+            if not count_only and isinstance(model_profiles, dict) and model_profiles:
+                try:
+                    changed_models, rejected_models = _persist_model_profiles(db, provider_id, model_profiles)
+                except Exception:
+                    db.session.rollback()
+                    logger.warning(
+                        "Failed to upsert model profiles for provider %s, the "
+                        "entire row update (base_residency_mb, loaded_vram_mb, "
+                        "kv_budget_mb, measurement_count, last_measured_at) is "
+                        "lost until this recovers",
+                        _resolve_provider_name(provider_id),
+                        exc_info=True,
+                    )
     except Exception:
         # Persisting a VRAM snapshot must never drop the worker's live session.
         # A missing table (the webservice migration that renames it has not run
@@ -169,14 +265,176 @@ def _capture_logosnode_provider_snapshot(
             _resolve_provider_name(provider_id),
             exc_info=True,
         )
-        return
+        return None
+    return changed_models, rejected_models
 
-    sample["snapshot_id"] = snapshot_id
-    # Keep a strong reference: an unheld task can be garbage-collected before
-    # it runs, which would silently drop the runtime sample.
-    task = asyncio.create_task(_main._logosnode_registry.record_runtime_sample(provider_id, sample))
+
+def _persist_model_profiles(
+    db: DBManager, provider_id: int, model_profiles: Dict[str, Any]
+) -> tuple[list[str], list[str]]:
+    """Store a worker's echoed profiles in one transaction.
+
+    Returns the models with a new central revision, and the models whose
+    echo was rejected as outdated; the worker must be sent both.
+    """
+    if not is_central_profile_payload(model_profiles):
+        _mirror_local_profiles(db, provider_id, model_profiles)
+        return [], []
+    now = time.monotonic()
+    changed: list[str] = []
+    rejected: list[str] = []
+    written: dict[str, tuple[str, str]] = {}
+    recorded: dict[str, float] = {}
+    for model_name, echoed in model_profiles.items():
+        if not isinstance(echoed, dict):
+            continue
+        try:
+            revision = int(echoed.get("sync_revision") or 0)
+        except (TypeError, ValueError):
+            continue
+        stored = persistable_profile(echoed)
+        key_hash = echoed.get("calibration_key_hash") or None
+        digest = profile_digest(revision, echoed)
+        material = profile_digest(revision, material_profile(echoed))
+        if not _profile_write_cache.unchanged(provider_id, model_name, digest, material, now):
+            if not db.persist_central_model_profile(
+                provider_id,
+                model_name,
+                stored,
+                reported_profile(echoed),
+                revision,
+                key_hash,
+                overridden_fields(echoed),
+            ):
+                rejected.append(model_name)
+                continue
+            written[model_name] = (digest, material)
+        if not is_new_local_calibration(echoed):
+            continue
+        epoch = float(echoed["last_measured_epoch"])
+        if _recorded_calibrations.get((provider_id, model_name)) == epoch:
+            continue
+        new_revision = db.record_model_calibration(
+            provider_id,
+            model_name,
+            calibration_snapshot(stored),
+            echoed.get("calibration_key") if isinstance(echoed.get("calibration_key"), dict) else None,
+            key_hash,
+            datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc),
+        )
+        recorded[model_name] = epoch
+        if new_revision is not None:
+            changed.append(model_name)
+    db.session.commit()
+    # Only now: a rolled-back write must not count as stored.
+    for model_name, (digest, material) in written.items():
+        _profile_write_cache.remember(provider_id, model_name, digest, material, now)
+    for model_name in changed:
+        _profile_write_cache.forget(provider_id, model_name)
+    for model_name, epoch in recorded.items():
+        _recorded_calibrations[(provider_id, model_name)] = epoch
+    return changed, rejected
+
+
+def _mirror_local_profiles(db: DBManager, provider_id: int, model_profiles: Dict[str, Any]) -> None:
+    """Mirror a worker that still keeps its own profile file."""
+    pending = {
+        model_name: (data, profile_digest(0, data))
+        for model_name, data in model_profiles.items()
+        if isinstance(data, dict)
+    }
+    pending = {
+        model_name: entry
+        for model_name, entry in pending.items()
+        if not _profile_write_cache.unchanged(provider_id, model_name, entry[1])
+    }
+    if not pending:
+        return
+    db.upsert_model_profiles(provider_id, {model_name: data for model_name, (data, _) in pending.items()})
+    for model_name, (_, digest) in pending.items():
+        _profile_write_cache.remember(provider_id, model_name, digest)
+
+
+def _load_effective_profiles(provider_id: int, model_names: list[str] | None = None) -> Dict[str, Dict[str, Any]]:
+    with DBManager() as db:
+        rows = db.get_central_model_profiles(provider_id, model_names)
+    return {str(row["model_name"]): effective_profile(provider_id, row) for row in rows}
+
+
+async def _push_model_profiles(
+    provider_id: int,
+    model_names: list[str] | None = None,
+    calibration_key_hashes: Dict[str, str] | None = None,
+) -> None:
+    """Send the stored profiles to a worker that syncs with the database."""
+    if not _main._logosnode_registry.supports_action(provider_id, SYNC_MODEL_PROFILES_ACTION):
+        return
+    try:
+        if calibration_key_hashes:
+            await asyncio.to_thread(_update_reported_calibration_keys, provider_id, calibration_key_hashes)
+        profiles = await asyncio.to_thread(_load_effective_profiles, provider_id, model_names)
+        await _main._logosnode_registry.send_command(
+            provider_id,
+            SYNC_MODEL_PROFILES_ACTION,
+            params={"profiles": profiles},
+            timeout_seconds=30,
+        )
+    except Exception:
+        # The worker keeps its current profiles; the next hello pushes again.
+        logger.warning(
+            "Failed to push model profiles to provider %s",
+            _resolve_provider_name(provider_id),
+            exc_info=True,
+        )
+
+
+def _update_reported_calibration_keys(provider_id: int, calibration_key_hashes: Dict[str, str]) -> None:
+    with DBManager() as db:
+        db.update_reported_calibration_keys(provider_id, calibration_key_hashes)
+
+
+def _schedule_model_profile_push(
+    provider_id: int,
+    model_names: list[str] | None = None,
+    calibration_key_hashes: Dict[str, str] | None = None,
+) -> None:
+    task = asyncio.create_task(_push_model_profiles(provider_id, model_names, calibration_key_hashes))
     _main._background_tasks.add(task)
     task.add_done_callback(_main._background_tasks.discard)
+
+
+def _schedule_model_profile_resync(provider_id: int, model_names: list[str]) -> None:
+    """Re-send profiles a worker has not adopted, e.g. after a failed push.
+
+    Every status repeats the rejected echo; all of them share one push, and
+    each further round without an accepted echo waits twice as long.
+    """
+    pending = _pending_resyncs.get(provider_id)
+    if pending is not None:
+        pending.update(model_names)
+        return
+    _pending_resyncs[provider_id] = set(model_names)
+    rounds = _resync_rounds.get(provider_id, 0)
+    _resync_rounds[provider_id] = rounds + 1
+    delay = min(_RESYNC_DELAY_SECONDS * 2 ** min(rounds, 16), _RESYNC_MAX_DELAY_SECONDS)
+    task = asyncio.create_task(_run_model_profile_resync(provider_id, delay))
+    _main._background_tasks.add(task)
+    task.add_done_callback(_main._background_tasks.discard)
+
+
+async def _run_model_profile_resync(provider_id: int, delay: float = _RESYNC_DELAY_SECONDS) -> None:
+    try:
+        await asyncio.sleep(delay)
+    finally:
+        model_names = _pending_resyncs.pop(provider_id, set())
+    if model_names:
+        await _push_model_profiles(provider_id, sorted(model_names))
+
+
+def _string_map(value: Any) -> Dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): str(v) for k, v in value.items() if isinstance(v, str) and v}
 
 
 def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> None:
@@ -317,6 +575,18 @@ async def logosnode_register(data: LogosNodeRegisterRequest):
     }
 
 
+def _logosnode_provider_for_key(shared_key: str) -> Dict[str, Any]:
+    with DBManager() as db:
+        provider = db.get_logosnode_provider_by_api_key(shared_key)
+
+    if not provider:
+        raise HTTPException(status_code=404, detail="Provider not found for this API key")
+    provider_type = _normalize_provider_type(provider.get("provider_type"))
+    if provider_type != "logosnode":
+        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
+    return provider
+
+
 @router.post("/logosdb/providers/logosnode/auth", tags=["logosnode"])
 async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     """
@@ -326,14 +596,7 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
     to know or send a provider_id.
     """
     _require_tls_request(request)
-    with DBManager() as db:
-        provider = db.get_logosnode_provider_by_api_key(data.shared_key)
-
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found for this API key")
-    provider_type = _normalize_provider_type(provider.get("provider_type"))
-    if provider_type != "logosnode":
-        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
+    provider = _logosnode_provider_for_key(data.shared_key)
 
     provider_id = provider["id"]
     worker_id = provider.get("name") or f"worker-{provider_id}"
@@ -364,6 +627,39 @@ async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
         "expires_in_seconds": 60,
         "hf_token": _central_hf_token(),
     }
+
+
+@router.post("/logosdb/providers/logosnode/model-profiles", tags=["logosnode"])
+async def logosnode_model_profiles(data: LogosNodeModelProfilesRequest, request: Request):
+    """Profiles a worker starts with, before it starts any lane.
+
+    ``legacy_import`` is the worker's former local file, used only once.
+    """
+    _require_tls_request(request)
+    provider = _logosnode_provider_for_key(data.shared_key)
+    provider_id = int(provider["id"])
+
+    def _load() -> Dict[str, Dict[str, Any]]:
+        if data.legacy_import is not None:
+            with DBManager() as db:
+                imported = db.import_legacy_model_profiles(
+                    provider_id,
+                    data.legacy_import.model_profiles,
+                    data.legacy_import.unsupported_models,
+                )
+            if imported:
+                logger.info(
+                    "Imported %d model profile(s) from the local file of provider %s",
+                    imported,
+                    _resolve_provider_name(provider_id),
+                )
+        if data.calibration_key_hashes:
+            _update_reported_calibration_keys(provider_id, data.calibration_key_hashes)
+        return _load_effective_profiles(provider_id)
+
+    _profile_write_cache.forget(provider_id)
+    profiles = await asyncio.to_thread(_load)
+    return {"profiles": profiles}
 
 
 @router.websocket("/logosdb/providers/logosnode/session")
@@ -411,6 +707,10 @@ async def logosnode_session(websocket: WebSocket, token: str):
                     ),
                     actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
                 )
+                _schedule_model_profile_push(
+                    ticket.provider_id,
+                    calibration_key_hashes=_string_map(payload.get("calibration_key_hashes")),
+                )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
                 await _main._logosnode_registry.update_runtime(
@@ -428,7 +728,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
                     ),
                 )
-                _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
+                await _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
                 event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
                 await _main._logosnode_registry.append_event(
@@ -656,3 +956,67 @@ async def logosnode_stop_calibration(data: LogosNodeStatusRequest):
             "current_model": current_model,
         }
     )
+
+
+@router.post("/logosdb/providers/logosnode/model-profiles/clear-unsupported", tags=["logosnode"])
+async def logosnode_clear_unsupported(data: LogosNodeClearUnsupportedRequest):
+    """Let calibration retry a model a node marked permanently unsupported."""
+    _require_root_access(data.logos_key)
+
+    def _clear() -> int | None:
+        with DBManager() as db:
+            return db.clear_calibration_unsupported(data.provider_id, data.model_name)
+
+    revision = await asyncio.to_thread(_clear)
+    if revision is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"{data.model_name} is not marked unsupported on provider {data.provider_id}"},
+        )
+    _profile_write_cache.forget(data.provider_id, data.model_name)
+    await _push_model_profiles(data.provider_id, [data.model_name])
+    return {"provider_id": data.provider_id, "model_name": data.model_name, "sync_revision": revision}
+
+
+@router.post("/logosdb/providers/logosnode/model-calibrations/invalidate", tags=["logosnode"])
+async def logosnode_invalidate_calibration(data: LogosNodeInvalidateCalibrationRequest):
+    """Stop trusting a calibration; nodes using it re-calibrate the model."""
+    _require_root_access(data.logos_key)
+
+    def _invalidate() -> list[tuple[int, str]]:
+        with DBManager() as db:
+            return db.invalidate_model_calibration(data.calibration_id, data.reason)
+
+    affected = await asyncio.to_thread(_invalidate)
+    by_provider: Dict[int, list[str]] = {}
+    for provider_id, model_name in affected:
+        _profile_write_cache.forget(provider_id, model_name)
+        by_provider.setdefault(provider_id, []).append(model_name)
+    for provider_id, model_names in by_provider.items():
+        await _push_model_profiles(provider_id, model_names)
+    return {
+        "calibration_id": data.calibration_id,
+        "affected": [{"provider_id": pid, "model_name": name} for pid, name in affected],
+    }
+
+
+@router.post("/logosdb/providers/logosnode/model-profiles/reset", tags=["logosnode"])
+async def logosnode_reset_profiles(data: LogosNodeResetProfilesRequest):
+    """Empty a node's profiles so its next calibration measures from scratch.
+
+    A connected worker adopts the empty profiles at once; echoes of its old
+    state carry an outdated revision and are rejected.
+    """
+    _require_root_access(data.logos_key)
+
+    def _reset() -> list[str]:
+        with DBManager() as db:
+            return db.reset_model_profiles(data.provider_id, data.model_names)
+
+    reset = await asyncio.to_thread(_reset)
+    for model_name in reset:
+        _profile_write_cache.forget(data.provider_id, model_name)
+        _recorded_calibrations.pop((data.provider_id, model_name), None)
+    if reset:
+        await _push_model_profiles(data.provider_id, reset)
+    return {"provider_id": data.provider_id, "reset": reset}

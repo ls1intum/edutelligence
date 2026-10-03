@@ -452,6 +452,10 @@ class ModelProfile:
     # orchestrator takes the max of this across every provider's profile for
     # the model to decide which nodes are still worth attempting.
     metal_capacity_floor_mb: Optional[float] = None
+    # Set by the central profile store: the calibration keeps serving but was
+    # measured under a different hardware/vLLM/config key, so the next window
+    # re-calibrates it.
+    calibration_stale: Optional[bool] = None
 
     def estimate_vram_mb(self) -> float:
         """Best estimate of model footprint (not GPU reservation).
@@ -511,6 +515,7 @@ class ModelProfile:
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
             "calibration_unsupported_reason": self.calibration_unsupported_reason,
+            "calibration_stale": self.calibration_stale,
         }
 
 

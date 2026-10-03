@@ -4629,6 +4629,7 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
             or profile.get("sleep_l1_transient_host_ram_mb") is None
             or (profile.get("residency_source") == "calibrated" and not profile.get("kv_cache_to_max_model_len_pairs"))
             or collapsed_envelope
+            or bool(profile is not None and profile.get("calibration_stale"))
         ):
             uncalibrated.append(model_name)
     return uncalibrated

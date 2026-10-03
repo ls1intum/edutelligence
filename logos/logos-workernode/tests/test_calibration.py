@@ -1,12 +1,10 @@
-"""Comprehensive tests for the auto-calibration feature.
+"""Tests for the calibration engine.
 
 Covers:
-  - Detection logic (_auto_calibrate_if_needed from main.py)
   - Unit tests for calibration.py pure functions
   - plans_from_config parsing
-  - save/load round-trip
-  - auto_calibrate_models integration (mocked calibrate_model)
-  - Startup lifespan integration
+  - TP escalation (mocked calibrate_model)
+  - Failure classification inside the probe
 """
 
 from __future__ import annotations
@@ -20,16 +18,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-import logos_worker_node.main as worker_main
 from logos_worker_node.calibration import (
     _CALIBRATION_DOMAINS,
     _DOMAIN_KV_CACHE_FIT,
     _FATAL_LOAD_ERROR_PATTERNS,
     _KV_CACHE_MIN_STEP_MB,
     _NODE_LEVEL_TRANSIENT_PATTERNS,
-    _UNSUPPORTED_MODELS_FILE,
     CalibrationResult,
-    UnsupportedModelEntry,
     _build_vllm_cmd,
     _classify_fatal_load_error,
     _classify_node_transient_error,
@@ -38,18 +33,13 @@ from logos_worker_node.calibration import (
     _extract_vllm_max_num_seqs_suggestion,
     _format_kv_mb,
     _is_cuda_oom_log,
-    _load_unsupported_models,
     _max_tp_for_plan,
     _parse_kv_to_mb,
     _plan_needs_gpu_pin,
-    _record_unsupported_model,
-    auto_calibrate_models,
     calibrate_model,
     calibrate_with_tp_escalation,
     calibration_gpu_slice,
     extract_revision_arg,
-    is_model_unsupported,
-    load_existing_profiles,
     merge_profile,
     parse_gpu_indices,
     pin_plan_gpu_devices,
@@ -61,12 +51,10 @@ from logos_worker_node.calibration import (
     probe_transcription,
     result_to_profile_dict,
     sample_vram_mb,
-    save_profiles,
     select_calibration_gpus,
     warmup_inference,
 )
-from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
-from logos_worker_node.models import AppConfig
+from logos_worker_node.model_profiles import ModelProfileRegistry
 
 
 @pytest.fixture(autouse=True)
@@ -79,20 +67,6 @@ def _pin_backend_to_cuda(monkeypatch):
 
 
 # ── helpers ────────────────────────────────────────────────────────────
-
-
-def _make_registry(tmp_path: Path, profiles: dict[str, ModelProfileRecord] | None = None) -> ModelProfileRegistry:
-    """Create a ModelProfileRegistry backed by *tmp_path* with pre-set profiles."""
-    reg = ModelProfileRegistry(state_dir=tmp_path)
-    if profiles:
-        for name, rec in profiles.items():
-            reg._profiles[name] = rec
-    return reg
-
-
-def _make_cfg(capabilities: list[str] | None = None) -> AppConfig:
-    caps = capabilities if capabilities is not None else []
-    return AppConfig(logos={"capabilities_models": caps})
 
 
 def _success_result(model: str, **overrides) -> CalibrationResult:
@@ -125,195 +99,6 @@ def _fail_result(model: str, error: str = "boom") -> CalibrationResult:
 # ═══════════════════════════════════════════════════════════════════════
 # Group 1 — Detection logic (_auto_calibrate_if_needed)
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@pytest.mark.asyncio
-async def test_all_models_calibrated_skips_calibration(tmp_path):
-    cfg = _make_cfg(["model-a", "model-b"])
-    reg = _make_registry(
-        tmp_path,
-        {
-            "model-a": ModelProfileRecord(
-                base_residency_mb=5000,
-                sleeping_residual_mb=200,
-                loaded_vram_mb=5000,
-                residency_source="calibrated",
-                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
-            ),
-            "model-b": ModelProfileRecord(
-                base_residency_mb=6000,
-                sleeping_residual_mb=300,
-                loaded_vram_mb=6000,
-                residency_source="calibrated",
-                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
-            ),
-        },
-    )
-
-    with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    mock_cal.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_uncalibrated_models_detected(tmp_path):
-    cfg = _make_cfg(["model-a", "model-b"])
-    reg = _make_registry(
-        tmp_path,
-        {
-            "model-a": ModelProfileRecord(
-                base_residency_mb=5000,
-                sleeping_residual_mb=200,
-                loaded_vram_mb=5000,
-                residency_source="calibrated",
-                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
-            ),
-            "model-b": ModelProfileRecord(base_residency_mb=None),
-        },
-    )
-
-    fake_result = _success_result("model-b")
-    with patch.object(worker_main, "auto_calibrate_models", return_value={"model-b": fake_result}) as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    mock_cal.assert_called_once()
-    call_args = mock_cal.call_args
-    assert call_args[0][0] == ["model-b"]
-
-
-@pytest.mark.asyncio
-async def test_no_profile_means_uncalibrated(tmp_path):
-    cfg = _make_cfg(["model-a", "model-b"])
-    reg = _make_registry(tmp_path)  # empty
-
-    fake = {
-        "model-a": _success_result("model-a"),
-        "model-b": _success_result("model-b"),
-    }
-    with patch.object(worker_main, "auto_calibrate_models", return_value=fake) as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    mock_cal.assert_called_once()
-    uncalibrated = mock_cal.call_args[0][0]
-    assert set(uncalibrated) == {"model-a", "model-b"}
-
-
-@pytest.mark.asyncio
-async def test_skip_env_var_disables_calibration(tmp_path, monkeypatch):
-    monkeypatch.setenv("LOGOS_SKIP_AUTO_CALIBRATION", "1")
-    cfg = _make_cfg(["model-a"])
-    reg = _make_registry(tmp_path)
-
-    with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    mock_cal.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_skip_env_var_true_string(tmp_path, monkeypatch):
-    monkeypatch.setenv("LOGOS_SKIP_AUTO_CALIBRATION", "true")
-    cfg = _make_cfg(["model-a"])
-    reg = _make_registry(tmp_path)
-
-    with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    mock_cal.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_empty_capabilities_skips(tmp_path):
-    cfg = _make_cfg([])
-    reg = _make_registry(tmp_path)
-
-    with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    mock_cal.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_calibrated_tp_above_default_does_not_loop(tmp_path, monkeypatch):
-    """Profile says tp=2, config has no explicit tp → don't re-calibrate.
-
-    Before the fix the provenance check defaulted expected_tp to 1, so any
-    calibrated tp>1 (the common case for big models) tripped "tp mismatch"
-    on every restart and re-ran a multi-minute calibration that produced the
-    same answer.
-    """
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        yaml.safe_dump(
-            {
-                "logos": {"capabilities_models": ["big/model"]},
-            }
-        )
-    )
-    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
-
-    reg = _make_registry(
-        tmp_path,
-        {
-            "big/model": ModelProfileRecord(
-                base_residency_mb=180_000.0,
-                sleeping_residual_mb=5000.0,
-                loaded_vram_mb=180_000.0,
-                residency_source="calibrated",
-                tensor_parallel_size=2,
-                kv_cache_to_max_model_len_pairs=[{"kv_mb": 2048.0, "max_model_len": 131072}],
-            ),
-        },
-    )
-    cfg = _make_cfg(["big/model"])
-
-    with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    mock_cal.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_calibrated_tp_disagrees_with_explicit_config_recalibrates(tmp_path, monkeypatch):
-    """Explicit tp in config that disagrees with the profile → re-calibrate."""
-    config_path = tmp_path / "config.yml"
-    config_path.write_text(
-        yaml.safe_dump(
-            {
-                "logos": {
-                    "capabilities_models": [
-                        {"model": "big/model", "tensor_parallel_size": 4},
-                    ],
-                },
-            }
-        )
-    )
-    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
-
-    reg = _make_registry(
-        tmp_path,
-        {
-            "big/model": ModelProfileRecord(
-                base_residency_mb=180_000.0,
-                sleeping_residual_mb=5000.0,
-                loaded_vram_mb=180_000.0,
-                residency_source="calibrated",
-                tensor_parallel_size=2,
-            ),
-        },
-    )
-    cfg = _make_cfg(["big/model"])
-
-    with patch.object(
-        worker_main,
-        "auto_calibrate_models",
-        return_value={"big/model": _success_result("big/model")},
-    ) as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    mock_cal.assert_called_once()
-    assert mock_cal.call_args[0][0] == ["big/model"]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -476,37 +261,22 @@ def test_plans_from_config_merges_vllm_model_overrides(tmp_path):
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def test_save_load_profiles_roundtrip(tmp_path):
-    profiles_path = tmp_path / "model_profiles.yml"
-    original = {
-        "org/model-a": {
-            "base_residency_mb": 5000.0,
-            "loaded_vram_mb": 7000.0,
-            "sleeping_residual_mb": 200.0,
-            "residency_source": "calibrated",
-        },
-        "org/model-b": {
-            "base_residency_mb": 3500.0,
-            "loaded_vram_mb": 5500.0,
-            "sleeping_residual_mb": 150.0,
-            "residency_source": "calibrated",
-        },
-    }
-
-    save_profiles(profiles_path, original)
-    loaded = load_existing_profiles(profiles_path)
-
-    assert loaded == original
-
-
-def test_load_existing_profiles_missing_file(tmp_path):
-    missing = tmp_path / "nonexistent" / "model_profiles.yml"
-    assert load_existing_profiles(missing) == {}
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # Group 5 — auto_calibrate_models integration (mock calibrate_model)
 # ═══════════════════════════════════════════════════════════════════════
+
+
+def _escalate(config_path: Path, model: str, gpus: int, log_dir: Path) -> CalibrationResult:
+    plan = next(p for p in plans_from_config(config_path) if p["model"] == model)
+    return calibrate_with_tp_escalation(
+        plan,
+        vllm_binary="vllm",
+        port=11499,
+        log_dir=log_dir,
+        sleep_level=1,
+        ready_timeout_s=60.0,
+        available_gpus=gpus,
+    )
 
 
 def _write_config(tmp_path, models):
@@ -522,121 +292,7 @@ def _mock_gpu_snap(n_gpus=1, total_mb=24000.0):
     return {i: {"total_mb": total_mb, "used_mb": 500.0, "free_mb": total_mb - 500.0} for i in range(n_gpus)}
 
 
-def test_auto_calibrate_models_calls_calibrate_for_each(tmp_path):
-    config_path = _write_config(tmp_path, ["model-a", "model-b"])
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-
-    side = {
-        "model-a": _success_result("model-a"),
-        "model-b": _success_result("model-b"),
-    }
-
-    with (
-        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch(
-            "logos_worker_node.calibration.query_gpu_vram",
-            return_value=_mock_gpu_snap(),
-        ),
-    ):
-        mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
-        results = auto_calibrate_models(
-            ["model-a", "model-b"],
-            config_path,
-            state_dir,
-        )
-
-    assert mock_cm.call_count == 2
-    assert results["model-a"].success
-    assert results["model-b"].success
-
-
-def test_auto_calibrate_models_persists_after_each_success(tmp_path):
-    config_path = _write_config(tmp_path, ["model-a", "model-b"])
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-
-    side = {
-        "model-a": _success_result("model-a"),
-        "model-b": _success_result("model-b"),
-    }
-
-    with (
-        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch("logos_worker_node.calibration.save_profiles") as mock_save,
-        patch(
-            "logos_worker_node.calibration.query_gpu_vram",
-            return_value=_mock_gpu_snap(),
-        ),
-    ):
-        mock_cm.side_effect = lambda plan, **kw: side[plan["model"]]
-        auto_calibrate_models(["model-a", "model-b"], config_path, state_dir)
-
-    assert mock_save.call_count == 2
-
-
-def test_auto_calibrate_models_continues_on_failure(tmp_path):
-    """Failed model-a (even after tp escalation) doesn't block model-b."""
-    config_path = _write_config(tmp_path, ["model-a", "model-b"])
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-
-    # model-a fails at both tp=1 and tp=2; model-b succeeds at tp=1
-    def side_effect(plan, **kw):
-        if plan["model"] == "model-a":
-            return _fail_result("model-a")
-        return _success_result("model-b")
-
-    with (
-        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch(
-            "logos_worker_node.calibration.query_gpu_vram",
-            return_value=_mock_gpu_snap(2),
-        ),
-    ):
-        mock_cm.side_effect = side_effect
-        results = auto_calibrate_models(
-            ["model-a", "model-b"],
-            config_path,
-            state_dir,
-        )
-
-    # model-a: tp=2 fail + tp=1 fallback fail = 2, model-b: tp=2 ok + tp=1 search = 2
-    assert mock_cm.call_count == 4
-    assert not results["model-a"].success
-    assert results["model-b"].success
-    # Only model-b should have a persisted profile
-    profiles = load_existing_profiles(state_dir / "model_profiles.yml")
-    assert "model-b" in profiles
-    assert "model-a" not in profiles
-
-
-def test_auto_calibrate_models_filters_to_uncalibrated_only(tmp_path):
-    config_path = _write_config(tmp_path, ["model-a", "model-b"])
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-
-    with (
-        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
-        patch(
-            "logos_worker_node.calibration.query_gpu_vram",
-            return_value=_mock_gpu_snap(),
-        ),
-    ):
-        mock_cm.return_value = _success_result("model-b")
-        results = auto_calibrate_models(
-            ["model-b"],
-            config_path,
-            state_dir,
-        )
-
-    assert mock_cm.call_count == 1
-    plan_arg = mock_cm.call_args[0][0]
-    assert plan_arg["model"] == "model-b"
-    assert "model-a" not in results
-
-
-def test_auto_calibrate_tp_escalation(tmp_path):
+def test_escalation_tries_max_tp_then_searches_down(tmp_path):
     """Max-first strategy: try tp=2 first, then binary-search down to tp=1.
 
     On a 2-GPU host with default tp=1, the first attempt uses tp=2 (max).
@@ -644,8 +300,6 @@ def test_auto_calibrate_tp_escalation(tmp_path):
     fails, the final result uses tp=2.
     """
     config_path = _write_config(tmp_path, ["big-model"])
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
 
     def side_effect(plan, **kw):
         tp = plan.get("tensor_parallel_size", 1)
@@ -661,21 +315,19 @@ def test_auto_calibrate_tp_escalation(tmp_path):
         ),
     ):
         mock_cm.side_effect = side_effect
-        results = auto_calibrate_models(["big-model"], config_path, state_dir)
+        result = _escalate(config_path, "big-model", 2, tmp_path)
 
     assert mock_cm.call_count == 2
     # First call: tp=2 (max), second call: tp=1 (binary search down)
     assert mock_cm.call_args_list[0][0][0]["tensor_parallel_size"] == 2
     assert mock_cm.call_args_list[1][0][0]["tensor_parallel_size"] == 1
-    assert results["big-model"].success
-    assert results["big-model"].tensor_parallel_size == 2
+    assert result.success
+    assert result.tensor_parallel_size == 2
 
 
-def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
+def test_no_escalation_on_single_gpu(tmp_path):
     """On a single-GPU host, max tp == 1 so only one attempt is made."""
     config_path = _write_config(tmp_path, ["big-model"])
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
@@ -685,19 +337,17 @@ def test_auto_calibrate_no_escalation_on_single_gpu(tmp_path):
         ),
     ):
         mock_cm.return_value = _fail_result("big-model")
-        results = auto_calibrate_models(["big-model"], config_path, state_dir)
+        result = _escalate(config_path, "big-model", 1, tmp_path)
 
     assert mock_cm.call_count == 1  # max tp == 1, single attempt
-    assert not results["big-model"].success
+    assert not result.success
 
 
-def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
+def test_no_escalation_when_already_max_tp(tmp_path):
     """Model configured at tp=2 on 2-GPU host — max == configured, single attempt."""
     cfg = {"logos": {"capabilities_models": [{"model": "big-model", "tensor_parallel_size": 2}]}}
     config_path = tmp_path / "config.yml"
     config_path.write_text(yaml.safe_dump(cfg))
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
@@ -707,10 +357,10 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
         ),
     ):
         mock_cm.return_value = _fail_result("big-model")
-        results = auto_calibrate_models(["big-model"], config_path, state_dir)
+        result = _escalate(config_path, "big-model", 2, tmp_path)
 
     assert mock_cm.call_count == 1  # already at max tp, single attempt
-    assert not results["big-model"].success
+    assert not result.success
 
 
 def test_escalation_pins_plan_to_gpu_slice_on_heterogeneous_node(tmp_path):
@@ -719,8 +369,6 @@ def test_escalation_pins_plan_to_gpu_slice_on_heterogeneous_node(tmp_path):
     TP escalation itself is unchanged: max-first from tp=2, then down to tp=1.
     """
     config_path = _write_config(tmp_path, ["big-model"])
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
 
     def side_effect(plan, **kw):
         tp = plan.get("tensor_parallel_size", 1)
@@ -733,10 +381,10 @@ def test_escalation_pins_plan_to_gpu_slice_on_heterogeneous_node(tmp_path):
         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(3)),
     ):
         mock_cm.side_effect = side_effect
-        results = auto_calibrate_models(["big-model"], config_path, state_dir)
+        result = _escalate(config_path, "big-model", 3, tmp_path)
 
-    assert results["big-model"].success
-    assert results["big-model"].tensor_parallel_size == 2
+    assert result.success
+    assert result.tensor_parallel_size == 2
     # Every probe attempt is pinned to the slice, not "all" / every GPU.
     for call in mock_cm.call_args_list:
         passed_plan = call[0][0]
@@ -748,15 +396,13 @@ def test_escalation_respects_an_explicit_plan_pin(tmp_path):
     cfg = {"logos": {"capabilities_models": [{"model": "big-model", "gpu_devices": "1,2"}]}}
     config_path = tmp_path / "config.yml"
     config_path.write_text(yaml.safe_dump(cfg))
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
 
     with (
         patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
         patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(3)),
     ):
         mock_cm.return_value = _success_result("big-model", tensor_parallel_size=2)
-        auto_calibrate_models(["big-model"], config_path, state_dir)
+        _escalate(config_path, "big-model", 3, tmp_path)
 
     assert mock_cm.call_args[0][0]["gpu_devices"] == "1,2"
 
@@ -1809,54 +1455,6 @@ def test_query_vllm_quantization_methods_returns_empty_on_corrupt_baked_file(tmp
     assert result == []
 
 
-@pytest.mark.asyncio
-async def test_calibration_output_honored_on_startup(tmp_path):
-    """Ensure that calibration output is honored — no recalibration triggered."""
-    # Simulate a model that was successfully calibrated.
-    # In real calibration: base_residency_mb == loaded_vram_mb (full loaded footprint).
-    r = _success_result(
-        "model-a",
-        kv_cache_sent_mb=3072.0,
-        loaded_vram_mb=7000.0,
-        base_residency_mb=7000.0,
-    )
-    profile = result_to_profile_dict(r)
-
-    # Create a registry with the profile already present.
-    # All required fields set so _auto_calibrate_if_needed considers it calibrated:
-    #   base_residency_mb is not None, sleeping_residual_mb is not None,
-    #   base_residency_mb == loaded_vram_mb (no stale format mismatch).
-    reg = _make_registry(
-        tmp_path,
-        {
-            "model-a": ModelProfileRecord(
-                base_residency_mb=profile["base_residency_mb"],
-                sleeping_residual_mb=profile["sleeping_residual_mb"],
-                loaded_vram_mb=profile["loaded_vram_mb"],
-                residency_source="calibrated",
-                kv_cache_to_max_model_len_pairs=[{"kv_mb": 1024.0, "max_model_len": 1000}],
-            ),
-        },
-    )
-
-    cfg = _make_cfg(["model-a"])
-
-    with patch.object(worker_main, "auto_calibrate_models") as mock_cal:
-        await worker_main._auto_calibrate_if_needed(cfg, reg, tmp_path)
-
-    # Already calibrated → no recalibration
-    mock_cal.assert_not_called()
-
-
-def test_profile_dict_has_calibration_kv_field():
-    """result_to_profile_dict includes calibration_kv_cache_memory_bytes."""
-    r = _success_result("org/my-model", kv_cache_sent_mb=5120.0)
-    d = result_to_profile_dict(r)
-
-    assert "calibration_kv_cache_memory_bytes" in d
-    assert d["calibration_kv_cache_memory_bytes"] == "5G"
-
-
 def test_profile_dict_records_calibration_max_model_len():
     """When calibration auto-injected --max-model-len (because the operator's
     pinned KV budget couldn't fit one request at the model's default
@@ -2288,119 +1886,6 @@ def test_fatal_classifier_registry_has_expected_codes():
     } <= codes
 
 
-def test_unsupported_file_roundtrip(tmp_path: Path):
-    """Record → load preserves contents and round-trips cleanly."""
-    path = tmp_path / _UNSUPPORTED_MODELS_FILE
-    entry = UnsupportedModelEntry(
-        model="Qwen/Bogus-Model",
-        reason_code="invalid-repo-id",
-        recorded_at="2026-06-04T19:46:51Z",
-        description="vLLM cannot resolve the model name to a repository.",
-    )
-    _record_unsupported_model(path, entry)
-    loaded = _load_unsupported_models(path)
-    assert "Qwen/Bogus-Model" in loaded
-    assert loaded["Qwen/Bogus-Model"].reason_code == "invalid-repo-id"
-    assert loaded["Qwen/Bogus-Model"].recorded_at == "2026-06-04T19:46:51Z"
-
-
-def test_unsupported_file_ignores_comments_and_blank_lines(tmp_path: Path):
-    path = tmp_path / _UNSUPPORTED_MODELS_FILE
-    path.write_text(
-        "# comment line\n"
-        "\n"
-        "Qwen/A\tinvalid-repo-id\t2026-06-04T00:00:00Z\tdescription A\n"
-        "\n"
-        "# another comment\n"
-        "Qwen/B\tgated-repo-no-token\t2026-06-04T01:00:00Z\tdescription B\n",
-        encoding="utf-8",
-    )
-    loaded = _load_unsupported_models(path)
-    assert set(loaded.keys()) == {"Qwen/A", "Qwen/B"}
-    assert loaded["Qwen/B"].reason_code == "gated-repo-no-token"
-
-
-def test_unsupported_file_last_entry_wins_for_same_model(tmp_path: Path):
-    """When operator appends a fresher entry, the loader returns the most recent."""
-    path = tmp_path / _UNSUPPORTED_MODELS_FILE
-    older = UnsupportedModelEntry(
-        model="Qwen/X",
-        reason_code="invalid-repo-id",
-        recorded_at="2026-06-01T00:00:00Z",
-        description="old",
-    )
-    newer = UnsupportedModelEntry(
-        model="Qwen/X",
-        reason_code="gated-repo-no-token",
-        recorded_at="2026-06-04T00:00:00Z",
-        description="new",
-    )
-    _record_unsupported_model(path, older)
-    _record_unsupported_model(path, newer)
-    loaded = _load_unsupported_models(path)
-    assert loaded["Qwen/X"].reason_code == "gated-repo-no-token"
-
-
-def test_is_model_unsupported_returns_none_when_file_missing(tmp_path: Path):
-    assert is_model_unsupported(tmp_path / "nope", "any/model") is None
-
-
-def test_unsupported_entry_with_tabs_in_description_does_not_corrupt_format(
-    tmp_path: Path,
-):
-    """A description that contains tab characters is sanitized at write time."""
-    path = tmp_path / _UNSUPPORTED_MODELS_FILE
-    entry = UnsupportedModelEntry(
-        model="Qwen/Z",
-        reason_code="invalid-repo-id",
-        recorded_at="2026-06-04T00:00:00Z",
-        description="line one\twith embedded\ttabs and\nnewlines",
-    )
-    _record_unsupported_model(path, entry)
-    # Should round-trip without splitting the description into extra columns.
-    loaded = _load_unsupported_models(path)
-    assert loaded["Qwen/Z"].reason_code == "invalid-repo-id"
-    assert "\t" not in loaded["Qwen/Z"].description
-    assert "\n" not in loaded["Qwen/Z"].description
-
-
-def test_calibrate_model_skips_when_on_unsupported_list(tmp_path: Path):
-    """calibrate_model short-circuits if the model is on the unsupported list."""
-    log_dir = tmp_path / "calibration_logs"
-    log_dir.mkdir()
-    _record_unsupported_model(
-        log_dir / _UNSUPPORTED_MODELS_FILE,
-        UnsupportedModelEntry(
-            model="Qwen/Bogus",
-            reason_code="invalid-repo-id",
-            recorded_at="2026-06-04T19:46:51Z",
-            description="bad repo",
-        ),
-    )
-
-    patches = _patch_calibration_infra()
-
-    plan = _make_plan(model="Qwen/Bogus")
-    managers = {k: p.__enter__() for k, p in patches.items()}
-    try:
-        result = calibrate_model(
-            plan,
-            vllm_binary="vllm",
-            port=11499,
-            log_dir=log_dir,
-            sleep_level=1,
-            ready_timeout_s=60.0,
-        )
-    finally:
-        for p in patches.values():
-            p.__exit__(None, None, None)
-
-    assert not result.success
-    assert result.unsupported_reason == "invalid-repo-id"
-    # No vLLM should have been spawned: the check fires before Phase 0.
-    assert managers["spawn"].call_count == 0
-
-
 def test_trust_remote_code_pattern_ignores_the_engine_config_line():
     """vLLM prints trust_remote_code=True in its engine config on every run
     started with the flag, so only the transformers error may match."""
@@ -2520,8 +2005,8 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
         "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
         "'/usr/share/logos/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
     )
-    # Make sure _record_failed_command and _record_unsupported_model are real
-    # (not pre-patched out) so we can detect any accidental writes.
+    # Make sure _record_failed_command is real (not pre-patched out) so we
+    # can detect any accidental writes.
     patches["load_failed"].kwargs.pop("return_value", None)
     patches["load_failed"] = patch(
         "logos_worker_node.calibration._load_failed_commands",
@@ -2547,9 +2032,8 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     # The two key guarantees:
     assert result.node_unhealthy_reason == "filesystem-eio"
     failed_path = log_dir / "calibration_failed_commands.txt"
-    unsupported_path = log_dir / _UNSUPPORTED_MODELS_FILE
     assert not failed_path.exists(), "node-level transient failure must NOT add per-command blacklist lines"
-    assert not unsupported_path.exists(), "node-level transient failure must NOT add per-model unsupported entries"
+    assert result.unsupported_reason is None, "node-level transient failure must NOT mark the model unsupported"
     # Only one spawn — the floor probe latched _node_unhealthy_box; the
     # ceiling / middle / final probes short-circuit.
     assert managers["spawn"].call_count == 1
@@ -2560,9 +2044,9 @@ def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search
 ):
     """A first-probe failure whose log tail matches a fatal pattern must:
 
-    (a) write a model-level unsupported entry,
-    (b) populate ``result.unsupported_reason`` so the bridge can mark the profile,
-    (c) NOT spawn vLLM N more times for each subsequent kv-cache size.
+    (a) populate ``result.unsupported_reason`` so the session marks the profile,
+    (b) NOT spawn vLLM N more times for each subsequent kv-cache size,
+    (c) leave no unsupported list on the node — Logos stores the verdict.
     """
     log_dir = tmp_path / "calibration_logs"
     log_dir.mkdir()
@@ -2599,9 +2083,7 @@ def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search
     # Exactly one spawn — the floor probe. Subsequent probes short-circuit
     # via the _unsupported_box latch instead of spawning again.
     assert managers["spawn"].call_count == 1
-    # The file on disk now lists the model — restart-safe.
-    loaded = _load_unsupported_models(log_dir / _UNSUPPORTED_MODELS_FILE)
-    assert loaded["Qwen/Bogus"].reason_code == "invalid-repo-id"
+    assert not list(log_dir.glob("*unsupported*"))
 
 
 def test_is_cuda_oom_log_distinguishes_capacity_from_validation_errors():
@@ -3895,14 +3377,16 @@ def test_merge_profile_keeps_prior_timing_when_new_run_unmeasured():
     assert merged2["wake_from_sleep_time_s"] == 12.0
 
 
-def test_timing_fields_survive_profile_store_roundtrip(tmp_path):
+def test_timing_fields_survive_the_round_trip_through_logos():
     result = _success_result("org/m", cold_load_time_s=123.4, wake_from_sleep_time_s=12.3)
-    profiles_path = tmp_path / "model_profiles.yml"
-    save_profiles(profiles_path, {"org/m": merge_profile(None, result_to_profile_dict(result))})
+    node = ModelProfileRegistry()
+    node.apply_calibration_result("org/m", result_to_profile_dict(result))
 
-    loaded = load_existing_profiles(profiles_path)
-    assert loaded["org/m"]["cold_load_time_s"] == 123.4
-    assert loaded["org/m"]["wake_from_sleep_time_s"] == 12.3
+    restarted = ModelProfileRegistry()
+    restarted.replace_from_sync(node.get_all_profiles())
+    profile = restarted.get_profile("org/m")
+    assert profile.cold_load_time_s == 123.4
+    assert profile.wake_from_sleep_time_s == 12.3
 
 
 # ── RAM-cache entry reservation during calibration ──────────────────────────

@@ -696,6 +696,7 @@ class LogosNodeDataProvider:
                 calibration_unsupported=data.get("calibration_unsupported"),
                 calibration_unsupported_reason=data.get("calibration_unsupported_reason"),
                 metal_capacity_floor_mb=data.get("metal_capacity_floor_mb"),
+                calibration_stale=data.get("calibration_stale"),
             )
 
         if isinstance(raw_lanes, list):

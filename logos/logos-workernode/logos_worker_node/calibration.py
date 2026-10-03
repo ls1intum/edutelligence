@@ -1,14 +1,14 @@
 """Shared calibration engine for VRAM profiling.
 
-Extracts the reusable calibration functions so they can be imported both by
-the standalone CLI tool (``tools/calibrate_vram_profiles.py``) and by the
-worker's startup flow (``main.py``).
+Driven by the worker's calibration session (``logos_bridge.py``), which
+Logos starts in its maintenance window.
 
 The calibration process sweeps KV cache sizes upward (starting at
 ``_KV_CACHE_MIN_STEP_MB`` floor, up to ``_KV_CACHE_VRAM_CAP_RATIO`` of
 per-GPU VRAM in ``_KV_CACHE_MIN_STEP_MB`` steps) and records the
 ``(kv_cache_mb, max_model_len)`` curve. It measures real VRAM in awake and
-sleeping states and persists the results to ``model_profiles.yml``.
+sleeping states; the session hands the result to the profile registry,
+which reports it to Logos.
 
 Sleep capability is verified, not assumed: after the sleep measurement the
 model is woken again (``/wake_up``) and must answer a second test request.
@@ -46,13 +46,11 @@ import urllib.request
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
 from logos_worker_node.vllm_compat import (
     _BAKED_QUANT_METHODS_FILENAME,
-    _DEFAULT_VLLM,
     _FATAL_LOAD_ERROR_PATTERNS,
     FatalLoadErrorPattern,
     _extract_vllm_kv_gib_needed_for_full,
@@ -82,7 +80,6 @@ _VLLM_STOP_TIMEOUT_S = 30.0
 _VRAM_SETTLE_S = 4.0
 _VRAM_SAMPLE_COUNT = 3
 _VRAM_SAMPLE_INTERVAL_S = 1.0
-_PROFILES_FILE = "model_profiles.yml"
 _CALIBRATION_PORT = 11499
 _KV_CACHE_MIN_STEP_MB = 1024.0  # sweep step and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
@@ -95,7 +92,6 @@ _BASELINE_VRAM_RETRY_DELAYS_S: tuple[float, ...] = (2.0, 15.0)
 _LOG_DIAGNOSTIC_TAIL_LINES = 80  # lines of probe log echoed into worker logs on failure
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 _SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
-_UNSUPPORTED_MODELS_FILE = "calibration_unsupported_models.txt"
 
 # ---------------------------------------------------------------------------
 # ANSI colours for calibration search visualisation
@@ -331,116 +327,6 @@ def _classify_fatal_load_error(log_tail: str) -> FatalLoadErrorPattern | None:
     return None
 
 
-@dataclass(frozen=True)
-class UnsupportedModelEntry:
-    """One line in ``calibration_unsupported_models.txt``.
-
-    Lines are tab-separated::
-
-        <model_name>\\t<reason_code>\\t<recorded_at>\\t<description>
-
-    Lines starting with '#' or blank lines are treated as comments. Multiple
-    lines for the same model are tolerated on read — the most recent wins.
-    Operators clean up entries by deleting the relevant lines when the
-    underlying issue is fixed (bad model name corrected, gated-repo token
-    added, vLLM upgraded, …).
-    """
-
-    model: str
-    reason_code: str
-    recorded_at: str  # ISO-8601 UTC, e.g. "2026-06-04T19:46:51Z"
-    description: str
-
-    def to_line(self) -> str:
-        # Defensive: strip embedded tabs/newlines so a misformatted
-        # description can never corrupt the file format.
-        def _safe(s: str) -> str:
-            return s.replace("\t", " ").replace("\n", " ").strip()
-
-        return "\t".join(
-            (
-                _safe(self.model),
-                _safe(self.reason_code),
-                _safe(self.recorded_at),
-                _safe(self.description),
-            )
-        )
-
-
-def _load_unsupported_models(path: Path) -> dict[str, UnsupportedModelEntry]:
-    """Read the unsupported-models file, keyed by model name (latest entry wins)."""
-    if not path.exists():
-        return {}
-    entries: dict[str, UnsupportedModelEntry] = {}
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split("\t")
-        if len(parts) < 4:
-            # Tolerate older/partial lines — best-effort upgrade in-place.
-            model = parts[0].strip() if parts else ""
-            if not model:
-                continue
-            entries[model] = UnsupportedModelEntry(
-                model=model,
-                reason_code=parts[1].strip() if len(parts) > 1 else "unknown",
-                recorded_at=parts[2].strip() if len(parts) > 2 else "",
-                description=parts[3].strip() if len(parts) > 3 else "",
-            )
-            continue
-        entries[parts[0].strip()] = UnsupportedModelEntry(
-            model=parts[0].strip(),
-            reason_code=parts[1].strip(),
-            recorded_at=parts[2].strip(),
-            description=parts[3].strip(),
-        )
-    return entries
-
-
-_UNSUPPORTED_FILE_HEADER = (
-    "# calibration_unsupported_models.txt — models that calibration will never\n"
-    "# retry on this worker until an operator removes the relevant line.\n"
-    "#\n"
-    "# Format (tab-separated):\n"
-    "#   <model_name>\\t<reason_code>\\t<iso_timestamp>\\t<description>\n"
-    "#\n"
-    "# Reason codes are defined by FatalLoadErrorPattern.reason_code in\n"
-    "# logos_worker_node/calibration.py. Remove a line after fixing the\n"
-    "# underlying issue (e.g. wrong model name corrected in config.yml,\n"
-    "# gated-repo HF token added, vLLM upgraded) to let the next maintenance\n"
-    "# window pick the model up again.\n"
-)
-
-
-def _record_unsupported_model(path: Path, entry: UnsupportedModelEntry) -> None:
-    """Persist *entry*. If the model is already present, leave the existing
-    line in place and append a new one — keeping prior diagnostic context
-    visible to operators without duplicating the read-side dedup logic.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text(_UNSUPPORTED_FILE_HEADER, encoding="utf-8")
-    with path.open("a", encoding="utf-8") as f:
-        f.write(entry.to_line() + "\n")
-    logger.warning(
-        "  Recorded model-level unsupported entry → %s  (%s, %s)",
-        path,
-        entry.model,
-        entry.reason_code,
-    )
-
-
-def is_model_unsupported(log_dir: Path, model: str) -> UnsupportedModelEntry | None:
-    """Public helper for callers outside this module (e.g. logos_bridge).
-
-    Returns the most recent :class:`UnsupportedModelEntry` for *model*, or
-    None if the model has no entry on this worker.
-    """
-    path = log_dir / _UNSUPPORTED_MODELS_FILE
-    return _load_unsupported_models(path).get(model)
-
-
 # ---------------------------------------------------------------------------
 # Node-level transient failures (storage EIO, fs read-only, etc.)
 #
@@ -455,7 +341,7 @@ def is_model_unsupported(log_dir: Path, model: str) -> UnsupportedModelEntry | N
 #
 # When _try_start sees one of these in the vLLM log tail, it MUST NOT:
 #   - write to the per-command blacklist (calibration_failed_commands.txt)
-#   - write to the per-model unsupported list (calibration_unsupported_models.txt)
+#   - mark the model unsupported in its profile
 #
 # It SHOULD:
 #   - log loudly (this will surface in worker logs),
@@ -1810,7 +1696,7 @@ class CalibrationResult:
     wake_from_sleep_time_s: float | None = None
     # Set when calibrate_model bails because the model itself can never
     # load on this worker (bad repo id, gated repo, unsupported architecture).
-    # Caller persists the model into model_profiles.yml so the master's
+    # The session flags the model in its profile so the master's
     # orchestrator stops scheduling calibration attempts. Distinct from
     # `success=False` with a generic error — those are still worth retrying
     # next window. ``unsupported_reason`` is the FatalLoadErrorPattern code.
@@ -2301,27 +2187,6 @@ def _calibrate_model_probe(
     )
     logger.info("-" * 60)
 
-    # Phase 0a — Model-level "do not retry" check. A previous calibration
-    # attempt classified this model as permanently unsupported on this
-    # worker (bad repo id, gated repo, missing architecture). Kv-cache
-    # probing cannot fix any of those, so short-circuit before spawning
-    # vLLM. Operators clear the entry by editing the file.
-    unsupported_path = log_dir / _UNSUPPORTED_MODELS_FILE
-    _unsupported = _load_unsupported_models(unsupported_path).get(model)
-    if _unsupported is not None:
-        partial.error = (
-            f"model is on the unsupported list "
-            f"(reason={_unsupported.reason_code}, recorded_at={_unsupported.recorded_at}): "
-            f"{_unsupported.description}"
-        )
-        partial.unsupported_reason = _unsupported.reason_code
-        logger.warning(
-            "  SKIP: %s. To re-attempt after fixing the underlying issue, " "remove the line from %s.",
-            partial.error,
-            unsupported_path,
-        )
-        return partial
-
     # Phase 0 — Kill any orphaned vLLM workers from previous runs.
     # Without this, leaked GPU memory inflates the baseline and can cause
     # subsequent calibrations to OOM or hang.
@@ -2519,8 +2384,8 @@ def _calibrate_model_probe(
 
     # Sibling latch for a fatal pattern with persist=False (see
     # FatalLoadErrorPattern) — stops the kv-cache search like
-    # _unsupported_box, but is never written to the unsupported-models
-    # file, so a same-run retry isn't blocked by its own side effect.
+    # _unsupported_box, but never marks the model unsupported, so a
+    # same-run retry isn't blocked by its own side effect.
     _retryable_fatal_box: list[FatalLoadErrorPattern] = []
 
     # Sibling latch for a genuine CUDA/torch OOM. Once set, the kv_lo scan
@@ -2881,21 +2746,12 @@ def _calibrate_model_probe(
             # (bad repo id, gated repo, unsupported architecture, …). When
             # one matches, no other kv-cache size will help — every probe
             # will produce an identical log tail and a fresh blacklist
-            # line. Persist into the model-level unsupported list and
-            # latch ``_unsupported_box`` so the search loops bail without
-            # spawning vLLM again.
+            # line. Latch ``_unsupported_box`` so the search loops bail
+            # without spawning vLLM again; the session then marks the model
+            # unsupported in its profile.
             fatal_pattern = _classify_fatal_load_error(probe_log)
             if fatal_pattern is not None and not _unsupported_box and not _retryable_fatal_box:
                 if fatal_pattern.persist:
-                    _record_unsupported_model(
-                        unsupported_path,
-                        UnsupportedModelEntry(
-                            model=model,
-                            reason_code=fatal_pattern.reason_code,
-                            recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                            description=fatal_pattern.description,
-                        ),
-                    )
                     _unsupported_box.append(fatal_pattern)
                 else:
                     _retryable_fatal_box.append(fatal_pattern)
@@ -3812,15 +3668,10 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         "wake_from_sleep_time_s": (
             round(r.wake_from_sleep_time_s, 1) if r.wake_from_sleep_time_s is not None else None
         ),
-        # Not part of ModelProfileRecord but useful for auditing
-        "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
-        # Discovered KV cache size for use by the lane manager at runtime
-        "calibration_kv_cache_memory_bytes": _format_kv_mb(r.kv_cache_sent_mb),
         # --max-model-len that calibration auto-injected because the operator's
         # pinned KV budget couldn't fit one request at the model's default
         # max_seq_len. 0 / omitted means the model's default fit and no flag
-        # was passed. Mirrors ``calibration_kv_cache_memory_bytes`` — same
-        # "value that the successful probe actually used" semantics.
+        # was passed: the value the successful probe actually used.
         "calibration_max_model_len": int(r.max_model_len) if r.max_model_len else None,
         # Per-KV max_model_len sweep captured during calibration, each point
         # annotated with the achievable concurrency (``parallelity`` factor =
@@ -3850,40 +3701,6 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
         # production runs with the same ceiling the successful probe proved.
         "calibration_max_num_seqs": int(r.max_num_seqs) if r.max_num_seqs else None,
     }
-
-
-class ProfileStoreUnreadableError(RuntimeError):
-    """Raised when model_profiles.yml exists but cannot be read back.
-
-    Callers of :func:`load_existing_profiles` write the result back over the
-    whole file, so an empty dict returned for an unreadable store deletes every
-    profile in it — including calibrated models nothing will measure again.
-    Failing loudly leaves the file alone and costs one calibration result.
-    """
-
-
-def load_existing_profiles(profiles_path: Path) -> dict[str, Any]:
-    """Read the persisted profiles, or raise if the file is there but unusable.
-
-    Returns ``{}`` only when there genuinely is no store yet.
-    """
-    if not profiles_path.exists():
-        return {}
-    try:
-        with profiles_path.open() as f:
-            data = yaml.safe_load(f) or {}
-    except Exception as exc:
-        raise ProfileStoreUnreadableError(f"could not parse {profiles_path}: {exc}") from exc
-    profiles = data.get("model_profiles")
-    if profiles is None:
-        # A store that parsed but holds no profiles section. Distinguishable
-        # from a parse failure, and safe to treat as empty.
-        return {}
-    if not isinstance(profiles, dict):
-        raise ProfileStoreUnreadableError(
-            f"{profiles_path}: model_profiles is {type(profiles).__name__}, not a mapping"
-        )
-    return dict(profiles)
 
 
 # Fields the probe owns outright: it either measures them or states that they
@@ -3922,21 +3739,6 @@ def merge_profile(prior: dict[str, Any] | None, measured: dict[str, Any]) -> dic
             continue
         merged[key] = value
     return merged
-
-
-def save_profiles(profiles_path: Path, profiles: dict[str, Any]) -> None:
-    """Persist profiles atomically.
-
-    Written to a temp file and renamed, so a crash or a concurrent reader
-    never sees a truncated store: ``open(path, "w")`` truncates first, and a
-    reader hitting that window gets a parse error — which used to be answered
-    with an empty dict and a full rewrite. Shares the writer with
-    ``ModelProfileRegistry._persist``, which keeps the same file: a temp name
-    unique per call is what stops the two from tearing each other's output.
-    """
-    from logos_worker_node.model_profiles import atomic_write_yaml  # noqa: PLC0415
-
-    atomic_write_yaml(profiles_path, {"model_profiles": profiles})
 
 
 # ---------------------------------------------------------------------------
@@ -4186,8 +3988,7 @@ def calibrate_with_tp_escalation(
 ) -> CalibrationResult:
     """Calibrate one model using a max-first, search-down TP strategy.
 
-    Shared by ``auto_calibrate_models`` (boot-time) and the server-orchestrated
-    ``start_calibration`` path so both behave identically:
+    Used by the server-orchestrated calibration session:
 
     1. Try ``max_tp`` first (fail fast on models that can't run at all).
     2. Auto-retry with ``--trust-remote-code`` when vLLM demands it.
@@ -4387,129 +4188,3 @@ def calibrate_with_tp_escalation(
         )
 
     return best_result
-
-
-def auto_calibrate_models(
-    uncalibrated: list[str],
-    config_path: Path,
-    state_dir: Path,
-    *,
-    vllm_binary: str = _DEFAULT_VLLM,
-    port: int = _CALIBRATION_PORT,
-    sleep_level: int = 1,
-    ready_timeout_s: float = _READY_TIMEOUT_S,
-    nccl_p2p_available: bool = False,
-    model_cache: Any | None = None,
-) -> dict[str, CalibrationResult]:
-    """Calibrate a list of uncalibrated models and persist results.
-
-    Returns a dict mapping model_name -> CalibrationResult.
-    Only calibrates models in the *uncalibrated* list.
-
-    Uses a **max-first strategy**: each model is first tested with the
-    maximum available ``tensor_parallel_size`` to quickly verify it can
-    run at all.  If that succeeds, a binary search finds the smallest
-    tp that still works, saving GPU resources at runtime.
-    """
-    # Load plans from config
-    if config_path.exists():
-        all_plans = plans_from_config(config_path)
-    else:
-        all_plans = []
-
-    # Build a lookup of plans by model name
-    plan_by_model: dict[str, dict[str, Any]] = {}
-    for p in all_plans:
-        plan_by_model[p["model"]] = p
-
-    # Filter to uncalibrated models only; create minimal plans for unknown ones
-    plans: list[dict[str, Any]] = []
-    for name in uncalibrated:
-        if name in plan_by_model:
-            plans.append(plan_by_model[name])
-        else:
-            plans.append({"model": name})
-
-    if not plans:
-        logger.info("No uncalibrated models to calibrate.")
-        return {}
-
-    # Detect available GPU count for tp escalation
-    try:
-        gpu_snap = query_gpu_vram()
-        available_gpus = len(gpu_snap)
-    except Exception:
-        available_gpus = 1
-
-    profiles_path = state_dir / _PROFILES_FILE
-    # Every result below is written back over the whole file, so an unreadable
-    # store must stop the run rather than be treated as empty — saving an empty
-    # dict back replaces the node's profiles with just this batch's models.
-    try:
-        existing_profiles = load_existing_profiles(profiles_path)
-    except ProfileStoreUnreadableError:
-        logger.exception(
-            "Refusing to auto-calibrate: %s exists but cannot be read, and "
-            "writing results would replace it. Fix or move the file.",
-            profiles_path,
-        )
-        return {}
-    log_dir = state_dir / "calibration_logs"
-
-    logger.info(
-        "Auto-calibration: %d model(s) to calibrate, %d GPU(s) available",
-        len(plans),
-        available_gpus,
-    )
-    for p in plans:
-        logger.info(
-            "  %s  tp=%s  gpu_devices=%s",
-            p["model"],
-            p.get("tensor_parallel_size", 1),
-            p.get("gpu_devices") or "all",
-        )
-
-    results: dict[str, CalibrationResult] = {}
-
-    for plan in plans:
-        model_name = plan["model"]
-        result = calibrate_with_tp_escalation(
-            plan,
-            vllm_binary=vllm_binary,
-            port=port,
-            log_dir=log_dir,
-            sleep_level=sleep_level,
-            ready_timeout_s=ready_timeout_s,
-            nccl_p2p_available=nccl_p2p_available,
-            model_cache=model_cache,
-            available_gpus=available_gpus,
-        )
-        results[model_name] = result
-
-        if result.success:
-            # Merged, not assigned: the probe leaves everything it does not
-            # measure at None, including flags maintained elsewhere
-            # (sleep_mode_disabled, calibration_unsupported) that an assignment
-            # would drop.
-            existing_profiles[model_name] = merge_profile(
-                existing_profiles.get(model_name),
-                result_to_profile_dict(result),
-            )
-            # Persist after every success so a later failure doesn't lose results
-            save_profiles(profiles_path, existing_profiles)
-            logger.info("  Saved profile for %s → %s", model_name, profiles_path)
-        else:
-            logger.warning(
-                "Calibration unsuccessful for %s: %s",
-                model_name,
-                result.error,
-            )
-
-    ok = [r for r in results.values() if r.success]
-    fail = [r for r in results.values() if not r.success]
-    logger.info("Auto-calibration complete: %d/%d succeeded", len(ok), len(ok) + len(fail))
-    if fail:
-        for r in fail:
-            logger.warning("  Failed: %s — %s", r.model, r.error)
-
-    return results

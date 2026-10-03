@@ -7,15 +7,32 @@ import pytest
 
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
+
+def _round_trip(registry: ModelProfileRegistry, **kwargs) -> ModelProfileRegistry:
+    """Restart the node: Logos stores the status echo and sends it back."""
+    stored = {}
+    for name, echoed in registry.get_all_profiles().items():
+        skip = {"calibration_key_hash", "overridden_fields", *(echoed.get("overridden_fields") or [])}
+        stored[name] = {k: v for k, v in echoed.items() if k not in skip}
+    restarted = ModelProfileRegistry(**kwargs)
+    restarted.replace_from_sync(stored)
+    return restarted
+
+
+def _registry_with(profiles: dict, **kwargs) -> ModelProfileRegistry:
+    registry = ModelProfileRegistry(**kwargs)
+    registry.replace_from_sync(profiles)
+    return registry
+
+
 # ---------------------------------------------------------------------------
 # Basic record/retrieve
 # ---------------------------------------------------------------------------
 
 
 def _seed_disk_size(registry: ModelProfileRegistry, model_name: str, disk_size_bytes: int) -> None:
-    """Inject the legacy disk_size_bytes field the way _load_persisted does."""
+    """Inject the legacy disk_size_bytes field the way a stored profile carries it."""
     registry._profiles[model_name] = ModelProfileRecord(disk_size_bytes=disk_size_bytes)
-    registry._persist()
 
 
 def test_record_loaded_vram_with_kv_derives_base_residency():
@@ -218,15 +235,13 @@ def test_get_all_profiles():
 
 
 # ---------------------------------------------------------------------------
-# Persistence (state directory)
+# Round trip through Logos (the node keeps no profile file)
 # ---------------------------------------------------------------------------
 
 
-def test_persist_and_reload(tmp_path):
+def test_persist_and_reload():
     """Write to temp state dir, create new registry from same dir, verify loaded."""
-    state_dir = tmp_path / "state"
-
-    registry1 = ModelProfileRegistry(state_dir=state_dir)
+    registry1 = ModelProfileRegistry()
     registry1.record_loaded_vram(
         "llama3:8b",
         8000.0,
@@ -239,7 +254,7 @@ def test_persist_and_reload(tmp_path):
     registry1.record_sleeping_vram("llama3:8b", 512.0)
     _seed_disk_size(registry1, "qwen3:8b", 5_000_000_000)
 
-    registry2 = ModelProfileRegistry(state_dir=state_dir)
+    registry2 = _round_trip(registry1)
     profiles = registry2.get_all_profiles()
     assert len(profiles) == 2
 
@@ -260,15 +275,10 @@ def test_persist_and_reload(tmp_path):
     assert qwen.base_residency_mb is None  # disk size does not derive base_residency
 
 
-def test_calibrated_profile_survives_restart(tmp_path):
-    """Profiles written by calibrate_vram_profiles.py are loaded and trusted on restart."""
-    import yaml
+def test_calibrated_profile_survives_restart():
+    """Calibrated profiles sent by Logos are loaded and trusted on restart."""
 
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    profiles_path = state_dir / "model_profiles.yml"
-
-    # Simulate what calibrate_vram_profiles.py writes
+    # A calibrated profile as Logos sends it
     calibrated_data = {
         "model_profiles": {
             "Qwen/Qwen2.5-Coder-7B-Instruct-AWQ": {
@@ -289,9 +299,8 @@ def test_calibrated_profile_survives_restart(tmp_path):
             }
         }
     }
-    profiles_path.write_text(yaml.safe_dump(calibrated_data))
 
-    registry = ModelProfileRegistry(state_dir=state_dir)
+    registry = _registry_with(calibrated_data["model_profiles"])
     profile = registry.get_profile("Qwen/Qwen2.5-Coder-7B-Instruct-AWQ")
 
     assert profile is not None
@@ -302,13 +311,8 @@ def test_calibrated_profile_survives_restart(tmp_path):
     assert profile.engine == "vllm"
 
 
-def test_calibrated_profile_not_overwritten_by_subsequent_load(tmp_path):
+def test_calibrated_profile_not_overwritten_by_subsequent_load():
     """After calibration, first real load updates via EMA but source becomes 'measured'."""
-    import yaml
-
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    profiles_path = state_dir / "model_profiles.yml"
 
     calibrated_data = {
         "model_profiles": {
@@ -330,9 +334,8 @@ def test_calibrated_profile_not_overwritten_by_subsequent_load(tmp_path):
             }
         }
     }
-    profiles_path.write_text(yaml.safe_dump(calibrated_data))
 
-    registry = ModelProfileRegistry(state_dir=state_dir)
+    registry = _registry_with(calibrated_data["model_profiles"])
     # Model actually loads — record the real measurement
     registry.record_loaded_vram("org/model", 7200.0, engine="vllm", kv_cache_sent_mb=2048.0)
 
@@ -346,13 +349,8 @@ def test_calibrated_profile_not_overwritten_by_subsequent_load(tmp_path):
     assert profile.residency_source == "calibrated"
 
 
-def _write_calibrated_profile(tmp_path, tp: int) -> ModelProfileRegistry:
+def _calibrated_registry(tp: int) -> ModelProfileRegistry:
     """Registry holding a calibrated profile with TP-dependent KV data."""
-    import yaml
-
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    profiles_path = state_dir / "model_profiles.yml"
     calibrated_data = {
         "model_profiles": {
             "org/model": {
@@ -374,17 +372,16 @@ def _write_calibrated_profile(tmp_path, tp: int) -> ModelProfileRegistry:
             }
         }
     }
-    profiles_path.write_text(yaml.safe_dump(calibrated_data))
-    return ModelProfileRegistry(state_dir=state_dir)
+    return _registry_with(calibrated_data["model_profiles"])
 
 
-def test_calibrated_tp_not_clobbered_by_mismatched_lane(tmp_path):
+def test_calibrated_tp_not_clobbered_by_mismatched_lane():
     """A serving lane that ran at a TP different from the calibrated TP must
     not overwrite the profile: the calibrated TP is the single
     source of truth, and the lane's measurements describe a different
     configuration. The whole profile — tp, residency, KV data — stays intact.
     """
-    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry = _calibrated_registry(tp=1)
     registry.record_loaded_vram(
         "org/model",
         9000.0,
@@ -402,9 +399,9 @@ def test_calibrated_tp_not_clobbered_by_mismatched_lane(tmp_path):
     assert profile.measurement_count == 1  # the mismatched measurement was discarded
 
 
-def test_calibrated_tp_not_clobbered_by_mismatched_sleep(tmp_path):
+def test_calibrated_tp_not_clobbered_by_mismatched_sleep():
     """Same guard on the sleep path: a mismatched-TP residual records nothing."""
-    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry = _calibrated_registry(tp=1)
     registry.record_sleeping_vram("org/model", 300.0, engine="vllm", tensor_parallel_size=2)
 
     profile = registry.get_profile("org/model")
@@ -413,10 +410,10 @@ def test_calibrated_tp_not_clobbered_by_mismatched_sleep(tmp_path):
     assert profile.residency_source == "calibrated"
 
 
-def test_calibrated_profile_matching_tp_records_measurements(tmp_path):
+def test_calibrated_profile_matching_tp_records_measurements():
     """A lane that runs at the calibrated TP records as usual — the guard only
     fires on a TP mismatch."""
-    registry = _write_calibrated_profile(tmp_path, tp=1)
+    registry = _calibrated_registry(tp=1)
     registry.record_loaded_vram("org/model", 7200.0, engine="vllm", tensor_parallel_size=1, kv_cache_sent_mb=2048.0)
 
     profile = registry.get_profile("org/model")
@@ -426,20 +423,6 @@ def test_calibrated_profile_matching_tp_records_measurements(tmp_path):
     assert profile.base_residency_mb == 5000.0  # calibrated value stays pinned
     assert profile.residency_source == "calibrated"
     assert profile.measurement_count == 2
-
-
-def test_persist_no_state_dir():
-    """No state dir → persist is a no-op."""
-    registry = ModelProfileRegistry(state_dir=None)
-    registry.record_loaded_vram("llama3:8b", 8000.0)
-    assert registry.get_profile("llama3:8b").loaded_vram_mb == 8000.0
-
-
-def test_reload_nonexistent_state_dir(tmp_path):
-    """Non-existent state dir → no profiles loaded."""
-    state_dir = tmp_path / "does-not-exist"
-    registry = ModelProfileRegistry(state_dir=state_dir)
-    assert registry.get_all_profiles() == {}
 
 
 # ---------------------------------------------------------------------------
@@ -458,13 +441,8 @@ def test_seed_capabilities_creates_stub_profile():
     assert profile.base_residency_mb is None  # no calibration data yet
 
 
-def test_seed_capabilities_skips_existing_calibrated_profile(tmp_path):
-    """seed_capabilities does not overwrite a calibrated profile loaded from YAML."""
-    import yaml
-
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    profiles_path = state_dir / "model_profiles.yml"
+def test_seed_capabilities_skips_existing_calibrated_profile():
+    """seed_capabilities does not overwrite a calibrated profile restored from Logos."""
 
     calibrated_data = {
         "model_profiles": {
@@ -486,9 +464,8 @@ def test_seed_capabilities_skips_existing_calibrated_profile(tmp_path):
             }
         }
     }
-    profiles_path.write_text(yaml.safe_dump(calibrated_data))
 
-    registry = ModelProfileRegistry(state_dir=state_dir)
+    registry = _registry_with(calibrated_data["model_profiles"])
     registry.seed_capabilities(["org/model"])
 
     profile = registry.get_profile("org/model")
@@ -638,8 +615,8 @@ def test_apply_hf_precheck_does_not_overwrite_an_override_added_mid_call():
     assert profile.kv_per_token_bytes == 999
 
 
-def test_apply_hf_precheck_persists_across_restart(tmp_path):
-    registry = ModelProfileRegistry(state_dir=tmp_path)
+def test_apply_hf_precheck_persists_across_restart():
+    registry = ModelProfileRegistry()
     registry.apply_hf_precheck(
         "org/model",
         disk_size_bytes=4_000_000_000,
@@ -648,7 +625,7 @@ def test_apply_hf_precheck_persists_across_restart(tmp_path):
         max_context_length=8192,
     )
 
-    reloaded = ModelProfileRegistry(state_dir=tmp_path)
+    reloaded = _round_trip(registry)
     profile = reloaded.get_profile("org/model")
     assert profile is not None
     assert profile.base_residency_mb == pytest.approx(4200.0)
@@ -715,11 +692,9 @@ def test_kv_envelope_defaults_to_none():
     assert data["max_kv_cache_mb"] is None
 
 
-def test_kv_envelope_persists_across_restart(tmp_path):
-    """YAML round-trip preserves both endpoints of the envelope."""
-    state_dir = tmp_path / "state"
-
-    registry1 = ModelProfileRegistry(state_dir=state_dir)
+def test_kv_envelope_persists_across_restart():
+    """The round trip through Logos preserves both endpoints of the envelope."""
+    registry1 = ModelProfileRegistry()
     registry1.record_loaded_vram(
         "envelope/model",
         20000.0,
@@ -733,9 +708,8 @@ def test_kv_envelope_persists_across_restart(tmp_path):
     assert profile is not None
     profile.min_kv_cache_mb = 1024.0
     profile.max_kv_cache_mb = 30720.0
-    registry1._persist()
 
-    registry2 = ModelProfileRegistry(state_dir=state_dir)
+    registry2 = _round_trip(registry1)
     reloaded = registry2.get_profile("envelope/model")
     assert reloaded is not None
     assert reloaded.min_kv_cache_mb == 1024.0
@@ -784,13 +758,12 @@ def test_kv_pairs_override_preserves_parallelity():
 
 
 def test_calibration_max_model_len_to_dict_round_trip():
-    """The auto-shrunk --max-model-len appears in to_dict() so the YAML
-    round-trip (and heartbeats) preserve it.
+    """The auto-shrunk --max-model-len appears in to_dict() so the status
+    echo, and with it Logos' copy, preserves it.
 
     Regression: without this field on ModelProfileRecord, calibration's
-    successfully-shrunk value got dropped on the first re-persist
-    (record_loaded_vram → _persist → to_dict), and the lane spawner
-    silently fell back to vLLM's default max_seq_len.
+    successfully-shrunk value got dropped on the first re-store, and the
+    lane spawner silently fell back to vLLM's default max_seq_len.
     """
     p = ModelProfileRecord(calibration_max_model_len=115632)
     assert p.to_dict()["calibration_max_model_len"] == 115632
@@ -803,11 +776,9 @@ def test_calibration_max_model_len_defaults_to_none():
     assert p.to_dict()["calibration_max_model_len"] is None
 
 
-def test_calibration_max_model_len_persists_across_restart(tmp_path):
-    """YAML round-trip preserves the auto-shrunk value across worker restarts."""
-    state_dir = tmp_path / "state"
-
-    registry1 = ModelProfileRegistry(state_dir=state_dir)
+def test_calibration_max_model_len_persists_across_restart():
+    """The round trip through Logos preserves the auto-shrunk value across worker restarts."""
+    registry1 = ModelProfileRegistry()
     registry1.record_loaded_vram(
         "shrunk/model",
         20000.0,
@@ -816,13 +787,12 @@ def test_calibration_max_model_len_persists_across_restart(tmp_path):
     )
     # Calibration writes the shrunk value via result_to_profile_dict; mirror
     # that here by mutating the loaded profile directly so the test exercises
-    # the load → persist → reload chain that was dropping the field.
+    # the record → store → restore chain that was dropping the field.
     profile = registry1.get_profile("shrunk/model")
     assert profile is not None
     profile.calibration_max_model_len = 115632
-    registry1._persist()
 
-    registry2 = ModelProfileRegistry(state_dir=state_dir)
+    registry2 = _round_trip(registry1)
     reloaded = registry2.get_profile("shrunk/model")
     assert reloaded is not None
     assert reloaded.calibration_max_model_len == 115632
@@ -853,18 +823,15 @@ def test_calibration_max_num_seqs_defaults_to_none():
     assert p.to_dict()["calibration_max_num_seqs"] is None
 
 
-def test_calibration_max_num_seqs_persists_across_restart(tmp_path):
-    """YAML round-trip preserves the auto-detected Mamba cap across restarts."""
-    state_dir = tmp_path / "state"
-
-    registry1 = ModelProfileRegistry(state_dir=state_dir)
+def test_calibration_max_num_seqs_persists_across_restart():
+    """The round trip through Logos preserves the auto-detected Mamba cap across restarts."""
+    registry1 = ModelProfileRegistry()
     registry1.record_loaded_vram("mamba/model", 20000.0, engine="vllm", kv_cache_sent_mb=8192.0)
     profile = registry1.get_profile("mamba/model")
     assert profile is not None
     profile.calibration_max_num_seqs = 160
-    registry1._persist()
 
-    registry2 = ModelProfileRegistry(state_dir=state_dir)
+    registry2 = _round_trip(registry1)
     reloaded = registry2.get_profile("mamba/model")
     assert reloaded is not None
     assert reloaded.calibration_max_num_seqs == 160
@@ -892,10 +859,8 @@ def test_kv_max_model_len_pairs_to_dict_round_trip():
     ]
 
 
-def test_kv_max_model_len_pairs_persist_across_restart(tmp_path):
-    state_dir = tmp_path / "state"
-
-    registry1 = ModelProfileRegistry(state_dir=state_dir)
+def test_kv_max_model_len_pairs_persist_across_restart():
+    registry1 = ModelProfileRegistry()
     registry1.record_loaded_vram("pair/model", 20000.0, engine="vllm", kv_cache_sent_mb=8192.0)
     profile = registry1.get_profile("pair/model")
     assert profile is not None
@@ -903,9 +868,8 @@ def test_kv_max_model_len_pairs_persist_across_restart(tmp_path):
         {"kv_mb": 1024.0, "max_model_len": 1000},
         {"kv_mb": 2048.0, "max_model_len": 2000},
     ]
-    registry1._persist()
 
-    registry2 = ModelProfileRegistry(state_dir=state_dir)
+    registry2 = _round_trip(registry1)
     reloaded = registry2.get_profile("pair/model")
     assert reloaded is not None
     assert reloaded.kv_cache_to_max_model_len_pairs == [
@@ -917,10 +881,9 @@ def test_kv_max_model_len_pairs_persist_across_restart(tmp_path):
 def test_add_overrides_reapplies_to_existing_record():
     """Overrides arriving after a record exists must reach the live record.
 
-    Records loaded from the persisted model_profiles.yml are otherwise never
-    revisited after startup, so a late override would stay in the store but
-    not on the record — and the runtime snapshot the server planner reads
-    would miss it.
+    Records restored from Logos are otherwise never revisited after startup,
+    so a late override would stay in the config but not on the record — and
+    the runtime snapshot the server planner reads would miss it.
     """
     registry = ModelProfileRegistry()
     registry.record_loaded_vram("org/model-27b", 50000.0, engine="vllm", kv_cache_sent_mb=8000.0)
@@ -945,13 +908,8 @@ def test_add_overrides_before_record_creation_lands_on_seeded_record():
     assert profile.min_context_fraction == 1.0
 
 
-def test_calibrated_timing_fields_reload_and_serialize(tmp_path):
-    """Cold-load / wake timings persist in model_profiles.yml and come back on reload."""
-    import yaml
-
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    profiles_path = state_dir / "model_profiles.yml"
+def test_calibrated_timing_fields_reload_and_serialize():
+    """Cold-load / wake timings come back with the profile Logos sends."""
 
     calibrated_data = {
         "model_profiles": {
@@ -966,9 +924,8 @@ def test_calibrated_timing_fields_reload_and_serialize(tmp_path):
             }
         }
     }
-    profiles_path.write_text(yaml.safe_dump(calibrated_data))
 
-    registry = ModelProfileRegistry(state_dir=state_dir)
+    registry = _registry_with(calibrated_data["model_profiles"])
     profile = registry.get_profile("org/model")
     assert profile is not None
     assert profile.cold_load_time_s == pytest.approx(91.5)
@@ -1058,3 +1015,96 @@ def test_manual_override_pins_an_explicit_capacity_floor():
 
     profile = registry.get_profile("org/model")
     assert profile.metal_capacity_floor_mb == pytest.approx(12_000.0)
+
+
+# ---------------------------------------------------------------------------
+# Sync with Logos
+# ---------------------------------------------------------------------------
+
+
+def test_sync_replaces_named_models_and_keeps_the_rest():
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/kept", 8000.0, engine="vllm")
+    replaced = registry.replace_from_sync({"org/new": {"base_residency_mb": 5.0, "sync_revision": 2}})
+    assert replaced == ["org/new"]
+    assert registry.get_profile("org/kept").loaded_vram_mb == 8000.0
+    assert registry.get_profile("org/new").sync_revision == 2
+
+
+def test_sync_reapplies_config_overrides_on_top():
+    registry = ModelProfileRegistry(model_profile_overrides={"org/m": {"max_context_length": 32768}})
+    registry.replace_from_sync({"org/m": {"max_context_length": 4096, "sync_revision": 1}})
+    assert registry.get_profile("org/m").max_context_length == 32768
+    assert registry.get_all_profiles()["org/m"]["overridden_fields"] == ["max_context_length"]
+
+
+def test_overrides_never_reach_the_stored_copy():
+    """Logos stores the echo without overridden fields; dropping the override
+    from config.yml then leaves no stale value behind."""
+    pinned = ModelProfileRegistry(model_profile_overrides={"org/m": {"max_context_length": 32768}})
+    pinned.replace_from_sync({"org/m": {"base_residency_mb": 5.0, "sync_revision": 1}})
+    assert _round_trip(pinned).get_profile("org/m").max_context_length is None
+
+
+def test_a_local_calibration_waits_for_its_snapshot_id():
+    registry = ModelProfileRegistry()
+    registry.set_calibration_keys({"org/m": {"schema": 1, "plan_hash": "p"}})
+    registry.replace_from_sync(
+        {"org/m": {"base_residency_mb": 1.0, "host_ram_mb": 900.0, "sync_revision": 6, "calibration_id": 3}}
+    )
+    registry.apply_calibration_result("org/m", {"base_residency_mb": 15000.0, "residency_source": "calibrated"})
+
+    echo = registry.get_all_profiles()["org/m"]
+    assert echo["base_residency_mb"] == 15000.0
+    assert echo["host_ram_mb"] == 900.0
+    assert echo["calibration_origin"] == "local"
+    assert echo["calibration_id"] is None
+    assert echo["calibration_stale"] is False
+    assert echo["calibration_key"] == {"schema": 1, "plan_hash": "p"}
+    assert echo["sync_revision"] == 6
+
+
+def test_sync_ignores_a_push_that_an_earlier_one_overtook():
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 9.0, "sync_revision": 5}})
+    replaced = registry.replace_from_sync({"org/m": {"base_residency_mb": 1.0, "sync_revision": 4}})
+    assert replaced == []
+    assert registry.get_profile("org/m").base_residency_mb == 9.0
+
+
+def test_sync_at_the_same_revision_keeps_measurements_and_refreshes_flags():
+    """The push after every hello repeats the stored revision; it may only
+    update what Logos derives, not what the node measured since."""
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync({"org/m": {"engine": "vllm", "sync_revision": 3, "calibration_id": 7}})
+    registry.record_loaded_vram("org/m", 8000.0, engine="vllm")
+    registry.replace_from_sync({"org/m": {"sync_revision": 3, "calibration_id": 7, "calibration_stale": True}})
+    profile = registry.get_profile("org/m")
+    assert profile.loaded_vram_mb == 8000.0
+    assert (profile.calibration_id, profile.calibration_stale) == (7, True)
+
+
+def test_sync_at_the_same_revision_keeps_an_unlinked_local_calibration():
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 1.0, "sync_revision": 6}})
+    registry.apply_calibration_result("org/m", {"base_residency_mb": 15000.0, "residency_source": "calibrated"})
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 1.0, "sync_revision": 6}})
+    profile = registry.get_profile("org/m")
+    assert (profile.base_residency_mb, profile.calibration_origin) == (15000.0, "local")
+
+
+def test_sync_at_a_newer_revision_replaces_the_record():
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync({"org/m": {"calibration_unsupported": True, "sync_revision": 2}})
+    registry.replace_from_sync({"org/m": {"sync_revision": 3}})
+    assert registry.get_profile("org/m").calibration_unsupported is None
+
+
+def test_sync_reports_a_model_only_when_its_record_changed():
+    registry = ModelProfileRegistry()
+    push = {"org/m": {"sync_revision": 3, "calibration_id": 7}}
+    assert registry.replace_from_sync(push) == ["org/m"]
+    assert registry.replace_from_sync(push) == []
+    assert registry.replace_from_sync(
+        {"org/m": {"sync_revision": 3, "calibration_id": 7, "calibration_stale": True}}
+    ) == ["org/m"]
