@@ -61,6 +61,9 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     tracing_context: Optional[TracingContext]
     query_text: str
     lecture_content_storage: dict
+    # Material at the student's current viewing position, shared between the current-position tool
+    # that reads it out and the point-out tool that invalidates it after moving the student.
+    current_view_storage: dict
     faq_storage: dict
     accessed_memory_storage: list
     allow_lecture_tool: bool
@@ -640,6 +643,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         # 0. Initialize the execution state
         state = AgentPipelineExecutionState[DTO, VARIANT]()
+        # Bound before anything fallible runs: the run accumulates usage into the run-local state,
+        # while a subclass' outer error path lives outside this method and can only reach
+        # self.tokens. Both names point at the same list, so a run that dies mid-flight reports
+        # what it spent up to that point, and never the leftovers of the instance's previous run.
+        state.tokens = []
+        self.tokens = state.tokens
         state.dto = dto
         state.db = VectorDatabase()
         state.variant = variant
@@ -651,10 +660,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.result = ""
         state.llm = None
         state.prompt = None
-        state.tokens = []
         state.local = local  # Store local flag in state
         state.query_text = ""
         state.lecture_content_storage = {}
+        state.current_view_storage = {}
         state.faq_storage = {}
         state.accessed_memory_storage = []
         state.allow_lecture_tool = False

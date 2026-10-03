@@ -1,11 +1,21 @@
 @use 'styles/glass' as *;
 
+// The strip (align-items: stretch) gives every host the row's height, but only
+// as high as its tallest member. Filling that height is the card's job:
+// without this, a card whose hint wraps or whose right slot is absent keeps a
+// shorter glass surface and the row's bottoms come out ragged.
+:host {
+  display: flex;
+}
+
 .kpi-card {
   @include glass-surface;
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 18px 20px;
+  flex: 1;
+  min-width: 0;
 }
 
 // Row 1: accent dot + uppercase label
@@ -14,6 +24,7 @@
   flex-direction: row;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .kpi-accent-dot {
@@ -29,6 +40,13 @@
   letter-spacing: var(--letter-spacing-wide);
   text-transform: uppercase;
   color: rgb(var(--color-typography-500));
+  // A label that wraps makes its card one line taller than its neighbours and
+  // knocks the whole KPI row out of alignment. Truncate instead — the cards sit
+  // in a fixed-height row, so this has to hold for any label passed in.
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 // Row 2: big value + right slot
@@ -47,9 +65,23 @@
   line-height: var(--line-height-tight);
 }
 
+// The right slot is projected content, a flex item of this row. Its floor
+// must be zero: a card narrower than value + gap + slot would otherwise let
+// the slot keep the width of whatever it draws (a 92px sparkline, a run of
+// lane bars) and the drawing runs into the card border. With the floor at
+// zero the slot yields its width to the value, and the drawing inside scales
+// (sparkline) or clips (lane bars) to the space it is given.
+.kpi-row-2 ::ng-deep [kpiRight] {
+  min-width: 0;
+}
+
 // Row 3: hint slot
 .kpi-row-3 {
-  // Uses .kpi-sub styling via projection
+  // Uses .kpi-sub styling via projection.
+  // Once the card fills the row's height, the leftover space lands here: the
+  // hint pins to the card's bottom edge so it aligns across the whole strip
+  // instead of drifting with each card's value-row height.
+  margin-top: auto;
 }
 
 ::ng-deep .kpi-row-3 {

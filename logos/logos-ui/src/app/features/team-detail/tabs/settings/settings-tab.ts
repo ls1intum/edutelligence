@@ -48,6 +48,7 @@ export class SettingsTabComponent implements OnChanges {
 
   private teamService = inject(TeamManagementService);
 
+  teamBudget = signal('');
   defaultBudget = signal('');
   cloudRpm = signal('');
   cloudTpm = signal('');
@@ -67,6 +68,7 @@ export class SettingsTabComponent implements OnChanges {
   }
 
   private resetForm(): void {
+    this.teamBudget.set(mcToDollars(this.team.team_monthly_budget_micro_cents));
     this.defaultBudget.set(mcToDollars(this.team.default_monthly_budget_micro_cents));
     this.cloudRpm.set(this.team.default_cloud_rpm_limit?.toString() ?? '');
     this.cloudTpm.set(this.team.default_cloud_tpm_limit?.toString() ?? '');
@@ -81,6 +83,7 @@ export class SettingsTabComponent implements OnChanges {
     this.saveSuccess.set(false);
 
     const payload: TeamLimitsPayload = {
+      team_monthly_budget_micro_cents: dollarsToMc(this.teamBudget()),
       default_monthly_budget_micro_cents: dollarsToMc(this.defaultBudget()),
       default_cloud_rpm_limit: strToIntOrNull(this.cloudRpm()),
       default_cloud_tpm_limit: strToIntOrNull(this.cloudTpm()),

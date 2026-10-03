@@ -1,382 +1,91 @@
-# AGENTS.md — Logos Project Guide for AI Agents
+# AGENTS.md — Logos Guide for AI Agents
 
-## Project Overview
+**Logos** is an LLM Engineering Platform: an intelligent proxy between LLM consumers and multiple LLM providers (self-hosted GPU workers, Azure, OpenAI), with usage logging, billing, central resource management, policy-based model selection, scheduling, GPU capacity planning, and monitoring.
 
-**Logos** is an LLM Engineering Platform that acts as an intelligent proxy between LLM consumers and multiple LLM providers (Azure, Ollama, OpenAI). It provides usage logging, billing, central resource management, policy-based model selection, scheduling, and monitoring.
+`logos/` is a multi-service directory, not a single project.
 
-## Tech Stack
+## Components
 
-- **Language**: Python 3.13
-- **Framework**: FastAPI (0.115.9) + Uvicorn
-- **Database**: PostgreSQL 17 via SQLAlchemy 2.x (raw SQL with `text()`, NOT the ORM query API)
-- **HTTP Client**: httpx (async)
-- **Dependency Management**: Poetry 2.x (lockfile: `poetry.lock`)
-- **Testing**: pytest + pytest-asyncio (asyncio_mode = "auto")
-- **Containerization**: Docker multi-stage build with `uv` (pinned), Docker Compose + Traefik v3
-- **CI**: GitHub Actions (`.github/workflows/logos_test.yml`) — runs unit tests with Poetry cache
+| Directory | Stack | Role |
+|-----------|-------|------|
+| `logos-orchestrator/` | Python 3.13, FastAPI, `uv` | Core proxy: auth, classification, scheduling, provider routing, request logging. See its own `AGENTS.md`. |
+| `logos-webservice/` | Java 25, Spring Boot, Maven | Admin/management REST API **and** public inference gateway (`/v1`, `/openai`, `/jobs`). **Owns the Postgres schema** via Liquibase. See its own `AGENTS.md`. |
+| `logos-ui/` | Angular 22, npm | Web application for teams, keys, models, stats. See its own `AGENTS.md`. |
+| `logos-workernode/` | Python | GPU worker-node control plane: vLLM lane lifecycle, calibration, websocket bridge to the orchestrator. See its own `AGENTS.md`. |
+| `logos-agent/` | Python, FastAPI | Runs coding agents in isolated containers on spare serving capacity. See its own `AGENTS.md` and `README.md`. |
+| `e2e/` | pytest, Playwright | GPU-less end-to-end suite. See its own `AGENTS.md` and `README.md`. |
+| `agent-gateway/`, `rate-limit-gateway/` | nginx | Edge proxies around the agent runner and the orchestrator. |
+| `keycloak/` | — | Dev realm seed (`tum-realm.json`); all seeded dev users have password `password`. |
+| `db/` | — | Plain `postgres:17` + pg_cron Dockerfile — **no schema here**. |
+| `docs/` | Docusaurus | User/admin/developer documentation site. Role-guide screenshot refresh + demo seed: see `docs/AGENTS.md`. |
+| `benchmarks/` | Python | Scheduler/throughput benchmarking scripts. |
+| `scripts/` | bash | Core-node ops scripts, e.g. `gateway-failover-demo.sh` (see [deployment](docs/deployment.md#failover-verification)). |
 
-## Repository Structure
+## Cross-Cutting Rules (Not Inferable From the Code)
 
-```
-logos/
-├── AGENTS.md                          # This file
-├── pyproject.toml                     # Poetry config + dependencies
-├── poetry.lock                        # Dependency lockfile (committed)
-├── .env.example                       # Environment variable template
-├── Dockerfile                         # Multi-stage Docker build (uv for deps)
-├── docker-compose.yaml                # Full stack (db, app, ui, landing, traefik)
-├── docker-compose.dev.yaml            # Local dev variant with local builds
-├── run_tests.sh                       # Test runner (unit|integration|sdi|performance|all)
-├── config/                            # Provider YAML configs
-│   ├── config-azure.yaml
-│   ├── config-openai.yaml
-│   └── config-openwebui.yaml
-├── db/
-│   ├── init.sql                       # Full DDL schema (source of truth)
-│   └── migrations/                    # Sequential SQL migration scripts (###_name.sql)
-│       ├── run_all_migrations.sh
-│       └── README.md
-├── src/logos/
-│   ├── main.py                        # FastAPI app + ALL route definitions (~1690 lines)
-│   ├── auth.py                        # Authentication & authorization
-│   ├── responses.py                   # Helper utilities (URL merging, token extraction)
-│   ├── model_string_parser.py         # logos-v* model string parser
-│   ├── dbutils/
-│   │   ├── dbmanager.py               # All DB operations (~2170 lines) — context manager pattern
-│   │   ├── dbmodules.py               # SQLAlchemy ORM models
-│   │   └── dbrequest.py               # Pydantic request models
-│   ├── pipeline/
-│   │   ├── pipeline.py                # Classification → Scheduling → Execution orchestrator
-│   │   ├── fcfs_scheduler.py          # FCFS scheduler with priority queue
-│   │   ├── executor.py                # HTTP client for provider API calls
-│   │   └── context_resolver.py        # DB lookups for auth/routing info
-│   ├── classification/
-│   │   └── classification_manager.py  # Multi-stage model classification
-│   ├── queue/
-│   │   └── priority_queue.py          # Thread-safe priority queue
-│   ├── sdi/                           # Scheduling Data Interface
-│   │   ├── ollama_facade.py
-│   │   └── azure_facade.py
-│   ├── monitoring/
-│   │   ├── recorder.py                # Request event monitoring
-│   │   └── ollama_monitor.py          # Background VRAM/model polling
-│   └── jobs/
-│       └── job_service.py             # Async job persistence
-└── tests/
-    ├── conftest.py                    # Global test config (stubs heavy deps)
-    ├── unit/
-    │   ├── main/                      # Tests for main.py functions
-    │   ├── sdi/                       # Tests for SDI facades
-    │   ├── queue/                     # Tests for priority queue
-    │   └── responses/                 # Tests for proxy behavior
-    ├── integration/                   # Full endpoint tests with mock providers
-    └── scheduling_data/               # SDI-specific tests
+### Schema ownership
+
+The Postgres schema is owned by `logos-webservice` and migrated via Liquibase changelogs in `logos-webservice/src/main/resources/liquibase/changelog/`. A changelog is only applied if it is `<include>`-ed in `master.xml` — a file left out is silently never run. The orchestrator and agent only read/write tables (raw SQL, no migrations); `db/` has no `init.sql`.
+
+### Entity hierarchy
+
+```text
+User (role: app_developer | app_admin | logos_admin)
+  └── Team(s), via team_members (is_owner flag)
+        └── API Key(s) (key_type: developer | application | service)
+              └── Model/Provider access:
+                    use_custom_permissions=true  → key's own api_key_*_permissions
+                    use_custom_permissions=false → team's team_*_permissions (default)
 ```
 
-## Architecture & Key Patterns
+The older Process/Profile hierarchy (`process`, `profiles`, `profile_model_permissions`, `model_api_keys` tables) **no longer exists** — never design against it.
 
-### Monolithic main.py
-All FastAPI routes are defined directly in `src/logos/main.py`. There are NO separate router files. When adding new endpoints, add them to `main.py` or create a new router file and include it.
+### Git workflow (MANDATORY, CI-enforced)
 
-**Important**: The `/v1/{path:path}` catch-all route captures all `/v1/*` requests. Any new `/v1/...` routes (e.g., `/v1/models`) MUST be defined BEFORE the catch-all in the file, otherwise FastAPI will never match them.
+- **PR title** must match: `` ^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos|Memiris)`:\s[A-Z].*$ `` — e.g. `` `Logos`: Add team management endpoints ``.
+- **Commit messages**: `Logos: Description starting with capital letter (#issue_number)`.
+- **Branch names**: `feature/logos/description` or `logos/description`.
+- Never merge to `main` without a PR. After opening a PR, check `gh pr checks` and fix failures immediately.
+- **Every PR that changes the UI must include full-page desktop AND mobile screenshots** in the PR description (never committed to the repo). The exact capture/hosting procedure is the `ui-screenshots` skill (see below).
+- **Every PR that changes how a documented page looks** must also refresh the matching committed role-guide PNGs under `docs/static/img/roles/` in that same PR (layout, chrome, empty/error states, sidebar — anything a reader would notice). Follow `docs/AGENTS.md`: one shot per distinct UI state (tabs / steps / modals), no near-duplicate per-role pages, every PNG explained in the flow with UI-consistent names.
 
-### Database Pattern
-- `DBManager` is a context manager: `with DBManager() as db: ...`
-- All queries use raw SQL via `sqlalchemy.text()` — NOT ORM queries
-- Connection string is hardcoded: `postgresql://postgres:root@logos-db:5432/logosdb`
-- For tests, DBManager is typically mocked/monkeypatched
-- DB methods return `(result_dict, status_code)` tuples — **always unpack** these and return proper `JSONResponse` objects from endpoints, never return raw tuples
+### Shared branches (MANDATORY)
 
-### Authentication
-Three levels defined in `auth.py`:
-1. **`authenticate_logos_key(headers)`** → `(logos_key, process_id)` — for admin endpoints
-2. **`authenticate_with_profile(headers)`** → `AuthContext(logos_key, process_id, profile_id, profile_name)` — for model execution
-3. **`check_authorization(logos_key)`** — verifies root user role for `/logosdb/` admin endpoints
+A branch that another active session (human or agent) is using to resolve open review findings is **frozen for you**:
 
-API keys are passed via: `logos_key` header, `logos-key` header, or `Authorization: Bearer <key>`
+- No reverts, no "restore" or "answer the question" commits, no rebases of the branch.
+- No force pushes, no branch deletion.
+- If a change on that branch is needed: do not push it — comment on the PR or the tracking issue and wait for the active session to apply it.
+- The authoritative state is always the latest commit of the active session. When in doubt whether a commit is wanted: do nothing.
 
-### Entity Hierarchy
-```
-User → Process (has logos_key) → Profile(s) → Model Permissions → Models → Providers
-```
+Conflicting pushes force manual merge/revert cycles and full CI re-runs, and can leave the PR head in exactly the state a reviewer just rejected.
 
-### Request Flow
-```
-Request → Auth → Log
-  ├── PROXY MODE (body has "model"): → Verify access → Resolve auth/URL → Execute
-  └── RESOURCE MODE (no "model"):    → Classify → Schedule → Resolve → Execute
-→ Log Response (tokens, provider, classifications, scheduling stats)
-```
+This section is a behavioral rule, not a technical control — the repository cannot block force pushes or branch deletions on its own. The matching technical enforcement (force pushes and deletion disabled, optionally push access via the rule's `restrictions` field) must be set per branch in the branch-protection settings.
 
-## Database Schema (Key Tables)
+### Conventions
 
-| Table | Purpose |
-|-------|---------|
-| `users` | User accounts (id, username, email, prename, name) |
-| `services` | Service definitions |
-| `process` | API key holders — `logos_key` (unique), links to user or service, log level, settings (JSONB) |
-| `profiles` | Access profiles linked to a process |
-| `providers` | LLM providers (base_url, provider_type, auth config, SDI fields) |
-| `models` | LLM models (name, endpoint, classification weights, tags) |
-| `model_provider` | Model ↔ Provider mapping |
-| `model_api_keys` | API keys per model-provider pair |
-| `profile_model_permissions` | Which profiles can access which models |
-| `policies` | Classification policies with threshold weights |
-| `log_entry` | Request usage logs (timestamps, payloads, tokens, SDI metrics) |
-| `usage_tokens` | Per-request token counts linked to log_entry |
-| `token_types` | Token type definitions (prompt_tokens, completion_tokens, etc.) |
-| `token_prices` | Billing prices (per-1000-token with valid_from dates) |
-| `jobs` | Async job tracking |
-| `request_events` | Scheduling monitoring events |
+- Avoid the imprecise terms `frontend` and `backend` in comments and documentation — name the actual component (user interface, web application, application server, feature service, data service, infrastructure service).
+- Keep comments focused on current behavior and implementation constraints; no issue/PR history or local provider names.
+- Pre-commit hooks (autoflake, isort, black 120 cols, flake8) gate Python code — see `logos/README.md` for setup and manual runs.
 
-The `process.settings` JSONB field can store per-process configuration (e.g., rate limits: `rate_limit_rpm`, `rate_limit_tpm`).
+### Shared sibling
 
-## Adding New Features — Checklist
+The `shared/` directory at the repo root (sibling of `logos/`) is symlinked into the orchestrator for local dev/CI: `ln -s ../../shared logos/logos-orchestrator/shared` (note the extra `../`).
 
-### Adding a new API endpoint
-1. Add the route handler to `src/logos/main.py` (or create a new router and include it)
-2. Add any new Pydantic request models to `src/logos/dbutils/dbrequest.py`
-3. Add DB operations to `src/logos/dbutils/dbmanager.py`
-4. Write unit tests in `tests/unit/`
-5. Update `db/init.sql` if schema changes are needed
-6. Create a migration in `db/migrations/` (next sequential number)
-
-### Adding a database migration
-1. Create `db/migrations/NNN_description.sql` (next number in sequence; currently up to 019)
-2. Use `ALTER TABLE` / `CREATE TABLE` — migrations must be idempotent where possible (`IF NOT EXISTS`)
-3. **CRITICAL**: Add the migration filename to the `MIGRATIONS` array in `db/migrations/run_all_migrations.sh` — forgetting this means existing deployments never get the migration applied
-4. Update `db/init.sql` to reflect the new schema for fresh installs
-5. Update ORM models in `dbmodules.py` if applicable
-
-**Common migration pitfall**: The `init.sql` file is only executed on first database initialization (PostgreSQL `docker-entrypoint-initdb.d`). Existing deployments with persistent volumes rely entirely on `run_all_migrations.sh` to get schema updates.
-
-### Testing
-```bash
-# Run unit tests only
-./run_tests.sh unit
-
-# Run with Poetry directly
-poetry run pytest tests/unit -v
-
-# Run specific test file
-poetry run pytest tests/unit/main/test_route_and_execute.py -v
-```
-
-Tests stub heavy dependencies (sentence_transformers, gRPC) via `conftest.py`. DBManager should be monkeypatched in tests — never connect to a real database in unit tests.
-
-**Note**: All unit tests should pass on `main` (25 passed, 1 skipped). The skipped test (`test_classification.py`) requires real `sentence-transformers` which is stubbed in `conftest.py`. Tests use `asyncio_mode = "auto"` so `@pytest.mark.asyncio` decorators are NOT needed on test functions.
-
-## Git Workflow & Pull Requests
-
-### Naming Conventions (MANDATORY)
-
-**PR Title** — Must match this regex (enforced by CI):
-```
-^`(Development|General|Athena|Atlas|AtlasML|Iris|Logos|Memiris)`:\s[A-Z].*$
-```
-Examples:
-- `` `Logos`: Add OpenAI-compatible /v1/models endpoint ``
-- `` `Logos`: Fix rate limiting for batch users ``
-
-**Commit Messages** — Must follow the same pattern (without backticks):
-```
-ProjectName: Description starting with capital letter (#issue_number)
-```
-Examples:
-- `Logos: Add OpenAI-compatible /v1/models endpoint (#420)`
-- `Logos: Fix rate limiting for batch users (#422)`
-
-**Branch Names**: `feature/logos/description` or `logos/description`
-
-### ALWAYS Create Pull Requests for Issues
-When implementing a feature for a GitHub issue:
-1. Create a feature branch from `main`: `git checkout -b feature/logos/short-description`
-2. Implement the feature with tests
-3. Run ALL existing tests to verify zero regressions: `poetry run pytest tests/unit/ -v`
-4. Commit with proper message format: `Logos: Description (#issue_number)`
-5. Push the branch: `git push origin feature/logos/short-description`
-6. **Create a PR** with `gh pr create`:
-   - Title MUST match the PR title regex above (with backtick-wrapped project name)
-   - Body should include: `Closes #NNN`, summary, changes list, new endpoints, testing info
-7. **After PR creation, ALWAYS**:
-   - Check CI/build status within a few minutes: `gh pr checks <PR_NUMBER>`
-   - If the PR title validation fails, fix it immediately with `gh pr edit <NUMBER> --title '...'`
-   - If tests fail, fix them before requesting review
-   - Monitor until all checks pass
-8. Never merge directly to `main` without a PR
-
-### PR Description Template
-```markdown
-## Closes #NNN
-
-## Summary
-Brief description of what this PR implements.
-
-## Changes
-- `file1.py`: Description of change
-- `file2.py`: Description of change
-
-## New Endpoints
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/v1/models` | Profile | List accessible models |
-
-## Testing
-- Added N tests in `tests/unit/...`
-- Run: `poetry run pytest tests/unit/ -v`
-
-## Database Changes
-- Migration: `db/migrations/NNN_description.sql`
-```
-
-### Post-PR Checklist
-After creating a PR, always verify:
-1. **Title validation passes** — check with `gh pr checks <NUMBER>` or view on GitHub
-2. **All CI checks pass** — build, lint, tests
-3. **No merge conflicts** — rebase on main if needed
-4. If any check fails, fix immediately — do NOT leave failing PRs
-
-## Conventions
-
-- **Imports**: Use absolute imports from `logos.*` (e.g., `from logos.auth import authenticate_logos_key`)
-- **Async**: All route handlers are `async def`; use `await` for DB and HTTP operations
-- **Error handling**: Raise `HTTPException` with appropriate status codes
-- **Response format**: Admin endpoints should return `JSONResponse(content=result, status_code=status)` — never return raw tuples from endpoints
-- **Naming**: Snake_case for functions/variables, PascalCase for classes
-- **Type hints**: Use them consistently (typing module + dataclasses)
-- **SQL**: Use parameterized queries with `:param_name` syntax in `text()` calls
-- **Docstrings**: All public functions should have docstrings explaining params, returns, raises
-
-## Environment & Running
+### Running the full stack
 
 ```bash
-# Install dependencies
-cd logos && poetry install
-
-# Run locally
-poetry run uvicorn logos.main:app --host 0.0.0.0 --port 8000
-
-# Run with Docker
-docker compose up --build
-
-# Database is at logos-db:5432/logosdb (user: postgres, pass: root)
+docker compose -f docker-compose.dev.yaml up --build   # from logos/
+cd logos-ui && ng serve                                 # web application on :4200
 ```
 
-## Operations Runbook
+Log in with a seeded Keycloak user (e.g. `tobias.wasner` / `password` — logos admin). See `README.md` for roles and team provisioning.
 
-### Creating Logos API Keys for a New Consumer
+## Skills
 
-API keys are managed via REST endpoints on the Logos server. The production server is accessed via `ssh logos`. All API calls go through `docker exec logos-orchestrator curl -s -X POST http://localhost:8080/...`. The root API key is in the `process` table (`SELECT logos_key FROM process WHERE name='root'`).
+Task-specific playbooks live in `.agents/skills/<name>/SKILL.md`, in the [Agent Skills](https://agentskills.io) format, and are mirrored by a frontmatter-only stub under `.claude/skills/<name>/` because clients scan different directories. Before adding, renaming or removing one, read [`.agents/skills/AGENTS.md`](.agents/skills/AGENTS.md) — it has the mirroring rules. An agent that discovers neither location can read the file directly.
 
-**Hierarchy**: Service → Process (holds the `logos_key`) → Profile → Model Permissions
-
-**Step-by-step**:
-
-1. **Get the root key** (needed for all admin calls):
-   ```bash
-   ssh logos "docker exec logos-db psql -U postgres -d logosdb -t -A -c \"SELECT logos_key FROM process WHERE name='root';\""
-   ```
-
-2. **Create a service** for the consumer (if it doesn't already exist):
-   ```bash
-   ssh logos "docker exec logos-orchestrator curl -s -X POST http://localhost:8080/logosdb/add_service \
-     -H 'Content-Type: application/json' \
-     -d '{\"logos_key\": \"<ROOT_KEY>\", \"name\": \"<service-name>\"}'"
-   ```
-   Returns `service-id`. Note: this auto-creates a process — delete it if you create dedicated processes below.
-
-3. **Create a process** (API key) under that service for each environment:
-   ```bash
-   ssh logos "docker exec logos-orchestrator curl -s -X POST http://localhost:8080/logosdb/connect_service_process \
-     -H 'Content-Type: application/json' \
-     -d '{\"logos_key\": \"<ROOT_KEY>\", \"service_id\": <SERVICE_ID>, \"process_name\": \"<name>-prod\"}'"
-   ```
-   Returns `api-key`. **Known bug**: the generated key prefix is `lg-root-...` instead of `lg-<name>-...`. Fix with:
-   ```bash
-   ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"UPDATE process SET logos_key='lg-<name>-<random_part>' WHERE id=<ID>;\""
-   ```
-
-4. **Create a profile** for each process:
-   ```bash
-   ssh logos "docker exec logos-orchestrator curl -s -X POST http://localhost:8080/logosdb/add_profile \
-     -H 'Content-Type: application/json' \
-     -d '{\"logos_key\": \"<ROOT_KEY>\", \"profile_name\": \"<name>-profile\", \"process_id\": <PROCESS_ID>}'"
-   ```
-   Returns `profile-id`.
-
-5. **Grant model access** — connect each profile to each model it should access:
-   ```bash
-   ssh logos "docker exec logos-orchestrator curl -s -X POST http://localhost:8080/logosdb/connect_profile_model \
-     -H 'Content-Type: application/json' \
-     -d '{\"logos_key\": \"<ROOT_KEY>\", \"profile_id\": <PROFILE_ID>, \"model_id\": <MODEL_ID>}'"
-   ```
-   To find model IDs: `ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name FROM models ORDER BY name;\""`.
-
-6. **Verify** the final setup:
-   ```bash
-   ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"
-     SELECT s.name AS service, p.name AS process, pr.name AS profile,
-            string_agg(m.name, ', ' ORDER BY m.name) AS models
-     FROM services s
-     JOIN process p ON p.service_id = s.id
-     JOIN profiles pr ON pr.process_id = p.id
-     JOIN profile_model_permissions pmp ON pmp.profile_id = pr.id
-     JOIN models m ON m.id = pmp.model_id
-     WHERE s.name = '<service-name>'
-     GROUP BY s.name, p.name, pr.name ORDER BY p.name;\""
-   ```
-
-### Testing an API Key with curl
-
-The external URL is `https://logos.aet.cit.tum.de:8080`. Traefik handles TLS on port 8080.
-
-```bash
-curl -X POST https://logos.aet.cit.tum.de:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <LOGOS_KEY>" \
-  -d '{
-    "model": "<model-name>",
-    "messages": [{"role": "user", "content": "Hello"}]
-  }'
-```
-
-**Important**: Use `/v1/...` path (not `/openai/v1/...`). The `/openai/` prefix is a separate proxy route, not a path prefix for the OpenAI-compatible API.
-
-### Useful DB Queries
-
-```bash
-# List all processes (API keys) with their services
-ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"
-  SELECT p.id, p.name, LEFT(p.logos_key, 30) AS key_prefix, s.name AS service
-  FROM process p LEFT JOIN services s ON s.id = p.service_id ORDER BY p.id;\""
-
-# List all model permissions for a specific consumer
-ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"
-  SELECT p.name, m.name AS model FROM profile_model_permissions pmp
-  JOIN profiles pr ON pr.id = pmp.profile_id JOIN process p ON p.id = pr.process_id
-  JOIN models m ON m.id = pmp.model_id WHERE p.name LIKE '<name>%' ORDER BY p.name, m.name;\""
-
-# List all available models
-ssh logos "docker exec logos-db psql -U postgres -d logosdb -c \"SELECT id, name FROM models ORDER BY name;\""
-```
-
-## Important Notes for AI Agents
-
-1. **main.py is large** (~1690+ lines). Read specific sections rather than the whole file. Use grep to find relevant routes/functions.
-2. **DBManager is the critical class** for all database operations. It auto-commits on exit.
-3. **No Alembic** — migrations are plain SQL files. Apply via `run_all_migrations.sh` (uses `docker exec`) or run manually.
-4. **Provider types**: `cloud` (Azure/OpenAI), `ollama` (local Ollama instances)
-5. **Token tracking exists** in the `usage_tokens` and `token_prices` tables.
-6. **The `process` table is the key auth entity** — each process has a unique `logos_key`.
-7. **Profiles control model access** — `profile_model_permissions` links profiles to models.
-8. **Existing tests mock DBManager** — follow the same pattern for new tests.
-9. **When adding OpenAI-compatible endpoints** (like `/v1/models`), follow the OpenAI API spec exactly.
-10. **For schema changes**: update BOTH `db/init.sql` (fresh install) AND add a migration file AND add the migration to `run_all_migrations.sh` MIGRATIONS array.
-11. **DB method return values**: Methods returning `(dict, int)` tuples must be unpacked in endpoints — use `JSONResponse(content=result, status_code=status)`, never return the tuple directly.
-12. **Route ordering matters**: FastAPI matches routes in definition order. Specific routes must come before catch-all routes like `/v1/{path:path}`.
-13. **Docker build**: Uses multi-stage build with `uv` (pinned version) for fast dependency installation. Runtime stage uses slim Python image with `VIRTUAL_ENV=/opt/venv`.
-14. **`process.settings` JSONB**: Flexible per-process config store. Used for rate limits and other settings. No schema migration needed to add new keys.
-15. **Traefik routing**: The domain is configured via the `LOGOS_DOMAIN` environment variable (default: `localhost`); Let's Encrypt ACME registration uses `ACME_EMAIL`. All surfaces (web UI, Swagger `/docs`, completion API, Spring `/api` backend) are served together on the default HTTPS port, routed by path and router priority. See `.env.example` for production setup.
-16. **Shared dependency**: The `shared/` sibling directory is symlinked as `logos/shared` for local dev. In CI, this is done explicitly: `ln -s ../shared logos/shared`.
-17. **Schema drift**: `init.sql` and `dbmodules.py` have some columns that are out of sync (e.g., several `providers` columns exist in SQL but not in ORM). The SQL schema (`init.sql`) is the source of truth; `dbmodules.py` only maps columns that the application code actively uses.
-18. **CI caching**: The CI workflow caches Poetry dependencies using `cache: "poetry"` with `cache-dependency-path: logos/poetry.lock`. Always commit `poetry.lock` changes.
+| Skill | Use it for |
+|-------|------------|
+| [`ui-screenshots`](.agents/skills/ui-screenshots/SKILL.md) | Full-page desktop + mobile screenshots of the web application for PRs and documentation. |
+| [`docs/AGENTS.md`](docs/AGENTS.md) | Role-guide PNGs under `docs/static/img/roles/` (committed): principles (no near-duplicate per-role shots; capture tabs/steps/modals; explain every shot), seed, and shot matrix. |

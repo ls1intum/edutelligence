@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+        http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="010-add-model-capabilities" author="Malte">
+        <createTable tableName="model_capabilities">
+            <column name="id" type="INT" autoIncrement="true">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="model_id" type="INT">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="supports_function_calling" type="BOOLEAN">
+                <constraints nullable="false"/>
+            </column>
+            <column name="supports_vision" type="BOOLEAN">
+                <constraints nullable="false"/>
+            </column>
+            <column name="supports_reasoning" type="BOOLEAN">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+    </changeSet>
+
+</databaseChangeLog>

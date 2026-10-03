@@ -5,23 +5,8 @@ Each lane is one model-serving process.
 ## Lane shape
 ```yaml
 lanes:
-  - lane_id: gemma2-2b-l1
-    model: gemma2:2b
-    vllm: false
-    num_parallel: 4
-    context_length: 4096
-    keep_alive: 5m
-    kv_cache_type: q8_0
-    flash_attention: true
-    gpu_devices: ""
-```
-
-vLLM lane:
-```yaml
-lanes:
   - lane_id: qwen3-8b-v1
     model: Qwen/Qwen3-8B
-    vllm: true
     context_length: 8192
     gpu_devices: "0"
     vllm_config:
@@ -32,11 +17,11 @@ lanes:
 ```
 
 Notes:
-- `num_parallel`, `keep_alive`, `kv_cache_type`, and `flash_attention` are Ollama-lane settings.
-- vLLM lanes use continuous batching, so runtime status reports `num_parallel: 0` for `vllm: true`.
-- For vLLM, the saved lane config `num_parallel` is still used by Logos as a scheduling-capacity hint.
-- vLLM requires a working `nvidia-smi`. If any configured lane has `vllm: true` and `nvidia-smi` is unavailable, worker startup and lane apply/reconfigure now fail immediately.
-- Without `nvidia-smi`, use Ollama lanes only. Derived-device mode is not accepted for vLLM anymore.
+- Every lane runs vLLM. The `vllm` lane field defaults to `true`; explicitly setting it to `false` is rejected (the Ollama engine was removed).
+- vLLM lanes use continuous batching, so runtime status reports `num_parallel: 0` until the worker parses the lane's startup log.
+- The saved lane config `num_parallel` is still used by Logos as a scheduling-capacity hint.
+- Every lane requires a working `nvidia-smi`. If it is unavailable, worker startup and lane apply/reconfigure fail immediately.
+- Derived-device mode is not accepted.
 
 ## Runtime states
 - `cold`: process exists but the model is not warm
@@ -64,7 +49,7 @@ Notes:
 curl -X POST http://localhost:8444/admin/lanes/apply \
   -H 'Authorization: Bearer <worker_api_key>' \
   -H 'Content-Type: application/json' \
-  -d '{"lanes":[{"lane_id":"gemma2-2b-l1","model":"gemma2:2b","vllm":false}]}'
+  -d '{"lanes":[{"lane_id":"qwen3-8b-v1","model":"Qwen/Qwen3-8B","vllm":true}]}'
 ```
 
 ## Sleep and wake
@@ -110,13 +95,13 @@ Profiles update via exponential moving average (alpha=0.3) and persist in the st
 Example persisted profiles (saved automatically to the state directory):
 ```yaml
 model_profiles:
-  gemma2:2b:
+  Qwen/Qwen2.5-1.5B-Instruct:
     loaded_vram_mb: 2048.5
     sleeping_residual_mb: 256.0
     disk_size_bytes: 1629516544
     base_residency_mb: 1700.0
     measurement_count: 12
-  llama3.1:latest:
+  meta-llama/Llama-3.1-8B-Instruct:
     loaded_vram_mb: 4812.3
     base_residency_mb: 4300.0
     kv_budget_mb: 512.0

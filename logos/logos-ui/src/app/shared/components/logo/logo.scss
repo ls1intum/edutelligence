@@ -7,20 +7,12 @@
   }
 
   &-background {
-    fill: url(#logo-gradient);
+    fill: rgb(var(--color-primary-500));
   }
 
   &-icon {
-    fill: rgb(var(--color-white)); 
+    fill: rgb(var(--color-white));
   }
-}
-
-.gradient-start {
-  stop-color: rgb(var(--color-primary-500));
-}
-
-.gradient-end {
-  stop-color: rgb(var(--brand-blue));
 }
 
 .clip-rect {

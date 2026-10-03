@@ -27,9 +27,13 @@ export type RequestLogResponse = {
   rows?: RequestLogRow[];
 };
 
+/**
+ * The statistics tabs. 'local-providers' is the default and stays out of the URL.
+ */
+export type StatsTab = 'local-providers' | 'requests';
+
 // RequestLogStats from logos-ui-old/components/statistics/types.ts
 export type RequestLogStats = {
-  lastEventTs: string | null;
   totals: {
     requests: number;
     cloudRequests: number;
@@ -38,10 +42,15 @@ export type RequestLogStats = {
     warmStarts: number;
     avgQueueSeconds: number | null;
     avgRunSeconds: number | null;
+    totalTokens: number | null;
+    cloudCostMicroCents: number | null;
   };
   statusCounts: Record<string, number>;
   modelBreakdown: Array<{
-    modelId: number;
+    /** null marks a deleted model: the usage survives under modelName. */
+    modelId: number | null;
+    /** Set on deleted-model entries so the UI can show the trash marker. */
+    modelDeleted?: boolean;
     modelName: string;
     requestCount: number;
     avgQueueSeconds: number | null;
@@ -57,23 +66,11 @@ export type RequestLogStats = {
     local: number;
     total: number;
     avgRunSeconds: number | null;
-    avgVram: number | null;
   }>;
   modelTimeSeries?: Array<{
     timestamp: number; // Unix ts (ms)
-    modelId: number;
+    modelId: number | null; // null for deleted models
     modelName: string;
-    count: number;
-  }>;
-  queueDepth: {
-    avgEnqueueDepth: number | null;
-    avgScheduleDepth: number | null;
-    p95EnqueueDepth: number | null;
-    p95ScheduleDepth: number | null;
-  } | null;
-  runtimeByColdStart: Array<{
-    type: "cold" | "warm";
-    avgRunSeconds: number | null;
     count: number;
   }>;
 };
@@ -103,48 +100,40 @@ export type DeviceInfo = {
 // LaneSignalData from logos-ui-old/components/statistics/types.ts
 export type LaneSignalData = {
   model: string;
-  vllm: boolean;
   runtime_state: string; // "running"|"loaded"|"sleeping"|"starting"|"cold"|"stopped"|"error"
   sleep_state: string | null;
+  gpu_devices: string | null;
+  effective_gpu_devices: string | null;
+  /**
+   * Worker-reported concurrency: the lane's full-context KV budget parsed
+   * from the vLLM startup log (guaranteed minimum; 0 until the log is parsed).
+   */
+  num_parallel: number | null;
   active_requests: number;
   effective_vram_mb: number;
+  /**
+   * Host RAM of the lane's process tree (MiB), the counterpart to
+   * effective_vram_mb. Optional: workers that predate the field, and hosts whose
+   * runtime cannot read process memory, report nothing rather than 0 — the page
+   * has to tell "no lane RAM reported" apart from "a lane using no RAM".
+   */
+  host_ram_mb?: number;
+  host_ram_source?: string | null;
   gpu_cache_usage_percent: number | null;
   ttft_p95_seconds: number | null;
   queue_waiting: number | null;
   requests_running: number | null;
-};
-
-// PaginatedRequestItem from logos-ui-old/components/statistics/types.ts
-export type PaginatedRequestItem = {
-  request_id: string;
-  model_name: string;
-  provider_name: string;
-  is_cloud: boolean;
-  status: string;
-  timestamp: string | null;
-  duration: number | null;
-  cold_start: boolean | null;
-  enqueue_ts: string | null;
-  scheduled_ts: string | null;
-  request_complete_ts: string | null;
-  queue_seconds: number | null;
-  total_seconds: number | null;
-  initial_priority: string | null;
-  priority_when_scheduled: string | null;
-  queue_depth_at_enqueue: number | null;
-  error_message: string | null;
-  team_name: string | null;
-  username: string | null;
-  environment: string | null;
-};
-
-// PaginatedRequestResponse from logos-ui-old/components/statistics/types.ts
-export type PaginatedRequestResponse = {
-  requests: PaginatedRequestItem[];
-  total: number;
-  page: number;
-  per_page: number;
-  total_pages: number;
+  prefix_cache_hit_rate: number | null;
+  mtp_acceptance_rate: number | null;
+  /**
+   * Context window this lane is serving at, in tokens.
+   *
+   * Per lane rather than per model on purpose: the planner sizes each lane
+   * against the KV cache it could get, so the same model runs at 262,144 on one
+   * worker and a fraction of that on another. Null when the worker reports
+   * nothing to derive it from.
+   */
+  max_model_len: number | null;
 };
 
 // VramV2Sample from logos-ui-old/hooks/use-stats-websocket-v2.ts
@@ -164,6 +153,15 @@ export interface VramV2Sample {
       total_memory_mb?: number;
       used_memory_mb?: number;
       free_memory_mb?: number;
+      /**
+       * Host RAM of the worker (MiB), from the runtime's host_memory summary.
+       * Optional like its VRAM siblings: undefined on workers that predate
+       * the field or cannot read /proc/meminfo, and the page has to read
+       * that as "not reported" rather than a host with 0 MB.
+       */
+      host_ram_total_mb?: number;
+      host_ram_used_mb?: number;
+      host_ram_available_mb?: number;
       lane_count?: number;
       active_requests?: number;
       loaded_lane_count?: number;
@@ -187,6 +185,8 @@ export interface VramV2Provider {
   runtime_modes?: string[];
   transport_connected?: boolean;
   last_heartbeat?: string | null;
+  connected_at?: string | null;
+  worker_started_at?: string | null;
   devices?: DeviceInfo[];
   data: VramV2Sample[];
 }
@@ -203,27 +203,7 @@ export interface TimelineInitPayload {
   range?: { start: string; end: string };
   bucketSeconds?: number;
   stats?: RequestLogStats;
-  events?: Array<{
-    request_id: string;
-    enqueue_ts: string;
-    timestamp_ms: number;
-    is_cloud: boolean;
-  }>;
-  cursor?: { enqueue_ts?: string; request_id?: string };
   error?: string;
-}
-
-// TimelineDeltaPayload from logos-ui-old/hooks/use-stats-websocket-v2.ts
-export interface TimelineDeltaPayload {
-  events?: Array<{
-    request_id: string;
-    enqueue_ts: string;
-    timestamp_ms: number;
-    is_cloud: boolean;
-  }>;
-  cursor?: { enqueue_ts?: string; request_id?: string };
-  bucketSeconds?: number;
-  range?: { start: string; end: string };
 }
 
 // TimelineRequestConfig from logos-ui-old/hooks/use-stats-websocket-v2.ts
@@ -247,14 +227,6 @@ export type VramSeriesPoint = {
   _empty?: boolean;
 };
 
-// TimelineEnqueueEvent from logos-ui-old/app/statistics.tsx lines 68-108
-export type TimelineEnqueueEvent = {
-  request_id: string;
-  enqueue_ts: string;
-  timestamp_ms: number;
-  is_cloud: boolean;
-};
-
 // VramProviderMeta from logos-ui-old/app/statistics.tsx lines 68-108
 export type VramProviderMeta = {
   provider_id?: number;
@@ -264,6 +236,9 @@ export type VramProviderMeta = {
   runtime_modes?: string[];
   transport_connected?: boolean;
   last_heartbeat?: string | null;
+  connected_at?: string | null;
+  worker_started_at?: string | null;
+  calibrating?: boolean;
 };
 
 // VramProviderPayload from logos-ui-old/app/statistics.tsx lines 68-108
@@ -284,6 +259,7 @@ export interface RequestItem {
   request_id: string;
   model_name: string;
   provider_name: string;
+  is_cloud: boolean | null;
   status: string; // 'success', 'error', 'timeout', 'pending'
   timestamp: string | null;
   duration: number | null; // seconds (exec only)
@@ -297,4 +273,54 @@ export interface RequestItem {
   priority_when_scheduled: string | null;
   queue_depth_at_enqueue: number | null;
   error_message: string | null;
+  team_name: string | null;
+  username: string | null;
+  full_name: string | null;
+  api_key_name: string | null;
+  api_key_type: string | null;
+  /**
+   * Application-key environment the request was logged under. Null / "-" for
+   * developer keys (and application keys that never set one).
+   */
+  environment: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  cost_microcents: number | null;
+  /**
+   * Generation rate of a request that is still streaming, from the
+   * orchestrator's in-flight view. Measured from the first token rather than
+   * from arrival, so queueing does not drag it down. Null once the request has
+   * finished, and while it is still waiting for its first token.
+   */
+  tokens_per_second?: number | null;
+  /**
+   * The token counts above are this request's live figures, not its settled
+   * ones. Prompt tokens are exact either way; the completion count is the
+   * orchestrator's running tally and moves until the request completes.
+   */
+  streaming?: boolean;
+  /**
+   * The prompt figure is the estimate the context routing computed from the
+   * body — the request has not reached a point where the upstream states the
+   * real size yet (it still queues). Shown as an estimate, not a fact.
+   */
+  prompt_estimated?: boolean;
+}
+
+/**
+ * One entry of the team / requester dropdowns that scope the page, as
+ * `request_log_scope_options` returns it.
+ *
+ * Lives here rather than with the request feed: the filter used to be part of
+ * that toolbar, and now narrows every request-derived panel on the page.
+ *
+ * `requestCount` is what picking this entry would select in the current range.
+ * It is shown in the option label, because the list is only useful if it says
+ * which of its entries hold anything.
+ */
+export interface FeedFilterOption {
+  id: number;
+  label: string;
+  requestCount: number;
 }

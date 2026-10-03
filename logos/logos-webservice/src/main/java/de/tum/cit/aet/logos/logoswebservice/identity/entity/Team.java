@@ -28,6 +28,11 @@ public class Team {
     private Long defaultMonthlyBudgetMicroCents = 100000000L;
     private Long teamMonthlyBudgetMicroCents = 500000000L;
 
+    // Queue priority of the team's traffic (1..10, same scale as
+    // api_keys.default_priority). Null = not set: the policy-level priority
+    // keeps applying as before. Set by Logos admins only.
+    private Integer priority;
+
     public Integer getId() { return id; }
     public String getName() { return name; }
     public Integer getDefaultCloudRpmLimit() { return defaultCloudRpmLimit; }
@@ -36,6 +41,7 @@ public class Team {
     public Integer getDefaultLocalTpmLimit() { return defaultLocalTpmLimit; }
     public Long getDefaultMonthlyBudgetMicroCents() { return defaultMonthlyBudgetMicroCents; }
     public Long getTeamMonthlyBudgetMicroCents() { return teamMonthlyBudgetMicroCents; }
+    public Integer getPriority() { return priority; }
     public String getKeycloakGroup() { return keycloakGroup; }
     public void setName(String name) { this.name = name; }
     public void setDefaultCloudRpmLimit(Integer v) { this.defaultCloudRpmLimit = v; }
@@ -44,5 +50,6 @@ public class Team {
     public void setDefaultLocalTpmLimit(Integer v) { this.defaultLocalTpmLimit = v; }
     public void setDefaultMonthlyBudgetMicroCents(Long v) { this.defaultMonthlyBudgetMicroCents = v; }
     public void setTeamMonthlyBudgetMicroCents(Long v) { this.teamMonthlyBudgetMicroCents = v; }
+    public void setPriority(Integer v) { this.priority = v; }
     public void setKeycloakGroup(String keycloakGroup) { this.keycloakGroup = keycloakGroup; }
 }

@@ -28,14 +28,35 @@ def test_azure_facade_status_and_capacity_updates():
     capacity_block = facade.get_capacity_info(2, "gpt-4o")
     assert capacity_block.has_capacity is False
 
-    # Threshold (remaining <= 10 treated as no capacity in provider logic)
+    # Low headroom remains routable; the scheduler applies a wait penalty.
     headers_low = {
         "x-ratelimit-remaining-requests": "5",
         "x-ratelimit-remaining-tokens": "500",
     }
     facade.update_rate_limits(2, "gpt-4o", headers_low)
     capacity_low = facade.get_capacity_info(2, "gpt-4o")
-    assert capacity_low.has_capacity is False
+    assert capacity_low.has_capacity is True
+
+    # Either Azure quota dimension can independently block the deployment.
+    facade.update_rate_limits(
+        2,
+        "gpt-4o",
+        {
+            "x-ratelimit-remaining-requests": "5",
+            "x-ratelimit-remaining-tokens": "0",
+        },
+    )
+    assert facade.get_capacity_info(2, "gpt-4o").has_capacity is False
+
+    facade.update_rate_limits(
+        2,
+        "gpt-4o",
+        {
+            "x-ratelimit-remaining-requests": "0",
+            "x-ratelimit-remaining-tokens": "500",
+        },
+    )
+    assert facade.get_capacity_info(2, "gpt-4o").has_capacity is False
 
     # Recovered
     headers_ok = {
@@ -44,7 +65,6 @@ def test_azure_facade_status_and_capacity_updates():
     }
     facade.update_rate_limits(2, "gpt-4o", headers_ok)
     capacity_ok = facade.get_capacity_info(2, "gpt-4o")
-    # To simplify, we assume that having more than 10 remaining requests means capacity is available
     assert capacity_ok.has_capacity is True
     assert capacity_ok.rate_limit_remaining_requests == 50
 
@@ -59,3 +79,30 @@ def test_azure_provider_lookup_and_defaults(monkeypatch):
     cap = provider.get_capacity_info("gpt-4o")
     assert cap.deployment_name == "gpt-4o"
     assert cap.has_capacity is True
+
+
+def test_azure_capacity_exhaustion_expires_per_quota_dimension(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr("logos.sdi.providers.azure_provider.time.time", lambda: now[0])
+    provider = AzureDataProvider(name="azure")
+
+    provider.update_rate_limits(
+        "gpt-4o",
+        {
+            "x-ratelimit-remaining-requests": "0",
+            "x-ratelimit-remaining-tokens": "0",
+        },
+    )
+    assert provider.get_capacity_info("gpt-4o").has_capacity is False
+
+    # A later response that omits the token quota must not make the old token
+    # snapshot fresh again.
+    now[0] = 130.0
+    provider.update_rate_limits("gpt-4o", {"x-ratelimit-remaining-requests": "5"})
+    assert provider.get_capacity_info("gpt-4o").has_capacity is False
+
+    now[0] = 161.0
+    capacity = provider.get_capacity_info("gpt-4o")
+    assert capacity.has_capacity is True
+    assert capacity.rate_limit_remaining_requests == 5
+    assert capacity.rate_limit_remaining_tokens is None

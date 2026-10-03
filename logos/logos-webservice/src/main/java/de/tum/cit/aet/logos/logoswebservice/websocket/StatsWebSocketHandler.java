@@ -61,7 +61,7 @@ public class StatsWebSocketHandler extends TextWebSocketHandler {
         states.put(session.getId(), state);
 
         Map<String, Object> vramPayload = vramService.getVramStats(null);
-        Map<String, Object> reqPayload = requestLogService.getLatestRequests();
+        Map<String, Object> reqPayload = requestLogService.getLatestRequests(null, null);
         state.prevVramSig = vramSig(vramPayload);
         state.prevReqSig = requestsSig(reqPayload);
         send(session, Map.of("type", "vram", "payload", vramPayload));
@@ -113,7 +113,7 @@ public class StatsWebSocketHandler extends TextWebSocketHandler {
         Map<String, Object> reqPayload = null;
         String reqSig = null;
         try {
-            reqPayload = requestLogService.getLatestRequests();
+            reqPayload = requestLogService.getLatestRequests(null, null);
             reqSig = requestsSig(reqPayload);
         } catch (Exception e) {
             log.warn("[ws/stats] Requests push error: {}", e.getMessage());

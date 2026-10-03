@@ -1,0 +1,132 @@
+"""Failover-under-load leg: kill one webservice replica mid-run under real
+concurrent streaming load, not the light polling
+``scripts/gateway-failover-demo.sh`` uses for its quick manual/ops check.
+
+Requires >=2 ``logos-webservice`` containers already running under the
+target compose file (this script does not own the stack's lifecycle, same
+philosophy as ``e2e/tests/conftest.py`` — start it yourself first).
+
+A fixed number of workers keep ``concurrency`` streaming requests in flight
+for the whole run (each finishes and immediately starts another), one
+replica is killed partway through, and every request is classified:
+  - ok: HTTP 2xx *and* a stream that reached its terminal SSE event
+  - connectivity failure: connection error/timeout, HTTP 5xx, or a 2xx
+    stream cut off before that terminal event — the only outcomes a live
+    replica behind Traefik should not otherwise produce. A truncated stream
+    belongs here and not under "other": the status line goes out before the
+    completion is relayed, so killing a replica mid-answer is seen by the
+    client as a successful HTTP 200 carrying half a response, which is
+    exactly the visible impact this leg exists to catch.
+  - other failure: any other non-2xx (would indicate a real bug, not a
+    failover problem, given the seeded key is valid)
+
+Environment (all optional, defaults in parentheses):
+  LOGOS_BENCH_GW_FAILOVER_CONCURRENCY  (32)
+  LOGOS_BENCH_GW_FAILOVER_DURATION_S   (30)
+  LOGOS_BENCH_GW_FAILOVER_KILL_AFTER_S (10)
+  LOGOS_BENCH_COMPOSE_FILE             (docker-compose.dev.yaml, relative to
+                                         the logos/ repo root)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import subprocess
+import time
+from typing import Any, Dict, List
+
+import gateway_client as gw
+import httpx
+
+
+def _env_int(name: str, default: int) -> int:
+    return int(os.environ.get(name, str(default)))
+
+
+def _is_truncated(r: gw.RequestResult) -> bool:
+    """A 2xx whose stream stopped before the terminal SSE event."""
+    return r.stream_complete is False and r.status_code is not None and 200 <= r.status_code < 300
+
+
+def _classify(results: List[gw.RequestResult]) -> Dict[str, Any]:
+    ok = [r for r in results if r.ok]
+    failed = [r for r in results if not r.ok]
+    connectivity_failed = [r for r in failed if r.status_code is None or r.status_code >= 500 or _is_truncated(r)]
+    other_failed = [r for r in failed if r.status_code is not None and r.status_code < 500 and not _is_truncated(r)]
+    max_total_ms = max((r.total_ms for r in results), default=0.0)
+    return {
+        "total": len(results),
+        "ok": len(ok),
+        "connectivity_failures": len(connectivity_failed),
+        "truncated_streams": len([r for r in results if _is_truncated(r)]),
+        "other_failures": len(other_failed),
+        "max_total_ms": max_total_ms,
+        "connectivity_failure_samples": sorted({r.error for r in connectivity_failed if r.error})[:5],
+    }
+
+
+async def _worker(client: httpx.AsyncClient, url: str, headers: Dict[str, str], deadline: float, out: List) -> None:
+    while time.monotonic() < deadline:
+        out.append(await gw.stream_chat_completion(client, url, headers))
+
+
+async def run() -> Dict[str, Any]:
+    compose_file = gw.compose_file()
+    containers = gw.webservice_containers(compose_file)
+    if len(containers) < 2:
+        raise RuntimeError(
+            f"need >=2 running logos-webservice replicas under {compose_file} (found {len(containers)}). "
+            f"Start with: docker compose -f {compose_file} up -d --scale logos-webservice=2"
+        )
+    kill_target = containers[0]
+
+    concurrency = _env_int("LOGOS_BENCH_GW_FAILOVER_CONCURRENCY", 32)
+    duration_s = _env_int("LOGOS_BENCH_GW_FAILOVER_DURATION_S", 30)
+    kill_after_s = _env_int("LOGOS_BENCH_GW_FAILOVER_KILL_AFTER_S", 10)
+
+    url = f"{gw.gateway_url()}/v1/chat/completions"
+    headers = gw.gateway_headers()
+    results: List[gw.RequestResult] = []
+
+    print(
+        f"  [failover] {concurrency} concurrent streams for {duration_s}s; "
+        f"killing {kill_target[:12]} at t={kill_after_s}s"
+    )
+
+    limits = httpx.Limits(max_connections=concurrency + 10, max_keepalive_connections=concurrency + 10)
+    timeout = httpx.Timeout(60.0, connect=10.0)
+    start = time.monotonic()
+    deadline = start + duration_s
+    async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
+        workers = [asyncio.create_task(_worker(client, url, headers, deadline, results)) for _ in range(concurrency)]
+
+        async def _kill_at(delay: float) -> None:
+            await asyncio.sleep(delay)
+            print(f"  [failover] killing {kill_target[:12]} ...")
+            subprocess.run(["docker", "kill", kill_target], check=True, capture_output=True)
+
+        await asyncio.gather(*workers, _kill_at(kill_after_s))
+
+    summary = _classify(results)
+    summary["killed_container"] = kill_target[:12]
+    summary["concurrency"] = concurrency
+    summary["duration_s"] = duration_s
+    summary["kill_after_s"] = kill_after_s
+    # Both counts, not just connectivity: this leg calls any non-2xx a failed
+    # client request, and a 4xx under a seeded, valid key is a real bug rather
+    # than a failover artefact — reporting "no visible impact" while the run
+    # produced authorization, routing or throttling errors would hide exactly
+    # the kind of finding the leg exists to surface.
+    summary["no_visible_impact"] = summary["connectivity_failures"] == 0 and summary["other_failures"] == 0
+    print(
+        f"  [failover] total={summary['total']} ok={summary['ok']} "
+        f"connectivity_failures={summary['connectivity_failures']} other_failures={summary['other_failures']}"
+    )
+    return summary
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import json
+
+    print(json.dumps(asyncio.run(run()), indent=2))

@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
-from logos_worker_node.logos_bridge import LogosBridgeClient
+from logos_worker_node.logos_bridge import LogosBridgeClient, _CalibrationSession
 from logos_worker_node.models import LaneStatus, LogosConfig, ProcessState, ProcessStatus
+
+
+@pytest.fixture(autouse=True)
+def _pin_backend_to_cuda(monkeypatch):
+    """These tests exercise the bridge mechanism on the calibration-capable
+    (CUDA) path. is_metal_backend() auto-detects the host platform, which
+    would refuse calibration sessions whenever the suite runs on a Mac; the
+    Metal refusal itself is covered by
+    test_start_calibration_session_refuses_on_metal_backend."""
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
 
 
 class _DummyState:
@@ -23,18 +36,15 @@ class _DummyApp:
 def _make_lane_status() -> LaneStatus:
     return LaneStatus(
         lane_id="lane-a",
-        lane_uid="ollama:lane-a",
+        lane_uid="vllm:lane-a",
         model="qwen2.5-coder:32b",
         port=19001,
-        vllm=False,
         process=ProcessStatus(state=ProcessState.RUNNING, pid=1001),
         runtime_state="running",
         routing_url="http://127.0.0.1:19001",
         inference_endpoint="/v1/chat/completions",
         num_parallel=4,
         context_length=4096,
-        keep_alive="5m",
-        kv_cache_type="q8_0",
         flash_attention=True,
     )
 
@@ -114,6 +124,194 @@ async def test_authenticate_accepts_explicit_ws_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_authenticate_applies_central_hf_token(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token"}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_keeps_local_hf_token_when_server_sends_none(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "local-token")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": ""}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "local-token"
+
+
+@pytest.mark.asyncio
+async def test_authenticate_reverts_when_central_hf_token_is_removed(monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "local-token")
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    hf_token_by_call = ["central-token", ""]
+
+    class _Resp:
+        def __init__(self, hf_token: str) -> None:
+            self._hf_token = hf_token
+            self.status_code = 200
+            self.content = b"{}"
+
+        def json(self):
+            return {"ws_url": "wss://logos.example/ws", "hf_token": self._hf_token}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp(hf_token_by_call.pop(0))
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+    await client._authenticate()  # noqa: SLF001
+    assert os.environ["HF_TOKEN"] == "local-token"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_applies_central_token_before_startup(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token"}
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            return _Resp()
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client.bootstrap_hf_token()
+    assert os.environ["HF_TOKEN"] == "central-token"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_swallows_auth_failures(monkeypatch):
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example:8080",
+        shared_key="secret",
+    )
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url: str, json=None):  # noqa: ARG002
+            raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.httpx.AsyncClient",
+        lambda timeout=15.0: _HttpClient(),
+    )
+    await client.bootstrap_hf_token()
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_hf_token_noop_when_disabled(monkeypatch):
+    cfg = LogosConfig(enabled=False)
+    client = LogosBridgeClient(_DummyApp(), cfg)
+
+    async def _fail_authenticate():
+        raise AssertionError("bootstrap_hf_token must not authenticate when disabled")
+
+    monkeypatch.setattr(client, "_authenticate", _fail_authenticate)
+    await client.bootstrap_hf_token()
+
+
+@pytest.mark.asyncio
 async def test_execute_infer_command_passthrough(monkeypatch):
     app = _DummyApp()
     lane_manager = type("LaneMgr", (), {})()
@@ -149,10 +347,8 @@ async def test_execute_infer_command_passthrough(monkeypatch):
             assert url.endswith("/v1/chat/completions")
             return _Resp()
 
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _HttpClient(),
-    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
     result = await client._execute_infer_command(  # noqa: SLF001
         {
             "lane_id": "lane-a",
@@ -163,6 +359,177 @@ async def test_execute_infer_command_passthrough(monkeypatch):
     assert result["body"] == {"ok": True}
     lane_manager.acquire_lane_for_infer.assert_awaited_once_with("lane-a")
     lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_execute_infer_command_preserves_plain_text_that_is_valid_json(monkeypatch):
+    app = _DummyApp()
+    lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    app.state.lane_manager = lane_manager
+
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        text = "null"
+
+        def __init__(self):
+            self.headers = {"content-type": "text/plain; charset=utf-8"}
+
+        @staticmethod
+        def json():
+            return None
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "whisper-1",
+                "_logos_multipart": {
+                    "fields": [["model", "whisper-1"]],
+                    "files": [],
+                },
+            },
+        }
+    )
+
+    assert result == {
+        "status_code": 200,
+        "body": "null",
+        "headers": {"content-type": "text/plain; charset=utf-8"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_infer_command_base64_encodes_binary_multipart_response(monkeypatch):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        content = b"\xff\x00ID3"
+        text = "\ufffd\x00ID3"
+
+        def __init__(self):
+            self.headers = {"content-type": "audio/mpeg"}
+
+        @staticmethod
+        def json():
+            raise ValueError("not JSON")
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "audio-binary-model",
+                "_logos_multipart": {
+                    "fields": [["model", "audio-binary-model"]],
+                    "files": [],
+                },
+            },
+        }
+    )
+
+    assert result == {
+        "status_code": 200,
+        "body": None,
+        "headers": {"content-type": "audio/mpeg"},
+        "body_base64": "/wBJRDM=",
+        "body_encoding": "base64",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_headers", [{}, {"content-type": "application/json"}])
+async def test_execute_infer_command_preserves_binary_when_json_parsing_fails(monkeypatch, response_headers):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        acquire_lane_for_infer=AsyncMock(return_value=_make_lane_status()),
+        decrement_active_requests=AsyncMock(return_value=None),
+    )
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _Resp:
+        status_code = 200
+        headers = response_headers
+        content = b"\xff\x00ID3"
+        text = "\ufffd\x00ID3"
+
+        @staticmethod
+        def json():
+            raise ValueError("not JSON")
+
+    class _HttpClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):  # noqa: ARG002
+            return None
+
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            return _Resp()
+
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _HttpClient())  # noqa: SLF001
+
+    result = await client._execute_infer_command(  # noqa: SLF001
+        {
+            "lane_id": "lane-a",
+            "request_path": "v1/audio/transcriptions",
+            "payload": {
+                "model": "audio-binary-model",
+                "_logos_multipart": {"fields": [], "files": []},
+            },
+        }
+    )
+
+    assert result["body"] is None
+    assert result["body_base64"] == "/wBJRDM="
+    assert result["body_encoding"] == "base64"
 
 
 @pytest.mark.asyncio
@@ -208,7 +575,7 @@ async def test_handle_message_runs_stream_command_in_background():
     assert len(client._command_tasks) == 1  # noqa: SLF001
     assert not finished.is_set()
 
-    background_tasks = tuple(client._command_tasks)  # noqa: SLF001
+    background_tasks = tuple(client._command_tasks.values())  # noqa: SLF001
     release.set()
     await asyncio.gather(*background_tasks)
 
@@ -262,7 +629,7 @@ async def test_handle_message_runs_infer_command_in_background():
     assert len(client._command_tasks) == 1  # noqa: SLF001
     assert sent_payloads == []
 
-    background_tasks = tuple(client._command_tasks)  # noqa: SLF001
+    background_tasks = tuple(client._command_tasks.values())  # noqa: SLF001
     release.set()
     await asyncio.gather(*background_tasks)
 
@@ -382,6 +749,76 @@ async def test_heartbeat_loop_does_not_build_runtime_status(monkeypatch):
     runtime_status.assert_not_awaited()
 
 
+def _app_with_vllm_engine_config(endpoints):
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(running_vllm_endpoints=lambda: endpoints)
+    app.state.config = SimpleNamespace(
+        engines=SimpleNamespace(vllm=SimpleNamespace(metrics_path="/custom-metrics", metrics_timeout_seconds=7))
+    )
+    return app
+
+
+@pytest.mark.asyncio
+async def test_send_vllm_metrics_forwards_merged_text(monkeypatch):
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _app_with_vllm_engine_config([("lane-a", "model-a", 19001)])
+    client = LogosBridgeClient(app, cfg)
+
+    collect = AsyncMock(return_value="vllm:num_requests_running 1.0\n")
+    monkeypatch.setattr("logos_worker_node.logos_bridge.collect_vllm_metrics_text", collect)
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_vllm_metrics(object())  # noqa: SLF001
+
+    collect.assert_awaited_once_with([("lane-a", "model-a", 19001)], metrics_path="/custom-metrics", timeout_s=7)
+    assert sends == [
+        {
+            "type": "vllm_metrics",
+            "worker_id": client.worker_id,
+            "metrics_text": "vllm:num_requests_running 1.0\n",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_send_vllm_metrics_forwards_empty_export_too(monkeypatch):
+    """An empty export must still be sent — it's what tells the orchestrator
+
+    the last lane went away, so it can drop the stale series instead of
+    keeping the latest non-empty snapshot forever."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _app_with_vllm_engine_config([])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.collect_vllm_metrics_text",
+        AsyncMock(return_value=""),
+    )
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_vllm_metrics(object())  # noqa: SLF001
+
+    assert sends == [
+        {
+            "type": "vllm_metrics",
+            "worker_id": client.worker_id,
+            "metrics_text": "",
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
     """Idle worker (no lane churn) must still resend runtime status periodically.
@@ -400,10 +837,11 @@ async def test_status_refresh_loop_pushes_periodically_when_idle(monkeypatch):
 
     class _StaticLaneManager:
         status_revision = 0
+        count_revision = 0
 
-        async def wait_for_status_revision(self, last_revision, timeout=None):
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
             await asyncio.sleep(0)
-            return last_revision  # never changes
+            return last_revision, last_count_revision  # never changes
 
     app.state.lane_manager = _StaticLaneManager()
     client = LogosBridgeClient(app, cfg)
@@ -448,13 +886,14 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
 
     class _StaticLaneManager:
         status_revision = 0
+        count_revision = 0
 
-        async def wait_for_status_revision(self, last_revision, timeout=None):
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
             await asyncio.sleep(0)
             iterations[0] += 1
             if iterations[0] >= 5:
                 client._stopping.set()
-            return last_revision
+            return last_revision, last_count_revision
 
     app.state.lane_manager = _StaticLaneManager()
     client = LogosBridgeClient(app, cfg)
@@ -475,6 +914,169 @@ async def test_status_refresh_loop_holds_off_before_interval_elapses(monkeypatch
     await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
 
     assert send_calls == []
+
+
+@pytest.mark.asyncio
+async def test_status_refresh_loop_count_bump_sends_patch_not_full_build(monkeypatch):
+    """A count change (no lifecycle change, no interval elapsed) must take the
+    in-memory patch path : the loop must NOT rebuild the full status
+    (all lanes, all probes) just because a request was counted."""
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        status_refresh_interval_seconds=60,
+    )
+    app = _DummyApp()
+
+    class _CountBumpLaneManager:
+        status_revision = 0
+
+        def __init__(self):
+            self.count_revision = 0
+
+        async def wait_for_status_or_count_revision(self, last_revision, last_count_revision, timeout=None):
+            await asyncio.sleep(0)
+            self.count_revision += 1
+            return last_revision, self.count_revision
+
+        async def active_requests_snapshot(self):
+            return {"lane-a": 1}
+
+    app.state.lane_manager = _CountBumpLaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {  # noqa: SLF001
+        "lanes": [{"lane_id": "lane-a", "active_requests": 0}],
+        "capacity": {"active_requests": 0},
+    }
+
+    calls: list[str] = []
+
+    async def _fake_full(_ws, force=False):
+        calls.append("full")
+        return True
+
+    async def _fake_patch(_ws):
+        calls.append("patch")
+        if len(calls) >= 2:
+            client._stopping.set()
+        return True
+
+    client._send_runtime_status = _fake_full  # type: ignore[method-assign]  # noqa: SLF001
+    client._send_count_update = _fake_patch  # type: ignore[method-assign]  # noqa: SLF001
+
+    fake_time = SimpleNamespace(monotonic=lambda: 0.0)
+    monkeypatch.setattr("logos_worker_node.logos_bridge.time", fake_time)
+
+    await asyncio.wait_for(client._status_refresh_loop(object()), timeout=1.0)  # noqa: SLF001
+
+    assert calls == ["patch", "patch"]
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_patches_lane_and_capacity_counts(monkeypatch):
+    """The patch updates each lane's active_requests and the capacity total,
+    sends a normal status message, and leaves the stored baseline unmutated."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 2, "lane-b": 1}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    baseline = {
+        "lanes": [
+            {"lane_id": "lane-a", "active_requests": 0, "runtime_state": "loaded"},
+            {"lane_id": "lane-b", "active_requests": 0, "runtime_state": "loaded"},
+        ],
+        "capacity": {"active_requests": 0, "lane_count": 2},
+    }
+    client._last_runtime_payload = baseline  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    sent = await client._send_count_update(object())  # noqa: SLF001
+
+    assert sent is True
+    assert len(sends) == 1
+    runtime = sends[0]["runtime"]
+    assert sends[0]["type"] == "status"
+    lanes = {lane["lane_id"]: lane["active_requests"] for lane in runtime["lanes"]}
+    assert lanes == {"lane-a": 2, "lane-b": 1}
+    assert runtime["capacity"]["active_requests"] == 3
+    # Deep copy: the baseline keeps its own (unpatched) objects.
+    assert client._last_runtime_payload is not baseline  # noqa: SLF001
+    assert baseline["lanes"][0]["active_requests"] == 0
+    assert baseline["capacity"]["active_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_with_unchanged_counts_is_still_sent(monkeypatch):
+    """An increment and decrement can both land between the last push and the
+    count-triggered snapshot: the patched payload then matches the previous
+    one, but the push must still go out — the orchestrator's per-snapshot
+    forwarding budget resets only on a new status push."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            # The +1/-1 pair cancelled out since the baseline push.
+            return {"lane-a": 0}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    baseline = {
+        "lanes": [{"lane_id": "lane-a", "active_requests": 0}],
+        "capacity": {"active_requests": 0},
+    }
+    client._last_runtime_payload = baseline  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    # Establish the baseline bookkeeping exactly as the initial push would.
+    await client._send_runtime_payload(object(), baseline, force=True)  # type: ignore[attr-defined]  # noqa: SLF001
+    assert len(sends) == 1
+    sends.clear()
+
+    sent = await client._send_count_update(object())  # noqa: SLF001
+
+    assert sent is True
+    assert len(sends) == 1
+    assert sends[0]["runtime"]["lanes"][0]["active_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_send_count_update_without_baseline_falls_back_to_full_build(monkeypatch):
+    """Before the first full push there is no payload to patch — the count
+    update must fall back to a forced full build."""
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    app = _DummyApp()
+
+    class _LaneManager:
+        async def active_requests_snapshot(self):
+            return {"lane-a": 1}
+
+    app.state.lane_manager = _LaneManager()
+    client = LogosBridgeClient(app, cfg)
+    client._last_runtime_payload = {}  # noqa: SLF001
+    client._send_runtime_status = AsyncMock(return_value=True)  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_count_update(None)  # noqa: SLF001
+
+    client._send_runtime_status.assert_awaited_once_with(None, force=True)  # type: ignore[attr-defined]
 
 
 def test_runtime_has_transient_lanes_uses_last_payload():
@@ -514,6 +1116,11 @@ def _make_app_for_calibration(tmp_path, *, vllm_disable_sleep=False, per_model_o
     lane_manager._MAX_EVENT_LOG = 500
     lane_manager._mark_status_dirty = lambda: None
     lane_manager.destroy_all = AsyncMock(return_value=None)
+    # Calibration-session GPU-slice guard: the session holds a
+    # power-of-two slice and frees only the lanes on it, keeping leftover lanes.
+    lane_manager.begin_calibration_session = MagicMock(return_value=frozenset({0, 1}))
+    lane_manager.destroy_lanes_on_gpus = AsyncMock(return_value=1)
+    lane_manager.end_calibration_session = MagicMock()
     app.state.lane_manager = lane_manager
     return app
 
@@ -551,9 +1158,11 @@ async def test_start_calibration_session_returns_ok_and_runs_in_background(tmp_p
     events = [e.event for e in app.state.lane_manager._event_log]
     assert "calibration_session_started" in events
     assert "calibration_session_finished" in events
-    # destroy_all is only called when there is at least one model to calibrate;
-    # an empty configured_models list ends the session before that step.
+    # The slice is only held and freed when there is at least one model to
+    # calibrate; an empty configured_models list ends the session before that.
     app.state.lane_manager.destroy_all.assert_not_awaited()
+    app.state.lane_manager.begin_calibration_session.assert_not_called()
+    app.state.lane_manager.destroy_lanes_on_gpus.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -583,6 +1192,73 @@ async def test_start_calibration_session_refuses_when_node_unhealthy(tmp_path, m
     assert response.get("node_unhealthy") is True
     assert response.get("reason_code") == "filesystem-eio"
     assert client._active_calibration_session is None  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_start_calibration_session_routes_metal_backend_to_metal_probe(tmp_path, monkeypatch):
+    """On Metal, the session must start (not refuse) and route each model
+    to calibrate_model_metal — never calibrate_with_tp_escalation, which
+    would call nvidia-smi. sleep_level is forced to 0 regardless of what
+    was requested: CuMemAllocator sleep is CUDA-only."""
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["some/model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    # The precheck classifies Metal models too (only the CUDA-only
+    # VRAM-fit half is skipped), so it needs HF metadata to not look like
+    # a permanently-unsupported repo (which would skip the model before
+    # it ever reaches calibrate_model_metal).
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="hf"),
+    )
+
+    seen_kwargs: dict = {}
+
+    def _fake_calibrate_metal(plan, **kwargs):
+        seen_kwargs.update(kwargs)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=True,
+            base_residency_mb=8192.0,
+        )
+
+    def _must_not_be_called(*_args, **_kwargs):
+        raise AssertionError("calibrate_with_tp_escalation must not run on the Metal backend")
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration_metal.calibrate_model_metal",
+        _fake_calibrate_metal,
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        _must_not_be_called,
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 1})  # noqa: SLF001
+    assert response["ok"] is True
+    assert response["sleep_level"] == 0
+    await _drain_session(client)
+
+    assert "cancel_event" in seen_kwargs  # reached the Metal probe with real kwargs
+    events = [e.event for e in app.state.lane_manager._event_log]
+    assert "calibration_session_started" in events
+    assert "calibration_session_finished" in events
 
 
 @pytest.mark.asyncio
@@ -672,6 +1348,55 @@ async def test_stop_calibration_session_sets_cancel_event(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_stop_calibration_session_kills_stuck_probe_after_grace_period(tmp_path, monkeypatch):
+    """A cancel that lands inside the blocking warmup HTTP call (no
+    cancel_event support there) leaves wait_ready's usual ~2s bail-out
+    unusable — the session task simply won't finish within the 15s grace
+    period. The stop handler must then kill the registered probe
+    subprocess directly rather than let it hold the GPU for the warmup's
+    full 600s/120s timeout."""
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=[],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    from logos_worker_node.logos_bridge import _CalibrationSession
+
+    session = _CalibrationSession(sleep_level=1)
+    session.current_model = "test/model"
+    fake_proc = MagicMock()
+    session.set_current_proc(fake_proc)
+
+    # Never finishes on its own — simulates a probe stuck inside the
+    # blocking warmup call.
+    session.task = asyncio.create_task(asyncio.sleep(60))
+    client._active_calibration_session = session  # noqa: SLF001
+
+    stop_vllm_mock = MagicMock()
+    monkeypatch.setattr("logos_worker_node.calibration.stop_vllm", stop_vllm_mock)
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.asyncio.wait_for",
+        AsyncMock(side_effect=asyncio.TimeoutError),
+    )
+
+    response = await client._handle_stop_calibration_session()  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["was_active"] is True
+    stop_vllm_mock.assert_called_once_with(fake_proc)
+
+    session.task.cancel()
+    try:
+        await session.task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
 async def test_stop_calibration_session_idempotent_when_no_session(tmp_path):
     """A stop with no active session is a no-op — important so the master
     can fire it on window close without worrying whether a session is
@@ -683,6 +1408,89 @@ async def test_stop_calibration_session_idempotent_when_no_session(tmp_path):
     response = await client._handle_stop_calibration_session()  # noqa: SLF001
     assert response["ok"] is True
     assert response["was_active"] is False
+
+
+def test_record_calibration_probe_log_forwards_metal_capacity_floor(tmp_path):
+    """A failed Metal probe's capacity-floor evidence must ride the
+    calibration_probe_log event, or it can never reach calibration_probe_logs
+    and the model-error-report UI."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="",
+        kv_cache_sent_mb=0.0,
+        success=False,
+        base_residency_mb=0.0,
+        metal_capacity_floor_mb=18_432.3,
+    )
+
+    client._record_calibration_probe_log("org/model", result, "log tail")  # noqa: SLF001
+
+    event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert event.event == "calibration_probe_log"
+    details = json.loads(event.details)
+    assert details["metal_capacity_floor_mb"] == pytest.approx(18_432.3)
+
+
+def test_record_calibration_probe_log_omits_metal_capacity_floor_on_cuda(tmp_path):
+    """CUDA results never set metal_capacity_floor_mb — the event must carry
+    an explicit null, not a missing key, so the DB column is cleared on a
+    later success (see upsert_calibration_probe_log's full-row overwrite)."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="0",
+        kv_cache_sent_mb=0.0,
+        success=True,
+        base_residency_mb=0.0,
+    )
+
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+
+    event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    details = json.loads(event.details)
+    assert details["metal_capacity_floor_mb"] is None
+
+
+def test_record_calibration_probe_log_reports_backend(tmp_path, monkeypatch):
+    """The event must say which backend produced it, so the UI can hide
+    CUDA-only fields (GPU devices, sleep timing) on Metal rows instead
+    of just showing them blank."""
+    from logos_worker_node.calibration import CalibrationResult
+
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+    result = CalibrationResult(
+        model="org/model",
+        tensor_parallel_size=1,
+        gpu_devices="",
+        kv_cache_sent_mb=0.0,
+        success=True,
+        base_residency_mb=0.0,
+    )
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+    metal_event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert json.loads(metal_event.details)["backend"] == "metal"
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
+    client._record_calibration_probe_log("org/model", result, None)  # noqa: SLF001
+    cuda_event = app.state.lane_manager._event_log[-1]  # noqa: SLF001
+    assert json.loads(cuda_event.details)["backend"] == "cuda"
 
 
 def test_list_uncalibrated_skips_calibration_unsupported(tmp_path):
@@ -755,11 +1563,11 @@ def test_list_uncalibrated_flags_calibrated_profile_missing_pairs(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkeypatch):
-    """Inside the session loop, a model that can't be slept on this worker
-    is recorded as skipped (with sleep_mode_disabled persisted on the
-    profile) and the loop moves on to the next model. The session must
-    not refuse the whole batch over one bad model."""
+async def test_session_calibrates_sleep_disabled_model_without_sleep(tmp_path, monkeypatch):
+    """A model that can't be slept on this worker is calibrated at
+    sleep_level 0 rather than skipped: base_residency is measurable without
+    sleep, and skipping left such a model permanently uncalibrated — and so
+    never announced as a capability — with no way back."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
 
@@ -777,7 +1585,11 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
     client = LogosBridgeClient(app, cfg)
 
     # Mock the actual calibration so we don't spawn vLLM.
+    seen_sleep_levels: dict[str, int] = {}
+
     def _fake_calibrate(plan, **kwargs):
+        sleep_level = int(kwargs["sleep_level"])
+        seen_sleep_levels[plan["model"]] = sleep_level
         return CalibrationResult(
             model=plan["model"],
             tensor_parallel_size=1,
@@ -785,8 +1597,8 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
             kv_cache_sent_mb=2048.0,
             success=True,
             base_residency_mb=12345.0,
-            sleeping_residual_mb=512.0,
-            sleep_l1_transient_host_ram_mb=4096.0,
+            sleeping_residual_mb=(512.0 if sleep_level > 0 else None),
+            sleep_l1_transient_host_ram_mb=(4096.0 if sleep_level > 0 else None),
         )
 
     monkeypatch.setattr(
@@ -803,20 +1615,60 @@ async def test_session_skips_sleep_disabled_model_and_continues(tmp_path, monkey
     await _drain_session(client)
 
     events = [(e.event, e.model) for e in app.state.lane_manager._event_log]
-    # gpt-oss skipped, phi-4 attempted and completed.
-    assert ("calibration_model_skipped", "openai/gpt-oss-120b") in events
+    assert ("calibration_model_skipped", "openai/gpt-oss-120b") not in events
+    assert ("calibration_model_completed", "openai/gpt-oss-120b") in events
     assert ("calibration_model_completed", "microsoft/Phi-4-reasoning") in events
     assert ("calibration_session_finished", "") in events
-    # sleep_mode_disabled persisted for the skipped model.
-    skipped_profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
-    assert skipped_profile is not None
-    assert skipped_profile.sleep_mode_disabled is True
+    # The nosleep model probed without sleep; the other one kept the session level.
+    assert seen_sleep_levels == {"openai/gpt-oss-120b": 0, "microsoft/Phi-4-reasoning": 1}
+    # sleep_mode_disabled persisted, and the measurement landed.
+    nosleep_profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    assert nosleep_profile is not None
+    assert nosleep_profile.sleep_mode_disabled is True
+    assert nosleep_profile.base_residency_mb == 12345.0
+    assert nosleep_profile.sleeping_residual_mb is None
+    # The model is announced to Logos now that it has a profile.
+    assert "openai/gpt-oss-120b" in client._cfg.capabilities_models  # noqa: SLF001
 
 
 @pytest.mark.asyncio
-async def test_session_destroys_lanes_before_calibrating(tmp_path, monkeypatch):
-    """Live lanes hold VRAM. The session must free everything up front or
-    the kv-cache search OOMs and blacklists every probe size."""
+async def test_nosleep_model_with_profile_is_not_recalibrated(tmp_path, monkeypatch):
+    """A nosleep model calibrated at level 0 has null sleep fields by
+    design. Those nulls must not read as "incomplete", or every session
+    re-picks the model forever."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(
+        tmp_path,
+        per_model_overrides={"openai/gpt-oss-120b": {"enable_sleep_mode": False}},
+    )
+    app.state.model_profiles.seed_capabilities(["openai/gpt-oss-120b"])
+    profile = app.state.model_profiles.get_profile("openai/gpt-oss-120b")
+    profile.base_residency_mb = 98945.0
+    profile.residency_source = "calibrated"
+    profile.sleeping_residual_mb = None
+    profile.sleep_l1_transient_host_ram_mb = None
+    profile.sleep_mode_disabled = True
+    profile.kv_cache_to_max_model_len_pairs = [{"kv_mb": 8192.0, "max_model_len": 32768}]
+
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/gpt-oss-120b"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    assert client._list_uncalibrated_models() == []  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_session_frees_calibrating_slice_before_calibrating(tmp_path, monkeypatch):
+    """Live lanes on the calibration's GPU slice hold VRAM. The session must
+    free that slice up front or the kv-cache search OOMs and
+    blacklists every probe size — but it must NOT free the whole node: lanes
+    on the leftover GPUs keep serving during the session."""
     from logos_worker_node import config as _wcfg
     from logos_worker_node.calibration import CalibrationResult
 
@@ -855,7 +1707,1209 @@ async def test_session_destroys_lanes_before_calibrating(tmp_path, monkeypatch):
     assert response["ok"] is True
     await _drain_session(client)
 
-    app.state.lane_manager.destroy_all.assert_awaited_once()
+    # The session holds the slice and frees only the lanes on it — never the
+    # whole node (which would idle the leftover GPUs for the session).
+    app.state.lane_manager.begin_calibration_session.assert_called_once()
+    app.state.lane_manager.destroy_lanes_on_gpus.assert_awaited_once_with(frozenset({0, 1}))
+    app.state.lane_manager.destroy_all.assert_not_awaited()
+    app.state.lane_manager.end_calibration_session.assert_called_once()
+
+
+# ── HF compatibility precheck ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_skips_model_whose_weights_dont_fit(tmp_path, monkeypatch):
+    """A model whose HF-reported weights exceed free VRAM at every TP the
+    hardware supports must never reach calibrate_with_tp_escalation."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["too/big-for-this-node"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=200 * 1024 * 1024 * 1024,  # 200 GB — doesn't fit anywhere
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    calibrate_called = False
+
+    def _fake_calibrate(plan, **kwargs):
+        nonlocal calibrate_called
+        calibrate_called = True
+        raise AssertionError("calibrate_with_tp_escalation must not run for an infeasible model")
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert calibrate_called is False
+    events = [(e.event, e.model, e.details) for e in app.state.lane_manager._event_log]
+    assert any(
+        event == "calibration_model_skipped"
+        and model == "too/big-for-this-node"
+        and REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS in (details or "")
+        for event, model, details in events
+    )
+    profile = app.state.model_profiles.get_profile("too/big-for-this-node")
+    assert profile is not None
+    assert profile.calibration_unsupported is True
+    assert profile.calibration_unsupported_reason == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+
+    probe_log_events = [json.loads(d) for e, _m, d in events if e == "calibration_probe_log"]
+    assert probe_log_events[-1]["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+    assert probe_log_events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_records_nonexistent_repo_as_its_own_row_in_a_session(tmp_path, monkeypatch):
+    """Inside a calibration session the rejection gets its own checklist row,
+    since no probe ran that could have written one."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/does-not-exist"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-not-found-or-unauthorized"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        MagicMock(side_effect=AssertionError("must not probe a nonexistent repo")),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    events = [
+        json.loads(e.details) for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"
+    ]  # noqa: SLF001
+    assert events[-1]["unsupported_reason"] == REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+    assert events[-1]["stages"][0]["name"] == "HF Compatibility Precheck"
+    assert events[-1]["log_text"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reason_code", "expect_row"),
+    [("unsupported-architecture", False), ("insufficient-vram-for-weights", True)],
+)
+async def test_unsupported_list_skip_writes_precheck_row_only_for_precheck_reasons(
+    tmp_path, monkeypatch, reason_code, expect_row
+):
+    """A vLLM load failure on the unsupported list keeps the row of the probe
+    that found it; re-recording it as an HF precheck row would move it to the
+    wrong checklist phase."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import _UNSUPPORTED_MODELS_FILE, UnsupportedModelEntry, _record_unsupported_model
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    _record_unsupported_model(
+        tmp_path / "calibration_logs" / _UNSUPPORTED_MODELS_FILE,
+        UnsupportedModelEntry(
+            model="org/listed-model",
+            reason_code=reason_code,
+            recorded_at="2026-09-28T00:00:00Z",
+            description="test entry",
+        ),
+    )
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/listed-model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        MagicMock(side_effect=AssertionError("must not probe a listed model")),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    events = [e for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"]  # noqa: SLF001
+    assert bool(events) is expect_row
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_narrows_plan_for_a_fitting_model(tmp_path, monkeypatch):
+    """A model whose HF-reported weights fit gets _hf_weight_bytes/_hf_max_tp_ceiling
+    injected into the plan, and its profile is seeded with the HF estimate."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["fits/on-this-node"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024,  # 4 GB — fits easily
+            kv_per_token_bytes=1024,
+            max_context_length=8192,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    seen_plans: list[dict] = []
+
+    def _fake_calibrate(plan, **kwargs):
+        seen_plans.append(plan)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=4200.0,
+        )
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert len(seen_plans) == 1
+    assert seen_plans[0]["_hf_weight_bytes"] == 4 * 1024 * 1024 * 1024
+    assert seen_plans[0]["_hf_max_tp_ceiling"] == 1
+    # No pipeline_tag/architectures on this HfModelMetadata —
+    # classify_model_kind defaults to "generative".
+    assert seen_plans[0]["_detected_model_kind"] == "generative"
+
+    # A successful calibration overwrites the HF estimate with the real
+    # measurement, but the HF-only fields (never measured by calibration)
+    # survive via merge_profile.
+    profile = app.state.model_profiles.get_profile("fits/on-this-node")
+    assert profile is not None
+    assert profile.residency_source == "calibrated"
+    assert profile.base_residency_mb == 4200.0
+    assert profile.kv_per_token_bytes == 1024
+    assert profile.max_context_length == 8192
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_classifies_transcription_model_into_plan(tmp_path, monkeypatch):
+    """A Whisper-like model's HF pipeline_tag must reach the calibration
+    plan as _detected_model_kind, routing the functional probe to
+    /v1/audio/transcriptions instead of /v1/completions. Isolated from
+    the VRAM-fit math: weight_bytes is left unset."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["openai/whisper-large-v3"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            pipeline_tag="automatic-speech-recognition",
+            architectures=["WhisperForConditionalGeneration"],
+            source="hf",
+        ),
+    )
+    seen_plans: list[dict] = []
+
+    def _fake_calibrate(plan, **kwargs):
+        seen_plans.append(plan)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=0.0,
+            success=True,
+            base_residency_mb=1000.0,
+        )
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert len(seen_plans) == 1
+    assert seen_plans[0]["_detected_model_kind"] == "transcription"
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_failure_does_not_block_calibration(tmp_path, monkeypatch):
+    """A network failure, gated repo, or unknown model must behave exactly
+    as if this feature did not exist: proceed, no plan mutation, no skip."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["unknown/gated-model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:gated-repo"),
+    )
+    seen_plans: list[dict] = []
+
+    def _fake_calibrate(plan, **kwargs):
+        seen_plans.append(plan)
+        return CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=9999.0,
+        )
+
+    monkeypatch.setattr("logos_worker_node.calibration.calibrate_with_tp_escalation", _fake_calibrate)
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    assert len(seen_plans) == 1
+    assert "_hf_weight_bytes" not in seen_plans[0]
+    assert "_hf_max_tp_ceiling" not in seen_plans[0]
+    events = [e.event for e in app.state.lane_manager._event_log]
+    assert "calibration_model_skipped" not in events
+    assert "calibration_model_completed" in events
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_warns_on_persistent_fetch_failure(tmp_path, monkeypatch, caplog):
+    """Not-found/gated already warn via the calibration loop's skip
+    event. Any other fetch failure has no such signal and stays
+    silent at debug level forever — this must warn on its own."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        await client._execute_command("run_compatibility_precheck", {"model": "org/flaky-network"})  # noqa: SLF001
+
+    assert any("HF metadata unavailable" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_hf_precheck_no_warning_for_not_found_or_gated(tmp_path, monkeypatch, caplog):
+    """Those two already warn (with more specific context) via the
+    calibration loop's own skip-event logging — this must not double-log."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    for source in ("error:model-not-found-or-unauthorized", "error:model-gated"):
+        monkeypatch.setattr(
+            "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+            lambda *a, source=source, **k: HfModelMetadata(source=source),
+        )
+        with caplog.at_level(logging.WARNING):
+            await client._execute_command("run_compatibility_precheck", {"model": "org/some-model"})  # noqa: SLF001
+        assert not any("HF metadata unavailable" in r.message for r in caplog.records)
+        caplog.clear()
+
+
+# ── Standalone compatibility precheck (run_compatibility_precheck RPC) ────────
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_rpc_requires_model_param(tmp_path, monkeypatch):
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    response = await client._execute_command("run_compatibility_precheck", {})  # noqa: SLF001
+    assert response["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_skips_vram_fit_on_metal_backend(tmp_path, monkeypatch):
+    """No nvidia-smi on Metal, so only the VRAM-fit half is skipped — HF
+    metadata is still fetched and classified (model_kind is a pure
+    Hub/config.json lookup, backend-independent), so a Metal pooling or
+    transcription model isn't silently misclassified as generative."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024,
+            pipeline_tag="feature-extraction",
+            source="hf",
+        ),
+    )
+    vram_spy = MagicMock(side_effect=AssertionError("nvidia-smi must never run on Metal"))
+    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", vram_spy)
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["hf_source"] == "hf"
+    assert response["model_kind"] == "pooling"
+    assert response["fit_tp_idle"] is None
+    assert response["per_gpu_total_mb"] is None
+    assert response["unsupported_reason"] is None
+    vram_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_rpc_returns_fit_result(tmp_path, monkeypatch):
+    """The standalone RPC is callable outside any calibration session — no
+    session needs to be started, no lanes are touched."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024,
+            kv_per_token_bytes=1024,
+            max_context_length=8192,
+            quantization_method="awq",
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["model"] == "org/model"
+    assert response["fit_tp_idle"] == 1
+    assert response["fit_tp_current"] == 1
+    assert response["unsupported_reason"] is None
+    assert response["quantization_method"] == "awq"
+    # No calibration session, no lanes touched — the app fixture's destroy_all
+    # mock must never have been called.
+    app.state.lane_manager.destroy_all.assert_not_awaited()
+
+    # And it seeded the profile, exactly like the session-path precheck does.
+    profile = app.state.model_profiles.get_profile("org/model")
+    assert profile is not None
+    assert profile.residency_source == "hf"
+    assert profile.kv_per_token_bytes == 1024
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_skips_nonexistent_repo_without_querying_vram(tmp_path, monkeypatch):
+    """A nonexistent-or-unauthorized HF repo can never work right now — skip
+    immediately, without even querying GPU VRAM. But the Hub gives the
+    identical response for a private repo this token just can't see, so
+    this must stay a candidate, not a permanent verdict (like gating)."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import is_model_unsupported
+    from logos_worker_node.hf_model_info import REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/does-not-exist"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-not-found-or-unauthorized"),
+    )
+    gpu_query = MagicMock(side_effect=AssertionError("must not query VRAM for a nonexistent repo"))
+    monkeypatch.setattr("logos_worker_node.calibration.query_gpu_vram", gpu_query)
+
+    response = await client._execute_command(  # noqa: SLF001
+        "run_compatibility_precheck", {"model": "org/does-not-exist"}
+    )
+
+    assert response["unsupported_reason"] == REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+    gpu_query.assert_not_called()
+    profile = app.state.model_profiles.get_profile("org/does-not-exist")
+    assert profile is None or profile.calibration_unsupported is not True
+    assert client._list_uncalibrated_models() == ["org/does-not-exist"]  # noqa: SLF001
+
+    # Never lands in the authoritative registry either — a token added
+    # later must let a private-but-real model calibrate normally.
+    log_dir = tmp_path / "calibration_logs"
+    assert is_model_unsupported(log_dir, "org/does-not-exist") is None
+
+    # An on-demand check must not replace the node's last calibration row.
+    assert not [e for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"]  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_survives_a_broken_profile_store(tmp_path, monkeypatch, caplog):
+    """A profile-store write failure must only discard that precheck's
+    persistence, never propagate. The calibration loop that calls this
+    has no try/except around it — an uncaught exception here would
+    abort every remaining model that session, not just skip this one."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    def _broken_write(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app.state.model_profiles, "mark_calibration_unsupported", _broken_write)
+
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command("run_compatibility_precheck", {"model": "org/too-big"})  # noqa: SLF001
+
+    assert response["ok"] is True
+    assert response["unsupported_reason"] == "insufficient-vram-for-weights"
+    assert any("failed to persist result" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_gated_model_stays_a_candidate(tmp_path, monkeypatch):
+    """A gated model must NOT be marked calibration_unsupported: that flag
+    drops it out of _list_uncalibrated_models's candidate list, so it
+    would never be rechecked once an admin adds a working HF_TOKEN. It
+    must be skipped this attempt but stay eligible for every future session."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_MODEL_GATED, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/gated-model"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:model-gated"),
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/gated-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] == REASON_MODEL_GATED
+    profile = app.state.model_profiles.get_profile("org/gated-model")
+    assert profile is None or profile.calibration_unsupported is not True
+    assert client._list_uncalibrated_models() == ["org/gated-model"]  # noqa: SLF001
+
+    assert not [e for e in app.state.lane_manager._event_log if e.event == "calibration_probe_log"]  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_warns_but_never_blocks_unrecognized_quantization(
+    tmp_path, monkeypatch, caplog
+):
+    """A quantization method vLLM doesn't recognize is informational
+    only — never marked unsupported, never skipped, VRAM still queried.
+    The registry can miss a method for reasons unrelated to the model
+    (e.g. a plugin not loaded here) — the real load attempt decides."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="some-future-method", source="hf"
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command(  # noqa: SLF001
+            "run_compatibility_precheck", {"model": "org/future-quant-model"}
+        )
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+    profile = app.state.model_profiles.get_profile("org/future-quant-model")
+    assert profile is None or profile.calibration_unsupported is not True
+    assert any("not found in the installed vLLM's registry" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_proceeds_for_known_quantization_method(tmp_path, monkeypatch):
+    """A quantization method the registry does recognize must not block
+    anything — the rest of the precheck runs normally."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["awq", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_empty_registry_fails_open(tmp_path, monkeypatch):
+    """An empty (but non-None) registry list is not proof the method is
+    unsupported — treat it the same as a failed query, or a corrupted/
+    empty baked file would permanently mark every quantized model as
+    unsupported the moment it's checked."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+    profile = app.state.model_profiles.get_profile("org/awq-model")
+    assert profile is None or profile.calibration_unsupported is not True
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_quantization_match_is_case_insensitive(tmp_path, monkeypatch):
+    """HF config.json is arbitrary user-uploaded JSON — "AWQ" vs "awq" (or
+    stray whitespace) must not read as a mismatch and wrongly, permanently
+    block a model that would actually load fine."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method=" AWQ ", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_vllm_quantization_methods",
+        lambda *a, **k: ["AWQ", "gptq", "fp8"],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_registry_query_failure_fails_open(tmp_path, monkeypatch, caplog):
+    """A failed registry query must never block a model — fail-open,
+    same as every other best-effort step here. Must still warn, not
+    stay silent at debug — a persistently broken install shouldn't
+    quietly turn this check into a no-op."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+
+    def _raise(*a, **k):
+        raise OSError("vllm venv not found")
+
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", _raise)
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = await client._execute_command(
+            "run_compatibility_precheck", {"model": "org/awq-model"}
+        )  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+    assert any("quantization registry query failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_vllm_quant_methods_cached_across_precheck_calls(tmp_path, monkeypatch):
+    """The registry only changes on a vLLM upgrade, which restarts this
+    process anyway — a successful lookup must be reused for the rest of the
+    client's lifetime, not re-queried (and re-paying vLLM's torch import
+    cost) for every quantized model checked."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=4 * 1024 * 1024 * 1024, quantization_method="awq", source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    registry_query = MagicMock(return_value=["awq", "gptq", "fp8"])
+    monkeypatch.setattr("logos_worker_node.calibration.query_vllm_quantization_methods", registry_query)
+
+    await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model-1"})  # noqa: SLF001
+    await client._execute_command("run_compatibility_precheck", {"model": "org/awq-model-2"})  # noqa: SLF001
+
+    registry_query.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_verdict_is_idle_based_only(tmp_path, monkeypatch):
+    """A model that fits on an empty node but not around today's live
+    traffic is reported as such WITHOUT being marked permanently unsupported
+    — daytime congestion isn't a permanent node property. A model too big
+    even for an empty node IS marked unsupported — that's a real verdict."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import is_model_unsupported
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+    log_dir = tmp_path / "calibration_logs"
+
+    # 10 GB of weights: fits on an empty 24 GB GPU (total_mb), but not
+    # alongside 20 GB already in live use (free_mb only 4 GB).
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=10 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 20000.0, "free_mb": 4000.0}},
+    )
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["fit_tp_idle"] == 1  # fits comfortably on an empty node
+    assert response["fit_tp_current"] is None  # doesn't fit around today's live load
+    assert response["unsupported_reason"] is None
+    profile = app.state.model_profiles.get_profile("org/model")
+    assert profile.calibration_unsupported is not True
+    assert is_model_unsupported(log_dir, "org/model") is None
+
+    # 200 GB of weights: doesn't fit even on an empty node — real
+    # verdict this time.
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/too-big"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+    profile = app.state.model_profiles.get_profile("org/too-big")
+    assert profile.calibration_unsupported is True
+
+    # Must also land in the authoritative registry — see the model-not-found
+    # test's comment for why a profile-only flag isn't enough.
+    entry = is_model_unsupported(log_dir, "org/too-big")
+    assert entry is not None
+    assert entry.reason_code == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_ignores_leftover_gpu_outside_auto_slice(tmp_path, monkeypatch):
+    """5 physical GPUs: the auto slice is the largest power-of-two
+    prefix (indices 0-3) — GPU 4 is never touched. A weak leftover GPU 4
+    must not sink the estimate for the slice actually used, falsely
+    permanent-blacklisting a model that fits fine where it would run."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=10 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            1: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            2: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            3: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            4: {"total_mb": 2000.0, "used_mb": 0.0, "free_mb": 2000.0},  # weak leftover
+        },
+    )
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["per_gpu_total_mb"] == 24000.0  # not dragged down to 2000 by GPU 4
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_session_scopes_to_plans_explicit_gpu_devices(tmp_path, monkeypatch):
+    """A plan pinned to specific GPUs (config.yml gpu_devices) must be
+    evaluated against exactly those GPUs — a weak GPU elsewhere on the
+    node, excluded from the pin, must not sink the estimate for a
+    selection that will never actually touch it."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=10 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 2000.0, "used_mb": 0.0, "free_mb": 2000.0},  # weak, excluded by the pin
+            1: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            2: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            3: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+        },
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/model", gpu_devices="1,2,3")  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["per_gpu_total_mb"] == 24000.0
+    assert response["fit_tp_idle"] == 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_reports_model_kind(tmp_path, monkeypatch):
+    """The precheck classifies every model it fetches HF metadata for,
+    generative default included, so the calibration loop can route its
+    functional probe without a second HF lookup."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(pipeline_tag="feature-extraction", source="hf"),
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/embedding-model", persist=False)  # noqa: SLF001
+
+    assert response["model_kind"] == "pooling"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_model_kind_defaults_generative_on_fetch_failure(tmp_path, monkeypatch):
+    """No HF metadata at all (network down, unknown model, ...) must still
+    default to "generative" — never a fatal probe for a model we have no
+    classification signal for."""
+    from logos_worker_node import config as _wcfg
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network down")),
+    )
+
+    response = await client._run_hf_compatibility_precheck("org/unreachable-model", persist=False)  # noqa: SLF001
+
+    assert response["model_kind"] == "generative"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_rpc_uses_configured_gpu_devices(tmp_path, monkeypatch):
+    """The standalone RPC has no session plan to read gpu_devices or
+    kv_cache_dtype from — it must look the model up in config.yml itself.
+    Without that, a pinned model is evaluated against the wrong (default)
+    slice and can be falsely blacklisted from a leftover GPU its pin was
+    meant to avoid, and a configured fp8 KV cache looks twice its size."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    config_path = tmp_path / "config.yml"
+    config_path.touch()
+    monkeypatch.setenv("LOGOS_WORKER_NODE_CONFIG", str(config_path))
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.plans_from_config",
+        lambda _p: [
+            {
+                "model": "org/model",
+                "gpu_devices": "1,2,3",
+                "kv_cache_dtype": "fp8",
+                "extra_args": ["--revision", "abc123"],
+                "tensor_parallel_size": 3,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=10 * 1024 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 2,  # bf16 (2 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 2000.0, "used_mb": 0.0, "free_mb": 2000.0},  # weak, excluded by the pin
+            1: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            2: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+            3: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0},
+        },
+    )
+    calls: list[dict] = []
+    real_precheck = client._run_hf_compatibility_precheck  # noqa: SLF001
+
+    async def _spy(*args, **kwargs):
+        calls.append(kwargs)
+        return await real_precheck(*args, **kwargs)
+
+    monkeypatch.setattr(client, "_run_hf_compatibility_precheck", _spy)
+
+    response = await client._execute_command("run_compatibility_precheck", {"model": "org/model"})  # noqa: SLF001
+
+    assert response["unsupported_reason"] is None
+    assert response["per_gpu_total_mb"] == 24000.0
+    assert calls[0]["gpu_devices"] == "1,2,3"
+    assert calls[0]["kv_cache_dtype"] == "fp8"
+    assert calls[0]["revision"] == "abc123"
+    assert calls[0]["tensor_parallel_size"] == 3
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_applies_kv_cache_dtype_override(tmp_path, monkeypatch):
+    """kv_per_token_bytes is derived from the model's own torch_dtype
+    (bf16 here) — a plan's --kv-cache-dtype override (e.g. fp8) must be
+    applied before the min-KV check, or a configured fp8 KV cache looks
+    twice its real size and can falsely fail near the VRAM boundary."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_MIN_KV, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=900 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 2,  # bf16 (2 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 1200.0, "used_mb": 0.0, "free_mb": 1200.0}},
+    )
+
+    # No override: the bf16-derived KV footprint pushes it over the edge.
+    response = await client._run_hf_compatibility_precheck("org/model", persist=False)  # noqa: SLF001
+    assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
+
+    # The plan's fp8 override halves the KV footprint — now it fits.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, kv_cache_dtype="fp8"
+    )
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 1
+
+    # The persisted profile must also carry the effective (fp8) value —
+    # not hf_meta's raw bf16 one, which calibration.py's own KV-ceiling
+    # narrowing would otherwise use to (again) double the real budget.
+    await client._run_hf_compatibility_precheck("org/model", kv_cache_dtype="fp8")  # noqa: SLF001
+    profile = app.state.model_profiles.get_profile("org/model")
+    assert profile.kv_per_token_bytes == 2 * 32 * 8 * 128 * 1
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_forwards_revision_to_hf_fetch(tmp_path, monkeypatch):
+    """A plan pinned via extra_args=['--revision', ...] must be looked up
+    at that exact revision, not the repo's default branch — otherwise the
+    precheck can judge a model against an unrelated checkpoint's weights
+    and config, permanently excluding it (or wrongly clearing it) on a
+    false basis."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    calls: list[dict] = []
+
+    def _fake_fetch(*args, **kwargs):
+        calls.append(kwargs)
+        return HfModelMetadata(weight_bytes=1024, source="hf")
+
+    monkeypatch.setattr("logos_worker_node.hf_model_info.fetch_hf_model_metadata", _fake_fetch)
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+
+    await client._run_hf_compatibility_precheck("org/model", persist=False, revision="v1.0-small")  # noqa: SLF001
+
+    assert calls[0]["revision"] == "v1.0-small"
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_checks_configured_non_power_of_two_tp(tmp_path, monkeypatch):
+    """Regression: 3 pinned GPUs round down to a power-of-2 hardware max
+    of tp=2, so the automatic search alone never tries tp=3 — even though
+    calibrate_with_tp_escalation probes an operator-pinned tp directly
+    regardless of parity. Without threading tensor_parallel_size through,
+    a model that only fits at tp=3 gets permanently marked unsupported
+    before its valid configuration is ever tried."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    # 30 GB weights: 15 GB/GPU at tp=2 doesn't fit a 12 GB budget; 10
+    # GB/GPU at tp=3 does.
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=30 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {
+            0: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+            1: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+            2: {"total_mb": 12000.0, "used_mb": 0.0, "free_mb": 12000.0},
+        },
+    )
+
+    # Without the pinned tp, only tp=1,2 are tried — falsely unsupported.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, gpu_devices="0,1,2"
+    )
+    assert response["unsupported_reason"] is not None
+
+    # With the pinned tp=3 checked too, it's recognized as feasible.
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, gpu_devices="0,1,2", tensor_parallel_size=3
+    )
+    assert response["unsupported_reason"] is None
+    assert response["fit_tp_idle"] == 3
+
+
+@pytest.mark.asyncio
+async def test_run_compatibility_precheck_kv_cache_dtype_auto_keeps_model_dtype(tmp_path, monkeypatch):
+    """ "auto" is vLLM's own value for "use the model's dtype" — not a
+    concrete dtype name. Recomputing it through the 2-byte fallback would
+    silently discard a correctly-derived non-2-byte estimate (fp32 here)
+    and wrongly report an oversized model as compatible."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import REASON_INSUFFICIENT_VRAM_FOR_MIN_KV, HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret", configured_models=[])
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(
+            weight_bytes=10 * 1024 * 1024,
+            kv_per_token_bytes=2 * 32 * 8 * 128 * 4,  # fp32 (4 bytes/element)
+            num_hidden_layers=32,
+            num_key_value_heads=8,
+            kv_head_dim=128,
+            source="hf",
+        ),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 400.0, "used_mb": 0.0, "free_mb": 400.0}},
+    )
+
+    response = await client._run_hf_compatibility_precheck(  # noqa: SLF001
+        "org/model", persist=False, kv_cache_dtype="auto"
+    )
+    assert response["unsupported_reason"] == REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
 
 
 # ── Streaming: defer stream_start until first token byte (wake-readiness fix) ──
@@ -909,10 +2963,9 @@ async def _run_stream(monkeypatch, chunks: list[bytes], status_code: int = 200) 
     cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
     client = LogosBridgeClient(app, cfg)
     upstream = _FakeUpstream(status_code, chunks)
-    monkeypatch.setattr(
-        "logos_worker_node.logos_bridge.httpx.AsyncClient",
-        lambda timeout=None: _FakeStreamClient(upstream),
-    )
+    # The relay uses one pooled client shared by all commands , so
+    # the fake is pinned on the instance, not the httpx class.
+    monkeypatch.setattr(client, "_relay_client", _FakeStreamClient(upstream))  # noqa: SLF001
     ws = _CollectWS()
     await client._execute_stream_command(  # noqa: SLF001
         ws, "cmd-1", {"lane_id": "lane-a", "payload": {"messages": []}}
@@ -936,3 +2989,918 @@ async def test_stream_200_with_no_output_fails_clean_without_start(monkeypatch):
     assert [f["type"] for f in frames] == ["stream_end"]
     assert frames[-1]["success"] is False
     assert "stream_start" not in [f["type"] for f in frames]
+
+
+# ---------------------------------------------------------------------------
+# VRAM-growing commands are refused while a calibration session holds the GPU
+# ---------------------------------------------------------------------------
+
+
+def _client_with_calibration_session(session_done: bool = False) -> LogosBridgeClient:
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    session = _CalibrationSession(sleep_level=1)
+    session.task = SimpleNamespace(done=lambda: session_done)
+    client._active_calibration_session = session  # noqa: SLF001
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"])
+async def test_vram_growing_commands_are_refused_during_calibration(action):
+    """The session freed this node's VRAM for its probes. A lane placed now
+    takes the memory they need and the kv-cache search fails at sizes that
+    would otherwise fit — so the node refuses locally, whatever the server
+    currently believes."""
+    client = _client_with_calibration_session()
+
+    result = await client._execute_command(action, {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert result["ok"] is False
+    assert result["calibrating"] is True
+    assert action in result["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["delete_lane", "sleep_lane"])
+async def test_vram_freeing_commands_are_still_accepted_during_calibration(action):
+    """Only growth is refused — the guard must not block the server from
+    freeing memory the session could use."""
+    client = _client_with_calibration_session()
+    calls: list[str] = []
+
+    async def _remove_lane(lane_id):
+        calls.append(f"remove:{lane_id}")
+
+    async def _sleep_lane(lane_id, level=1, mode="wait"):  # noqa: ARG001
+        calls.append(f"sleep:{lane_id}")
+        return _make_lane_status()
+
+    client._app.state.lane_manager = SimpleNamespace(  # noqa: SLF001
+        remove_lane=_remove_lane,
+        sleep_lane=_sleep_lane,
+    )
+
+    await client._execute_command(action, {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert calls, f"{action} must reach the lane manager"
+
+
+@pytest.mark.asyncio
+async def test_a_finished_session_does_not_keep_refusing():
+    """_active_calibration_session lingers until the next start clears it, so
+    the task state is what decides — otherwise the node would refuse lanes
+    forever after its first session."""
+    client = _client_with_calibration_session(session_done=True)
+    added: list[str] = []
+
+    async def _add_lane(lane_config):
+        added.append(lane_config.lane_id)
+        return _make_lane_status()
+
+    client._app.state.lane_manager = SimpleNamespace(add_lane=_add_lane)  # noqa: SLF001
+
+    await client._execute_command(  # noqa: SLF001
+        "add_lane",
+        {"lane_id": "lane-a", "model": "qwen2.5-coder:32b"},
+    )
+
+    assert added == ["lane-a"]
+
+
+def _event_stub(event_id: str, name: str):
+    return SimpleNamespace(
+        event_id=event_id,
+        model_dump=lambda mode="json", _n=name: {"event": _n},
+    )
+
+
+def _bridge_client(app) -> LogosBridgeClient:
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    return LogosBridgeClient(app, cfg)
+
+
+@pytest.mark.asyncio
+async def test_event_loop_flags_only_the_backlog_that_existed_at_connect():
+    """The first drain runs a second after the connect, so it carries both the
+    backlog and anything created in that second. Only the backlog is history:
+    a session ending inside that second produces a live terminal event, and
+    dismissing it as backlog would leave the provider excluded from lane
+    placement with no further event coming to release it."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    log = [_event_stub("evt-1", "calibration_session_finished")]
+    replay_ids = frozenset({"evt-1"})
+    # The session ends between the connect and the drain.
+    log.append(_event_stub("calib-9", "calibration_session_cancelled"))
+    app.state.lane_manager = SimpleNamespace(event_log=log)
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if len(sent) == 2:
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object(), replay_event_ids=replay_ids)  # noqa: SLF001
+
+    assert [p["event"]["event"] for p in sent] == [
+        "calibration_session_finished",
+        "calibration_session_cancelled",
+    ]
+    assert [p["replay"] for p in sent] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_a_live_event_in_a_full_log_is_not_mistaken_for_backlog():
+    """The log is capped and trims from the front, so on a full log a live event
+    lands at a position the backlog used to occupy. Keyed on position it would
+    be sent as replay, the server would ignore it, and a terminal event lost
+    that way leaves the provider excluded with nothing left to release it."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    cap = 500
+    backlog = [_event_stub(f"evt-{n}", "lane_started") for n in range(1, cap + 1)]
+    replay_ids = frozenset(event.event_id for event in backlog)
+
+    # A live terminal event arrives; the append trims the oldest entry, so the
+    # log length is unchanged and the new event sits at the last position.
+    full_log = backlog[1:] + [_event_stub("calib-1", "calibration_session_finished")]
+    assert len(full_log) == cap
+    app.state.lane_manager = SimpleNamespace(event_log=full_log)
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if payload["event"]["event"] == "calibration_session_finished":
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object(), replay_event_ids=replay_ids)  # noqa: SLF001
+
+    terminal = [p for p in sent if p["event"]["event"] == "calibration_session_finished"]
+    assert terminal, "the live terminal event must be forwarded"
+    assert terminal[0]["replay"] is False
+
+
+@pytest.mark.asyncio
+async def test_event_loop_keeps_forwarding_once_the_log_is_full():
+    """A positional cursor equals the log length once the log is full and never
+    advances again, so no further event would reach the server at all."""
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    cap = 500
+    log = [_event_stub(f"evt-{n}", "lane_started") for n in range(1, cap + 1)]
+    drains = {"count": 0}
+
+    class _LaneManager:
+        @property
+        def event_log(self):
+            drains["count"] += 1
+            if drains["count"] == 1:
+                return list(log)
+            # Second drain: one new event, oldest trimmed — same length.
+            return log[1:] + [_event_stub("evt-501", "lane_stopped")]
+
+    app.state.lane_manager = _LaneManager()
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+        if payload["event"]["event"] == "lane_stopped":
+            client._stopping.set()  # noqa: SLF001
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object())  # noqa: SLF001
+
+    assert len(sent) == cap + 1, "the event added to a full log must still be forwarded"
+    assert sent[-1]["event"]["event"] == "lane_stopped"
+
+
+@pytest.mark.asyncio
+async def test_event_loop_does_not_resend_events_it_already_forwarded():
+    app = _DummyApp()
+    client = _bridge_client(app)
+
+    log = [_event_stub("evt-1", "lane_started")]
+    drains = {"count": 0}
+
+    class _LaneManager:
+        @property
+        def event_log(self):
+            drains["count"] += 1
+            if drains["count"] >= 2:
+                client._stopping.set()  # noqa: SLF001
+            return list(log)
+
+    app.state.lane_manager = _LaneManager()
+
+    sent: list[dict] = []
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._event_loop(object())  # noqa: SLF001
+
+    assert len(sent) == 1
+
+
+def test_current_event_ids_snapshots_the_log():
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(
+        event_log=[_event_stub("evt-1", "lane_started"), _event_stub("calib-1", "calibration_session_started")]
+    )
+    client = _bridge_client(app)
+
+    assert client._current_event_ids() == frozenset({"evt-1", "calib-1"})  # noqa: SLF001
+
+    app.state.lane_manager = None
+    assert client._current_event_ids() == frozenset()  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# The status carries the live calibration state
+#
+# The server excludes a calibrating worker from lane placement, and used to
+# learn when that ended from a single lifecycle event. An event that never
+# lands as a live one — dropped by the post-connect replay filter, belonging
+# to a connection that is gone — left the worker excluded with nothing to
+# release it. Observed in production as three workers holding no lanes for
+# over seven hours, recovered only by restarting the container.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_reports_the_live_calibration_state(tmp_path, monkeypatch):
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.build_runtime_status",
+        AsyncMock(return_value=SimpleNamespace(model_dump=lambda mode="json": {"lanes": []})),
+    )
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._send_runtime_status(object(), force=True)  # noqa: SLF001
+    assert sends[-1]["calibrating"] is False
+
+    client._active_calibration_session = _CalibrationSession(sleep_level=1)  # noqa: SLF001
+    await client._send_runtime_status(object(), force=True)  # noqa: SLF001
+    assert sends[-1]["calibrating"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_session_ending_is_pushed_even_when_nothing_else_changed(tmp_path, monkeypatch):
+    """A session that starts and ends without touching a lane changes nothing
+    else in the payload. Left out of the dedupe signature, the status carrying
+    calibrating=False would never be sent and the server would stay stuck."""
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    monkeypatch.setattr(
+        "logos_worker_node.logos_bridge.build_runtime_status",
+        AsyncMock(return_value=SimpleNamespace(model_dump=lambda mode="json": {"lanes": []})),
+    )
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    session = _CalibrationSession(sleep_level=1)
+    client._active_calibration_session = session  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is True  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is False  # noqa: SLF001
+
+    client._active_calibration_session = None  # noqa: SLF001
+    assert await client._send_runtime_status(object(), force=False) is True  # noqa: SLF001
+    assert [p["calibrating"] for p in sends] == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_hello_reports_a_finished_session_as_not_calibrating(tmp_path, monkeypatch):
+    """_active_calibration_session lingers until the next start clears it.
+    Reporting that as live at connect would exclude the worker from placement
+    for as long as no new session begins."""
+    app = _make_app_for_calibration(tmp_path)
+    app.state.lane_manager._static_lane_ids = set()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    async def _already_done():
+        return None
+
+    done = _CalibrationSession(sleep_level=1)
+    done.task = asyncio.create_task(_already_done())
+    await done.task
+    client._active_calibration_session = done  # noqa: SLF001
+
+    sends: list[dict] = []
+
+    async def _fake_send_json(_ws, payload):
+        sends.append(payload)
+
+    client._send_json = _fake_send_json  # type: ignore[method-assign]  # noqa: SLF001
+    await client._send_hello(object())  # noqa: SLF001
+
+    assert sends[-1]["calibrating"] is False
+
+
+# ---------------------------------------------------------------------------
+# A calibration result is merged into the store, never written over it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_profile_store_is_left_alone(tmp_path, monkeypatch):
+    """load_existing_profiles used to answer an unreadable store with an empty
+    dict, and saving that back replaced every profile on the node with this one
+    result. One lost measurement is recoverable; the file is not."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/model-a"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    profiles_path = tmp_path / "model_profiles.yml"
+    profiles_path.write_text("model_profiles:\n  org/other: {unterminated\n")
+    corrupt = profiles_path.read_text()
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=12345.0,
+            sleeping_residual_mb=512.0,
+        ),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    assert (await client._handle_start_calibration_session({"sleep_level": 1}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    assert profiles_path.read_text() == corrupt
+    events = [(e.event, e.details) for e in app.state.lane_manager._event_log]
+    assert any(e == "calibration_model_failed" and "unreadable" in d for e, d in events)
+    # The session still ends cleanly — the server must not be left waiting.
+    assert ("calibration_session_finished", "sleep_level=1") in events
+
+
+@pytest.mark.asyncio
+async def test_a_result_merges_into_the_existing_entry(tmp_path, monkeypatch):
+    """Fields the probe does not measure — here the sleep gate's flag and a
+    disk size recorded elsewhere — survive the write."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.calibration import CalibrationResult, load_existing_profiles, save_profiles
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/model-a"],
+    )
+    client = LogosBridgeClient(app, cfg)
+
+    profiles_path = tmp_path / "model_profiles.yml"
+    save_profiles(
+        profiles_path,
+        {
+            "org/model-a": {"base_residency_mb": 1.0, "disk_size_bytes": 42, "sleep_mode_disabled": True},
+            "org/untouched": {"base_residency_mb": 22545.0},
+        },
+    )
+
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(source="error:no-data"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: CalibrationResult(
+            model=plan["model"],
+            tensor_parallel_size=1,
+            gpu_devices="0",
+            kv_cache_sent_mb=2048.0,
+            success=True,
+            base_residency_mb=12345.0,
+            sleeping_residual_mb=512.0,
+        ),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+
+    assert (await client._handle_start_calibration_session({"sleep_level": 1}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    stored = load_existing_profiles(profiles_path)
+    assert stored["org/model-a"]["base_residency_mb"] == 12345.0
+    assert stored["org/model-a"]["disk_size_bytes"] == 42
+    assert stored["org/model-a"]["sleep_mode_disabled"] is True
+    assert stored["org/untouched"]["base_residency_mb"] == 22545.0, "other models must be untouched"
+
+
+# ---------------------------------------------------------------------------
+# Cancelling an abandoned request
+#
+# Every request to a worker is multiplexed over one WebSocket, so there is no
+# per-request connection whose close tells vLLM to stop. When the client
+# behind a request goes away, the server sends `cancel_command`; cancelling
+# the task is what closes the httpx stream to the lane, and that closed
+# connection is what makes vLLM abort the sequence and free its KV blocks.
+# ---------------------------------------------------------------------------
+
+
+class _BlockingUpstream:
+    """An upstream that yields one chunk and then never produces another."""
+
+    def __init__(self) -> None:
+        self.status_code = 200
+        self.headers = {"content-type": "text/event-stream"}
+        self.closed = False
+        self.first_chunk_sent = asyncio.Event()
+
+    async def aiter_bytes(self):
+        yield b"tok1"
+        self.first_chunk_sent.set()
+        await asyncio.Event().wait()  # generate forever
+        yield b"unreachable"
+
+    async def aread(self) -> bytes:
+        return b""
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _stream_client_fixture(monkeypatch, upstream):
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    # Pooled relay client : pin the fake on the instance.
+    monkeypatch.setattr(client, "_relay_client", _FakeStreamClient(upstream))  # noqa: SLF001
+    return client, lane_manager
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_stream_closes_the_upstream_and_frees_the_lane(monkeypatch):
+    """The point of the whole feature: aborting the relay must close the
+    connection to vLLM (which aborts generation) and release the in-flight
+    count that would otherwise keep the lane from ever sleeping."""
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    task = asyncio.create_task(
+        client._execute_stream_command(ws, "cmd-1", {"lane_id": "lane-a", "payload": {}})  # noqa: SLF001
+    )
+    await upstream.first_chunk_sent.wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert upstream.closed is True, "vLLM never sees the abort unless the stream is closed"
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_sends_no_terminal_frame(monkeypatch):
+    """Nobody is reading: the server already dropped the queue for this
+    cmd_id. Emitting a stream_end failure would only be noise."""
+    upstream = _BlockingUpstream()
+    client, _lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    task = asyncio.create_task(
+        client._execute_stream_command(ws, "cmd-1", {"lane_id": "lane-a", "payload": {}})  # noqa: SLF001
+    )
+    await upstream.first_chunk_sent.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [f["type"] for f in ws.frames] == ["stream_start", "stream_chunk"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_aborts_the_named_stream(monkeypatch):
+    """End-to-end through the message dispatcher, the way the server drives it."""
+    upstream = _BlockingUpstream()
+    client, lane_manager = _stream_client_fixture(monkeypatch, upstream)
+    ws = _CollectWS()
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-stream",
+                "action": "infer_stream",
+                "params": {"lane_id": "lane-a", "payload": {}},
+            }
+        ),
+    )
+    await upstream.first_chunk_sent.wait()
+    assert "cmd-stream" in client._command_tasks  # noqa: SLF001
+    stream_task = client._command_tasks["cmd-stream"]  # noqa: SLF001
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-cancel",
+                "action": "cancel_command",
+                "params": {"target_cmd_id": "cmd-stream"},
+            }
+        ),
+    )
+
+    result = [f for f in ws.frames if f["type"] == "command_result"][-1]
+    assert result["result"] == {"cancelled": True, "target_cmd_id": "cmd-stream"}
+
+    with pytest.raises(asyncio.CancelledError):
+        await stream_task
+    await asyncio.sleep(0)  # let the done-callback deregister the task
+    assert upstream.closed is True
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+    assert "cmd-stream" not in client._command_tasks  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_for_an_unknown_id_is_not_an_error():
+    """A cancel racing a stream that just finished is normal traffic, not a
+    failure the server should have to special-case."""
+    app = _DummyApp()
+    app.state.lane_manager = object()
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    ws = _CollectWS()
+
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-cancel",
+                "action": "cancel_command",
+                "params": {"target_cmd_id": "long-gone"},
+            }
+        ),
+    )
+
+    assert ws.frames[-1]["success"] is True
+    assert ws.frames[-1]["result"]["cancelled"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_command_only_touches_its_target(monkeypatch):
+    """Two concurrent requests on one worker: cancelling one must not
+    disturb the other. This is what keying the task map by cmd_id buys."""
+    upstream_a = _BlockingUpstream()
+    upstream_b = _BlockingUpstream()
+    upstreams = iter([upstream_a, upstream_b])
+
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    class _TwoUpstreamClient:
+        # Both commands share the pooled relay client ; distinguish
+        # them per send instead of per client instance.
+        def build_request(self, *a, **k):  # noqa: ANN002, ANN003
+            return SimpleNamespace()
+
+        async def send(self, request, stream=True):  # noqa: ARG002
+            return next(upstreams)
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(client, "_relay_client", _TwoUpstreamClient())  # noqa: SLF001
+    ws = _CollectWS()
+
+    for cmd_id in ("cmd-a", "cmd-b"):
+        await client._handle_message(  # noqa: SLF001
+            ws,
+            json.dumps(
+                {
+                    "type": "command",
+                    "cmd_id": cmd_id,
+                    "action": "infer_stream",
+                    "params": {"lane_id": "lane-a", "payload": {}},
+                }
+            ),
+        )
+    await upstream_a.first_chunk_sent.wait()
+    await upstream_b.first_chunk_sent.wait()
+
+    task_a = client._command_tasks["cmd-a"]  # noqa: SLF001
+    assert client.cancel_command("cmd-a") is True
+    # The close happens in the task's finally, so wait for it rather than
+    # assuming one scheduler turn is enough.
+    with pytest.raises(asyncio.CancelledError):
+        await task_a
+
+    assert upstream_a.closed is True
+    assert upstream_b.closed is False
+    assert "cmd-b" in client._command_tasks  # noqa: SLF001
+
+    # Clean up the survivor so the test does not leak a task.
+    client.cancel_command("cmd-b")
+    await asyncio.gather(*client._command_tasks.values(), return_exceptions=True)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_hello_advertises_the_cancel_action():
+    """The server feature-gates on this list; without it, no cancellation is
+    ever sent to this worker."""
+    client = LogosBridgeClient(
+        _DummyApp(),
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+    ws = _CollectWS()
+    await client._send_hello(ws)  # noqa: SLF001
+    assert "cancel_command" in ws.frames[0]["actions"]
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_non_streaming_infer_aborts_the_relay_request(monkeypatch):
+    """The sync `infer` path is exposed the same way — a client that leaves
+    mid-request would otherwise keep the lane busy for the whole generation.
+
+    Since the relay uses one pooled client  there is no per-request
+    connection to close: cancelling the task aborts the in-flight POST (httpx
+    releases the connection as it unwinds) and the shared client keeps
+    serving every other command."""
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    posting = asyncio.Event()
+    post_aborted = asyncio.Event()
+
+    class _BlockingHttpClient:
+        async def post(self, url, headers=None, **kwargs):  # noqa: ARG002
+            posting.set()
+            try:
+                await asyncio.Event().wait()  # generation never finishes
+            except asyncio.CancelledError:
+                post_aborted.set()
+                raise
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(client, "_relay_client", _BlockingHttpClient())  # noqa: SLF001
+
+    ws = _CollectWS()
+    await client._handle_message(  # noqa: SLF001
+        ws,
+        json.dumps(
+            {
+                "type": "command",
+                "cmd_id": "cmd-infer",
+                "action": "infer",
+                "params": {"lane_id": "lane-a", "payload": {"messages": []}},
+            }
+        ),
+    )
+    await posting.wait()
+    task = client._command_tasks["cmd-infer"]  # noqa: SLF001
+
+    assert client.cancel_command("cmd-infer") is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert post_aborted.is_set(), "the in-flight relay request was never aborted"
+    lane_manager.decrement_active_requests.assert_awaited_once_with("lane-a")
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_the_pooled_relay_client(monkeypatch) -> None:
+    """The relay client is shared by every command , so its
+    lifecycle belongs to the bridge: stop() — not any command — may close it."""
+    app = _DummyApp()
+    cfg = LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret")
+    client = LogosBridgeClient(app, cfg)
+
+    relay = AsyncMock()
+    monkeypatch.setattr(client, "_relay_client", relay)
+
+    await client.stop()
+
+    relay.aclose.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_stream_finally_does_not_close_the_shared_client(monkeypatch) -> None:
+    """Closing the pooled client after one stream would break every other
+    in-flight command: the finally may only close the streamed response,
+    which is what makes vLLM abort the sequence."""
+    app = _DummyApp()
+    lane_manager = type("LaneMgr", (), {})()
+    lane_manager.acquire_lane_for_infer = AsyncMock(return_value=_make_lane_status())
+    lane_manager.decrement_active_requests = AsyncMock(return_value=None)
+    app.state.lane_manager = lane_manager
+    client = LogosBridgeClient(
+        app,
+        LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"),
+    )
+
+    upstream = _FakeUpstream(200, [b"tok1"])
+    relay = _FakeStreamClient(upstream)
+    relay.aclose = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(client, "_relay_client", relay)
+
+    ws = _CollectWS()
+    await client._execute_stream_command(  # noqa: SLF001
+        ws, "cmd-1", {"lane_id": "lane-a", "payload": {"messages": []}}
+    )
+
+    relay.aclose.assert_not_awaited()
+    assert [f["type"] for f in ws.frames] == ["stream_start", "stream_chunk", "stream_end"]
+
+
+# ---------------------------------------------------------------------------
+# Post-calibration sharded-checkpoint conversion
+#
+# The calibration trigger pre-shards a model while the GPUs are still free. It
+# has to answer the same two gates as the spawn-time path, or it burns GPU time
+# building a cache the lane will never read: a per-model opt-out, and a loader
+# rejection already recorded for the installed vLLM.
+# ---------------------------------------------------------------------------
+
+
+def _sharded_bridge(monkeypatch, tmp_path) -> tuple[LogosBridgeClient, list[str]]:
+    """A bridge client whose recorded calibration events are captured."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    client = LogosBridgeClient(
+        _DummyApp(),
+        LogosConfig(enabled=True, logos_url="http://logos.example:8080", shared_key="secret"),
+    )
+    events: list[str] = []
+    monkeypatch.setattr(
+        client,
+        "_record_calibration_event",
+        lambda event, model="", details="": events.append(event),
+    )
+    monkeypatch.setattr(sc, "resolve_cache_root", lambda _models_path: str(tmp_path))
+    return client, events
+
+
+def _sharded_cfg(vllm_engine: dict):
+    from logos_worker_node.models import AppConfig
+
+    return AppConfig(engines={"vllm": vllm_engine})
+
+
+async def _run_conversion(client, cfg, tmp_path) -> None:
+    await client._maybe_convert_sharded_checkpoint(  # noqa: SLF001
+        "org/Model-A",
+        SimpleNamespace(tensor_parallel_size=2, gpu_devices=""),
+        {"dtype": "auto"},
+        _CalibrationSession(sleep_level=1),
+        cfg,
+        tmp_path,
+    )
+
+
+@pytest.mark.asyncio
+async def test_calibration_conversion_honors_a_per_model_opt_out(tmp_path, monkeypatch) -> None:
+    from logos_worker_node import sharded_checkpoint as sc
+
+    client, events = _sharded_bridge(monkeypatch, tmp_path)
+
+    def _boom(**_kw):
+        raise AssertionError("the lane spawner honors the same opt-out — there is no cache to build")
+
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", _boom)
+    cfg = _sharded_cfg({"model_overrides": {"org/Model-A": {"sharded_checkpoint_enabled": False}}})
+
+    await _run_conversion(client, cfg, tmp_path)
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_calibration_conversion_honors_a_per_model_opt_in(tmp_path, monkeypatch) -> None:
+    """The worker-wide switch is off, but this one model is opted in — the
+    trigger must run rather than short-circuit on the global flag."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    client, events = _sharded_bridge(monkeypatch, tmp_path)
+    calls: list[dict] = []
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", lambda **kw: calls.append(kw) or "/converted")
+    cfg = _sharded_cfg(
+        {
+            "sharded_checkpoint_enabled": False,
+            "model_overrides": {"org/Model-A": {"sharded_checkpoint_enabled": True}},
+        }
+    )
+
+    await _run_conversion(client, cfg, tmp_path)
+    assert len(calls) == 1
+    assert calls[0]["model"] == "org/Model-A"
+    assert events == ["sharded_conversion_started", "sharded_conversion_completed"]
+
+
+@pytest.mark.asyncio
+async def test_calibration_conversion_skips_a_rejected_build_without_a_failure_event(tmp_path, monkeypatch) -> None:
+    """A recorded rejection is a *skip*, not a failure.
+
+    ``ensure_sharded_checkpoint`` would refuse the rejected (model, tp) on its
+    own, but its ``None`` return is indistinguishable from a real conversion
+    failure and would surface a misleading ``sharded_conversion_failed`` event
+    to the server on every calibration run. The trigger asks first.
+    """
+    from logos_worker_node import sharded_checkpoint as sc
+
+    target = sc.sharded_checkpoint_dir(str(tmp_path), "org/Model-A", 2)
+    target.mkdir(parents=True)
+    (target / sc._COMPLETION_MARKER).write_text("ok")
+    sc.invalidate_sharded_checkpoint(target, vllm_version="0.27.1")
+
+    client, events = _sharded_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _binary: "0.27.1")
+
+    def _boom(**_kw):
+        raise AssertionError("a rejected conversion must not be re-run at calibration either")
+
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", _boom)
+
+    await _run_conversion(client, _sharded_cfg({}), tmp_path)
+    assert events == []
+
+
+@pytest.mark.asyncio
+async def test_calibration_conversion_runs_when_nothing_blocks_it(tmp_path, monkeypatch) -> None:
+    """Control: the ordinary path is unchanged — a real failure still reports."""
+    from logos_worker_node import sharded_checkpoint as sc
+
+    client, events = _sharded_bridge(monkeypatch, tmp_path)
+    monkeypatch.setattr(sc, "resolve_vllm_version", lambda _binary: "0.27.1")
+    monkeypatch.setattr(sc, "ensure_sharded_checkpoint", lambda **_kw: None)
+
+    await _run_conversion(client, _sharded_cfg({}), tmp_path)
+    assert events == ["sharded_conversion_started", "sharded_conversion_failed"]

@@ -4,15 +4,10 @@
   position: relative;
   display: flex;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 
-  background:
-    linear-gradient(
-      135deg,
-      rgb(var(--shell-gradient-start)) 0%,
-      rgb(var(--shell-gradient-mid)) 45%,
-      rgb(var(--shell-gradient-end)) 100%
-    );
+  background: rgb(var(--shell-background));
 }
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -20,7 +15,7 @@
   @include glass-surface;
   display: flex;
   flex-direction: column;
-  width: 220px;
+  width: 240px;
   border-right: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
   padding: 10px;
 }
@@ -122,9 +117,11 @@
 
   color: rgb(var(--nav-active-text));
 
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
 }
 
 .user-role {
@@ -144,6 +141,7 @@
 .main-content {
   position: relative;
   flex: 1;
+  overflow-x: hidden;
   overflow-y: auto;
   min-width: 0;
   min-height: 0;
@@ -239,6 +237,7 @@
     top: 0;
     width: 220px;
     height: 100vh;
+    height: 100dvh;
     transform: translateX(-100%);
     transition: transform 0.3s ease;
     z-index: 25;
@@ -270,14 +269,12 @@
   inset: 0;
   z-index: 24;
   background: transparent;
-  backdrop-filter: blur(0);
   pointer-events: none;
-  transition: background-color 0.3s ease, backdrop-filter 0.3s ease;
+  transition: background-color 0.3s ease;
 }
 
 .sidebar-backdrop--visible {
   background: rgb(var(--shadow-color) / var(--opacity-overlay));
-  backdrop-filter: blur(2px);
   pointer-events: auto;
 }
 

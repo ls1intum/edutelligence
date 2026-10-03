@@ -29,20 +29,8 @@
   flex-shrink: 0;
   font-size: var(--font-size-lg);
 
-  &--cyan {
-    background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-cyan));
-  }
-
-  &--purple {
-    background: rgb(var(--color-accent-purple)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-purple));
-  }
-
-  &--green {
-    background: rgb(var(--color-success)  / var(--opacity-soft));
-    color: rgb(var(--color-success));
-  }
+  background: rgb(var(--color-primary-500)  / var(--opacity-soft));
+  color: rgb(var(--color-text-accent));
 }
 
 .kpi-body {

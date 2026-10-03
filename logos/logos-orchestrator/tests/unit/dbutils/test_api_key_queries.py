@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import datetime
 from unittest.mock import MagicMock
 
 from logos import DBManager
+from logos.dbutils import dbmanager
 
 
 class MockRow:
@@ -87,9 +89,55 @@ def test_create_api_key_returns_dict():
     assert result["key_value"] == "lg-test-xyz"
 
 
-def test_get_team_budget_usage_returns_int():
+def test_get_team_budget_usage_returns_int(monkeypatch):
+    monkeypatch.setattr(dbmanager, "text", lambda sql: sql)
     db = _db_fetchone({"total": 12345})
     assert db.get_team_budget_usage(1, "2026-05-01") == 12345
+    sql = str(db.session.execute.call_args.args[0])
+    assert "FROM log_entry_cost" in sql
+    assert "timestamp_request >= CAST" in sql
+    assert "timestamp_request < CAST" in sql
+    assert "budget_usage" not in sql
+
+
+def test_get_api_key_budget_usage_uses_indexable_month_range(monkeypatch):
+    monkeypatch.setattr(dbmanager, "text", lambda sql: sql)
+    db = _db_fetchone({"total": 6789})
+
+    assert db.get_api_key_budget_usage(7, "2026-05-01") == 6789
+
+    sql, params = db.session.execute.call_args.args
+    assert "FROM log_entry_cost" in str(sql)
+    assert "timestamp_request >= CAST" in str(sql)
+    assert "timestamp_request < CAST" in str(sql)
+    assert "budget_usage" not in str(sql)
+    assert params == {"aki": 7, "month": "2026-05-01"}
+
+
+def test_get_usage_cost_micro_cents_returns_cloud_billing_amount():
+    db = _db_fetchone({"cost_micro_cents": 4321})
+    response_at = datetime.datetime(2026, 8, 17, 20, 21, 52, tzinfo=datetime.timezone.utc)
+
+    result = db.get_usage_cost_micro_cents(
+        model_id=7,
+        provider_id=9,
+        usage={"prompt_tokens": 12, "completion_tokens": 3, "ignored": -1},
+        response_at=response_at,
+    )
+
+    assert result == 4321
+    params = db.session.execute.call_args.args[1]
+    assert params["model_id"] == 7
+    assert params["provider_id"] == 9
+    assert params["usage"] == '{"prompt_tokens": 12, "completion_tokens": 3}'
+    assert params["response_at"] == response_at
+
+
+def test_get_usage_cost_micro_cents_returns_none_for_local_provider():
+    db = _db_fetchone({"cost_micro_cents": None})
+
+    response_at = datetime.datetime(2026, 8, 17, tzinfo=datetime.timezone.utc)
+    assert db.get_usage_cost_micro_cents(7, 9, {"prompt_tokens": 12}, response_at) is None
 
 
 def _db_execute_many(return_values):

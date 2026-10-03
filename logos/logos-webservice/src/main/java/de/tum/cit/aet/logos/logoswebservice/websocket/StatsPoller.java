@@ -36,7 +36,7 @@ public class StatsPoller {
 
     public String buildRequestsMessage() {
         try {
-            Map<String, Object> payload = requestLogService.getLatestRequests();
+            Map<String, Object> payload = requestLogService.getLatestRequests(null, null);
             return objectMapper.writeValueAsString(Map.of("type", "requests", "payload", payload));
         } catch (Exception e) {
             return "{\"type\":\"requests\",\"payload\":{\"requests\":[]}}";

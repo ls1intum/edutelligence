@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Execution timeouts were stored as result_status = error whenever the
+         error_message mentioned a timeout: the orchestrator never set its
+         timed_out flag, so worker command timeouts, HTTP 504s and "timed out"
+         text all landed in Error. The statistics Status chart's Timeout row
+         therefore stayed at zero.
+
+         Correct the source rows. The hourly rollup is incremental and keyed
+         off log_entry.updated_at (stamped by trigger on this UPDATE), so the
+         next pass re-aggregates the hours these rows belong to. -->
+    <changeSet id="040-reclassify-timeout-errors" author="logos">
+        <sql>
+            UPDATE log_entry
+               SET result_status = 'timeout'
+             WHERE result_status = 'error'
+               AND (error_message ILIKE '%timeout%'
+                    OR error_message ILIKE '%timed out%');
+        </sql>
+        <!-- Irreversible: a matching rollback would also flip timeouts the
+             orchestrator wrote after this migration, because we do not keep
+             the IDs this UPDATE touched. -->
+        <rollback/>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- ModelRepository derives each model's last_used_at from log_entry for the
+         /logosdb/get_models list, so admins can spot models that have gone quiet
+         and should be deprecated. The subselect
+         filters on model_id and takes MAX(timestamp_request); with no index covering
+         both columns Postgres has to scan the whole log_entry table on every model
+         list load, and it only gets worse as log_entry grows.
+
+         The composite index lets the MAX be answered by an index seek:
+         timestamp_request is NOT NULL, so the latest request of a model is the last
+         entry of that model's range in the index.
+
+         Runs outside a transaction so CONCURRENTLY can build the index without
+         locking log_entry against the logos-orchestrator, which keeps writing to
+         this table while logos-webservice is redeployed via `docker compose up -d`.
+         A maintenance window (plain CREATE INDEX) is only needed if writes to
+         log_entry are stopped for the duration of the migration. -->
+    <changeSet id="014-log-entry-model-id-timestamp-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_model_id_timestamp_request"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY idx_log_entry_model_id_timestamp_request
+                ON log_entry (model_id, timestamp_request);
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_model_id_timestamp_request;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

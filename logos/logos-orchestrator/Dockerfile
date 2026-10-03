@@ -3,25 +3,39 @@
 # ──────────────────────────────────────────────────────────
 FROM python:3.13-slim AS builder
 
-WORKDIR /build
+# The build tree mirrors the repository layout, because uv.lock records the
+# `shared` path dependency relative to this directory as ../../shared. Keeping
+# the same shape here is what lets the lock be installed from as-is.
+WORKDIR /build/logos/logos-orchestrator
 
 # Install system packages needed for compiling C-extension wheels
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends gcc build-essential \
+  && apt-get install -y --no-install-recommends gcc build-essential rustc cargo \
   && rm -rf /var/lib/apt/lists/*
 
 # Install uv – a drop-in pip replacement written in Rust (10-100× faster)
 # Pinned to a specific version to mitigate supply-chain risk (update explicitly)
-COPY --from=ghcr.io/astral-sh/uv:0.10.3 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
 
 # Create an isolated virtual-env that we will copy into the runtime image
 RUN uv venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+# `uv sync` manages a project environment; point it at the venv above rather
+# than letting it create .venv next to the project.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 
-# ── Dependency layer (cached unless pyproject.toml or shared/ changes) ──
-COPY logos/logos-orchestrator/pyproject.toml ./
-COPY shared/ ./shared/
+# ── Dependency layer (cached unless pyproject.toml or the shared package changes) ──
+# Copy ONLY the files `uv sync` reads to build the `shared` path
+# dependency: its metadata (pyproject.toml), its declared readme (required
+# by the poetry-core build backend) and the package source itself. The rest
+# of shared/ (its own poetry.lock, .flake8, ...) is NOT an input to this
+# install — copying it would invalidate this layer (and re-run the whole
+# dependency install) on every unrelated shared/ change.
+COPY logos/logos-orchestrator/pyproject.toml logos/logos-orchestrator/uv.lock ./
+COPY shared/pyproject.toml /build/shared/pyproject.toml
+COPY shared/README.md /build/shared/README.md
+COPY shared/shared/ /build/shared/shared/
 
 # Create a minimal package stub so the poetry-core build backend can
 # resolve metadata without needing the real source tree.
@@ -29,8 +43,30 @@ RUN mkdir -p src/logos && echo '__version__ = "0.1.0"' > src/logos/__init__.py \
  && touch README.md
 
 # Install all dependencies with uv (replaces poetry install ~436 s → ~30-60 s)
+#
+# `uv sync --locked` installs exactly what uv.lock pins and fails if the lock
+# has drifted from pyproject.toml, so the image can no longer quietly resolve
+# a different dependency set than the one that was reviewed and tested.
+# --no-install-project: only the dependencies belong in this cached layer; the
+# service's own source is copied into the runtime stage and imported via
+# PYTHONPATH, so there is nothing to install for it here.
+# sentence-transformers pulls in torch as a transitive dep; this container has
+# no GPU (see docker-compose.yaml — no device reservation for this service),
+# so pull the CPU-only build instead of PyPI's default CUDA wheels (which drag
+# in ~15 nvidia-cu12 packages and blow the install up from ~1 min to ~8 min).
+# torch is pinned to PyTorch's CPU-only wheel index via tool.uv.sources + an
+# explicit index in pyproject.toml, so no extra install-time flags are needed
+# here to steer it away from PyPI's default CUDA build.
+#
+# --refresh-package shared: rebuild the local `shared` path dependency from
+# current source. Without it, uv's build cache can serve a STALE wheel for
+# that dependency: the cache entry is keyed by path+version, not content, so
+# after a shared/ source change the (re-run) install layer would silently
+# install the previously built code. Reproduced with uv 0.11.3 and 0.12.5.
+# The narrow flag invalidates exactly that one build-cache entry — the cached
+# registry wheels stay untouched.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install .
+    uv sync --locked --no-install-project --refresh-package shared
 
 # ──────────────────────────────────────────────────────────
 # Stage 2: Runtime – slim image without compilers or build tools

@@ -1,5 +1,8 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +20,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProjection;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.MyKeyProjection;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.RateLimitUsageProjection;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelWindowClient;
 
 @Service
@@ -24,6 +28,20 @@ public class MeKeysService {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final TypeReference<Object> OBJ_TYPE = new TypeReference<>() {};
+    private static final int API_KEY_TOKEN_LENGTH = 128;
+
+    /**
+     * The sliding window the orchestrator's rate limiter enforces rpm/tpm
+     * limits over; the usage numbers shown next to a limit must come from the
+     * same window to be comparable to it.
+     *
+     * This is a copy of the default of {@code RateLimitConfig.window_seconds}
+     * in {@code logos/logos-orchestrator/src/logos/rate_limiter.py} — the
+     * orchestrator is the source of truth. Keep the two in sync; the test
+     * {@code RateLimitWindowConsistencyTest} fails if they drift, and the
+     * corresponding comment in rate_limiter.py points back here.
+     */
+    private static final int RATE_LIMIT_WINDOW_SECONDS = 60;
 
     private final ApiKeyRepository apiKeyRepository;
     private final OrchestratorModelWindowClient modelWindowClient;
@@ -34,9 +52,29 @@ public class MeKeysService {
     }
 
     public List<Map<String, Object>> getKeysForUser(int userId) {
-        return apiKeyRepository.findKeysForUser(userId).stream()
-            .map(this::toMap)
+        List<MyKeyProjection> keys = apiKeyRepository.findKeysForUser(userId);
+        Map<Integer, RateLimitUsageProjection> usageByKey = findRateLimitUsage(userId);
+        return keys.stream()
+            .map(p -> toMap(p, usageByKey.get(p.getId())))
             .toList();
+    }
+
+    /**
+     * Rate-limit usage of the user's active keys inside one rate-limiter
+     * window (see {@link #RATE_LIMIT_WINDOW_SECONDS}), keyed by key id.
+     * Keys with no traffic in the window are absent — and stay absent: the
+     * caller must not render them at zero, because zero usage is the most
+     * reassuring possible reading for a rate-limit figure ("you have your
+     * entire budget available"). Unknown usage and genuinely-idle usage
+     * deserve different renderings; the UI shows an en dash for the former.
+     */
+    private Map<Integer, RateLimitUsageProjection> findRateLimitUsage(int userId) {
+        Timestamp since = Timestamp.from(Instant.now().minusSeconds(RATE_LIMIT_WINDOW_SECONDS));
+        Map<Integer, RateLimitUsageProjection> byKey = new HashMap<>();
+        for (RateLimitUsageProjection p : apiKeyRepository.findRateLimitUsageForUser(userId, since)) {
+            byKey.put(p.getKeyId(), p);
+        }
+        return byKey;
     }
 
     @Transactional
@@ -50,6 +88,9 @@ public class MeKeysService {
         }
         ApiKey key = keyOpt.get();
         if (!key.getUserId().equals(userId)) {
+            // Deliberately collapse "exists but not owned" into the same outcome as
+            // "not found" so callers can return a uniform 404 and avoid key
+            // enumeration.
             return Optional.empty();
         }
         key.setLog(LogLevel.valueOf(level));
@@ -57,7 +98,8 @@ public class MeKeysService {
         return Optional.of(Map.of("result", "Log level updated to " + level));
     }
 
-    public Optional<List<ModelAccessDTO>> getAccessibleModels(int keyId, int userId) {
+    public Optional<List<ModelAccessDTO>> getAccessibleModels(
+            int keyId, int userId, boolean includeProviderNames) {
         Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
         if (keyOpt.isEmpty()) {
             return Optional.empty();
@@ -72,14 +114,40 @@ public class MeKeysService {
         List<ModelAccessProjection> rows = Boolean.TRUE.equals(key.getUseCustomPermissions())
             ? apiKeyRepository.findAccessibleModelsByKey(keyId)
             : apiKeyRepository.findAccessibleModelsByTeam(key.getTeamId());
-        Map<String, Integer> windows = modelWindowClient.getContextWindows();
+        Map<String, OrchestratorModelWindowClient.ModelContextWindows> windows =
+            modelWindowClient.getContextWindows();
         return Optional.of(rows.stream()
-            .map(r -> new ModelAccessDTO(
-                r.getModelName(), r.getProviderName(), r.getProviderType(), windows.get(r.getModelName())))
+            .map(r -> {
+                var w = windows.get(r.getModelName());
+                return new ModelAccessDTO(
+                    r.getModelName(),
+                    includeProviderNames ? r.getProviderName() : null,
+                    r.getProviderType(),
+                    w != null ? w.currentMin() : null,
+                    w != null ? w.currentMax() : null,
+                    w != null ? w.overall() : null);
+            })
             .toList());
     }
 
-    private Map<String, Object> toMap(MyKeyProjection p) {
+    @Transactional
+    public Optional<Map<String, Object>> rotateKeyForUser(int keyId, int userId) {
+        Optional<ApiKey> keyOpt = apiKeyRepository.findById(keyId);
+        if (keyOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        ApiKey key = keyOpt.get();
+        if (!key.getUserId().equals(userId)) {
+            return Optional.empty();
+        }
+        key.setKeyValue(rotateKeyValue(key.getKeyValue()));
+        apiKeyRepository.save(key);
+        return Optional.of(Map.of(
+            "result", "API key rotated successfully",
+            "api_key", key.getKeyValue()));
+    }
+
+    private Map<String, Object> toMap(MyKeyProjection p, RateLimitUsageProjection usage) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", p.getId());
         m.put("name", p.getName());
@@ -91,6 +159,7 @@ public class MeKeysService {
         m.put("used_micro_cents", p.getUsedMicroCents());
         m.put("settings", resolvedSettings(p));
         m.put("last_used_at", p.getLastUsedAt() != null ? p.getLastUsedAt().toString() : null);
+        m.put("rate_limit_usage", usage == null ? null : toRateLimitUsage(usage));
 
         Map<String, Object> team = new LinkedHashMap<>();
         team.put("id", p.getTeamId());
@@ -99,6 +168,16 @@ public class MeKeysService {
         team.put("budget_used_micro_cents", p.getTeamBudgetUsedMicroCents());
         m.put("team", team);
         return m;
+    }
+
+    private Map<String, Object> toRateLimitUsage(RateLimitUsageProjection usage) {
+        Map<String, Object> u = new LinkedHashMap<>();
+        u.put("window_seconds", RATE_LIMIT_WINDOW_SECONDS);
+        u.put("cloud_requests", usage.getCloudRequests());
+        u.put("cloud_tokens", usage.getCloudTokens());
+        u.put("local_requests", usage.getLocalRequests());
+        u.put("local_tokens", usage.getLocalTokens());
+        return u;
     }
 
     @SuppressWarnings("unchecked")
@@ -122,5 +201,20 @@ public class MeKeysService {
         if (json == null || json.isBlank()) return Map.of();
         try { return OBJECT_MAPPER.readValue(json, OBJ_TYPE); }
         catch (Exception e) { return Map.of(); }
+    }
+
+    private String rotateKeyValue(String currentKeyValue) {
+        if (currentKeyValue == null || currentKeyValue.isBlank()) {
+            return "lg-" + ApiKeyFactory.generateToken();
+        }
+        String prefix = null;
+        int separatorIndex = currentKeyValue.length() - API_KEY_TOKEN_LENGTH - 1;
+        if (separatorIndex >= 0 && currentKeyValue.charAt(separatorIndex) == '-') {
+            prefix = currentKeyValue.substring(0, separatorIndex);
+        }
+        if (prefix == null || prefix.isBlank()) {
+            prefix = "lg";
+        }
+        return prefix + "-" + ApiKeyFactory.generateToken();
     }
 }

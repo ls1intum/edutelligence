@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import json
 import logging
+import os
+import subprocess
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
@@ -24,11 +29,47 @@ except Exception:  # noqa: BLE001
         pass
 
 
+from logos_worker_node import perf_trace as worker_perf
 from logos_worker_node import prometheus_metrics as prom
-from logos_worker_node.models import LaneConfig, LaneEvent, LogosConfig, WorkerTransportStatus, model_can_sleep
+from logos_worker_node.metal import is_metal_backend
+from logos_worker_node.models import (
+    LaneConfig,
+    LaneEvent,
+    LogosConfig,
+    WorkerTransportStatus,
+    model_can_sleep,
+    model_uses_sharded_checkpoint,
+)
+from logos_worker_node.request_content import MULTIPART_PAYLOAD_KEY, httpx_request_parts
 from logos_worker_node.runtime import build_runtime_status
+from logos_worker_node.vllm_metrics_export import collect_vllm_metrics_text
 
 logger = logging.getLogger("logos_worker_node.logos_bridge")
+
+_INFERENCE_RELAY_TIMEOUT = httpx.Timeout(
+    connect=10.0,
+    read=3600.0,
+    write=300.0,
+    pool=10.0,
+)
+
+_MAX_CALIBRATION_LOG_TEXT_BYTES = 512 * 1024
+_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES = 10 * 1024 * 1024
+
+
+# Commands that can grow this node's VRAM footprint. Refused while a
+# calibration session holds the GPU — see _execute_command.
+_VRAM_GROWING_ACTIONS = frozenset({"add_lane", "apply_lanes", "wake_lane", "reconfigure_lane"})
+
+
+_NULL_PERF_PHASE = nullcontext()
+
+
+def _perf_phase(tracer: Any, name: str) -> Any:
+    """Traced phase when a tracer is active, a no-op context manager otherwise."""
+    if tracer is None:
+        return _NULL_PERF_PHASE
+    return tracer.phase(name)
 
 
 class _CalibrationSession:
@@ -39,14 +80,42 @@ class _CalibrationSession:
     RPCs and consumes calibration_* events back from the worker.
     """
 
-    def __init__(self, sleep_level: int) -> None:
+    def __init__(self, sleep_level: int, skip_models: frozenset[str] = frozenset()) -> None:
         self.sleep_level: int = sleep_level
         self.cancel_event: threading.Event = threading.Event()
         self.task: asyncio.Task | None = None
         self.started_at: float = time.time()
+        # Models the orchestrator already knows can't fit on this node
+        # (cross-node capacity evidence) — excluded from this session's
+        # model list without a wasted probe attempt.
+        self.skip_models: frozenset[str] = skip_models
         # Updated by the session driver as it walks the model list — surfaced
         # so a future status RPC could inspect what's running without polling.
         self.current_model: str | None = None
+        # The live probe subprocess, set by the session driver right after
+        # each spawn. warmup_inference has no cancel_event support — it's a
+        # plain blocking HTTP call — so this is stop_calibration_session's
+        # only way to unblock one once its grace period elapses.
+        self._current_proc: subprocess.Popen[str] | None = None
+        self._proc_lock = threading.Lock()
+
+    def set_current_proc(self, proc: subprocess.Popen[str] | None) -> None:
+        with self._proc_lock:
+            self._current_proc = proc
+
+    def kill_current_proc(self) -> None:
+        """Force-stop the running probe subprocess, if any.
+
+        Makes a blocking warmup/probe HTTP call fail immediately with a
+        connection error instead of waiting out its full 600s/120s timeout.
+        """
+        with self._proc_lock:
+            proc = self._current_proc
+        if proc is None:
+            return
+        from logos_worker_node.calibration import stop_vllm  # noqa: PLC0415
+
+        stop_vllm(proc)
 
 
 # ANSI color codes for structured log output
@@ -66,14 +135,26 @@ class LogosBridgeClient:
         self._app = app
         self._cfg = config
         self._task: asyncio.Task | None = None
-        self._command_tasks: set[asyncio.Task] = set()
+        # Keyed by cmd_id so a single in-flight command can be cancelled. An
+        # unkeyed set only allowed "cancel everything on disconnect", which
+        # left an abandoned request generating until it finished on its own.
+        self._command_tasks: dict[str, asyncio.Task] = {}
         self._stopping = asyncio.Event()
         self._send_lock = asyncio.Lock()
+        # One pooled relay client shared by every infer/stream command instead
+        # of a fresh AsyncClient (and a fresh TCP connection to the lane) per
+        # request. It outlives individual commands, so command finally-blocks
+        # must NOT close it — stop() does.
+        self._relay_client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
         self._connected = False
         self._last_connected_at: datetime | None = None
         self._last_status_sent_at: datetime | None = None
         self._consecutive_failures = 0
-        self._last_event_seq = 0
+        # Event ids already forwarded on the current connection. The log is
+        # capped and trims from the front, so a list position is not a stable
+        # cursor: once the log is full its length stops changing, and a
+        # position-based cursor never advances past it again.
+        self._forwarded_event_ids: set[str] = set()
         self._last_runtime_signature: str | None = None
         self._last_runtime_payload: dict[str, Any] = {}
         # Resolved by server during auth
@@ -86,6 +167,17 @@ class LogosBridgeClient:
         self._active_calibration_session: _CalibrationSession | None = None
         # Sequence counter for calibration event_id (independent of lane events).
         self._calibration_event_seq: int = 0
+        # Lazily built by _get_hf_info_cache(); lives for the client's whole
+        # lifetime so repeated compatibility-precheck calls (calibration
+        # session, run_compatibility_precheck RPC) share the on-disk cache
+        # instance instead of re-reading it from disk every time.
+        self._hf_info_cache: Any | None = None
+        # Cached result of query_vllm_quantization_methods (see
+        # _get_vllm_quant_methods) — only changes on a vLLM upgrade, which
+        # restarts this process anyway, so caching for its lifetime is
+        # exact, not an approximation. None means "not fetched yet".
+        self._vllm_quant_methods: list[str] | None = None
+        self._local_hf_token: str = os.environ.get("HF_TOKEN", "")
 
     @property
     def worker_id(self) -> str:
@@ -100,26 +192,44 @@ class LogosBridgeClient:
             consecutive_failures=self._consecutive_failures,
         )
 
+    async def bootstrap_hf_token(self) -> None:
+        if not self._cfg.enabled:
+            return
+        try:
+            await self._authenticate()
+        except Exception:
+            logger.warning(
+                "Could not reach Logos to fetch a centrally configured HF_TOKEN "
+                "before startup model operations; falling back to the locally "
+                "configured HF_TOKEN",
+                exc_info=True,
+            )
+
     async def start(self) -> None:
         if not self._cfg.enabled:
             logger.info("Logos bridge disabled in config")
             return
         if self._task is not None and not self._task.done():
             return
+        # stop() closes the shared relay client; a restarted bridge must not
+        # reuse it (httpx rejects requests on a closed client).
+        if self._relay_client.is_closed:
+            self._relay_client = httpx.AsyncClient(timeout=_INFERENCE_RELAY_TIMEOUT)
         self._stopping.clear()
         self._task = asyncio.create_task(self._run(), name="logos-bridge")
         logger.info("Logos bridge started (worker_id=%s)", self.worker_id)
 
     async def stop(self) -> None:
         self._stopping.set()
-        if self._task is None:
-            return
-        self._task.cancel()
-        try:
-            await self._task
-        except asyncio.CancelledError:
-            pass
+        task = self._task
         self._task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await self._relay_client.aclose()
         self._connected = False
         logger.info("Logos bridge stopped")
 
@@ -143,7 +253,12 @@ class LogosBridgeClient:
                     self._connected = True
                     self._last_connected_at = datetime.now(timezone.utc)
                     self._consecutive_failures = 0
-                    self._last_event_seq = 0
+                    # Resend the whole log to the new server session, and
+                    # remember which events it already held: those are backlog,
+                    # anything appended from here on is live. The first drain
+                    # carries both and only this snapshot tells them apart.
+                    self._forwarded_event_ids.clear()
+                    replay_event_ids = self._current_event_ids()
                     self._last_runtime_signature = None
                     self._last_runtime_payload = {}
                     caps = list(self._cfg.capabilities_models) if self._cfg.capabilities_models else []
@@ -159,7 +274,13 @@ class LogosBridgeClient:
                     await self._send_runtime_status(ws, force=True)
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws), name="logos-bridge-heartbeat")
                     status_task = asyncio.create_task(self._status_refresh_loop(ws), name="logos-bridge-status")
-                    event_task = asyncio.create_task(self._event_loop(ws), name="logos-bridge-events")
+                    vllm_metrics_task = asyncio.create_task(
+                        self._vllm_metrics_loop(ws), name="logos-bridge-vllm-metrics"
+                    )
+                    event_task = asyncio.create_task(
+                        self._event_loop(ws, replay_event_ids=replay_event_ids),
+                        name="logos-bridge-events",
+                    )
                     try:
                         while not self._stopping.is_set():
                             raw = await ws.recv()
@@ -169,8 +290,9 @@ class LogosBridgeClient:
                     finally:
                         heartbeat_task.cancel()
                         status_task.cancel()
+                        vllm_metrics_task.cancel()
                         event_task.cancel()
-                        for task in (heartbeat_task, status_task, event_task):
+                        for task in (heartbeat_task, status_task, vllm_metrics_task, event_task):
                             try:
                                 await task
                             except asyncio.CancelledError:
@@ -236,6 +358,14 @@ class LogosBridgeClient:
         if "worker_id" in data:
             self._resolved_worker_id = str(data["worker_id"])
 
+        central_hf_token = str(data.get("hf_token", "")).strip()
+        if central_hf_token:
+            os.environ["HF_TOKEN"] = central_hf_token
+        elif self._local_hf_token:
+            os.environ["HF_TOKEN"] = self._local_hf_token
+        else:
+            os.environ.pop("HF_TOKEN", None)
+
         ws_url = str(data.get("ws_url", "")).strip()
         if not ws_url:
             token = str(data.get("session_token", "")).strip()
@@ -279,12 +409,17 @@ class LogosBridgeClient:
     async def _status_refresh_loop(self, ws) -> None:
         lane_manager = self._app.state.lane_manager
         revision = getattr(lane_manager, "status_revision", 0)
+        count_revision = getattr(lane_manager, "count_revision", 0)
         refresh_interval = max(1, self._cfg.status_refresh_interval_seconds)
         last_refresh = time.monotonic()
         while not self._stopping.is_set():
-            next_revision = await lane_manager.wait_for_status_revision(revision, timeout=1.0)
+            next_revision, next_count_revision = await lane_manager.wait_for_status_or_count_revision(
+                revision, count_revision, timeout=1.0
+            )
             changed = next_revision != revision
             revision = next_revision
+            count_bumped = next_count_revision != count_revision
+            count_revision = next_count_revision
             now = time.monotonic()
             # Periodic refresh ensures VRAM/host-memory telemetry reaches the
             # server even on idle workers (no lane churn → revision never
@@ -292,23 +427,97 @@ class LogosBridgeClient:
             # this cheap when nothing actually changed.
             interval_elapsed = (now - last_refresh) >= refresh_interval
             if changed or self._runtime_has_transient_lanes() or interval_elapsed:
+                # Lifecycle change or telemetry interval: rebuild the full
+                # status (probes every lane). The count watermark is
+                # deliberately NOT reset here: a bump that lands while the
+                # build is in flight is still above it, so the next pass
+                # pushes a patch carrying the post-build count.
                 await self._send_runtime_status(ws, force=False)
                 last_refresh = now
+            elif count_bumped:
+                # Per-request counting must stay off the hot path :
+                # a full rebuild would re-probe every lane (nvidia-smi, HTTP,
+                # /proc) next to the relay. A count change only patches the
+                # fields a count touches in the last pushed payload, so the
+                # orchestrator still gets a status push per count change to
+                # reset its per-snapshot forward budget.
+                await self._send_count_update(ws)
 
-    async def _event_loop(self, ws) -> None:
+    async def _vllm_metrics_loop(self, ws) -> None:
+        """Periodically push this worker's merged vLLM ``/metrics`` upstream.
+
+        Runs on its own interval rather than piggybacking on the status
+        refresh loop: vLLM's counters change on every tick, so gating this on
+        the status dedupe signature would send it on every pass instead of a
+        predictable cadence.
+        """
+        interval = max(1, self._cfg.vllm_metrics_interval_seconds)
+        while not self._stopping.is_set():
+            await asyncio.sleep(interval)
+            try:
+                await self._send_vllm_metrics(ws)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to collect/send vLLM metrics", exc_info=True)
+
+    async def _send_vllm_metrics(self, ws) -> None:
+        lane_manager = self._app.state.lane_manager
+        endpoints = lane_manager.running_vllm_endpoints()
+        vllm_engine_cfg = self._app.state.config.engines.vllm
+        metrics_text = await collect_vllm_metrics_text(
+            endpoints,
+            metrics_path=vllm_engine_cfg.metrics_path,
+            timeout_s=vllm_engine_cfg.metrics_timeout_seconds,
+        )
+        # Always send, even when empty: this is what tells the orchestrator
+        # the last lane is gone, so it drops the stale series instead of
+        # keeping the latest non-empty snapshot forever (see
+        # LogosNodeRuntimeRegistry.peek_vllm_metrics).
+        await self._send_json(
+            ws,
+            {
+                "type": "vllm_metrics",
+                "worker_id": self.worker_id,
+                "metrics_text": metrics_text,
+            },
+        )
+
+    async def _event_loop(self, ws, replay_event_ids: frozenset[str] = frozenset()) -> None:
+        # Events named in *replay_event_ids* were already in the log when this
+        # connection came up: a backlog that can hold lifecycle events from
+        # sessions long finished, in an order that says nothing about what is
+        # running now. They are flagged so the server keeps taking its
+        # calibration state from the hello instead.
+        #
+        # Membership, not position. The log is capped at _MAX_EVENT_LOG and
+        # trims from the front, so on a full log a live event lands at a
+        # position the backlog used to occupy — a positional boundary would
+        # send it as replay, the server would ignore it, and a terminal event
+        # lost that way leaves the provider excluded from lane placement with
+        # nothing left to release it. The same trimming is why what has already
+        # been forwarded is tracked by id: a positional cursor equals the log
+        # length once it is full and never advances again, so no further event
+        # would reach the server at all.
         while not self._stopping.is_set():
             await asyncio.sleep(1)
             events = self._app.state.lane_manager.event_log
-            for event in events[self._last_event_seq :]:
+            for event in events:
+                if event.event_id in self._forwarded_event_ids:
+                    continue
                 await self._send_json(
                     ws,
                     {
                         "type": "event",
                         "worker_id": self.worker_id,
                         "event": event.model_dump(mode="json"),
+                        "replay": event.event_id in replay_event_ids,
                     },
                 )
-            self._last_event_seq = len(events)
+                self._forwarded_event_ids.add(event.event_id)
+            # Forget ids the log has trimmed away, so this set stays bounded by
+            # the log size rather than growing for the life of the connection.
+            self._forwarded_event_ids &= {event.event_id for event in events}
 
     async def _send_hello(self, ws) -> None:
         max_lanes = 0
@@ -326,9 +535,24 @@ class LogosBridgeClient:
                 "configured_models": self._cfg.configured_models,
                 "max_lanes": max_lanes,
                 "static_lane_ids": static_lane_ids,
+                # Authoritative calibration state at connect time. The server
+                # excludes calibrating workers from lane placement; it cannot
+                # derive that from the replayed event log alone, because the
+                # log is in-memory, capped, and only reaches the server a
+                # moment after the first status has already made this worker
+                # look plannable. Asks the task, not the slot: a finished
+                # session lingers in _active_calibration_session until the next
+                # start clears it, and reporting that as live would exclude this
+                # worker from placement for as long as no new session begins.
+                "calibrating": self._calibration_session_is_live(),
                 "actions": [
                     "infer",
                     "infer_stream",
+                    # The server only sends cancellations to a worker that
+                    # lists this; an older worker keeps the previous
+                    # behaviour instead of being sent a command it would
+                    # answer with "Unsupported bridge command".
+                    "cancel_command",
                     "get_runtime",
                     "get_lanes",
                     "apply_lanes",
@@ -356,7 +580,55 @@ class LogosBridgeClient:
     async def _send_runtime_status(self, ws, force: bool = False) -> bool:
         runtime = await build_runtime_status(self._app)
         payload = runtime.model_dump(mode="json")
-        signature = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return await self._send_runtime_payload(ws, payload, force)
+
+    async def _send_count_update(self, ws) -> bool:
+        """Report an in-flight count change without rebuilding the status.
+
+        A full status build probes every lane (nvidia-smi, HTTP, /proc); doing
+        that on every increment/decrement would put the worker's biggest
+        per-request cost back on the request cycle . A count change
+        touches exactly two fields — each lane's active_requests and the
+        capacity total — so patch them from the live counters and re-send the
+        payload. Lane-set changes cannot reach this path: adding/removing a
+        lane bumps the status revision, which takes the full-build branch.
+        """
+        lane_manager = self._app.state.lane_manager
+        last = self._last_runtime_payload
+        if not last:
+            # No baseline yet (first pass before the initial push completed):
+            # fall back to a full build.
+            return await self._send_runtime_status(ws, force=True)
+        counts = await lane_manager.active_requests_snapshot()
+        payload = copy.deepcopy(last)
+        for lane in payload.get("lanes") or []:
+            if isinstance(lane, dict):
+                lane["active_requests"] = int(counts.get(lane.get("lane_id"), 0))
+        capacity = payload.get("capacity")
+        if isinstance(capacity, dict):
+            capacity["active_requests"] = sum(int(v) for v in counts.values())
+        # Forced: an increment and decrement can both land between the last
+        # push and this snapshot, leaving the patched payload identical to
+        # the previous one. Signature dedupe would then drop the push — but
+        # the orchestrator's per-snapshot forwarding budget resets only on a
+        # new status push, so a count-triggered update must always reach it.
+        return await self._send_runtime_payload(ws, payload, force=True)
+
+    async def _send_runtime_payload(self, ws, payload: dict[str, Any], force: bool = False) -> bool:
+        # Every status repeats the live calibration state, so the server can
+        # settle it without depending on a lifecycle event arriving. An event
+        # is a one-shot signal: the one that ends a session can be dropped
+        # (post-connect replay filter, a connection that no longer exists) and
+        # the server is then left excluding this worker from lane placement
+        # with nothing to release it. Part of the dedupe signature because a
+        # session that starts and ends while the lanes are untouched changes
+        # nothing else in the payload, and the status would not be sent at all.
+        calibrating = self._calibration_session_is_live()
+        signature = json.dumps(
+            {"runtime": payload, "calibrating": calibrating},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         if not force and signature == self._last_runtime_signature:
             return False
         self._last_runtime_signature = signature
@@ -369,6 +641,7 @@ class LogosBridgeClient:
                 "worker_id": self.worker_id,
                 "capabilities_models": self._cfg.capabilities_models,
                 "configured_models": self._cfg.configured_models,
+                "calibrating": calibrating,
                 "runtime": payload,
             },
         )
@@ -396,10 +669,13 @@ class LogosBridgeClient:
             await ws.send(json.dumps(payload))
 
     def _track_command_task(self, task: asyncio.Task, *, action: str, cmd_id: str) -> None:
-        self._command_tasks.add(task)
+        self._command_tasks[cmd_id] = task
 
         def _cleanup(done_task: asyncio.Task) -> None:
-            self._command_tasks.discard(done_task)
+            # Only drop our own entry: a cmd_id is unique per command, but
+            # clearing blindly would race a same-key re-registration.
+            if self._command_tasks.get(cmd_id) is done_task:
+                self._command_tasks.pop(cmd_id, None)
             try:
                 done_task.result()
             except asyncio.CancelledError:
@@ -417,7 +693,7 @@ class LogosBridgeClient:
         task.add_done_callback(_cleanup)
 
     async def _cancel_command_tasks(self) -> None:
-        tasks = tuple(self._command_tasks)
+        tasks = tuple(self._command_tasks.values())
         if not tasks:
             return
 
@@ -434,6 +710,60 @@ class LogosBridgeClient:
                     exc_info=True,
                 )
         self._command_tasks.clear()
+
+    def cancel_command(self, target_cmd_id: str) -> bool:
+        """Cancel one in-flight command by its cmd_id.
+
+        Returns whether a live task was found. Cancelling the task unwinds
+        ``_execute_stream_command``'s ``finally``, which closes the httpx
+        stream to the lane — that closed connection is what makes vLLM abort
+        the sequence and free its KV blocks — and decrements the lane's
+        in-flight count.
+        """
+        task = self._command_tasks.get(target_cmd_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
+    async def _handle_cancel_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
+        """Abort the command named by ``params["target_cmd_id"]``.
+
+        Sent when the client behind a request has gone away. Without it the
+        lane keeps generating a response nobody will read: the relay holds a
+        KV slot and burns GPU cycles for the full length of a generation that
+        was abandoned, which under retry storms compounds the overload that
+        caused the retries.
+
+        Answers with a normal ``command_result`` so the server can tell an
+        aborted stream from one that had already finished on its own.
+        """
+        target_cmd_id = str(params.get("target_cmd_id", "")).strip()
+        cancelled = self.cancel_command(target_cmd_id) if target_cmd_id else False
+        if cancelled:
+            logger.info(
+                "%s>> CMD cancel_command%s cmd_id=%s target=%s aborted",
+                _CYAN + _BOLD,
+                _RESET,
+                cmd_id[:8],
+                target_cmd_id[:8],
+            )
+        else:
+            # Not an error: a cancel racing a completing stream is normal.
+            logger.debug(
+                "cancel_command cmd_id=%s target=%s: no in-flight command",
+                cmd_id[:8],
+                target_cmd_id[:8],
+            )
+        await self._send_json(
+            ws,
+            {
+                "type": "command_result",
+                "cmd_id": cmd_id,
+                "success": True,
+                "result": {"cancelled": cancelled, "target_cmd_id": target_cmd_id},
+            },
+        )
 
     async def _execute_command_and_respond(self, ws, cmd_id: str, action: str, params: dict[str, Any]) -> None:
         if action != "infer":
@@ -500,6 +830,12 @@ class LogosBridgeClient:
         if not cmd_id or not action:
             return
 
+        # Cancellation must not queue behind the command it cancels — handle
+        # it inline on the receive loop rather than spawning a task.
+        if action == "cancel_command":
+            await self._handle_cancel_command(ws, cmd_id, params)
+            return
+
         if action == "infer_stream":
             task = asyncio.create_task(
                 self._execute_stream_command(ws, cmd_id, params),
@@ -520,6 +856,32 @@ class LogosBridgeClient:
 
     async def _execute_command(self, action: str, params: dict[str, Any]) -> dict[str, Any]:
         lane_manager = self._app.state.lane_manager
+
+        if action in _VRAM_GROWING_ACTIONS and self._calibration_session_is_live():
+            # Last line of defence, at the resource itself. The server excludes
+            # a calibrating worker from lane placement, but every mechanism it
+            # has for knowing lags reality by some amount — an event in flight,
+            # a plan made a moment ago — and a lane placed here takes the VRAM
+            # the probes need, which fails the kv-cache search at sizes that
+            # would otherwise fit. Refusing locally makes those races harmless.
+            #
+            # The session's own lane work does not come through here: it drives
+            # the lane manager directly (destroy_all) and runs its probes on
+            # _CALIBRATION_PORT. The server re-spawns lanes via apply_lanes once
+            # the session ends, which is why that command in particular has to
+            # be refused while it is still running.
+            logger.warning(
+                "[Calibration] refusing %s: a calibration session is running and holds this node's VRAM",
+                action,
+            )
+            return {
+                "ok": False,
+                "error": (
+                    f"'{action}' is refused while a calibration session is running: "
+                    f"the session has freed this node's VRAM for its probes."
+                ),
+                "calibrating": True,
+            }
 
         if action == "infer":
             return await self._execute_infer_command(params)
@@ -555,15 +917,473 @@ class LogosBridgeClient:
             return status.model_dump(mode="json")
         if action == "reconfigure_lane":
             updates = params.get("updates") or {}
-            status = await lane_manager.reconfigure_lane(lane_id, updates)
+            if params.get("require_idle"):
+                status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True)
+            else:
+                status = await lane_manager.reconfigure_lane(lane_id, updates)
             return status.model_dump(mode="json")
 
         if action == "start_calibration_session":
             return await self._handle_start_calibration_session(params)
         if action == "stop_calibration_session":
             return await self._handle_stop_calibration_session()
+        if action == "get_calibration_log":
+            return await self._handle_get_calibration_log(params)
+        if action == "run_compatibility_precheck":
+            return await self._handle_run_compatibility_precheck(params)
 
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _current_event_ids(self) -> frozenset[str]:
+        lane_manager = getattr(self._app.state, "lane_manager", None)
+        if lane_manager is None:
+            return frozenset()
+        try:
+            return frozenset(event.event_id for event in lane_manager.event_log)
+        except Exception:  # noqa: BLE001
+            return frozenset()
+
+    def _calibration_session_is_live(self) -> bool:
+        """True while a calibration session is actually running.
+
+        A finished session can linger in ``_active_calibration_session`` until
+        the next start clears it, so the task state is what counts.
+        """
+        session = self._active_calibration_session
+        if session is None:
+            return False
+        task = session.task
+        return task is None or not task.done()
+
+    def _get_hf_info_cache(self) -> Any:
+        if self._hf_info_cache is None:
+            from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+            from logos_worker_node.hf_model_info import HfModelInfoCache  # noqa: PLC0415
+
+            self._hf_info_cache = HfModelInfoCache(get_state_dir())
+        return self._hf_info_cache
+
+    async def _get_vllm_quant_methods(self, model_name: str) -> list[str] | None:
+        """Cached wrapper around query_vllm_quantization_methods — a
+        success is cached for this process's lifetime; a failure never
+        is, so a broken install gets to retry and recover without a
+        restart. Returns None (and warns) on failure."""
+        if self._vllm_quant_methods is not None:
+            return self._vllm_quant_methods
+        from logos_worker_node.calibration import _DEFAULT_VLLM, query_vllm_quantization_methods  # noqa: PLC0415
+
+        try:
+            self._vllm_quant_methods = await asyncio.to_thread(query_vllm_quantization_methods, _DEFAULT_VLLM)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "[Precheck] vLLM quantization registry query failed for %s — quantization check skipped",
+                model_name,
+                exc_info=True,
+            )
+            return None
+        return self._vllm_quant_methods
+
+    async def _persist_precheck(self, model_name: str, func: Any, *args: Any, **kwargs: Any) -> None:
+        """Runs a model_profiles write off the event loop, catching any
+        failure so a broken profile store degrades only this precheck's
+        persistence — never the whole calibration session. Must itself
+        never raise (see _run_hf_compatibility_precheck's docstring)."""
+        try:
+            await asyncio.to_thread(func, *args, **kwargs)
+        except Exception:  # noqa: BLE001
+            logger.warning("[Precheck] failed to persist result for %s", model_name, exc_info=True)
+
+    async def _persist_permanent_unsupported(self, model_name: str, reason_code: str, description: str) -> None:
+        """Writes calibration_unsupported_models.txt first, then mirrors
+        the flag onto the profile. Skipping the file write lets the next
+        heartbeat's reconciliation (runtime.build_runtime_status) silently
+        clear the profile flag again — see calibration.py's own fatal-error path."""
+        from logos_worker_node.calibration import (  # noqa: PLC0415
+            _UNSUPPORTED_MODELS_FILE,
+            UnsupportedModelEntry,
+            _record_unsupported_model,
+        )
+        from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+        path = get_state_dir() / "calibration_logs" / _UNSUPPORTED_MODELS_FILE
+        entry = UnsupportedModelEntry(
+            model=model_name,
+            reason_code=reason_code,
+            recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            description=description,
+        )
+        await self._persist_precheck(model_name, _record_unsupported_model, path, entry)
+        await self._persist_precheck(
+            model_name, self._app.state.model_profiles.mark_calibration_unsupported, model_name, True, reason_code
+        )
+
+    async def _run_hf_compatibility_precheck(
+        self,
+        model_name: str,
+        *,
+        persist: bool = True,
+        record_probe_log: bool = True,
+        gpu_devices: str = "",
+        kv_cache_dtype: str = "",
+        dtype: str = "",
+        revision: str = "",
+        tensor_parallel_size: int = 1,
+    ) -> dict[str, Any]:
+        """Best-effort HF compatibility check for one model on this node.
+
+        Shared by the calibration session's per-model loop and the standalone
+        ``run_compatibility_precheck`` RPC — the latter can run any time, not
+        just during the maintenance window, because this never touches vLLM
+        or lanes (only an HF fetch and a read-only nvidia-smi query).
+
+        Returns two tp answers because they mean different things to a
+        daytime caller with live lanes running:
+          - ``fit_tp_idle`` (against total VRAM): would this fit on an empty
+            node — the only one that persists calibration_unsupported, since
+            daytime load isn't a permanent property of the node.
+          - ``fit_tp_current`` (against free VRAM): fits right now without
+            evicting anything — informational only.
+
+        ``gpu_devices`` is the calibration plan's own selection (blank/"all"
+        for the auto-pinned slice, matching pin_plan_gpu_devices). On a
+        heterogeneous node, an irrelevant GPU outside that selection must
+        never sink the estimate — see calibration_gpu_slice.
+
+        ``kv_cache_dtype`` is the plan's ``--kv-cache-dtype`` override, if
+        any — the HF-derived KV estimate otherwise uses the model's own
+        torch_dtype, which can be double a configured fp8 KV cache's real
+        footprint and falsely fail the min-KV check near the VRAM edge.
+
+        ``dtype`` is the plan's ``--dtype`` override, if explicit. With
+        ``kv_cache_dtype`` blank/"auto", vLLM sizes the KV cache off this
+        effective model dtype (see resolve_effective_dtype), not the raw
+        repo torch_dtype — else a float32 repo served at float16 is 2x'd.
+
+        ``revision`` is the plan's ``--revision`` pin, if any (see
+        calibration.extract_revision_arg). The Hub calls otherwise default
+        to the repo's main branch — a plan pinned to a smaller/older commit
+        would then be judged on an unrelated revision's weights and config,
+        and could be permanently marked unsupported on a false basis.
+
+        ``tensor_parallel_size`` is the plan's configured tp. The feasibility
+        search otherwise only tries the power-of-2 ladder up to the
+        rounded-down hardware max (e.g. 3 GPUs → only tp=1,2 tried, never
+        3) — same as calibrate_with_tp_escalation's own hardware_max_tp,
+        which is why that function separately widens to ``max(hw_max,
+        original_tp)`` before probing. A model that only fits at a pinned,
+        non-power-of-2 tp must be checked at that exact tp too, or it gets
+        permanently excluded before its valid configuration is ever tried.
+
+        ``persist=False`` skips the model_profiles write.
+        ``record_probe_log=False`` keeps a rejection out of
+        calibration_probe_logs, where it would replace the node's last real
+        calibration row. Never raises.
+        """
+        from logos_worker_node.calibration import (  # noqa: PLC0415
+            _max_tp_for_plan,
+            calibration_gpu_slice,
+            parse_gpu_indices,
+            query_gpu_vram,
+        )
+        from logos_worker_node.hf_model_info import (  # noqa: PLC0415
+            MIN_VIABLE_CONTEXT_TOKENS,
+            REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+            REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+            REASON_MODEL_GATED,
+            REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
+            classify_model_kind,
+            fetch_hf_model_metadata,
+            kv_bytes_for_dtype,
+            min_feasible_tp,
+            resolve_effective_dtype,
+        )
+
+        model_profiles = self._app.state.model_profiles
+
+        try:
+            # fetch_hf_model_metadata does blocking network I/O (HF Hub HTTP
+            # calls) — off the event loop, or a slow/hung Hub request stalls
+            # every other bridge RPC and the live vLLM proxy on this node.
+            hf_meta = await asyncio.to_thread(
+                fetch_hf_model_metadata,
+                model_name,
+                token=os.environ.get("HF_TOKEN") or None,
+                cache=self._get_hf_info_cache(),
+                revision=revision.strip() or None,
+            )
+        except Exception:  # noqa: BLE001
+            hf_meta = None
+            logger.debug("[Precheck] HF fetch raised unexpectedly for %s", model_name, exc_info=True)
+
+        # Not-found/gated already warn via the calibration loop's skip
+        # event. Anything else (network trouble, bad HF_TOKEN, missing
+        # huggingface_hub) has no such signal and stays silent at debug
+        # level forever — warn here so a persistent failure is visible.
+        if hf_meta is None or hf_meta.source not in (
+            "hf",
+            "error:model-not-found-or-unauthorized",
+            "error:model-gated",
+        ):
+            logger.warning(
+                "[Precheck] HF metadata unavailable for %s (source=%s) — precheck skipped this run",
+                model_name,
+                hf_meta.source if hf_meta is not None else "error:precheck-failed",
+            )
+
+        result: dict[str, Any] = {
+            "model": model_name,
+            "hf_source": hf_meta.source if hf_meta is not None else "error:precheck-failed",
+            "weight_bytes": hf_meta.weight_bytes if hf_meta is not None else None,
+            "kv_per_token_bytes": hf_meta.kv_per_token_bytes if hf_meta is not None else None,
+            "max_context_length": hf_meta.max_context_length if hf_meta is not None else None,
+            "quantization_method": hf_meta.quantization_method if hf_meta is not None else None,
+            "per_gpu_total_mb": None,
+            "per_gpu_free_mb": None,
+            "hardware_max_tp": None,
+            "fit_tp_idle": None,
+            "fit_tp_current": None,
+            "unsupported_reason": None,
+            "model_kind": (
+                classify_model_kind(hf_meta.pipeline_tag, hf_meta.architectures, hf_meta.model_type)
+                if hf_meta is not None
+                else "generative"
+            ),
+        }
+
+        # A repo that doesn't exist and a private one this token can't see
+        # produce the identical Hub response (see fetch_hf_model_metadata)
+        # — never a confirmed permanent verdict. Treated like gating: skip
+        # this attempt only, stays a candidate, rechecked every session.
+        if hf_meta is not None and hf_meta.source == "error:model-not-found-or-unauthorized":
+            result["unsupported_reason"] = REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED
+            if persist and record_probe_log:
+                self._record_precheck_rejection(
+                    model_name,
+                    REASON_MODEL_NOT_FOUND_OR_UNAUTHORIZED,
+                    tensor_parallel_size=tensor_parallel_size,
+                    gpu_devices=gpu_devices,
+                )
+            return result
+
+        # Gating is temporary (a token can be added later), so this is
+        # NOT persisted via mark_calibration_unsupported — that flag drops
+        # the model from _list_uncalibrated_models's candidates for good.
+        # Skip this attempt only; stays a candidate, rechecked every session.
+        if hf_meta is not None and hf_meta.source == "error:model-gated":
+            result["unsupported_reason"] = REASON_MODEL_GATED
+            if persist and record_probe_log:
+                self._record_precheck_rejection(
+                    model_name, REASON_MODEL_GATED, tensor_parallel_size=tensor_parallel_size, gpu_devices=gpu_devices
+                )
+            return result
+
+        # Informational only — never blocks or persists. A registry miss
+        # can mean "unsupported" or "a plugin didn't register it here"
+        # (see query_vllm_quantization_methods) — can't tell those apart,
+        # so the real load attempt is left to decide authoritatively.
+        if hf_meta is not None and hf_meta.quantization_method:
+            supported_methods = await self._get_vllm_quant_methods(model_name)
+            if supported_methods:
+                canonical_method = hf_meta.quantization_method.strip().lower()
+                canonical_supported = {m.strip().lower() for m in supported_methods}
+                if canonical_method not in canonical_supported:
+                    logger.warning(
+                        "[Precheck] %s declares quantization method %r, not found "
+                        "in the installed vLLM's registry — proceeding anyway; "
+                        "a genuine incompatibility will surface at the real load "
+                        "attempt instead.",
+                        model_name,
+                        hf_meta.quantization_method,
+                    )
+
+        if hf_meta is None or not hf_meta.weight_bytes:
+            return result
+
+        if is_metal_backend():
+            # No nvidia-smi here, so the VRAM-fit half below could never
+            # run anyway — skip it, but only it. HF metadata and
+            # model_kind are already resolved above and backend-
+            # independent (a pure Hub/config.json lookup), so a Metal
+            # pooling/transcription model must still get its real
+            # classification instead of silently defaulting to generative.
+            # Metal profiles themselves come from model_profile_overrides,
+            # not this precheck.
+            return result
+
+        try:
+            # nvidia-smi subprocess with a 30s timeout — off the event loop,
+            # or a slow/hung GPU query stalls live serving on this node too.
+            gpu_snap = await asyncio.to_thread(query_gpu_vram)
+        except Exception:  # noqa: BLE001
+            gpu_snap = {}
+            logger.debug("[Precheck] live VRAM query failed for %s", model_name, exc_info=True)
+
+        if not gpu_snap:
+            return result
+
+        # Scope to the GPUs the plan will use: an explicit pin, or (for
+        # "all"/blank — the standalone no-plan caller too) the same
+        # index-ordered auto slice pin_plan_gpu_devices commits to. A GPU
+        # outside that never sinks an estimate it was never part of.
+        explicit_indices = parse_gpu_indices(gpu_devices)
+        if explicit_indices is not None:
+            relevant_indices = explicit_indices
+        else:
+            relevant_indices = calibration_gpu_slice(len(gpu_snap))
+        relevant_snap = {i: gpu_snap[i] for i in relevant_indices if i in gpu_snap}
+        if not relevant_snap:
+            return result
+
+        per_gpu_total_mb = min(v["total_mb"] for v in relevant_snap.values())
+        per_gpu_free_mb = min(v["free_mb"] for v in relevant_snap.values())
+        hardware_max_tp = _max_tp_for_plan({"model": model_name, "gpu_devices": gpu_devices}, len(gpu_snap))
+
+        # calibrate_with_tp_escalation probes a pinned tp directly even when
+        # it isn't a power of 2 (max(hw_max, original_tp)) — the search here
+        # must consider the same candidate, or a model that only fits at
+        # that pinned tp gets excluded before it's ever actually tried.
+        # Bounded to the GPUs this plan actually uses: a stale/impossible
+        # pin (more GPUs configured than are in the relevant selection)
+        # must never widen the search beyond what's physically available.
+        configured_tp = tensor_parallel_size if 1 <= tensor_parallel_size <= len(relevant_snap) else None
+
+        # kv_per_token_bytes is cached under the repo's raw torch_dtype; an
+        # explicit --kv-cache-dtype must override it outright, or the
+        # min-KV check uses double the real footprint. Blank/"auto" instead
+        # defers to the plan's --dtype, when explicit — vLLM sizes "auto"
+        # KV cache off that effective model dtype, not the raw repo one.
+        # Neither override set: keep the cached (repo-dtype) value as-is.
+        has_kv_geometry = hf_meta.num_hidden_layers and hf_meta.num_key_value_heads and hf_meta.kv_head_dim
+        is_explicit_kv_override = bool(kv_cache_dtype) and kv_cache_dtype.strip().lower() != "auto"
+        is_explicit_plan_dtype = bool(dtype) and dtype.strip().lower() != "auto"
+        kv_per_token_bytes = hf_meta.kv_per_token_bytes
+        if is_explicit_kv_override and has_kv_geometry:
+            kv_per_token_bytes = kv_bytes_for_dtype(
+                hf_meta.num_hidden_layers, hf_meta.num_key_value_heads, hf_meta.kv_head_dim, kv_cache_dtype
+            )
+        elif is_explicit_plan_dtype and has_kv_geometry:
+            effective_dtype = resolve_effective_dtype(hf_meta.torch_dtype, dtype)
+            kv_per_token_bytes = kv_bytes_for_dtype(
+                hf_meta.num_hidden_layers, hf_meta.num_key_value_heads, hf_meta.kv_head_dim, effective_dtype
+            )
+
+        min_kv_mb = 0.0
+        if kv_per_token_bytes:
+            min_kv_mb = (kv_per_token_bytes * MIN_VIABLE_CONTEXT_TOKENS) / (1024 * 1024)
+
+        unsupported_reason: str | None = None
+        weights_only_tp_idle = min_feasible_tp(
+            hf_meta.weight_bytes, per_gpu_total_mb, hardware_max_tp, configured_tp=configured_tp
+        )
+        fit_tp_idle: int | None = None
+        if weights_only_tp_idle is None:
+            unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS
+        else:
+            fit_tp_idle = min_feasible_tp(
+                hf_meta.weight_bytes,
+                per_gpu_total_mb,
+                hardware_max_tp,
+                min_kv_mb=min_kv_mb,
+                num_key_value_heads=hf_meta.num_key_value_heads,
+                configured_tp=configured_tp,
+            )
+            if fit_tp_idle is None:
+                unsupported_reason = REASON_INSUFFICIENT_VRAM_FOR_MIN_KV
+
+        fit_tp_current = min_feasible_tp(
+            hf_meta.weight_bytes,
+            per_gpu_free_mb,
+            hardware_max_tp,
+            min_kv_mb=min_kv_mb,
+            num_key_value_heads=hf_meta.num_key_value_heads,
+            configured_tp=configured_tp,
+        )
+
+        result.update(
+            per_gpu_total_mb=per_gpu_total_mb,
+            per_gpu_free_mb=per_gpu_free_mb,
+            hardware_max_tp=hardware_max_tp,
+            fit_tp_idle=fit_tp_idle,
+            fit_tp_current=fit_tp_current,
+            unsupported_reason=unsupported_reason,
+        )
+
+        if persist:
+            await self._persist_precheck(
+                model_name,
+                model_profiles.apply_hf_precheck,
+                model_name,
+                disk_size_bytes=hf_meta.weight_bytes,
+                base_residency_mb=hf_meta.weight_bytes / (1024 * 1024),
+                kv_per_token_bytes=kv_per_token_bytes,  # effective (dtype-adjusted), not hf_meta's raw value
+                num_key_value_heads=hf_meta.num_key_value_heads,
+                max_context_length=hf_meta.max_context_length,
+            )
+            if unsupported_reason is not None:
+                if unsupported_reason == REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS:
+                    description = "HF compatibility precheck: weights alone exceed per-GPU VRAM at every TP size."
+                else:
+                    description = "HF compatibility precheck: no VRAM left for a min KV cache at every TP size."
+                await self._persist_permanent_unsupported(model_name, unsupported_reason, description)
+                if record_probe_log:
+                    self._record_precheck_rejection(
+                        model_name,
+                        unsupported_reason,
+                        tensor_parallel_size=tensor_parallel_size,
+                        gpu_devices=gpu_devices,
+                    )
+
+        return result
+
+    @staticmethod
+    def _resolve_config_path() -> Path:
+        """The worker's config.yml — same resolution the calibration
+        session loop uses (LOGOS_WORKER_NODE_CONFIG env, then /app or CWD)."""
+        config_path_str = os.environ.get("LOGOS_WORKER_NODE_CONFIG", "").strip()
+        if config_path_str:
+            return Path(config_path_str)
+        for candidate in (Path("/app/config.yml"), Path("config.yml")):
+            if candidate.resolve().is_file():
+                return candidate
+        return Path("config.yml")
+
+    def _resolve_configured_plan(self, model_name: str) -> dict[str, Any]:
+        """The model's plan from config.yml (gpu_devices, kv_cache_dtype,
+        ...), or {} if unconfigured/unreadable. The standalone RPC has no
+        session plan to read these from, unlike the session loop — without
+        it, a model pinned or given a --kv-cache-dtype gets the defaults."""
+        try:
+            from logos_worker_node.calibration import plans_from_config  # noqa: PLC0415
+
+            config_path = self._resolve_config_path()
+            if not config_path.exists():
+                return {}
+            plan = next((p for p in plans_from_config(config_path) if p.get("model") == model_name), None)
+            return plan or {}
+        except Exception:  # noqa: BLE001
+            logger.debug("[Precheck] config.yml plan lookup failed for %s", model_name, exc_info=True)
+            return {}
+
+    async def _handle_run_compatibility_precheck(self, params: dict[str, Any]) -> dict[str, Any]:
+        """RPC handler for an on-demand compatibility check, callable any
+        time — including outside the nightly maintenance window — since it
+        never touches vLLM or lanes."""
+        from logos_worker_node.calibration import extract_revision_arg  # noqa: PLC0415
+
+        model_name = str(params.get("model", "")).strip()
+        if not model_name:
+            return {"ok": False, "error": "'model' is required"}
+        plan = self._resolve_configured_plan(model_name)
+        result = await self._run_hf_compatibility_precheck(
+            model_name,
+            record_probe_log=False,
+            gpu_devices=str(plan.get("gpu_devices") or ""),
+            kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+            dtype=str(plan.get("dtype") or ""),
+            revision=extract_revision_arg(plan.get("extra_args")) or "",
+            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+        )
+        return {"ok": True, **result}
 
     async def _handle_start_calibration_session(self, params: dict[str, Any]) -> dict[str, Any]:
         """Start a worker-driven calibration session.
@@ -574,6 +1394,11 @@ class LogosBridgeClient:
         choose models; it only sends start/stop session RPCs.
         """
         sleep_level = int(params.get("sleep_level", 1))
+        # Sleep is unsupported on Metal regardless of config (CuMemAllocator
+        # is CUDA-only) — force it off rather than let the probe fail at
+        # a /sleep call that can never succeed on this backend.
+        if is_metal_backend():
+            sleep_level = 0
 
         # Refuse start when a session is already running — caller should
         # have stopped the previous session first. The event channel told
@@ -612,7 +1437,8 @@ class LogosBridgeClient:
         except Exception:  # noqa: BLE001
             logger.debug("[Calibration] node_health evaluation failed", exc_info=True)
 
-        session = _CalibrationSession(sleep_level=sleep_level)
+        skip_models = frozenset(str(m) for m in (params.get("skip_models") or []))
+        session = _CalibrationSession(sleep_level=sleep_level, skip_models=skip_models)
         session.task = asyncio.create_task(
             self._run_calibration_session(session),
             name="calibration-session",
@@ -634,7 +1460,9 @@ class LogosBridgeClient:
         Sets the cancel_event so the calibration's wait_ready polling kills
         the running vLLM probe within ~2s, then awaits the session task
         briefly so the terminal ``calibration_session_cancelled`` event is
-        emitted before the RPC reply.
+        emitted before the RPC reply. If that grace period elapses with the
+        probe stuck inside a blocking warmup call instead, kills the probe
+        subprocess directly so the RPC reply doesn't outlive it by minutes.
         """
         session = self._active_calibration_session
         if session is None:
@@ -646,15 +1474,42 @@ class LogosBridgeClient:
             try:
                 await asyncio.wait_for(asyncio.shield(session.task), timeout=15.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
-                # Session is still wrapping up (subprocess teardown). The
-                # terminal event will arrive on the event channel when it
-                # does. Don't block the RPC longer than 15s.
-                pass
+                # Session is still wrapping up. A blocking warmup/probe HTTP
+                # call has no cancel_event support and can otherwise hold
+                # the subprocess for up to its 600s/120s timeout — kill it
+                # directly so that call fails fast and the session unwinds
+                # promptly. The terminal event still arrives on the event
+                # channel once it does; don't block the RPC longer than 15s.
+                session.kill_current_proc()
         logger.info(
             "[Calibration] stop_calibration_session received — cancelled (current_model=%s)",
             current_model or "<none>",
         )
         return {"ok": True, "was_active": True, "current_model": current_model}
+
+    async def _handle_get_calibration_log(self, params: dict[str, Any]) -> dict[str, Any]:
+        """On-demand fetch of one model's on-disk calibration log.
+
+        Backs the Download-full-logs button for successful runs, which no
+        longer ship log_text automatically. Plain disk read, no GPU/vLLM
+        involved — capped higher (10 MB) than the automatic 512 KB send.
+        """
+        from logos_worker_node.config import get_state_dir  # noqa: PLC0415
+
+        model_name = str(params.get("model_name", "")).strip()
+        if not model_name:
+            return {"ok": False, "error": "model_name is required"}
+
+        log_dir = get_state_dir() / "calibration_logs"
+        log_text = await self._read_calibration_log_text(
+            model_name, log_dir, max_bytes=_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES
+        )
+        if not log_text:
+            return {"ok": False, "error": "No calibration log found on this node for this model"}
+        return {
+            "ok": True,
+            "log_text": self._truncate_calibration_log_text(log_text, max_bytes=_MAX_CALIBRATION_LOG_DOWNLOAD_BYTES),
+        }
 
     # ------------------------------------------------------------------
     # Calibration session driver
@@ -687,34 +1542,176 @@ class LogosBridgeClient:
         if len(lane_manager._event_log) > max_events:  # noqa: SLF001
             lane_manager._event_log = lane_manager._event_log[-max_events:]  # noqa: SLF001
 
+    @staticmethod
+    async def _read_calibration_log_text(
+        model_name: str, log_dir: Path, max_bytes: int = _MAX_CALIBRATION_LOG_TEXT_BYTES
+    ) -> str:
+        log_path = log_dir / f"{model_name.replace('/', '__')}.log"
+        try:
+            return await asyncio.to_thread(LogosBridgeClient._read_calibration_log_tail, log_path, max_bytes)
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _read_calibration_log_tail(log_path: Path, max_bytes: int) -> str:
+        with log_path.open("rb") as f:
+            file_size = f.seek(0, os.SEEK_END)
+            if file_size <= max_bytes:
+                f.seek(0)
+                return f.read().decode("utf-8", errors="replace")
+
+            omitted = file_size - max_bytes
+            marker = f"... [truncated, {omitted} bytes omitted] ...\n"
+            budget = max(0, max_bytes - len(marker.encode("utf-8")))
+
+            f.seek(-budget, os.SEEK_END)
+            tail = f.read().decode("utf-8", errors="ignore")
+            return marker + tail
+
+    @staticmethod
+    def _truncate_calibration_log_text(text: str, max_bytes: int = _MAX_CALIBRATION_LOG_TEXT_BYTES) -> str:
+        """Cap ``text`` to at most ``max_bytes`` UTF-8 bytes, trimming the head.
+
+        The on-disk log is append-mode across every probe attempt in a
+        session and can grow to several hundred KB (see
+        ``_read_calibration_log_text``); without a cap the encoded
+        ``calibration_probe_log`` event — and the DB row it lands in — would
+        be unbounded. Keeps the tail (most recent output, where failures
+        typically surface) and prefixes a truncation marker inside the limit.
+        """
+        encoded = text.encode("utf-8")
+        if len(encoded) <= max_bytes:
+            return text
+
+        omitted = len(encoded) - max_bytes
+        marker = f"... [truncated, {omitted} bytes omitted] ...\n"
+        budget = max(0, max_bytes - len(marker.encode("utf-8")))
+        tail = encoded[-budget:].decode("utf-8", errors="ignore")
+        return marker + tail
+
+    def _record_calibration_probe_log(self, model_name: str, result: Any, log_text: str | None) -> None:
+        """Report the finalized per-model probe log to the orchestrator.
+
+        Rides the calibration event channel into calibration_probe_logs,
+        keyed on (node, model). log_text is None on success — kept only
+        for failures; the fields below cover a successful run already.
+        """
+        self._record_calibration_event(
+            "calibration_probe_log",
+            model=model_name,
+            details=json.dumps(
+                {
+                    "success": result.success,
+                    "backend": "metal" if is_metal_backend() else "cuda",
+                    "probe_command": result.probe_command,
+                    "error": result.error,
+                    "unsupported_reason": result.unsupported_reason,
+                    "node_unhealthy_reason": result.node_unhealthy_reason,
+                    "observed_reason": result.observed_reason,
+                    "metal_capacity_floor_mb": (
+                        round(result.metal_capacity_floor_mb, 1) if result.metal_capacity_floor_mb is not None else None
+                    ),
+                    "stages": result.stages,
+                    "tensor_parallel_size": result.tensor_parallel_size,
+                    "gpu_devices": result.gpu_devices,
+                    "kv_cache_sent_mb": round(result.kv_cache_sent_mb, 1),
+                    "base_residency_mb": round(result.base_residency_mb, 1),
+                    "loaded_vram_mb": round(result.loaded_vram_mb, 1),
+                    "sleeping_residual_mb": (
+                        round(result.sleeping_residual_mb, 1) if result.sleeping_residual_mb is not None else None
+                    ),
+                    "min_kv_cache_mb": round(result.min_kv_cache_mb, 1),
+                    "max_kv_cache_mb": round(result.max_kv_cache_mb, 1),
+                    "max_model_len": result.max_model_len,
+                    "cold_load_time_s": (
+                        round(result.cold_load_time_s, 1) if result.cold_load_time_s is not None else None
+                    ),
+                    "wake_from_sleep_time_s": (
+                        round(result.wake_from_sleep_time_s, 1) if result.wake_from_sleep_time_s is not None else None
+                    ),
+                    "log_text": (self._truncate_calibration_log_text(log_text) if log_text is not None else None),
+                }
+            ),
+        )
+
+    def _record_precheck_rejection(
+        self, model_name: str, reason_code: str, *, tensor_parallel_size: int, gpu_devices: str
+    ) -> None:
+        """Report an HF-precheck rejection into calibration_probe_logs, as
+        its own single-stage checklist row — no real vLLM attempt ever ran,
+        so there's no log_text and every other domain must stay absent
+        rather than implying Node Preflight etc. were reached.
+        """
+        from logos_worker_node.calibration import CalibrationResult  # noqa: PLC0415
+
+        result = CalibrationResult(
+            model=model_name,
+            tensor_parallel_size=tensor_parallel_size,
+            gpu_devices=gpu_devices,
+            kv_cache_sent_mb=0.0,
+            success=False,
+            unsupported_reason=reason_code,
+            stages=[
+                {
+                    "name": "HF Compatibility Precheck",
+                    "status": "failure",
+                    "reason_kind": "unsupported",
+                    "reason_code": reason_code,
+                    "generic_error_message": None,
+                    "generic_error_detail": None,
+                    "log_anchor": None,
+                }
+            ],
+        )
+        self._record_calibration_probe_log(model_name, result, None)
+
     def _list_uncalibrated_models(self) -> list[str]:
         """Pick configured models that still need calibration.
 
         Mirrors the previous server-side selection logic so behaviour is
         unchanged — only the location of the decision moves to the worker.
-        Skips models with sleep_mode_disabled (only the sleep field would
-        be N/A) only when base_residency is already known, and models
-        flagged calibration_unsupported.
+        Models that cannot sleep on this worker are judged on their non-sleep
+        fields alone, because their sleep fields stay null by design; models
+        flagged calibration_unsupported are skipped entirely.
         """
         cfg = self._app.state.config
         model_profiles = self._app.state.model_profiles
         candidates = list(self._cfg.configured_models) or list(self._cfg.capabilities_models)
 
-        sleep_level = (
+        # A session at level 0 measures no sleep field for any model, so those
+        # fields must not count as missing — a run that cannot fill them would
+        # otherwise re-pick the same models every time.
+        session_sleep_level = (
             self._active_calibration_session.sleep_level if self._active_calibration_session is not None else 1
+        )
+
+        session_skip_models = (
+            self._active_calibration_session.skip_models
+            if self._active_calibration_session is not None
+            else frozenset()
         )
 
         ordered: list[str] = []
         for model_name in candidates:
+            if model_name in session_skip_models:
+                logger.info(
+                    "[Calibration] skipping %s — orchestrator flagged it as "
+                    "too large for this node's known capacity",
+                    model_name,
+                )
+                continue
             profile = model_profiles.get_profile(model_name)
             if profile is not None and profile.calibration_unsupported:
                 continue
             sleep_na = bool(profile is not None and profile.sleep_mode_disabled)
             # Worker-side knowledge: if config now forbids sleep but profile
             # still claims it's possible, picking this model is fine — the
-            # session driver re-checks model_can_sleep before each model
-            # and persists the new flag.
-            if sleep_level > 0 and not model_can_sleep(cfg, model_name):
+            # session driver re-checks model_can_sleep before each model,
+            # persists the new flag, and calibrates it at sleep_level 0. That
+            # run leaves the sleep fields null by design, so they must not
+            # count as missing here either. Mirrors
+            # main.py::_auto_calibrate_if_needed.
+            if session_sleep_level <= 0 or not model_can_sleep(cfg, model_name):
                 sleep_na = True
             collapsed_envelope = (
                 profile is not None
@@ -735,6 +1732,10 @@ class LogosBridgeClient:
                     and not profile.kv_cache_to_max_model_len_pairs
                 )
                 or collapsed_envelope
+                # An HF precheck estimate is not a live measurement — keep
+                # the model a candidate until a real calibration/measurement
+                # replaces it, or it never gets probed once a precheck runs.
+                or (profile is not None and profile.residency_source == "hf")
             )
             if needs_calib:
                 ordered.append(model_name)
@@ -760,18 +1761,31 @@ class LogosBridgeClient:
 
         terminal_event = "calibration_session_finished"
         lane_manager = getattr(self._app.state, "lane_manager", None)
+        # Push a status carrying calibrating=True right away. The server holds
+        # its optimistic mark for a bounded window after dispatching the start,
+        # and this is what confirms the session inside it.
+        if lane_manager is not None:
+            try:
+                lane_manager._mark_status_dirty()  # noqa: SLF001
+            except Exception:  # noqa: BLE001
+                logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
         try:
             from logos_worker_node.calibration import (  # noqa: PLC0415
                 _CALIBRATION_PORT,
                 _DEFAULT_VLLM,
                 _READY_TIMEOUT_S,
+                ProfileStoreUnreadableError,
+                _plan_needs_gpu_pin,
                 calibrate_with_tp_escalation,
+                extract_revision_arg,
                 is_model_unsupported,
                 load_existing_profiles,
+                merge_profile,
                 plans_from_config,
                 result_to_profile_dict,
                 save_profiles,
             )
+            from logos_worker_node.calibration_metal import calibrate_model_metal  # noqa: PLC0415
             from logos_worker_node.config import get_state_dir  # noqa: PLC0415
 
             cfg = self._app.state.config
@@ -806,18 +1820,27 @@ class LogosBridgeClient:
             all_plans = plans_from_config(config_path) if config_path.exists() else []
             plan_by_model = {p["model"]: p for p in all_plans}
 
-            # Free all VRAM up front. Live lanes compete with the calibration
-            # probe for GPU memory: the kv-cache search starts against an
-            # already-loaded model, every probe size OOMs, and the blacklist
-            # fills up with bogus entries even though the model could have
-            # calibrated on a clean GPU. The Logos server re-spawns lanes via
-            # the normal apply_lanes path once the session ends.
+            # Free the calibration's GPU slice up front — but only that slice
+            # The probe is pinned to the slice (CUDA_VISIBLE_DEVICES),
+            # so it only competes for the slice's VRAM; lanes on the leftover
+            # GPUs keep serving for the rest of the session instead of sitting
+            # idle. Without the pin the kv-cache search would start against an
+            # already-loaded model on the measured GPUs and OOM at sizes that
+            # would otherwise fit. The Logos server re-spawns the stopped slice
+            # lanes via the normal apply_lanes path once the session ends.
+            calibration_gpus: frozenset[int] = frozenset()
             if lane_manager is not None:
                 try:
-                    await lane_manager.destroy_all()
-                    logger.info("[Calibration] Stopped all lanes to free VRAM for calibration session")
+                    calibration_gpus = lane_manager.begin_calibration_session()
+                    stopped = await lane_manager.destroy_lanes_on_gpus(calibration_gpus)
+                    logger.info(
+                        "[Calibration] Calibration holds GPU(s) %s — stopped %d lane(s) on them; "
+                        "leftover lanes kept serving",
+                        sorted(calibration_gpus),
+                        stopped,
+                    )
                 except Exception:  # noqa: BLE001
-                    logger.exception("[Calibration] destroy_all failed — continuing anyway")
+                    logger.exception("[Calibration] calibration slice setup failed — continuing anyway")
 
             for model_name in models:
                 if session.cancel_event.is_set():
@@ -825,6 +1848,20 @@ class LogosBridgeClient:
                     break
 
                 session.current_model = model_name
+                plan = plan_by_model.get(model_name) or {"model": model_name}
+
+                # Pin to the slice begin_calibration_session actually freed
+                # (which may prefer idle GPUs over 0..slice_size-1 — see
+                # select_calibration_gpus) rather than leaving gpu_devices
+                # blank/"all": calibrate_with_tp_escalation's own
+                # pin_plan_gpu_devices would otherwise recompute the naive
+                # slice independently and probe GPUs that were never freed.
+                # An explicit operator pin in config.yml is left untouched.
+                if calibration_gpus and _plan_needs_gpu_pin(str(plan.get("gpu_devices") or "")):
+                    plan = {
+                        **plan,
+                        "gpu_devices": ",".join(str(i) for i in sorted(calibration_gpus)),
+                    }
 
                 # Pre-flight: persistent unsupported flag.
                 _unsupported = None
@@ -844,42 +1881,103 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"unsupported reason={_unsupported.reason_code}",
                     )
+                    from logos_worker_node.hf_model_info import (  # noqa: PLC0415
+                        REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+                        REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+                    )
+
+                    # A vLLM load failure keeps the row of the probe that
+                    # found it; only a precheck verdict has no row of its own.
+                    if _unsupported.reason_code in (
+                        REASON_INSUFFICIENT_VRAM_FOR_WEIGHTS,
+                        REASON_INSUFFICIENT_VRAM_FOR_MIN_KV,
+                    ):
+                        self._record_precheck_rejection(
+                            model_name,
+                            _unsupported.reason_code,
+                            tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+                            gpu_devices=str(plan.get("gpu_devices") or ""),
+                        )
                     continue
 
                 # Pre-flight: sleep gate. If the worker config forbids sleep
-                # for this model (worker kill switch or per-model override)
-                # there is no point spawning a vLLM lane with sleep_level>0 —
-                # the POST /sleep at Phase 4 of calibration will fail and the
-                # whole probe is wasted. Persist the flag and skip; the model
-                # stays uncalibrated on this worker until config or sleep
-                # level changes.
-                if session.sleep_level > 0 and not model_can_sleep(cfg, model_name):
+                # for this model (worker kill switch or per-model override),
+                # probing with sleep_level>0 would fail at the POST /sleep in
+                # Phase 4 and waste the whole run. Calibrate it at level 0
+                # instead: the sleep phases are skipped, sleeping_residual_mb
+                # is recorded as null, and everything the planner places on —
+                # base_residency_mb — is measured exactly as for any other
+                # model. Skipping the model outright, as this used to, left it
+                # permanently uncalibrated: a nosleep model is never reported
+                # as a capability without a profile, and no later session could
+                # ever produce one either.
+                model_sleep_level = session.sleep_level
+                if not model_can_sleep(cfg, model_name):
                     model_profiles.mark_sleep_mode_disabled(model_name, True)
+                    model_sleep_level = 0
                     logger.info(
-                        "[Calibration] Skipping %s — sleep mode disabled on this worker",
+                        "[Calibration] %s cannot sleep on this worker — calibrating without the sleep phases",
                         model_name,
                     )
-                    self._record_calibration_event(
-                        "calibration_model_skipped",
-                        model=model_name,
-                        details="sleep_mode_disabled",
-                    )
-                    continue
-                if model_can_sleep(cfg, model_name):
+                else:
                     # Config now permits sleep — clear any stale flag so a
                     # config flip (true → false) is picked up immediately.
                     model_profiles.mark_sleep_mode_disabled(model_name, False)
 
-                plan = plan_by_model.get(model_name) or {"model": model_name}
+                # Pre-flight: HF compatibility precheck (see
+                # _run_hf_compatibility_precheck's docstring for the rules).
+                precheck = await self._run_hf_compatibility_precheck(
+                    model_name,
+                    gpu_devices=str(plan.get("gpu_devices") or ""),
+                    kv_cache_dtype=str(plan.get("kv_cache_dtype") or ""),
+                    dtype=str(plan.get("dtype") or ""),
+                    revision=extract_revision_arg(plan.get("extra_args")) or "",
+                    tensor_parallel_size=int(plan.get("tensor_parallel_size") or 1),
+                )
+                if precheck["unsupported_reason"] is not None:
+                    logger.warning(
+                        "[Calibration] Skipping %s — %s",
+                        model_name,
+                        precheck["unsupported_reason"],
+                    )
+                    self._record_calibration_event(
+                        "calibration_model_skipped",
+                        model=model_name,
+                        details=f"unsupported reason={precheck['unsupported_reason']}",
+                    )
+                    # _run_hf_compatibility_precheck itself already recorded
+                    # this rejection (see _record_precheck_rejection) — no
+                    # second write here, or it would clobber that one's
+                    # stages with a plain, domain-less unsupported_reason.
+                    continue
+                # Auto-classification — routes the functional probe to
+                # the model's real serving endpoint. An operator override
+                # (plan["model_kind"], via engines.vllm.model_overrides)
+                # takes precedence; see _calibrate_model_probe.
+                plan = {**plan, "_detected_model_kind": precheck["model_kind"]}
+                if precheck["fit_tp_idle"] is not None:
+                    plan = {
+                        **plan,
+                        "_hf_weight_bytes": precheck["weight_bytes"],
+                        "_hf_max_tp_ceiling": precheck["fit_tp_idle"],
+                    }
+                    logger.info(
+                        "[Calibration] HF precheck for %s: weights=%.0f MB, tp_ceiling=%d (hardware_max=%s)",
+                        model_name,
+                        precheck["weight_bytes"] / (1024 * 1024),
+                        precheck["fit_tp_idle"],
+                        precheck["hardware_max_tp"],
+                    )
+
                 self._record_calibration_event(
                     "calibration_model_started",
                     model=model_name,
-                    details=f"sleep_level={session.sleep_level}",
+                    details=f"sleep_level={model_sleep_level}",
                 )
                 logger.info(
                     "[Calibration] Starting model=%s sleep_level=%d",
                     model_name,
-                    session.sleep_level,
+                    model_sleep_level,
                 )
 
                 # Blocking calibration runs in the default thread executor so
@@ -887,21 +1985,85 @@ class LogosBridgeClient:
                 # is the same instance the stop RPC sets — wait_ready polls
                 # it every 2s and bails immediately.
                 loop = asyncio.get_running_loop()
+
+                def _establish_host_ram_floor_for_probe() -> bool:
+                    # The probe reserves its tmpfs entry on the executor
+                    # thread and immediately admits a synchronous copy, with
+                    # no re-plan tick in between: run one re-plan pass for
+                    # the new reservation on the bridge's event loop and
+                    # wait, so the floor (sleep reserve + safety margin) is
+                    # established before ensure_cached_sync's admission
+                    # checks could fail open against a stale zero floor.
+                    # Return True only once the pass has completed and set
+                    # the floor: a re-plan can legitimately exceed this
+                    # wait (sleeping_model_counts probes the live lanes
+                    # sequentially with a five-second HTTP timeout each),
+                    # and a timed-out or failed pass leaves the floor
+                    # stale — the probe must then admit NO RAM-cache copy
+                    # (it falls back to the source HF_HOME) rather than
+                    # check the stale floor.
+                    fut = None
+                    try:
+                        from logos_worker_node.main import _replan_ram_cache_once  # noqa: PLC0415
+
+                        fut = asyncio.run_coroutine_threadsafe(
+                            _replan_ram_cache_once(self._app),
+                            loop,
+                        )
+                        fut.result(timeout=30.0)
+                        return True
+                    except Exception:  # noqa: BLE001
+                        # Cancel the pass if it has not started; a pass
+                        # already running cannot be interrupted from here,
+                        # and its eventual completion is a normal re-plan
+                        # tick (the probe's own reservation keeps its
+                        # entry protected meanwhile).
+                        if fut is not None:
+                            fut.cancel()
+                        logger.warning(
+                            "[Calibration] host-RAM floor escalation before "
+                            "the synchronous calibration copy did not "
+                            "complete successfully — the probe will load "
+                            "from the source instead of admitting a RAM "
+                            "cache copy",
+                            exc_info=True,
+                        )
+                        return False
+
                 try:
-                    result = await loop.run_in_executor(
-                        None,
-                        lambda p=plan: calibrate_with_tp_escalation(
-                            p,
-                            vllm_binary=_DEFAULT_VLLM,
-                            port=_CALIBRATION_PORT,
-                            log_dir=log_dir,
-                            sleep_level=session.sleep_level,
-                            ready_timeout_s=_READY_TIMEOUT_S,
-                            nccl_p2p_available=nccl_p2p,
-                            model_cache=_mc,
-                            cancel_event=session.cancel_event,
-                        ),
-                    )
+                    if is_metal_backend():
+                        # No TP escalation, no KV sweep, no sleep/wake — see
+                        # calibration_metal's module docstring for why.
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda p=plan: calibrate_model_metal(
+                                p,
+                                vllm_binary=_DEFAULT_VLLM,
+                                port=_CALIBRATION_PORT,
+                                log_dir=log_dir,
+                                ready_timeout_s=_READY_TIMEOUT_S,
+                                cancel_event=session.cancel_event,
+                                worker_metal_config=cfg.engines.metal,
+                                proc_callback=session.set_current_proc,
+                            ),
+                        )
+                    else:
+                        result = await loop.run_in_executor(
+                            None,
+                            lambda p=plan, sl=model_sleep_level: calibrate_with_tp_escalation(
+                                p,
+                                vllm_binary=_DEFAULT_VLLM,
+                                port=_CALIBRATION_PORT,
+                                log_dir=log_dir,
+                                sleep_level=sl,
+                                ready_timeout_s=_READY_TIMEOUT_S,
+                                nccl_p2p_available=nccl_p2p,
+                                model_cache=_mc,
+                                cancel_event=session.cancel_event,
+                                establish_host_ram_floor=_establish_host_ram_floor_for_probe,
+                                proc_callback=session.set_current_proc,
+                            ),
+                        )
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("[Calibration] Unexpected error for model=%s", model_name)
                     self._record_calibration_event(
@@ -924,16 +2086,34 @@ class LogosBridgeClient:
                     break
 
                 if result.success:
-                    existing = load_existing_profiles(profiles_path)
-                    prior = existing.get(model_name) or {}
-                    new_profile = result_to_profile_dict(result)
-                    for _carry in (
-                        "sleep_l1_transient_host_ram_mb",
-                        "sleep_l2_transient_host_ram_mb",
-                    ):
-                        if new_profile.get(_carry) is None and prior.get(_carry) is not None:
-                            new_profile[_carry] = prior[_carry]
-                    existing[model_name] = new_profile
+                    # An unreadable store aborts the write: load_existing_profiles
+                    # used to answer with an empty dict, and saving that back
+                    # replaced every profile on the node with this one result.
+                    # Losing one measurement is recoverable; losing the file is
+                    # not, because a model without base_residency_mb is never
+                    # announced as a capability and a model that cannot sleep
+                    # here would keep failing to be re-measured.
+                    try:
+                        existing = load_existing_profiles(profiles_path)
+                    except ProfileStoreUnreadableError as exc:
+                        logger.error(
+                            "[Calibration] %s calibrated, but %s is unreadable (%s) — "
+                            "keeping the file untouched. Fix or remove it; this model "
+                            "re-calibrates on the next session.",
+                            model_name,
+                            profiles_path,
+                            exc,
+                        )
+                        self._record_calibration_event(
+                            "calibration_model_failed",
+                            model=model_name,
+                            details=f"profile store unreadable: {exc}",
+                        )
+                        continue
+                    existing[model_name] = merge_profile(
+                        existing.get(model_name),
+                        result_to_profile_dict(result),
+                    )
                     save_profiles(profiles_path, existing)
                     model_profiles._load_persisted()  # noqa: SLF001
                     # Models that were pruned from capabilities at startup
@@ -957,6 +2137,7 @@ class LogosBridgeClient:
                         model=model_name,
                         details=f"base_residency_mb={result.base_residency_mb:.0f}",
                     )
+                    self._record_calibration_probe_log(model_name, result, None)
                     # Dirty the lane manager's status revision so the next
                     # status push includes the updated model_profiles right
                     # away (instead of waiting the full status_refresh
@@ -968,7 +2149,7 @@ class LogosBridgeClient:
                         except Exception:  # noqa: BLE001
                             logger.debug("[Calibration] _mark_status_dirty failed", exc_info=True)
 
-                    # Issue #615: when the calibrated TP is >1, pre-shard the
+                    # When the calibrated TP is >1, pre-shard the
                     # checkpoint now while the GPU is free, so the lane that
                     # serves this model later loads each rank's shard directly
                     # instead of every rank re-reading the full checkpoint.
@@ -986,6 +2167,13 @@ class LogosBridgeClient:
                             model_name,
                             result.unsupported_reason,
                         )
+                    if getattr(result, "metal_capacity_floor_mb", None):
+                        model_profiles.mark_capacity_floor(model_name, result.metal_capacity_floor_mb)
+                        logger.warning(
+                            "[Calibration] %s recorded capacity floor = %.0f MB on this node",
+                            model_name,
+                            result.metal_capacity_floor_mb,
+                        )
                     self._record_calibration_event(
                         "calibration_model_failed",
                         model=model_name,
@@ -996,6 +2184,8 @@ class LogosBridgeClient:
                             else ""
                         ),
                     )
+                    log_text = await self._read_calibration_log_text(model_name, log_dir)
+                    self._record_calibration_probe_log(model_name, result, log_text)
 
                 session.current_model = None
         except asyncio.CancelledError:
@@ -1014,6 +2204,10 @@ class LogosBridgeClient:
                 details=f"sleep_level={session.sleep_level}",
             )
             if lane_manager is not None:
+                try:
+                    lane_manager.end_calibration_session()
+                except Exception:  # noqa: BLE001
+                    logger.debug("[Calibration] end_calibration_session failed", exc_info=True)
                 try:
                     lane_manager._mark_status_dirty()  # noqa: SLF001
                 except Exception:  # noqa: BLE001
@@ -1036,7 +2230,7 @@ class LogosBridgeClient:
         Runs the (blocking, GPU-loading) conversion on the thread executor with
         the session's cancel_event wired through, so stop_calibration_session
         tears it down within ~2s. Best-effort: any failure is logged and the
-        model still serves from its full checkpoint. See issue #615.
+        model still serves from its full checkpoint.
         """
         try:
             from pathlib import Path  # noqa: PLC0415
@@ -1045,19 +2239,41 @@ class LogosBridgeClient:
             from logos_worker_node.calibration import _DEFAULT_VLLM  # noqa: PLC0415
 
             vc_engine = cfg.engines.vllm if cfg.engines else None
-            if vc_engine is None or not getattr(vc_engine, "sharded_checkpoint_enabled", True):
+            if vc_engine is None:
+                return
+            # Per-model override wins over the worker-wide switch in both
+            # directions; the lane spawner reads the same answer, so a
+            # conversion it would never serve is never started here.
+            if not model_uses_sharded_checkpoint(vc_engine, model_name):
                 return
             tp = int(getattr(result, "tensor_parallel_size", 1) or 1)
             min_tp = max(2, int(getattr(vc_engine, "sharded_checkpoint_min_tensor_parallel_size", 2)))
             if tp < min_tp:
                 return
 
-            models_path = cfg.engines.ollama.models_path if cfg.engines else ""
+            models_path = cfg.worker.models_path
             cache_root = sc.resolve_cache_root(models_path)
             if not cache_root:
                 return
             target = sc.sharded_checkpoint_dir(cache_root, model_name, tp)
             if sc.is_sharded_checkpoint_ready(target):
+                return
+
+            loop = asyncio.get_running_loop()
+            # ensure_sharded_checkpoint would refuse a rejected (model, tp)
+            # itself, but returning None there is indistinguishable from a real
+            # conversion failure and would record a misleading
+            # sharded_conversion_failed event. Ask first so the skip stays a
+            # skip. Off the event loop: the check can probe a separate-venv
+            # interpreter for its version.
+            rejection = await loop.run_in_executor(None, lambda: sc.rejection_state(target, vllm_binary=_DEFAULT_VLLM))
+            if rejection == "skip":
+                logger.info(
+                    "[Calibration] sharded checkpoint for %s (tp=%d) was rejected by this vLLM — "
+                    "not converting; the lane serves the full checkpoint",
+                    model_name,
+                    tp,
+                )
                 return
 
             import os as _os  # noqa: PLC0415
@@ -1071,7 +2287,6 @@ class LogosBridgeClient:
             self._record_calibration_event("sharded_conversion_started", model=model_name, details=f"tp={tp}")
             logger.info("[Calibration] Converting %s to sharded checkpoint (tp=%d)", model_name, tp)
 
-            loop = asyncio.get_running_loop()
             out = await loop.run_in_executor(
                 None,
                 lambda: sc.ensure_sharded_checkpoint(
@@ -1151,37 +2366,72 @@ class LogosBridgeClient:
         if not isinstance(payload, dict):
             raise ValueError("payload must be an object")
 
+        tracer = worker_perf.begin()
+
         # Atomically validate-and-count the lane (closes the dispatch-to-sleep
         # race: the lane cannot be slept/evicted between selection and counting).
-        lane_status = (await lane_manager.acquire_lane_for_infer(lane_id)).model_dump(mode="json")
+        # Includes the per-request lane status build (the W2 optimisation
+        # target) — that is why the phase is named lane.acquire.
+        with _perf_phase(tracer, "lane.acquire"):
+            lane_status = (await lane_manager.acquire_lane_for_infer(lane_id)).model_dump(mode="json")
         try:
-            request_path = params.get("request_path")
-            target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
-            async with httpx.AsyncClient(timeout=None) as client:
-                upstream = await client.post(
+            with _perf_phase(tracer, "relay.prepare"):
+                request_path = params.get("request_path")
+                target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
+                request_kwargs, request_headers = httpx_request_parts(payload)
+            with _perf_phase(tracer, "relay.post"):
+                upstream = await self._relay_client.post(
                     target_url,
-                    headers={"Content-Type": "application/json"},
-                    json=payload,
+                    headers=request_headers,
+                    **request_kwargs,
                 )
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Lane relay request failed for '{lane_id}': {exc}") from exc
         finally:
-            await lane_manager.decrement_active_requests(lane_id)
+            with _perf_phase(tracer, "lane.decrement"):
+                await lane_manager.decrement_active_requests(lane_id)
 
-        try:
-            body = upstream.json()
-        except ValueError:
-            body = upstream.text
+        with _perf_phase(tracer, "relay.parse"):
+            content_type = upstream.headers.get("content-type")
+            media_type = (content_type or "").partition(";")[0].strip().lower()
+            is_json_response = not media_type or media_type == "application/json" or media_type.endswith("+json")
+            is_successful_multipart = upstream.status_code < 400 and isinstance(
+                payload.get(MULTIPART_PAYLOAD_KEY), dict
+            )
+            is_text_response = media_type.startswith("text/") or media_type == "application/x-subrip"
+            body_base64 = None
+            if is_successful_multipart:
+                if is_text_response:
+                    body = upstream.text
+                elif is_json_response:
+                    try:
+                        body = upstream.json()
+                    except ValueError:
+                        body = None
+                        body_base64 = base64.b64encode(upstream.content).decode("ascii")
+                else:
+                    body = None
+                    body_base64 = base64.b64encode(upstream.content).decode("ascii")
+            else:
+                try:
+                    body = upstream.json()
+                except ValueError:
+                    body = upstream.text
 
         headers = {}
-        content_type = upstream.headers.get("content-type")
         if content_type:
             headers["content-type"] = content_type
-        return {
+        result = {
             "status_code": int(upstream.status_code),
             "body": body,
             "headers": headers,
         }
+        if body_base64 is not None:
+            result["body_base64"] = body_base64
+            result["body_encoding"] = "base64"
+        if tracer is not None:
+            result["perf"] = tracer.finish()
+        return result
 
     async def _execute_stream_command(self, ws, cmd_id: str, params: dict[str, Any]) -> None:
         lane_manager = self._app.state.lane_manager
@@ -1217,16 +2467,20 @@ class LogosBridgeClient:
             )
             return
 
-        client = httpx.AsyncClient(timeout=None)
+        # Shared pooled client (see __init__): the finally below must NOT
+        # close it — only the streamed response, which is what makes vLLM
+        # abort the sequence. stop() closes the client itself.
+        client = self._relay_client
         upstream = None
         try:
             request_path = params.get("request_path")
             target_url = self._lane_target_url(lane_status, payload, request_path=request_path)
+            request_kwargs, request_headers = httpx_request_parts(payload)
             request = client.build_request(
                 "POST",
                 target_url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
+                headers=request_headers,
+                **request_kwargs,
             )
             upstream = await client.send(request, stream=True)
 
@@ -1301,6 +2555,22 @@ class LogosBridgeClient:
                 )
                 return
             await self._send_json(ws, {"type": "stream_end", "cmd_id": cmd_id, "success": True})
+        except asyncio.CancelledError:
+            # The server cancelled this stream because its client went away.
+            # No terminal frame: nobody is reading, and the server already
+            # dropped the queue for this cmd_id. What matters is the `finally`
+            # below — closing the httpx stream is what tells vLLM to abort the
+            # sequence instead of generating into a socket nobody drains.
+            # CancelledError is a BaseException, so the handler below does not
+            # swallow it and no spurious stream_end is emitted.
+            logger.info(
+                "%s<< STREAM CANCELLED%s cmd_id=%s lane=%s — aborting generation",
+                _YELLOW,
+                _RESET,
+                cmd_id[:8],
+                lane_id,
+            )
+            raise
         except Exception as exc:  # noqa: BLE001
             await self._send_json(
                 ws,
@@ -1312,16 +2582,27 @@ class LogosBridgeClient:
                 },
             )
         finally:
-            # Decrement before aclose() so that a client-side disconnect that
-            # leaves httpx draining the upstream stream does not keep
-            # worker_active > 0 and falsely trigger proxy_stuck detection.
-            await lane_manager.decrement_active_requests(lane_id)
+            # Decrement before the response is closed so that a client-side
+            # disconnect that leaves httpx draining the upstream stream does
+            # not keep worker_active > 0 and falsely trigger proxy_stuck
+            # detection.
+            #
+            # Guarded so a lane-manager failure cannot skip the close below:
+            # on the cancellation path that close is the whole point — it is
+            # what makes vLLM abort the sequence and release its KV blocks.
+            # Only the streamed response is closed; the pooled client is
+            # shared with every other command and outlives this one.
+            try:
+                await lane_manager.decrement_active_requests(lane_id)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "Failed to decrement in-flight count for lane=%s (cmd_id=%s)",
+                    lane_id,
+                    cmd_id[:8],
+                    exc_info=True,
+                )
             if upstream is not None:
                 try:
                     await asyncio.wait_for(upstream.aclose(), timeout=5.0)
                 except Exception:  # noqa: BLE001
                     pass
-            try:
-                await asyncio.wait_for(client.aclose(), timeout=5.0)
-            except Exception:  # noqa: BLE001
-                pass

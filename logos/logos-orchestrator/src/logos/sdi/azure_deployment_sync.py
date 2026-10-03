@@ -1,6 +1,6 @@
 """Azure deployment auto-sync.
 
-Discovers the deployments live on each Azure OpenAI resource and upserts them
+Discovers the deployments live on each Azure resource and upserts them
 into the Logos database (``models`` + ``model_provider``) so the catalogue
 mirrors what is actually deployed. Runs once on startup and then every 24h.
 
@@ -12,7 +12,8 @@ Azure quirks this handles:
     ``model`` it serves (e.g. id ``gpt-4o`` serving model ``gpt-5.1``). Models
     are named by the served ``model``; the URL uses the deployment ``id``.
   * Different model families need different operation paths / api-versions
-    (chat completions, the Responses API, embeddings, audio, images).
+    (chat completions, the Responses API, embeddings, audio, images, and
+    native Anthropic Messages).
 """
 
 import asyncio
@@ -26,6 +27,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from logos.dbutils.dbmanager import DBManager
+from logos.sdi.model_discovery_notifier import deliver_discovery_notifications
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ DEPLOYMENTS_LIST_API_VERSION = os.getenv("LOGOS_AZURE_DEPLOYMENTS_API_VERSION", 
 _CHAT_API_VERSION = os.getenv("LOGOS_AZURE_CHAT_API_VERSION", "2025-01-01-preview")
 _RESPONSES_API_VERSION = os.getenv("LOGOS_AZURE_RESPONSES_API_VERSION", "2025-04-01-preview")
 _EMBEDDINGS_API_VERSION = os.getenv("LOGOS_AZURE_EMBEDDINGS_API_VERSION", "2024-02-01")
-_AUDIO_API_VERSION = os.getenv("LOGOS_AZURE_AUDIO_API_VERSION", "2024-06-01")
+_AUDIO_API_VERSION = os.getenv("LOGOS_AZURE_AUDIO_API_VERSION", "2025-04-01-preview")
 _IMAGE_API_VERSION = os.getenv("LOGOS_AZURE_IMAGE_API_VERSION", "2024-02-01")
 
 # Operation suffix -> api-version, for callers that need to re-target a stored
@@ -47,6 +49,8 @@ AZURE_OPERATION_API_VERSIONS: Dict[str, str] = {
     "chat/completions": _CHAT_API_VERSION,
     "responses": _RESPONSES_API_VERSION,
     "embeddings": _EMBEDDINGS_API_VERSION,
+    "audio/transcriptions": _AUDIO_API_VERSION,
+    "audio/translations": _AUDIO_API_VERSION,
 }
 
 SYNC_INTERVAL_S = int(os.getenv("LOGOS_AZURE_SYNC_INTERVAL_S", str(24 * 60 * 60)))
@@ -58,11 +62,13 @@ class AzureOperation:
     """How to address a model family on Azure."""
 
     # Operation suffix appended after the deployment segment, e.g.
-    # "chat/completions". For the Responses API this is "responses": Azure's
-    # real route is /openai/responses (no deployment in the path; the
-    # deployment is named by the request body's "model"), but we still store
-    # the deployment-scoped form so the id is recoverable — see
-    # build_azure_endpoint and ContextResolver._azure_responses_route.
+    # "chat/completions". For the Responses API this is "responses" and for
+    # the Anthropic Messages route "anthropic/v1/messages": both real routes
+    # carry no deployment in the path (the deployment is named by the request
+    # body's "model"), but we still store the deployment-scoped form so the id
+    # is recoverable — see build_azure_endpoint and
+    # ContextResolver._azure_responses_route / _azure_anthropic_route.
+    # api_version is empty where the route takes none.
     suffix: str
     api_version: str
 
@@ -71,8 +77,9 @@ def classify_azure_operation(model_name: str) -> AzureOperation:
     """Map a served Azure model name to its operation path + api-version.
 
     Best-effort by family. Chat completions is the default; the special cases
-    cover embeddings, audio (whisper/tts), images, and the Responses API used
-    by the gpt-5.x reasoning models (gpt-5-chat stays on chat/completions).
+    cover embeddings, audio (whisper/tts), images, the Responses API used by
+    the gpt-5.x reasoning models (gpt-5-chat stays on chat/completions), and
+    native Anthropic Messages for Claude deployments.
     """
     m = model_name.lower()
 
@@ -88,6 +95,8 @@ def classify_azure_operation(model_name: str) -> AzureOperation:
     # config for the gpt-5.4 family); gpt-5-chat is a normal chat model.
     if re.match(r"^gpt-5", m) and "chat" not in m:
         return AzureOperation("responses", _RESPONSES_API_VERSION)
+    if m.startswith("claude-"):
+        return AzureOperation("anthropic/v1/messages", "")
     return AzureOperation("chat/completions", _CHAT_API_VERSION)
 
 
@@ -102,6 +111,46 @@ def azure_host_from_base_url(base_url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def _warn_if_not_an_azure_endpoint(provider: Dict[str, Any]) -> None:
+    """Point out a cloud provider that is typed 'azure' but is not one.
+
+    Such a provider is discovered by nobody: this sync queries the Azure
+    data-plane route it does not serve, and the generic ``/v1/models`` sync
+    skips everything typed 'azure' on purpose. The catalogue then just stays
+    empty, with the Azure listing failure as the only hint. Say plainly which
+    provider it is and what to change.
+    """
+    base_url = provider.get("base_url") or ""
+    try:
+        host = urlsplit(base_url).hostname or ""
+    except ValueError:
+        # A bracketed authority that is not a valid IPv6 literal — "https://[x"
+        # — raises rather than returning None. This runs before any provider is
+        # synced and outside the per-provider guard, so letting it escape would
+        # abort the whole pass, and the initial one is awaited inline by
+        # start(): a single malformed base_url would take orchestrator startup
+        # down with it. It is also its own kind of misconfiguration, so it is
+        # reported rather than swallowed.
+        logger.warning(
+            "Azure deployment sync: provider %s (%s) has an unparseable base_url %r; it cannot be queried",
+            provider.get("id"),
+            provider.get("name"),
+            base_url,
+        )
+        return
+    if host.lower().rstrip(".").endswith("azure.com"):
+        return
+    logger.warning(
+        "Azure deployment sync: provider %s (%s) is typed 'azure' but its endpoint %r is not an Azure host. "
+        "Azure providers are excluded from the generic /v1/models sync, so this provider is discovered by "
+        "neither path and its model list will stay empty. Set its cloud provider type to the vendor it "
+        "actually is, or leave it unset for a plain OpenAI-compatible endpoint.",
+        provider.get("id"),
+        provider.get("name"),
+        provider.get("base_url"),
+    )
+
+
 def build_azure_endpoint(host: str, deployment_id: str, op: AzureOperation) -> str:
     """Build the per-model endpoint URL stored in the DB for a deployment.
 
@@ -110,14 +159,15 @@ def build_azure_endpoint(host: str, deployment_id: str, op: AzureOperation) -> s
     for capacity tracking (``extract_azure_deployment_name``) and the forward
     layer recovers it to address the deployment.
 
-    For the Responses API Azure's real route has no deployment segment — it
-    resolves the deployment from the request body's ``model`` field — so
-    ``ContextResolver._azure_responses_route`` collapses
-    ``.../openai/deployments/<id>/responses`` to ``.../openai/responses`` and
-    rewrites the body ``model`` to ``<id>`` at forward time.
+    For the Responses API and the Anthropic Messages route Azure's real route
+    has no deployment segment — it resolves the deployment from the request
+    body's ``model`` field — so ``ContextResolver._azure_responses_route`` /
+    ``_azure_anthropic_route`` collapse the stored form to the real URL and
+    rewrite the body ``model`` to ``<id>`` at forward time.
     """
     host = host.rstrip("/")
-    return f"{host}/openai/deployments/{deployment_id}/{op.suffix}?api-version={op.api_version}"
+    url = f"{host}/openai/deployments/{deployment_id}/{op.suffix}"
+    return f"{url}?api-version={op.api_version}" if op.api_version else url
 
 
 def _norm(s: str) -> str:
@@ -183,6 +233,9 @@ class AzureDeploymentSyncService:
         self._enabled = enabled
         self._on_models_changed = on_models_changed
         self._task: Optional[asyncio.Task] = None
+        self._refresh_task: Optional[asyncio.Task] = None
+        self._refresh_pending = False
+        self._pass_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if not self._enabled:
@@ -193,14 +246,36 @@ class AzureDeploymentSyncService:
         await self.run_once()
         self._task = asyncio.create_task(self._loop())
 
-    async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
+    def request_refresh(self) -> None:
+        """Sync Azure providers immediately after a provider change."""
+        if not self._enabled:
+            return
+        if self._refresh_task is not None and not self._refresh_task.done():
+            self._refresh_pending = True
+            return
+        self._refresh_task = asyncio.create_task(self._refresh_loop())
+
+    async def _refresh_loop(self) -> None:
+        while True:
+            self._refresh_pending = False
             try:
-                await self._task
+                await self.run_once()
+            except Exception:  # noqa: BLE001
+                logger.exception("Azure deployment sync: out-of-band refresh failed")
+            if not self._refresh_pending:
+                return
+
+    async def stop(self) -> None:
+        for attr in ("_task", "_refresh_task"):
+            task = getattr(self, attr)
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
             except asyncio.CancelledError:
                 pass
-            self._task = None
+            setattr(self, attr, None)
 
     async def _loop(self) -> None:
         while True:
@@ -212,6 +287,10 @@ class AzureDeploymentSyncService:
 
     async def run_once(self) -> None:
         """Sync every Azure provider once. Never raises."""
+        async with self._pass_lock:
+            await self._run_pass()
+
+    async def _run_pass(self) -> None:
         try:
             with DBManager() as db:
                 providers = db.get_azure_providers()
@@ -222,6 +301,9 @@ class AzureDeploymentSyncService:
         if not providers:
             logger.debug("Azure deployment sync: no Azure providers configured")
             return
+
+        for provider in providers:
+            _warn_if_not_an_azure_endpoint(provider)
 
         # Track DB changes separately from new model rows: any link insert /
         # endpoint update / prune must refresh the runtime registry (so the
@@ -260,6 +342,14 @@ class AzureDeploymentSyncService:
         try:
             with DBManager() as db:
                 result = db.sync_azure_deployments(pid, planned)
+                try:
+                    await deliver_discovery_notifications(db)
+                except Exception:  # noqa: BLE001
+                    # A queue read/delivery failure must not fail the pass —
+                    # the IDs stay queued and are retried on the next pass.
+                    logger.exception(
+                        "Azure deployment sync: discovery notification delivery failed for provider %s (%s)", pid, name
+                    )
         except Exception:  # noqa: BLE001
             logger.exception("Azure deployment sync: DB upsert failed for provider %s (%s)", pid, name)
             return False, False

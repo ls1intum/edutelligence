@@ -1,8 +1,7 @@
-// ─── Glass System ─────────────────────────────────────────────────────────────
+// ─── Card/Panel Surface System ────────────────────────────────────────────────
 //
-// Tokens defined in _tokens.scss:
-//   --glass-fill, --glass-stroke, --glass-blur
-//   --glass-fill-opacity, --glass-stroke-opacity, --glass-hover-fill-opacity
+// Flat, opaque surfaces (no blur/translucency) using the surface + outline
+// tokens from _tokens.scss.
 //
 // Two variants:
 //   glass-card    - interactive surface with hover (stat cards, list items)
@@ -12,30 +11,25 @@
 //   @use 'styles/glass' as *;
 //   .my-card    { @include glass-card; }
 //   .my-panel   { @include glass-surface; }
-//   .my-input   { @include glass-surface(4px); }
 
 // ── Interactive card (hover changes fill) ─────────────────────────────────────
 
 @mixin glass-card {
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: rgb(var(--color-surface-0));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
   border-radius: 8px;
 }
 
 @mixin glass-card-hover {
-  background: rgb(var(--glass-fill) / var(--glass-hover-fill-opacity));
-  border-color: rgb(var(--glass-stroke) / calc(var(--glass-stroke-opacity) * 1.5));
+  background: rgb(var(--color-surface-50));
+  border-color: rgb(var(--color-outline-200) / var(--opacity-strong));
 }
 
 // ── Static surface (no hover) ─────────────────────────────────────────────────
 
 @mixin glass-surface {
-  background: rgb(var(--glass-fill) / var(--glass-fill-opacity));
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  background: rgb(var(--color-surface-0));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
   border-radius: 8px;
 }
 

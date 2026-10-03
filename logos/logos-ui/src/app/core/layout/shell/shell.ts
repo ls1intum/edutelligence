@@ -1,4 +1,4 @@
-import { Component, computed, effect, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import { Component, computed, inject, signal, ChangeDetectionStrategy } from '@angular/core';
 import { Router, RouterModule } from '@angular/router';
 import { AuthService } from '../../auth/services/auth.service';
 import { MENU_ITEMS, NAV_GROUP_LABELS } from '../../../shared/constants/nav-items';
@@ -6,7 +6,6 @@ import { MenuItem } from '../../../shared/models/nav.model';
 import { UserRole } from '../../auth/models/user.model';
 import { Logo } from '../../../shared/components/logo/logo';
 import { ThemeToggle } from '../../../shared/components/theme-toggle/theme-toggle';
-import { Orbs } from '../../../shared/components/orbs/orbs';
 import { IconTileComponent } from '../../../shared/components/icon-tile/icon-tile';
 import { MyKeysService } from '../../services/my-keys.service';
 
@@ -18,7 +17,7 @@ interface NavSection {
 @Component({
   selector: 'app-shell',
   standalone: true,
-  imports: [RouterModule, Logo, ThemeToggle, Orbs, IconTileComponent],
+  imports: [RouterModule, Logo, ThemeToggle, IconTileComponent],
   templateUrl: './shell.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './shell.scss',
@@ -32,45 +31,45 @@ export class Shell {
   showLogoutModal = signal(false);
   private opener: HTMLElement | null = null;
 
-  /** null while unresolved; treated as hidden until proven, failing closed like hasKeysGuard. */
-  hasKeys = signal<boolean | null>(null);
+  /**
+   * Shared with hasKeysGuard (see MyKeysService.hasKeys) so the guard reads
+   * an already-resolved value on repeat navigations instead of re-fetching.
+   */
+  hasKeys = this.keysService.hasKeys;
 
   /**
-   * String fingerprint of the current user's team ids (null when logged out).
-   * A string keeps the computed referentially stable across refreshUser()
-   * calls that don't change membership, so the key re-fetch effect below only
-   * fires on actual membership changes.
+   * Whether the agent runner is running on this deployment. The runner is
+   * opt-in per deployment (a compose profile), so where it is not selected
+   * there is no /api/agent router at all: the probe below falls through to
+   * the SPA and comes back with its HTML shell instead of the runner's JSON
+   * health answer. Only that JSON answer means the runner is really there,
+   * and it is what keeps the menu entry out of deployments without agents.
+   * Hidden by default: while the probe is in flight, and on any failure,
+   * the entry stays out rather than pointing at a service that is not up.
    */
-  private teamFingerprint = computed(() => {
-    const user = this.auth.currentUser();
-    if (!user) return null;
-    return user.teams.map((t) => t.id).sort((a, b) => a - b).join(',');
-  });
-
-  /** Discards responses of superseded key fetches (see effect below). */
-  private keysFetchGeneration = 0;
+  agentAvailable = signal(false);
 
   constructor() {
     this.router.events.subscribe(() => {
       this.closeSidebar();
     });
-    // Joining a team auto-creates a developer key server-side (and leaving
-    // deactivates it), so a membership change is exactly when key state can
-    // flip; re-fetch instead of guessing.
-    effect(() => {
-      const fingerprint = this.teamFingerprint();
-      const generation = ++this.keysFetchGeneration;
-      this.hasKeys.set(null);
-      if (fingerprint === null) return;
-      this.keysService
-        .getMyKeys()
-        .then((keys) => {
-          if (generation === this.keysFetchGeneration) this.hasKeys.set(keys.length > 0);
-        })
-        .catch(() => {
-          if (generation === this.keysFetchGeneration) this.hasKeys.set(false);
-        });
-    });
+    void this.probeAgent();
+  }
+
+  /**
+   * One probe per page load: the absence of the entry is the default, and a
+   * deployment that enables the runner later picks it up on the next reload.
+   * The endpoint needs no token, so a raw fetch keeps this out of the
+   * auth-intercepted HttpClient.
+   */
+  async probeAgent(): Promise<void> {
+    try {
+      const res = await fetch('/api/agent/health', { cache: 'no-store' });
+      const type = res.headers.get('content-type') ?? '';
+      this.agentAvailable.set(res.ok && type.includes('application/json'));
+    } catch {
+      this.agentAvailable.set(false);
+    }
   }
 
   toggleSidebar() {
@@ -118,7 +117,7 @@ export class Shell {
   navSections = computed<NavSection[]>(() => {
     const role = this.auth.role();
     if (!role) return [];
-    const keyGatedPaths = ['/my-workspace', '/open-code'];
+    const keyGatedPaths = ['/my-workspace', '/ai-tools', '/batches'];
     // Keys can outlive team membership (orphaned key after removal), so both
     // must hold; this mirrors hasKeysGuard, which is the actual access boundary.
     const hasTeams = (this.auth.currentUser()?.teams.length ?? 0) > 0;
@@ -126,6 +125,7 @@ export class Shell {
     const visible = MENU_ITEMS.filter(
       (item) =>
         item.roles.includes(role as UserRole) &&
+        (!item.requiresAgent || this.agentAvailable()) &&
         (!keyGatedPaths.includes(item.path) || showKeyGated),
     );
     return (['system', 'management', 'personal'] as const)
@@ -135,4 +135,16 @@ export class Shell {
       }))
       .filter((g) => g.items.length > 0);
   });
+
+  /**
+   * Team detail lives at `/teams/:id` while the sidebar entry is
+   * `/team-management` — keep Teams highlighted for the whole flow.
+   */
+  isNavActive(item: MenuItem): boolean {
+    const url = this.router.url.split('?')[0];
+    if (item.path === '/team-management') {
+      return url === '/team-management' || url.startsWith('/teams/');
+    }
+    return url === item.path || url.startsWith(`${item.path}/`);
+  }
 }

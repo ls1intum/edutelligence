@@ -39,9 +39,9 @@ jobs:
       DEPLOYMENT_HOST: ${{ vars.DEPLOYMENT_HOST }}
       DEPLOYMENT_FOLDER: ${{ vars.DEPLOYMENT_FOLDER }}
       DEPLOYMENT_HOST_PUBLIC_KEYS: ${{ vars.DEPLOYMENT_HOST_PUBLIC_KEYS }}
-      GATEWAY_USER: "jump"
-      GATEWAY_HOST: "gateway.artemis.in.tum.de:2010"
-      GATEWAY_HOST_PUBLIC_KEY: "[gateway.artemis.in.tum.de]:2010 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtTLiKRILjKZ+Qg4ReWKsG7mLDXkzHfeY5nalSQUNQ4"
+      GATEWAY_USER: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+      GATEWAY_HOST: "${{ vars.DEPLOYMENT_GATEWAY_HOST }}:${{ vars.DEPLOYMENT_GATEWAY_PORT }}"
+      GATEWAY_HOST_PUBLIC_KEY: ${{ vars.DEPLOYMENT_GATEWAY_PUBLIC_KEY }}
 
     steps:
       # Download pyris-server-cli from GH without cloning the Repo

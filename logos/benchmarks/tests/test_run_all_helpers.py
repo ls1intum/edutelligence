@@ -231,3 +231,88 @@ def test_ensure_calibration_fails_without_provider_ids():
     reset.assert_not_called()
     trig.assert_not_awaited()
     wait.assert_not_awaited()
+
+
+def _config_env_fake(legacy_env: str):
+    """A subprocess fake that serves ``legacy_env`` for the .env read and
+    records the rewritten .env (the tee input). config.yml is skipped by
+    patching bm._YAML to None at the call site."""
+    tee_inputs: list = []
+
+    def fake_run(cmd, *args, **kwargs):
+        flat = _flatten(cmd)
+        r = MagicMock()
+        r.returncode = 0
+        r.stderr = ""
+        if "tee " in flat and ".env" in flat:
+            tee_inputs.append(kwargs.get("input"))
+        elif "cat " in flat and ".env" in flat and ".bak" not in flat:
+            r.stdout = legacy_env
+        return r
+
+    return fake_run, tee_inputs
+
+
+def test_apply_config_appends_logos_models_mount_for_legacy_only_env():
+    """A legacy-only .env (OLLAMA_MODELS_MOUNT, no LOGOS_MODELS_MOUNT) must
+    still receive a LOGOS_MODELS_MOUNT line when a local cache path is given,
+    or the override is silently ignored by the still-active old mount."""
+    legacy_env = (
+        "OLLAMA_MODELS_MOUNT=/data/legacy-models\n" "TMPFS_SIZE=400\n" "LOGOS_TMPFS_CACHE_PATH=/dev/shm/logos\n"
+    )
+    fake_run, tee_inputs = _config_env_fake(legacy_env)
+    with patch.object(bm.subprocess, "run", side_effect=fake_run), patch.object(bm, "_YAML", None):
+        bm._apply_benchmark_workernode_config_via_ssh(
+            hosts=["h1"],
+            ssh_user="root",
+            ssh_key=None,
+            workernode_dir="/opt/logos",
+            benchmark_models=["m1"],
+            local_cache_path="/data/bench-cache",
+        )
+    assert tee_inputs, "the .env was never rewritten"
+    new_env = tee_inputs[0].decode()
+    assert "LOGOS_MODELS_MOUNT=/data/bench-cache" in new_env
+    # the legacy line is kept (Compose prefers LOGOS, so it is shadowed)
+    assert "OLLAMA_MODELS_MOUNT=/data/legacy-models" in new_env
+
+
+def test_apply_config_replaces_existing_logos_models_mount_without_duplicating():
+    """When a LOGOS_MODELS_MOUNT line already exists it is replaced in place,
+    not appended a second time."""
+    existing_env = "LOGOS_MODELS_MOUNT=/data/old\nTMPFS_SIZE=400\n"
+    fake_run, tee_inputs = _config_env_fake(existing_env)
+    with patch.object(bm.subprocess, "run", side_effect=fake_run), patch.object(bm, "_YAML", None):
+        bm._apply_benchmark_workernode_config_via_ssh(
+            hosts=["h1"],
+            ssh_user="root",
+            ssh_key=None,
+            workernode_dir="/opt/logos",
+            benchmark_models=["m1"],
+            local_cache_path="/data/new",
+        )
+    new_env = tee_inputs[0].decode()
+    assert new_env.count("LOGOS_MODELS_MOUNT=") == 1
+    assert "LOGOS_MODELS_MOUNT=/data/new" in new_env
+
+
+def test_wipe_weights_falls_back_to_ollama_models_mount():
+    """With no explicit weight_cache_path the wipe reads the mount from .env —
+    preferring LOGOS_MODELS_MOUNT but falling back to the legacy
+    OLLAMA_MODELS_MOUNT so a not-yet-migrated .env still wipes the weights
+    Compose actually mounted."""
+    calls, fake = _capture_subprocess()
+    with patch.object(bm.subprocess, "run", side_effect=fake):
+        bm._wipe_calibration_and_weights_via_ssh(
+            hosts=["h1"],
+            ssh_user="root",
+            ssh_key=None,
+            workernode_dir="/opt/logos",
+            weight_cache_path=None,
+            use_sudo=True,
+        )
+    wipe = [c for c in calls if "rm -rf" in _flatten(c) and "MODELS_MOUNT" in _flatten(c)]
+    assert wipe, "no weight-wipe command was issued"
+    script = _flatten(wipe[-1])
+    assert "^LOGOS_MODELS_MOUNT=" in script
+    assert "^OLLAMA_MODELS_MOUNT=" in script

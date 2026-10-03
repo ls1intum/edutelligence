@@ -1,0 +1,10 @@
+INFO 05-21 08:03:12 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 05-21 08:03:31 [backends.py:620] Directly load the compiled graph(s) for dynamic shape from the cache, took 1.284 s
+ERROR 05-21 08:03:33 [core.py:712] EngineCore failed to start.
+ERROR 05-21 08:03:33 [core.py:712] Traceback (most recent call last):
+ERROR 05-21 08:03:33 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/vllm/v1/worker/gpu_model_runner.py", line 2411, in _dummy_run
+ERROR 05-21 08:03:33 [core.py:712]     outputs = self.model(input_ids=input_ids, positions=positions)
+ERROR 05-21 08:03:33 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/torch/_inductor/utils.py", line 2384, in copy_misaligned_inputs
+ERROR 05-21 08:03:33 [core.py:712]     assert isinstance(new_inputs[i], torch.Tensor), "Expected tensors only"
+ERROR 05-21 08:03:33 [core.py:712] AssertionError: Expected tensors only
+Process EngineCore_DP0: exited with code 1

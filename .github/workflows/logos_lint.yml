@@ -48,7 +48,7 @@ jobs:
             pre-commit-logos-${{ runner.os }}-
 
       - name: Install pre-commit
-        run: pip install pre-commit
+        run: pip install pre-commit==4.6.2
 
       - name: Run pre-commit on logos
         # Top-level `files: '^logos/'` in logos/.pre-commit-config.yaml

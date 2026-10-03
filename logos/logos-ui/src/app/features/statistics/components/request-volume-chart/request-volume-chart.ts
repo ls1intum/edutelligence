@@ -19,6 +19,7 @@ export interface ChartTooltip {
 }
 import { SegmentedSwitchComponent } from '../segmented-switch/segmented-switch';
 import { CHART_ROLE, seriesColor } from '../../statistics.constants';
+import { formatBucketRange, timeAxisLabels } from '../../statistics.utils';
 import { nearestIndex, pointerPlotFrac } from '../chart-interaction.util';
 
 export interface DataPoint {
@@ -48,15 +49,23 @@ function formatCount(v: number): string {
   return String(Math.round(v));
 }
 
+/**
+ * Full, unambiguous timestamp for tooltips when the bucket width is unknown.
+ * Prefer {@link formatBucketRange} whenever bucketMs is available.
+ */
 function formatTimestamp(ts: number, spanMs: number): string {
   const d = new Date(ts);
   if (spanMs <= 2 * 86_400_000) {
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
   }
-  if (spanMs <= 32 * 86_400_000) {
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  }
-  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function bucketTimeLabel(ts: number, bucketMs: number, spanMs: number): string {
+  if (bucketMs > 0) return formatBucketRange(ts, bucketMs);
+  return formatTimestamp(ts, spanMs);
 }
 
 // ── Internal chart types ─────────────────────────────────────────────────────
@@ -74,14 +83,8 @@ export interface BarSegment {
   seriesKey: string;
 }
 
-export interface PolylinePoint {
-  x: number;
-  y: number;
-}
-
 export interface ChartData {
   rects: BarSegment[];
-  totalPolyline: PolylinePoint[];
   gridLines: Array<{ y: number; label: string }>;
   xLabels: Array<{ x: number; label: string }>;
   plotLeft: number;
@@ -94,6 +97,8 @@ export interface LegendItem {
   key: string;
   label: string;
   color: string;
+  /** The model behind this series no longer exists; the legend shows a trash marker. */
+  deleted?: boolean;
 }
 
 type ViewMode = 'provider' | 'model';
@@ -114,6 +119,10 @@ export class RequestVolumeChartComponent implements OnChanges {
   @Input() modelSeriesMap: Record<string, DataPoint[]> = {};
   @Input() modelLabelById: Record<string, string> = {};
   @Input() modelColors: Record<string, string> = {};
+  /** Series keys whose model was deleted; the legend marks those entries. */
+  @Input() modelDeletedKeys: Set<string> = new Set();
+  /** Width of each volume bar in ms; drives explicit range labels in tooltips. */
+  @Input() bucketMs = 0;
   @Input() resetZoomTrigger = 0;
 
   // ── Outputs ─────────────────────────────────────────────────────────────
@@ -123,6 +132,8 @@ export class RequestVolumeChartComponent implements OnChanges {
   // ── Internal state ───────────────────────────────────────────────────────
   readonly mode = signal<ViewMode>('provider');
   readonly hiddenSeries = signal<Set<string>>(new Set());
+  /** Legend hover — dims every other series the way the model-share donut does. */
+  readonly hoveredSeries = signal<string | null>(null);
 
   toggleSeries(key: string): void {
     const next = new Set(this.hiddenSeries());
@@ -132,6 +143,23 @@ export class RequestVolumeChartComponent implements OnChanges {
 
   isHidden(key: string): boolean {
     return this.hiddenSeries().has(key);
+  }
+
+  onLegendEnter(key: string): void {
+    this.hoveredSeries.set(key);
+  }
+
+  onLegendLeave(): void {
+    this.hoveredSeries.set(null);
+  }
+
+  isBarDimmed(seriesKey: string): boolean {
+    const hovered = this.hoveredSeries();
+    return hovered !== null && hovered !== seriesKey;
+  }
+
+  isBarHighlighted(seriesKey: string): boolean {
+    return this.hoveredSeries() === seriesKey;
   }
 
   /** Whether the chart has any underlying data. Drives the empty-state independently
@@ -145,6 +173,8 @@ export class RequestVolumeChartComponent implements OnChanges {
   private readonly _modelMap = signal<Record<string, DataPoint[]>>({});
   private readonly _modelLbl = signal<Record<string, string>>({});
   private readonly _modelClr = signal<Record<string, string>>({});
+  private readonly _modelDeletedKeys = signal<Set<string>>(new Set());
+  private readonly _bucketMs = signal(0);
 
   // ── Mode switch options ─────────────────────────────────────────────────
   readonly modeOptions = [
@@ -168,13 +198,13 @@ export class RequestVolumeChartComponent implements OnChanges {
     const modelMap = this._modelMap();
     const modelLbl = this._modelLbl();
     const modelClr = this._modelClr();
+    const bucketMs = this._bucketMs();
     const mode = this.mode();
     const hidden = this.hiddenSeries();
 
     const n = total.length;
     const empty: ChartData = {
       rects: [],
-      totalPolyline: [],
       gridLines: [],
       xLabels: [],
       plotLeft: CHART_PAD_LEFT,
@@ -198,7 +228,7 @@ export class RequestVolumeChartComponent implements OnChanges {
 
     for (let i = 0; i < n; i++) {
       const ts = total[i].timestamp;
-      const timeLabel = formatTimestamp(ts, spanMs);
+      const timeLabel = bucketTimeLabel(ts, bucketMs, spanMs);
       let stacks: BucketStack = [];
 
       if (mode === 'provider') {
@@ -259,57 +289,39 @@ export class RequestVolumeChartComponent implements OnChanges {
       rects.push(...segRects);
     }
 
-    // Build total polyline (provider mode only, unless hidden)
-    const totalPolyline: PolylinePoint[] = hidden.has('total') ? [] : total.map((p, i) => ({
-      x: CHART_PAD_LEFT + i * slotW + slotW / 2,
-      y: CHART_PAD_TOP + plotH * (1 - Math.min(p.value / maxVal, 1)),
-    }));
-
     // Grid lines
     const gridLines = [0.25, 0.5, 0.75, 1.0].map((f) => ({
       y: CHART_PAD_TOP + plotH * (1 - f),
       label: formatCount(f * maxVal),
     }));
 
-    // X-axis labels
-    // For sub-2-day spans: evenly space up to 8 time labels.
-    // For wider spans: label on day (or month for 6m/year) boundaries only.
-    let xLabels: Array<{ x: number; label: string }>;
-    if (spanMs <= 2 * 86_400_000) {
-      const every = Math.max(1, Math.ceil(n / 8));
-      xLabels = buckets
-        .filter((_, i) => i % every === 0)
-        .map((b, fi) => ({
-          x: CHART_PAD_LEFT + fi * every * slotW + slotW / 2,
-          label: b.timeLabel,
-        }));
-    } else {
-      // Emit a label whenever the day (or month for 6m+) boundary changes.
-      const boundaryKey = (ts: number) => {
-        const d = new Date(ts);
-        return spanMs <= 32 * 86_400_000
-          ? `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
-          : `${d.getFullYear()}-${d.getMonth()}`;
-      };
-      let lastKey = '';
-      xLabels = [];
-      buckets.forEach((b, i) => {
-        const key = boundaryKey(b.ts);
-        if (key !== lastKey) {
-          lastKey = key;
-          xLabels.push({ x: CHART_PAD_LEFT + i * slotW + slotW / 2, label: b.timeLabel });
-        }
-      });
-      // Thin out if too crowded (keep at most 8 labels).
-      if (xLabels.length > 8) {
-        const step = Math.ceil(xLabels.length / 8);
-        xLabels = xLabels.filter((_, i) => i % step === 0);
+    // X-axis labels — deterministic and always unambiguous (hour labels for
+    // ≤24 h, "Mon D" for ≤32 d, "Mon YYYY" beyond; see timeAxisLabels). Each
+    // label is anchored to the nearest bucket so ticks align with bars.
+    const xLabels: Array<{ x: number; label: string }> = [];
+    const firstTs = total[0].timestamp;
+    const lastTs = total[n - 1].timestamp;
+    const bucketDurMs = n > 1 ? (lastTs - firstTs) / (n - 1) : 0;
+    if (bucketDurMs > 0) {
+      const seenX = new Set<number>();
+      for (const l of timeAxisLabels(firstTs, lastTs, 8)) {
+        const idx = Math.min(n - 1, Math.max(0, Math.round((l.tsMs - firstTs) / bucketDurMs)));
+        const x = Math.round(CHART_PAD_LEFT + idx * slotW + slotW / 2);
+        if (seenX.has(x)) continue; // two boundary labels collapsed onto one bucket
+        seenX.add(x);
+        xLabels.push({ x, label: l.label });
       }
+    } else if (Number.isFinite(firstTs)) {
+      // Single bucket: no span to place boundaries in, but the axis still
+      // needs to say which moment the lone bar covers.
+      xLabels.push({
+        x: Math.round(CHART_PAD_LEFT + slotW / 2),
+        label: bucketTimeLabel(firstTs, bucketMs, spanMs),
+      });
     }
 
     return {
       rects,
-      totalPolyline,
       gridLines,
       xLabels,
       plotLeft: CHART_PAD_LEFT,
@@ -327,16 +339,18 @@ export class RequestVolumeChartComponent implements OnChanges {
     const modelClr = this._modelClr();
 
     if (mode === 'model') {
+      const deleted = this._modelDeletedKeys();
       return Object.keys(modelMap).map((id, idx) => ({
         key: id,
         label: modelLbl[id] ?? id,
         color: modelClr[id] ?? seriesColor(idx),
+        deleted: deleted.has(id),
       }));
     }
+    // Provider view: cloud/local bars only.
     return [
       { key: 'cloud', label: 'Cloud', color: CHART_ROLE.cloud },
       { key: 'local', label: 'Local', color: CHART_ROLE.local },
-      { key: 'total', label: 'Total', color: CHART_ROLE.total },
     ];
   });
 
@@ -370,12 +384,15 @@ export class RequestVolumeChartComponent implements OnChanges {
         if (val > 0) rows.push({ label: lbl[id] ?? id, value: val, color: clr[id] ?? seriesColor(idx) });
       });
     }
-    if (!hidden.has('total')) rows.push({ label: 'Total', value: total[i].value, color: CHART_ROLE.total });
     const plotW = CHART_W - CHART_PAD_LEFT - CHART_PAD_RIGHT;
     const slotW = plotW / total.length;
     const x = CHART_PAD_LEFT + i * slotW + slotW / 2;
     const spanMs = total.length > 1 ? total[total.length - 1].timestamp - total[0].timestamp : 0;
-    return { x, rows, timeLabel: formatTimestamp(total[i].timestamp, spanMs) };
+    return {
+      x,
+      rows,
+      timeLabel: bucketTimeLabel(total[i].timestamp, this._bucketMs(), spanMs),
+    };
   });
 
   // ── Drag-to-zoom state ───────────────────────────────────────────────────
@@ -390,31 +407,6 @@ export class RequestVolumeChartComponent implements OnChanges {
   /** Whether a drag is in progress */
   isDraggingSig = signal(false);
 
-  // ── Total-line smoothed path ─────────────────────────────────────────────
-  // Builds a smooth SVG path through the total points using a Catmull-Rom
-  // spline converted to cubic Béziers (tension 0 = standard Catmull-Rom).
-  readonly totalLinePath = computed(() => {
-    const pts = this.chartData().totalPolyline;
-    if (pts.length < 2) return '';
-    if (pts.length === 2) return `M${pts[0].x},${pts[0].y} L${pts[1].x},${pts[1].y}`;
-
-    let d = `M${pts[0].x},${pts[0].y}`;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i - 1] ?? pts[i];
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      const p3 = pts[i + 2] ?? p2;
-
-      const c1x = p1.x + (p2.x - p0.x) / 6;
-      const c1y = p1.y + (p2.y - p0.y) / 6;
-      const c2x = p2.x - (p3.x - p1.x) / 6;
-      const c2y = p2.y - (p3.y - p1.y) / 6;
-
-      d += ` C${c1x},${c1y} ${c2x},${c2y} ${p2.x},${p2.y}`;
-    }
-    return d;
-  });
-
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['totalLineData']) this._total.set(this.totalLineData);
     if (changes['cloudLineData']) this._cloud.set(this.cloudLineData);
@@ -422,6 +414,8 @@ export class RequestVolumeChartComponent implements OnChanges {
     if (changes['modelSeriesMap']) this._modelMap.set(this.modelSeriesMap);
     if (changes['modelLabelById']) this._modelLbl.set(this.modelLabelById);
     if (changes['modelColors']) this._modelClr.set(this.modelColors);
+    if (changes['modelDeletedKeys']) this._modelDeletedKeys.set(this.modelDeletedKeys);
+    if (changes['bucketMs']) this._bucketMs.set(this.bucketMs);
 
     if (changes['resetZoomTrigger'] && !changes['resetZoomTrigger'].firstChange) {
       this.clearZoomSelection();

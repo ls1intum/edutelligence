@@ -1,12 +1,22 @@
-import { Component, OnInit, inject, signal, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  inject,
+  signal,
+  computed,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { MyKeysService } from '../../core/services/my-keys.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
-import { MyKey, ModelAccess } from '../../shared/models/my-key.model';
+import { AuthService } from '../../core/auth/services/auth.service';
+import { MyKey, ModelAccess, RateLimitUsage } from '../../shared/models/my-key.model';
 import { MyTeam } from '../../shared/models/team.model';
+import { formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
 
 interface TeamWorkspace {
@@ -24,7 +34,13 @@ interface ModelGroup {
 @Component({
   selector: 'app-my-workspace',
   standalone: true,
-  imports: [CommonModule, ModalFormComponent, ErrorMessageComponent, IconTileComponent],
+  imports: [
+    CommonModule,
+    ModalFormComponent,
+    ModalConfirmComponent,
+    ErrorMessageComponent,
+    IconTileComponent,
+  ],
   templateUrl: './my-workspace.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './my-workspace.scss',
@@ -32,6 +48,11 @@ interface ModelGroup {
 export class MyWorkspace implements OnInit {
   private keysService = inject(MyKeysService);
   private teamService = inject(TeamManagementService);
+  private authService = inject(AuthService);
+
+  readonly showProviderNames = computed(
+    () => this.authService.role() === 'logos_admin' || this.authService.role() === 'app_admin',
+  );
 
   workspaces = signal<TeamWorkspace[]>([]);
   loading = signal(true);
@@ -45,6 +66,10 @@ export class MyWorkspace implements OnInit {
   logChangeTarget = signal<{ key: MyKey; newLog: 'BILLING' | 'FULL' } | null>(null);
   logChangeLoading = signal(false);
   logChangeError = signal(false);
+
+  rotateTarget = signal<MyKey | null>(null);
+  rotateLoading = signal(false);
+  rotateError = signal(false);
 
   copiedKeyId = signal<number | null>(null);
 
@@ -163,7 +188,9 @@ export class MyWorkspace implements OnInit {
         hasCloud: false,
         hasLocal: false,
       };
-      if (!group.providers.includes(m.provider_name)) group.providers.push(m.provider_name);
+      if (m.provider_name && !group.providers.includes(m.provider_name)) {
+        group.providers.push(m.provider_name);
+      }
       if (m.provider_type === 'cloud') group.hasCloud = true;
       else group.hasLocal = true;
       groups.set(m.model_name, group);
@@ -222,6 +249,38 @@ export class MyWorkspace implements OnInit {
       : `Switch "${target.key.name}" to Billing logging? Only metadata (no content) will be stored.`;
   }
 
+  requestRotate(key: MyKey): void {
+    this.rotateError.set(false);
+    this.rotateTarget.set(key);
+  }
+
+  closeRotateModal(): void {
+    if (this.rotateLoading()) return;
+    this.rotateTarget.set(null);
+  }
+
+  async confirmRotate(): Promise<void> {
+    const key = this.rotateTarget();
+    if (!key || this.rotateLoading()) return;
+    this.rotateLoading.set(true);
+    this.rotateError.set(false);
+    try {
+      const res = await this.keysService.rotateKey(key.id);
+      this.workspaces.update((list) =>
+        list.map((ws) => ({
+          ...ws,
+          keys: ws.keys.map((k) => (k.id === key.id ? { ...k, key_value: res.api_key } : k)),
+        })),
+      );
+      this.copiedKeyId.set(null);
+      this.rotateTarget.set(null);
+    } catch {
+      this.rotateError.set(true);
+    } finally {
+      this.rotateLoading.set(false);
+    }
+  }
+
   // ── Key budget ─────────────────────────────────────────────────────────────
   isKeyBudgetExhausted(key: MyKey): boolean {
     return (
@@ -239,7 +298,7 @@ export class MyWorkspace implements OnInit {
 
   budgetExhaustedMessage(team: MyTeam, key: MyKey): string | null {
     if (this.isTeamBudgetExhausted(team)) {
-      return `Team budget exhausted: all ${team.name} keys are currently inactive.`;
+      return `Monthly member budget exhausted: your ${team.name} keys are currently inactive.`;
     }
     if (this.isKeyBudgetExhausted(key)) {
       return 'Key budget exhausted: this key is currently inactive.';
@@ -253,22 +312,43 @@ export class MyWorkspace implements OnInit {
   }
 
   // ── Display ────────────────────────────────────────────────────────────────
-  formatRpm(rpm: number | null): string {
-    return rpm != null ? rpm.toLocaleString() : '∞';
+  /**
+   * The key's usage inside the current rate-limit window, or null when the
+   * the application service found nothing for the window. Null is kept distinct from zero on
+   * purpose: a rate-limit figure of zero claims the entire budget is
+   * available, so an unknown window must not be rendered as one.
+   */
+  usageFor(key: MyKey): RateLimitUsage | null {
+    return key.rate_limit_usage;
   }
 
-  formatTpm(tpm: number | null): string {
-    if (tpm == null) return '∞';
-    return tpm >= 1000 ? (tpm / 1000).toFixed(0) + 'k' : tpm.toString();
+  /**
+   * Used/limit pair for one side of a rate limit: "12/60" when a limit is
+   * set, "12/∞" when the key or its team set none (the ∞ marker keeps an
+   * unlimited key readable — a bare used figure looks like the limit is the
+   * used figure), "–/60" when the used figure is unknown for the window.
+   */
+  formatRpm(used: number | null, limit: number | null): string {
+    const u = used == null ? '–' : used.toLocaleString();
+    const l = limit == null ? '∞' : limit.toLocaleString();
+    return `${u}/${l}`;
+  }
+
+  /**
+   * Like {@link formatRpm} with compact thousand figures. The used side keeps
+   * one decimal ("59.5k/60k"): at 1k granularity a near-exhausted limit
+   * rounds to the limit and reads as fully used, and small used figures
+   * round up. The limit side stays whole ("60k").
+   */
+  formatTpm(used: number | null, limit: number | null): string {
+    const compact = (n: number, decimals: number) =>
+      n >= 1000 ? `${(n / 1000).toFixed(decimals)}k` : n.toString();
+    const u = used == null ? '–' : compact(used, 1);
+    const l = limit == null ? '∞' : compact(limit, 0);
+    return `${u}/${l}`;
   }
 
   formatLastUsed(iso: string | null): string {
-    if (!iso) return 'Never';
-    const d = new Date(iso);
-    const today = new Date();
-    const diffDays = Math.floor((today.getTime() - d.getTime()) / 86_400_000);
-    if (diffDays === 0) return 'Today';
-    if (diffDays === 1) return 'Yesterday';
-    return d.toLocaleDateString();
+    return formatLastUsedLabel(iso);
   }
 }

@@ -22,19 +22,25 @@ import {
 import { OverviewTabComponent } from './tabs/overview/overview-tab';
 import { MembersTabComponent } from './tabs/members/members-tab';
 import { AppKeysTabComponent } from './tabs/app-keys/app-keys-tab';
+import { RepositoriesTabComponent } from './tabs/repositories/repositories-tab';
+import { WorkflowsTabComponent } from './tabs/workflows/workflows-tab';
 import { ProvidersTabComponent } from './tabs/providers/providers-tab';
 import { ModelsTabComponent } from './tabs/models/models-tab';
 import { SettingsTabComponent } from './tabs/settings/settings-tab';
 import { BillingTabComponent } from './tabs/billing/billing-tab';
+import { ActivityTabComponent } from './tabs/activity/activity-tab';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 
 export type Tab =
   | 'overview'
   | 'members'
   | 'application_keys'
+  | 'repositories'
+  | 'workflows'
   | 'providers'
   | 'models'
   | 'settings'
+  | 'activity'
   | 'billing';
 
 @Component({
@@ -48,10 +54,13 @@ export type Tab =
     OverviewTabComponent,
     MembersTabComponent,
     AppKeysTabComponent,
+    RepositoriesTabComponent,
+    WorkflowsTabComponent,
     ProvidersTabComponent,
     ModelsTabComponent,
     SettingsTabComponent,
     BillingTabComponent,
+    ActivityTabComponent,
   ],
   templateUrl: './team-detail.html',
   changeDetection: ChangeDetectionStrategy.Eager,
@@ -87,9 +96,11 @@ export class TeamDetail implements OnInit {
     const admin = this.isLogosAdmin();
     const owner = this.isCallerOwner();
     const tabs: Tab[] = ['overview', 'members'];
-    if (admin || owner) tabs.push('application_keys');
+    if (admin || owner) tabs.push('application_keys', 'repositories', 'workflows');
     if (admin) tabs.push('providers');
-    if (admin || owner) tabs.push('models', 'billing', 'settings');
+    // Activity before Cloud Usage: what the platform did, then what the cloud
+    // providers billed for the part of it that ran off-site.
+    if (admin || owner) tabs.push('models', 'activity', 'billing', 'settings');
     return tabs;
   });
 
@@ -97,10 +108,16 @@ export class TeamDetail implements OnInit {
     overview: 'Overview',
     members: 'Members',
     application_keys: 'Application Keys',
+    repositories: 'Repositories',
+    workflows: 'Workflows',
     providers: 'Providers',
     models: 'Models',
     settings: 'Settings',
-    billing: 'Billing',
+    activity: 'Activity',
+    // Renamed from "Billing": it reports what cloud providers charged, which is
+    // only part of what a team uses — a local model bills nothing and still
+    // consumes the cluster. The Activity tab covers the rest.
+    billing: 'Cloud Usage',
   };
 
   ngOnInit(): void {
@@ -109,8 +126,12 @@ export class TeamDetail implements OnInit {
     this.loadAll(id);
   }
 
-  setTab(tab: Tab): void {
+  setTab(tab: Tab, event?: Event): void {
     this.activeTab.set(tab);
+    const btn = event?.currentTarget;
+    if (btn instanceof HTMLElement) {
+      btn.scrollIntoView({ inline: 'nearest', block: 'nearest', behavior: 'smooth' });
+    }
   }
 
   private async loadAll(teamId: number): Promise<void> {
@@ -141,6 +162,19 @@ export class TeamDetail implements OnInit {
 
   refresh(): void {
     this.loadAll(this.teamId());
+  }
+
+  /**
+   * Reload only the application keys, without the page-wide loading state:
+   * that state unmounts the active tab, and the Workflows tab would lose the
+   * key the owner picked for their reviews.
+   */
+  async refreshApiKeys(): Promise<void> {
+    try {
+      this.apiKeys.set(await this.teamService.getTeamApiKeys(this.teamId()));
+    } catch {
+      // The keys on screen stay as they were; the next full load corrects them.
+    }
   }
 
   openEditName(): void {
