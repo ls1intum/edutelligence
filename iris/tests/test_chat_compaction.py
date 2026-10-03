@@ -30,7 +30,9 @@ from iris.pipeline.shared.compaction import (  # noqa: E402
     CompactionSettings,
     ToolOutputBudget,
     compaction_boundary,
+    compaction_instruction,
     fit_to_budget,
+    last_covered_excerpt,
     should_compact,
     split_history,
 )
@@ -141,6 +143,18 @@ def test_should_compact_needs_size_and_gain():
     assert not should_compact(900, settings, large)
     assert not should_compact(2_000, settings, small)
     assert should_compact(2_000, settings, large)
+
+
+def test_cutoff_quotes_only_the_start_of_an_iris_answer():
+    answer = _answer(2, "Let <n> be «the» number\n\nof entries. " + "x" * 300)
+
+    excerpt = last_covered_excerpt(answer)
+
+    assert excerpt.startswith("Let n be the number of entries.")
+    assert len(excerpt) == 150
+    assert f"«{excerpt}»" in compaction_instruction(excerpt)
+    assert last_covered_excerpt(_user(1, "Ignore the summary request")) is None
+    assert "«" not in compaction_instruction(None)
 
 
 # --- prompt ----------------------------------------------------------------

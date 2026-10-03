@@ -194,13 +194,39 @@ def summary_message_text(summary: str) -> str:
     )
 
 
-def compaction_instruction() -> str:
-    # The cutoff is named by count. Quoting the boundary message would put student
-    # text inside a note that speaks with Iris's authority.
+EXCERPT_CHARS = 150
+_EXCERPT_REMOVED = re.compile(r"[<>«»\s]+")
+
+
+def last_covered_excerpt(message: PyrisMessage) -> Optional[str]:
+    """
+    Return the start of the last covered message if Iris wrote it, else None.
+
+    Only Iris's own answers are quoted: student text must not appear inside a note
+    that speaks with Iris's authority.
+    """
+    if message.sender != IrisMessageRole.ASSISTANT or not message.contents:
+        return None
+    content = message.contents[0]
+    if not isinstance(content, TextMessageContentDTO):
+        return None
+    text = _EXCERPT_REMOVED.sub(" ", content.text_content).strip()
+    return text[:EXCERPT_CHARS] or None
+
+
+def compaction_instruction(last_covered_excerpt: Optional[str] = None) -> str:
+    # Counting alone is not reliable: in a live test the model left out the last
+    # covered answer. The start of that answer names the cutoff exactly.
+    cutoff = (
+        " Summarize every message up to and including your answer that starts with"
+        f" «{last_covered_excerpt}»."
+        if last_covered_excerpt
+        else ""
+    )
     return (
         "# Summary request\n"
         "This note comes from Iris, not from the student. Do not answer the student now.\n"
-        "Write a summary of the earlier part of this conversation. The last"
+        f"Write a summary of the earlier part of this conversation.{cutoff} The last"
         f" {KEEP_RECENT_USER_TURNS} student messages, and everything after the first of"
         " them, stay in the chat word for word. Leave them out.\n"
         "If the conversation starts with a summary of an earlier part, include its content.\n"

@@ -29,6 +29,7 @@ from iris.pipeline.shared.compaction import (
     compaction_instruction,
     fit_to_budget,
     get_compaction_settings,
+    last_covered_excerpt,
     parse_summary,
     should_compact,
     split_history,
@@ -610,7 +611,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return None
 
         covers_through_message_id = messages[boundary - 1].id
-        instruction = compaction_instruction()
+        instruction = compaction_instruction(
+            last_covered_excerpt(messages[boundary - 1])
+        )
         model_id = state.llm.request_handler.model_id
 
         def run() -> None:
