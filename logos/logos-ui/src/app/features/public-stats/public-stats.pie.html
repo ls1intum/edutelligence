@@ -1,0 +1,34 @@
+@if (isEmpty()) {
+  <p class="pie-empty">No successful requests yet.</p>
+} @else {
+  <div class="pie-body">
+    <svg class="pie-svg" [class.has-hover]="hovered() !== null" viewBox="0 0 200 200" role="img" [attr.aria-label]="title">
+      @for (g of geometry; track trackByKey($index, g.slice)) {
+        <path
+          [attr.d]="g.path"
+          [style.fill]="g.slice.color"
+          [class.highlighted]="isHighlighted(g.slice.key)"
+          (mouseenter)="hovered.set(g.slice.key)"
+          (mouseleave)="hovered.set(null)"
+        >
+          <title>{{ g.slice.label }}: {{ formatCount(g.slice.value) }} ({{ g.percent }}%)</title>
+        </path>
+      }
+    </svg>
+
+    <ul class="pie-legend" role="list">
+      @for (s of slices; track trackByKey($index, s)) {
+        <li>
+          <label class="legend-item" [class.off]="s.hidden" [class.highlighted]="isHighlighted(s.key)"
+                 (mouseenter)="hovered.set(s.key)" (mouseleave)="hovered.set(null)">
+            <input type="checkbox" [checked]="!s.hidden" (change)="toggle(s.key)"
+                   [attr.aria-label]="'Show ' + s.label + ' in the chart'" />
+            <span class="swatch" [style.background]="s.color" aria-hidden="true"></span>
+            <span class="name">{{ s.label }}</span>
+            <span class="value">{{ formatCount(s.value) }}{{ percentOf(s) }}</span>
+          </label>
+        </li>
+      }
+    </ul>
+  </div>
+}

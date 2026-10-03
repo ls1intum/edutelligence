@@ -1,0 +1,35 @@
+@if (total === 0) {
+  <p class="split-empty">No successful requests yet.</p>
+} @else {
+  <div class="split-bar" role="img" [attr.aria-label]="label">
+    @for (seg of nonZero; track trackByKey($index, seg)) {
+      <span
+        class="segment"
+        [style.flex-grow]="seg.value"
+        [style.background]="seg.color"
+        [class.highlighted]="isHighlighted(seg.key)"
+        (mouseenter)="hovered.set(seg.key)"
+        (mouseleave)="hovered.set(null)"
+      >
+        <title>{{ seg.label }}: {{ formatCount(seg.value) }} ({{ percentOf(seg) }}%)</title>
+      </span>
+    }
+  </div>
+
+  <ul class="split-legend" role="list">
+    @for (seg of segments; track trackByKey($index, seg)) {
+      <li>
+        <span
+          class="legend-item"
+          [class.highlighted]="isHighlighted(seg.key)"
+          (mouseenter)="hovered.set(seg.key)"
+          (mouseleave)="hovered.set(null)"
+        >
+          <span class="swatch" [style.background]="seg.color" aria-hidden="true"></span>
+          <span class="name">{{ seg.label }}</span>
+          <span class="value">{{ formatCount(seg.value) }} ({{ percentOf(seg) }}%)</span>
+        </span>
+      </li>
+    }
+  </ul>
+}

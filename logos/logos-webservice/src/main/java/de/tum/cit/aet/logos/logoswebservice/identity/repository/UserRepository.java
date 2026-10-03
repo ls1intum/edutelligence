@@ -16,6 +16,9 @@ public interface UserRepository extends JpaRepository<User, Integer> {
 
     List<User> findByIsActiveTrue();
 
+    /** Registered (still active) students — the public stats page's headline number. */
+    long countByIsActiveTrue();
+
     /**
      * Locks the user row until the surrounding transaction ends. Role changes and
      * ownership grants both acquire this lock before their cross-entity check

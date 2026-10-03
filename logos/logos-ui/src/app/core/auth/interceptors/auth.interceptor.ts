@@ -6,8 +6,14 @@ import Keycloak from 'keycloak-js';
 import { KEYCLOAK } from '../keycloak';
 
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  // /info is public and fetched before login, so never attach a bearer.
-  if (req.url.endsWith('/info') || req.url.endsWith('/api/info')) {
+  // /info and /public/stats are public and fetched before login, so never
+  // attach a bearer.
+  if (
+    req.url.endsWith('/info') ||
+    req.url.endsWith('/api/info') ||
+    req.url.endsWith('/public/stats') ||
+    req.url.endsWith('/api/public/stats')
+  ) {
     return next(req);
   }
   const kc = inject(KEYCLOAK);
