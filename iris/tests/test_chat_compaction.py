@@ -56,7 +56,7 @@ def _answer(message_id, text="answer"):
 def _compaction(message_id, covers, summary):
     return PyrisMessage(
         id=message_id,
-        sender=IrisMessageRole.COMPACTION,
+        sender=IrisMessageRole.SUMMARY,
         contents=[
             JsonMessageContentDTO(
                 jsonContent={"summary": summary, "coversThroughMessageId": covers}
@@ -94,7 +94,7 @@ def test_split_ignores_summaries_of_other_sessions_and_unreadable_ones():
         _compaction(100, covers=999, summary="foreign"),
         PyrisMessage(
             id=101,
-            sender=IrisMessageRole.COMPACTION,
+            sender=IrisMessageRole.SUMMARY,
             contents=[JsonMessageContentDTO(jsonContent={"text": "bad"})],
         ),
     ]
@@ -176,7 +176,7 @@ def test_load_history_hides_compactions_and_uses_the_full_history():
 
     assert state.compaction_summary == "sum"
     assert history[0].id == 5 and len(history) == 16
-    assert all(m.sender != IrisMessageRole.COMPACTION for m in state.dto.chat_history)
+    assert all(m.sender != IrisMessageRole.SUMMARY for m in state.dto.chat_history)
 
 
 def test_load_history_without_settings_keeps_the_window():

@@ -20,7 +20,7 @@ class IrisMessageRole(str, Enum):
     COMMAND = "COMMAND"
     CTXSWAP = "CTXSWAP"
     # Stored summary of the earlier conversation (see pipeline/shared/compaction.py).
-    COMPACTION = "COMPACTION"
+    SUMMARY = "SUMMARY"
 
 
 class PyrisMessage(BaseModel):

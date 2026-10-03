@@ -567,7 +567,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         """
         Return the history for the agent prompt.
 
-        COMPACTION messages are removed from the DTO, so side pipelines never see them.
+        SUMMARY messages are removed from the DTO, so side pipelines never see them.
         With compaction, the agent gets every message after the newest summary.
         Otherwise it gets the fixed window of recent messages.
         """

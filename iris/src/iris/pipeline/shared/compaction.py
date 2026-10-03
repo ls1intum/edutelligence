@@ -2,7 +2,7 @@
 Auto-compaction of long chat histories.
 
 When a chat gets long, Iris asks the chat model for a summary of the older part of the
-conversation. Artemis stores the summary as a COMPACTION message, and later turns send
+conversation. Artemis stores the summary as a SUMMARY message, and later turns send
 the summary in place of the messages it covers. The summary is a normal message: the
 original messages stay in the session and are still shown to the student.
 """
@@ -88,7 +88,7 @@ def get_compaction_settings(model_id: str) -> Optional[CompactionSettings]:
 
 
 def without_compactions(messages: list[PyrisMessage]) -> list[PyrisMessage]:
-    return [m for m in messages if m.sender != IrisMessageRole.COMPACTION]
+    return [m for m in messages if m.sender != IrisMessageRole.SUMMARY]
 
 
 def _parse_compaction(message: PyrisMessage) -> Optional[CompactionDTO]:
@@ -102,7 +102,7 @@ def _parse_compaction(message: PyrisMessage) -> Optional[CompactionDTO]:
             return CompactionDTO.model_validate_json(content.text_content)
     except ValidationError:
         pass
-    logger.warning("Ignoring a COMPACTION message that cannot be read")
+    logger.warning("Ignoring a SUMMARY message that cannot be read")
     return None
 
 
@@ -119,7 +119,7 @@ def split_history(messages: list[PyrisMessage]) -> HistorySplit:
     best: Optional[CompactionDTO] = None
     best_position = -1
     for message in messages:
-        if message.sender != IrisMessageRole.COMPACTION:
+        if message.sender != IrisMessageRole.SUMMARY:
             continue
         compaction = _parse_compaction(message)
         if compaction is None:
