@@ -9,7 +9,7 @@ import os
 import re
 import secrets
 import threading
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 import sqlalchemy.exc
 import yaml
@@ -256,29 +256,44 @@ def derived_reported_context_length(profile: Any) -> int:
 def _epoch_to_datetime(epoch: Any) -> Optional[datetime.datetime]:
     try:
         value = float(epoch)
-    except (TypeError, ValueError):
+        return datetime.datetime.fromtimestamp(value, tz=datetime.timezone.utc) if value > 0 else None
+    except (TypeError, ValueError, OverflowError, OSError):
         return None
-    return datetime.datetime.fromtimestamp(value, tz=datetime.timezone.utc) if value > 0 else None
+
+
+def _number(value: Any, convert: Callable[[Any], Any]) -> Any:
+    try:
+        return None if value is None else convert(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _text(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) else None
 
 
 def _model_profile_column_params(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Bind values for the typed model_profiles columns of one profile dict."""
+    """Bind values for the typed model_profiles columns of one profile dict.
+
+    Values come from the worker unchecked; one malformed field must not fail
+    the whole write, or a worker waiting for its profiles never starts.
+    """
     return {
-        "base_residency_mb": data.get("base_residency_mb"),
-        "loaded_vram_mb": data.get("loaded_vram_mb"),
-        "sleeping_residual_mb": data.get("sleeping_residual_mb"),
-        "kv_budget_mb": data.get("kv_budget_mb"),
-        "disk_size_bytes": data.get("disk_size_bytes"),
-        "engine": data.get("engine"),
-        "tensor_parallel_size": data.get("tensor_parallel_size"),
-        "kv_per_token_bytes": data.get("kv_per_token_bytes"),
-        "max_context_length": data.get("max_context_length"),
+        "base_residency_mb": _number(data.get("base_residency_mb"), float),
+        "loaded_vram_mb": _number(data.get("loaded_vram_mb"), float),
+        "sleeping_residual_mb": _number(data.get("sleeping_residual_mb"), float),
+        "kv_budget_mb": _number(data.get("kv_budget_mb"), float),
+        "disk_size_bytes": _number(data.get("disk_size_bytes"), int),
+        "engine": _text(data.get("engine")),
+        "tensor_parallel_size": _number(data.get("tensor_parallel_size"), int),
+        "kv_per_token_bytes": _number(data.get("kv_per_token_bytes"), int),
+        "max_context_length": _number(data.get("max_context_length"), int),
         "max_reported_context_length": derived_reported_context_length(data),
-        "residency_source": data.get("residency_source"),
-        "measurement_count": int(data.get("measurement_count", 0) or 0),
+        "residency_source": _text(data.get("residency_source")),
+        "measurement_count": _number(data.get("measurement_count"), int) or 0,
         "last_measured_at": _epoch_to_datetime(data.get("last_measured_epoch")),
-        "observed_gpu_memory_utilization": data.get("observed_gpu_memory_utilization"),
-        "min_gpu_memory_utilization_to_load": data.get("min_gpu_memory_utilization_to_load"),
+        "observed_gpu_memory_utilization": _number(data.get("observed_gpu_memory_utilization"), float),
+        "min_gpu_memory_utilization_to_load": _number(data.get("min_gpu_memory_utilization_to_load"), float),
     }
 
 
@@ -1793,7 +1808,11 @@ class DBManager:
                 },
                 conflict_set={
                     "profile": "EXCLUDED.profile",
-                    "calibration_key_hash": "EXCLUDED.calibration_key_hash",
+                    # An echo without a key must not erase the one hello
+                    # reported; staleness and sharing are judged on it.
+                    "calibration_key_hash": (
+                        "COALESCE(EXCLUDED.calibration_key_hash, model_profiles.calibration_key_hash)"
+                    ),
                 },
                 where="model_profiles.sync_revision = EXCLUDED.sync_revision",
             )

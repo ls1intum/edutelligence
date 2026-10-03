@@ -937,11 +937,24 @@ class ModelProfileRegistry:
         replaced: list[str] = []
         with self._lock:
             for model_name, data in profiles.items():
-                if model_name in skip or not isinstance(data, dict):
+                name = str(model_name)
+                if name in skip or not isinstance(data, dict):
                     continue
-                self._profiles[str(model_name)] = _record_from_dict(data)
-                self._apply_manual_overrides(str(model_name), self._profiles[str(model_name)])
-                replaced.append(str(model_name))
+                current = self._profiles.get(name)
+                revision = int(data.get("sync_revision", 0) or 0)
+                if current is not None and revision <= current.sync_revision:
+                    # Pushes can overtake each other, and one at our own
+                    # revision carries no central change: keep what this node
+                    # measured since, and only refresh the derived flags.
+                    if revision < current.sync_revision or _awaits_snapshot(current):
+                        continue
+                    current.calibration_id = _optional_int(data.get("calibration_id"))
+                    current.calibration_origin = data.get("calibration_origin")
+                    current.calibration_stale = data.get("calibration_stale")
+                else:
+                    self._profiles[name] = _record_from_dict(data)
+                    self._apply_manual_overrides(name, self._profiles[name])
+                replaced.append(name)
         return replaced
 
     def apply_calibration_result(self, model_name: str, measured: dict[str, Any]) -> None:
@@ -966,6 +979,11 @@ class ModelProfileRegistry:
 
 
 _RECORD_FIELDS = frozenset(field.name for field in fields(ModelProfileRecord))
+
+
+def _awaits_snapshot(profile: ModelProfileRecord) -> bool:
+    """A local calibration Logos has not linked to a snapshot yet."""
+    return profile.calibration_origin == "local" and profile.calibration_id is None
 
 
 def _optional_int(value: Any) -> int | None:

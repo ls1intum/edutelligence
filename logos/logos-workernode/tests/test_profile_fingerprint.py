@@ -82,3 +82,15 @@ def test_models_without_a_plan_get_a_bare_key():
     keys = calibration_keys(AppConfig(), [{"model": "org/a", "dtype": "half"}], ["org/a", "org/b"], [_gpu(0)], "0.30.0")
     assert set(keys) == {"org/a", "org/b"}
     assert keys["org/a"]["plan_hash"] != keys["org/b"]["plan_hash"]
+
+
+def test_unknown_vllm_version_is_probed_again(monkeypatch):
+    from logos_worker_node import profile_fingerprint, sharded_checkpoint
+
+    answers = iter(["", "0.30.0", "0.31.0"])
+    monkeypatch.setattr(profile_fingerprint, "_vllm_versions", {})
+    monkeypatch.setattr(sharded_checkpoint, "resolve_vllm_version", lambda binary: next(answers))
+
+    assert profile_fingerprint.cached_vllm_version("vllm") == ""
+    assert profile_fingerprint.cached_vllm_version("vllm") == "0.30.0"
+    assert profile_fingerprint.cached_vllm_version("vllm") == "0.30.0"

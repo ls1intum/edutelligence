@@ -6,13 +6,15 @@ under; any difference marks the calibration stale.
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
+import logging
 from typing import Any, Iterable
 
 from logos_worker_node.metal import is_metal_backend
 from logos_worker_node.models import AppConfig, DeviceInfo, model_can_sleep
+
+logger = logging.getLogger(__name__)
 
 _KEY_SCHEMA = 1
 
@@ -97,12 +99,25 @@ def calibration_keys(
     }
 
 
-@functools.lru_cache(maxsize=None)
+_vllm_versions: dict[str, str] = {}
+
+
 def cached_vllm_version(vllm_binary: str) -> str:
-    """vLLM version of the serving interpreter; resolving it may fork."""
+    """vLLM version of the serving interpreter; resolving it may fork.
+
+    An unknown version is not cached: a probe that timed out once would
+    otherwise change every calibration key of this process.
+    """
+    if vllm_binary in _vllm_versions:
+        return _vllm_versions[vllm_binary]
     from logos_worker_node.sharded_checkpoint import resolve_vllm_version  # noqa: PLC0415
 
     try:
-        return resolve_vllm_version(vllm_binary)
+        version = resolve_vllm_version(vllm_binary)
     except Exception:  # noqa: BLE001
-        return ""
+        version = ""
+    if version:
+        _vllm_versions[vllm_binary] = version
+    else:
+        logger.warning("vLLM version of %s is unknown; calibration keys omit it", vllm_binary)
+    return version

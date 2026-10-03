@@ -1062,3 +1062,39 @@ def test_a_local_calibration_waits_for_its_snapshot_id():
     assert echo["calibration_stale"] is False
     assert echo["calibration_key"] == {"schema": 1, "plan_hash": "p"}
     assert echo["sync_revision"] == 6
+
+
+def test_sync_ignores_a_push_that_an_earlier_one_overtook():
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 9.0, "sync_revision": 5}})
+    replaced = registry.replace_from_sync({"org/m": {"base_residency_mb": 1.0, "sync_revision": 4}})
+    assert replaced == []
+    assert registry.get_profile("org/m").base_residency_mb == 9.0
+
+
+def test_sync_at_the_same_revision_keeps_measurements_and_refreshes_flags():
+    """The push after every hello repeats the stored revision; it may only
+    update what Logos derives, not what the node measured since."""
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync({"org/m": {"engine": "vllm", "sync_revision": 3, "calibration_id": 7}})
+    registry.record_loaded_vram("org/m", 8000.0, engine="vllm")
+    registry.replace_from_sync({"org/m": {"sync_revision": 3, "calibration_id": 7, "calibration_stale": True}})
+    profile = registry.get_profile("org/m")
+    assert profile.loaded_vram_mb == 8000.0
+    assert (profile.calibration_id, profile.calibration_stale) == (7, True)
+
+
+def test_sync_at_the_same_revision_keeps_an_unlinked_local_calibration():
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 1.0, "sync_revision": 6}})
+    registry.apply_calibration_result("org/m", {"base_residency_mb": 15000.0, "residency_source": "calibrated"})
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 1.0, "sync_revision": 6}})
+    profile = registry.get_profile("org/m")
+    assert (profile.base_residency_mb, profile.calibration_origin) == (15000.0, "local")
+
+
+def test_sync_at_a_newer_revision_replaces_the_record():
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync({"org/m": {"calibration_unsupported": True, "sync_revision": 2}})
+    registry.replace_from_sync({"org/m": {"sync_revision": 3}})
+    assert registry.get_profile("org/m").calibration_unsupported is None

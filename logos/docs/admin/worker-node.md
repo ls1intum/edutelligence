@@ -18,6 +18,10 @@ rule or its own TLS certificate.
 5. Check that `http://localhost:80/` returns the worker's service info, and
    check the provider status in the Logos UI.
 
+The worker fetches its calibrated model profiles from Logos before it starts
+any lane, so it waits — logging `Waiting for model profiles from Logos` —
+until the orchestrator is reachable.
+
 The production Compose file pulls the worker image
 `${REGISTRY}/logos-workernode-vllm` from the public mirror at
 `ghcr.io/ls1intum/edutelligence` by default — no login required. Set
