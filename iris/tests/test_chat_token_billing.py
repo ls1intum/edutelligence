@@ -151,6 +151,24 @@ def test_terminal_update_after_failed_resends_keeps_newer_usage_apart():
     assert sorted(artemis.recorded) == [7, 100]
 
 
+def test_usage_only_update_is_not_retried():
+    """A usage-only update that reached Artemis but lost its response is not sent again."""
+    artemis = _FakeArtemis()
+    tokens = [TokenUsageDTO(numInputTokens=100)]
+    # send_result: stored, response lost; three resends lost; usage-only update
+    # reaches Artemis but its response is lost; terminal update succeeds.
+    script = [(True, False), (False, False), (False, False)]
+    script += [(False, False)] * 3 + [(True, False)]
+    callback = _callback_against(artemis, script)
+
+    with patch("iris.web.status.status_update.time.sleep"):
+        callback.send_result("answer", tokens=tokens)
+        tokens.append(TokenUsageDTO(numInputTokens=7))
+        callback.finish(tokens=tokens)
+
+    assert sorted(artemis.recorded) == [7, 100]
+
+
 def test_resent_answer_goes_alone_before_the_update_that_triggered_it():
     answer = TokenUsageDTO(numInputTokens=100)
     title = TokenUsageDTO(numInputTokens=7)

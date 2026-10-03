@@ -551,8 +551,10 @@ class ChatRunCallback(StatusCallback):
 
         Artemis drops every token of an update whose answer it already stored. A
         running update leaves newer usage for a later update. Before a terminal
-        update, the newer usage goes out alone first; only if that fails too does the
-        terminal update carry it, as the last chance.
+        update, the newer usage goes out alone first; only if that fails does the
+        terminal update carry it, as the last chance. The usage-only update is sent
+        once: Artemis records every copy it receives, and only an update that repeats
+        the answer is deduplicated, so a retry could bill the same usage twice.
         """
         answer_tokens = (self._undelivered_result_fields or {}).get("tokens") or []
         answer_usage = [t for t in tokens if any(t is a for a in answer_tokens)]
@@ -560,7 +562,7 @@ class ChatRunCallback(StatusCallback):
         if not terminal_send or not newer_usage:
             return answer_usage
         payload = self._payload(run_state=RunStateEnum.RUNNING, tokens=newer_usage)
-        if self._send_payload_with_backoff(payload, self._DELIVERY_RETRY_ATTEMPTS):
+        if self._send_status_payload(payload):
             self._delivered_tokens.extend(newer_usage)
             return answer_usage
         return answer_usage + newer_usage
