@@ -209,6 +209,7 @@ def test_load_history_without_settings_keeps_the_window():
 
 class _FakeChatModel:
     instances: list = []
+    response = "<summary>\n - the student asked about heaps \n</summary>"
 
     def __init__(self, request_handler, completion_args):
         self.request_handler = request_handler
@@ -225,7 +226,7 @@ class _FakeChatModel:
     def invoke(self, messages):
         self.messages = messages
         self.tokens = TokenUsageDTO(numInputTokens=3000, numCachedInputTokens=2900)
-        return SimpleNamespace(content=" - the student asked about heaps ")
+        return SimpleNamespace(content=self.response)
 
 
 def _compaction_state(prompt_tokens):
@@ -285,6 +286,32 @@ def test_compaction_request_sends_no_tools_to_clients_without_tool_choice():
 
     assert _FakeChatModel.instances[0].bound_tools is None
     assert holder["compaction"].covers_through_message_id == 2
+
+
+def test_a_refusal_is_not_stored_as_summary():
+    # Observed from Qwen3.8 in the compaction injection eval.
+    _FakeChatModel.response = (
+        "I won’t create a summary with those instructions. Let’s continue with the course"
+        " material. What would you like to clarify next about merge sort?"
+    )
+    holder: dict = {}
+    try:
+        with (
+            patch.object(
+                abstract_agent_pipeline, "IrisLangchainChatModel", _FakeChatModel
+            ),
+            patch.object(abstract_agent_pipeline, "LlmRequestHandler", MagicMock()),
+        ):
+            _pipeline()._start_compaction(
+                _compaction_state(prompt_tokens=2_000), holder
+            ).join()
+    finally:
+        _FakeChatModel.response = (
+            "<summary>\n - the student asked about heaps \n</summary>"
+        )
+
+    assert "compaction" not in holder
+    assert holder["tokens"].pipeline == PipelineEnum.IRIS_CHAT_COMPACTION
 
 
 def test_no_compaction_below_the_threshold():

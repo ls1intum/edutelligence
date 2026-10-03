@@ -29,6 +29,7 @@ from iris.pipeline.shared.compaction import (
     compaction_instruction,
     fit_to_budget,
     get_compaction_settings,
+    parse_summary,
     should_compact,
     split_history,
     summary_message_text,
@@ -631,8 +632,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 if llm.tokens is not None:
                     llm.tokens.pipeline = PipelineEnum.IRIS_CHAT_COMPACTION
                     holder["tokens"] = llm.tokens
-                summary = _visible_content_text(response.content).strip()
-                if summary:
+                summary = parse_summary(_visible_content_text(response.content))
+                if summary is None:
+                    logger.warning("Compaction returned no summary; history kept")
+                else:
                     holder["compaction"] = CompactionDTO(
                         summary=summary,
                         covers_through_message_id=covers_through_message_id,
