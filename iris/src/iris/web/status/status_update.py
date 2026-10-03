@@ -371,6 +371,10 @@ class ChatRunCallback(StatusCallback):
             url, run_id, ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING)
         )
         self._undelivered_result_fields: Optional[dict[str, Any]] = None
+        # Usage already handed to Artemis. Callers pass their whole running token list on
+        # every send, but Artemis adds each send's tokens to the trace, so each usage
+        # object must be delivered exactly once.
+        self._delivered_tokens: list[TokenUsageDTO] = []
 
     def activity_snapshot(self, activities: list[ActivityDTO], seq: int) -> None:
         payload = self._payload(
@@ -498,6 +502,10 @@ class ChatRunCallback(StatusCallback):
             return False
 
         fields, carried_result = self._merge_undelivered_result(fields)
+        new_tokens: list[TokenUsageDTO] = []
+        if "tokens" in fields:
+            new_tokens = self._undelivered_tokens(fields["tokens"])
+            fields = {**fields, "tokens": new_tokens}
 
         # A terminal send is the LAST chance to deliver an answer that a prior
         # send_result() failed to hand off. Give it the same retry/backoff so a
@@ -519,6 +527,7 @@ class ChatRunCallback(StatusCallback):
                 if self._send_status_payload(payload):
                     if carried_result:
                         self._undelivered_result_fields = None
+                    self._delivered_tokens.extend(new_tokens)
                     return True
                 if attempt < attempts - 1:
                     time.sleep((1, 2, 4)[attempt])
@@ -526,6 +535,15 @@ class ChatRunCallback(StatusCallback):
         finally:
             if terminal_send:
                 self._shutdown_running_update_executor()
+
+    def _undelivered_tokens(
+        self, tokens: Optional[list[TokenUsageDTO]]
+    ) -> list[TokenUsageDTO]:
+        return [
+            token
+            for token in tokens or []
+            if not any(token is delivered for delivered in self._delivered_tokens)
+        ]
 
     def _merge_undelivered_result(
         self, fields: dict[str, Any]

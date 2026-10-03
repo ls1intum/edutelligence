@@ -801,6 +801,7 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
     pipeline.mcq_pipeline = MagicMock()
     pipeline.prepare_state = lambda state: None
     pipeline.build_system_message = lambda state: "system prompt"
+    pipeline.build_turn_context_message = lambda state: "turn context"
     pipeline.get_tools = lambda state: []
     pipeline.execute_agent = lambda state: "agent answer"
     pipeline.create_tracing_context = lambda dto, variant: None

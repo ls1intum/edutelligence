@@ -10,6 +10,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.timing import timed_span
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
@@ -56,6 +57,14 @@ from .mcq_chat_mixin import (
 )
 
 logger = get_logger(__name__)
+
+# The billing label of the chat agent's own LLM calls, per chat mode.
+_TOKEN_PIPELINE_BY_CHAT_MODE: dict[IrisChatMode, PipelineEnum] = {
+    IrisChatMode.COURSE: PipelineEnum.IRIS_CHAT_COURSE_MESSAGE,
+    IrisChatMode.LECTURE: PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE,
+    IrisChatMode.EXERCISE: PipelineEnum.IRIS_CHAT_EXERCISE_MESSAGE,
+    IrisChatMode.TEXT_EXERCISE: PipelineEnum.IRIS_CHAT_EXERCISE_MESSAGE,
+}
 
 _GUIDE_OK_SENTINEL = "!ok!"
 
@@ -241,6 +250,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         self.system_prompt_template = self.jinja_env.get_template(
             "chat_system_prompt.j2"
         )
+        self.turn_context_template = self.jinja_env.get_template("chat_turn_context.j2")
         self.guide_prompt_template = self.jinja_env.get_template(
             "exercise_chat_guide_prompt.j2"
         )
@@ -510,15 +520,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             The system prompt string.
         """
         dto = state.dto
-
-        query = self.get_latest_user_message(state)
         exercise = dto.programming_exercise or dto.text_exercise
-
-        current_view_blocks = self._build_current_view(state)
-        current_view_is_combined = any(
-            getattr(ctx, "type", None) == "combinedView"
-            for ctx in getattr(state, "lecture_contexts", []) or []
-        )
         # Whether the prompt may advertise the point-out tool. Derived from the same function the
         # provider gates on rather than from `current_view_is_combined`, so the two cannot drift:
         # a combinedView context carrying neither slides nor video resolves to no lecture unit, and
@@ -530,11 +532,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             is not None
         )
 
-        # Base template context (shared across all contexts)
+        # Only values that stay the same for the whole session: this prompt is the start
+        # of the cached prefix. Per-message values go to build_turn_context_message.
         template_context: dict[str, Any] = {
             "chat_mode": self.chat_mode,
             "support_level": _support_level(dto),
-            "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
             "user_language": dto.user.lang_key,
             "custom_instructions": format_custom_instructions(
                 dto.custom_instructions or ""
@@ -543,12 +545,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "allow_lecture_tool": state.allow_lecture_tool,
             "allow_faq_tool": state.allow_faq_tool,
             "allow_memiris_tool": state.allow_memiris_tool,
-            "has_chat_history": bool(state.message_history),
             "has_exercises": bool(dto.course.exercises),
-            "has_query": query is not None,
             "lecture_name": dto.lecture.title if dto.lecture else None,
-            "current_view_blocks": current_view_blocks,
-            "current_view_is_combined": current_view_is_combined,
             "can_point_out_in_combined_view": can_point_out_in_combined_view,
             "exercise_title": exercise.title if exercise else "",
             "problem_statement": exercise.problem_statement if exercise else "",
@@ -565,12 +563,62 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             "end_date": (
                 str(exercise.end_date) if exercise and exercise.end_date else ""
             ),
-            "text_exercise_submission": dto.text_exercise_submission,
-            "mcq_parallel": getattr(state, "mcq_parallel", False),
-            "event": self.event,
         }
 
         return self.system_prompt_template.render(template_context)
+
+    def build_turn_context_message(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> str:
+        """
+        Build the per-message context that is sent after the chat history.
+
+        Args:
+            state: The current pipeline execution state.
+
+        Returns:
+            The rendered context: date, current position, submission, event and quiz request.
+        """
+        dto = state.dto
+        exercise = dto.programming_exercise or dto.text_exercise
+        return self.turn_context_template.render(
+            {
+                "chat_mode": self.chat_mode,
+                "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
+                "current_view_blocks": self._build_current_view(state),
+                "current_view_is_combined": any(
+                    getattr(ctx, "type", None) == "combinedView"
+                    for ctx in getattr(state, "lecture_contexts", []) or []
+                ),
+                "allow_lecture_tool": state.allow_lecture_tool,
+                "exercise_id": exercise.id if exercise else "",
+                "text_exercise_submission": dto.text_exercise_submission,
+                "programming_language": (
+                    dto.programming_exercise.programming_language.lower()
+                    if dto.programming_exercise
+                    and dto.programming_exercise.programming_language
+                    else ""
+                ),
+                "event": self.event,
+                "mcq_parallel": getattr(state, "mcq_parallel", False),
+            }
+        )
+
+    def get_token_pipeline(
+        self,
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> PipelineEnum:
+        """
+        Return the pipeline that the chat agent's LLM calls are billed to.
+
+        Args:
+            state: The current pipeline execution state.
+
+        Returns:
+            The chat pipeline enum for this chat mode.
+        """
+        return _TOKEN_PIPELINE_BY_CHAT_MODE.get(self.chat_mode, PipelineEnum.NOT_SET)
 
     def is_memiris_memory_creation_enabled(
         self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]

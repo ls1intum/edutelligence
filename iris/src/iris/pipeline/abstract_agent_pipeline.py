@@ -10,6 +10,7 @@ from memiris.domain.memory import Memory
 from iris.common.logging_config import get_logger
 from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
@@ -77,6 +78,11 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     deferred_session_title_delivered: bool
     partial_result_sender: Optional[PartialResultSender]
     activity_tracker: ActivityTracker
+
+
+def _escape_template_braces(text: str) -> str:
+    """Escape braces so ChatPromptTemplate does not read them as variables."""
+    return text.replace("{", "{{").replace("}", "}}")
 
 
 def _filter_empty_messages(messages: list[PyrisMessage]) -> list[PyrisMessage]:
@@ -165,6 +171,24 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> str:
         """Return a ChatPromptTemplate containing only messages before chat history."""
+
+    def build_turn_context_message(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> Optional[str]:
+        """
+        Return context that changes from turn to turn (date, current view), or None.
+
+        It is sent as a system message after the chat history, so the system prompt and
+        the history stay a byte-identical prefix that the provider can read from its
+        prompt cache on the next turn.
+        """
+        return None
+
+    def get_token_pipeline(  # pylint: disable=unused-argument
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> PipelineEnum:
+        """Return the pipeline that the agent's own LLM calls are billed to."""
+        return PipelineEnum.NOT_SET
 
     @abstractmethod
     def get_memiris_tenant(self, dto: DTO) -> str:
@@ -313,23 +337,30 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         return output or ""
 
     def assemble_prompt_with_history(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT], system_prompt: str
+        self,
+        state: AgentPipelineExecutionState[DTO, VARIANT],
+        system_prompt: str,
+        turn_context: Optional[str] = None,
     ) -> ChatPromptTemplate:
         """
         Combine the prefix prompt with converted chat history and add the agent scratchpad.
 
+        The per-turn context goes after the history: only the latest request carries it,
+        so the next turn shares everything up to the latest user message.
         Subclasses can override to customize how history is injected.
         """
-        prefix_messages = [
-            ("system", system_prompt.replace("{", "{{").replace("}", "}}"))
-        ]
+        prefix_messages = [("system", _escape_template_braces(system_prompt))]
         history_lc_messages = [
             convert_iris_message_to_langchain_message(message)
             for message in state.message_history
         ]
+        turn_context_messages = (
+            [("system", _escape_template_braces(turn_context))] if turn_context else []
+        )
         combined = (
             prefix_messages
             + history_lc_messages
+            + turn_context_messages
             + [("placeholder", "{agent_scratchpad}")]
         )
         return ChatPromptTemplate.from_messages(combined)
@@ -460,9 +491,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     result_preview,
                 )
 
-            # Track LLM tokens
-            if hasattr(state, "llm") and state.llm and hasattr(state.llm, "tokens"):
-                state.tokens.append(state.llm.tokens)
+            # Track LLM tokens. The chat model replaces its usage object on every call, so
+            # a step that made no new call still points at the previous call's usage.
+            step_tokens = getattr(state.llm, "tokens", None) if state.llm else None
+            if step_tokens is not None and not any(
+                tracked is step_tokens for tracked in state.tokens
+            ):
+                step_tokens.pipeline = self.get_token_pipeline(state)
+                state.tokens.append(step_tokens)
 
             # Allow subclasses to process each step
             try:
@@ -713,8 +749,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 self.prepare_state(state)
             with timed_span(pipeline_name, "build_system_message", start_time):
                 system_message = self.build_system_message(state)
+                turn_context = self.build_turn_context_message(  # pylint: disable=assignment-from-none
+                    state
+                )
             state.prompt = self.assemble_prompt_with_history(
-                state=state, system_prompt=system_message
+                state=state, system_prompt=system_message, turn_context=turn_context
             )
 
             # Load tools for both local and cloud models
