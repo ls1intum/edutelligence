@@ -10,7 +10,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureTranscriptionRetrievalDTO,
     LectureUnitPageChunkRetrievalDTO,
 )
-from iris.domain.search.lecture_search_dto import LectureSearchResultDTO
+from iris.domain.search.global_search_dto import LectureSearchResultDTO
 
 # pylint: disable=missing-class-docstring,invalid-name
 
