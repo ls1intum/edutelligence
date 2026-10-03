@@ -579,7 +579,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return self.get_recent_history_from_dto(state)
         state.compaction_summary = split.summary
         return fit_to_budget(
-            split.messages, state.compaction_settings.history_budget_bytes
+            split.messages, state.compaction_settings.history_budget_tokens
         )
 
     def _start_compaction(
@@ -609,7 +609,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return None
 
         covers_through_message_id = messages[boundary - 1].id
-        instruction = compaction_instruction(messages[boundary])
+        instruction = compaction_instruction()
         model_id = state.llm.request_handler.model_id
 
         def run() -> None:
@@ -620,7 +620,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                         temperature=0.5, tool_choice="none"
                     ),
                 )
-                if state.tools:
+                if state.tools and settings.send_tools:
                     llm.bind_tools(
                         generate_structured_tools_from_functions(state.tools)
                     )

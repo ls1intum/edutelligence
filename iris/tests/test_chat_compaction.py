@@ -109,7 +109,17 @@ def test_fit_to_budget_drops_oldest_messages_only_when_needed():
     messages = [_user(1, "a" * 100), _answer(2, "b" * 100), _user(3, "c" * 100)]
 
     assert fit_to_budget(messages, 10_000) == messages
-    assert [m.id for m in fit_to_budget(messages, 300)] == [2, 3]
+    assert [m.id for m in fit_to_budget(messages, 75)] == [2, 3]
+
+
+def test_history_above_the_default_threshold_is_kept_for_compaction():
+    # luna in llm_config.example.yml: summarize at 245k, never drop messages first.
+    settings = CompactionSettings(max_input_tokens=922_000, threshold_tokens=245_000)
+    messages = _chat(150)
+    for message in messages:
+        message.contents[0].text_content = "x" * 4_000  # 300 messages, ~300k tokens
+
+    assert fit_to_budget(messages, settings.history_budget_tokens) == messages
 
 
 # --- trigger ---------------------------------------------------------------
@@ -255,9 +265,26 @@ def test_compaction_request_reuses_prompt_and_tools_without_tool_calls():
     assert isinstance(llm.messages[0], SystemMessage)
     assert isinstance(llm.messages[-1], SystemMessage)
     assert "Summary request" in llm.messages[-1].content
+    assert "x" * 50 not in llm.messages[-1].content  # no student text in the note
     assert holder["compaction"].summary == "- the student asked about heaps"
     assert holder["compaction"].covers_through_message_id == 2
     assert holder["tokens"].pipeline == PipelineEnum.IRIS_CHAT_COMPACTION
+
+
+def test_compaction_request_sends_no_tools_to_clients_without_tool_choice():
+    _FakeChatModel.instances = []
+    state = _compaction_state(prompt_tokens=2_000)
+    state.compaction_settings = CompactionSettings(10_000, 1_000, send_tools=False)
+    holder: dict = {}
+
+    with (
+        patch.object(abstract_agent_pipeline, "IrisLangchainChatModel", _FakeChatModel),
+        patch.object(abstract_agent_pipeline, "LlmRequestHandler", MagicMock()),
+    ):
+        _pipeline()._start_compaction(state, holder).join()
+
+    assert _FakeChatModel.instances[0].bound_tools is None
+    assert holder["compaction"].covers_through_message_id == 2
 
 
 def test_no_compaction_below_the_threshold():
