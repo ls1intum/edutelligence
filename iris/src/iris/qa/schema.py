@@ -32,7 +32,7 @@ def _default_profiles() -> set[Profile]:
 
 
 class TokenCeiling(BaseModel):
-    """Conservative capacity used only by the pre-run cost guard."""
+    """Per-scenario limits enforced by the worker and pre-run cost guard."""
 
     model_config = ConfigDict(extra="forbid")
 

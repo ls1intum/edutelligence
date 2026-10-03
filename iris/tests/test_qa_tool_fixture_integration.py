@@ -15,6 +15,7 @@ from iris.domain.communication.communication_tutor_suggestion_pipeline_execution
 )
 from iris.qa.adapters import FixtureMemiris, ScenarioAdapters  # noqa: E402
 from iris.qa.loader import load_suite  # noqa: E402
+from iris.qa.worker import _run_pipeline  # noqa: E402
 from iris.tools import chat_tool_providers as providers  # noqa: E402
 from iris.tools import (  # noqa: E402
     create_tool_get_additional_exercise_details,
@@ -187,3 +188,29 @@ def test_mcq_and_tutor_artifact_fixtures_execute_production_tool_wrappers():
     tutor_dto = CommunicationTutorSuggestionPipelineExecutionDTO.model_validate(payload)
     artifact = create_tool_get_last_artifact(tutor_dto.chat_history, Mock())()
     assert "free type variables" in artifact
+
+
+def test_global_search_worker_passes_frozen_time_and_base_url(monkeypatch):
+    scenario = next(
+        item for item in _suite().scenarios if item.id == "global-navigation-no-answer"
+    )
+    observed = {}
+
+    class FakeGlobalSearchPipeline:
+        def __init__(self, **_kwargs):
+            self.tokens = []
+
+        def __call__(self, **kwargs):
+            observed.update(kwargs)
+            return SimpleNamespace(answer=None, sources=[])
+
+    monkeypatch.setattr(
+        "iris.pipeline.global_search_pipeline.GlobalSearchPipeline",
+        FakeGlobalSearchPipeline,
+    )
+
+    result = _run_pipeline(scenario, "gpt-5.4-mini")
+
+    assert result["response"] is None
+    assert observed["base_url"] == "https://artemis.example.invalid"
+    assert observed["access_context"].effective_now().startswith("2026-05-17T12:00:00")

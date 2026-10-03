@@ -117,6 +117,12 @@ omits reasoning effort and reasoning mode so the provider selects its defaults.
 The GPT-6 Logos candidates use the Responses API and fixed comparison settings:
 `gpt-6.1-sol` uses `high`, while `gpt-6-luna` uses `xhigh`.
 
+Before a worker starts, the runner records that trial's full cost bound. It
+replaces the bound with actual usage only after the candidate and evaluator
+both return complete token counts. A timeout or incomplete result keeps the
+full bound. The worker also applies each situation's agent-turn, per-call
+output, and total token limits before it sends another model request.
+
 The CLI exits non-zero for invalid fixtures, budget refusal, or execution/judge
 errors. A low score is benchmark data, not a command failure.
 

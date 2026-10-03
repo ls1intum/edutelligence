@@ -1,5 +1,6 @@
 # yamllint disable rule:line-length rule:document-start
 query: Why does merge sort have n log n running time?
+artemisBaseUrl: https://artemis.example.invalid
 limit: 5
 intent: SEARCH
 qa:

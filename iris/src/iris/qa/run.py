@@ -80,6 +80,13 @@ def run_paid_suite(
                             "Next scenario would exceed --max-cost-usd; "
                             "stopping before the paid call"
                         )
+                    reservation = guard.record_reservation(
+                        run_id=run_id,
+                        scenario_id=scenario.id,
+                        pipeline="trial-upper-bound",
+                        model=model,
+                        cost_usd=reserve,
+                    )
                     stem = trial_stem(model, scenario.id, repetition)
                     input_path = raw_root / f"{stem}.input.json"
                     output_path = raw_root / f"{stem}.output.json"
@@ -126,7 +133,7 @@ def run_paid_suite(
                             completed.stderr, encoding="utf-8"
                         )
 
-                    accounted = False
+                    verified_usage = []
                     for usage in payload.get("usage", []):
                         usage_model = str(usage.get("model", ""))
                         rate = model_rates.get(usage_model)
@@ -135,22 +142,33 @@ def run_paid_suite(
                                 f"Unknown billed model in usage: {usage_model}"
                             )
                             continue
-                        guard.record_usage(
-                            run_id=run_id,
-                            scenario_id=scenario.id,
-                            pipeline=str(usage.get("pipeline", "unknown")),
-                            rate=rate,
-                            input_tokens=usage.get("inputTokens"),
-                            output_tokens=usage.get("outputTokens"),
+                        verified_usage.append(
+                            (
+                                str(usage.get("pipeline", "unknown")),
+                                rate,
+                                usage.get("inputTokens"),
+                                usage.get("outputTokens"),
+                            )
                         )
-                        accounted = True
-                    if completed.returncode and not accounted:
-                        guard.record_reservation(
-                            run_id=run_id,
-                            scenario_id=scenario.id,
-                            pipeline="failed-worker-upper-bound",
-                            model=model,
-                            cost_usd=reserve,
+                    has_judge_usage = any(
+                        rate.model == rate_card.judge.model
+                        for _, rate, _, _ in verified_usage
+                    )
+                    if (
+                        completed.returncode == 0
+                        and not payload.get("executionError")
+                        and verified_usage
+                        and has_judge_usage
+                    ):
+                        guard.reconcile_reservation(
+                            reservation=reservation, usage=verified_usage
+                        )
+                    elif completed.returncode == 0 and not payload.get(
+                        "executionError"
+                    ):
+                        payload["executionError"] = (
+                            "Worker returned incomplete paid usage; "
+                            "the full reservation remains accounted"
                         )
 
                     try:
@@ -193,7 +211,7 @@ def run_paid_suite(
         "repetitions": repetitions,
         "scenarioCount": len(scenarios),
         "plannedUpperBoundUsd": str(planned_cost),
-        "measuredLedgerSpendUsd": str(ledger.total() - run_start_total),
+        "accountedSpendUsd": str(ledger.total() - run_start_total),
         "rateSource": rate_card.source,
     }
     write_json_report(result_root / "report.json", evaluations, metadata=metadata)

@@ -1,5 +1,6 @@
 # yamllint disable rule:line-length rule:document-start
 query: I failed the graded checkpoint on Friday 26 June and the booking page offers Tuesday 30 June at 09:00. I also had a graded attempt on Wednesday 24 June, a practice run on Saturday, and an approved illness accommodation through Monday noon. Can I use the Tuesday slot, and if not, what is the earliest time the supplied rules establish?
+artemisBaseUrl: https://artemis.example.invalid
 limit: 5
 intent: SEARCH
 qa:

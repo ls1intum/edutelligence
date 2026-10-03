@@ -98,6 +98,13 @@ def rejudge_saved_runs(
                     )
                 configuration = create_worker_configuration(rate_card, model)
                 try:
+                    reservation = guard.record_reservation(
+                        run_id=f"rejudge-{output_root.name}",
+                        scenario_id=identity[1],
+                        pipeline="qa-rejudge-upper-bound",
+                        model=rate_card.judge.model,
+                        cost_usd=reserve,
+                    )
                     completed = subprocess.run(  # nosec B603 - fixed Python module
                         [
                             sys.executable,
@@ -130,13 +137,16 @@ def rejudge_saved_runs(
                     raise RuntimeError(
                         f"Judge worker failed for {identity}: {worker_error}"
                     )
-                guard.record_usage(
-                    run_id=f"rejudge-{output_root.name}",
-                    scenario_id=identity[1],
-                    pipeline="qa-rejudge",
-                    rate=rate_card.judge,
-                    input_tokens=usage.get("inputTokens"),
-                    output_tokens=usage.get("outputTokens"),
+                guard.reconcile_reservation(
+                    reservation=reservation,
+                    usage=[
+                        (
+                            "qa-rejudge",
+                            rate_card.judge,
+                            usage.get("inputTokens"),
+                            usage.get("outputTokens"),
+                        )
+                    ],
                 )
             else:
                 shutil.copy2(source_output, target_output)
@@ -163,7 +173,7 @@ def rejudge_saved_runs(
         "sourceRunCount": len(input_roots),
         "candidateModelsInvoked": False,
         "judgeContext": "production instructions and bounded fixture evidence",
-        "measuredRejudgeSpendUsd": str(ledger.total() - run_start_total),
+        "accountedRejudgeSpendUsd": str(ledger.total() - run_start_total),
         "rateSource": rate_card.source,
     }
     write_json_report(output_root / "report.json", evaluations, metadata=metadata)

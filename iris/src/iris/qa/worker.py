@@ -7,11 +7,96 @@ import math
 import os
 import sys
 import traceback
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 # pylint: disable=import-outside-toplevel,missing-class-docstring,protected-access
+
+
+def _request_token_estimate(messages: list[Any], tools: Any) -> int:
+    """Conservatively estimate request tokens before a paid model call."""
+
+    def serializable(value: Any) -> Any:
+        if hasattr(value, "model_dump"):
+            return value.model_dump(by_alias=True, mode="json")
+        return value
+
+    payload = {
+        "messages": [serializable(message) for message in messages],
+        "tools": [serializable(tool) for tool in (tools or [])],
+    }
+    return (
+        math.ceil(len(json.dumps(payload, default=str, ensure_ascii=False)) / 3) + 256
+    )
+
+
+class _ScenarioRequestBudget:
+    """Apply one scenario's request limits to every production model call."""
+
+    def __init__(self, ceiling):
+        self.ceiling = ceiling
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.stack = ExitStack()
+
+    def __enter__(self):
+        from iris.llm.request_handler.llm_request_handler import LlmRequestHandler
+        from iris.pipeline import abstract_agent_pipeline
+
+        original_chat = LlmRequestHandler.chat
+        original_executor = abstract_agent_pipeline.AgentExecutor
+
+        def budgeted_chat(handler, messages, arguments, tools):
+            estimate = _request_token_estimate(messages, tools)
+            if self.input_tokens + estimate > self.ceiling.max_input_tokens:
+                raise RuntimeError(
+                    "Scenario input-token limit would be exceeded before model call"
+                )
+            remaining_output = self.ceiling.max_output_tokens - self.output_tokens
+            if remaining_output <= 0:
+                raise RuntimeError(
+                    "Scenario output-token limit would be exceeded before model call"
+                )
+            request_limit = min(
+                self.ceiling.max_output_tokens_per_call, remaining_output
+            )
+            if arguments.max_tokens is None or arguments.max_tokens > request_limit:
+                arguments.max_tokens = request_limit
+
+            response = original_chat(handler, messages, arguments, tools)
+            usage = response.token_usage
+            input_tokens = int(usage.num_input_tokens)
+            output_tokens = int(usage.num_output_tokens)
+            if input_tokens < 0 or output_tokens < 0:
+                raise RuntimeError("Model returned negative token usage")
+            self.input_tokens += input_tokens
+            self.output_tokens += output_tokens
+            if self.input_tokens > self.ceiling.max_input_tokens:
+                raise RuntimeError("Scenario input-token limit was exceeded")
+            if self.output_tokens > self.ceiling.max_output_tokens:
+                raise RuntimeError("Scenario output-token limit was exceeded")
+            return response
+
+        def budgeted_executor(*args, **kwargs):
+            configured = kwargs.get("max_iterations")
+            kwargs["max_iterations"] = (
+                min(configured, self.ceiling.max_agent_turns)
+                if configured is not None
+                else self.ceiling.max_agent_turns
+            )
+            return original_executor(*args, **kwargs)
+
+        self.stack.enter_context(patch.object(LlmRequestHandler, "chat", budgeted_chat))
+        self.stack.enter_context(
+            patch.object(abstract_agent_pipeline, "AgentExecutor", budgeted_executor)
+        )
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback_value):
+        return self.stack.__exit__(exc_type, exc_value, traceback_value)
 
 
 def _recording_callback(base):
@@ -142,6 +227,7 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
     from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (  # noqa: E501
         CommunicationTutorSuggestionPipelineExecutionDTO,
     )
+    from iris.domain.search.global_search_dto import AccessContext
     from iris.domain.search.search_intent_dto import SearchIntent
     from iris.pipeline.autonomous_tutor_pipeline import AutonomousTutorPipeline
     from iris.pipeline.chat.chat_pipeline import ChatPipeline
@@ -158,7 +244,7 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
     metadata = payload.pop("qa", {}) or {}
     diagnostics: dict[str, Any] = {}
     raw_tokens: list[Any] = []
-    with ScenarioAdapters(metadata):
+    with _ScenarioRequestBudget(scenario.token_ceiling), ScenarioAdapters(metadata):
         if scenario.use_case.value == "chat":
             callback = _recording_callback(ChatRunCallback)(
                 f"benchmark-{scenario.id}", "https://callback.invalid"
@@ -204,7 +290,13 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
                 else SearchIntent.TRIGGER_AI
             )
             result = pipeline(
-                query=payload["query"], limit=payload.get("limit", 5), intent=intent
+                query=payload["query"],
+                limit=payload.get("limit", 5),
+                intent=intent,
+                access_context=AccessContext(
+                    now=metadata["syntheticNow"], unrestricted=True
+                ),
+                base_url=payload["artemisBaseUrl"],
             )
             response = result.answer
             activities = []

@@ -1,18 +1,27 @@
 from __future__ import annotations
 
+import importlib
+import json
+import subprocess
 from collections import Counter
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
-from iris.qa.cost import ModelRate, SpendLedger
+import pytest
+
+from iris.qa.cost import BudgetGuard, ModelRate, SpendLedger
 from iris.qa.evaluate import Rating, evaluation_from_worker
 from iris.qa.loader import load_suite
-from iris.qa.planning import build_cost_plan
+from iris.qa.planning import build_cost_plan, trial_reserve
 from iris.qa.report import report_payload
-from iris.qa.run import trial_stem
-from iris.qa.schema import Scenario
-from iris.qa.worker import _extract_callback, _judge_answer
+from iris.qa.run import run_paid_suite, trial_stem
+from iris.qa.schema import Scenario, TokenCeiling
+from iris.qa.worker import (
+    _extract_callback,
+    _judge_answer,
+    _ScenarioRequestBudget,
+)
 
 QA_ROOT = Path(__file__).parents[1] / "qa"
 
@@ -35,6 +44,186 @@ def _scenario() -> Scenario:
             "critical_errors": ["The answer invents facts not in the evidence."],
         }
     )
+
+
+def _rate_card():
+    return SimpleNamespace(
+        candidates=(ModelRate("gpt-5.4-mini", Decimal("0.75"), Decimal("4.5")),),
+        judge=ModelRate("gpt-5.4", Decimal("2.5"), Decimal("15")),
+        auxiliary=ModelRate("gpt-5.4-mini", Decimal("0.75"), Decimal("4.5")),
+        source="test rates",
+    )
+
+
+def test_request_budget_caps_each_call_and_agent_iterations(monkeypatch):
+    importlib.import_module("iris.pipeline.pipeline")
+    # pylint: disable=import-outside-toplevel
+    from iris.llm import CompletionArguments
+    from iris.llm.request_handler.llm_request_handler import (
+        LlmRequestHandler,
+    )
+
+    # pylint: enable=import-outside-toplevel
+
+    usage = iter(((100, 80), (100, 70)))
+
+    def fake_chat(handler, messages, arguments, tools):
+        del handler, messages, arguments, tools
+        input_tokens, output_tokens = next(usage)
+        return SimpleNamespace(
+            token_usage=SimpleNamespace(
+                num_input_tokens=input_tokens,
+                num_output_tokens=output_tokens,
+            )
+        )
+
+    executor_arguments = {}
+
+    def fake_executor(*_args, **kwargs):
+        executor_arguments.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(LlmRequestHandler, "chat", fake_chat)
+    from iris.pipeline import (  # pylint: disable=import-outside-toplevel
+        abstract_agent_pipeline,
+    )
+
+    monkeypatch.setattr(abstract_agent_pipeline, "AgentExecutor", fake_executor)
+    ceiling = TokenCeiling(
+        max_agent_turns=2,
+        max_input_tokens=1_000,
+        max_output_tokens=150,
+        max_output_tokens_per_call=100,
+    )
+    with _ScenarioRequestBudget(ceiling):
+        first = CompletionArguments()
+        LlmRequestHandler.chat(object(), [{"text": "first"}], first, None)
+        assert first.max_tokens == 100
+
+        second = CompletionArguments()
+        LlmRequestHandler.chat(object(), [{"text": "second"}], second, None)
+        assert second.max_tokens == 70
+
+        with pytest.raises(RuntimeError, match="output-token limit"):
+            LlmRequestHandler.chat(
+                object(), [{"text": "third"}], CompletionArguments(), None
+            )
+        abstract_agent_pipeline.AgentExecutor(agent=object(), tools=[])
+
+    assert executor_arguments["max_iterations"] == 2
+
+
+def test_paid_run_records_reservation_before_worker_timeout(tmp_path, monkeypatch):
+    scenario = _scenario()
+    rate_card = _rate_card()
+    ledger = SpendLedger(tmp_path / "spend.jsonl")
+
+    monkeypatch.setattr(
+        "iris.qa.run.create_worker_configuration",
+        lambda *_args: SimpleNamespace(environment={}, close=lambda: None),
+    )
+
+    def timeout(*_args, **_kwargs):
+        records = ledger.records()
+        assert len(records) == 1
+        assert records[0].reservation is True
+        raise subprocess.TimeoutExpired("worker", 900)
+
+    monkeypatch.setattr("iris.qa.run.subprocess.run", timeout)
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_paid_suite(
+            qa_root=tmp_path / "qa",
+            scenarios=[scenario],
+            models=("gpt-5.4-mini",),
+            repetitions=1,
+            rate_card=rate_card,
+            ledger=ledger,
+            hard_limit=Decimal("30"),
+            max_run_cost=Decimal("30"),
+            planned_cost=Decimal("1"),
+            output_root=tmp_path / "timeout-run",
+        )
+
+    assert ledger.records()[0].reservation is True
+
+
+def test_verified_usage_atomically_replaces_reservation(tmp_path):
+    ledger = SpendLedger(tmp_path / "spend.jsonl")
+    guard = BudgetGuard(ledger, Decimal("30"))
+    rate = ModelRate("gpt-5.4-mini", Decimal("1"), Decimal("2"))
+    reservation = guard.record_reservation(
+        run_id="run",
+        scenario_id="scenario",
+        pipeline="trial-upper-bound",
+        model=rate.model,
+        cost_usd=Decimal("1"),
+    )
+
+    guard.reconcile_reservation(
+        reservation=reservation,
+        usage=[("chat", rate, 100, 50)],
+    )
+
+    records = ledger.records()
+    assert len(records) == 1
+    assert records[0].reservation is False
+    assert records[0].input_tokens == 100
+    assert ledger.total() == Decimal("0.00020000")
+
+
+def test_failed_judge_keeps_full_trial_reservation(tmp_path, monkeypatch):
+    scenario = _scenario()
+    rate_card = _rate_card()
+    ledger = SpendLedger(tmp_path / "spend.jsonl")
+
+    monkeypatch.setattr(
+        "iris.qa.run.create_worker_configuration",
+        lambda *_args: SimpleNamespace(environment={}, close=lambda: None),
+    )
+    monkeypatch.setattr("iris.qa.run._git_value", lambda *_args: "test")
+
+    def failed_judge(args, **_kwargs):
+        output = Path(args[args.index("--output") + 1])
+        output.write_text(
+            json.dumps(
+                {
+                    "response": "Candidate answer",
+                    "activities": [],
+                    "usage": [
+                        {
+                            "model": "gpt-5.4-mini",
+                            "pipeline": "chat",
+                            "inputTokens": 100,
+                            "outputTokens": 50,
+                            "costUsd": 0.0003,
+                        }
+                    ],
+                    "judge": {},
+                    "executionError": "Judge failed",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 1, "", "")
+
+    monkeypatch.setattr("iris.qa.run.subprocess.run", failed_judge)
+    code, _, _ = run_paid_suite(
+        qa_root=tmp_path / "qa",
+        scenarios=[scenario],
+        models=("gpt-5.4-mini",),
+        repetitions=1,
+        rate_card=rate_card,
+        ledger=ledger,
+        hard_limit=Decimal("30"),
+        max_run_cost=Decimal("30"),
+        planned_cost=trial_reserve(scenario, rate_card, "gpt-5.4-mini"),
+        output_root=tmp_path / "failed-judge-run",
+    )
+
+    assert code == 1
+    records = ledger.records()
+    assert len(records) == 1
+    assert records[0].reservation is True
 
 
 def test_corpus_has_fifty_scenarios_and_explicit_mode_support_matrix():

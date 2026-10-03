@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
 from iris.qa.schema import Scenario
 
@@ -43,6 +44,7 @@ class UsageRecord:
     cost_usd: str
     recorded_at: str
     reservation: bool = False
+    reservation_id: str | None = None
 
 
 class BudgetExceeded(RuntimeError):
@@ -99,6 +101,45 @@ class SpendLedger:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+
+    def replace_reservation(
+        self, reservation: UsageRecord, replacements: list[UsageRecord]
+    ) -> None:
+        """Atomically replace one persisted reservation with verified usage."""
+        if not reservation.reservation_id:
+            raise ValueError("reservation has no identity")
+        records = self.records()
+        matching = [
+            index
+            for index, record in enumerate(records)
+            if record.reservation_id == reservation.reservation_id
+            and record.reservation
+        ]
+        if len(matching) != 1:
+            raise ValueError("reservation is missing or duplicated")
+        index = matching[0]
+        updated = records.copy()
+        updated.pop(index)
+        for replacement in reversed(replacements):
+            updated.insert(index, replacement)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
+        descriptor = os.open(
+            temporary,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+        try:
+            for record in updated:
+                payload = json.dumps(asdict(record), sort_keys=True) + "\n"
+                os.write(descriptor, payload.encode("utf-8"))
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        try:
+            os.replace(temporary, self.path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @contextmanager
     def exclusive_paid_run(self) -> Iterator[None]:
@@ -179,6 +220,47 @@ class BudgetGuard:
             )
         return record
 
+    def reconcile_reservation(
+        self,
+        *,
+        reservation: UsageRecord,
+        usage: Iterable[tuple[str, ModelRate, int | None, int | None]],
+    ) -> list[UsageRecord]:
+        """Replace a pre-call upper bound with complete provider usage."""
+        records: list[UsageRecord] = []
+        for pipeline, rate, input_tokens, output_tokens in usage:
+            if input_tokens is None or output_tokens is None:
+                raise BudgetExceeded(
+                    "Provider omitted paid token usage; keeping reservation"
+                )
+            if input_tokens < 0 or output_tokens < 0:
+                raise BudgetExceeded(
+                    "Provider reported negative token usage; keeping reservation"
+                )
+            records.append(
+                UsageRecord(
+                    run_id=reservation.run_id,
+                    scenario_id=reservation.scenario_id,
+                    model=rate.model,
+                    pipeline=pipeline,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=f"{rate.cost(input_tokens, output_tokens):.8f}",
+                    recorded_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+        actual_cost = sum((Decimal(record.cost_usd) for record in records), Decimal(0))
+        reserved_cost = Decimal(reservation.cost_usd)
+        if actual_cost > reserved_cost:
+            raise BudgetExceeded(
+                f"Verified usage ${actual_cost:.4f} exceeds reserved upper bound "
+                f"${reserved_cost:.4f}; keeping reservation"
+            )
+        self.ledger.replace_reservation(reservation, records)
+        if self.ledger.total() > self.hard_limit_usd:
+            raise BudgetExceeded("Verified usage exceeds the hard spending limit")
+        return records
+
     def record_reservation(
         self,
         *,
@@ -208,6 +290,7 @@ class BudgetGuard:
             cost_usd=f"{cost_usd:.8f}",
             recorded_at=datetime.now(timezone.utc).isoformat(),
             reservation=True,
+            reservation_id=uuid4().hex,
         )
         self.ledger.append(record)
         return record
