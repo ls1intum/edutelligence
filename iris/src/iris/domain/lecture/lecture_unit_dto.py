@@ -27,3 +27,7 @@ class LectureUnitDTO(BaseModel):
     # True when every content sub-pipeline structurally skipped this run, which
     # makes it provably safe to reuse the stored unit summary and its vector.
     content_unchanged: bool = False
+    # False when this dispatch carried no PDF, so the run purged every page chunk:
+    # the unit row must then record an empty page manifest and no PDF quality
+    # verdict instead of keeping the ones of the removed PDF.
+    has_pdf: bool = True

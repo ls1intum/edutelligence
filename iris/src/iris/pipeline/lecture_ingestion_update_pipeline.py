@@ -471,7 +471,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             self._update_dto_with_transcript(aligned_segments, existing.language)
 
     def _build_lecture_unit_dto(
-        self, language: str = "", content_unchanged: bool = False
+        self, language: str = "", content_unchanged: bool = False, has_pdf: bool = True
     ) -> LectureUnitDTO:
         chunk_counts = self.dto.lecture_unit.chunk_counts_by_page
         quality_flags = self.dto.lecture_unit.quality_flags
@@ -507,6 +507,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 json.dumps(quality_flags) if quality_flags is not None else None
             ),
             content_unchanged=content_unchanged,
+            has_pdf=has_pdf,
         )
 
     def _run_ingestion(
@@ -608,7 +609,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
         declared_language = (self.dto.lecture_unit.course_language or "").strip()
         unit_row_language = declared_language or language
         lecture_unit_dto = self._build_lecture_unit_dto(
-            unit_row_language, content_unchanged
+            unit_row_language, content_unchanged, has_pdf
         )
 
         tokens += LectureUnitPipeline(

@@ -142,6 +142,7 @@ def _unit_lecture_dto(content_unchanged: bool) -> SimpleNamespace:
         quality_score=0.9,
         quality_flags_json=None,
         content_unchanged=content_unchanged,
+        has_pdf=True,
     )
 
 
@@ -285,3 +286,82 @@ def test_unit_pipeline_stamps_the_ingestion_ledger():
     assert stored[LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value] == json.dumps({"1": 2})
     assert stored[LectureUnitSchema.PIPELINE_VERSION.value] == 1
     assert stored[LectureUnitSchema.QUALITY_SCORE.value] == 0.9
+
+
+_STORED_PDF_LEDGER = {
+    LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: json.dumps({"1": 2, "2": 3}),
+    LectureUnitSchema.PIPELINE_VERSION.value: 1,
+    LectureUnitSchema.QUALITY_SCORE.value: 0.4,
+    LectureUnitSchema.QUALITY_FLAGS.value: json.dumps(["thin pages: [2]"]),
+}
+
+
+def _write_unit_row_over_stored_pdf_ledger(has_pdf: bool) -> dict:
+    """Run the unit-row write for a dispatch that recomputed no page ledger, over a
+    stored row that still carries the ledger of an earlier PDF generation."""
+    pipeline = object.__new__(LectureUnitPipeline)
+    pipeline.cancel_event = None
+    pipeline.weaviate_client = MagicMock()
+    pipeline.local = False
+    pipeline.callback = None
+    pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
+    pipeline.lecture_unit_collection = SimpleNamespace(
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(
+                return_value=SimpleNamespace(
+                    objects=[
+                        SimpleNamespace(
+                            uuid=_ROW_UUID, properties=dict(_STORED_PDF_LEDGER)
+                        )
+                    ]
+                )
+            )
+        ),
+        data=SimpleNamespace(
+            insert=MagicMock(return_value=_ROW_UUID),
+            delete_many=MagicMock(
+                return_value=SimpleNamespace(failed=0, matches=0, successful=0)
+            ),
+        ),
+    )
+    lecture_unit = _unit_lecture_dto(content_unchanged=False)
+    # Neither dispatch ran the page pipeline, so no page ledger was recomputed.
+    lecture_unit.expected_chunk_counts_json = None
+    lecture_unit.pipeline_version = None
+    lecture_unit.quality_score = None
+    lecture_unit.quality_flags_json = None
+    lecture_unit.has_pdf = has_pdf
+
+    with (
+        patch(
+            "iris.pipeline.lecture_unit_pipeline.LectureUnitSegmentSummaryPipeline"
+        ) as segment_pipeline_cls,
+        patch(
+            "iris.pipeline.lecture_unit_pipeline.LectureUnitSummaryPipeline"
+        ) as summary_pipeline_cls,
+    ):
+        segment_pipeline_cls.return_value.return_value = ([], [])
+        summary_pipeline_cls.return_value.return_value = ("summary", [])
+        pipeline(lecture_unit=lecture_unit, initial_properties={})
+
+    return pipeline.lecture_unit_collection.data.insert.call_args.kwargs["properties"]
+
+
+def test_unit_row_clears_page_ledger_when_the_pdf_was_removed():
+    # The PDF was removed while the transcript stays: this dispatch carries no PDF,
+    # so every page chunk was purged and the ledger must not keep the removed
+    # PDF's chunk expectation or quality verdict.
+    stored = _write_unit_row_over_stored_pdf_ledger(has_pdf=False)
+
+    assert stored[LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value] == json.dumps({})
+    assert stored[LectureUnitSchema.QUALITY_SCORE.value] is None
+    assert stored[LectureUnitSchema.QUALITY_FLAGS.value] is None
+
+
+def test_unit_row_keeps_page_ledger_when_the_pdf_was_skipped():
+    # A PDF that was present but structurally skipped still has its chunks, so the
+    # stored ledger describing them stays authoritative.
+    stored = _write_unit_row_over_stored_pdf_ledger(has_pdf=True)
+
+    for property_name, value in _STORED_PDF_LEDGER.items():
+        assert stored[property_name] == value

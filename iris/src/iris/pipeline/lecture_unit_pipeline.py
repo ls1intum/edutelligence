@@ -190,6 +190,29 @@ class LectureUnitPipeline(SubPipeline):
                         return incoming_value
                     return latest_properties.get(property_name)
 
+                # A dispatch without a PDF purged every page chunk, so the page ledger
+                # must say so: an empty manifest and no PDF quality verdict. Keeping the
+                # stored values is only right when the PDF was present but skipped;
+                # for a removed PDF it would leave the census reporting a chunk
+                # expectation the index can never meet.
+                if lecture_unit.has_pdf:
+                    expected_chunk_counts = ledger_value(
+                        LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value,
+                        lecture_unit.expected_chunk_counts_json,
+                    )
+                    quality_score = ledger_value(
+                        LectureUnitSchema.QUALITY_SCORE.value,
+                        lecture_unit.quality_score,
+                    )
+                    quality_flags = ledger_value(
+                        LectureUnitSchema.QUALITY_FLAGS.value,
+                        lecture_unit.quality_flags_json,
+                    )
+                else:
+                    expected_chunk_counts = "{}"
+                    quality_score = None
+                    quality_flags = None
+
                 # Write-new-then-sweep: insert this run's row first, then remove
                 # every other row of the unit (previous generation, duplicates,
                 # legacy rows). A crash between the two leaves a duplicate that the
@@ -236,22 +259,13 @@ class LectureUnitPipeline(SubPipeline):
                     ),
                     LectureUnitSchema.CONTENT_FINGERPRINT.value: lecture_unit.content_fingerprint,
                     LectureUnitSchema.INGESTION_RUN_ID.value: lecture_unit.ingestion_run_id,
-                    LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: ledger_value(
-                        LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value,
-                        lecture_unit.expected_chunk_counts_json,
-                    ),
+                    LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value: expected_chunk_counts,
                     LectureUnitSchema.PIPELINE_VERSION.value: ledger_value(
                         LectureUnitSchema.PIPELINE_VERSION.value,
                         lecture_unit.pipeline_version,
                     ),
-                    LectureUnitSchema.QUALITY_SCORE.value: ledger_value(
-                        LectureUnitSchema.QUALITY_SCORE.value,
-                        lecture_unit.quality_score,
-                    ),
-                    LectureUnitSchema.QUALITY_FLAGS.value: ledger_value(
-                        LectureUnitSchema.QUALITY_FLAGS.value,
-                        lecture_unit.quality_flags_json,
-                    ),
+                    LectureUnitSchema.QUALITY_SCORE.value: quality_score,
+                    LectureUnitSchema.QUALITY_FLAGS.value: quality_flags,
                 }
                 new_uuid = retry.run(
                     lambda: self.lecture_unit_collection.data.insert(

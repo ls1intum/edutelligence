@@ -8,6 +8,8 @@ it, and stale segments are pruned.
 
 # pylint: disable=protected-access,import-outside-toplevel
 
+import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -255,6 +257,46 @@ def test_page_replacement_purges_by_unit_identity_every_run(monkeypatch):
     pipeline.collection.data.delete_many.assert_called_once()
 
 
+def test_page_replacement_applies_visibility_changed_during_preprocessing(
+    monkeypatch,
+):
+    # A visibility webhook hides slide 1 while vision and embedding run. The
+    # replacement must write the hidden state, not the visibility read at the start
+    # of the run, or the slide becomes retrievable again.
+    events: list = []
+    pipeline = _page_pipeline(events)
+    hidden_until = datetime(2026, 7, 3, 12, 0, tzinfo=timezone.utc)
+    visibility_changed = {"value": False}
+
+    def fetch_unit_rows(**_kwargs):
+        if not visibility_changed["value"]:
+            return SimpleNamespace(objects=[])
+        snapshot = json.dumps({"1": hidden_until.isoformat()})
+        return SimpleNamespace(
+            objects=[
+                SimpleNamespace(
+                    properties={LectureUnitSchema.SLIDE_VISIBILITY.value: snapshot}
+                )
+            ]
+        )
+
+    def chunk_while_slide_gets_hidden(**_kwargs):
+        visibility_changed["value"] = True
+        return [_sample_chunk()]
+
+    pipeline.lecture_unit_collection.query.fetch_objects = MagicMock(
+        side_effect=fetch_unit_rows
+    )
+    pipeline.chunk_data = MagicMock(side_effect=chunk_while_slide_gets_hidden)
+    _patch_pdf(monkeypatch)
+
+    pipeline()
+
+    batch = pipeline.collection.batch.rate_limit.return_value.__enter__.return_value
+    written = batch.add_object.call_args.kwargs["properties"]
+    assert written.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value) == hidden_until
+
+
 def test_page_replacement_fails_run_when_batch_drops_objects(monkeypatch):
     events: list = []
     pipeline = _page_pipeline(events)
@@ -336,6 +378,7 @@ def test_unit_row_replacement_fails_run_when_delete_fails(monkeypatch):
         quality_score=None,
         quality_flags_json=None,
         content_unchanged=False,
+        has_pdf=True,
     )
 
     with pytest.raises(IngestionStageError) as exc_info:

@@ -385,6 +385,7 @@ def _lecture_unit_commit_target():
         base_url=BASE_URL,
         lecture_unit_summary="summary",
         content_unchanged=False,
+        has_pdf=True,
     )
 
     def run():

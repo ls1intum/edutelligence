@@ -672,6 +672,19 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 self.cancel_event,
                 "lecture page replacement",
             ):
+                # The visibility read at the start of the run is minutes old by now:
+                # a visibility webhook that hid a slide during vision or embedding
+                # would otherwise be reverted by this replacement. Re-read it under
+                # the same lock the visibility pipeline writes under and stamp it on
+                # every chunk, including the ones a convergence escalation rewrites.
+                self._load_existing_slide_visibility()
+                for chunk, _ in prepared_chunks:
+                    page_number = int(
+                        chunk[LectureUnitPageChunkSchema.PAGE_NUMBER.value]
+                    )
+                    chunk[LectureUnitPageChunkSchema.HIDDEN_UNTIL.value] = (
+                        self._hidden_until_by_page.get(page_number)
+                    )
                 # One retry budget for the whole swap: a transient store condition
                 # re-submits only the dropped chunks, never the vision/embedding work.
                 retry = WeaviateWriteRetry.for_request()

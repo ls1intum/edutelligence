@@ -543,6 +543,7 @@ def test_full_unit_reingestion_preserves_visibility_but_uses_fresh_content_metad
         quality_score=None,
         quality_flags_json=None,
         content_unchanged=False,
+        has_pdf=True,
     )
 
     with (
@@ -621,6 +622,7 @@ def test_full_unit_reingestion_preserves_metadata_updated_after_ingestion_starte
         quality_score=None,
         quality_flags_json=None,
         content_unchanged=False,
+        has_pdf=True,
     )
 
     with (
@@ -677,6 +679,7 @@ def test_full_unit_reingestion_does_not_delete_existing_unit_when_embedding_fail
         quality_score=None,
         quality_flags_json=None,
         content_unchanged=False,
+        has_pdf=True,
     )
 
     with (
