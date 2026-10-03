@@ -106,8 +106,9 @@
 # Token usage reports which part of the input the provider read from its prompt
 # cache (`cost_per_million_cached_input_token`) and, on GPT-5.6 and later, which
 # part it wrote to the cache (`cost_per_million_cache_write_input_token`). The
-# rest of the input is billed at `cost_per_million_input_token`. Leave a rate
-# at 0 when the provider has no such billing (e.g. local models).
+# rest of the input is billed at `cost_per_million_input_token`. A cache rate
+# that is not set falls back to `cost_per_million_input_token`; set it to 0
+# only when the provider really doesn't bill those tokens (e.g. local models).
 # `long_context_threshold_tokens` plus the two multipliers model a long-context
 # price tier: above the threshold the whole request uses the multiplied rates.
 - id: oai-gpt-6-luna

@@ -14,6 +14,9 @@ from iris.domain.data.text_message_content_dto import (  # noqa: E402
     TextMessageContentDTO,
 )
 from iris.llm import CompletionArguments  # noqa: E402
+from iris.llm.external.ollama import (  # noqa: E402
+    convert_to_iris_message as ollama_convert_to_iris_message,
+)
 from iris.llm.external.openai_chat import (  # noqa: E402
     DirectOpenAIChatModel,
     convert_responses_to_iris_message,
@@ -23,6 +26,7 @@ from iris.llm.external.openai_chat import (  # noqa: E402
 from iris.llm.langchain.iris_langchain_chat_model import (  # noqa: E402
     IrisLangchainChatModel,
 )
+from iris.llm.llm_manager import LlmList  # noqa: E402
 from iris.llm.request_handler.llm_request_handler import (  # noqa: E402
     apply_model_costs,
 )
@@ -176,6 +180,72 @@ def test_model_costs_include_cache_rates():
     assert tokens.cost_per_million_cached_input_token == 0.01
     assert tokens.cost_per_million_cache_write_input_token == 0.125
     assert tokens.cost_per_million_output_token == 0.50
+
+
+def test_unset_cache_rates_fall_back_to_the_input_rate():
+    model = _model()
+    legacy = DirectOpenAIChatModel(
+        id="gpt-5.4-mini",
+        type="openai_chat",
+        model="gpt-5.4-mini",
+        api_key="sk-test",  # pragma: allowlist secret
+        cost_per_million_input_token=0.75,
+        cost_per_million_output_token=4.5,
+    )
+    tokens = TokenUsageDTO(numInputTokens=1000, numCachedInputTokens=900)
+
+    apply_model_costs(tokens, legacy)
+
+    assert model.cost_per_million_cached_input_token == 0.01
+    assert tokens.cost_per_million_cached_input_token == 0.75
+    assert tokens.cost_per_million_cache_write_input_token == 0.75
+
+
+def test_explicit_zero_cache_rates_stay_zero():
+    local = _model(
+        cost_per_million_input_token=0,
+        cost_per_million_cached_input_token=0,
+        cost_per_million_cache_write_input_token=0,
+        cost_per_million_output_token=0,
+    )
+    tokens = TokenUsageDTO(numInputTokens=1000, numCachedInputTokens=900)
+
+    apply_model_costs(tokens, local)
+
+    assert tokens.cost_per_million_cached_input_token == 0
+    assert tokens.cost_per_million_cache_write_input_token == 0
+
+
+def test_config_keys_load_into_the_model():
+    entry = {
+        "id": "gpt-6-luna",
+        "type": "openai_chat",
+        "model": "gpt-6-luna",
+        "api_key": "sk-test",  # pragma: allowlist secret
+        "cost_per_million_cached_input_token": 0.0089,
+        "cost_per_million_cache_write_input_token": 0.1114,
+        "long_context_threshold_tokens": 272000,
+        "long_context_input_cost_multiplier": 2.0,
+        "long_context_output_cost_multiplier": 1.5,
+    }
+
+    model = LlmList(llms=[entry]).llms[0]
+
+    assert model.cost_per_million_cached_input_token == 0.0089
+    assert model.cost_per_million_cache_write_input_token == 0.1114
+    assert model.long_context_threshold_tokens == 272000
+    assert model.long_context_input_cost_multiplier == 2.0
+    assert model.long_context_output_cost_multiplier == 1.5
+
+
+def test_ollama_reports_no_cache_usage():
+    message = ollama_convert_to_iris_message(
+        {"role": "assistant", "content": "hi"}, 12, 3, "gemma3:27b"
+    )
+
+    assert message.token_usage.num_input_tokens == 12
+    assert message.token_usage.num_cached_input_tokens == 0
+    assert message.token_usage.num_cache_write_input_tokens == 0
 
 
 def test_model_costs_use_long_context_tier_above_threshold():

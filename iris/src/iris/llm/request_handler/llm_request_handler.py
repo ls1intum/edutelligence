@@ -27,16 +27,17 @@ def apply_model_costs(token_usage: TokenUsageDTO, llm: ChatModel) -> None:
     if threshold is not None and token_usage.num_input_tokens > threshold:
         input_multiplier = llm.long_context_input_cost_multiplier
         output_multiplier = llm.long_context_output_cost_multiplier
+    input_rate = llm.cost_per_million_input_token
+    cached_rate = llm.cost_per_million_cached_input_token
+    cache_write_rate = llm.cost_per_million_cache_write_input_token
     token_usage.model_info = llm.model
-    token_usage.cost_per_million_input_token = (
-        llm.cost_per_million_input_token * input_multiplier
-    )
+    token_usage.cost_per_million_input_token = input_rate * input_multiplier
     token_usage.cost_per_million_cached_input_token = (
-        llm.cost_per_million_cached_input_token * input_multiplier
-    )
+        input_rate if cached_rate is None else cached_rate
+    ) * input_multiplier
     token_usage.cost_per_million_cache_write_input_token = (
-        llm.cost_per_million_cache_write_input_token * input_multiplier
-    )
+        input_rate if cache_write_rate is None else cache_write_rate
+    ) * input_multiplier
     token_usage.cost_per_million_output_token = (
         llm.cost_per_million_output_token * output_multiplier
     )
