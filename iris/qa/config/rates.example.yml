@@ -24,6 +24,12 @@ candidates:
   - model: openai/gpt-oss-120b
     input_per_million: "0"
     output_per_million: "0"
+  - model: gpt-6.1-sol
+    input_per_million: "0"
+    output_per_million: "0"
+  - model: gpt-6-luna
+    input_per_million: "0"
+    output_per_million: "0"
 judge:
   model: gpt-5.4
   input_per_million: "2.50"

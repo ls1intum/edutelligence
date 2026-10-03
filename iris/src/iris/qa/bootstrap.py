@@ -17,6 +17,8 @@ CANDIDATE_MODEL_IDS = {
     "gpt-5.6-terra": "qa-gpt-56-terra",
     "gpt-5.6-luna": "qa-gpt-56-luna",
     "openai/gpt-oss-120b": "qa-gpt-oss-120b",
+    "gpt-6.1-sol": "qa-gpt-61-sol",
+    "gpt-6-luna": "qa-gpt-6-luna",
 }
 CANDIDATE_DEPLOYMENT_ENV = {
     "gpt-5.4-mini": "IRIS_QA_GPT_54_MINI_DEPLOYMENT",
@@ -31,10 +33,27 @@ DEFAULT_REASONING_MODELS = {
     "gpt-5.6-luna",
 }
 GPT_OSS_MODEL = "openai/gpt-oss-120b"
+LOGOS_CANDIDATES = {
+    GPT_OSS_MODEL: {
+        "model_env": "IRIS_QA_GPT_OSS_120B_MODEL",
+        "reasoning_effort": None,
+        "use_responses_api": False,
+    },
+    "gpt-6.1-sol": {
+        "model_env": "IRIS_QA_GPT_61_SOL_MODEL",
+        "reasoning_effort": "high",
+        "use_responses_api": True,
+    },
+    "gpt-6-luna": {
+        "model_env": "IRIS_QA_GPT_6_LUNA_MODEL",
+        "reasoning_effort": "xhigh",
+        "use_responses_api": True,
+    },
+}
 LOGOS_ENVIRONMENT_NAMES = (
     "IRIS_QA_LOGOS_BASE_URL",
     "IRIS_QA_LOGOS_API_KEY",
-    "IRIS_QA_GPT_OSS_120B_MODEL",
+    *(entry["model_env"] for entry in LOGOS_CANDIDATES.values()),
 )
 
 
@@ -65,16 +84,20 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
     resources: dict[str, dict[str, set[str]]] = {}
     api_versions: dict[str, list[str]] = {}
     deployments: dict[str, dict[str, set[str]]] = {}
-    logos_entries: list[tuple[str, str, str]] = []
+    logos_entries: dict[str, list[tuple[str, str, str]]] = {}
     for entry in payload:
         if not isinstance(entry, dict):
             continue
-        if entry.get("type") == "openai_chat" and entry.get("model") == GPT_OSS_MODEL:
-            logos_entries.append(
+        if (
+            entry.get("type") == "openai_chat"
+            and entry.get("model") in LOGOS_CANDIDATES
+        ):
+            model = str(entry["model"])
+            logos_entries.setdefault(model, []).append(
                 (
                     str(entry.get("base_url", "")).strip().rstrip("/"),
                     str(entry.get("api_key", "")).strip(),
-                    str(entry.get("model", "")).strip(),
+                    model,
                 )
             )
             continue
@@ -145,22 +168,31 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
         "IRIS_QA_JUDGE_DEPLOYMENT": requested_deployments["gpt-5.4"],
     }
     if logos_entries:
-        unique_logos_entries = set(logos_entries)
-        if len(unique_logos_entries) != 1:
-            raise ValueError(
-                "Local LLM configuration contains multiple Logos GPT-OSS routes"
-            )
-        logos_base_url, logos_key, logos_model = next(iter(unique_logos_entries))
+        unique_logos_entries = {
+            item for entries in logos_entries.values() for item in entries
+        }
+        unique_logos_routes = {
+            (base_url, key) for base_url, key, _ in unique_logos_entries
+        }
+        if len(unique_logos_routes) != 1:
+            raise ValueError("Local LLM configuration contains multiple Logos routes")
+        logos_base_url, logos_key = next(iter(unique_logos_routes))
         _validate_logos_base_url(logos_base_url)
         if not logos_key:
-            raise ValueError("Local Logos GPT-OSS configuration requires an API key")
+            raise ValueError("Local Logos configuration requires an API key")
         configured.update(
             {
                 "IRIS_QA_LOGOS_BASE_URL": logos_base_url,
                 "IRIS_QA_LOGOS_API_KEY": logos_key,
-                "IRIS_QA_GPT_OSS_120B_MODEL": logos_model,
             }
         )
+        for model, entries in logos_entries.items():
+            if len(set(entries)) != 1:
+                raise ValueError(
+                    "Local LLM configuration contains multiple Logos entries "
+                    f"for {model}"
+                )
+            configured[str(LOGOS_CANDIDATES[model]["model_env"])] = model
     else:
         for name in LOGOS_ENVIRONMENT_NAMES:
             os.environ.pop(name, None)
@@ -269,18 +301,36 @@ def _model(
 def _logos_model(*, model_id: str, model: str, rate, api_key: str) -> dict:
     base_url = _required("IRIS_QA_LOGOS_BASE_URL").rstrip("/")
     _validate_logos_base_url(base_url)
-    if model != GPT_OSS_MODEL:
+    if model not in LOGOS_CANDIDATES:
         raise ValueError(f"Unexpected Logos candidate model: {model}")
-    return {
+    candidate = LOGOS_CANDIDATES[model]
+    entry = {
         "id": model_id,
         "type": "openai_chat",
         "model": model,
         "base_url": base_url,
         "api_key": api_key,  # pragma: allowlist secret
-        "use_responses_api": False,
+        "use_responses_api": candidate["use_responses_api"],
         "cost_per_million_input_token": float(rate.input_per_million),
         "cost_per_million_output_token": float(rate.output_per_million),
     }
+    reasoning_effort = candidate["reasoning_effort"]
+    if reasoning_effort is not None:
+        entry.update(
+            {
+                "supports_temperature": False,
+                "supports_reasoning_effort": True,
+                "reasoning_effort": reasoning_effort,
+                "reasoning_effort_values": [
+                    "none",
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                ],
+            }
+        )
+    return entry
 
 
 def _application(candidate_id: str) -> dict:
@@ -364,7 +414,7 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
         "gpt-5.4-mini": _required("IRIS_QA_GPT_54_MINI_DEPLOYMENT"),
         "gpt-5.4": _required("IRIS_QA_JUDGE_DEPLOYMENT"),
     }
-    if candidate_model not in {"gpt-5.4-mini", GPT_OSS_MODEL}:
+    if candidate_model not in {"gpt-5.4-mini", *LOGOS_CANDIDATES}:
         deployments[candidate_model] = _required(
             CANDIDATE_DEPLOYMENT_ENV[candidate_model]
         )
@@ -392,8 +442,8 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
         )
         for model, deployment in deployments.items()
     ]
-    if candidate_model == GPT_OSS_MODEL:
-        logos_model = _required("IRIS_QA_GPT_OSS_120B_MODEL")
+    if candidate_model in LOGOS_CANDIDATES:
+        logos_model = _required(str(LOGOS_CANDIDATES[candidate_model]["model_env"]))
         logos_key = _required("IRIS_QA_LOGOS_API_KEY")
         models.append(
             _logos_model(

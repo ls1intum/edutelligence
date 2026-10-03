@@ -19,6 +19,8 @@ def _card():
             ModelRate("gpt-5.6-terra", Decimal("2.5"), Decimal("15")),
             ModelRate("gpt-5.6-luna", Decimal("1"), Decimal("6")),
             ModelRate("openai/gpt-oss-120b", Decimal("0"), Decimal("0")),
+            ModelRate("gpt-6.1-sol", Decimal("0"), Decimal("0")),
+            ModelRate("gpt-6-luna", Decimal("0"), Decimal("0")),
         ),
         judge=ModelRate("gpt-5.4", Decimal("5"), Decimal("6")),
     )
@@ -114,6 +116,42 @@ def test_logos_candidate_uses_openai_compatible_chat(monkeypatch):
         assert candidate["use_responses_api"] is False
         assert "reasoning_effort" not in candidate
         assert "supports_reasoning_effort" not in candidate
+    finally:
+        config.close()
+
+
+@pytest.mark.parametrize(
+    ("model", "model_id", "environment_name", "effort"),
+    (
+        ("gpt-6.1-sol", "qa-gpt-61-sol", "IRIS_QA_GPT_61_SOL_MODEL", "high"),
+        ("gpt-6-luna", "qa-gpt-6-luna", "IRIS_QA_GPT_6_LUNA_MODEL", "xhigh"),
+    ),
+)
+def test_logos_gpt_6_candidates_use_responses_api_and_requested_effort(
+    monkeypatch, model, model_id, environment_name, effort
+):
+    monkeypatch.setenv("IRIS_QA_AZURE_ENDPOINT", "https://qa.openai.azure.com")
+    monkeypatch.setenv("IRIS_QA_GPT_54_MINI_DEPLOYMENT", "mini")
+    monkeypatch.setenv("IRIS_QA_JUDGE_DEPLOYMENT", "judge")
+    monkeypatch.setenv("IRIS_QA_LOGOS_BASE_URL", "https://logos.aet.cit.tum.de/v1")
+    monkeypatch.setenv(
+        "IRIS_QA_LOGOS_API_KEY",
+        "logos-test-key",  # pragma: allowlist secret
+    )
+    monkeypatch.setenv(environment_name, model)
+
+    config = create_worker_configuration(_card(), model)
+    try:
+        models = yaml.safe_load(
+            Path(config.environment["LLM_CONFIG_PATH"]).read_text(encoding="utf-8")
+        )
+        candidate = next(item for item in models if item["id"] == model_id)
+        assert candidate["type"] == "openai_chat"
+        assert candidate["model"] == model
+        assert candidate["use_responses_api"] is True
+        assert candidate["supports_reasoning_effort"] is True
+        assert candidate["reasoning_effort"] == effort
+        assert effort in candidate["reasoning_effort_values"]
     finally:
         config.close()
 
@@ -248,6 +286,38 @@ def test_local_llm_config_loads_logos_candidate(tmp_path):
         == "logos-test-key"  # pragma: allowlist secret
     )
     assert os.environ["IRIS_QA_GPT_OSS_120B_MODEL"] == "openai/gpt-oss-120b"
+
+
+def test_local_llm_config_loads_logos_gpt_6_candidates(tmp_path):
+    path = tmp_path / "llm-config.yml"
+    path.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "type": "azure_chat",
+                    "model": "gpt-5.4",
+                    "endpoint": "https://qa.openai.azure.com",
+                    "api_key": "azure-test-key",  # pragma: allowlist secret
+                    "azure_deployment": "judge",
+                },
+                *[
+                    {
+                        "type": "openai_chat",
+                        "model": model,
+                        "base_url": "https://logos.aet.cit.tum.de/v1",
+                        "api_key": "logos-test-key",  # pragma: allowlist secret
+                    }
+                    for model in ("gpt-6.1-sol", "gpt-6-luna")
+                ],
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    apply_local_llm_config(path)
+
+    assert os.environ["IRIS_QA_GPT_61_SOL_MODEL"] == "gpt-6.1-sol"
+    assert os.environ["IRIS_QA_GPT_6_LUNA_MODEL"] == "gpt-6-luna"
 
 
 def test_local_llm_config_rejects_non_logos_gpt_oss_route(tmp_path):

@@ -23,8 +23,14 @@ CANDIDATE_MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "openai/gpt-oss-120b",
+    "gpt-6.1-sol",
+    "gpt-6-luna",
 )
-ZERO_RATE_CANDIDATES = {"openai/gpt-oss-120b"}
+ZERO_RATE_CANDIDATES = {
+    "openai/gpt-oss-120b",
+    "gpt-6.1-sol",
+    "gpt-6-luna",
+}
 
 
 @dataclass(frozen=True)
