@@ -120,7 +120,7 @@ def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | N
             _cancel_benchmark_job(job_id, "Provider restarted or disconnected")
 
 
-def _capture_logosnode_provider_snapshot(
+async def _capture_logosnode_provider_snapshot(
     provider_id: int,
     runtime: Dict[str, Any],
 ) -> None:
@@ -133,7 +133,30 @@ def _capture_logosnode_provider_snapshot(
     )
     if sample is None:
         return
+    # Database round trips must not stall the loop every worker shares.
+    persisted = await asyncio.to_thread(_persist_logosnode_status, provider_id, sample)
+    if persisted is None:
+        return
+    snapshot_id, changed_models, rejected_models = persisted
+    if changed_models:
+        _schedule_model_profile_push(provider_id, changed_models)
+    if rejected_models:
+        _schedule_model_profile_resync(provider_id, rejected_models)
 
+    sample["snapshot_id"] = snapshot_id
+    # Keep a strong reference: an unheld task can be garbage-collected before
+    # it runs, which would silently drop the runtime sample.
+    task = asyncio.create_task(_main._logosnode_registry.record_runtime_sample(provider_id, sample))
+    _main._background_tasks.add(task)
+    task.add_done_callback(_main._background_tasks.discard)
+
+
+def _persist_logosnode_status(provider_id: int, sample: Dict[str, Any]) -> tuple[int, list[str], list[str]] | None:
+    """Store one status sample; None when even the snapshot failed.
+
+    Returns the snapshot id and, as in ``_persist_model_profiles``, the models
+    the worker must be sent.
+    """
     timestamp = _parse_iso_datetime(sample.get("timestamp"))
     used_bytes = int(float(sample.get("used_vram_mb") or 0.0) * 1024 * 1024)
     total_vram_mb = sample.get("total_vram_mb")
@@ -145,6 +168,8 @@ def _capture_logosnode_provider_snapshot(
     if free_vram_mb is not None:
         free_bytes = int(float(free_vram_mb or 0.0) * 1024 * 1024)
 
+    changed_models: list[str] = []
+    rejected_models: list[str] = []
     try:
         with DBManager() as db:
             snapshot_id = db.insert_provider_snapshot(
@@ -171,10 +196,6 @@ def _capture_logosnode_provider_snapshot(
                 if isinstance(model_profiles, dict) and model_profiles:
                     try:
                         changed_models, rejected_models = _persist_model_profiles(db, provider_id, model_profiles)
-                        if changed_models:
-                            _schedule_model_profile_push(provider_id, changed_models)
-                        if rejected_models:
-                            _schedule_model_profile_resync(provider_id, rejected_models)
                     except Exception:
                         db.session.rollback()
                         logger.warning(
@@ -197,20 +218,14 @@ def _capture_logosnode_provider_snapshot(
             _resolve_provider_name(provider_id),
             exc_info=True,
         )
-        return
-
-    sample["snapshot_id"] = snapshot_id
-    # Keep a strong reference: an unheld task can be garbage-collected before
-    # it runs, which would silently drop the runtime sample.
-    task = asyncio.create_task(_main._logosnode_registry.record_runtime_sample(provider_id, sample))
-    _main._background_tasks.add(task)
-    task.add_done_callback(_main._background_tasks.discard)
+        return None
+    return snapshot_id, changed_models, rejected_models
 
 
 def _persist_model_profiles(
     db: DBManager, provider_id: int, model_profiles: Dict[str, Any]
 ) -> tuple[list[str], list[str]]:
-    """Store a worker's echoed profiles.
+    """Store a worker's echoed profiles in one transaction.
 
     Returns the models with a new central revision, and the models whose
     echo was rejected as outdated; the worker must be sent both.
@@ -220,6 +235,8 @@ def _persist_model_profiles(
         return [], []
     changed: list[str] = []
     rejected: list[str] = []
+    written: dict[str, str] = {}
+    recorded: dict[str, float] = {}
     for model_name, echoed in model_profiles.items():
         if not isinstance(echoed, dict):
             continue
@@ -236,7 +253,7 @@ def _persist_model_profiles(
             ):
                 rejected.append(model_name)
                 continue
-            _profile_write_cache.remember(provider_id, model_name, digest)
+            written[model_name] = digest
         if not is_new_local_calibration(echoed):
             continue
         epoch = float(echoed["last_measured_epoch"])
@@ -250,10 +267,17 @@ def _persist_model_profiles(
             key_hash,
             datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc),
         )
-        _recorded_calibrations[(provider_id, model_name)] = epoch
+        recorded[model_name] = epoch
         if new_revision is not None:
-            _profile_write_cache.forget(provider_id, model_name)
             changed.append(model_name)
+    db.session.commit()
+    # Only now: a rolled-back write must not count as stored.
+    for model_name, digest in written.items():
+        _profile_write_cache.remember(provider_id, model_name, digest)
+    for model_name in changed:
+        _profile_write_cache.forget(provider_id, model_name)
+    for model_name, epoch in recorded.items():
+        _recorded_calibrations[(provider_id, model_name)] = epoch
     return changed, rejected
 
 
@@ -645,7 +669,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
                     ),
                 )
-                _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
+                await _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
             elif msg_type == "event":
                 event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
                 await _main._logosnode_registry.append_event(
@@ -919,21 +943,21 @@ async def logosnode_invalidate_calibration(data: LogosNodeInvalidateCalibrationR
 
 @router.post("/logosdb/providers/logosnode/model-profiles/reset", tags=["logosnode"])
 async def logosnode_reset_profiles(data: LogosNodeResetProfilesRequest):
-    """Forget a node's profiles so its next calibration measures from scratch.
+    """Empty a node's profiles so its next calibration measures from scratch.
 
-    Refused while the worker is connected: it still holds the profiles in
-    memory, and its next status would store them again.
+    A connected worker adopts the empty profiles at once; echoes of its old
+    state carry an outdated revision and are rejected.
     """
     _require_root_access(data.logos_key)
-    if _main._logosnode_registry.peek_runtime_snapshot(data.provider_id) is not None:
-        return JSONResponse(status_code=409, content={"error": "Stop the worker before resetting its profiles"})
 
-    def _delete() -> list[str]:
+    def _reset() -> list[str]:
         with DBManager() as db:
-            return db.delete_model_profiles(data.provider_id, data.model_names)
+            return db.reset_model_profiles(data.provider_id, data.model_names)
 
-    deleted = await asyncio.to_thread(_delete)
-    _profile_write_cache.forget(data.provider_id)
-    for model_name in deleted:
+    reset = await asyncio.to_thread(_reset)
+    for model_name in reset:
+        _profile_write_cache.forget(data.provider_id, model_name)
         _recorded_calibrations.pop((data.provider_id, model_name), None)
-    return {"provider_id": data.provider_id, "deleted": deleted}
+    if reset:
+        await _push_model_profiles(data.provider_id, reset)
+    return {"provider_id": data.provider_id, "reset": reset}

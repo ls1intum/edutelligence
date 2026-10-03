@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from typing import Any, Mapping
 
 SYNC_MODEL_PROFILES_ACTION = "sync_model_profiles"
@@ -135,20 +136,27 @@ def base_residency_agrees(previous: Any, current: Any, tolerance: float = 0.05) 
 
 
 class ProfileWriteCache:
-    """Skips database writes for profiles a worker echoes unchanged."""
+    """Skips database writes for profiles a worker echoes unchanged.
+
+    Statuses persist in worker threads while endpoints forget entries.
+    """
 
     def __init__(self) -> None:
         self._digests: dict[tuple[int, str], str] = {}
+        self._lock = threading.Lock()
 
     def unchanged(self, provider_id: int, model_name: str, digest: str) -> bool:
-        return self._digests.get((provider_id, model_name)) == digest
+        with self._lock:
+            return self._digests.get((provider_id, model_name)) == digest
 
     def remember(self, provider_id: int, model_name: str, digest: str) -> None:
-        self._digests[(provider_id, model_name)] = digest
+        with self._lock:
+            self._digests[(provider_id, model_name)] = digest
 
     def forget(self, provider_id: int, model_name: str | None = None) -> None:
-        if model_name is not None:
-            self._digests.pop((provider_id, model_name), None)
-            return
-        for key in [k for k in self._digests if k[0] == provider_id]:
-            del self._digests[key]
+        with self._lock:
+            if model_name is not None:
+                self._digests.pop((provider_id, model_name), None)
+                return
+            for key in [k for k in self._digests if k[0] == provider_id]:
+                del self._digests[key]

@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from logos.dbutils.dbmanager import (
     _CENTRAL_PROFILE_ROW,
+    _RESET_PROFILE_COLUMNS,
     DBManager,
     _model_profile_column_params,
     _upsert_model_profile_sql,
@@ -116,3 +117,11 @@ def test_malformed_worker_values_bind_as_null_instead_of_failing():
 def test_profile_requests_are_bounded():
     with pytest.raises(ValidationError):
         LogosNodeModelProfilesRequest(shared_key="k", calibration_key_hashes={str(i): "h" for i in range(1001)})
+
+
+def test_reset_is_a_revision_bump_that_keeps_the_context_high_water_mark():
+    source = inspect.getsource(DBManager.reset_model_profiles)
+    assert "sync_revision = sync_revision + 1" in source
+    assert "DELETE" not in source
+    assert "max_reported_context_length" not in _RESET_PROFILE_COLUMNS
+    assert {"base_residency_mb", "residency_source", "last_measured_at"} <= set(_RESET_PROFILE_COLUMNS)

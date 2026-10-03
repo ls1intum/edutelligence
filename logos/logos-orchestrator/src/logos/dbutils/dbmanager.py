@@ -315,6 +315,14 @@ _CALIBRATED_PROFILE_COLUMNS = (
     "last_measured_at",
 )
 
+# Typed columns a reset empties; max_reported_context_length is a high-water
+# mark and measurement_count is NOT NULL, so both are handled separately.
+_RESET_PROFILE_COLUMNS = tuple(
+    column
+    for column in _model_profile_column_params({})
+    if column not in ("max_reported_context_length", "measurement_count")
+)
+
 
 def _upsert_model_profile_sql(
     extra: Optional[Dict[str, str]] = None,
@@ -1796,8 +1804,8 @@ class DBManager:
     ) -> bool:
         """Store a worker's echoed profile unless a central change is newer.
 
-        ``profile`` excludes operator overrides; the typed columns mirror
-        ``reported``, what the node runs with. False on an outdated echo.
+        ``profile`` excludes operator overrides, the typed columns mirror
+        ``reported``. False on an outdated echo; the caller commits.
         """
         sql = text(
             _upsert_model_profile_sql(
@@ -1828,7 +1836,6 @@ class DBManager:
                 "sync_revision": int(sync_revision),
             },
         )
-        self.session.commit()
         return bool(result.rowcount)
 
     def record_model_calibration(
@@ -1842,17 +1849,15 @@ class DBManager:
     ) -> Optional[int]:
         """Snapshot a calibration and link the node's profile row to it.
 
-        Idempotent per (provider, model, calibrated_at). Returns the row's
-        new ``sync_revision``, or None when it already linked this snapshot.
+        Idempotent per (provider, model, calibrated_at); the caller commits.
+        New ``sync_revision``, or None when it already linked this snapshot.
         """
         calibration_id, inserted = self._insert_calibration_snapshot(
             provider_id, model_name, snapshot, calibration_key, calibration_key_hash, calibrated_at
         )
         if inserted and calibration_key_hash:
             self._count_calibration_agreement(model_name, calibration_key_hash, calibration_id, snapshot)
-        revision = self._link_calibration(provider_id, model_name, calibration_id)
-        self.session.commit()
-        return revision
+        return self._link_calibration(provider_id, model_name, calibration_id)
 
     def _insert_calibration_snapshot(
         self,
@@ -2059,12 +2064,22 @@ class DBManager:
         self.session.commit()
         return int(row.sync_revision) if row is not None else None
 
-    def delete_model_profiles(self, provider_id: int, model_names: Optional[List[str]] = None) -> List[str]:
-        """Forget a node's profiles so its next calibration starts fresh.
+    def reset_model_profiles(self, provider_id: int, model_names: Optional[List[str]] = None) -> List[str]:
+        """Empty a node's profiles so its next calibration starts fresh.
 
-        Calibration snapshots stay as history. Returns the deleted models.
+        A central change like any other: the bumped sync_revision rejects
+        echoes of the old state. Snapshots and the context high-water mark stay.
         """
-        sql = "DELETE FROM model_profiles WHERE provider_id = :provider_id"
+        cleared = ", ".join(f"{column} = NULL" for column in _RESET_PROFILE_COLUMNS)
+        sql = f"""
+            UPDATE model_profiles
+            SET profile = '{{}}'::jsonb, {cleared},
+                measurement_count = 0,
+                calibration_id = NULL,
+                sync_revision = sync_revision + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE provider_id = :provider_id
+        """
         params: Dict[str, Any] = {"provider_id": provider_id}
         if model_names is not None:
             sql += " AND model_name = ANY(:model_names)"

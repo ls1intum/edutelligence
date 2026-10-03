@@ -5258,30 +5258,22 @@ async def _reset_profiles_via_rest(
     logos_key: str,
     provider_id: int,
     models: Optional[list[str]] = None,
-    retry_s: float = 60.0,
 ) -> list[str]:
-    """Make Logos forget a stopped node's profiles (``models=None``: all).
+    """Make Logos empty a node's profiles (``models=None``: all of them).
 
-    The worker must be stopped: Logos refuses (409) while it is connected, since
-    it would store its in-memory profiles again. A just-stopped worker can take
-    a moment to drop its session, so 409 is retried for ``retry_s``.
+    A connected worker adopts the empty profiles at once, so the reset does
+    not depend on the worker being stopped.
     """
-    deadline = time.monotonic() + retry_s
     async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-        while True:
-            r = await client.post(
-                f"{admin_url}/logosdb/providers/logosnode/model-profiles/reset",
-                json={"provider_id": provider_id, "logos_key": logos_key, "model_names": models},
-            )
-            if r.status_code == 200:
-                deleted = list((r.json() or {}).get("deleted") or [])
-                print(f"  [calib] provider {provider_id}: reset {len(deleted)} profile(s)")
-                return deleted
-            if r.status_code != 409 or time.monotonic() >= deadline:
-                raise RuntimeError(
-                    f"Cannot reset profiles of provider {provider_id}: HTTP {r.status_code} {r.text[:200]}"
-                )
-            await asyncio.sleep(5.0)
+        r = await client.post(
+            f"{admin_url}/logosdb/providers/logosnode/model-profiles/reset",
+            json={"provider_id": provider_id, "logos_key": logos_key, "model_names": models},
+        )
+    if r.status_code != 200:
+        raise RuntimeError(f"Cannot reset profiles of provider {provider_id}: HTTP {r.status_code} {r.text[:200]}")
+    reset = list((r.json() or {}).get("reset") or [])
+    print(f"  [calib] provider {provider_id}: reset {len(reset)} profile(s)")
+    return reset
 
 
 async def _trigger_calibration_via_rest(
@@ -5497,8 +5489,7 @@ async def _ensure_calibration_complete_all_nodes(
     print("=" * 58)
     print(f"  Incomplete across nodes: {', '.join(sorted(pending_anywhere))}")
 
-    # Stop first: a running worker would store its in-memory profiles again,
-    # and the sleep-mode override is only read at startup.
+    # Stop first: the sleep-mode override is only read at startup.
     _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
 
     # Forget the incomplete profiles so the worker re-picks them (it would

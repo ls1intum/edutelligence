@@ -27,8 +27,20 @@ _CALIBRATED = {
 }
 
 
+class _FakeSession:
+    def __init__(self):
+        self.commits = 0
+
+    def commit(self):
+        self.commits += 1
+
+    def rollback(self):
+        pass
+
+
 class _FakeDB:
     def __init__(self, *, accept: bool = True, new_revision: int | None = 1):
+        self.session = _FakeSession()
         self.accept = accept
         self.new_revision = new_revision
         self.legacy_upserts: list = []
@@ -82,8 +94,8 @@ class _FakeDB:
         self.cleared.append((provider_id, model_name))
         return 4
 
-    def delete_model_profiles(self, provider_id, model_names=None):
-        self.deleted = (provider_id, model_names)
+    def reset_model_profiles(self, provider_id, model_names=None):
+        self.reset = (provider_id, model_names)
         return list(model_names or ["org/model"])
 
     def invalidate_model_calibration(self, calibration_id, reason):
@@ -289,33 +301,50 @@ def test_invalidation_pushes_every_affected_node(monkeypatch):
     assert len(result["affected"]) == 2
 
 
-class _SnapshotRegistry:
-    def __init__(self, connected: bool):
-        self.connected = connected
-
-    def peek_runtime_snapshot(self, provider_id):
-        return {"provider_id": provider_id} if self.connected else None
-
-
-def test_reset_is_refused_while_the_worker_is_connected(monkeypatch):
+def test_reset_is_a_central_change_pushed_to_the_worker(monkeypatch):
+    """No 409 any more: the bumped revision rejects the worker's old echoes,
+    so a running worker cannot write the reset profiles back."""
     db = _FakeDB()
-    monkeypatch.setattr(main_mod, "_logosnode_registry", _SnapshotRegistry(connected=True))
+    pushed: list = []
+
+    async def _push(provider_id, model_names=None, calibration_key_hashes=None):
+        pushed.append((provider_id, model_names))
+
     monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
     monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: None)
-    data = LogosNodeResetProfilesRequest(logos_key="k", provider_id=1)
-    response = asyncio.run(logosnode_mod.logosnode_reset_profiles(data))
-    assert response.status_code == 409
-    assert not hasattr(db, "deleted")
-
-
-def test_reset_forgets_the_named_profiles_of_a_stopped_worker(monkeypatch):
-    db = _FakeDB()
-    monkeypatch.setattr(main_mod, "_logosnode_registry", _SnapshotRegistry(connected=False))
-    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
-    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: None)
+    monkeypatch.setattr(logosnode_mod, "_push_model_profiles", _push)
     logosnode_mod._recorded_calibrations[(1, "org/model")] = 1.0
+    logosnode_mod._profile_write_cache.remember(1, "org/model", "d")
     data = LogosNodeResetProfilesRequest(logos_key="k", provider_id=1, model_names=["org/model"])
     result = asyncio.run(logosnode_mod.logosnode_reset_profiles(data))
-    assert db.deleted == (1, ["org/model"])
-    assert result == {"provider_id": 1, "deleted": ["org/model"]}
+    assert db.reset == (1, ["org/model"])
+    assert result == {"provider_id": 1, "reset": ["org/model"]}
+    assert pushed == [(1, ["org/model"])]
     assert (1, "org/model") not in logosnode_mod._recorded_calibrations
+    assert not logosnode_mod._profile_write_cache.unchanged(1, "org/model", "d")
+
+
+def test_profiles_of_one_status_are_committed_once():
+    db = _FakeDB()
+    echoes = {name: {"base_residency_mb": 1.0, "sync_revision": 0} for name in ("a", "b", "c")}
+    logosnode_mod._persist_model_profiles(db, 1, echoes)
+    assert len(db.persisted) == 3
+    assert db.session.commits == 1
+
+
+def test_a_rolled_back_status_is_not_remembered_as_stored():
+    """The write cache may only skip what reached the database."""
+
+    class _FailingDB(_FakeDB):
+        def record_model_calibration(self, *args):
+            raise RuntimeError("db down")
+
+    db = _FailingDB()
+    with pytest.raises(RuntimeError):
+        logosnode_mod._persist_model_profiles(db, 1, {"org/model": dict(_CALIBRATED)})
+    assert db.session.commits == 0
+    assert logosnode_mod._recorded_calibrations == {}
+    retry = _FakeDB()
+    logosnode_mod._persist_model_profiles(retry, 1, {"org/model": dict(_CALIBRATED)})
+    assert len(retry.persisted) == 1
+    assert len(retry.calibrations) == 1

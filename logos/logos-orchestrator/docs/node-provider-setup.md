@@ -201,8 +201,8 @@ curl -X POST https://logos.aet.cit.tum.de/logosdb/providers/logosnode/model-cali
   -H 'Content-Type: application/json' \
   -d '{"logos_key":"<root_key>","calibration_id":<id>,"reason":"<why>"}'
 
-# Forget a node's profiles ("model_names": null = all of them). Stop the
-# worker first: Logos answers 409 while it is connected.
+# Empty a node's profiles ("model_names": null = all of them) so the next
+# calibration window measures them from scratch. Works on a running worker.
 curl -X POST https://logos.aet.cit.tum.de/logosdb/providers/logosnode/model-profiles/reset \
   -H 'Content-Type: application/json' \
   -d '{"logos_key":"<root_key>","provider_id":<provider_id>,"model_names":["<model>"]}'

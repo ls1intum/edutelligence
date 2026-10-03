@@ -1,6 +1,6 @@
 """A VRAM snapshot that fails to persist must not drop the worker.
 
-``_capture_logosnode_provider_snapshot`` runs synchronously inside the worker
+``_capture_logosnode_provider_snapshot`` is awaited inside the worker
 WebSocket ``status`` handler. If it raised, the exception would propagate out
 of that handler and the session would be detached — for every worker. That is
 the failure mode of starting the orchestrator before the webservice migration
@@ -12,6 +12,9 @@ retries.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
 from logos.routers import logosnode as logosnode_mod
 
 
@@ -22,6 +25,7 @@ class _SnapshotDB:
         self._raises = raises
         self._snapshot_id = snapshot_id
         self.inserted: dict | None = None
+        self.thread: int | None = None
 
     def __enter__(self):
         return self
@@ -33,6 +37,7 @@ class _SnapshotDB:
         if self._raises is not None:
             raise self._raises
         self.inserted = kwargs
+        self.thread = threading.get_ident()
         return self._snapshot_id
 
 
@@ -84,7 +89,7 @@ def test_a_snapshot_insert_failure_keeps_the_worker_connected(monkeypatch, caplo
 
     with caplog.at_level("WARNING"):
         # must not raise
-        logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})
+        asyncio.run(logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"}))
 
     assert "Failed to persist provider snapshot" in caplog.text
 
@@ -97,7 +102,7 @@ def test_an_insert_failure_is_not_silently_recorded_in_memory(monkeypatch):
     created = _capture_created_tasks(monkeypatch)
 
     # must not raise
-    logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})
+    asyncio.run(logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"}))
 
     assert db.inserted is None
     assert created == []
@@ -110,8 +115,20 @@ def test_a_successful_snapshot_still_persists_and_is_recorded(monkeypatch):
     _patched_capture(monkeypatch, db)
     created = _capture_created_tasks(monkeypatch)
 
-    logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"})
+    asyncio.run(logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"}))
 
     assert db.inserted is not None
     assert db.inserted["provider_id"] == 7
     assert len(created) == 1
+
+
+def test_the_database_work_runs_off_the_event_loop_thread(monkeypatch):
+    """Every worker's session shares the loop; a slow insert must not stall it."""
+    db = _SnapshotDB()
+    _patched_capture(monkeypatch, db)
+    _capture_created_tasks(monkeypatch)
+
+    asyncio.run(logosnode_mod._capture_logosnode_provider_snapshot(7, {"timestamp": "2026-09-03T12:00:00+00:00"}))
+
+    assert db.thread is not None
+    assert db.thread != threading.get_ident()
