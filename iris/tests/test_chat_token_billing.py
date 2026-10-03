@@ -60,17 +60,78 @@ def test_fail_sends_only_usage_not_sent_before():
     assert _input_counts(outbox[1]) == [7]
 
 
-def test_usage_of_an_undelivered_result_is_sent_with_finish():
+class _FakeArtemis:
+    """Mirrors AbstractIrisChatSessionService: a repeated answer is ignored with all its tokens."""
+
+    def __init__(self):
+        self.has_answer = False
+        self.recorded: list[int] = []
+
+    def handle(self, payload):
+        if payload.get("result") is not None and payload.get("final") is not False:
+            if self.has_answer:
+                return
+            self.has_answer = True
+        self.recorded += [token["numInputTokens"] for token in payload["tokens"] or []]
+
+
+def _callback_against(artemis, delivered):
+    """``delivered`` scripts, per POST, (reaches Artemis, Iris sees success)."""
+    callback = ChatRunCallback(run_id="run-1", base_url="http://artemis")
+    script = list(delivered)
+
+    def send(payload, **_kwargs):
+        reaches, succeeds = script.pop(0) if script else (True, True)
+        if reaches:
+            artemis.handle(payload)
+        return succeeds
+
+    callback._send_status_payload = send
+    return callback
+
+
+def _run_lost_result(artemis, first_post_reaches: bool):
     answer = TokenUsageDTO(numInputTokens=100)
     title = TokenUsageDTO(numInputTokens=7)
-    callback, outbox = _callback_with_outbox(results=[False, False, False, True])
+    suggestion = TokenUsageDTO(numInputTokens=3)
+    callback = _callback_against(
+        artemis, [(first_post_reaches, False), (False, False), (False, False)]
+    )
+    with patch("iris.web.status.status_update.time.sleep"):
+        callback.send_result("answer", tokens=[answer])
+        callback.send_suggestions(["s"])
+        callback.finish(tokens=[answer, title, suggestion])
+
+
+def test_answer_stored_despite_lost_responses_is_billed_once_with_later_usage():
+    artemis = _FakeArtemis()
+
+    _run_lost_result(artemis, first_post_reaches=True)
+
+    assert sorted(artemis.recorded) == [3, 7, 100]
+
+
+def test_answer_that_never_arrived_is_resent_and_billed_once():
+    artemis = _FakeArtemis()
+
+    _run_lost_result(artemis, first_post_reaches=False)
+
+    assert artemis.has_answer
+    assert sorted(artemis.recorded) == [3, 7, 100]
+
+
+def test_resent_answer_goes_alone_before_the_update_that_triggered_it():
+    answer = TokenUsageDTO(numInputTokens=100)
+    title = TokenUsageDTO(numInputTokens=7)
+    callback, outbox = _callback_with_outbox(results=[False, False, False])
 
     with patch("iris.web.status.status_update.time.sleep"):
         callback.send_result("answer", tokens=[answer])
         callback.finish(tokens=[answer, title])
 
-    assert _input_counts(outbox[-1]) == [100, 7]
-    assert outbox[-1]["result"] == "answer"
+    resent, terminal = outbox[-2], outbox[-1]
+    assert resent["result"] == "answer" and _input_counts(resent) == [100]
+    assert terminal["result"] is None and _input_counts(terminal) == [7]
 
 
 def test_equal_but_separate_usages_are_both_sent():
@@ -179,3 +240,31 @@ def test_no_turn_context_keeps_the_previous_layout():
     prompt = pipeline.assemble_prompt_with_history(state, system_prompt="Static")
 
     assert len(prompt.format_messages(agent_scratchpad=[])) == 1
+
+
+def test_mcq_intro_usage_is_billed_once_with_the_chat_pipeline():
+    usage = TokenUsageDTO(numInputTokens=40, numCachedInputTokens=32)
+    llm = MagicMock()
+    llm.tokens = None
+
+    def invoke(_messages):
+        llm.tokens = usage
+        return SimpleNamespace(content="Sure, here is a quiz!")
+
+    llm.invoke.side_effect = invoke
+    state = _agent_state(llm)
+    state.mcq_parallel = True
+    state.prompt = MagicMock()
+
+    for mode, expected in [
+        (IrisChatMode.COURSE, PipelineEnum.IRIS_CHAT_COURSE_MESSAGE),
+        (IrisChatMode.LECTURE, PipelineEnum.IRIS_CHAT_LECTURE_MESSAGE),
+    ]:
+        state.tokens = []
+        llm.tokens = None
+
+        assert _pipeline(mode).execute_agent(state) == "Sure, here is a quiz!"
+
+        assert state.tokens == [usage]
+        assert state.tokens[0].pipeline == expected
+        assert state.tokens[0].num_cached_input_tokens == 32

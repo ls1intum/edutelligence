@@ -249,6 +249,21 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         if tokens is not None:
             state.tokens.append(tokens)
 
+    def _track_llm_usage(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> None:
+        """
+        Record the usage of the agent model's latest call, once.
+
+        The chat model replaces its usage object on every call, so a step that made no
+        new call still points at the previous call's usage.
+        """
+        usage = getattr(state.llm, "tokens", None) if state.llm else None
+        if usage is None or any(tracked is usage for tracked in state.tokens):
+            return
+        usage.pipeline = self.get_token_pipeline(state)
+        state.tokens.append(usage)
+
     def get_agent_params(  # pylint: disable=unused-argument
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> dict[str, Any]:
@@ -491,14 +506,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     result_preview,
                 )
 
-            # Track LLM tokens. The chat model replaces its usage object on every call, so
-            # a step that made no new call still points at the previous call's usage.
-            step_tokens = getattr(state.llm, "tokens", None) if state.llm else None
-            if step_tokens is not None and not any(
-                tracked is step_tokens for tracked in state.tokens
-            ):
-                step_tokens.pipeline = self.get_token_pipeline(state)
-                state.tokens.append(step_tokens)
+            self._track_llm_usage(state)
 
             # Allow subclasses to process each step
             try:

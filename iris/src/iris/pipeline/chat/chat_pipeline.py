@@ -334,7 +334,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def execute_agent(self, state):
         """Use a direct LLM call when MCQ parallel is active, else default agent."""
         if getattr(state, "mcq_parallel", False):
-            return mcq_execute_agent(state)
+            result = mcq_execute_agent(state)
+            self._track_llm_usage(state)
+            return result
         return super().execute_agent(state)
 
     def should_stream_agent_response(

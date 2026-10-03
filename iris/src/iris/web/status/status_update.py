@@ -501,10 +501,24 @@ class ChatRunCallback(StatusCallback):
             self._reject_after_terminal(run_state.value.lower())
             return False
 
+        terminal_send = run_state != RunStateEnum.RUNNING
+        if self._undelivered_result_fields is not None:
+            self._drain_running_updates()
+            self._resend_undelivered_result()
+
         fields, carried_result = self._merge_undelivered_result(fields)
         new_tokens: list[TokenUsageDTO] = []
-        if "tokens" in fields:
-            new_tokens = self._undelivered_tokens(fields["tokens"])
+        if "tokens" in fields or carried_result:
+            new_tokens = self._undelivered_tokens(fields.get("tokens"))
+            if carried_result and not terminal_send:
+                # Artemis drops every token of an update whose result it already stored.
+                # Hold back usage that is not the answer's own until a later update.
+                answer_tokens = self._undelivered_result_fields.get("tokens") or []
+                new_tokens = [
+                    token
+                    for token in new_tokens
+                    if any(token is answer for answer in answer_tokens)
+                ]
             fields = {**fields, "tokens": new_tokens}
 
         # A terminal send is the LAST chance to deliver an answer that a prior
@@ -517,7 +531,6 @@ class ChatRunCallback(StatusCallback):
 
         payload = self._payload(run_state=run_state, error=error, **fields)
 
-        terminal_send = run_state != RunStateEnum.RUNNING
         if terminal_send:
             self._mark_terminal_sent()
         self._drain_running_updates()
@@ -535,6 +548,23 @@ class ChatRunCallback(StatusCallback):
         finally:
             if terminal_send:
                 self._shutdown_running_update_executor()
+
+    def _resend_undelivered_result(self) -> None:
+        """Retry an answer that send_result() could not hand off, on its own.
+
+        Artemis may have stored the answer although Iris saw no response. It then
+        ignores the repeated answer together with every token of that update, so the
+        answer goes alone with only its own usage, and the caller's newer usage
+        follows in a separate update that Artemis always records.
+        """
+        fields = self._undelivered_result_fields or {}
+        answer_tokens = self._undelivered_tokens(fields.get("tokens"))
+        payload = self._payload(
+            run_state=RunStateEnum.RUNNING, **{**fields, "tokens": answer_tokens}
+        )
+        if self._send_payload_with_backoff(payload, self._DELIVERY_RETRY_ATTEMPTS):
+            self._undelivered_result_fields = None
+            self._delivered_tokens.extend(answer_tokens)
 
     def _undelivered_tokens(
         self, tokens: Optional[list[TokenUsageDTO]]
