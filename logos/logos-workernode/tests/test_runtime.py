@@ -15,7 +15,7 @@ from logos_worker_node.models import (
     ProcessStatus,
     WorkerTransportStatus,
 )
-from logos_worker_node.runtime import build_runtime_status
+from logos_worker_node.runtime import _read_version_checksum, build_runtime_status
 
 
 class _LaneManager:
@@ -253,3 +253,44 @@ async def test_runtime_reports_worker_gpu_selection(raw_config, expected):
     config = AppConfig.model_validate(raw_config)
     runtime = await build_runtime_status(_make_app([], _NvidiaCollector(), config=config))
     assert runtime.gpu_devices == expected
+
+
+_COMMIT = "a3f9c21e0b7d4f65a1c2d3e4f5061728394a5b6c"
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        (f"{_COMMIT}\n", _COMMIT),  # a trailing newline is tolerated
+        ("a3f9c21", "a3f9c21"),  # short form
+        ("unknown", "unknown"),  # the Dockerfile default for a build without GIT_SHA
+        ("", "unknown"),
+        ("not a commit", "unknown"),
+        (f"{_COMMIT}0", "unknown"),  # longer than any commit id
+    ],
+)
+def test_read_version_checksum(tmp_path, content, expected):
+    """The worker only ever reports a plausible commit id or "unknown" — a
+    garbled BUILD_COMMIT file must not put arbitrary text on the statistics page."""
+    path = tmp_path / "BUILD_COMMIT"
+    path.write_text(content, encoding="utf-8")
+    assert _read_version_checksum(path) == expected
+
+
+def test_read_version_checksum_without_a_file(tmp_path):
+    assert _read_version_checksum(tmp_path / "BUILD_COMMIT") == "unknown"
+
+
+def test_read_version_checksum_with_unreadable_content(tmp_path):
+    path = tmp_path / "BUILD_COMMIT"
+    path.write_bytes(b"\xff\xfe\x00")
+    assert _read_version_checksum(path) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_runtime_reports_version_checksum(monkeypatch):
+    monkeypatch.setattr("logos_worker_node.runtime._VERSION_CHECKSUM", _COMMIT)
+
+    runtime = await build_runtime_status(_make_app([], _NvidiaCollector()))
+
+    assert runtime.version_checksum == _COMMIT

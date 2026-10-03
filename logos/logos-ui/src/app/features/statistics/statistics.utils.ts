@@ -1,4 +1,10 @@
-import type { RequestLogStats, VramV2Sample, VramSeriesPoint, VramProviderPayload } from './statistics.models';
+import type {
+  RequestLogStats,
+  VramV2Sample,
+  VramSeriesPoint,
+  VramProviderPayload,
+  WorkerVersionChip,
+} from './statistics.models';
 import { cssVar } from './statistics.constants';
 
 /**
@@ -105,6 +111,44 @@ export function formatUptime(ts: string | null | undefined, nowMs: number): stri
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m`;
   return '<1m';
+}
+
+const SHORT_COMMIT_LENGTH = 8;
+
+/**
+ * The "version: <commit>" chip for a worker's header, or null to show none.
+ *
+ * An offline worker has no live status to read a version from, and its
+ * "offline" badge already explains the gap. An online worker without a commit
+ * still gets a chip, so the gap reads as a known limit and not a bug:
+ * "unknown" is either reported explicitly (built outside CI) or implied by
+ * silence (a worker that predates version reporting, or whose first status has
+ * not arrived yet).
+ *
+ * `hint` is the sentence in the card behind the chip's info icon. For a commit
+ * the full commit travels separately in `commit`, so the card can set it on a
+ * line of its own with a copy button; the "unknown" cases have no commit.
+ */
+export function describeWorkerVersion(
+  checksum: string | null | undefined,
+  online: boolean,
+): WorkerVersionChip | null {
+  if (!online) return null;
+  if (checksum === 'unknown') {
+    return { label: 'version: unknown', hint: 'Built outside CI, so no commit was recorded.', commit: null };
+  }
+  if (!checksum) {
+    return {
+      label: 'version: unknown',
+      hint: 'No version reported yet. Workers that predate version reporting never report one; redeploy to see it.',
+      commit: null,
+    };
+  }
+  return {
+    label: `version: ${checksum.slice(0, SHORT_COMMIT_LENGTH)}`,
+    hint: "Commit this worker's image was built from:",
+    commit: checksum,
+  };
 }
 
 // ── Recent-requests state filter ──────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import {
+  describeWorkerVersion,
   extractProviderHostRamMb,
   formatBucketRange,
   formatPercent,
@@ -334,6 +335,50 @@ describe('formatUptime', () => {
 
   it('reads days and hours at a day or more', () => {
     expect(formatUptime('2026-09-13T04:00:00Z', nowMs)).toBe('3d 8h');
+  });
+});
+
+/**
+ * The "version: <commit>" chip next to a worker's name. A worker that cannot
+ * name its commit still shows a chip, so the gap reads as a known limit
+ * rather than a missing feature.
+ */
+describe('describeWorkerVersion', () => {
+  const commit = 'a3f9c21e0b7d4f65a1c2d3e4f5061728394a5b6c';
+
+  it('shows the first 8 characters and hands the full commit to the card separately', () => {
+    expect(describeWorkerVersion(commit, true)).toEqual({
+      label: 'version: a3f9c21e',
+      hint: "Commit this worker's image was built from:",
+      commit,
+    });
+  });
+
+  it('keeps the whole commit, unshortened, out of the sentence', () => {
+    const chip = describeWorkerVersion(commit, true);
+    expect(chip?.commit).toBe(commit);
+    expect(chip?.hint).not.toContain(commit);
+  });
+
+  it('says "unknown" for a worker that reports it was built outside CI', () => {
+    const chip = describeWorkerVersion('unknown', true);
+    expect(chip?.label).toBe('version: unknown');
+    expect(chip?.hint).toContain('outside CI');
+    expect(chip?.commit).toBeNull();
+  });
+
+  it('says "unknown" for a worker that reports nothing', () => {
+    for (const missing of [null, undefined, '']) {
+      const chip = describeWorkerVersion(missing, true);
+      expect(chip?.label).toBe('version: unknown');
+      expect(chip?.hint).toContain('predate');
+      expect(chip?.commit).toBeNull();
+    }
+  });
+
+  it('shows nothing for an offline worker', () => {
+    expect(describeWorkerVersion(commit, false)).toBeNull();
+    expect(describeWorkerVersion(null, false)).toBeNull();
   });
 });
 
