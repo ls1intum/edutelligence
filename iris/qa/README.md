@@ -90,8 +90,9 @@ poetry run iris-benchmark run \
   --output qa-results/my-run
 ```
 
-Pass `--model openai/gpt-oss-120b` to run only the Logos candidate. Omitting
-`--model` selects every candidate in the rate card.
+Pass `--model` once or more to select candidates such as
+`openai/gpt-oss-120b`, `gpt-6.1-sol`, or `gpt-6-luna`. Omitting `--model`
+selects every candidate in the rate card.
 
 To reuse paid candidate answers after changing only evaluator context:
 
@@ -107,13 +108,14 @@ poetry run iris-benchmark rejudge \
 
 The local LLM file is read only to create short-lived worker configuration
 files. It is never copied into a report or committed. Azure chat entries supply
-the OpenAI candidates, helpers, and evaluator. An `openai_chat` entry for
-`openai/gpt-oss-120b` at `https://logos.aet.cit.tum.de/v1` supplies the optional
-Logos candidate. Its API key is written only to the short-lived worker file and
-is never included in report metadata. The rate card is a cost guard; verify its
-values against actual billing before a paid run. For GPT-5.6 and GPT-OSS
-candidates, the harness omits reasoning effort and reasoning mode so the
-provider selects its defaults.
+the Azure candidates, helpers, and evaluator. `openai_chat` entries at
+`https://logos.aet.cit.tum.de/v1` supply the Logos candidates. Their API key is
+written only to the short-lived worker file and is never included in report
+metadata. The rate card is a cost guard; verify its values against actual
+billing before a paid run. For GPT-5.6 and GPT-OSS candidates, the harness
+omits reasoning effort and reasoning mode so the provider selects its defaults.
+The GPT-6 Logos candidates use the Responses API and fixed comparison settings:
+`gpt-6.1-sol` uses `high`, while `gpt-6-luna` uses `xhigh`.
 
 The CLI exits non-zero for invalid fixtures, budget refusal, or execution/judge
 errors. A low score is benchmark data, not a command failure.

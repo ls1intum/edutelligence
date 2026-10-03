@@ -1,8 +1,8 @@
 # yamllint disable rule:line-length rule:document-start
 # OpenAI API list prices verified on 2026-07-21, for reference only. The Logos
-# candidate has no monetary API charge; Azure evaluator and helper usage remains
-# priced below. Copy this file to rates.local.yml, verify the actual Azure prices
-# used for QA, then set confirmed_azure_rates: true.
+# candidates are recorded with no monetary API charge; Azure evaluator and
+# helper usage remains priced below. Copy this file to rates.local.yml, verify
+# the actual Azure prices used for QA, then set confirmed_azure_rates: true.
 confirmed_azure_rates: false
 source: "OpenAI API list prices verified 2026-07-21; NOT confirmed Azure billing"
 candidates:
