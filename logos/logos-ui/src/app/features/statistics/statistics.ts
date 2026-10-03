@@ -319,22 +319,20 @@ export class Statistics implements OnInit, OnDestroy {
     };
   }
 
-  // ── Request feed state filter ───────────────────────────────────────────────
-  // One lifecycle bucket the recent-requests list is narrowed to; null shows
-  // every state. Deliberately not part of the page scope: a state filter only
-  // makes sense for the list of individual requests, not for the KPI cards and
-  // charts above it, which must keep summarising the whole team/user selection.
+  // ── Request feed filters ────────────────────────────────────────────────────
+  // One lifecycle bucket and a model set the recent-requests list is narrowed
+  // to; empty shows everything. Deliberately not part of the page scope: they
+  // only make sense for the list of individual requests, not for the KPI cards
+  // and charts above it, which must keep summarising the whole team/user
+  // selection. The selectors still sit in the page-top row with the scope —
+  // every selector on the page lives there, none inside a panel.
   readonly feedStatus = signal<string | null>(null);
   readonly feedModelIds = signal<string[]>([]);
-  readonly feedProviderIds = signal<string[]>([]);
   readonly feedFilterActive = computed(() =>
-    this.feedStatus() !== null || this.feedModelIds().length > 0 || this.feedProviderIds().length > 0,
+    this.feedStatus() !== null || this.feedModelIds().length > 0,
   );
   readonly feedModelOptions = computed<AppSelectOption[]>(() => this.feedModels().map(model => ({
     value: String(model.id), label: `${model.label} (${model.requestCount.toLocaleString()})`,
-  })));
-  readonly feedProviderOptions = computed<AppSelectOption[]>(() => this.feedProviders().map(provider => ({
-    value: String(provider.id), label: `${provider.label} (${provider.requestCount.toLocaleString()})`,
   })));
 
   setFeedModelFilter(values: string[]): void {
@@ -342,22 +340,10 @@ export class Statistics implements OnInit, OnDestroy {
     this.applyFeedFilters();
   }
 
-  setFeedProviderFilter(values: string[]): void {
-    this.feedProviderIds.set(values);
-    this.applyFeedFilters();
-  }
-
-  clearFeedFilters(): void {
-    this.feedStatus.set(null);
-    this.feedModelIds.set([]);
-    this.feedProviderIds.set([]);
-    this.applyFeedFilters();
-  }
-
   private applyFeedFilters(): void {
     this.liveFeedTotal.set(null);
     this.requestsPending.set(true);
-    this.statsWs.setFeedFilters(this.feedStatus(), this.feedModelIds().map(Number), this.feedProviderIds().map(Number));
+    this.statsWs.setFeedFilters(this.feedStatus(), this.feedModelIds().map(Number), []);
   }
 
   readonly feedStatusOptions = computed<AppSelectOption[]>(() => [
@@ -392,7 +378,7 @@ export class Statistics implements OnInit, OnDestroy {
     // Only the feed changes, so only it is marked loading — the KPI cards and
     // charts keep their current (unaffected) numbers.
     this.requestsPending.set(true);
-    this.statsWs.setFeedFilters(next, this.feedModelIds().map(Number), this.feedProviderIds().map(Number));
+    this.statsWs.setFeedFilters(next, this.feedModelIds().map(Number), []);
   }
 
   // ── Raw WS signals ────────────────────────────────────────────────────────────
@@ -969,7 +955,6 @@ export class Statistics implements OnInit, OnDestroy {
       scope: this.currentScope(),
       feedStatus: this.feedStatus(),
       feedModelIds: this.feedModelIds().map(Number),
-      feedProviderIds: this.feedProviderIds().map(Number),
       interest: this.activeTab(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
@@ -1032,14 +1017,29 @@ export class Statistics implements OnInit, OnDestroy {
     void this.loadScopeOptions();
   }
 
-  clearFilter(): void {
-    if (!this.filterActive()) return;
-    this.filterUserId.set(null);
-    this.filterTeamId.set(null);
-    this.filterProviderId.set(null);
-    this.errorsOnly.set(false);
-    this.applyScope();
-    void this.loadScopeOptions();
+  /**
+   * Reset every selector in the page-top filter row: the page scope and the
+   * feed-only selections. Each group is only re-sent when it was active — an
+   * already-empty group has nothing to undo, and re-sending it would blank the
+   * panels it feeds (the KPI cards in particular) for no reason.
+   */
+  clearFilters(): void {
+    const scopeActive = this.filterActive();
+    const feedActive = this.feedFilterActive();
+    if (!scopeActive && !feedActive) return;
+    if (scopeActive) {
+      this.filterUserId.set(null);
+      this.filterTeamId.set(null);
+      this.filterProviderId.set(null);
+      this.errorsOnly.set(false);
+      this.applyScope();
+      void this.loadScopeOptions();
+    }
+    if (feedActive) {
+      this.feedStatus.set(null);
+      this.feedModelIds.set([]);
+      this.applyFeedFilters();
+    }
   }
 
   /**
@@ -1091,20 +1091,14 @@ export class Statistics implements OnInit, OnDestroy {
       this.feedProviders.set(options.providers ?? []);
       this.feedModels.set(options.models ?? []);
 
-      // Feed multi-selects keep ids that vanish from the new option lists
+      // The model multi-select keeps ids that vanish from the new option list
       // after a range or team change — the trigger still says "N models" and
       // those ids keep filtering while they cannot be unchecked. Prune like
       // the single-value requester/provider scope below.
       const modelIds = new Set(this.feedModels().map((m) => String(m.id)));
-      const providerIds = new Set(this.feedProviders().map((p) => String(p.id)));
       const keptModels = this.feedModelIds().filter((id) => modelIds.has(id));
-      const keptProviders = this.feedProviderIds().filter((id) => providerIds.has(id));
-      if (
-        keptModels.length !== this.feedModelIds().length ||
-        keptProviders.length !== this.feedProviderIds().length
-      ) {
+      if (keptModels.length !== this.feedModelIds().length) {
         this.feedModelIds.set(keptModels);
-        this.feedProviderIds.set(keptProviders);
         this.applyFeedFilters();
       }
 

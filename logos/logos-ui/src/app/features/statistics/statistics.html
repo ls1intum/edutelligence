@@ -35,7 +35,10 @@
     @if (activeTab() === 'requests') {
     <div class="stats-header__controls">
       <!-- Scope. Sits with the time range because it does the same kind of job:
-           both narrow every request-derived panel on the page at once. -->
+           both narrow every request-derived panel on the page at once. Every
+           selector on the page lives in this row — the two feed-only ones
+           (models, state) included, so nothing filters from inside a panel.
+           One Clear resets the whole row. -->
       <div class="stats-scope">
         <app-select
           class="stats-scope__select"
@@ -70,15 +73,34 @@
           ariaLabel="Filter by outcome"
           (valueChange)="setErrorsOnlyFilter($event)"
         />
+        <!-- Feed-only: they narrow the recent-requests list, not the KPI cards
+             and charts, which keep summarising the full team/user/provider
+             scope above. The provider multi-select that used to sit next to
+             them is the page's provider filter one row up, deduplicated. -->
+        <app-multi-select
+          class="stats-scope__select"
+          label="Models"
+          [options]="feedModelOptions()"
+          [values]="feedModelIds()"
+          (valuesChange)="setFeedModelFilter($event)"
+        />
+        <app-select
+          class="stats-scope__select"
+          [options]="feedStatusOptions()"
+          [value]="selectedFeedStatusValue()"
+          [compact]="true"
+          ariaLabel="Filter requests by state"
+          (valueChange)="setFeedStatusFilter($event)"
+        />
         @if (noRequestersInScope()) {
           <span class="stats-scope__note">no named requesters in this range</span>
         }
-        @if (filterActive()) {
+        @if (filterActive() || feedFilterActive()) {
           <button
             class="stats-scope__clear"
             type="button"
-            (click)="clearFilter()"
-            aria-label="Clear filter"
+            (click)="clearFilters()"
+            aria-label="Clear filters"
           >
             <i class="pi pi-times" aria-hidden="true"></i> Clear
           </button>
@@ -215,23 +237,6 @@
         title="Recent requests"
         subtitle="Latest activity from the request log."
       >
-        <span panelRight class="stats-feed-filters">
-          <app-multi-select label="Models" [options]="feedModelOptions()" [values]="feedModelIds()" (valuesChange)="setFeedModelFilter($event)" />
-          <app-multi-select label="Providers" [options]="feedProviderOptions()" [values]="feedProviderIds()" (valuesChange)="setFeedProviderFilter($event)" />
-          <!-- State filter for this list only — it sits with the feed, not in the
-               page scope, because it must not narrow the KPI cards and charts. -->
-          <app-select
-            class="stats-feed-status"
-            [options]="feedStatusOptions()"
-            [value]="selectedFeedStatusValue()"
-            [compact]="true"
-            ariaLabel="Filter requests by state"
-            (valueChange)="setFeedStatusFilter($event)"
-          />
-          @if (feedFilterActive()) {
-            <button type="button" class="stats-scope__clear" aria-label="Clear request filters" (click)="clearFeedFilters()">Clear</button>
-          }
-        </span>
         <app-stats-recent-requests
           [liveRequests]="latestRequests()"
           [totalInRange]="requestFeedTotal()"
@@ -243,7 +248,6 @@
           [filterErrorsOnly]="errorsOnly()"
           [filterStatus]="feedStatus()"
           [filterModelIds]="feedModelIds()"
-          [filterProviderIds]="feedProviderIds()"
         />
       </app-stats-chart-panel>
 
