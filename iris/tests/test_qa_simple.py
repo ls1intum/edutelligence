@@ -165,6 +165,42 @@ def test_request_budget_reserves_concurrent_output_capacity(monkeypatch):
     assert sorted(limits) == [50, 100]
 
 
+def test_request_budget_keeps_ambiguous_failed_call_reserved(monkeypatch):
+    importlib.import_module("iris.pipeline.pipeline")
+    # pylint: disable=import-outside-toplevel
+    from iris.llm import CompletionArguments
+    from iris.llm.request_handler.llm_request_handler import (
+        LlmRequestHandler,
+    )
+
+    # pylint: enable=import-outside-toplevel
+
+    def failed_chat(handler, messages, arguments, tools):
+        del handler, messages, arguments, tools
+        raise RuntimeError("provider connection closed")
+
+    monkeypatch.setattr(LlmRequestHandler, "chat", failed_chat)
+    ceiling = TokenCeiling(
+        max_agent_turns=2,
+        max_input_tokens=10_000,
+        max_output_tokens=150,
+        max_output_tokens_per_call=100,
+    )
+    budget = _ScenarioRequestBudget(ceiling)
+    with budget:
+        with pytest.raises(RuntimeError, match="provider connection closed"):
+            LlmRequestHandler.chat(
+                object(), [{"text": "first"}], CompletionArguments(), None
+            )
+        with pytest.raises(RuntimeError, match="usage is ambiguous"):
+            LlmRequestHandler.chat(
+                object(), [{"text": "second"}], CompletionArguments(), None
+            )
+
+    with pytest.raises(RuntimeError, match="usage is ambiguous"):
+        budget.raise_if_failed()
+
+
 def test_paid_run_records_reservation_before_worker_timeout(tmp_path, monkeypatch):
     scenario = _scenario()
     rate_card = _rate_card()

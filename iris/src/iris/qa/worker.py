@@ -45,6 +45,7 @@ class _ScenarioRequestBudget:
         self.output_tokens = 0
         self.reserved_input_tokens = 0
         self.reserved_output_tokens = 0
+        self.request_failure: str | None = None
         self.lock = threading.Lock()
         self.stack = ExitStack()
 
@@ -58,6 +59,8 @@ class _ScenarioRequestBudget:
         def budgeted_chat(handler, messages, arguments, tools):
             estimate = _request_token_upper_bound(messages, tools)
             with self.lock:
+                if self.request_failure:
+                    raise RuntimeError(self.request_failure)
                 if (
                     self.input_tokens + self.reserved_input_tokens + estimate
                     > self.ceiling.max_input_tokens
@@ -87,8 +90,9 @@ class _ScenarioRequestBudget:
                 response = original_chat(handler, messages, arguments, tools)
             except Exception:
                 with self.lock:
-                    self.reserved_input_tokens -= estimate
-                    self.reserved_output_tokens -= request_limit
+                    self.request_failure = (
+                        "A model request failed after dispatch; its usage is ambiguous"
+                    )
                 raise
             usage = response.token_usage
             input_tokens = int(usage.num_input_tokens)
@@ -120,6 +124,12 @@ class _ScenarioRequestBudget:
             patch.object(abstract_agent_pipeline, "AgentExecutor", budgeted_executor)
         )
         return self
+
+    def raise_if_failed(self) -> None:
+        with self.lock:
+            failure = self.request_failure
+        if failure:
+            raise RuntimeError(failure)
 
     def __exit__(self, exc_type, exc_value, traceback_value):
         return self.stack.__exit__(exc_type, exc_value, traceback_value)
@@ -270,7 +280,8 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
     metadata = payload.pop("qa", {}) or {}
     diagnostics: dict[str, Any] = {}
     raw_tokens: list[Any] = []
-    with _ScenarioRequestBudget(scenario.token_ceiling), ScenarioAdapters(metadata):
+    budget = _ScenarioRequestBudget(scenario.token_ceiling)
+    with budget, ScenarioAdapters(metadata):
         if scenario.use_case.value == "chat":
             callback = _recording_callback(ChatRunCallback)(
                 f"benchmark-{scenario.id}", "https://callback.invalid"
@@ -332,6 +343,7 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
             artifacts = {}
             raw_tokens = pipeline.tokens
 
+    budget.raise_if_failed()
     diagnostics.update(artifacts)
     if response and "Agent stopped due to iteration limit" in response:
         raise RuntimeError("Production agent reached its iteration limit")

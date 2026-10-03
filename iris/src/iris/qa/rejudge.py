@@ -82,7 +82,12 @@ def rejudge_saved_runs(
                 reserve = rate_card.judge.cost(
                     JUDGE_INPUT_CEILING, JUDGE_OUTPUT_CEILING
                 )
+                reservation_pipeline = f"qa-rejudge-upper-bound:{model}:r{identity[2]}"
                 prior_reservation_exists = ledger.has_reservation(
+                    run_id=f"rejudge-{output_root.name}",
+                    scenario_id=identity[1],
+                    pipeline=reservation_pipeline,
+                ) or ledger.has_reservation(
                     run_id=f"rejudge-{output_root.name}",
                     scenario_id=identity[1],
                     pipeline="qa-rejudge-upper-bound",
@@ -106,7 +111,7 @@ def rejudge_saved_runs(
                     reservation = guard.record_reservation(
                         run_id=f"rejudge-{output_root.name}",
                         scenario_id=identity[1],
-                        pipeline="qa-rejudge-upper-bound",
+                        pipeline=reservation_pipeline,
                         model=rate_card.judge.model,
                         cost_usd=reserve,
                     )
