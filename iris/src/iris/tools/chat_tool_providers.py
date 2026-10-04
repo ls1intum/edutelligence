@@ -7,6 +7,7 @@ and calls the existing create_tool_* factory. Returns None if the required data
 is not present in the state.
 """
 
+from functools import wraps
 from typing import Callable, Optional
 
 from iris.common.logging_config import get_logger
@@ -37,10 +38,60 @@ from iris.tools import (
 )
 from iris.tools.combined_view_point_out import get_combined_view_context
 from iris.tools.current_view_content import CONTENT_BLOCKS_KEY
+from iris.tools.switch_chat_context import switch_reminder_for_exercise
 
 logger = get_logger(__name__)
 
 State = AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+
+
+def _resolve_lecture_scope(state: State) -> tuple[Optional[int], Optional[int]]:
+    """Return the lecture and lecture unit a lecture-bound tool is scoped to.
+
+    Resolved at call time, so a context switch earlier in the same run moves
+    the scope to the lecture the agent switched to.
+    """
+    switch = state.pending_context_switch
+    if switch is not None:
+        if switch.mode == IrisChatMode.LECTURE:
+            # The new lecture has no unit selected yet, so the scope covers it whole.
+            return switch.entity_id, None
+        # The chat left the lecture context, so the scope goes course-wide.
+        return None, None
+    if not state.dto.lecture:
+        return None, None
+    return state.dto.lecture.id, state.dto.lecture_unit_id
+
+
+def _bound_to_original_exercise(
+    state: State, tool: Optional[Callable]
+) -> Optional[Callable]:
+    """Disable an exercise tool once the agent switched away from its exercise.
+
+    The exercise tools read the submission, repository and results Artemis
+    sent for the exercise the chat started in. Pyris has no such data for a
+    context the agent switched to in the same run, so after a switch the tool
+    refuses instead of passing the original exercise's data off as the new one's.
+    """
+    if tool is None:
+        return None
+    exercise = state.dto.programming_exercise or state.dto.text_exercise
+    exercise_title = exercise.title if exercise else ""
+
+    @wraps(tool)
+    def guarded(*args, **kwargs):
+        if state.pending_context_switch is not None:
+            return (
+                f"Unavailable: this tool only has data of the exercise "
+                f"'{exercise_title}', and you switched the chat context away from "
+                "it in this response. Do not present that data as data of the new "
+                "context. The data of the new context is available from the "
+                "student's next message on."
+            )
+        return tool(*args, **kwargs)
+
+    return guarded
+
 
 # ---------------------------------------------------------------------------
 # Course-related providers
@@ -56,9 +107,19 @@ def provide_exercise_list(state: State) -> Optional[Callable]:
 
 
 def provide_exercise_problem_statement(state: State) -> Optional[Callable]:
-    return create_tool_get_exercise_problem_statement(
+    tool = create_tool_get_exercise_problem_statement(
         state.dto.course.exercises, state.callback
     )
+
+    @wraps(tool)
+    def get_exercise_problem_statement(exercise_id: int) -> str:
+        result = tool(exercise_id)
+        reminder = switch_reminder_for_exercise(
+            state.dto, state.pending_context_switch, exercise_id
+        )
+        return f"{result}\n\n{reminder}" if reminder else result
+
+    return get_exercise_problem_statement
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +128,11 @@ def provide_exercise_problem_statement(state: State) -> Optional[Callable]:
 
 
 def provide_submission_details(state: State) -> Callable[[], dict] | None:
-    return create_tool_get_submission_details(
-        state.dto.programming_exercise_submission, state.callback
+    return _bound_to_original_exercise(
+        state,
+        create_tool_get_submission_details(
+            state.dto.programming_exercise_submission, state.callback
+        ),
     )
 
 
@@ -76,34 +140,48 @@ def provide_additional_exercise_details(state: State) -> Callable[[], dict] | No
     exercise = state.dto.programming_exercise or state.dto.text_exercise
     if not exercise:
         return None
-    return create_tool_get_additional_exercise_details(exercise, state.callback)
+    return _bound_to_original_exercise(
+        state, create_tool_get_additional_exercise_details(exercise, state.callback)
+    )
 
 
 def provide_build_logs_analysis(state: State) -> Callable[[], str] | None:
-    return create_tool_get_build_logs_analysis(
-        state.dto.programming_exercise_submission, state.callback
+    return _bound_to_original_exercise(
+        state,
+        create_tool_get_build_logs_analysis(
+            state.dto.programming_exercise_submission, state.callback
+        ),
     )
 
 
 def provide_feedbacks(state: State) -> Callable[[], str] | None:
-    return create_tool_get_feedbacks(
-        state.dto.programming_exercise_submission, state.callback
+    return _bound_to_original_exercise(
+        state,
+        create_tool_get_feedbacks(
+            state.dto.programming_exercise_submission, state.callback
+        ),
     )
 
 
 def provide_repository_files(state: State) -> Callable[[], str] | None:
     if not state.dto.programming_exercise_submission:
         return None
-    return create_tool_repository_files(
-        state.dto.programming_exercise_submission.repository, state.callback
+    return _bound_to_original_exercise(
+        state,
+        create_tool_repository_files(
+            state.dto.programming_exercise_submission.repository, state.callback
+        ),
     )
 
 
 def provide_file_lookup(state: State) -> Callable[[str], str] | None:
     if not state.dto.programming_exercise_submission:
         return None
-    return create_tool_file_lookup(
-        state.dto.programming_exercise_submission.repository, state.callback
+    return _bound_to_original_exercise(
+        state,
+        create_tool_file_lookup(
+            state.dto.programming_exercise_submission.repository, state.callback
+        ),
     )
 
 
@@ -124,19 +202,6 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.lecture_retriever = lecture_retriever
     base_url = state.dto.settings.artemis_base_url if state.dto.settings else ""
 
-    def scope_supplier() -> tuple[Optional[int], Optional[int]]:
-        """Scope retrieval to the lecture the agent switched to, if it switched."""
-        switch = state.pending_context_switch
-        if switch is not None:
-            if switch.mode == IrisChatMode.LECTURE:
-                # The new lecture has no unit selected yet, so retrieval covers it whole.
-                return switch.entity_id, None
-            # The chat left the lecture context, so retrieval goes course-wide.
-            return None, None
-        if not state.dto.lecture:
-            return None, None
-        return state.dto.lecture.id, state.dto.lecture_unit_id
-
     return create_tool_lecture_content_retrieval(
         lecture_retriever,
         course_id,
@@ -145,7 +210,7 @@ def provide_lecture_retrieval(state: State) -> Optional[Callable]:
         state.query_text,
         state.message_history,
         state.lecture_content_storage,
-        scope_supplier=scope_supplier,
+        scope_supplier=lambda: _resolve_lecture_scope(state),
     )
 
 
@@ -256,6 +321,12 @@ def provide_find_similar_memories(state: State) -> Optional[Callable]:
 def provide_switch_chat_context(state: State) -> Optional[Callable]:
     def record_switch(suggested_context) -> None:
         state.pending_context_switch = suggested_context
+        if suggested_context is not None:
+            # Lecture content stored so far belongs to the previous context. Left
+            # in place, the citation pipeline could cite it in the answer about
+            # the new context.
+            state.lecture_content_storage.pop("current_view", None)
+            state.lecture_content_storage.pop("content", None)
 
     return create_tool_switch_chat_context(state.dto, record_switch)
 
@@ -274,14 +345,12 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
     if not hasattr(state, "mcq_result_storage"):
         state.mcq_result_storage = {}
 
-    lecture_id = (
-        state.dto.lecture.id if state.dto.lecture and state.dto.lecture.id else None
-    )
-
     # Fetch the (potentially large) grounding content only when the agent
     # actually calls the MCQ tool, not on every course/lecture chat turn.
     def lecture_content_supplier() -> Optional[str]:
         execution_settings = getattr(state.dto, "settings", None)
+        # Resolved at call time, so questions after a switch are grounded in the new lecture.
+        lecture_id, _ = _resolve_lecture_scope(state)
         lecture_content, _ = retrieve_lecture_content_for_mcq(
             state.db,
             course_id,

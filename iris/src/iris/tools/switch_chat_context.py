@@ -38,6 +38,48 @@ def _current_entity_id(dto: ChatPipelineExecutionDTO) -> Optional[int]:
     return None
 
 
+def switch_reminder_for_exercise(
+    dto: ChatPipelineExecutionDTO,
+    pending_switch: Optional[SuggestedContextDTO],
+    exercise_id: int,
+) -> Optional[str]:
+    """Return a reminder to switch when the agent reads an exercise that is not active.
+
+    The system prompt asks the agent to switch before answering about another
+    exercise, but after reading the problem statement the agent has everything
+    it needs for the answer and tends to skip the switch. The reminder lands in
+    the tool result, right before the agent writes that answer, and already
+    carries the arguments of the switch.
+
+    Returns:
+        The reminder, or None if the exercise is unknown, does not support
+        context switching, or already is (or is about to become) the active
+        context.
+    """
+    exercise = next(
+        (ex for ex in dto.course.exercises or [] if ex.id == exercise_id), None
+    )
+    if exercise is None:
+        return None
+    mode = _EXERCISE_TYPE_TO_MODE.get(exercise.type)
+    if mode is None:
+        return None
+    if pending_switch is not None:
+        active_mode, active_id = pending_switch.mode, pending_switch.entity_id
+    else:
+        active_mode, active_id = dto.chat_mode, _current_entity_id(dto)
+    if mode == active_mode and exercise_id == active_id:
+        return None
+    return (
+        f"Note: the exercise '{exercise.title}' (ID {exercise_id}) is not the "
+        "active context of this chat. If the student is asking about this "
+        f'exercise, call `switch_chat_context` with mode "{mode.value}" and '
+        f"entity_id {exercise_id} before you answer. Do not switch if the "
+        "student only mentions it in passing or compares it with the active "
+        "context."
+    )
+
+
 def create_tool_switch_chat_context(
     dto: ChatPipelineExecutionDTO,
     record_switch: Callable[[Optional[SuggestedContextDTO]], None],

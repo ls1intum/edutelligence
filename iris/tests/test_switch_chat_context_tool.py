@@ -1,6 +1,8 @@
 import logging
 from unittest.mock import patch
 
+import pytest
+
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.data.course_dto import CourseDTO
 from iris.domain.data.exercise_with_submissions_dto import (
@@ -10,6 +12,7 @@ from iris.domain.data.exercise_with_submissions_dto import (
 )
 from iris.domain.data.lecture_dto import PyrisLectureDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingExerciseDTO
+from iris.domain.data.programming_submission_dto import ProgrammingSubmissionDTO
 from iris.domain.data.user_dto import UserDTO
 from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrievalDTO
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
@@ -17,13 +20,27 @@ from iris.domain.status.run_state_dto import RunStateEnum
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
+from iris.pipeline.shared.utils import generate_structured_tool_from_function
 from iris.tools.chat_tool_providers import (
+    provide_additional_exercise_details,
+    provide_build_logs_analysis,
+    provide_exercise_problem_statement,
+    provide_feedbacks,
+    provide_file_lookup,
     provide_lecture_list,
     provide_lecture_retrieval,
+    provide_mcq_generation,
+    provide_repository_files,
+    provide_submission_details,
     provide_switch_chat_context,
 )
 from iris.tools.switch_chat_context import create_tool_switch_chat_context
 from iris.web.status.status_update import ChatRunCallback
+from tests.test_mcq_prompt_rendering import (
+    _minimal_course_chat_context,
+    _minimal_lecture_chat_context,
+    _render_template,
+)
 
 
 class _RecordedSwitch:
@@ -64,6 +81,7 @@ def _dto(
     lecture: PyrisLectureDTO | None = None,
     lectures: list[PyrisLectureDTO] | None = None,
     lecture_unit_id: int | None = None,
+    submission: ProgrammingSubmissionDTO | None = None,
 ) -> ChatPipelineExecutionDTO:
     return ChatPipelineExecutionDTO(
         settings=None,
@@ -82,6 +100,7 @@ def _dto(
         programming_exercise=programming_exercise,
         lecture=lecture,
         lectureUnitId=lecture_unit_id,
+        programmingExerciseSubmission=submission,
     )
 
 
@@ -250,6 +269,228 @@ def test_retrieval_stays_on_the_active_lecture_without_a_switch():
     call = state.lecture_retriever.calls[-1]
     assert call["lecture_id"] == 41
     assert call["lecture_unit_id"] == 410
+
+
+def _exercise_chat_state() -> AgentPipelineExecutionState:
+    """A programming exercise chat on exercise 11 (Sorting) with a submission."""
+    state = AgentPipelineExecutionState()
+    state.dto = _dto(
+        chat_mode=IrisChatMode.EXERCISE,
+        programming_exercise=ProgrammingExerciseDTO(id=11, title="Sorting"),
+        submission=ProgrammingSubmissionDTO(
+            id=5,
+            repository={"src/Sort.java": "class Sort {}"},
+            isPractice=False,
+            buildFailed=False,
+        ),
+    )
+    state.callback = None
+    state.lecture_content_storage = {}
+    state.pending_context_switch = None
+    return state
+
+
+_EXERCISE_TOOL_CALLS = [
+    pytest.param(provide_submission_details, (), id="submission_details"),
+    pytest.param(
+        provide_additional_exercise_details, (), id="additional_exercise_details"
+    ),
+    pytest.param(provide_build_logs_analysis, (), id="build_logs_analysis"),
+    pytest.param(provide_feedbacks, (), id="feedbacks"),
+    pytest.param(provide_repository_files, (), id="repository_files"),
+    pytest.param(provide_file_lookup, ("src/Sort.java",), id="file_lookup"),
+]
+
+
+@pytest.mark.parametrize("provider,args", _EXERCISE_TOOL_CALLS)
+def test_exercise_tools_refuse_after_the_switch_from_exercise_a_to_exercise_b(
+    provider, args
+):
+    """After A to B the exercise tools must not hand out A's data as B's."""
+    state = _exercise_chat_state()
+    tool = provider(state)
+
+    switch = provide_switch_chat_context(state)
+    assert "Successfully registered" in switch("TEXT_EXERCISE_CHAT", 12)
+
+    result = tool(*args)
+
+    assert isinstance(result, str)
+    assert result.startswith("Unavailable")
+    assert "'Sorting'" in result
+
+
+@pytest.mark.parametrize("provider,args", _EXERCISE_TOOL_CALLS)
+def test_exercise_tools_return_their_data_without_a_switch(provider, args):
+    state = _exercise_chat_state()
+
+    result = provider(state)(*args)
+
+    assert not (isinstance(result, str) and result.startswith("Unavailable"))
+
+
+def test_exercise_tools_keep_their_data_when_the_switch_targets_the_active_exercise():
+    state = _exercise_chat_state()
+    tool = provide_file_lookup(state)
+
+    provide_switch_chat_context(state)("PROGRAMMING_EXERCISE_CHAT", 11)
+
+    assert tool("src/Sort.java").startswith("src/Sort.java:")
+
+
+def test_guarded_exercise_tool_keeps_its_name_and_arguments():
+    """The agent sees the guarded tool exactly like the unguarded one."""
+    structured = generate_structured_tool_from_function(
+        provide_file_lookup(_exercise_chat_state())
+    )
+
+    assert structured.name == "file_lookup"
+    assert list(structured.args) == ["file_path"]
+
+
+def _course_chat_state() -> AgentPipelineExecutionState:
+    state = AgentPipelineExecutionState()
+    state.dto = _dto()
+    state.callback = None
+    state.lecture_content_storage = {}
+    state.pending_context_switch = None
+    return state
+
+
+def test_problem_statement_of_another_exercise_reminds_the_agent_to_switch():
+    """Reading another exercise's statement is the step the agent answers right after."""
+    result = provide_exercise_problem_statement(_course_chat_state())(11)
+
+    assert "call `switch_chat_context`" in result
+    assert 'mode "PROGRAMMING_EXERCISE_CHAT" and entity_id 11' in result
+
+
+def test_problem_statement_reminder_uses_the_text_exercise_mode():
+    result = provide_exercise_problem_statement(_course_chat_state())(12)
+
+    assert 'mode "TEXT_EXERCISE_CHAT" and entity_id 12' in result
+
+
+def test_problem_statement_of_the_active_exercise_carries_no_reminder():
+    result = provide_exercise_problem_statement(_exercise_chat_state())(11)
+
+    assert "switch_chat_context" not in result
+
+
+def test_problem_statement_carries_no_reminder_after_the_switch_to_that_exercise():
+    state = _course_chat_state()
+    tool = provide_exercise_problem_statement(state)
+
+    provide_switch_chat_context(state)("PROGRAMMING_EXERCISE_CHAT", 11)
+
+    assert "switch_chat_context" not in tool(11)
+
+
+def test_problem_statement_reminds_again_when_the_switch_targets_another_exercise():
+    state = _course_chat_state()
+    tool = provide_exercise_problem_statement(state)
+
+    provide_switch_chat_context(state)("TEXT_EXERCISE_CHAT", 12)
+
+    assert "entity_id 11" in tool(11)
+
+
+def test_problem_statement_of_unswitchable_or_unknown_exercises_carries_no_reminder():
+    tool = provide_exercise_problem_statement(_course_chat_state())
+
+    assert "switch_chat_context" not in tool(13)
+    assert tool(999) == "Exercise not found"
+
+
+def test_problem_statement_tool_keeps_its_name_and_arguments():
+    structured = generate_structured_tool_from_function(
+        provide_exercise_problem_statement(_course_chat_state())
+    )
+
+    assert structured.name == "get_exercise_problem_statement"
+    assert list(structured.args) == ["exercise_id"]
+
+
+def test_course_chat_prompt_does_not_claim_retrieval_is_scoped_to_a_lecture():
+    """In a course chat retrieval is course-wide, so it can answer without a switch."""
+    rendered = _render_template("chat_system_prompt.j2", _minimal_course_chat_context())
+
+    assert "scoped to the active lecture" not in rendered
+    assert "searches all lectures of the course" in rendered
+
+
+def test_lecture_chat_prompt_states_retrieval_is_scoped_to_the_active_lecture():
+    rendered = _render_template(
+        "chat_system_prompt.j2", _minimal_lecture_chat_context()
+    )
+
+    assert "scoped to the active lecture" in rendered
+    assert "searches all lectures of the course" not in rendered
+
+
+def test_mcq_generation_follows_the_switch_from_lecture_a_to_lecture_b():
+    state = _lecture_chat_state(
+        _dto(
+            chat_mode=IrisChatMode.LECTURE,
+            lecture=PyrisLectureDTO(id=41),
+            lectures=_lectures(),
+        )
+    )
+    state.mcq_pipeline = None
+    state.db = None
+
+    with (
+        patch(
+            "iris.tools.chat_tool_providers.create_tool_generate_mcq_questions"
+        ) as create_tool,
+        patch(
+            "iris.tools.chat_tool_providers.retrieve_lecture_content_for_mcq",
+            return_value=("content", []),
+        ) as retrieve,
+    ):
+        provide_mcq_generation(state)
+        supplier = create_tool.call_args.kwargs["lecture_content_supplier"]
+
+        supplier()
+        assert retrieve.call_args.kwargs["lecture_id"] == 41
+
+        provide_switch_chat_context(state)("LECTURE_CHAT", 42)
+        supplier()
+        assert retrieve.call_args.kwargs["lecture_id"] == 42
+
+
+def test_switch_clears_lecture_content_of_the_previous_context():
+    """Content of lecture A must not end up as a citation in the answer about B."""
+    state = _lecture_chat_state(
+        _dto(
+            chat_mode=IrisChatMode.LECTURE,
+            lecture=PyrisLectureDTO(id=41),
+            lectures=_lectures(),
+        )
+    )
+    state.lecture_content_storage["current_view"] = object()
+    state.lecture_content_storage["content"] = object()
+
+    provide_switch_chat_context(state)("LECTURE_CHAT", 42)
+
+    assert "current_view" not in state.lecture_content_storage
+    assert "content" not in state.lecture_content_storage
+
+
+def test_switch_to_the_active_context_keeps_its_lecture_content():
+    state = _lecture_chat_state(
+        _dto(
+            chat_mode=IrisChatMode.LECTURE,
+            lecture=PyrisLectureDTO(id=41),
+            lectures=_lectures(),
+        )
+    )
+    current_view = object()
+    state.lecture_content_storage["current_view"] = current_view
+
+    provide_switch_chat_context(state)("LECTURE_CHAT", 41)
+
+    assert state.lecture_content_storage["current_view"] is current_view
 
 
 def test_lecture_list_reaches_the_agent_without_indexed_lecture_content():
