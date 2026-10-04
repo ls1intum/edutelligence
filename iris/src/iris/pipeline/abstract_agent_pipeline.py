@@ -99,6 +99,8 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     compaction_settings: Optional[CompactionSettings]
     compaction_summary: Optional[str]
     first_prompt_tokens: Optional[int]
+    compaction_thread: Optional[Thread]
+    compaction_holder: dict[str, Any]
 
 
 def _escape_template_braces(text: str) -> str:
@@ -655,6 +657,23 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         thread.start()
         return thread
 
+    def _collect_compaction(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> Optional[CompactionDTO]:
+        """
+        Wait for the compaction of this turn and record its usage, once.
+
+        Call it before any terminal callback: after one, Artemis accepts no more
+        updates, so the usage and the summary would be lost.
+        """
+        thread = getattr(state, "compaction_thread", None)
+        if thread is None:
+            return None
+        thread.join()
+        state.compaction_thread = None
+        self._track_tokens(state, state.compaction_holder.get("tokens"))
+        return state.compaction_holder.get("compaction")
+
     def _create_partial_result_sender(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
@@ -854,8 +873,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.compaction_settings = None
         state.compaction_summary = None
         state.first_prompt_tokens = None
-        compaction_thread: Optional[Thread] = None
-        compaction_holder: dict[str, Any] = {}
+        state.compaction_thread = None
+        state.compaction_holder = {}
         state.activity_tracker = ActivityTracker(
             getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
         )
@@ -945,7 +964,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     state.partial_result_sender.stop()
 
             # Runs next to the post agent hook and memory creation, off the answer's path.
-            compaction_thread = self._start_compaction(state, compaction_holder)
+            state.compaction_thread = self._start_compaction(
+                state, state.compaction_holder
+            )
 
             # 7.3. Run post agent hook
             with timed_span(pipeline_name, "post_agent_hook", start_time):
@@ -961,11 +982,9 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
             # 8. Wait for compaction and memory creation to finish if enabled
             finish_fields: dict[str, Any] = {}
-            if compaction_thread is not None:
-                compaction_thread.join()
-                self._track_tokens(state, compaction_holder.get("tokens"))
-                if "compaction" in compaction_holder:
-                    finish_fields["compaction"] = compaction_holder["compaction"]
+            compaction = self._collect_compaction(state)
+            if compaction is not None:
+                finish_fields["compaction"] = compaction
             if state.memiris_memory_creation_thread:
                 state.memiris_memory_creation_thread.join()
                 finish_fields["created_memories"] = (

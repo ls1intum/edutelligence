@@ -426,11 +426,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         except Exception as e:
             logger.error("Error in post agent hook", exc_info=e)
+            compaction = self._collect_compaction(state)
             activities, activity_seq = _tool_activity_snapshot(state)
             state.callback.fail(
                 "Error in processing response",
                 activities=activities,
                 activity_seq=activity_seq,
+                tokens=state.tokens,
+                compaction=compaction,
                 exception=e,
             )
             return state.result
@@ -1085,13 +1088,16 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             activities, activity_seq = _tool_activity_snapshot(state)
             # fail() marks the job terminal, so no later finish() can attach the
             # accumulated usage — carry state.tokens here so the FAILED status
-            # still reports the answer/title tokens that were already produced.
+            # still reports the answer/title tokens that were already produced,
+            # and the compaction of this turn once it has finished.
+            compaction = self._collect_compaction(state)
             state.callback.fail(
                 "Generating interaction suggestions failed.",
                 session_title=state.deferred_session_title,
                 activities=activities,
                 activity_seq=activity_seq,
                 tokens=state.tokens,
+                compaction=compaction,
                 exception=e,
             )
             state.deferred_session_title_delivered = True

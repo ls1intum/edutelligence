@@ -2,6 +2,7 @@
 
 # pylint: skip-file
 
+from threading import Thread
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -412,3 +413,39 @@ def test_tool_choice_is_sent_with_tools_only():
 
     assert with_tools["tool_choice"] == "none"
     assert "tool_choice" not in without_tools
+
+
+def test_failed_suggestions_still_report_the_finished_compaction():
+    usage = TokenUsageDTO(numInputTokens=5_000, numCachedInputTokens=4_800)
+    compaction = CompactionDTO(summary="sum", covers_through_message_id=4)
+    holder: dict = {}
+
+    def run():
+        holder["tokens"] = usage
+        holder["compaction"] = compaction
+
+    thread = Thread(target=run)
+    thread.start()
+    pipeline = _pipeline()
+    pipeline.suggestion_pipeline = MagicMock(side_effect=RuntimeError("down"))
+    state = SimpleNamespace(
+        tokens=[],
+        compaction_thread=thread,
+        compaction_holder=holder,
+        callback=MagicMock(),
+        dto=SimpleNamespace(chat_history=[], user=SimpleNamespace(lang_key="en")),
+        deferred_session_title=None,
+        deferred_session_title_delivered=False,
+        activity_tracker=MagicMock(
+            authoritative_snapshot=MagicMock(return_value=([], 0))
+        ),
+    )
+
+    pipeline._generate_suggestions(state, "answer")
+
+    kwargs = state.callback.fail.call_args.kwargs
+    assert kwargs["tokens"] == [usage]
+    assert kwargs["compaction"] is compaction
+    # Collected once: a later finish() must not record the usage again.
+    assert pipeline._collect_compaction(state) is None
+    assert state.tokens == [usage]

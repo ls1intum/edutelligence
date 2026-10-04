@@ -472,12 +472,15 @@ class ChatRunCallback(StatusCallback):
         activities=None,
         activity_seq=None,
         exception=None,
+        compaction=None,
     ) -> bool:
         fields: dict[str, Any] = {}
         if tokens is not None:
             fields["tokens"] = tokens
         if session_title is not None:
             fields["session_title"] = session_title
+        if compaction is not None:
+            fields["compaction"] = compaction
         if activities is not None:
             fields["activities"] = activities
         if activity_seq is not None:
