@@ -2,9 +2,7 @@ import math
 import re
 from typing import Optional
 
-# Qwen3.8 is listed by family: it replaces gpt-oss for local inference, and its
-# 27B dense variant would otherwise fall below the parameter-size threshold.
-_LARGE_MODEL_FAMILIES = ("gpt-4", "gpt-5", "gpt-oss", "qwen3.8")
+_LARGE_MODEL_FAMILIES = ("gpt-4", "gpt-5", "gpt-oss")
 
 _SIZE_TOKEN_RE = re.compile(r"(\d+)\s*b\b", re.IGNORECASE)
 
@@ -23,7 +21,7 @@ def is_large_model(model_id: str) -> bool:
     """Return True if the model should use the combo confidence prompt.
 
     A model is considered large when:
-    - It belongs to a known large-model family (GPT-4, GPT-5, gpt-oss, Qwen3.8), OR
+    - It belongs to a known large-model family (GPT-4, GPT-5, gpt-oss), OR
     - Its name contains a numeric parameter size ≥ 32 followed by "b"
       (e.g. "llama-3-70b", "codellama-34b", "mixtral-65b-instruct").
     Everything else is treated as small.

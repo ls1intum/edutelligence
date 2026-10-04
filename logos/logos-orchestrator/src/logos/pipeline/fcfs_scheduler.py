@@ -68,6 +68,7 @@ class FcfScheduler(BaseScheduler):
                         priority_int,
                         request.request_id,
                         was_queued=False,
+                        api_key_id=request.api_key_id,
                     )
             else:
                 # Cloud providers: accept immediately
@@ -78,6 +79,7 @@ class FcfScheduler(BaseScheduler):
                     priority_int,
                     request.request_id,
                     was_queued=False,
+                    api_key_id=request.api_key_id,
                 )
 
         # No immediate selection — queue on first logosnode deployment
@@ -122,6 +124,7 @@ class FcfScheduler(BaseScheduler):
                             model_id=result.model_id,
                             provider_id=provider_id,
                             priority=priority.name.lower(),
+                            api_key_id=request.api_key_id,
                         )
                     self._logosnode.on_request_begin_processing(
                         request.request_id,

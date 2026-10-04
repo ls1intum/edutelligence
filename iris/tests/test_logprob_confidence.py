@@ -65,14 +65,14 @@ def test_model_supports_logprobs_false_when_unsupported_or_unknown():
 # ──────────────────────────────────────────────────────────────────────────
 # openai_chat: request logprobs and surface them on the PyrisMessage
 # ──────────────────────────────────────────────────────────────────────────
-def _mock_openai_response(logprobs=None, content="ok"):
+def _mock_openai_response(logprobs=None):
     return SimpleNamespace(
         choices=[
             SimpleNamespace(
                 finish_reason="stop",
                 message=SimpleNamespace(
                     role="assistant",
-                    content=content,
+                    content="ok",
                     tool_calls=None,
                     refusal=None,
                 ),
@@ -134,10 +134,8 @@ def test_token_logprobs_extracted_onto_message():
             SimpleNamespace(token="!", logprob=-0.3),
         ]
     )
-    # The content matches the tokens, as in real responses: logprobs are
-    # aligned with the visible content (see test_openai_chat_content_logprobs).
     _, message = _invoke_chat(
-        model, _mock_openai_response(logprobs_payload, content="ok!"), logprobs=True
+        model, _mock_openai_response(logprobs_payload), logprobs=True
     )
     assert message.token_logprobs == [-0.1, -0.3]
 

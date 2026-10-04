@@ -15,7 +15,6 @@ from iris.retrieval.lecture.lecture_global_search_retrieval import (
     _LANE_DEPTH,
     LectureGlobalSearchRetrieval,
     _Candidate,
-    _VisibilityPolicy,
 )
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
@@ -109,7 +108,6 @@ def test_global_search_filters_hidden_slide_aggregate():
         props,
         {("https://artemis.example", 10): lecture_unit()},
         {},
-        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
     assert dto is None
     assert drop_reason == "segment_hidden"
@@ -132,7 +130,6 @@ def test_global_search_filters_unreleased_transcription_but_not_released_one():
     hidden_dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
         props,
         {("https://artemis.example", 10): lecture_unit(future)},
-        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
     assert hidden_dto is None
     assert drop_reason == "transcription_hidden"
@@ -140,7 +137,6 @@ def test_global_search_filters_unreleased_transcription_but_not_released_one():
     visible_dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
         props,
         {("https://artemis.example", 10): lecture_unit()},
-        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
     assert visible_dto is not None
     assert drop_reason is None
@@ -176,7 +172,6 @@ def test_hidden_slide_transcription_is_filtered_across_retrieval_paths():
         props,
         {("https://artemis.example", 10): unit},
         {("https://artemis.example", 10, 8): associated_slides},
-        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
     assert dto is None
     assert drop_reason == "transcription_hidden"
@@ -630,13 +625,7 @@ def test_global_search_fetches_lane_depth_candidates_regardless_of_limit():
     retrieval._map_candidates = Mock(return_value=[])
     retrieval._safe_rerank = Mock(return_value=None)
 
-    retrieval._run_hybrid_search(
-        query="query",
-        vector=[0.1],
-        alpha=0.5,
-        limit=1,
-        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
-    )
+    retrieval._run_hybrid_search(query="query", vector=[0.1], alpha=0.5, limit=1)
 
     assert retrieval._search_segments.call_args.args[3] == _LANE_DEPTH
     assert retrieval._search_video_transcriptions.call_args.args[3] == _LANE_DEPTH
@@ -649,10 +638,8 @@ def test_global_search_merges_both_lanes_into_one_ranked_pool():
     the other lane returned a result first.
     """
     retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
-    segment_hit = SimpleNamespace(properties={"base_url": "https://artemis.example"})
-    transcription_hit = SimpleNamespace(
-        properties={"base_url": "https://artemis.example"}
-    )
+    segment_hit = SimpleNamespace()
+    transcription_hit = SimpleNamespace()
     retrieval._search_segments = Mock(return_value=[segment_hit])
     retrieval._search_video_transcriptions = Mock(return_value=[transcription_hit])
     retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
@@ -667,11 +654,7 @@ def test_global_search_merges_both_lanes_into_one_ranked_pool():
     retrieval._safe_rerank = Mock(return_value=None)
 
     result = retrieval._run_hybrid_search(
-        query="query",
-        vector=[0.1],
-        alpha=0.5,
-        limit=1,
-        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
+        query="query", vector=[0.1], alpha=0.5, limit=1
     )
 
     assert result == [high_score_transcription]
@@ -724,10 +707,7 @@ def _retriever_returning(unit, segment=None):
 
 def _found_unit_ids(unit, access_context):
     results = _retriever_returning(unit).search(
-        "query",
-        limit=5,
-        access_context=access_context,
-        base_url="https://artemis.example",
+        "query", limit=5, access_context=access_context
     )
     return [dto.lecture_unit.id for dto in results]
 
@@ -776,7 +756,7 @@ def test_staff_of_a_different_course_do_not_see_unreleased_unit():
 def test_missing_access_context_hides_unreleased_unit():
     # Safe default: no context -> unreleased content stays hidden.
     results = _retriever_returning(lecture_unit(RELEASED_IN_FUTURE)).search(
-        "query", limit=5, base_url="https://artemis.example"
+        "query", limit=5
     )
     assert results == []
 
@@ -792,7 +772,6 @@ def test_staff_bypass_does_not_expose_a_hidden_slide():
         "query",
         limit=5,
         access_context=AccessContext(course_ids=[30], staff_course_ids=[30]),
-        base_url="https://artemis.example",
     )
     assert results == []
 

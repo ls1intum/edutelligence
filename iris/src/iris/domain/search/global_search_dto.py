@@ -42,7 +42,6 @@ class LectureSearchRequestDTO(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     query: str = Field(min_length=1)
-    artemis_base_url: str = Field(alias="artemisBaseUrl", min_length=1)
     limit: int = Field(default=10, ge=1, le=20)
     course_ids: list[int] | None = Field(default=None, alias="courseIds")
     # Only needed for a caller with no course_ids ceiling to narrow itself (unrestricted
@@ -51,13 +50,6 @@ class LectureSearchRequestDTO(BaseModel):
         default_factory=list, alias="excludeCourseIds"
     )
     access_context: AccessContext | None = Field(default=None, alias="accessContext")
-
-    @field_validator("artemis_base_url")
-    @classmethod
-    def validate_artemis_base_url(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("artemisBaseUrl must not be blank")
-        return value
 
     @field_validator("query")
     @classmethod
@@ -232,8 +224,6 @@ class GlobalSearchRequestDTO(BaseModel):
 
     @model_validator(mode="after")
     def _normalize_empty_course_scope(self) -> "GlobalSearchRequestDTO":
-        if not self.settings.artemis_base_url.strip():
-            raise ValueError("settings.artemisBaseUrl must not be blank")
         if self.searches_nothing:
             self.course_ids = []
         return self

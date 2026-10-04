@@ -28,7 +28,16 @@ def _lane(model: str, num_parallel: int, *, runtime_state: str = "loaded", queue
     }
 
 
-def _provider(monkeypatch, lanes, *, config=None, with_registry=True, model_ids=None, provider_id=13, model_name="m"):
+def _facade_and_provider(
+    monkeypatch,
+    lanes,
+    *,
+    config=None,
+    with_registry=True,
+    model_ids=None,
+    provider_id=13,
+    model_name="m",
+):
     """Build a facade + registered provider backed by a fake runtime registry."""
 
     class _FakeRegistry:
@@ -54,7 +63,20 @@ def _provider(monkeypatch, lanes, *, config=None, with_registry=True, model_ids=
     )
     for model_id in model_ids or [1]:
         facade.register_model(model_id, "logosnode", "http://fake", model_name, 65536, provider_id=provider_id)
-    return facade._providers[provider_id]
+    return facade, facade._providers[provider_id]
+
+
+def _provider(monkeypatch, lanes, *, config=None, with_registry=True, model_ids=None, provider_id=13, model_name="m"):
+    """Build a registered provider backed by a fake runtime registry."""
+    return _facade_and_provider(
+        monkeypatch,
+        lanes,
+        config=config,
+        with_registry=with_registry,
+        model_ids=model_ids,
+        provider_id=provider_id,
+        model_name=model_name,
+    )[1]
 
 
 def test_a_vllm_lane_does_not_cap_the_ledger_at_its_full_context_guarantee(monkeypatch):
@@ -143,3 +165,101 @@ def test_reserve_capacity_refuses_on_backend_queue_pressure(monkeypatch):
     provider = _provider(monkeypatch, [_lane("m", 10, queue_waiting=9)])
     assert provider.try_reserve_capacity(1, "r1") is False
     assert provider.get_active_count(1) == 0
+
+
+# ---------------------------------------------------------------------------
+# The in-flight ledger, split by caller key
+# ---------------------------------------------------------------------------
+
+
+def test_the_in_flight_ledger_is_split_by_caller_key(monkeypatch):
+    """`active` says how busy a model is; the split says *who* is keeping it
+    busy. A key whose sessions fan out into several concurrent requests
+    holds several of the model's slots, and the total alone cannot say so."""
+    provider = _provider(monkeypatch, [_lane("m", 8)])
+    provider.increment_active(1, request_id="r1", api_key_id=7)
+    provider.increment_active(1, request_id="r2", api_key_id=7)
+    provider.increment_active(1, request_id="r3", api_key_id=9)
+
+    assert provider.get_active_count(1) == 3
+    assert provider.get_debug_state()[1]["active_by_api_key"] == {"7": 2, "9": 1}
+
+
+def test_the_split_cannot_outrun_the_total(monkeypatch):
+    """A request that starts without a key still counts for the model; the
+    split is a slice of the total, never something that can push it past
+    what the model itself reports."""
+    provider = _provider(monkeypatch, [_lane("m", 8)])
+    provider.increment_active(1, request_id="r1", api_key_id=7)
+    provider.increment_active(1, request_id="r2")
+
+    state = provider.get_debug_state()[1]
+    assert state["active"] == 2
+    assert sum(state["active_by_api_key"].values()) <= state["active"]
+    assert state["active_by_api_key"] == {"7": 1}
+
+
+def test_a_completion_uncounts_the_key_that_started_it(monkeypatch):
+    """The key is recorded with the request at the start, so a completion
+    that arrives without one still un-counts the right key — and the split
+    empties with the total."""
+    provider = _provider(monkeypatch, [_lane("m", 8)])
+    provider.increment_active(1, request_id="r1", api_key_id=7)
+    provider.decrement_active(1, request_id="r1")
+
+    assert provider.get_active_count(1) == 0
+    assert provider.get_debug_state()[1]["active_by_api_key"] == {}
+
+
+def test_a_completion_without_a_recorded_key_uses_the_callers(monkeypatch):
+    provider = _provider(monkeypatch, [_lane("m", 8)])
+    provider.increment_active(1, request_id="r1")
+    provider.decrement_active(1, request_id="r1", api_key_id=9)
+
+    assert provider.get_active_count(1) == 0
+    assert provider.get_debug_state()[1]["active_by_api_key"] == {}
+
+
+def test_a_stray_completion_cannot_run_the_split_negative(monkeypatch):
+    """The clamp the total has always had: a completion with no matching
+    start reads as zero, for the model and for every key on it."""
+    provider = _provider(monkeypatch, [_lane("m", 8)])
+    provider.decrement_active(1, api_key_id=7)
+
+    assert provider.get_active_count(1) == 0
+    assert provider.get_debug_state()[1]["active_by_api_key"] == {}
+
+
+def test_track_active_request_counts_the_key_only_when_it_said_to(monkeypatch):
+    provider = _provider(monkeypatch, [_lane("m", 8)])
+    provider.track_active_request("r1", 1, increment_active=True, api_key_id=7)
+    provider.track_active_request("r2", 1, increment_active=False, api_key_id=9)
+
+    state = provider.get_debug_state()[1]
+    assert state["active"] == 1
+    assert state["active_by_api_key"] == {"7": 1}
+
+
+def test_removing_a_model_drops_its_split(monkeypatch):
+    provider = _provider(monkeypatch, [_lane("m", 8)], model_ids=[1, 2])
+    provider.increment_active(1, request_id="r1", api_key_id=7)
+    provider.set_registered_models({2: "m"})
+
+    assert 1 not in provider.get_debug_state()
+    assert provider.get_debug_state()[2]["active_by_api_key"] == {}
+
+
+def test_request_events_carry_the_key_from_start_to_completion(monkeypatch):
+    """The split is built from what the request's start recorded, and the
+    key travels with the request: the start stores it, the processing start
+    counts it, and the completion un-counts it — no caller has to remember
+    it in between."""
+    facade, provider = _facade_and_provider(monkeypatch, [_lane("m", 8)])
+
+    facade.on_request_start("r1", 1, 13, priority="normal", api_key_id=7)
+    facade.on_request_begin_processing("r1", increment_active=True, provider_id=13)
+    assert provider.get_debug_state()[1]["active_by_api_key"] == {"7": 1}
+
+    facade.on_request_complete("r1", was_cold_start=False, duration_ms=10.0, provider_id=13)
+    assert provider.get_active_count(1) == 0
+    assert provider.get_debug_state()[1]["active_by_api_key"] == {}

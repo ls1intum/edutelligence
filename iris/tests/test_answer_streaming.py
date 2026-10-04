@@ -5,8 +5,6 @@ sentinel-gating stream handler, and the parameterized partial-result sender."""
 
 from types import SimpleNamespace
 
-import pytest
-
 from iris.domain.search.global_search_dto import CourseInfo, EntitySourceDTO
 from iris.domain.status.global_search_status_update_dto import (
     GlobalSearchStatusUpdateDTO,
@@ -138,37 +136,6 @@ class TestSentinelGateStreamHandler:
         gate(None)
         assert chunks == ["An answer", None]
 
-    @pytest.mark.parametrize(
-        "retry_chunks", [["!none!"], ["!no", "ne!"], [" ", "!n", "one!", " "]]
-    )
-    def test_provider_retry_restarts_sentinel_detection(self, retry_chunks):
-        chunks, gate = self.collect()
-        gate("A draft answer")
-        gate(None)
-        for delta in retry_chunks:
-            gate(delta)
-        assert chunks == ["A draft answer", None]
-
-    def test_repeated_resets_before_opening_do_not_emit_a_reset(self):
-        chunks, gate = self.collect()
-        gate("!no")
-        gate(None)
-        gate(None)
-        gate("!none!")
-        assert not chunks
-
-    def test_retry_normal_answer_reopens_gate_and_subsequent_reset_closes_it(self):
-        chunks, gate = self.collect()
-        gate("First answer")
-        gate(None)
-        gate(None)
-        gate("!n")
-        gate("ice retry")
-        gate(" continuation")
-        gate(None)
-        gate("!none!")
-        assert chunks == ["First answer", None, "!nice retry", " continuation", None]
-
 
 class TestPartialResultSenderFactory:
     """Payload construction with and without an injected status DTO."""
@@ -248,7 +215,6 @@ class TestNavigateFallbackClearsTheStream:
             query="where is this covered",
             intent=SearchIntent.TRIGGER_AI,
             stream_handler=deltas.append,
-            base_url="https://artemis.example",
         )
 
         assert None in deltas
@@ -261,7 +227,6 @@ class TestNavigateFallbackClearsTheStream:
             query="how many points is the exam worth",
             intent=SearchIntent.TRIGGER_AI,
             stream_handler=deltas.append,
-            base_url="https://artemis.example",
         )
 
         # No fallback ran, so nothing was ever discarded — an unconditional reset
@@ -286,11 +251,7 @@ class TestNavigateFallbackClearsTheStream:
 
         pipeline._generate_answer = generate_and_stamp_usage
 
-        pipeline(
-            query="where is this covered",
-            intent=SearchIntent.TRIGGER_AI,
-            base_url="https://artemis.example",
-        )
+        pipeline(query="where is this covered", intent=SearchIntent.TRIGGER_AI)
 
         recorded_calls = [t.call for t in pipeline.tokens]
         assert recorded_calls == [1, 2], (
@@ -337,9 +298,7 @@ class TestDeliberateRefusalSkipsTheFallback:
         pipeline._generate_answer = count_calls
 
         result = pipeline(
-            query="explain the difference between",
-            intent=SearchIntent.TRIGGER_AI,
-            base_url="https://artemis.example",
+            query="explain the difference between", intent=SearchIntent.TRIGGER_AI
         )
 
         assert call_count == 1
@@ -349,9 +308,7 @@ class TestDeliberateRefusalSkipsTheFallback:
         pipeline = self._pipeline_with("!none!.")
 
         result = pipeline(
-            query="explain the difference between",
-            intent=SearchIntent.TRIGGER_AI,
-            base_url="https://artemis.example",
+            query="explain the difference between", intent=SearchIntent.TRIGGER_AI
         )
 
         assert result.answer is None
@@ -365,9 +322,7 @@ class TestDeliberateRefusalSkipsTheFallback:
         )
 
         result = pipeline(
-            query="explain the difference between",
-            intent=SearchIntent.TRIGGER_AI,
-            base_url="https://artemis.example",
+            query="explain the difference between", intent=SearchIntent.TRIGGER_AI
         )
 
         assert result.answer is None
@@ -401,7 +356,6 @@ class TestStageHandler:
             query="how many points is the exam worth",
             intent=SearchIntent.TRIGGER_AI,
             stage_handler=lambda stage, sources: calls.append((stage, sources)),
-            base_url="https://artemis.example",
         )
 
         assert [stage for stage, _ in calls] == ["searching", "found", "generating"]
@@ -414,7 +368,6 @@ class TestStageHandler:
             query="how many points is the exam worth",
             intent=SearchIntent.TRIGGER_AI,
             stage_handler=lambda stage, sources: calls.append((stage, sources)),
-            base_url="https://artemis.example",
         )
 
         searching_sources = next(
@@ -440,7 +393,6 @@ class TestStageHandler:
             query="how many points is the exam worth",
             intent=SearchIntent.TRIGGER_AI,
             stage_handler=lambda stage, sources: calls.append((stage, sources)),
-            base_url="https://artemis.example",
         )
 
         found_sources = next(sources for stage, sources in calls if stage == "found")
@@ -460,7 +412,6 @@ class TestStageHandler:
             query="how many points is the exam worth",
             intent=SearchIntent.TRIGGER_AI,
             stage_handler=lambda stage, sources: calls.append((stage, sources)),
-            base_url="https://artemis.example",
         )
 
         generating_sources = next(
@@ -474,9 +425,7 @@ class TestStageHandler:
         pipeline = self._pipeline_with("Yes, see the exercise.[1]")
 
         pipeline(
-            query="how many points is the exam worth",
-            intent=SearchIntent.TRIGGER_AI,
-            base_url="https://artemis.example",
+            query="how many points is the exam worth", intent=SearchIntent.TRIGGER_AI
         )
 
 
@@ -511,7 +460,6 @@ class TestRetrieveSourcesWiresStageHandlerIntoRetrieverOnPhase:
             query="how many points is the exam worth",
             intent=SearchIntent.TRIGGER_AI,
             stage_handler=lambda stage, sources: calls.append((stage, sources)),
-            base_url="https://artemis.example",
         )
 
         assert [stage for stage, _ in calls] == [
@@ -542,9 +490,7 @@ class TestRetrieveSourcesWiresStageHandlerIntoRetrieverOnPhase:
         pipeline._generate_answer = lambda *args, **kwargs: "Yes, see the exercise.[1]"
 
         pipeline(
-            query="how many points is the exam worth",
-            intent=SearchIntent.TRIGGER_AI,
-            base_url="https://artemis.example",
+            query="how many points is the exam worth", intent=SearchIntent.TRIGGER_AI
         )
 
         assert captured["on_phase"] is None

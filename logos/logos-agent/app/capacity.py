@@ -81,6 +81,7 @@ async def read_load(
     timeout_s: float = 5.0,
     lane: frozenset[tuple[str, str]] | None = None,
     ours: Mapping[str, int] | None = None,
+    own_api_key_id: int | None = None,
 ) -> Reading:
     """Ask the orchestrator how busy the serving lane we would use is.
 
@@ -92,6 +93,12 @@ async def read_load(
     served by. ``None`` asks for the fleet-wide figure, which is what this
     answered before it knew about lanes; an empty set says the key reaches
     nothing at all, which is not the same question and is refused.
+
+    ``own_api_key_id`` is this runner's key: when the orchestrator reports
+    in-flight requests per key, the discount uses how many of them are ours —
+    the true figure, which a session's subagents can push well past one —
+    and falls back to ``ours`` (a session count) on an orchestrator that does
+    not.
     """
     if not settings.internal_secret:
         return Reading(
@@ -125,7 +132,7 @@ async def read_load(
         logger.warning("capacity read failed: %s", _describe(exc))
         return UNKNOWN
 
-    return parse_scheduler_state(payload, lane=lane, ours=ours)
+    return parse_scheduler_state(payload, lane=lane, ours=ours, own_api_key_id=own_api_key_id)
 
 
 def _describe(exc: BaseException) -> str:
@@ -201,6 +208,7 @@ def parse_scheduler_state(
     payload: dict,
     lane: frozenset[tuple[str, str]] | None = None,
     ours: Mapping[str, int] | None = None,
+    own_api_key_id: int | None = None,
 ) -> Reading:
     """Turn the orchestrator's debug payload into a single load figure.
 
@@ -219,6 +227,15 @@ def parse_scheduler_state(
     rather than in total: five sessions on one model say nothing about
     another, and subtracting them there would turn somebody else's busy
     lane into an idle-looking one.
+
+    When ``own_api_key_id`` is given and the payload splits a model's
+    in-flight requests by caller key (``active_by_api_key``), that split
+    replaces the session count for the discount: a session that has fanned
+    out into several subagents holds several of the model's slots at once,
+    and only the per-key figure sees them. A session count subtracted instead
+    leaves the subagents' share reading as the platform's, which is how a
+    runner pauses for its own work, thaws, and pauses again. An orchestrator
+    that does not report the split falls back to the session count.
     """
     mine = {str(name).strip().lower(): int(count) for name, count in (ours or {}).items()}
     if lane is not None and not lane:
@@ -264,6 +281,15 @@ def parse_scheduler_state(
     # not two. The engine's wait is the opposite — one list per deployment
     # — and is added where it is seen.
     model_depth: dict[str, int] = {}
+    # This runner's in-flight share, per model, read off the payload's own
+    # per-key split rather than estimated from a session count. `key_reported`
+    # lists the models whose deployment carried the split: for them the
+    # session-count fallback would understate a session that fanned out into
+    # subagents, so the per-key figure is the one to subtract. For a model
+    # that did not carry it — an older orchestrator — the session count is
+    # the only figure the payload offers, and it is the one to keep.
+    per_model_own_key: dict[str, int] = {}
+    key_reported: set[str] = set()
     for provider_id, provider in providers.items():
         deployments = (provider or {}).get("models") or {}
         for model_id, model in deployments.items():
@@ -304,6 +330,17 @@ def parse_scheduler_state(
             slots[1] += waiting
             slots[2] += capacity
             slots[3] = max(slots[3], cache)
+            # The orchestrator splits this model's in-flight requests by
+            # caller key. When the deployment carries the split, the discount
+            # below reads this runner's share off it instead of estimating it
+            # from a session count: a session fanned out into subagents holds
+            # several of the slots at once, and only the split sees them all.
+            split = model.get("active_by_api_key")
+            if own_api_key_id is not None and isinstance(split, dict):
+                key_reported.add(name)
+                share = split.get(str(own_api_key_id), 0)
+                if isinstance(share, (int, float)):
+                    per_model_own_key[name] = per_model_own_key.get(name, 0) + int(share)
 
     # The ledger's backlog folds into the model it belongs to. For a model
     # this lane serves that puts it in front of the subtraction of our own
@@ -326,7 +363,11 @@ def parse_scheduler_state(
     # sessions are the ones waiting, and a queue that reads as empty is the
     # signal that no user is waiting.
     for name, slots in per_model.items():
-        ours_here = mine.get(name.strip().lower(), 0)
+        # The per-key split, when the payload carried it for this model: it
+        # is zero for a model the key has no request on, and that zero is
+        # the answer — not the session count, which would subtract traffic
+        # that is not here.
+        ours_here = per_model_own_key.get(name, 0) if name in key_reported else mine.get(name.strip().lower(), 0)
         ours_serving = min(ours_here, slots[0])
         ours_waiting = min(ours_here - ours_serving, slots[1])
         slots[0] -= ours_serving

@@ -199,6 +199,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 priority_int,
                 request.request_id,
                 was_queued=False,
+                api_key_id=request.api_key_id,
             )
             result.ettft_estimate_ms = ettft.ettft_ms
             result.ettft_tier = ettft.tier.value
@@ -1012,6 +1013,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             model_id=result.model_id,
                             provider_id=dispatched_pid,
                             priority=priority.name.lower(),
+                            api_key_id=request.api_key_id,
                         )
                     # Every dispatch out of the queue is a fresh one now that
                     # a completing request no longer hands its slot to a

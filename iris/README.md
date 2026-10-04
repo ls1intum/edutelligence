@@ -12,7 +12,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
 - [Pyris V2](#pyris-v2)
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
-  - [Global Search instance ownership](#global-search-instance-ownership)
   - [Setup](#setup)
     - [Prerequisites](#prerequisites)
     - [Local Development Setup](#local-development-setup)
@@ -49,36 +48,6 @@ their programming exercises on Artemis in a pedagogically meaningful way.
   prompted by students. The LLM responds with a structured JSON object (`"type": "mcq"`) that Artemis renders as an
   interactive quiz widget in the chat. This requires the corresponding Artemis client changes from the
   `feature/iris/quiz-questions` branch.
-
-## Global Search instance ownership
-
-The synchronous `POST /api/v1/search/lectures` request requires `artemisBaseUrl`.
-The asynchronous Global Search request uses its existing `settings.artemisBaseUrl`.
-Artemis supplies its configured `server.url`; this is a trusted server identity,
-not a value from the student's search input. Blank or missing identity is rejected.
-Deploy callers that send this field before enabling the secured Iris endpoint.
-
-Iris API keys are not bound to an Artemis instance. A valid key is a trusted service
-credential: it can already ingest, delete and retrieve for the `base_url` it sends.
-This check restricts results to the exact URL supplied by a trusted caller. It does
-not isolate instances from a holder of a valid key or a malicious Artemis operator.
-Binding keys to instances would be a separate change to the authentication contract.
-
-Search compares this identity byte-for-byte with the existing `base_url` tags before
-processing lecture content. Weaviate's word-tokenized URL filters only narrow the
-query; they do not establish ownership. URLs are not normalized or aliased, and
-missing tags have no fallback. This change does not modify schemas, stored objects,
-IDs or vectors. Before rollout, verify each caller's actual `server.url` against its
-owned stored tags and confirm a known-owned search result. An unknown or mismatched
-identity blocks rollout and needs investigation, rather than a tag rewrite.
-
-Token-matching foreign rows can consume the configured lane-depth, metadata-join
-and expansion caps. Search expands saturated lanes within those bounds, but does
-not promise complete recall beyond them. Foreign-instance drops are logged, including
-an empty final result; that observation alone does not prove a configuration mismatch.
-Expansion visits the surviving anchors in their existing order under one raw-row
-budget per collection. The first anchor can use that budget; each lane performs at
-most the configured number of selected-anchor reads, with query counts and time logged.
 
 ## Setup
 

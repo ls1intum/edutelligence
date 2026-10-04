@@ -39,8 +39,6 @@ const POLL_MS = 4000;
 export class Agents implements OnInit {
   private agentService = inject(AgentService);
   private destroyRef = inject(DestroyRef);
-  /** Local clock: elapsed timings keep moving even when session polling stops. */
-  private now = signal(Date.now());
 
   /** The template binds a numeric workspace id to the select's string value. */
   readonly String = String;
@@ -169,16 +167,13 @@ export class Agents implements OnInit {
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   async ngOnInit(): Promise<void> {
-    this.now.set(Date.now());
-    const clock = setInterval(() => this.now.set(Date.now()), 1000);
+    await this.refresh();
     const timer = setInterval(() => void this.tick(), POLL_MS);
     this.destroyRef.onDestroy(() => {
-      clearInterval(clock);
       clearInterval(timer);
       this.stopStream();
       this.resetScreenshots();
     });
-    await this.refresh();
   }
 
   private async tick(): Promise<void> {
@@ -757,24 +752,10 @@ export class Agents implements OnInit {
 
   duration(session: AgentSession): string {
     if (!session.started_at) return '—';
-    return this.elapsed(session.started_at, session.finished_at);
-  }
-
-  queueDuration(session: AgentSession): string {
-    // A cancellation before starting ends the wait without a runtime.
-    return this.elapsed(session.created_at, session.started_at ?? session.finished_at);
-  }
-
-  finishedAgo(session: AgentSession): string {
-    return session.finished_at ? this.elapsed(session.finished_at) : '—';
-  }
-
-  private elapsed(start: string, end: string | null = null): string {
-    const milliseconds = (end ? Date.parse(end) : this.now()) - Date.parse(start);
-    if (!Number.isFinite(milliseconds)) return '—';
-    const seconds = Math.max(0, Math.floor(milliseconds / 1000));
-    if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    const end = session.finished_at ? new Date(session.finished_at) : new Date();
+    const seconds = Math.max(0, (end.getTime() - new Date(session.started_at).getTime()) / 1000);
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
   }
 

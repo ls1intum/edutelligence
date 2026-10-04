@@ -57,7 +57,6 @@ def test_search_short_circuits_empty_scope_before_embedding():
         limit=5,
         course_ids=[99],
         access_context=AccessContext(course_ids=[1, 2]),
-        base_url="http://a",
     )
 
     assert result == []
@@ -72,9 +71,7 @@ def test_search_without_access_context_passes_client_filter_through_and_embeds()
     retrieval.llm_embedding.embed.return_value = [0.1]
     retrieval._run_hybrid_search = Mock(return_value=[])
 
-    result = retrieval.search(
-        "query", limit=5, course_ids=[7], access_context=None, base_url="http://a"
-    )
+    result = retrieval.search("query", limit=5, course_ids=[7], access_context=None)
 
     assert result == []
     retrieval.llm_embedding.embed.assert_called_once()

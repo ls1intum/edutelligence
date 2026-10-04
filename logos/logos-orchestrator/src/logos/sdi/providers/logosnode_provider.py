@@ -65,6 +65,17 @@ class LogosNodeDataProvider:
         self._last_refresh = 0.0
         self._model_active: Dict[int, int] = {}
         self._active_request_ids: Dict[str, int] = {}
+        # The same in-flight counts, split by the caller's API key. `_model_active`
+        # says how busy a model is; this says *who* is keeping it busy. It is a
+        # strict mirror of `_model_active` (bumped and clamped at exactly the same
+        # points), so it can never overstate a model's total. It exists for callers
+        # that must tell their own load apart from everyone else's — a key whose
+        # sessions fan out into several concurrent requests would otherwise read
+        # its own traffic as the platform's.
+        self._model_active_by_key: Dict[int, Dict[int, int]] = {}
+        # Which key held each in-flight request, so the completion can un-count
+        # the same key that the start counted.
+        self._active_request_keys: Dict[str, Optional[int]] = {}
         # Requests forwarded for a model since the current runtime snapshot
         # was taken, and the marker identifying that snapshot. The engine
         # signals are sampled, so without this every arrival inside one
@@ -125,6 +136,7 @@ class LogosNodeDataProvider:
             self._model_id_to_name = desired
             for model_id in removed_ids:
                 self._model_active.pop(model_id, None)
+                self._model_active_by_key.pop(model_id, None)
             for model_id in desired:
                 self._model_active.setdefault(model_id, 0)
             stale_request_ids = [
@@ -132,6 +144,7 @@ class LogosNodeDataProvider:
             ]
             for request_id in stale_request_ids:
                 self._active_request_ids.pop(request_id, None)
+                self._active_request_keys.pop(request_id, None)
 
     def refresh_data(self) -> None:
         now = time.time()
@@ -833,25 +846,54 @@ class LogosNodeDataProvider:
         runtime = snap.get("runtime") or {}
         return bool(runtime.get("sleep_mode_disabled"))
 
-    def increment_active(self, model_id: int, request_id: Optional[str] = None) -> None:
+    def _bump_active(self, model_id: int, delta: int, api_key_id: Optional[int] = None) -> None:
+        """Move the in-flight count for a model — and for one of its callers.
+
+        The per-key figure must track the model total exactly, so both move
+        here, under the same lock, with the same clamp: a key's count is a
+        slice of the model's, never something that can push the total past what
+        the model itself reports.
+        """
+        # Clamped the way the decrement always was: the count can never read
+        # below zero, so a stray completion cannot turn a model (or one of its
+        # keys) negative.
+        self._model_active[model_id] = max(0, self._model_active.get(model_id, 0) + delta)
+        if api_key_id is None:
+            return
+        by_key = self._model_active_by_key.setdefault(model_id, {})
+        by_key[api_key_id] = max(0, by_key.get(api_key_id, 0) + delta)
+
+    def increment_active(
+        self, model_id: int, request_id: Optional[str] = None, api_key_id: Optional[int] = None
+    ) -> None:
         with self._lock:
             if request_id:
                 if request_id in self._active_request_ids:
                     return
                 self._active_request_ids[request_id] = model_id
-            self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
+                self._active_request_keys[request_id] = api_key_id
+            self._bump_active(model_id, +1, api_key_id)
 
-    def decrement_active(self, model_id: int, reuse_slot: bool = False, request_id: Optional[str] = None) -> None:
+    def decrement_active(
+        self,
+        model_id: int,
+        reuse_slot: bool = False,
+        request_id: Optional[str] = None,
+        api_key_id: Optional[int] = None,
+    ) -> None:
         if request_id:
             with self._lock:
                 mapped_model = self._active_request_ids.pop(request_id, None)
+                # The key recorded at the matching increment is the one to
+                # un-count; a completion that arrives without it falls back to
+                # the caller's.
+                api_key_id = self._active_request_keys.pop(request_id, None) or api_key_id
                 if mapped_model is not None:
                     model_id = mapped_model
         if reuse_slot:
             return
         with self._lock:
-            current_active = self._model_active.get(model_id, 0)
-            self._model_active[model_id] = max(0, current_active - 1)
+            self._bump_active(model_id, -1, api_key_id)
 
     # Engine-side queue_waiting tolerated before we stop forwarding.
     #
@@ -1083,13 +1125,16 @@ class LogosNodeDataProvider:
                 return True
         return False
 
-    def track_active_request(self, request_id: str, model_id: int, increment_active: bool) -> None:
+    def track_active_request(
+        self, request_id: str, model_id: int, increment_active: bool, api_key_id: Optional[int] = None
+    ) -> None:
         with self._lock:
             if request_id in self._active_request_ids:
                 return
             self._active_request_ids[request_id] = model_id
+            self._active_request_keys[request_id] = api_key_id
             if increment_active:
-                self._model_active[model_id] = self._model_active.get(model_id, 0) + 1
+                self._bump_active(model_id, +1, api_key_id)
 
     def get_active_count(self, model_id: int) -> int:
         with self._lock:
@@ -1105,6 +1150,16 @@ class LogosNodeDataProvider:
                 models[model_id] = {
                     "model_name": model_name,
                     "active": self._model_active.get(model_id, 0),
+                    # In-flight for each caller key on this model, as string
+                    # keys so the in-memory shape matches the JSON the runner
+                    # reads. A slice of `active` above, split by who is holding
+                    # it — the runner discounts its own key's share rather than
+                    # guessing it from a session count.
+                    "active_by_api_key": {
+                        str(api_key_id): count
+                        for api_key_id, count in sorted(self._model_active_by_key.get(model_id, {}).items())
+                        if count
+                    },
                     "max_capacity": max_capacity,
                     "capacity_source": capacity_source,
                     "queue_depth": queue_state.total,

@@ -122,9 +122,7 @@ def _convert_iris_model_to_memiris_llm(
         raise ValueError(f"Model with ID '{model_id}' not found in LlmManager")
 
     if isinstance(model, OllamaModel):
-        return OllamaLanguageModel(
-            model.model, model.host, model.api_key, think=model.think
-        )
+        return OllamaLanguageModel(model.model, model.host, model.api_key)
     elif isinstance(
         model,
         (
@@ -135,27 +133,6 @@ def _convert_iris_model_to_memiris_llm(
         ),
     ):
         is_azure = isinstance(model, (AzureOpenAIChatModel, AzureOpenAIEmbeddingModel))
-        chat_options: dict = {}
-        if isinstance(model, OpenAIChatModel):
-            # Memiris issues its own requests, so it needs the same per-model
-            # request settings Iris applies; otherwise a reasoning model
-            # configured to think (e.g. Qwen3.8 on vLLM) would run without it.
-            # Memiris only speaks chat completions: models routed through the
-            # Responses API (which reject reasoning_effort with tools on chat
-            # completions) keep the provider's default effort there.
-            forward_effort = (
-                model.supports_reasoning_effort and not model.use_responses_api
-            )
-            chat_options = {
-                "reasoning_effort": model.reasoning_effort if forward_effort else None,
-                "extra_body": model.extra_body,
-                # Only an explicit flag overrides Memiris's own name-based default.
-                "supports_temperature": (
-                    model.supports_temperature
-                    if "supports_temperature" in model.model_fields_set
-                    else None
-                ),
-            }
         return OpenAiLanguageModel(
             model=model.model,
             api_key=model.api_key,
@@ -163,7 +140,6 @@ def _convert_iris_model_to_memiris_llm(
             azure=is_azure,
             azure_endpoint=getattr(model, "endpoint", None),
             api_version=getattr(model, "api_version", None),
-            **chat_options,
         )
     else:
         raise ValueError(
@@ -256,7 +232,7 @@ def _create_memory_sleep_pipeline(
         .set_memory_connection_repository(weaviate_client)
         .set_vectorizer(vectorizer)
         .set_group_size(25)
-        .set_max_threads(settings.memiris.sleep_max_threads)
+        .set_max_threads(20)
         .set_tool_llm(tool_llm)
         .set_response_llm(json_llm)
         .build()
@@ -293,19 +269,6 @@ def has_memories_for_tenant(tenant: Tenant, memory_service: MemoryService) -> bo
             "Error checking memories for tenant %s: %s", tenant, e, exc_info=True
         )
         return False
-
-
-def memories_for_llm(memories: Sequence[Memory]) -> list[dict[str, str]]:
-    """
-    Reduce memories to what a model needs to read: id, title and content.
-
-    A Memory's string form includes its embedding vectors (thousands of floats
-    each), which would otherwise be pasted into the prompt as tool output.
-    """
-    return [
-        {"id": str(memory.id), "title": memory.title, "content": memory.content}
-        for memory in memories
-    ]
 
 
 class MemirisWrapper:
@@ -461,7 +424,7 @@ class MemirisWrapper:
 
     def create_tool_memory_search(
         self, accessed_memory_storage: list[Memory], limit: int = 5
-    ) -> Callable[[str], list[dict[str, str]] | str]:
+    ) -> Callable[[str], Sequence[Memory] | str]:
         """
         Creates a tool for vector search in the memory service.
 
@@ -469,7 +432,7 @@ class MemirisWrapper:
             Callable[[str], Any]: A function that performs vector search.
         """
 
-        def memiris_search_for_memories(query: str) -> list[dict[str, str]] | str:
+        def memiris_search_for_memories(query: str) -> Sequence[Memory] | str:
             """
             Use this tool to search for memories about a user.
             This function performs a semantic search for memories that match the query.
@@ -479,8 +442,7 @@ class MemirisWrapper:
             Args:
                 query (str): The query string to search for memories.
             Returns:
-                list[dict[str, str]]: The id, title and content of the memories that most
-                closely match the query.
+                Sequence[Memory]: A list of Memory objects that most closely match the query.
             """
             try:
                 vectors = self.vectorizer.vectorize(query)
@@ -499,23 +461,21 @@ class MemirisWrapper:
             if len(memories) == 0:
                 return "No memories found for the given query."
 
-            return memories_for_llm(memories)
+            return memories
 
         return memiris_search_for_memories
 
     def create_tool_find_similar_memories(
         self, accessed_memory_storage: list[Memory], limit: int = 5
-    ) -> Callable[[str], list[dict[str, str]] | str]:
+    ) -> Callable[[str], Sequence[Memory] | str]:
         """
         Creates a tool to find similar memories based on a given memory ID.
 
         Returns:
-            Callable[[str], list[dict[str, str]] | str]: A function that finds similar memories.
+            Callable[[str], Sequence[Memory]]: A function that finds similar memories.
         """
 
-        def memiris_find_similar_memories(
-            memory_id: str,
-        ) -> list[dict[str, str]] | str:
+        def memiris_find_similar_memories(memory_id: str) -> Sequence[Memory] | str:
             """
             Use this tool to find similar memories of another memory.
             You must provide the valid UUID of the memory you want to find similar memories for.
@@ -527,8 +487,8 @@ class MemirisWrapper:
             Args:
                 memory_id (str): The valid UUID of the memory to find similar memories for.
             Returns:
-                list[dict[str, str]] | str: The id, title and content of memories similar to
-                the provided memory ID, or an error message.
+                Sequence[Memory] | str: A list of Memory objects that are similar to the provided memory ID,
+                or an error message.
             """
             if is_valid_uuid(memory_id):
                 memory_uuid: UUID = to_uuid(memory_id)  # type: ignore
@@ -577,7 +537,7 @@ class MemirisWrapper:
 
                     if len(memories) == limit:
                         accessed_memory_storage.extend(memories)
-                        return memories_for_llm(memories)
+                        return memories
                 except Exception:
                     logger.exception(
                         "Failed to fetch memory connections for memory %s "
@@ -612,7 +572,7 @@ class MemirisWrapper:
             if len(memories) == 0:
                 return "No similar memories found."
 
-            return memories_for_llm(memories)
+            return memories
 
         return memiris_find_similar_memories
 
