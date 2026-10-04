@@ -134,7 +134,6 @@ def _lane(
     sleep_state: str = "awake",
     effective_vram_mb: float = 20_000.0,
     gpu_devices: str = "0",
-    is_vllm: bool = True,
     active_requests: int = 0,
     queue_waiting: float = 0.0,
 ) -> LaneSchedulerSignals:
@@ -143,7 +142,6 @@ def _lane(
         model_name=model_name,
         runtime_state=runtime_state,
         sleep_state=sleep_state,
-        is_vllm=is_vllm,
         active_requests=active_requests,
         queue_waiting=queue_waiting,
         requests_running=0.0,
@@ -200,7 +198,7 @@ def _planner(providers: List[_MockProvider]) -> CapacityPlanner:
     planner._lane_load_failure_until = {}
     planner._cross_provider_best_first = True
     planner._replica_first_eviction = True
-    planner._replicate_on_free_vram = False  # opt-in; tests turn it on
+    planner._replicate_on_free_vram = False  # on by default; pin off unless a test enables it
     # Eviction-picker dependencies
     planner._lane_loaded_at = {}
     planner._lane_idle_since = {}
@@ -410,6 +408,28 @@ class TestEstimateDemandActionCost:
             CapacityPlanner.TARGET_ACTION_COST_S["load"] + CapacityPlanner.VICTIM_ACTION_COST_S["stop"]
         )
 
+    def test_cold_load_never_calibrated_on_non_metal_returns_none(self):
+        """A model with no profile on a non-Metal worker can't actually
+        cold-load there (see _load_requires_calibration), no matter how
+        much free VRAM the cheap 4096 MB guess would otherwise fit into.
+        """
+        provider = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            profiles={},  # no profile for "X" at all
+            available_vram_mb=80_000.0,
+        )
+        planner = _planner([provider])
+        result = planner._estimate_demand_action_cost(
+            1,
+            "X",
+            provider.lanes,
+            provider.profiles,
+            planner._facade.get_capacity_info(1),
+        )
+        assert result is None
+
     def test_no_lane_no_evict_target_returns_none(self):
         """Pathological: needs eviction but no displaceable lanes → None (infeasible)."""
         provider = _MockProvider(
@@ -556,6 +576,37 @@ class TestRankProvidersForDemandedModels:
         )
         planner = _planner([a, b])
         planner._lane_load_failure_until[(a.provider_id, planner._planner_lane_id("X"))] = time.time() + 120.0
+
+        winners = planner._rank_providers_for_demanded_models(
+            [a.provider_id, b.provider_id],
+            [("X", 1.5)],
+        )
+        assert winners == {"X": b.provider_id}
+
+    def test_a_never_calibrated_worker_does_not_win_over_a_feasible_one(self):
+        """A has no profile for X at all and would win on free-VRAM alone —
+        the cheap 4096 MB guess for an unknown model fits easily and no
+        eviction is needed. But A is not Metal, so it could never actually
+        load X (see _load_requires_calibration): the calibrated B, with less
+        free VRAM, must win instead of both providers deferring to a dead end.
+        """
+        a = _MockProvider(
+            provider_id=1,
+            name="A",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=90_000,  # would otherwise win the free-VRAM tiebreak
+            profiles={},
+        )
+        b = _MockProvider(
+            provider_id=2,
+            name="B",
+            lanes=[],
+            capabilities=["X"],
+            available_vram_mb=80_000,
+            profiles={"X": _profile(loaded_vram_mb=20_000)},
+        )
+        planner = _planner([a, b])
 
         winners = planner._rank_providers_for_demanded_models(
             [a.provider_id, b.provider_id],
@@ -1137,38 +1188,6 @@ class TestReplication:
         )
         assert actions == []
 
-    def test_respects_max_replicas_per_model(self):
-        """Already at MAX_REPLICAS_PER_MODEL → don't add another."""
-        # Pretend X is already loaded on MAX_REPLICAS workers via the
-        # cluster_lanes_by_model count (we don't need real lanes on each).
-        a = _MockProvider(
-            provider_id=1,
-            name="A",
-            lanes=[_lane(lane_id="A-x", model_name="X", runtime_state="loaded")],
-            capabilities=["X"],
-            available_vram_mb=5_000,
-            profiles={"X": _profile(loaded_vram_mb=20_000)},
-        )
-        b = _MockProvider(
-            provider_id=2,
-            name="B",
-            lanes=[],
-            capabilities=["X"],
-            available_vram_mb=80_000,
-            profiles={"X": _profile(loaded_vram_mb=20_000)},
-        )
-        planner = _planner([a, b])
-        self._enable(planner)
-        # Inject a count at the cap
-        cluster = {"X": CapacityPlanner.MAX_REPLICAS_PER_MODEL}
-        actions = planner._compute_replication_actions(
-            provider_ids=[a.provider_id, b.provider_id],
-            ranked_models=[("X", 5.0)],
-            cluster_lanes_by_model=cluster,
-            cycle_planned_models=set(),
-        )
-        assert actions == []
-
     def test_does_not_replicate_when_no_free_vram_anywhere(self):
         """When every candidate worker lacks free VRAM for the model, the
         replication pass refuses to emit (it must never evict)."""
@@ -1297,8 +1316,8 @@ class TestReplication:
         assert len(actions) == 1
         assert actions[0].provider_id == b.provider_id
 
-    def test_disabled_by_default_returns_empty(self):
-        """With LOGOS_REPLICATE_ON_FREE_VRAM unset (default), nothing fires."""
+    def test_disabled_returns_empty(self):
+        """With LOGOS_REPLICATE_ON_FREE_VRAM disabled, nothing fires."""
         a = _MockProvider(
             provider_id=1,
             name="A",

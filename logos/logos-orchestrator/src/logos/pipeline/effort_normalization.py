@@ -10,7 +10,7 @@ template, for example, only accepts ``xhigh`` (its default), ``medium`` and
 ``low``; the Anthropic value ``high`` — and vLLM's ``minimal``/``max`` —
 therefore raise a template exception that vLLM surfaces as an HTTP 500
 ``internal_error``, failing every turn of a client session left on
-``high`` (ls1intum/edutelligence#749).
+``high``.
 
 This module keeps a registry mapping chat template families to the effort
 scale their ``chat_template.jinja`` enforces, and rewrites out-of-scale
@@ -28,7 +28,7 @@ entry in ``CHAT_TEMPLATE_EFFORT_SCALES``.
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Mapping, Optional
 
-# Snapshot of vLLM 0.27.1's ChatCompletionRequest.reasoning_effort Literal,
+# Snapshot of vLLM 0.30.0's ChatCompletionRequest.reasoning_effort Literal,
 # kept in sync with the workernode's VLLM_PIP_SPEC (the "Logos - Update
 # vLLM" workflow bumps that pin). It only drives the coverage test: runtime
 # normalization is drift-proof, since unknown values fall back to the

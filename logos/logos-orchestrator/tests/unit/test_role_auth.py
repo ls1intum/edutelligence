@@ -31,21 +31,21 @@ def patch_auth(monkeypatch):
 def test_require_logos_admin_key_passes_for_admin(monkeypatch):
     db = MagicMock()
     db.get_user_by_api_key.return_value = {"role": "logos_admin"}
-    role_auth.require_logos_admin_key("key", db)
+    _role_auth_impl.require_logos_admin_key("key", db)
 
 
 def test_require_logos_admin_key_rejects_app_admin(monkeypatch):
     db = MagicMock()
     db.get_user_by_api_key.return_value = {"role": "app_admin"}
     with pytest.raises(Exception):
-        role_auth.require_logos_admin_key("key", db)
+        _role_auth_impl.require_logos_admin_key("key", db)
 
 
 def test_require_logos_admin_key_rejects_service_key(monkeypatch):
     db = MagicMock()
     db.get_user_by_api_key.return_value = None
     with pytest.raises(Exception):
-        role_auth.require_logos_admin_key("key", db)
+        _role_auth_impl.require_logos_admin_key("key", db)
 
 
 def test_require_app_admin_or_above_passes_for_app_admin(monkeypatch):

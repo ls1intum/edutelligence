@@ -60,6 +60,17 @@ engines:
     # when the calibrated TP is >1, or lazily before a TP>1 lane is spawned if
     # not yet converted. Checkpoints live under
     # <cache_root>/.sharded_cache/<model>/tp<N>/.
+    #
+    # A single model can be opted out (or in) against this worker-wide value via
+    # engines.vllm.model_overrides.<model>.sharded_checkpoint_enabled — useful
+    # for a quantization whose weight layout does not survive the sharded_state
+    # round trip, without giving up the optimization for every other model.
+    #
+    # If the vLLM loader refuses a converted checkpoint, the worker discards it,
+    # serves the model from the full checkpoint, and records the rejection next
+    # to the cache as <model>/tp<N>.rejected. That (model, TP) is not converted
+    # again while the same vLLM version is installed; a version change clears
+    # the record and re-arms the conversion. Delete the file to force a retry.
     sharded_checkpoint_enabled: true
     # Allow the lazy, spawn-time fallback conversion (set false to only use
     # checkpoints converted by the post-calibration trigger, so a lane spawn

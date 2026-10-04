@@ -93,3 +93,52 @@ async def test_no_default_without_api_key(monkeypatch):
 
     headers, _ = ContextResolver.prepare_headers_and_payload(context, {"model": "gpt-4.1-nano"})
     assert "Authorization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_credentials_are_not_sent_over_plain_http(monkeypatch):
+    """A key must never go out in the clear.
+
+    Same rule Logos already applies to these credentials on the benchmark
+    path. Refused at resolve time, with a log line naming the provider, rather
+    than leaking the key on every request.
+    """
+    with _patched_db(monkeypatch, _auth_info(base_url="http://upstream.example/v1")):
+        assert await ContextResolver().resolve_context(35, 4, "v1/chat/completions") is None
+
+
+@pytest.mark.asyncio
+async def test_a_cleartext_per_model_endpoint_is_refused_too(monkeypatch):
+    # base_url is https, but the request would go to the endpoint.
+    info = _auth_info(
+        base_url="https://upstream.example/v1",
+        endpoint="http://upstream.example/v1/chat/completions",
+    )
+    with _patched_db(monkeypatch, info):
+        assert await ContextResolver().resolve_context(35, 4, "v1/chat/completions") is None
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_provider_on_plain_http_is_refused(monkeypatch):
+    info = _auth_info(cloud_provider_type="anthropic", base_url="http://api.anthropic.example/v1")
+    with _patched_db(monkeypatch, info):
+        assert await ContextResolver().resolve_context(35, 4, "v1/messages") is None
+
+
+@pytest.mark.asyncio
+async def test_loopback_http_keeps_working(monkeypatch):
+    # Local development runs the upstream on localhost over plain HTTP.
+    with _patched_db(monkeypatch, _auth_info(base_url="http://localhost:8000/v1")):
+        context = await ContextResolver().resolve_context(35, 4, "v1/chat/completions")
+    assert context is not None
+    assert context.forward_url == "http://localhost:8000/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_an_unauthenticated_cleartext_upstream_keeps_working(monkeypatch):
+    # Nothing secret goes over the wire, so the transport rule does not apply.
+    info = _auth_info(base_url="http://upstream.example/v1", api_key=None, auth_name="", auth_format="")
+    with _patched_db(monkeypatch, info):
+        context = await ContextResolver().resolve_context(35, 4, "v1/chat/completions")
+    assert context is not None
+    assert context.auth_header == ""

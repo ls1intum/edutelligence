@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main_mod
+from logos.routers import internal as internal_mod
 
 
 def _make_request(authorization: str = "") -> MagicMock:
@@ -14,25 +15,41 @@ def _make_request(authorization: str = "") -> MagicMock:
     return request
 
 
+class DummyDB:
+    """DBManager stub: only the historic context maximum is consulted here."""
+
+    def __init__(self, historic=None):
+        self._historic = historic if historic is not None else {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def get_historic_max_context_by_model(self):
+        return self._historic
+
+
 @pytest.mark.asyncio
 async def test_returns_403_when_secret_not_configured(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", None)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", None)
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_model_context_windows(_make_request("Bearer secret"))
+        await internal_mod.internal_model_context_windows(_make_request("Bearer secret"))
     assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
 async def test_returns_401_when_secret_is_wrong(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
     with pytest.raises(HTTPException) as exc_info:
-        await main_mod.internal_model_context_windows(_make_request("Bearer wrong-secret"))
+        await internal_mod.internal_model_context_windows(_make_request("Bearer wrong-secret"))
     assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_returns_served_windows_per_model(monkeypatch):
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     registry = MagicMock()
     registry.active_provider_ids = lambda: [7]
@@ -45,14 +62,15 @@ async def test_returns_served_windows_per_model(monkeypatch):
                     "context_length": 4096,
                     "backend_metrics": {"max_model_len": 40960},
                 },
-                {"model": "mistral-7b", "vllm": False, "context_length": 32768, "backend_metrics": {}},
+                {"model": "mistral-7b", "vllm": True, "context_length": 32768, "backend_metrics": {}},
             ],
             "model_profiles": {},
         }
     }
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB())
 
-    result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     # "windows" keeps its original shape for an older webservice.
     assert result["windows"] == {"qwen-14b": 40960, "mistral-7b": 32768}
@@ -72,7 +90,7 @@ async def test_stats_separate_smallest_largest_and_native(monkeypatch):
     ``current_max`` the wide one, and ``overall`` the widest it is ever served
     with — known from the profile even on the worker whose lane runs narrow.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     snapshots = {
         1: {
@@ -111,8 +129,9 @@ async def test_stats_separate_smallest_largest_and_native(monkeypatch):
     registry.active_provider_ids = lambda: [1, 2]
     registry.peek_runtime_snapshot = snapshots.get
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB())
 
-    result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     assert result["windows"] == {"qwen-27b": 33000}
     assert result["stats"]["qwen-27b"] == {
@@ -130,7 +149,7 @@ async def test_native_is_known_without_a_live_lane(monkeypatch):
     context limit once at startup, so it needs a number even when nothing is
     loaded at that moment.
     """
-    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
 
     registry = MagicMock()
     registry.active_provider_ids = lambda: [1]
@@ -141,8 +160,58 @@ async def test_native_is_known_without_a_live_lane(monkeypatch):
         }
     }
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB())
 
-    result = await main_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
 
     assert result["windows"] == {}
     assert result["stats"] == {"cold-model": {"overall": 131072}}
+
+
+@pytest.mark.asyncio
+async def test_calibrated_cap_is_the_overall_when_nothing_wider_was_reported(monkeypatch):
+    """A calibrated cap is reported when no wider context value exists.
+
+    A calibration capped --max-model-len to fit the pinned KV budget and
+    recorded no wider KV point, so ``calibration_max_model_len`` is the only
+    context the profile reports. The worker was connected and ready to serve
+    the model at exactly that width, yet the old native reading (operator pin
+    or KV sweep only) saw nothing and the client fell back to a guessed
+    window. The calibrated cap has to count on its own."""
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+
+    registry = MagicMock()
+    registry.active_provider_ids = lambda: [1]
+    registry.peek_runtime_snapshot = lambda pid: {
+        "runtime": {
+            "lanes": [],
+            "model_profiles": {"gemma-12b": {"calibration_max_model_len": 24576}},
+        }
+    }
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB())
+
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+
+    assert result["windows"] == {}
+    assert result["stats"] == {"gemma-12b": {"overall": 24576}}
+
+
+@pytest.mark.asyncio
+async def test_all_workernodes_offline_falls_back_to_the_historic_max(monkeypatch):
+    """No registered session at all: the live snapshots say nothing, so the
+    historic maximum the database keeps per model is what is still reported —
+    ``overall`` only, since no lane is up that would make any current_* figure
+    true."""
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "correct-secret")
+
+    registry = MagicMock()
+    registry.active_provider_ids = lambda: []
+    registry.peek_runtime_snapshot = lambda pid: None
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(main_mod, "DBManager", lambda: DummyDB(historic={"qwen-27b": 262144}))
+
+    result = await internal_mod.internal_model_context_windows(_make_request("Bearer correct-secret"))
+
+    assert result["windows"] == {}
+    assert result["stats"] == {"qwen-27b": {"overall": 262144}}

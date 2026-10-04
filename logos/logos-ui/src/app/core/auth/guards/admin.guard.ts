@@ -8,7 +8,7 @@ export const adminGuard: CanActivateFn = () => {
 
   const decide = (status: AuthStatus): boolean | UrlTree => {
     if (status !== 'authenticated') return router.parseUrl('/');
-    return auth.role() === 'logos_admin' ? true : router.parseUrl('/dashboard');
+    return auth.role() === 'logos_admin' ? true : router.parseUrl('/statistics');
   };
 
   if (auth.status() !== 'checking') return decide(auth.status());

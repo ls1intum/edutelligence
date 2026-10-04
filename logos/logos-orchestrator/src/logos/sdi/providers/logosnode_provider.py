@@ -24,7 +24,7 @@ from ..models import (
     ModelProfile,
     ModelSchedulerView,
     ModelStatus,
-    OllamaCapacity,
+    WorkerCapacity,
 )
 
 try:
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 class LogosNodeDataProvider:
-    """Unified local-provider SDI source for direct Ollama and worker-backed lanes."""
+    """Unified local-provider SDI source for worker-backed lanes."""
 
     DEFAULT_PARALLEL_CAPACITY = 200
 
@@ -73,6 +73,17 @@ class LogosNodeDataProvider:
         # requests, zero holds. Counting our own sends closes that window.
         self._forwarded_since_snapshot: Dict[int, int] = {}
         self._snapshot_marker: Optional[str] = None
+        # Scheduler state memoised per runtime revision : the lane
+        # signals and per-model views are pure functions of (latest_runtime,
+        # model registration), and the registry replaces latest_runtime and
+        # bumps runtime_revision in one step — so within one revision every
+        # rebuild would produce identical objects. Rebuilding them per
+        # request (18-field dataclasses, histogram parses, per-snapshot dict
+        # construction) was ~400 µs of the warm scheduling decision; the
+        # revision-keyed lookup is the only work the hot path still needs.
+        # Both read and write happen on the event-loop thread — no locking.
+        self._view_cache: Dict[tuple, Optional[ModelSchedulerView]] = {}
+        self._lane_signals_cache: Optional[tuple[int, List[LaneSchedulerSignals]]] = None
         self._lock = threading.RLock()
         self._provider_config = self._load_provider_config()
 
@@ -365,33 +376,19 @@ class LogosNodeDataProvider:
                 continue
 
             matched_lanes += 1
-            is_vllm = bool(lane.get("vllm"))
-            if is_vllm:
-                # vLLM's `num_parallel` is the concurrency the engine
-                # guarantees at *full context*, so it is a lower bound on
-                # capacity, not a ceiling — measured on dev, a lane
-                # reporting 4 served 23 concurrent requests at 47% KV, and a
-                # production lane reporting 1 served 8. Using it here would
-                # have the local ledger throttle by 5-8x exactly where the
-                # admission gate was changed to stop doing so.  What the
-                # engine can really hold is bounded by the KV cache, which
-                # `evaluate_admission` reads live; this ledger only needs a
-                # ceiling loose enough not to bind before that does.
-                capacity_hint = self.DEFAULT_PARALLEL_CAPACITY
-            else:
-                # Ollama's num_parallel is an explicit `--parallel` slot
-                # count — a real ceiling, and the only one available.
-                capacity_hint = lane.get("num_parallel")
+            # vLLM's `num_parallel` is the concurrency the engine
+            # guarantees at *full context*, so it is a lower bound on
+            # capacity, not a ceiling — measured on dev, a lane
+            # reporting 4 served 23 concurrent requests at 47% KV, and a
+            # production lane reporting 1 served 8. Using it here would
+            # have the local ledger throttle by 5-8x exactly where the
+            # admission gate was changed to stop doing so.  What the
+            # engine can really hold is bounded by the KV cache, which
+            # `evaluate_admission` reads live; this ledger only needs a
+            # ceiling loose enough not to bind before that does.
+            total_capacity += self.DEFAULT_PARALLEL_CAPACITY
 
-            try:
-                capacity = int(capacity_hint) if capacity_hint is not None else 0
-            except (TypeError, ValueError):
-                capacity = 0
-
-            if capacity > 0:
-                total_capacity += capacity
-
-        if matched_lanes == 0 or total_capacity <= 0:
+        if matched_lanes == 0:
             return None, "config"
         return max(1, total_capacity), "runtime"
 
@@ -433,7 +430,7 @@ class LogosNodeDataProvider:
                 provider_type="logosnode",
             )
 
-    def get_capacity_info(self) -> OllamaCapacity:
+    def get_capacity_info(self) -> WorkerCapacity:
         self.refresh_data()
         runtime_free_mb = None
         runtime_total_mb = None
@@ -441,9 +438,15 @@ class LogosNodeDataProvider:
             snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
             runtime = (snap or {}).get("runtime") or {}
             devices = runtime.get("devices") or {}
-            if isinstance(devices, dict) and bool(devices.get("nvidia_smi_available")):
-                runtime_free_mb = int(devices.get("free_memory_mb", 0) or 0)
-                runtime_total_mb = int(devices.get("total_memory_mb", 0) or 0)
+            if isinstance(devices, dict):
+                # Accept Metal telemetry too — see the note in main.py. Without
+                # this a Mac worker's real free/total figures are dropped and
+                # total_vram_mb silently falls back to the value recorded at
+                # registration time.
+                has_telemetry = bool(devices.get("telemetry_available")) or bool(devices.get("nvidia_smi_available"))
+                if has_telemetry:
+                    runtime_free_mb = int(devices.get("free_memory_mb", 0) or 0)
+                    runtime_total_mb = int(devices.get("total_memory_mb", 0) or 0)
         with self._lock:
             total_used_bytes = sum(info["size_vram"] for info in self._loaded_models.values())
             used_vram_mb = total_used_bytes // (1024 * 1024)
@@ -451,7 +454,7 @@ class LogosNodeDataProvider:
                 runtime_total_mb if runtime_total_mb is not None and runtime_total_mb > 0 else self.total_vram_mb
             )
             available_vram_mb = runtime_free_mb if runtime_free_mb is not None else max(0, total_vram_mb - used_vram_mb)
-            return OllamaCapacity(
+            return WorkerCapacity(
                 available_vram_mb=available_vram_mb,
                 total_vram_mb=total_vram_mb,
                 loaded_models=list(self._loaded_models.keys()),
@@ -466,7 +469,6 @@ class LogosNodeDataProvider:
         backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
         lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
         vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
-        is_vllm = bool(lane.get("vllm"))
         gpu_cache_usage_percent = backend_metrics.get("gpu_cache_usage_percent")
         if gpu_cache_usage_percent is None:
             gpu_cache_usage_percent = backend_metrics.get("gpu_cache_usage_perc")
@@ -476,16 +478,11 @@ class LogosNodeDataProvider:
             model_name=str(lane.get("model", "")),
             runtime_state=str(lane.get("runtime_state", "error")),
             sleep_state=str(lane.get("sleep_state", "unsupported")),
-            is_vllm=is_vllm,
             active_requests=int(lane.get("active_requests", 0) or 0),
             queue_waiting=_lane_metric_float(backend_metrics.get("queue_waiting")),
-            requests_running=(
-                _lane_metric_float(backend_metrics.get("requests_running"))
-                if is_vllm
-                else float(int(lane.get("active_requests", 0) or 0))
-            ),
+            requests_running=_lane_metric_float(backend_metrics.get("requests_running")),
             gpu_cache_usage_percent=(
-                _lane_metric_float(gpu_cache_usage_percent) if is_vllm and gpu_cache_usage_percent is not None else None
+                _lane_metric_float(gpu_cache_usage_percent) if gpu_cache_usage_percent is not None else None
             ),
             ttft_p95_seconds=_lane_ttft_p95_seconds(backend_metrics),
             e2e_latency_p50_seconds=_lane_e2e_latency_p50_seconds(backend_metrics),
@@ -493,12 +490,12 @@ class LogosNodeDataProvider:
             num_parallel=int(lane.get("num_parallel", 0) or 0),
             gpu_memory_utilization=(
                 _lane_metric_float(vllm_config.get("gpu_memory_utilization"))
-                if is_vllm and vllm_config.get("gpu_memory_utilization") is not None
+                if vllm_config.get("gpu_memory_utilization") is not None
                 else None
             ),
             tensor_parallel_size=(
                 int(vllm_config.get("tensor_parallel_size", 0) or 0)
-                if is_vllm and vllm_config.get("tensor_parallel_size") is not None
+                if vllm_config.get("tensor_parallel_size") is not None
                 else None
             ),
             gpu_devices=str(
@@ -513,6 +510,10 @@ class LogosNodeDataProvider:
         Reads lanes from latest_runtime, filters by model name matching model_id,
         constructs LaneSchedulerSignals per lane, aggregates into ModelSchedulerView.
         Returns None if the model is not registered or no runtime data available.
+
+        Memoised per runtime revision : the view is a pure function
+        of the snapshot, and the revision only changes when the snapshot is
+        replaced, so a per-request rebuild would return an identical object.
         """
         self.refresh_data()
 
@@ -522,6 +523,16 @@ class LogosNodeDataProvider:
 
         if self._runtime_registry is None:
             return None
+
+        # Model registration changes without a revision bump, so it rides the
+        # key: the same model_id under a different name must rebuild. A
+        # registry without peek_runtime_revision (test fakes, older builds)
+        # simply skips the memo and rebuilds, exactly as before.
+        peek_revision = getattr(self._runtime_registry, "peek_runtime_revision", None)
+        revision = peek_revision(self.provider_id) if peek_revision is not None else None
+        cache_key = (model_id, model_name, revision) if revision is not None else None
+        if cache_key is not None and cache_key in self._view_cache:
+            return self._view_cache[cache_key]
 
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
@@ -577,7 +588,7 @@ class LogosNodeDataProvider:
         cache_values = [s.gpu_cache_usage_percent for s in matching_signals if s.gpu_cache_usage_percent is not None]
         gpu_cache_max = max(cache_values) if cache_values else None
 
-        return ModelSchedulerView(
+        view = ModelSchedulerView(
             model_id=model_id,
             model_name=model_name,
             provider_id=self.provider_id,
@@ -591,13 +602,34 @@ class LogosNodeDataProvider:
             gpu_cache_pressure_max=gpu_cache_max,
             lanes=matching_signals,
         )
+        # Bounded: revisions only ever go up and bump at most per status push,
+        # so a plain clear keeps this O(1) without an LRU.
+        if cache_key is not None:
+            if len(self._view_cache) >= 128:
+                self._view_cache.clear()
+            self._view_cache[cache_key] = view
+        return view
 
     def get_all_lane_signals(self) -> List[LaneSchedulerSignals]:
-        """Return signals for every lane regardless of model. Used by capacity planner."""
+        """Return signals for every lane regardless of model. Used by capacity planner.
+
+        Memoised per runtime revision  — same rationale as
+        ``get_model_scheduler_view``: the signals are a pure function of the
+        snapshot, and the revision only changes when it is replaced.
+        """
         self.refresh_data()
 
         if self._runtime_registry is None:
             return []
+
+        # A registry without peek_runtime_revision (test fakes, older builds)
+        # simply skips the memo and rebuilds, exactly as before.
+        peek_revision = getattr(self._runtime_registry, "peek_runtime_revision", None)
+        revision = peek_revision(self.provider_id) if peek_revision is not None else None
+        if revision is not None:
+            cached = self._lane_signals_cache
+            if cached is not None and cached[0] == revision:
+                return cached[1]
 
         snap = self._runtime_registry.peek_runtime_snapshot(self.provider_id)
         if not snap:
@@ -608,7 +640,10 @@ class LogosNodeDataProvider:
         if not isinstance(lanes, list):
             return []
 
-        return [self._build_lane_signal(lane) for lane in lanes if isinstance(lane, dict)]
+        signals = [self._build_lane_signal(lane) for lane in lanes if isinstance(lane, dict)]
+        if revision is not None:
+            self._lane_signals_cache = (revision, signals)
+        return signals
 
     def get_model_profiles(self) -> Dict[str, ModelProfile]:
         """Read model profiles from runtime snapshot's model_profiles section."""
@@ -645,6 +680,7 @@ class LogosNodeDataProvider:
                 tensor_parallel_size=data.get("tensor_parallel_size"),
                 enforce_eager_at_calibration=data.get("enforce_eager_at_calibration"),
                 kv_per_token_bytes=data.get("kv_per_token_bytes"),
+                num_key_value_heads=data.get("num_key_value_heads"),
                 max_context_length=data.get("max_context_length"),
                 min_context_fraction=data.get("min_context_fraction"),
                 measurement_count=int(data.get("measurement_count", 0) or 0),
@@ -652,10 +688,14 @@ class LogosNodeDataProvider:
                 residency_source=data.get("residency_source"),
                 sleep_l1_transient_host_ram_mb=data.get("sleep_l1_transient_host_ram_mb"),
                 sleep_l2_transient_host_ram_mb=data.get("sleep_l2_transient_host_ram_mb"),
+                cold_load_time_s=data.get("cold_load_time_s"),
+                wake_from_sleep_time_s=data.get("wake_from_sleep_time_s"),
+                host_ram_mb=data.get("host_ram_mb"),
                 host_ram_residual_mb=data.get("host_ram_residual_mb"),
                 sleep_mode_disabled=data.get("sleep_mode_disabled"),
                 calibration_unsupported=data.get("calibration_unsupported"),
                 calibration_unsupported_reason=data.get("calibration_unsupported_reason"),
+                metal_capacity_floor_mb=data.get("metal_capacity_floor_mb"),
             )
 
         if isinstance(raw_lanes, list):
@@ -671,7 +711,7 @@ class LogosNodeDataProvider:
                 lane_config = lane.get("lane_config") if isinstance(lane.get("lane_config"), dict) else {}
                 vllm_config = lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
                 if profile.engine is None:
-                    profile.engine = "vllm" if bool(lane.get("vllm")) else "ollama"
+                    profile.engine = "vllm"
                 if (
                     profile.observed_gpu_memory_utilization is None
                     and vllm_config.get("gpu_memory_utilization") is not None
@@ -704,7 +744,7 @@ class LogosNodeDataProvider:
                         lane_config.get("vllm_config") if isinstance(lane_config.get("vllm_config"), dict) else {}
                     )
                     if profile.engine is None:
-                        profile.engine = "vllm" if bool(lane.get("vllm")) else "ollama"
+                        profile.engine = "vllm"
                     if (
                         profile.observed_gpu_memory_utilization is None
                         and vllm_config.get("gpu_memory_utilization") is not None
@@ -940,13 +980,11 @@ class LogosNodeDataProvider:
         if _lane_metric_float(backend.get("queue_waiting")) > self.BACKEND_QUEUE_PRESSURE_THRESHOLD:
             return 0, "backend_queue"
 
-        cache_usage = None
-        if bool(lane.get("vllm")):
-            cache_usage = backend.get("gpu_cache_usage_percent")
-            if cache_usage is None:
-                cache_usage = backend.get("gpu_cache_usage_perc")
-            if cache_usage is not None and _lane_metric_float(cache_usage) >= self.KV_CACHE_PRESSURE_PERCENT:
-                return 0, "kv_cache_pressure"
+        cache_usage = backend.get("gpu_cache_usage_percent")
+        if cache_usage is None:
+            cache_usage = backend.get("gpu_cache_usage_perc")
+        if cache_usage is not None and _lane_metric_float(cache_usage) >= self.KV_CACHE_PRESSURE_PERCENT:
+            return 0, "kv_cache_pressure"
 
         try:
             guaranteed = int(lane.get("num_parallel") or 0)

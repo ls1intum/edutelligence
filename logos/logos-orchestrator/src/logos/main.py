@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import binascii
-import codecs
 import datetime
 import hmac
 import json
@@ -12,27 +11,48 @@ import re
 import secrets
 import threading
 import time
-from contextlib import aclosing, asynccontextmanager, suppress
-from dataclasses import dataclass, field
+from contextlib import aclosing, asynccontextmanager, nullcontext, suppress
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Set
 
 import grpc
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.encoders import jsonable_encoder
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from grpclocal import model_pb2_grpc
 from grpclocal.grpc_server import LogosServicer
-from logos.auth import authenticate_api_key
+from logos import perf_trace, refcache, write_queue
+from logos.anthropic_compat import (
+    MessagesStreamTranslator,
+    UpstreamDialect,
+    from_message,
+    is_messages_path,
+    stream_translator,
+    translate_error,
+    translate_response,
+)
+from logos.anthropic_compat.common import sse
+from logos.auth import AuthContext, authenticate_api_key
+from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
+from logos.batch_local import local_batch_runner_loop
+from logos.benchmarks.guidellm_runner import (
+    BENCHMARK_JOB_HEADER,
+    BENCHMARK_PHASE_HEADER,
+    BENCHMARK_PROVIDER_HEADER,
+    BENCHMARK_TOKEN_HEADER,
+    benchmark_affinity_token,
+)
+from logos.billing.budget import check_monthly_budget
+from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
 from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
-from logos.context_budget import required_context_tokens
+from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import *
@@ -44,21 +64,25 @@ from logos.dbutils.types import (
 )
 from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
 from logos.jobs.job_service import JobService, JobSubmission
-from logos.logosnode_registry import (
-    LogosNodeCommandError,
-    LogosNodeOfflineError,
-    LogosNodeRuntimeRegistry,
-    LogosNodeSessionConflictError,
+from logos.live_stream import _LiveStreamRegistry, _StreamingLogAccumulator, _usage_tokens_from_payload
+from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, LogosNodeRuntimeRegistry
+from logos.logosnode_snapshot import (
+    _lane_served_context_window,
+    _profile_native_context_length,
+    resolve_proxy_model_from_deployments,
 )
-from logos.monitoring.prometheus_metrics import metrics_response as _prometheus_metrics_response
+from logos.middleware import APIPrefixStripperMiddleware
+from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
-from logos.pipeline.pipeline import PipelineRequest, RequestPipeline
+from logos.pipeline.latency_store import LatencyStore
+from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, queue_role_rank
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
     force_non_streaming_payload,
     is_audio_upload_path,
+    is_batch_api_path,
     is_multipart_payload,
     is_whisper_payload,
     metered_whisper_response_format,
@@ -69,10 +93,10 @@ from logos.request_content import (
     sanitized_payload_for_logging,
     set_payload_field,
 )
-from logos.responses import extract_model, extract_token_usage, get_client_ip, request_setup
-from logos.role_auth import require_logos_admin_key
+from logos.responses import extract_model, extract_service_tier, get_client_ip, request_setup
 from logos.sdi.azure_deployment_sync import AzureDeploymentSyncService
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
+from logos.sdi.cloud_model_sync import CloudModelSyncService
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.providers.azure_provider import extract_azure_deployment_name
 from logos.terminal_logging import (
@@ -85,17 +109,46 @@ from logos.terminal_logging import (
     format_number,
     model_name_cache,
     paint,
+    provider_name_cache,
     style_duration,
     style_model,
     style_request_id,
 )
-from logos.timeouts import global_timeout_s
-
-_SERVER_START_TIME = int(time.time())
+from logos.timeouts import (
+    _LOGOSNODE_INFER_TIMEOUT_SECONDS,
+    _LOGOSNODE_PRETOKEN_RETRIES,
+    _LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S,
+    _LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+)
 
 logger = logging.getLogger("LogosLogger")
 _grpc_server = None
+# Settles batches that finished while nobody polled them (see logos.batch_api),
+# and runs the batches Logos executes itself (see logos.batch_local).
+_batch_reconciler_task = None
+_local_batch_runner_task = None
 _background_tasks: Set[asyncio.Task] = set()
+_benchmark_tasks: Set[asyncio.Task] = set()
+_benchmark_tasks_by_job: dict[int, asyncio.Task] = {}
+_benchmark_sessions_by_job: dict[int, tuple[int, str]] = {}
+_benchmark_admission_lock = threading.Lock()
+
+
+def _forget_benchmark_task(job_id: int, task: asyncio.Task) -> None:
+    _background_tasks.discard(task)
+    _benchmark_tasks.discard(task)
+    _benchmark_tasks_by_job.pop(job_id, None)
+    _benchmark_sessions_by_job.pop(job_id, None)
+
+
+def _cancel_benchmark_job(job_id: int, reason: str) -> bool:
+    """Persist cancellation first, then stop the local GuideLLM process."""
+    with DBManager() as db:
+        cancelled = db.cancel_model_benchmark_job(job_id, reason)
+    task = _benchmark_tasks_by_job.get(job_id)
+    if task is not None and not task.done():
+        task.cancel(reason)
+    return cancelled
 
 
 def _resolve_provider_name(provider_id: int) -> str:
@@ -157,47 +210,16 @@ def _sync_logosnode_capabilities_to_db(provider_id: int, model_names: list[str])
     task.add_done_callback(_background_tasks.discard)
 
 
+_latency_store = LatencyStore(db_factory=DBManager)
 _logosnode_registry = LogosNodeRuntimeRegistry(
     on_capabilities_changed=_sync_logosnode_capabilities_to_db,
+    latency_store=_latency_store,
 )
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None or not str(raw).strip():
-        return default
-    try:
-        return max(1, int(raw))
-    except (TypeError, ValueError):
-        return default
-
-
-# max(1, ...): a fractional LOGOS_TIMEOUT_S (e.g. 0.5) must not floor to 0 and
-# cause immediate timeouts — clamp to at least 1 second.
-_LOGOSNODE_INFER_TIMEOUT_SECONDS = max(1, int(global_timeout_s(_env_int("LOGOSNODE_INFER_TIMEOUT_SECONDS", 120))))
-_LOGOSNODE_STREAM_TIMEOUT_SECONDS = max(
-    1,
-    int(
-        global_timeout_s(
-            _env_int(
-                "LOGOSNODE_STREAM_TIMEOUT_SECONDS",
-                _LOGOSNODE_INFER_TIMEOUT_SECONDS,
-            )
-        )
-    ),
-)
-_LOGOSNODE_STATS_STALE_AFTER_SECONDS = _env_int("LOGOSNODE_STATS_STALE_AFTER_SECONDS", 30)
-# Transparent retry for a logosnode stream that fails BEFORE the first token is
-# forwarded to the client (e.g. a just-woken level-1 lane whose vLLM engine was
-# not yet serveable — the worker now fails cleanly before stream_start). Safe to
-# re-dispatch because nothing has been sent downstream yet; bounded, with a small
-# backoff so the lane finishes waking. Never retries once a token has streamed.
-_LOGOSNODE_PRETOKEN_RETRIES = _env_int("LOGOSNODE_PRETOKEN_RETRIES", 3)
-_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S = float(os.getenv("LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", "1.0") or 1.0)
+_cloud_model_sync: Optional[CloudModelSyncService] = None
 
 
 def _record_azure_rate_limits(
@@ -230,791 +252,6 @@ def _record_azure_rate_limits(
         _pipeline.record_provider_metrics(request_id, provider_metrics)
 
 
-def _parse_iso_datetime(raw: Any) -> Optional[datetime.datetime]:
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    try:
-        return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _is_today_or_all_utc(day: str) -> bool:
-    normalized = str(day or "").strip().lower()
-    if normalized == "all":
-        return True
-    return normalized == datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-
-
-def _logosnode_snapshot_is_connected(snapshot: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(snapshot, dict):
-        return False
-    last_heartbeat = _parse_iso_datetime(snapshot.get("last_heartbeat"))
-    if last_heartbeat is None:
-        return False
-    now = datetime.datetime.now(datetime.timezone.utc)
-    return (now - last_heartbeat) <= datetime.timedelta(seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS)
-
-
-def _normalize_loaded_models(lanes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    deduped: dict[str, dict[str, Any]] = {}
-    for lane in lanes:
-        if not isinstance(lane, dict):
-            continue
-        lane_model = str(lane.get("model") or "").strip()
-        loaded_models = lane.get("loaded_models") or []
-        if not isinstance(loaded_models, list):
-            loaded_models = []
-        for item in loaded_models:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("name") or lane_model).strip()
-            if not name:
-                continue
-            size_vram = int(item.get("size_vram") or 0)
-            size_bytes = int(item.get("size") or 0)
-            current = deduped.get(name)
-            candidate = {
-                "name": name,
-                "size": size_bytes,
-                "size_vram": size_vram,
-            }
-            if current is None or candidate["size_vram"] > current["size_vram"]:
-                deduped[name] = candidate
-    return sorted(deduped.values(), key=lambda item: item["name"].lower())
-
-
-def _planner_model_alias(model_name: str) -> str:
-    """Return the planner/worker-safe alias used in lane ids and logs."""
-    return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
-
-
-def _resolve_requested_model_name(
-    requested_name: str,
-    available_model_names: list[str],
-) -> Optional[str]:
-    """Resolve user-supplied model ids to canonical DB model names.
-
-    Accepts exact OpenAI-style model names as stored in the DB and also the
-    planner-safe alias form where ``/``, ``:``, and spaces are rewritten as
-    underscores. This lets users copy model ids from lane names or worker logs
-    without breaking access-controlled model lookup.
-    """
-    requested = str(requested_name or "").strip()
-    if not requested:
-        return None
-
-    alias_matches: set[str] = set()
-    for raw_name in available_model_names:
-        canonical = str(raw_name or "").strip()
-        if not canonical:
-            continue
-        if canonical == requested:
-            return canonical
-
-        sanitized = _planner_model_alias(canonical)
-        if requested in {sanitized, f"planner-{sanitized}"}:
-            alias_matches.add(canonical)
-
-    if len(alias_matches) == 1:
-        return next(iter(alias_matches))
-    return None
-
-
-def _runtime_modes_for_lanes(lanes: list[dict[str, Any]]) -> list[str]:
-    modes: set[str] = set()
-    for lane in lanes:
-        if not isinstance(lane, dict):
-            continue
-        modes.add("vllm" if bool(lane.get("vllm")) else "ollama")
-    return sorted(modes)
-
-
-def _safe_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _safe_int(value: Any) -> Optional[int]:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _merge_histogram_buckets(target: dict[str, float], source: Any) -> None:
-    if not isinstance(source, dict):
-        return
-    for raw_bucket, raw_value in source.items():
-        bucket = str(raw_bucket).strip()
-        if not bucket:
-            continue
-        count = _safe_float(raw_value)
-        if count is None or count < 0:
-            continue
-        target[bucket] = target.get(bucket, 0.0) + count
-
-
-def _histogram_quantile_seconds(histogram: Any, quantile: float = 0.95) -> Optional[float]:
-    if not isinstance(histogram, dict) or not histogram:
-        return None
-
-    buckets: list[tuple[float, float]] = []
-    for raw_bucket, raw_count in histogram.items():
-        count = _safe_float(raw_count)
-        if count is None or count < 0:
-            continue
-        bucket_label = str(raw_bucket).strip()
-        if not bucket_label:
-            continue
-        if bucket_label == "+Inf":
-            upper_bound = float("inf")
-        else:
-            upper_bound = _safe_float(bucket_label)
-            if upper_bound is None:
-                continue
-        buckets.append((upper_bound, count))
-
-    if not buckets:
-        return None
-
-    buckets.sort(key=lambda item: item[0])
-    total_count = max(count for _upper, count in buckets)
-    if total_count <= 0:
-        return None
-
-    target = total_count * max(0.0, min(1.0, quantile))
-    previous_upper = 0.0
-    previous_count = 0.0
-
-    for upper_bound, cumulative_count in buckets:
-        if cumulative_count < target:
-            previous_upper = 0.0 if upper_bound == float("inf") else upper_bound
-            previous_count = cumulative_count
-            continue
-
-        if upper_bound == float("inf"):
-            return previous_upper if previous_upper > 0 else None
-
-        bucket_count = cumulative_count - previous_count
-        if bucket_count <= 0:
-            return upper_bound
-
-        bucket_width = upper_bound - previous_upper
-        if bucket_width <= 0:
-            return upper_bound
-
-        fraction = (target - previous_count) / bucket_count
-        return previous_upper + (fraction * bucket_width)
-
-    last_upper = buckets[-1][0]
-    if last_upper == float("inf"):
-        return previous_upper if previous_upper > 0 else None
-    return last_upper
-
-
-def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any]:
-    if not isinstance(runtime, dict):
-        return {}
-
-    devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
-    lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
-    # Needed to resolve a lane's served window: a vLLM lane that was started
-    # without an explicit --max-model-len takes it from the calibrated profile,
-    # so the number is not on the lane itself.
-    model_profiles = runtime.get("model_profiles") if isinstance(runtime.get("model_profiles"), dict) else {}
-
-    provider_signals: Dict[str, Any] = {
-        "timestamp": runtime.get("timestamp"),
-        "transport_connected": bool(transport.get("connected", True)),
-        "device_mode": devices.get("mode"),
-        "nvidia_smi_available": bool(devices.get("nvidia_smi_available", False)),
-        "device_count": (len(devices.get("devices") or []) if isinstance(devices.get("devices"), list) else 0),
-        "total_memory_mb": _safe_float(devices.get("total_memory_mb")),
-        "used_memory_mb": _safe_float(devices.get("used_memory_mb")),
-        "free_memory_mb": _safe_float(devices.get("free_memory_mb")),
-        "lane_count": _safe_int(capacity.get("lane_count")) or len(lanes),
-        "active_requests": _safe_int(capacity.get("active_requests")) or 0,
-        "loaded_lane_count": _safe_int(capacity.get("loaded_lane_count")) or 0,
-        "sleeping_lane_count": _safe_int(capacity.get("sleeping_lane_count")) or 0,
-        "cold_lane_count": _safe_int(capacity.get("cold_lane_count")) or 0,
-        "total_effective_vram_mb": _safe_float(capacity.get("total_effective_vram_mb")) or 0.0,
-        "runtime_modes": _runtime_modes_for_lanes(lanes),
-    }
-
-    raw_device_list = devices.get("devices") or []
-    provider_signals["devices"] = [
-        {
-            "device_id": d.get("device_id", ""),
-            "kind": d.get("kind", "nvidia"),
-            "name": d.get("name", ""),
-            "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
-            "memory_total_mb": float(d.get("memory_total_mb") or 0.0),
-            "memory_free_mb": float(d.get("memory_free_mb") or 0.0),
-            "utilization_percent": _safe_float(d.get("utilization_percent")),
-            "temperature_celsius": _safe_float(d.get("temperature_celsius")),
-            "power_draw_watts": _safe_float(d.get("power_draw_watts")),
-        }
-        for d in raw_device_list
-        if isinstance(d, dict)
-    ]
-
-    model_signals: dict[str, Dict[str, Any]] = {}
-    lane_signals: dict[str, Dict[str, Any]] = {}
-
-    def _ensure_model_entry(model_name: str) -> Dict[str, Any]:
-        return model_signals.setdefault(
-            model_name,
-            {
-                "lane_count": 0,
-                "vllm_lane_count": 0,
-                "ollama_lane_count": 0,
-                "loaded_lane_count": 0,
-                "running_lane_count": 0,
-                "sleeping_lane_count": 0,
-                "cold_lane_count": 0,
-                "starting_lane_count": 0,
-                "error_lane_count": 0,
-                "active_requests": 0,
-                "effective_vram_mb": 0.0,
-                "reported_vram_mb": 0.0,
-                "pid_vram_mb": 0.0,
-                "device_vram_mb": 0.0,
-                "queue_waiting_current": 0.0,
-                "requests_running_current": 0.0,
-                "prompt_tokens_total": None,
-                "generation_tokens_total": None,
-                "ttft_histogram": {},
-                "ttft_p95_seconds": None,
-                "gpu_cache_usage_percent_avg": None,
-                "gpu_cache_usage_percent_max": None,
-                "prefix_cache_hit_rate_avg": None,
-                "mtp_acceptance_rate_avg": None,
-                "_gpu_cache_usage_percent_sum": 0.0,
-                "_gpu_cache_usage_percent_count": 0,
-                "_prefix_cache_hit_rate_sum": 0.0,
-                "_prefix_cache_hit_rate_count": 0,
-                "_mtp_draft_tokens_total": 0.0,
-                "_mtp_accepted_tokens_total": 0.0,
-            },
-        )
-
-    for lane in lanes:
-        if not isinstance(lane, dict):
-            continue
-
-        model_name = str(lane.get("model") or "").strip()
-        lane_id = str(lane.get("lane_id") or "").strip()
-        runtime_state = str(lane.get("runtime_state") or "").strip()
-        is_vllm = bool(lane.get("vllm"))
-        active_requests = _safe_int(lane.get("active_requests")) or 0
-        backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
-        ttft_histogram = (
-            backend_metrics.get("ttft_histogram") if isinstance(backend_metrics.get("ttft_histogram"), dict) else {}
-        )
-        lane_ttft_p95 = _histogram_quantile_seconds(ttft_histogram)
-
-        lane_signal = {
-            "model": model_name,
-            "vllm": is_vllm,
-            "runtime_state": runtime_state,
-            "sleep_state": lane.get("sleep_state"),
-            "gpu_devices": str(lane.get("gpu_devices") or ""),
-            "effective_gpu_devices": str(lane.get("effective_gpu_devices") or ""),
-            "num_parallel": _safe_int(lane.get("num_parallel")) or 0,
-            "active_requests": active_requests,
-            "effective_vram_mb": _safe_float(lane.get("effective_vram_mb")) or 0.0,
-            "reported_vram_mb": _safe_float(lane.get("reported_vram_mb")) or 0.0,
-            "pid_vram_mb": _safe_float(lane.get("pid_vram_mb")) or 0.0,
-            "device_vram_mb": _safe_float(lane.get("device_vram_mb")) or 0.0,
-            "vram_source": lane.get("vram_source"),
-            "queue_waiting": _safe_float(backend_metrics.get("queue_waiting")),
-            "requests_running": _safe_float(backend_metrics.get("requests_running")),
-            "gpu_cache_usage_percent": _safe_float(backend_metrics.get("gpu_cache_usage_percent")),
-            "prefix_cache_hit_rate": _safe_float(backend_metrics.get("prefix_cache_hit_rate")),
-            "mtp_acceptance_rate": _safe_float(backend_metrics.get("mtp_acceptance_rate")),
-            "prompt_tokens_total": _safe_float(backend_metrics.get("prompt_tokens_total")),
-            "generation_tokens_total": _safe_float(backend_metrics.get("generation_tokens_total")),
-            "ttft_histogram": ttft_histogram,
-            "ttft_p95_seconds": lane_ttft_p95,
-            # The window this lane is actually serving at. Two lanes of the same
-            # model can differ — the planner sizes each against the KV cache it
-            # could get — so it belongs on the lane and not on the model. 0 when
-            # the worker reports nothing to derive it from.
-            "max_model_len": _lane_served_context_window(lane, model_profiles) or None,
-        }
-        if lane_id:
-            lane_signals[lane_id] = lane_signal
-
-        if not model_name:
-            continue
-
-        entry = _ensure_model_entry(model_name)
-        entry["lane_count"] += 1
-        if is_vllm:
-            entry["vllm_lane_count"] += 1
-        else:
-            entry["ollama_lane_count"] += 1
-
-        if runtime_state == "loaded":
-            entry["loaded_lane_count"] += 1
-        elif runtime_state == "running":
-            entry["running_lane_count"] += 1
-        elif runtime_state == "sleeping":
-            entry["sleeping_lane_count"] += 1
-        elif runtime_state == "cold":
-            entry["cold_lane_count"] += 1
-        elif runtime_state == "starting":
-            entry["starting_lane_count"] += 1
-        elif runtime_state == "error":
-            entry["error_lane_count"] += 1
-
-        entry["active_requests"] += active_requests
-        entry["effective_vram_mb"] += _safe_float(lane.get("effective_vram_mb")) or 0.0
-        entry["reported_vram_mb"] += _safe_float(lane.get("reported_vram_mb")) or 0.0
-        entry["pid_vram_mb"] += _safe_float(lane.get("pid_vram_mb")) or 0.0
-        entry["device_vram_mb"] += _safe_float(lane.get("device_vram_mb")) or 0.0
-
-        queue_waiting = _safe_float(backend_metrics.get("queue_waiting"))
-        if queue_waiting is not None:
-            entry["queue_waiting_current"] += queue_waiting
-
-        requests_running = _safe_float(backend_metrics.get("requests_running"))
-        if requests_running is not None:
-            entry["requests_running_current"] += requests_running
-
-        prompt_tokens_total = _safe_float(backend_metrics.get("prompt_tokens_total"))
-        if prompt_tokens_total is not None:
-            current_prompt = _safe_float(entry.get("prompt_tokens_total")) or 0.0
-            entry["prompt_tokens_total"] = current_prompt + prompt_tokens_total
-
-        generation_tokens_total = _safe_float(backend_metrics.get("generation_tokens_total"))
-        if generation_tokens_total is not None:
-            current_generation = _safe_float(entry.get("generation_tokens_total")) or 0.0
-            entry["generation_tokens_total"] = current_generation + generation_tokens_total
-
-        gpu_cache_usage_percent = _safe_float(backend_metrics.get("gpu_cache_usage_percent"))
-        if gpu_cache_usage_percent is not None:
-            entry["_gpu_cache_usage_percent_sum"] += gpu_cache_usage_percent
-            entry["_gpu_cache_usage_percent_count"] += 1
-            current_max = _safe_float(entry.get("gpu_cache_usage_percent_max"))
-            entry["gpu_cache_usage_percent_max"] = (
-                gpu_cache_usage_percent if current_max is None else max(current_max, gpu_cache_usage_percent)
-            )
-
-        prefix_cache_hit_rate = _safe_float(backend_metrics.get("prefix_cache_hit_rate"))
-        if prefix_cache_hit_rate is not None:
-            entry["_prefix_cache_hit_rate_sum"] += prefix_cache_hit_rate
-            entry["_prefix_cache_hit_rate_count"] += 1
-
-        # Token-weighted MTP aggregation: sum the cumulative draft/accepted
-        # token counters per model (an unweighted mean of per-lane rates would
-        # misstate the model rate when lanes have different draft volumes).
-        mtp_draft_tokens_total = _safe_float(backend_metrics.get("mtp_draft_tokens_total"))
-        if mtp_draft_tokens_total is not None:
-            entry["_mtp_draft_tokens_total"] += mtp_draft_tokens_total
-
-        mtp_accepted_tokens_total = _safe_float(backend_metrics.get("mtp_accepted_tokens_total"))
-        if mtp_accepted_tokens_total is not None:
-            entry["_mtp_accepted_tokens_total"] += mtp_accepted_tokens_total
-
-        _merge_histogram_buckets(entry["ttft_histogram"], ttft_histogram)
-
-    for entry in model_signals.values():
-        gpu_count = int(entry.pop("_gpu_cache_usage_percent_count", 0) or 0)
-        gpu_sum = float(entry.pop("_gpu_cache_usage_percent_sum", 0.0) or 0.0)
-        if gpu_count > 0:
-            entry["gpu_cache_usage_percent_avg"] = gpu_sum / gpu_count
-
-        prefix_count = int(entry.pop("_prefix_cache_hit_rate_count", 0) or 0)
-        prefix_sum = float(entry.pop("_prefix_cache_hit_rate_sum", 0.0) or 0.0)
-        if prefix_count > 0:
-            entry["prefix_cache_hit_rate_avg"] = prefix_sum / prefix_count
-
-        mtp_draft = float(entry.pop("_mtp_draft_tokens_total", 0.0) or 0.0)
-        mtp_accepted = float(entry.pop("_mtp_accepted_tokens_total", 0.0) or 0.0)
-        if mtp_draft > 0:
-            entry["mtp_acceptance_rate_avg"] = mtp_accepted / mtp_draft
-
-        entry["ttft_p95_seconds"] = _histogram_quantile_seconds(entry.get("ttft_histogram"))
-
-    return {
-        "provider": provider_signals,
-        "models": model_signals,
-        "lanes": lane_signals,
-    }
-
-
-def _build_live_local_provider_sample(
-    provider: Optional[Dict[str, Any]],
-    snapshot: Optional[Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
-    if not _logosnode_snapshot_is_connected(snapshot):
-        return None
-
-    runtime = snapshot.get("runtime") if isinstance(snapshot, dict) else {}
-    if not isinstance(runtime, dict):
-        return None
-
-    lanes = runtime.get("lanes") if isinstance(runtime.get("lanes"), list) else []
-    devices = runtime.get("devices") if isinstance(runtime.get("devices"), dict) else {}
-    capacity = runtime.get("capacity") if isinstance(runtime.get("capacity"), dict) else {}
-    transport = runtime.get("transport") if isinstance(runtime.get("transport"), dict) else {}
-
-    used_vram_mb = float(devices.get("used_memory_mb") or 0.0)
-    if used_vram_mb <= 0:
-        used_vram_mb = float(capacity.get("total_effective_vram_mb") or 0.0)
-
-    total_vram_mb = float(devices.get("total_memory_mb") or 0.0)
-    if total_vram_mb <= 0 and isinstance(provider, dict) and provider.get("total_vram_mb") is not None:
-        total_vram_mb = float(provider.get("total_vram_mb") or 0.0)
-
-    remaining_vram_mb: Optional[float] = None
-    if devices.get("nvidia_smi_available"):
-        remaining_vram_mb = float(devices.get("free_memory_mb") or 0.0)
-    elif total_vram_mb > 0:
-        remaining_vram_mb = max(total_vram_mb - used_vram_mb, 0.0)
-
-    loaded_models = _normalize_loaded_models(lanes)
-    runtime_modes = _runtime_modes_for_lanes(lanes)
-    scheduler_signals = _build_logosnode_scheduler_signals(runtime)
-
-    if remaining_vram_mb is None and not loaded_models and used_vram_mb <= 0:
-        return None
-
-    # Pick the freshest timestamp the worker has given us. With an idle
-    # cluster the cached `runtime.timestamp` can be hours old (the worker
-    # only emits status on lane-state changes), while `last_heartbeat`
-    # advances on every WS heartbeat. Using the older of the two would
-    # collide with the already-persisted DB sample inside
-    # _merge_provider_samples and add no new point — leaving the chart
-    # with a single dot that scatter `mode: "lines"` can't draw.
-    runtime_ts = runtime.get("timestamp") if isinstance(runtime.get("timestamp"), str) else None
-    heartbeat_ts = snapshot.get("last_heartbeat") if isinstance(snapshot, dict) else None
-    if isinstance(heartbeat_ts, datetime.datetime):
-        heartbeat_ts = heartbeat_ts.isoformat()
-    elif not isinstance(heartbeat_ts, str):
-        heartbeat_ts = None
-    candidates = [t for t in (heartbeat_ts, runtime_ts) if isinstance(t, str) and t.strip()]
-    timestamp = max(candidates) if candidates else datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-    return {
-        "timestamp": timestamp,
-        "snapshot_source": "logosnode-runtime",
-        "provider_type": (provider.get("provider_type") if isinstance(provider, dict) else "logosnode"),
-        "connection_state": "online",
-        "connected": True,
-        "transport_connected": bool(transport.get("connected", True)),
-        "runtime_modes": runtime_modes,
-        "vram_mb": used_vram_mb,
-        "used_vram_mb": used_vram_mb,
-        "remaining_vram_mb": remaining_vram_mb,
-        "total_vram_mb": total_vram_mb if total_vram_mb > 0 else None,
-        "models_loaded": len(loaded_models),
-        "loaded_models": loaded_models,
-        "runtime_payload": runtime,
-        "scheduler_signals": scheduler_signals,
-    }
-
-
-def _sample_snapshot_id(sample: Dict[str, Any]) -> int:
-    try:
-        return int(sample.get("snapshot_id") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _sample_sort_key(sample: Dict[str, Any]) -> tuple[int, str]:
-    return (_sample_snapshot_id(sample), str(sample.get("timestamp") or ""))
-
-
-def _merge_provider_samples(
-    existing_samples: list[Dict[str, Any]],
-    extra_samples: list[Dict[str, Any]],
-) -> list[Dict[str, Any]]:
-    by_key: dict[str, Dict[str, Any]] = {}
-    for sample in list(existing_samples) + list(extra_samples):
-        if not isinstance(sample, dict):
-            continue
-        key = str(sample.get("snapshot_id") or sample.get("timestamp") or "")
-        if not key:
-            continue
-        by_key[key] = {**by_key.get(key, {}), **sample}
-    return sorted(by_key.values(), key=_sample_sort_key)
-
-
-def _load_persisted_local_provider_vram_payload(
-    logos_key: str,
-    *,
-    day: str,
-    after_snapshot_id: int = 0,
-) -> Dict[str, Any]:
-    with DBManager() as db:
-        if int(after_snapshot_id or 0) > 0:
-            payload, status = db.get_ollama_vram_deltas(
-                logos_key,
-                day=day,
-                after_snapshot_id=int(after_snapshot_id or 0),
-            )
-        elif str(day).strip().lower() == "all":
-            # Initial WS load with no cursor. Cap to a recent window so the
-            # init payload stays small even after weeks of accumulated
-            # snapshots — the UI only renders a 30-min live window anyway,
-            # and live deltas keep flowing afterwards via after_snapshot_id.
-            recent_since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
-            payload, status = db.get_ollama_vram_deltas(
-                logos_key,
-                day="all",
-                after_snapshot_id=0,
-                since=recent_since,
-            )
-        else:
-            payload, status = db.get_ollama_vram_stats(logos_key, day=day, bucket_seconds=5)
-    if status != 200 or not isinstance(payload, dict):
-        return {
-            "providers": [],
-            "last_snapshot_id": int(after_snapshot_id or 0),
-        }
-    payload.setdefault("providers", [])
-    payload.setdefault("last_snapshot_id", int(after_snapshot_id or 0))
-    return payload
-
-
-def _capture_logosnode_provider_snapshot(
-    provider_id: int,
-    runtime: Dict[str, Any],
-) -> None:
-    sample = _build_live_local_provider_sample(
-        None,
-        {
-            "last_heartbeat": runtime.get("timestamp"),
-            "runtime": runtime,
-        },
-    )
-    if sample is None:
-        return
-
-    timestamp = _parse_iso_datetime(sample.get("timestamp"))
-    used_bytes = int(float(sample.get("used_vram_mb") or 0.0) * 1024 * 1024)
-    total_vram_mb = sample.get("total_vram_mb")
-    total_bytes = None
-    if total_vram_mb is not None:
-        total_bytes = int(float(total_vram_mb or 0.0) * 1024 * 1024)
-    free_vram_mb = sample.get("remaining_vram_mb")
-    free_bytes = None
-    if free_vram_mb is not None:
-        free_bytes = int(float(free_vram_mb or 0.0) * 1024 * 1024)
-
-    with DBManager() as db:
-        snapshot_id = db.insert_provider_snapshot(
-            provider_id=provider_id,
-            snapshot_ts=timestamp,
-            total_models_loaded=int(sample.get("models_loaded") or 0),
-            total_vram_used_bytes=used_bytes,
-            total_memory_bytes=total_bytes,
-            free_memory_bytes=free_bytes,
-            loaded_models=list(sample.get("loaded_models") or []),
-            snapshot_source=str(sample.get("snapshot_source") or "logosnode-runtime"),
-            runtime_payload=(sample.get("runtime_payload") if isinstance(sample.get("runtime_payload"), dict) else {}),
-            scheduler_signals=(
-                sample.get("scheduler_signals") if isinstance(sample.get("scheduler_signals"), dict) else {}
-            ),
-            poll_success=True,
-        )
-        # Persist calibrated model profiles into the dedicated table
-        runtime_payload = sample.get("runtime_payload")
-        if isinstance(runtime_payload, dict):
-            model_profiles = runtime_payload.get("model_profiles")
-            if isinstance(model_profiles, dict) and model_profiles:
-                try:
-                    db.upsert_model_profiles(provider_id, model_profiles)
-                except Exception:
-                    logger.debug(
-                        "Failed to upsert model profiles for provider %s",
-                        _resolve_provider_name(provider_id),
-                        exc_info=True,
-                    )
-
-    sample["snapshot_id"] = snapshot_id
-    asyncio.create_task(_logosnode_registry.record_runtime_sample(provider_id, sample))
-
-
-def _capture_calibration_probe_log(provider_id: int, event: Dict[str, Any]) -> None:
-    """Persist a worker's ``calibration_probe_log`` event into the DB.
-
-    Fired once per model per calibration attempt (see
-    ``LogosBridgeClient._record_calibration_probe_log`` on the worker side).
-    Keeps only the most recent row per (provider_id, model_name) via
-    ``upsert_calibration_probe_log``'s ON CONFLICT — mirrors how
-    ``upsert_model_profiles`` above keeps one row per (provider_id,
-    model_name).
-    """
-    model_name = str(event.get("model") or "").strip()
-    if not model_name:
-        return
-    recorded_at = _parse_iso_datetime(event.get("timestamp"))
-    details_raw = event.get("details")
-    payload = json.loads(details_raw) if isinstance(details_raw, str) and details_raw else {}
-    if not isinstance(payload, dict):
-        return
-    # Pop out before it goes into `summary` below — otherwise the (large,
-    # deliberately un-truncated) raw log text would be duplicated into both
-    # the dedicated `log_text` column and the JSONB summary blob.
-    log_text = payload.pop("log_text", None)
-
-    with DBManager() as db:
-        db.upsert_calibration_probe_log(provider_id, model_name, recorded_at, payload, log_text)
-
-
-def _merge_local_provider_vram_payload(
-    logos_key: str,
-    payload: Dict[str, Any],
-    *,
-    day: str,
-    after_snapshot_id: int = 0,
-    include_live_runtime: bool,
-) -> Dict[str, Any]:
-    providers = payload.get("providers") if isinstance(payload.get("providers"), list) else []
-    providers_by_id: Dict[int, Dict[str, Any]] = {}
-    unnamed_providers: list[Dict[str, Any]] = []
-
-    for provider in providers:
-        if not isinstance(provider, dict):
-            continue
-        entry = dict(provider)
-        entry["data"] = list(entry.get("data") or [])
-        provider_id = entry.get("provider_id")
-        if isinstance(provider_id, int):
-            providers_by_id[provider_id] = entry
-        else:
-            unnamed_providers.append(entry)
-
-    with DBManager() as db:
-        inventory, status = db.get_local_provider_inventory(logos_key)
-    if status != 200 or not isinstance(inventory, list):
-        merged = list(providers_by_id.values()) + unnamed_providers
-        merged.sort(key=lambda item: str(item.get("name") or "").lower())
-        next_payload = dict(payload)
-        next_payload["providers"] = merged
-        return next_payload
-
-    for provider in inventory:
-        if not isinstance(provider, dict):
-            continue
-        provider_id = int(provider.get("provider_id") or 0)
-        if provider_id <= 0:
-            continue
-        entry = providers_by_id.get(provider_id)
-        if entry is None:
-            entry = {
-                "provider_id": provider_id,
-                "name": provider.get("name") or f"Provider {provider_id}",
-                "data": [],
-            }
-            providers_by_id[provider_id] = entry
-
-        entry["provider_type"] = provider.get("provider_type")
-        entry["base_url"] = provider.get("base_url")
-        entry["parallel_capacity"] = provider.get("parallel_capacity")
-        if provider.get("total_vram_mb") is not None:
-            entry["configured_total_vram_mb"] = provider.get("total_vram_mb")
-
-        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
-        connected = _logosnode_snapshot_is_connected(runtime_snapshot)
-        entry["connected"] = connected
-        entry["connection_state"] = "online" if connected else "offline"
-        entry["last_heartbeat"] = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
-
-        runtime = runtime_snapshot.get("runtime") if isinstance(runtime_snapshot, dict) else {}
-        lanes = runtime.get("lanes") if isinstance(runtime, dict) and isinstance(runtime.get("lanes"), list) else []
-        runtime_modes = _runtime_modes_for_lanes(lanes)
-        if runtime_modes:
-            entry["runtime_modes"] = runtime_modes
-        transport = (
-            runtime.get("transport") if isinstance(runtime, dict) and isinstance(runtime.get("transport"), dict) else {}
-        )
-        if transport:
-            entry["transport_connected"] = bool(transport.get("connected", connected))
-
-        runtime_devices = runtime.get("devices") if isinstance(runtime, dict) else {}
-        if isinstance(runtime_devices, dict):
-            raw_device_list = runtime_devices.get("devices") or []
-            if isinstance(raw_device_list, list) and raw_device_list:
-                entry["devices"] = [
-                    {
-                        "device_id": d.get("device_id", ""),
-                        "kind": d.get("kind", "nvidia"),
-                        "name": d.get("name", ""),
-                        "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
-                        "memory_total_mb": float(d.get("memory_total_mb") or 0.0),
-                        "memory_free_mb": float(d.get("memory_free_mb") or 0.0),
-                        "utilization_percent": _safe_float(d.get("utilization_percent")),
-                        "temperature_celsius": _safe_float(d.get("temperature_celsius")),
-                        "power_draw_watts": _safe_float(d.get("power_draw_watts")),
-                    }
-                    for d in raw_device_list
-                    if isinstance(d, dict)
-                ]
-
-        data = list(entry.get("data") or [])
-
-        if include_live_runtime and _is_today_or_all_utc(day):
-            recent_samples = _logosnode_registry.peek_recent_samples(
-                provider_id,
-                after_snapshot_id=int(after_snapshot_id or 0),
-            )
-            if recent_samples:
-                data = _merge_provider_samples(data, recent_samples)
-            elif connected:
-                live_sample = _build_live_local_provider_sample(provider, runtime_snapshot)
-                if live_sample is not None:
-                    data = _merge_provider_samples(data, [live_sample])
-
-        entry["data"] = data
-
-    merged = list(providers_by_id.values()) + unnamed_providers
-    merged.sort(key=lambda item: str(item.get("name") or "").lower())
-    next_payload = dict(payload)
-    next_payload["providers"] = merged
-    return next_payload
-
-
-def _build_live_local_provider_vram_payload(
-    logos_key: str,
-    *,
-    day: str,
-    after_snapshot_id: int = 0,
-) -> Dict[str, Any]:
-    payload = _load_persisted_local_provider_vram_payload(
-        logos_key,
-        day=day,
-        after_snapshot_id=after_snapshot_id,
-    )
-    payload = _merge_local_provider_vram_payload(
-        logos_key,
-        payload,
-        day=day,
-        after_snapshot_id=after_snapshot_id,
-        include_live_runtime=True,
-    )
-    last_snapshot_id = int(payload.get("last_snapshot_id") or after_snapshot_id or 0)
-    for provider in payload.get("providers") or []:
-        for sample in provider.get("data") or []:
-            sample_id = _sample_snapshot_id(sample)
-            if sample_id > last_snapshot_id:
-                last_snapshot_id = sample_id
-    payload["last_snapshot_id"] = last_snapshot_id
-    return payload
-
-
 def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
     """Stop counting a request that ended without reaching ``record_complete``.
 
@@ -1038,8 +275,49 @@ def _discard_in_flight(request_id: Optional[str], result_status: str) -> None:
         logger.debug("Failed to discard in-flight state for %s", request_id, exc_info=True)
 
 
+def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> None:
+    """Persist whether the key's rate limiter admitted the request.
+
+    Same monitoring semantics as `_discard_in_flight`: failures are logged
+    and never break the request path.
+    """
+    if not request_id:
+        return
+    pipeline = globals().get("_pipeline")
+    if pipeline is None:
+        return
+    try:
+        pipeline.record_rate_limit_admission(request_id, admitted)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.debug("Failed to record rate-limit admission for %s", request_id, exc_info=True)
+
+
+def _is_timeout_failure(
+    *,
+    timed_out: bool = False,
+    error: Optional[str] = None,
+    status_code: Optional[int] = None,
+) -> bool:
+    """Whether a failed execution should settle as ``timeout``, not ``error``.
+
+    Queue wait already records ``timeout`` on ``QueueTimeoutError``. Execution
+    used to leave ``timed_out`` stuck at False, so worker command timeouts,
+    HTTP 504s, and error text that named a timeout all landed as ``error`` —
+    which is why the statistics Status chart's Timeout row stayed at zero.
+    """
+    if timed_out:
+        return True
+    if status_code == 504:
+        return True
+    if error:
+        lowered = error.lower()
+        if "timeout" in lowered or "timed out" in lowered:
+            return True
+    return False
+
+
 def _record_log_failure(
-    log_id: Optional[int],
+    log_id,
     request_id: Optional[str],
     error_message: str,
     *,
@@ -1049,6 +327,19 @@ def _record_log_failure(
     classification_stats: Optional[Dict[str, Any]] = None,
     scheduling_stats: Optional[Dict[str, Any]] = None,
 ) -> None:
+    # Drain the recorder's buffered lifecycle fields before the in-flight
+    # settlement below pops the request state: this write is the request's
+    # terminal one, and it must carry the same metric fields the recorder's
+    # sequential writes used to produce .
+    buffered_metrics: Dict[str, Any] = {}
+    if request_id:
+        pipeline = globals().get("_pipeline")
+        if pipeline is not None:
+            try:
+                buffered_metrics = pipeline.take_monitoring_buffer(request_id)
+            except Exception:  # noqa: BLE001 — monitoring must never break a request
+                logger.debug("Failed to drain monitoring buffer for %s", request_id, exc_info=True)
+
     # Close out the in-flight accounting first, and unconditionally: this is
     # the common funnel for terminal failures that write the log row
     # themselves (client disconnect, rate-limit and budget rejects), and
@@ -1066,8 +357,11 @@ def _record_log_failure(
 
     try:
         with DBManager() as db:
+            actual_log_id = _materialize_log_id(db, log_id)
+            if actual_log_id is None:
+                return
             db.set_response_payload(
-                log_id,
+                actual_log_id,
                 payload,
                 provider_id,
                 model_id,
@@ -1078,14 +372,25 @@ def _record_log_failure(
                 queue_depth_at_arrival=scheduling_stats.get("queue_depth_at_arrival"),
                 utilization_at_arrival=scheduling_stats.get("utilization_at_arrival"),
             )
+            # Explicit values win over buffered ones on a collision — but only
+            # when they are not None: a failure before deployment selection
+            # passes model_id/provider_id=None, and the values the recorder
+            # buffered at schedule time must still reach the row.
+            metrics_fields = {k: v for k, v in buffered_metrics.items() if v is not None}
+            explicit_metrics = {
+                "model_id": model_id,
+                "provider_id": provider_id,
+                "result_status": result_status,
+                "error_message": error_message,
+                "cold_start": scheduling_stats.get("is_cold_start"),
+            }
+            for key, value in explicit_metrics.items():
+                if value is not None:
+                    metrics_fields[key] = value
             db.update_log_entry_metrics(
-                log_id=log_id,
+                log_id=actual_log_id,
                 request_id=request_id,
-                model_id=model_id,
-                provider_id=provider_id,
-                result_status=result_status,
-                error_message=error_message,
-                cold_start=scheduling_stats.get("is_cold_start"),
+                **metrics_fields,
             )
     except Exception:
         logger.exception(
@@ -1095,339 +400,7 @@ def _record_log_failure(
         )
 
 
-# Anthropic Messages SSE event types the accumulator acts on. The stream also
-# emits content_block_start/stop and ping, which carry neither text nor usage.
-_MESSAGES_EVENT_TYPES = frozenset({"message_start", "message_delta", "message_stop", "content_block_delta"})
-
-
-class _LiveStreamRegistry:
-    """Token counts of the streams running right now, keyed by request id.
-
-    A finished request's usage is in the database; one still running is
-    nowhere, and "nowhere" is what the statistics page showed for the whole
-    minute a long generation takes. This holds the in-flight view, in memory
-    and on the orchestrator, because that is the only process that sees the
-    chunks go past.
-
-    Bounded by construction: an entry exists only while its request is
-    streaming and is dropped in the same ``finally`` that logs the completion.
-    """
-
-    def __init__(self, now: Any = time.time) -> None:
-        self._streams: dict[str, dict[str, Any]] = {}
-        self._lock = threading.Lock()
-        # Injected rather than read off the module so a test can drive the clock
-        # without patching time.time for everything else running in-process.
-        self._now = now
-
-    def start(self, request_id: Optional[str], model_name: Optional[str]) -> None:
-        if not request_id:
-            return
-        with self._lock:
-            self._streams[request_id] = {
-                "model_name": model_name,
-                "started_at": self._now(),
-                # Set on the first delta, not here: the wait for a lane to warm
-                # up is not generation, and averaging over it would report a
-                # rate no one is seeing.
-                "first_token_at": None,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-            }
-
-    def update(self, request_id: Optional[str], tokens: Dict[str, int]) -> None:
-        if not request_id:
-            return
-        with self._lock:
-            entry = self._streams.get(request_id)
-            if entry is None:
-                return
-            completion = tokens.get("completion_tokens", 0)
-            if completion > 0 and entry["first_token_at"] is None:
-                entry["first_token_at"] = self._now()
-            entry["prompt_tokens"] = tokens.get("prompt_tokens", 0)
-            entry["completion_tokens"] = completion
-
-    def finish(self, request_id: Optional[str]) -> None:
-        if not request_id:
-            return
-        with self._lock:
-            self._streams.pop(request_id, None)
-
-    def snapshot(self) -> list[dict[str, Any]]:
-        """Every running stream, with the rate it is generating at."""
-        now = self._now()
-        out: list[dict[str, Any]] = []
-        with self._lock:
-            entries = [(rid, dict(entry)) for rid, entry in self._streams.items()]
-        for request_id, entry in entries:
-            first_token_at = entry["first_token_at"]
-            completion = entry["completion_tokens"]
-            elapsed = (now - first_token_at) if first_token_at else 0.0
-            out.append(
-                {
-                    "request_id": request_id,
-                    "model_name": entry["model_name"],
-                    "prompt_tokens": entry["prompt_tokens"],
-                    "completion_tokens": completion,
-                    # Measured from the first token, so it is the generation
-                    # rate rather than an average dragged down by queueing.
-                    # None until there is a span to divide by.
-                    "tokens_per_second": (completion / elapsed) if elapsed > 0.5 and completion > 0 else None,
-                    "elapsed_seconds": now - entry["started_at"],
-                }
-            )
-        return out
-
-
 _live_streams = _LiveStreamRegistry()
-
-
-@dataclass
-class _StreamingLogAccumulator:
-    """
-    Line-buffered SSE parser for request logging.
-
-    Network chunk boundaries are not aligned with SSE event boundaries, especially on the
-    logosnode websocket path. Buffer until complete lines are available so streamed usage
-    metadata is not lost when it arrives split across chunks.
-    """
-
-    buffer: str = ""
-    full_text: str = ""
-    first_chunk: Optional[Dict[str, Any]] = None
-    last_chunk: Optional[Dict[str, Any]] = None
-    # Terminal Response object from a Responses-API stream (the
-    # ``response.completed`` / ``response.incomplete`` / ``response.failed``
-    # event carries the full response including usage).
-    responses_final: Optional[Dict[str, Any]] = None
-    _saw_responses_events: bool = False
-    # Usage accumulated from an Anthropic Messages stream. Kept apart from
-    # ``last_chunk`` because that stream ends on ``message_stop``, which carries
-    # no usage and would otherwise erase the figures that arrived one event
-    # earlier — see _consume_messages_event.
-    messages_usage: Optional[Dict[str, Any]] = None
-    _saw_messages_events: bool = False
-    # Text deltas seen so far. The exact completion count only arrives with the
-    # terminal usage event, which is no help to anyone watching the request run
-    # — so the delta count stands in for it until then. See streamed_tokens.
-    delta_count: int = 0
-    _decoder: Any = field(
-        default_factory=lambda: codecs.getincrementaldecoder("utf-8")(errors="replace"),
-        repr=False,
-    )
-
-    def feed(self, chunk: bytes | str) -> None:
-        if isinstance(chunk, bytes):
-            text = self._decoder.decode(chunk, final=False)
-        else:
-            text = self._decoder.decode(b"", final=True) + str(chunk)
-            self._decoder.reset()
-        self.buffer += text
-        self._consume_complete_lines()
-
-    def finish(self) -> None:
-        self.buffer += self._decoder.decode(b"", final=True)
-        self._decoder.reset()
-        if not self.buffer:
-            return
-        remainder = self.buffer
-        self.buffer = ""
-        for line in remainder.splitlines():
-            self._consume_line(line.rstrip("\r"))
-
-    def streamed_tokens(self) -> Dict[str, int]:
-        """Best current view of this request's tokens, mid-stream.
-
-        Prompt tokens are exact as soon as the stream opens — every surface
-        states them up front. Completion tokens are not: the count settles only
-        in the terminal usage event, which is precisely the moment a live view
-        stops being interesting. Until it arrives the text deltas are counted
-        instead, one apiece.
-
-        That is an approximation, and it is the right one to make: vLLM emits a
-        delta per token, so it tracks the real figure closely, and speculative
-        decoding is the case where it can undercount. It is only ever shown
-        while the request is running — the settled usage replaces it on
-        completion, so nothing is stored or billed from this.
-        """
-        usage = self.usage()
-        prompt = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
-        completion = usage.get("completion_tokens") or usage.get("output_tokens") or 0
-        if not isinstance(prompt, int):
-            prompt = 0
-        if not isinstance(completion, int) or completion <= 0:
-            completion = self.delta_count
-        return {"prompt_tokens": prompt, "completion_tokens": completion}
-
-    def usage(self) -> Dict[str, Any]:
-        if isinstance(self.responses_final, dict):
-            usage = self.responses_final.get("usage")
-            if isinstance(usage, dict):
-                return usage
-        if isinstance(self.messages_usage, dict) and self.messages_usage:
-            return self.messages_usage
-        if isinstance(self.last_chunk, dict):
-            usage = self.last_chunk.get("usage")
-            if isinstance(usage, dict):
-                return usage
-        return {}
-
-    def response_payload(self) -> Dict[str, Any]:
-        # Responses-API stream: the terminal event already carries the complete
-        # response (output items + usage) — log it verbatim. If the stream was
-        # cut off before the terminal event, fall back to the accumulated text.
-        if isinstance(self.responses_final, dict):
-            return self.responses_final
-        if self._saw_responses_events:
-            return {"content": self.full_text}
-        if self._saw_messages_events:
-            # No chunk to rebuild from: an Anthropic stream never sends the
-            # response as one object, only the events that assemble it.
-            payload: Dict[str, Any] = {"content": self.full_text}
-            if self.messages_usage:
-                payload["usage"] = self.messages_usage
-            return payload
-
-        usage = self.usage()
-        response_payload: Dict[str, Any] = {"content": self.full_text}
-        base_payload = None
-
-        if self.first_chunk:
-            base_payload = self.first_chunk.copy()
-        if self.last_chunk:
-            if base_payload is None:
-                base_payload = self.last_chunk.copy()
-            else:
-                for key, value in self.last_chunk.items():
-                    if key not in base_payload:
-                        base_payload[key] = value
-
-        if base_payload:
-            response_payload = base_payload
-            if "choices" in response_payload and response_payload["choices"]:
-                response_payload["choices"][0]["delta"] = {"content": self.full_text}
-        if usage:
-            response_payload["usage"] = usage
-        return response_payload
-
-    def _consume_complete_lines(self) -> None:
-        while "\n" in self.buffer:
-            line, self.buffer = self.buffer.split("\n", 1)
-            self._consume_line(line.rstrip("\r"))
-
-    def _consume_line(self, line: str) -> None:
-        stripped = line.strip()
-        if not stripped or stripped == "data: [DONE]" or not stripped.startswith("data: "):
-            return
-        try:
-            blob = json.loads(stripped[6:])
-        except json.JSONDecodeError:
-            return
-        if not isinstance(blob, dict):
-            return
-
-        event_type = blob.get("type")
-        if isinstance(event_type, str) and event_type.startswith("response."):
-            self._consume_responses_event(event_type, blob)
-            return
-        if isinstance(event_type, str) and event_type in _MESSAGES_EVENT_TYPES:
-            self._consume_messages_event(event_type, blob)
-            return
-
-        self.last_chunk = blob
-        if self.first_chunk is None:
-            self.first_chunk = blob
-
-        choices = blob.get("choices")
-        if isinstance(choices, list) and choices:
-            delta = choices[0].get("delta", {})
-            if isinstance(delta, dict):
-                content = delta.get("content", "")
-                if content:
-                    self.full_text += content
-                    self.delta_count += 1
-
-    def _consume_responses_event(self, event_type: str, blob: Dict[str, Any]) -> None:
-        """Consume one Responses-API SSE event (``{"type": "response.*", ...}``)."""
-        self._saw_responses_events = True
-        if event_type == "response.output_text.delta":
-            delta = blob.get("delta")
-            if isinstance(delta, str):
-                self.full_text += delta
-                self.delta_count += 1
-        elif event_type in {"response.completed", "response.incomplete", "response.failed"}:
-            response = blob.get("response")
-            if isinstance(response, dict):
-                self.responses_final = response
-
-    def _consume_messages_event(self, event_type: str, blob: Dict[str, Any]) -> None:
-        """Consume one Anthropic Messages SSE event.
-
-        This is what Claude Code speaks, so it covers every session set up
-        through the AI-tools page — and none of it was being counted. The usage
-        arrives in two places and neither is the last event:
-
-            message_start   {"message": {"usage": {"input_tokens": 14, …}}}
-            content_block_delta …
-            message_delta   {"usage": {"input_tokens": 14, "output_tokens": 2}}
-            message_stop    — nothing
-
-        Reading the final chunk's ``usage`` therefore found ``message_stop`` and
-        came away empty, so every such request was logged with no tokens at all.
-        Both events are merged instead, later winning, since message_delta
-        carries the settled figures.
-        """
-        self._saw_messages_events = True
-        if event_type == "content_block_delta":
-            delta = blob.get("delta")
-            if isinstance(delta, dict):
-                text = delta.get("text")
-                if isinstance(text, str):
-                    self.full_text += text
-                    self.delta_count += 1
-            return
-
-        usage: Any = None
-        if event_type == "message_start":
-            message = blob.get("message")
-            if isinstance(message, dict):
-                usage = message.get("usage")
-        elif event_type == "message_delta":
-            usage = blob.get("usage")
-        if not isinstance(usage, dict):
-            return
-
-        merged = dict(self.messages_usage or {})
-        merged.update(usage)
-        # Anthropic omits a total — it is the sum, so it says it once. Logos
-        # stores one row per token type and the statistics page reads
-        # total_tokens, so a stream without it lands as zero tokens used.
-        prompt = merged.get("input_tokens")
-        completion = merged.get("output_tokens")
-        if isinstance(prompt, int) and isinstance(completion, int):
-            merged["total_tokens"] = prompt + completion
-        self.messages_usage = merged
-
-
-def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
-    if not isinstance(response_payload, dict):
-        return {}
-    usage = response_payload.get("usage")
-    if isinstance(usage, dict):
-        extracted = extract_token_usage(usage)
-        if extracted:
-            return extracted
-    duration = response_payload.get("duration")
-    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
-        return extract_token_usage({"seconds": duration})
-    if isinstance(duration, str):
-        try:
-            parsed_duration = float(duration)
-        except ValueError:
-            return {}
-        return extract_token_usage({"seconds": parsed_duration})
-    return {}
 
 
 # One currency unit = 100 cents = 1e8 micro-cents. The unit is USD, not EUR:
@@ -1438,13 +411,52 @@ def _usage_tokens_from_payload(response_payload: Any) -> Dict[str, int]:
 _MICRO_CENTS_PER_USD = 100_000_000
 
 
+@dataclass(frozen=True)
+class _PendingLog:
+    fields: Dict[str, Any]
+
+
+def _materialize_log_id(db, log_ref) -> Optional[int]:
+    if isinstance(log_ref, _PendingLog):
+        # Idempotent: the live-feed path may already have inserted this row
+        # on the write-behind queue before enqueue metrics landed.
+        return db.ensure_log_usage(**log_ref.fields)
+    return int(log_ref) if log_ref else None
+
+
+def _insert_pending_log_row(fields: Dict[str, Any]) -> None:
+    """Write-behind worker: create the deferred log row for the live feed."""
+    try:
+        with DBManager() as db:
+            db.ensure_log_usage(**fields)
+    except Exception:  # noqa: BLE001 — monitoring must never break a request
+        logger.exception("Failed to materialize deferred log for live feed")
+
+
+def _enqueue_pending_log_for_live_feed(log_ref) -> None:
+    """Queue a deferred log INSERT ahead of live identity UPDATEs (FIFO).
+
+    Warm non-streaming requests keep their log as ``_PendingLog`` until
+    completion for overhead reasons. The stats recent-requests feed still
+    needs a row while the request queues, so the insert rides the same
+    write-behind worker that the enqueue/schedule identity UPDATEs use —
+    ordered before them so those UPDATEs find a matching ``request_id``.
+    """
+    if not isinstance(log_ref, _PendingLog):
+        return
+    write_queue.get_write_queue().enqueue(_insert_pending_log_row, dict(log_ref.fields))
+
+
 def _response_with_cost(
     response_payload: Any,
     provider_id: Optional[int],
     model_id: Optional[int],
     response_at: datetime.datetime,
+    request_payload: Any = None,
+    path: str = "",
+    allow_derived_only: bool = False,
 ) -> tuple[Any, bool]:
-    """Add the configured EUR cost to a cloud response's usage object.
+    """Add the configured USD cost to a cloud response's usage object.
 
     Cost enrichment is deliberately best-effort: a billing lookup must never
     turn a successful inference into an error. The DB method returns ``None``
@@ -1454,9 +466,25 @@ def _response_with_cost(
     if not isinstance(response_payload, dict) or provider_id is None or model_id is None:
         return response_payload, False
     usage = response_payload.get("usage")
-    if not isinstance(usage, dict):
+    # Only settle a live cost onto a frame that carries a provider usage signal.
+    # ``finalize_billing_inputs`` always returns at least ``billed_requests``, so
+    # without this gate every ordinary SSE delta frame (which has no usage) would
+    # get a cost injected — clients would see repeated interim costs instead of
+    # one settled terminal cost. A root ``duration`` counts as a signal so
+    # verbose audio transcriptions still price live (see finalize.py).
+    has_provider_usage = isinstance(usage, dict) or isinstance(response_payload.get("usageMetadata"), dict)
+    if not has_provider_usage:
+        duration = response_payload.get("duration")
+        has_provider_usage = isinstance(duration, (int, float, str)) and not isinstance(duration, bool)
+        usage = {}
+    if not has_provider_usage and not allow_derived_only:
         return response_payload, False
-    usage_tokens = extract_token_usage(usage)
+    # Native Gemini has usageMetadata but no OpenAI-style usage object. Cost is
+    # still exposed under the compatibility `usage` field; start it empty
+    # instead of attempting dict(None) after successful detection.
+    if not isinstance(usage, dict):
+        usage = {}
+    usage_tokens, service_tier = finalize_billing_inputs(request_payload, response_payload, path)
     if not usage_tokens:
         return response_payload, False
 
@@ -1467,6 +495,7 @@ def _response_with_cost(
                 provider_id,
                 usage_tokens,
                 response_at,
+                service_tier=service_tier,
             )
     except Exception:
         logger.exception(
@@ -1492,6 +521,8 @@ class _StreamingCostEnricher:
 
     provider_id: Optional[int]
     model_id: Optional[int]
+    request_payload: Any = None
+    path: str = ""
     buffer: bytes = b""
 
     def feed(self, chunk: bytes | str) -> list[bytes]:
@@ -1514,6 +545,30 @@ class _StreamingCostEnricher:
         self.buffer = b""
         return [remainder]
 
+    @staticmethod
+    def _frame_usage_is_settled(target: dict) -> bool:
+        """True when this frame carries a *complete* usage picture, not a running
+        partial. An Anthropic ``message_delta`` reports only ``output_tokens``
+        mid-stream (input arrived once in ``message_start``); pricing that frame
+        alone yields an output-only, undercharged cost. Enrich only frames whose
+        usage settles the input side too — the Chat Completions terminal chunk,
+        the Responses ``response.completed`` object, or a duration/usageMetadata
+        payload. Native Gemini usage is cumulative, so require a candidate's
+        terminal finishReason as well. Leave native Anthropic streams without a
+        live cost rather than a wrong one (the persisted ledger still prices
+        them correctly)."""
+        usage = target.get("usage")
+        if isinstance(usage, dict):
+            return any(
+                k in usage for k in ("prompt_tokens", "input_tokens", "inputTokens", "promptTokens", "total_tokens")
+            )
+        if isinstance(target.get("usageMetadata"), dict):
+            candidates = target.get("candidates")
+            return isinstance(candidates, list) and any(
+                isinstance(candidate, dict) and candidate.get("finishReason") is not None for candidate in candidates
+            )
+        return target.get("duration") is not None
+
     def _enrich_frame(self, frame: bytes, payload_end: int, delimiter: bytes) -> bytes:
         event = frame[:payload_end]
         newline = b"\r\n" if b"\r\n" in event else b"\n"
@@ -1532,11 +587,15 @@ class _StreamingCostEnricher:
                 continue
 
             target = blob.get("response") if isinstance(blob.get("response"), dict) else blob
+            if not self._frame_usage_is_settled(target):
+                continue
             enriched_target, changed = _response_with_cost(
                 target,
                 self.provider_id,
                 self.model_id,
                 datetime.datetime.now(datetime.timezone.utc),
+                request_payload=self.request_payload,
+                path=self.path,
             )
             if not changed:
                 continue
@@ -1570,6 +629,27 @@ def _close_orphaned_request_logs() -> None:
         return
     if closed:
         logger.info("Closed %d request log(s) left in-flight by a previous orchestrator process", closed)
+
+
+def _assert_no_ollama_typed_providers() -> None:
+    """Refuse to start while provider rows of the dropped 'ollama' type exist.
+
+    Ollama servers are gone from the deployment — every worker lane runs
+    vLLM — so a provider still typed 'ollama' would be routed nowhere. Dropping
+    it from scheduling silently would hide the data problem; a startup failure
+    forces the operator to retype the row (worker-backed: 'logosnode') or
+    delete it before any traffic is accepted.
+    """
+    with DBManager() as db:
+        stale = db.find_ollama_typed_providers()
+    if stale:
+        rows = ", ".join(f"#{p['id']} {p['name']!r}" for p in stale)
+        raise RuntimeError(
+            "Startup aborted: providers of the dropped type 'ollama' still exist "
+            f"in the database: {rows}. Ollama is no longer served by Logos — "
+            "retype each provider as 'logosnode' (worker-backed) or delete it, "
+            "then restart."
+        )
 
 
 @asynccontextmanager
@@ -1615,6 +695,10 @@ async def lifespan(app: FastAPI):
     # state" unambiguously means "orphaned by a restart".
     _close_orphaned_request_logs()
 
+    # Legacy local-provider rows are a data problem, not a runtime state —
+    # abort loudly instead of scheduling around them.
+    _assert_no_ollama_typed_providers()
+
     # Start Pipeline
     await start_pipeline()
 
@@ -1625,27 +709,73 @@ async def lifespan(app: FastAPI):
     _grpc_server.add_insecure_port("[::]:50051")
     await _grpc_server.start()
 
+    # A client may fire a batch and never poll it to completion. Without this
+    # pass its cost would never be booked, so the ledger would understate what
+    # the provider actually charged.
+    global _batch_reconciler_task, _local_batch_runner_task
+    _batch_reconciler_task = asyncio.create_task(batch_reconciler_loop())
+    # Batches Logos runs itself: started here, and picked up again after a
+    # restart that interrupted one mid-file.
+    _local_batch_runner_task = asyncio.create_task(local_batch_runner_loop())
+
     yield
 
-    # Shutdown logic
+    # Shutdown logic: stop every background producer first — cancelling a
+    # loop can still enqueue a final write on its way out — and only drain
+    # the write-behind queue last, so nothing is enqueued after the drain
+    # has stopped (the drain is a blocking thread join, so it runs off the
+    # event loop; in-flight HTTP requests are already finished by the time
+    # the lifespan shutdown runs).
+    for batch_task in (_batch_reconciler_task, _local_batch_runner_task):
+        if batch_task:
+            batch_task.cancel()
+            await asyncio.gather(batch_task, return_exceptions=True)
+    benchmark_tasks = list(_benchmark_tasks)
+    for task in benchmark_tasks:
+        task.cancel()
+    if benchmark_tasks:
+        await asyncio.gather(*benchmark_tasks, return_exceptions=True)
     if _capacity_planner:
         await _capacity_planner.stop()
     if _calibration_orchestrator:
         await _calibration_orchestrator.stop()
     if _azure_deployment_sync:
         await _azure_deployment_sync.stop()
+    if _cloud_model_sync:
+        await _cloud_model_sync.stop()
     if _grpc_server:
         await _grpc_server.stop(0)
+    # Async jobs run as background tasks and finish their terminal writes by
+    # enqueuing them on the write-behind queue: quiesce them before the drain,
+    # or a late job write lands behind the sentinel and is lost. A cancelled
+    # job keeps the state its crash twin would have (process death already
+    # leaves jobs running; startup recovery closes the orphaned *request*
+    # logs, not job rows).
+    job_tasks = list(_background_tasks)
+    for task in job_tasks:
+        task.cancel()
+    if job_tasks:
+        await asyncio.gather(*job_tasks, return_exceptions=True)
+    # Last step: flush the write-behind queue so no terminal log writes are
+    # lost on exit.
+    await asyncio.to_thread(write_queue.get_write_queue().shutdown, 5.0)
 
 
 # Prometheus metrics auth: set PROMETHEUS_API_KEY env var to require auth; if unset, deny all.
 _PROMETHEUS_API_KEY = os.getenv("PROMETHEUS_API_KEY")
 _INTERNAL_SECRET = os.getenv("LOGOS_INTERNAL_SECRET")
 
+# API docs are off by default: /docs and /openapi.json publish the full
+# endpoint map — every /internal/* and /logosdb/* path included — and the
+# public router serves them on the same port as the completion API. Turn
+# them on for development with LOGOS_DOCS_ENABLED=1.
+_DOCS_ENABLED = os.getenv("LOGOS_DOCS_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
 # Initialize FastAPI app with lifespan
 app = FastAPI(
-    docs_url="/docs",
-    openapi_url="/openapi.json",
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
     lifespan=lifespan,
     swagger_ui_init_oauth={},
     openapi_tags=[
@@ -1753,37 +883,6 @@ app.add_middleware(
 )
 
 
-class APIPrefixStripperMiddleware:
-    """Strip a leading `/api` from incoming HTTP and WebSocket paths.
-
-    Lets the UI namespace all of its calls under `/api/*` so a single Traefik
-    route handles every UI-internal endpoint, while existing bare paths
-    (workernode protocol, public `/v1`/`/openai`/`/jobs`, `/docs`, `/metrics`)
-    still resolve unchanged.
-    """
-
-    def __init__(self, app, prefix: str = "/api") -> None:
-        self.app = app
-        self.prefix = prefix.rstrip("/")
-        self._prefix_bytes = self.prefix.encode("ascii")
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] in ("http", "websocket"):
-            path = scope.get("path", "")
-            if path == self.prefix or path.startswith(self.prefix + "/"):
-                new_scope = dict(scope)
-                new_scope["path"] = path[len(self.prefix) :] or "/"
-                raw = scope.get("raw_path")
-                if isinstance(raw, bytes) and raw.startswith(self._prefix_bytes):
-                    rest = raw[len(self._prefix_bytes) :]
-                    q = rest.find(b"?")
-                    path_part = rest[:q] if q >= 0 else rest
-                    query_part = rest[q:] if q >= 0 else b""
-                    new_scope["raw_path"] = (path_part or b"/") + query_part
-                scope = new_scope
-        await self.app(scope, receive, send)
-
-
 app.add_middleware(APIPrefixStripperMiddleware, prefix="/api")
 
 
@@ -1838,440 +937,6 @@ async def _generic_exception_handler(request: Request, exc: Exception) -> JSONRe
     """Catch-all: return HTTP 500 without leaking stack traces or internal details."""
     logger.exception("Unhandled exception on %s", request.url.path)
     return openai_error_response(500, "Internal server error")
-
-
-@app.get("/health", tags=["monitoring"])
-async def health():
-    """Report overall health plus a breakdown of what is serveable.
-
-    Serving local inference is the core function of the orchestrator, so the
-    overall ``status`` is only UP when there is a live (non-stale heartbeat)
-    local worker that declares at least one capable model. When every local
-    provider is offline (or none expose a capable model) we return 503/DOWN so
-    external monitors surface the degradation instead of seeing a misleading UP.
-
-    The body always breaks the state down per backend so callers can tell what
-    exactly is down: ``local_models`` (logosnode workers) and ``cloud_models``
-    (Azure/cloud deployments). Cloud may still be serveable even while local is
-    down, which the ``detail`` message makes explicit.
-    """
-    local_ok = False
-    cloud_ok = False
-    try:
-        with DBManager() as db:
-            inventory = db.list_local_providers()
-            deployments = db.get_all_deployments()
-        # Cloud is serveable if any non-logosnode deployment is configured.
-        cloud_ok = any(str(d.get("type")) != "logosnode" for d in deployments)
-        # Local is serveable if an online worker declares at least one capable model.
-        for provider in inventory:
-            provider_id = int(provider.get("provider_id") or 0)
-            if provider_id <= 0:
-                continue
-            snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
-            if not _logosnode_snapshot_is_connected(snapshot):
-                continue
-            if snapshot.get("capabilities_models"):
-                local_ok = True
-                break
-    except Exception:
-        logger.exception("Health check failed to evaluate provider state")
-        local_ok = False
-        cloud_ok = False
-
-    payload = {
-        "status": "UP" if local_ok else "DOWN",
-        "local_models": "UP" if local_ok else "DOWN",
-        "cloud_models": "UP" if cloud_ok else "DOWN",
-    }
-    if not local_ok:
-        payload["detail"] = "No local provider with a capable model is online." + (
-            " Cloud models may still be served." if cloud_ok else " No cloud models are configured."
-        )
-    return JSONResponse(status_code=200 if local_ok else 503, content=payload)
-
-
-@app.get("/metrics", tags=["monitoring"])
-async def prometheus_metrics(request: Request):
-    """Prometheus metrics endpoint. Requires PROMETHEUS_API_KEY env var to be set.
-    Pass the key via `Authorization: Bearer <key>` header."""
-    if not _PROMETHEUS_API_KEY:
-        raise HTTPException(
-            status_code=403,
-            detail="Metrics endpoint disabled (PROMETHEUS_API_KEY not configured)",
-        )
-    auth = request.headers.get("authorization", "")
-    token = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else auth.strip()
-    if not hmac.compare_digest(token, _PROMETHEUS_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing metrics API key")
-    body, content_type = _prometheus_metrics_response()
-    from starlette.responses import Response
-
-    return Response(content=body, media_type=content_type)
-
-
-class _RefreshPipelineRequest(BaseModel):
-    rebuild_classifier: bool = False
-
-
-@app.post("/internal/refresh_pipeline", tags=["admin"])
-async def internal_refresh_pipeline(data: _RefreshPipelineRequest, request: Request):
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal refresh endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-    if not _pipeline or not _logosnode_facade or not _azure_facade:
-        raise HTTPException(status_code=503, detail="Pipeline not initialized")
-    logger.info("Pipeline refresh requested by Spring (rebuildClassifier=%s)", data.rebuild_classifier)
-    await refresh_pipeline_runtime_state(rebuild_model_classifier=data.rebuild_classifier)
-    return {"status": "ok"}
-
-
-@app.get("/internal/provider_status", tags=["admin"])
-async def internal_provider_status(request: Request):
-    """Connection state of every local provider, for the Spring webservice.
-
-    The webservice serves the statistics VRAM payload from persisted snapshots
-    only; live connection state (online/offline) exists solely in the
-    orchestrator's worker registry, so it is exposed here for enrichment.
-    """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal provider status endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-
-    with DBManager() as db:
-        inventory = db.list_local_providers()
-
-    providers = []
-    for provider in inventory:
-        provider_id = int(provider.get("provider_id") or 0)
-        if provider_id <= 0:
-            continue
-        runtime_snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
-        connected = _logosnode_snapshot_is_connected(runtime_snapshot)
-        last_heartbeat = runtime_snapshot.get("last_heartbeat") if runtime_snapshot else None
-        if isinstance(last_heartbeat, datetime.datetime):
-            last_heartbeat = last_heartbeat.isoformat()
-        providers.append(
-            {
-                "provider_id": provider_id,
-                "name": provider.get("name"),
-                "provider_type": provider.get("provider_type"),
-                "connected": connected,
-                "connection_state": "online" if connected else "offline",
-                "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
-                "calibrating": _logosnode_registry.is_calibrating(provider_id),
-            }
-        )
-    return {"providers": providers}
-
-
-@app.get("/internal/model_context_windows", tags=["admin"])
-async def internal_model_context_windows(request: Request):
-    """Served context window per model name, for the Spring webservice.
-
-    The effective window lives only in the worker runtime snapshots held by
-    the orchestrator's registry; the webservice enriches its model listings
-    (e.g. the AI-tools setup page) from this map.
-
-    ``windows`` keeps its original shape — model name -> smallest currently
-    served window — so an older webservice keeps working. ``stats`` adds the
-    ``best`` and ``native`` numbers next to it; see
-    :func:`_served_context_window_stats`.
-    """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-
-    stats = _served_context_window_stats()
-    return {
-        "windows": {model: entry["current_min"] for model, entry in stats.items() if "current_min" in entry},
-        "stats": stats,
-    }
-
-
-@app.get("/internal/live_streams", tags=["admin"])
-async def internal_live_streams(request: Request):
-    """Token counts of the requests streaming right now, for the statistics page.
-
-    A finished request's usage is in the database; one still running is only
-    here, in the process the chunks pass through. Without this the request feed
-    shows a row with no numbers for the whole minute a long generation takes,
-    and then the totals appear at once when it ends.
-
-    Cheap by construction: a dict of the in-flight requests, no database work,
-    and the webservice already polls on the cadence it pushes the feed at.
-    """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-    return {"streams": _live_streams.snapshot()}
-
-
-@app.get("/internal/calibration_probe_logs", tags=["admin"])
-def internal_calibration_probe_logs(model_name: str, request: Request):
-    """Every node's most recent calibration probe log for one model.
-
-    Backs the webservice's model-error-report page (Complete Logs tab) —
-    it resolves a model id to a model name, then asks here for what every
-    provider that has calibrated it reported.
-    """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-
-    with DBManager() as db:
-        rows = db.get_calibration_probe_logs_by_model(model_name)
-    return JSONResponse(status_code=200, content=jsonable_encoder({"logs": rows}))
-
-
-class _InternalCalibrateRequest(BaseModel):
-    provider_id: int
-
-
-class _InternalDeleteLaneRequest(BaseModel):
-    provider_id: int
-    lane_id: str
-
-
-class _InternalAddLaneRequest(BaseModel):
-    provider_id: int
-    lane: dict[str, Any]
-
-
-class _InternalSleepLaneRequest(BaseModel):
-    provider_id: int
-    lane_id: str
-
-
-class _InternalWakeLaneRequest(BaseModel):
-    provider_id: int
-    lane_id: str
-
-
-@app.post("/internal/logosnode/calibrate_uncalibrated", tags=["admin"])
-async def internal_logosnode_calibrate_uncalibrated(data: _InternalCalibrateRequest, request: Request):
-    """Calibrate uncalibrated models on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
-    if snap is None:
-        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
-    if not snap.get("first_status_received"):
-        return JSONResponse(
-            status_code=503,
-            content={"error": "Worker has not sent its first status yet"},
-        )
-    models = _find_uncalibrated_models_on_provider(data.provider_id)
-    if not models:
-        return {"message": "No uncalibrated models on this worker", "count": 0, "models": []}
-    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
-    pname = _resolve_provider_name(data.provider_id)
-    try:
-        await _logosnode_registry.send_command(
-            data.provider_id,
-            "start_calibration_session",
-            params={"sleep_level": sleep_level},
-            timeout_seconds=30,
-        )
-    except LogosNodeOfflineError as exc:
-        logger.warning("Internal calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
-        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
-    except LogosNodeCommandError as exc:
-        logger.warning(
-            "Internal calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s", pname, exc
-        )
-        return JSONResponse(status_code=409, content={"error": str(exc)})
-    logger.info(
-        "Internal calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))", pname, len(models)
-    )
-    return {
-        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
-        "count": len(models),
-        "models": models,
-    }
-
-
-@app.post("/internal/logosnode/lanes/delete", tags=["admin"])
-async def internal_logosnode_delete_lane(data: _InternalDeleteLaneRequest, request: Request):
-    """Unload a lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="delete_lane",
-        params={"lane_id": data.lane_id},
-    )
-
-
-@app.post("/internal/logosnode/lanes/add", tags=["admin"])
-async def internal_logosnode_add_lane(data: _InternalAddLaneRequest, request: Request):
-    """Manually load a single lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-
-    model = str(data.lane.get("model") or "").strip()
-    if not model:
-        raise HTTPException(status_code=400, detail="lane.model is required")
-
-    if _capacity_planner is None:
-        raise HTTPException(status_code=503, detail="Capacity planner not ready")
-
-    # Answer a refusal synchronously — a background task has nobody to report to.
-    rejection = _capacity_planner.manual_load_rejection_reason(data.provider_id)
-    if rejection is not None:
-        raise HTTPException(status_code=409, detail=rejection)
-
-    # Loading a model takes minutes (the planner budgets 1800 s for the command),
-    # far beyond any caller's HTTP read timeout, and holding a servlet thread
-    # open that long per load is its own problem. So kick it off and return: the
-    # lane appears in the lane-status stream the statistics page already
-    # subscribes to, which is where the operator watches it come up.
-    task = asyncio.create_task(_capacity_planner.load_lane_manually(data.provider_id, model))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
-    # 202, not 200: the lane is not loaded when this returns, only scheduled.
-    return JSONResponse(
-        status_code=202,
-        content={"status": "accepted", "model": model, "provider_id": data.provider_id},
-    )
-
-
-@app.post("/internal/logosnode/lanes/sleep", tags=["admin"])
-async def internal_logosnode_sleep_lane(data: _InternalSleepLaneRequest, request: Request):
-    """Sleep a lane on a worker, called by Spring after JWT validation.
-
-    Level 1 keeps the weights resident in host memory, so the lane wakes in
-    seconds; level 2 would release them and pay for a full reload on the next
-    wake — a choice most operators cannot make well, so the button does not
-    offer it and neither does this endpoint.
-
-    In-flight requests are not refused: mode="wait" makes the worker drain
-    them first and only sleep once the lane is idle (a request admitted
-    between drain and sleep makes the worker skip the sleep and stay awake).
-    The command therefore takes as long as the drain — the dispatch budget
-    must cover it, which is why sleep_lane gets the same 120 s as the
-    planner's own sleep commands.
-    """
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-
-    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
-    if snap is None:
-        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
-    if not snap.get("first_status_received"):
-        return JSONResponse(
-            status_code=503,
-            content={"error": "Worker has not sent its first status yet"},
-        )
-    lanes = (snap.get("runtime") or {}).get("lanes") or []
-    lane = next(
-        (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id", "")) == data.lane_id),
-        None,
-    )
-    if lane is None:
-        return JSONResponse(status_code=404, content={"error": f"Lane '{data.lane_id}' not found on this worker"})
-    # "unsupported" is the worker's resolved answer for "cannot sleep this
-    # lane": enable_sleep_mode off for its model (per-model override or the
-    # node-wide kill switch) or a non-vLLM lane. Dispatching would burn the
-    # command budget to fail on the worker, so refuse synchronously with the
-    # reason the panel can display.
-    if str(lane.get("sleep_state", "")).strip().lower() == "unsupported":
-        raise HTTPException(
-            status_code=409,
-            detail="Lane does not support sleep mode; its model is configured without enable_sleep_mode.",
-        )
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="sleep_lane",
-        params={"lane_id": data.lane_id, "level": 1, "mode": "wait"},
-    )
-
-
-@app.post("/internal/logosnode/lanes/wake", tags=["admin"])
-async def internal_logosnode_wake_lane(data: _InternalWakeLaneRequest, request: Request):
-    """Wake a sleeping lane on a worker, called by Spring after JWT validation."""
-    if not _INTERNAL_SECRET:
-        raise HTTPException(status_code=403, detail="Internal endpoint disabled")
-    auth_header = request.headers.get("authorization", "")
-    token = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.lower().startswith("bearer ")
-        else auth_header.strip()
-    )
-    if not hmac.compare_digest(token, _INTERNAL_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="wake_lane",
-        params={"lane_id": data.lane_id},
-    )
 
 
 # ============================================================================
@@ -2332,45 +997,8 @@ def _extract_policy(headers: dict, logos_key: str, body: dict):
     return policy if policy else None
 
 
-def _require_root_access(logos_key: str) -> None:
-    with DBManager() as db:
-        require_logos_admin_key(logos_key, db)
-
-
 def _normalize_provider_type(provider_type: str | None) -> str:
     return normalize_provider_type(provider_type)
-
-
-def _logosnode_insecure_dev_mode_enabled() -> bool:
-    raw = os.getenv("LOGOS_NODE_DEV_ALLOW_INSECURE_HTTP", "")
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _is_tls_request(request: Request) -> bool:
-    if _logosnode_insecure_dev_mode_enabled():
-        return True
-    if request.url.scheme == "https":
-        return True
-    forwarded = request.headers.get("x-forwarded-proto", "")
-    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
-    return "https" in forwarded_values
-
-
-def _require_tls_request(request: Request) -> None:
-    if not _is_tls_request(request):
-        raise HTTPException(
-            status_code=400,
-            detail="TLS is required for logosnode auth/session endpoints",
-        )
-
-
-def _build_logosnode_ws_url(request: Request, token: str) -> str:
-    _require_tls_request(request)
-    ws_scheme = "ws" if _logosnode_insecure_dev_mode_enabled() else "wss"
-    host = request.headers.get("host", "")
-    if not host:
-        raise HTTPException(status_code=400, detail="Missing Host header for websocket URL generation")
-    return f"{ws_scheme}://{host}/logosdb/providers/logosnode/session?token={token}"
 
 
 async def _filter_logosnode_deployments(
@@ -2390,7 +1018,14 @@ async def _filter_logosnode_deployments(
     filtered: list[Deployment] = []
     _local_name_lookup: dict[int, str] = {}
 
-    with DBManager() as db:
+    # Deployment rows carry the model name (enriched by
+    # get_deployments_for_api_key); only callers that build deployment dicts
+    # by hand (job paths, tests) still need the DB fallback.
+    needs_db = any(
+        _normalize_provider_type(deployment.get("type")) == "logosnode" and not deployment.get("model_name")
+        for deployment in deployments
+    )
+    with DBManager() if needs_db else nullcontext() as db:
         for deployment in deployments:
             provider_type = _normalize_provider_type(deployment.get("type"))
             if provider_type != "logosnode":
@@ -2399,11 +1034,13 @@ async def _filter_logosnode_deployments(
 
             model_id = int(deployment["model_id"])
             if model_id not in _local_name_lookup:
-                model_info = db.get_model(model_id)
-                name = (model_info or {}).get("name", "")
-                _local_name_lookup[model_id] = name
+                name = deployment.get("model_name")
+                if name is None and db is not None:
+                    model_info = db.get_model(model_id)
+                    name = (model_info or {}).get("name", "")
+                _local_name_lookup[model_id] = name or ""
                 # Prime the module-level cache so log lines resolve without a DB hit.
-                model_name_cache.prime(model_id, name)
+                model_name_cache.prime(model_id, _local_name_lookup[model_id])
 
             model_name = _local_name_lookup[model_id]
             if not model_name:
@@ -2482,15 +1119,14 @@ def _prefer_deployments_with_context_room(
     Deliberate escape hatches, because this filter runs on an estimate:
 
     * A worker whose window is unknown is always kept. ``max_model_len`` is
-      absent for cloud providers, for Ollama lanes and for a vLLM lane the
-      worker has not reported a window for — none of those are evidence of a
-      *narrow* window.
+      absent for cloud providers and for a vLLM lane the worker has not
+      reported a window for — neither is evidence of a *narrow* window.
     * A model is never filtered out entirely. If every lane of a model has a
       known window that is too narrow, the widest of them is kept anyway.
       Downstream, proxy mode narrows this list to the requested model and
       turns an emptied model into a 404 "no deployment found" that hides the
       real state; the engine, by contrast, either serves the request or
-      answers its own honest 400 — which is what the client should see (#810).
+      answers its own honest 400 — which is what the client should see.
     * When no worker is left, the widest ones are returned instead of nothing,
       so the request fails upstream exactly as it did before this filter
       existed.
@@ -2575,6 +1211,7 @@ async def start_pipeline():
         azure_facade=_azure_facade,
         model_registry=model_registry,
         ettft_enabled=ettft_enabled,
+        latency_store=_latency_store,
     )
     logger.info("Scheduler: ClassificationCorrectingScheduler (ettft_enabled=%s)", ettft_enabled)
 
@@ -2607,6 +1244,7 @@ async def start_pipeline():
         demand_tracker=_demand_tracker,
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
+        latency_store=_latency_store,
     )
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
@@ -2661,6 +1299,17 @@ async def start_pipeline():
         ),
     )
     await _azure_deployment_sync.start()
+
+    # Every other cloud provider discovers its models over GET /v1/models, and
+    # the same pass records the context windows the upstream reports so
+    # /v1/models can republish them.
+    global _cloud_model_sync
+    _cloud_model_sync = CloudModelSyncService(
+        on_models_changed=lambda *, rebuild_classifier: refresh_pipeline_runtime_state(
+            rebuild_model_classifier=rebuild_classifier
+        ),
+    )
+    await _cloud_model_sync.start()
 
     logger.info(
         "Request Pipeline Initialized with ClassificationCorrectingScheduler " "(planner=%s, ettft=%s)",
@@ -2840,7 +1489,6 @@ def rebuild_classifier():
     Updates the global pipeline's classifier instance.
     Called when models are added, updated, or deleted.
     """
-    global _pipeline
     if _pipeline:
         new_classifier = classifier()
         _pipeline.update_classifier(new_classifier)
@@ -2854,7 +1502,6 @@ async def refresh_pipeline_runtime_state(*, rebuild_model_classifier: bool = Fal
     This keeps queue state and active request tracking intact while making newly
     added providers/deployments/models available immediately.
     """
-    global _pipeline, _logosnode_facade, _azure_facade
     if not _pipeline or not _logosnode_facade or not _azure_facade:
         return
 
@@ -2936,6 +1583,34 @@ def _log_request_completion(
     logger.info(" ".join(parts))
 
 
+def _record_ettft_accuracy(scheduling_stats: Optional[dict]) -> None:
+    """Observe |ettft_estimate - actual_ttft| at the moment the first token arrives.
+
+    Uses ``schedule_start_s`` from scheduling_stats (captured in pipeline.py
+    immediately before the scheduler is invoked) so that the measured interval
+    covers the same phases as the ETTFT model: reclaim → state_overhead →
+    queue_wait → prefill → TTFT.  Returns without recording when
+    ``schedule_start_s`` is absent (e.g. timeout or error paths).
+    """
+    if not scheduling_stats:
+        return
+    ettft_ms = scheduling_stats.get("ettft_estimate_ms")
+    if not isinstance(ettft_ms, (int, float)) or not math.isfinite(ettft_ms):
+        return
+    schedule_start = scheduling_stats.get("schedule_start_s")
+    if not isinstance(schedule_start, float):
+        return
+    tier = str(scheduling_stats.get("ettft_tier") or "unknown")
+    provider_id = scheduling_stats.get("provider_id")
+    provider = provider_name_cache.get(provider_id) if provider_id is not None else "unknown"
+    prom.record_ettft_outcome(
+        estimate_s=ettft_ms / 1000.0,
+        actual_ttft_s=time.perf_counter() - schedule_start,
+        provider=provider or str(provider_id),
+        tier=tier,
+    )
+
+
 def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
     """Response headers exposing the scheduling decision to the client.
 
@@ -2957,6 +1632,85 @@ def _decision_response_headers(request_id, scheduling_stats) -> Optional[dict]:
         if warmth is not None:
             headers["X-Logos-Warmth-State"] = str(int(warmth))
     return headers or None
+
+
+_STREAM_END = object()
+
+# Upper bound on pulled-but-undelivered chunks buffered for a slow client. The
+# pump decouples arrival capture from client delivery, but an unbounded buffer
+# would let a pathologically slow client accumulate the whole provider response
+# in memory. Once the buffer is full the pump waits (backpressure) instead of
+# growing without limit; normal clients never fill it, so their arrivals stay
+# captured off the client's pace.
+_STREAM_BUFFER_MAX_CHUNKS = 512
+
+# Attribute the arrival pump attaches to a source exception with the instant
+# the failure was observed upstream, so a response stamp can use it without
+# waiting for a slow client to drain buffered chunks.
+_STREAM_FAILURE_AT = "logos_stream_failure_at"
+
+
+async def _chunks_with_arrival(source):
+    """Yield ``(chunk, arrival)`` pairs with arrival decoupled from delivery.
+
+    A background task pulls from ``source`` as fast as data arrives and records
+    each chunk's arrival instant, buffering it for the consumer, which yields at
+    the client's own pace. The recorded arrival therefore reflects when the
+    provider sent the byte, not when the client was ready to take it — what the
+    statistics page's exec figure needs: the provider's own time, without logos'
+    client-delivery wait.
+
+    The buffer is bounded (``_STREAM_BUFFER_MAX_CHUNKS``): a slow client cannot
+    accumulate unbounded provider output. When it fills, the pump waits for
+    room (backpressure) rather than growing memory.
+
+    The source is closed and the pump cancelled when this generator ends,
+    including on a client disconnect (GeneratorExit at the ``yield``). A source
+    exception is re-raised to the consumer (annotated with the upstream failure
+    instant) once the in-flight chunks are drained. The caller must close this
+    generator (e.g. via ``aclosing``) so the cleanup in the finally runs.
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=_STREAM_BUFFER_MAX_CHUNKS)
+
+    async def _pump() -> None:
+        try:
+            # The pump pulls as fast as data arrives. The put is bounded, so a
+            # slow client applies backpressure (the put blocks) once the buffer
+            # is full instead of accumulating the response without limit.
+            async for chunk in source:
+                await queue.put((chunk, datetime.datetime.now(datetime.timezone.utc)))
+        except asyncio.CancelledError:
+            # Client disconnect. The source may be closing already (cancelled
+            # __anext__) or still open (the pump was waiting for buffer room),
+            # so close it unless a concurrent close is in flight.
+            with suppress(RuntimeError):
+                await source.aclose()
+            raise
+        except BaseException as exc:  # noqa: BLE001 - re-raised by the consumer
+            # Stamp the failure where it is observed, upstream, not when the
+            # (possibly slow) client finishes draining buffered chunks.
+            try:
+                setattr(exc, _STREAM_FAILURE_AT, datetime.datetime.now(datetime.timezone.utc))
+            except AttributeError:
+                pass  # exception type does not accept attributes
+            with suppress(RuntimeError):
+                await source.aclose()
+            await queue.put(exc)
+        await queue.put(_STREAM_END)
+
+    pump = asyncio.get_running_loop().create_task(_pump())
+    try:
+        while True:
+            item = await queue.get()
+            if item is _STREAM_END:
+                break
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        pump.cancel()
+        with suppress(asyncio.CancelledError):
+            await pump
 
 
 async def _streaming_response(
@@ -3016,6 +1770,12 @@ async def _streaming_response(
 
     def _pre_stream_error_response(status_code: int, body: Any, error_message: str):
         """Record an error that occurred before a streaming response was committed."""
+        # The provider's (error) response is complete the moment this runs — it
+        # either sent an error status or the transport failed — so end the exec
+        # figure here. Without the stamp the exec window would fall back to the
+        # completion time, which adds the error handling and persistence below.
+        if request_id:
+            _pipeline.record_provider_response(request_id)
         corrected_sc, error_body = coerce_upstream_error(status_code, body)
         _release()
         if log_id:
@@ -3068,7 +1828,11 @@ async def _streaming_response(
             is_streaming=True,
         )
         return JSONResponse(
-            content=error_body,
+            content=(
+                translate_error(error_body)
+                if context.anthropic_dialect not in (None, UpstreamDialect.NATIVE)
+                else error_body
+            ),
             status_code=corrected_sc,
             headers=_decision_response_headers(request_id, scheduling_stats),
         )
@@ -3086,6 +1850,10 @@ async def _streaming_response(
             }
 
         def _new_logosnode_chunk_iter():
+            # The stamp lands on the actual WebSocket send, not here: session
+            # acquisition and the send lock run before it, and a pre-token
+            # retry calls this again, so each attempt re-stamps and the final
+            # attempt's send is what the request keeps.
             return _logosnode_registry.send_stream_command(
                 provider_id=provider_id,
                 action="infer_stream",
@@ -3095,9 +1863,16 @@ async def _streaming_response(
                     "request_path": request_path,
                 },
                 timeout_seconds=_LOGOSNODE_STREAM_TIMEOUT_SECONDS,
+                on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
             )
 
+        unconsumed_cleanup = _UnconsumedStreamCleanup(None, _release)
+
         async def logosnode_streamer():
+            # Discard of a never-started body cannot run this generator's finally;
+            # claim the reserved slot as soon as the body runs.
+            if unconsumed_cleanup is not None:
+                unconsumed_cleanup.claim_for_streamer()
             stream_log = _StreamingLogAccumulator()
             error_message = None
             ttft_recorded = False
@@ -3113,6 +1888,17 @@ async def _streaming_response(
             # also completes the disconnect count, which until now only saw
             # the clients that left *before* the first token.
             stream_completed = False
+            # The provider's last byte is the last chunk off the worker stream.
+            # _chunks_with_arrival captures each chunk's arrival on a
+            # background pump (independent of the client's pace), so this holds
+            # the last chunk's arrival — not the moment the loop ends, which
+            # under backpressure would be after the client already took it.
+            last_chunk_at = None
+            # Closing the generator at the terminal-frame yield (GuideLLM and
+            # similar close after [DONE]) raises GeneratorExit and skips the
+            # post-loop stamp. Track whether we stamped so finally can persist
+            # the captured arrival before record_completion when needed.
+            provider_response_stamped = False
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
                 for attempt in range(attempts):
@@ -3125,18 +1911,28 @@ async def _streaming_response(
                         # async-generator GC hook, so its cleanup (which is
                         # what sends the cancellation) would run at some
                         # unspecified later point. Closing it here runs that
-                        # cleanup while the disconnect is being handled.
-                        async with aclosing(_new_logosnode_chunk_iter()) as chunk_iter:
-                            async for chunk in chunk_iter:
+                        # cleanup while the disconnect is being handled. The
+                        # chunks are read through _chunks_with_arrival so the
+                        # arrival instant is captured off the client's pace.
+                        async with aclosing(_chunks_with_arrival(_new_logosnode_chunk_iter())) as wrapped:
+                            async for chunk, arrival in wrapped:
                                 produced = True
-                                yield chunk
+                                last_chunk_at = arrival
+                                # Parse before yielding: GuideLLM closes its HTTP
+                                # stream as soon as it receives [DONE]. If the
+                                # completion flag were set afterwards, that normal
+                                # close would be misreported as a disconnect.
+                                stream_log.feed(chunk)
+                                if stream_log.terminal_event_received:
+                                    stream_completed = True
                                 if chunk and not ttft_recorded:
                                     if log_id:
                                         with DBManager() as db:
                                             db.set_time_at_first_token(log_id)
+                                    _record_ettft_accuracy(scheduling_stats)
                                     ttft_recorded = True
-                                stream_log.feed(chunk)
                                 _live_streams.update(request_id, stream_log.streamed_tokens())
+                                yield chunk
                     except Exception as e:
                         # Retry ONLY if nothing has been streamed to the client yet:
                         # a pre-token failure (e.g. a just-woken level-1 lane whose
@@ -3154,7 +1950,22 @@ async def _streaming_response(
                             await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
                             continue
                         error_message = str(e)
+                        # The worker stream failed; stamp the failure instant the
+                        # arrival pump recorded upstream (annotated on the
+                        # exception), not the last chunk's arrival — a stream that
+                        # produced chunks and then timed out waiting for stream_end
+                        # should count that wait as provider run time, which
+                        # last_chunk_at would omit.
+                        if request_id:
+                            _pipeline.record_provider_response(request_id, at=getattr(e, _STREAM_FAILURE_AT, None))
+                            provider_response_stamped = True
                         raise e
+                    # The worker stream completed — the provider's last byte,
+                    # stamped at that chunk's arrival (last_chunk_at), before
+                    # the finally's billing/persistence runs.
+                    if request_id:
+                        _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                        provider_response_stamped = True
                     stream_completed = True
                     break  # stream completed without raising
             finally:
@@ -3165,8 +1976,29 @@ async def _streaming_response(
                     )
                 _live_streams.finish(request_id)
                 stream_log.finish()
+                # A terminal ``response.failed`` frame ends the stream cleanly,
+                # but the request still failed and must not be billed or logged
+                # as a success.
+                if error_message is None and stream_log.upstream_error:
+                    error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
+                # Client close after [DONE] jumps here via GeneratorExit before
+                # the post-loop stamp. Persist the captured terminal arrival so
+                # statistics do not fall back to completion time (billing delay).
+                if (
+                    request_id
+                    and not provider_response_stamped
+                    and stream_log.terminal_event_received
+                    and last_chunk_at is not None
+                ):
+                    _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                billable = stream_completed and stream_log.upstream_error is None
                 response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload)
+                usage_tokens = _usage_tokens_from_payload(
+                    response_payload,
+                    prepared_payload,
+                    request_path or "",
+                    billable_request=billable,
+                )
                 if log_id:
                     with DBManager() as db:
                         db.set_response_payload(
@@ -3177,6 +2009,7 @@ async def _streaming_response(
                             usage_tokens,
                             policy_id,
                             classification_stats,
+                            service_tier=extract_service_tier(response_payload),
                             request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                             queue_depth_at_arrival=(
                                 scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -3198,6 +2031,7 @@ async def _streaming_response(
                         result_status="error" if error_message else "success",
                         error_message=error_message,
                         cold_start=scheduling_stats.get("is_cold_start"),
+                        usage_tokens=usage_tokens,
                     )
                 _log_request_completion(
                     model_id=model_id,
@@ -3209,11 +2043,13 @@ async def _streaming_response(
                 )
                 _release()
 
-        return StreamingResponse(
+        response = StreamingResponse(
             logosnode_streamer(),
             media_type="text/event-stream",
             headers=_decision_response_headers(request_id, scheduling_stats),
         )
+        response._logos_unconsumed_cleanup = unconsumed_cleanup
+        return response
 
     # ── HTTP executor path ────────────────────────────────────────────────
     stream_status = StreamingExecutionStatus()
@@ -3224,6 +2060,16 @@ async def _streaming_response(
         on_headers=process_headers,
         status=stream_status,
     )
+
+    def _stamp_provider_call():
+        # The executor captures the dispatch instant after its request
+        # preparation (the multipart decode for file uploads) and before the
+        # send, in status.dispatch_at — set once the generator body has run,
+        # i.e. by the peek below. A preparation failure leaves it unset: the
+        # request never reached the provider, so the call stamp stays off and
+        # the stats split falls back to the scheduling-based cut.
+        if request_id and stream_status.dispatch_at is not None:
+            _pipeline.record_provider_call(request_id, at=stream_status.dispatch_at)
 
     # Peek at the first chunk.  This triggers the initial HTTP connection so
     # that on_headers fires and – crucially – UpstreamStreamError is raised
@@ -3237,6 +2083,9 @@ async def _streaming_response(
             provider_id,
             exc.status_code,
         )
+        # The provider was called and answered (with an error status) — the
+        # queue figure ends at the dispatch it captured.
+        _stamp_provider_call()
         return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
     except StopAsyncIteration:
         first_chunk = None
@@ -3248,64 +2097,186 @@ async def _streaming_response(
             type(exc).__name__,
             exc,
         )
+        _stamp_provider_call()
         return _pre_stream_error_response(502, {"error": str(exc)}, str(exc))
 
+    # The peek ran the executor's setup, so the dispatch instant it captured
+    # is available — stamp the provider call from it (see _sync_response for
+    # the reasoning).
+    _stamp_provider_call()
+
+    # When the first upstream byte (or an immediately-empty stream) was
+    # observed. The http_streamer starts its last-byte tracker from this so an
+    # empty or single-chunk stream still stamps a real arrival instant.
+    stream_first_byte_at = datetime.datetime.now(datetime.timezone.utc)
     upstream_content_type = upstream_stream_headers.get("content-type", "")
     upstream_media_type = upstream_content_type.split(";", 1)[0].strip().lower()
     response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
-    response_headers["content-type"] = upstream_content_type or "text/event-stream"
+    # A translated response is an event stream in the client's own dialect
+    # regardless of how the upstream labelled its own, so the client is told
+    # what it is actually about to parse rather than what the upstream sent.
+    translating = context.anthropic_dialect not in (None, UpstreamDialect.NATIVE) or context.messages_upstream
+    response_headers["content-type"] = (
+        "text/event-stream" if translating else (upstream_content_type or "text/event-stream")
+    )
+
+    # Bound before http_streamer so the closure can claim it when the body runs.
+    unconsumed_cleanup = None
 
     async def http_streamer():
         stream_log = _StreamingLogAccumulator()
         cost_enricher = (
-            _StreamingCostEnricher(provider_id, model_id)
+            _StreamingCostEnricher(provider_id, model_id, request_payload=prepared_payload, path=request_path or "")
             if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
             else None
         )
+        # A request forwarded to an upstream that speaks the other dialect
+        # comes back as the other dialect's event stream, and the client's SSE
+        # parser only understands its own.
+        if context.messages_upstream:
+            translated_stream = MessagesStreamTranslator(context.model_name)
+        elif context.anthropic_dialect is not None:
+            translated_stream = stream_translator(context.anthropic_dialect, model_name=context.model_name)
+        else:
+            translated_stream = None
         error_message = None
         ttft_recorded = False
+        # The provider's last byte is the last chunk off the upstream (or the
+        # empty-stream observation, for a body-less stream). _chunks_with_arrival
+        # captures each chunk's arrival on a background pump — independent of the
+        # client's pace and of the loop's end — so this holds the last chunk's
+        # arrival, ahead of the cloud-SSE pricing lookup and terminal-frame
+        # delivery, both of which are logos work that must stay out of the
+        # provider's window.
+        last_chunk_at = stream_first_byte_at
+        # The first chunk was already observed at the peek (stream_first_byte_at),
+        # before StreamingResponse started. Re-injecting it into the pump would
+        # re-stamp it at pump start, which for a delayed response start inflates
+        # a one-chunk stream's run figure — so keep the peek instant for it and
+        # the pump's recorded arrival for every later chunk.
+        first_chunk_pending = bool(first_chunk)
+        # Closing at the terminal-frame yield skips the post-loop stamp via
+        # GeneratorExit; finally uses this to persist the captured arrival.
+        provider_response_stamped = False
 
-        def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
-            return cost_enricher.feed(chunk) if cost_enricher else [chunk]
+        async def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
+            if cost_enricher is None:
+                return [chunk]
+            # A settled usage frame triggers a synchronous pricing DB lookup; run
+            # the enrichment off the event loop so the arrival pump (a separate
+            # task on this loop) keeps recording chunk arrivals while billing
+            # runs. feed() is awaited sequentially, so its buffer sees one call
+            # at a time and is safe from the worker thread.
+            return await asyncio.to_thread(cost_enricher.feed, chunk)
+
+        def client_chunks(chunk: bytes | str) -> list[bytes | str]:
+            """Record one upstream chunk and return what the client receives.
+
+            Logging, billing and the live view all read the upstream's own
+            frames, so the accumulator is fed before any translation — only
+            the bytes on the wire change shape.
+            """
+            stream_log.feed(chunk)
+            return translated_stream.feed(chunk) if translated_stream else [chunk]
 
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
         _live_streams.start(request_id, model_name_cache.get(model_id) if model_id else None)
-        try:
-            # Yield the already-peeked first chunk
-            if first_chunk:
-                for outgoing_chunk in enriched_chunks(first_chunk):
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
-                if not ttft_recorded:
-                    if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
-                    ttft_recorded = True
 
+        # The already-peeked first chunk is re-injected at the head of the
+        # source so the arrival pump starts before the first yield to the
+        # client. Yielding it directly (as before) would let a slow client hold
+        # up that yield while the pump is not yet running, so every later
+        # chunk's arrival would be stamped only after the client took chunk
+        # one — inflating the provider's run figure.
+        async def _source():
+            if first_chunk:
+                yield first_chunk
             async for chunk in chunk_iter:
-                for outgoing_chunk in enriched_chunks(chunk):
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
-                _live_streams.update(request_id, stream_log.streamed_tokens())
-                if chunk and not ttft_recorded:
-                    if log_id:
-                        with DBManager() as db:
-                            db.set_time_at_first_token(log_id)
-                    ttft_recorded = True
+                yield chunk
+
+        # Discard of a never-started body cannot run this generator's finally;
+        # claim ownership of the prefetched upstream + slot as soon as we run.
+        if unconsumed_cleanup is not None:
+            unconsumed_cleanup.claim_for_streamer()
+
+        try:
+            async with aclosing(_chunks_with_arrival(_source())) as wrapped:
+                async for chunk, arrival in wrapped:
+                    # The re-injected first chunk keeps its peek instant; later
+                    # chunks use the pump's recorded arrival.
+                    last_chunk_at = stream_first_byte_at if first_chunk_pending else arrival
+                    first_chunk_pending = False
+                    for outgoing_chunk in await enriched_chunks(chunk):
+                        for client_chunk in client_chunks(outgoing_chunk):
+                            yield client_chunk
+                    _live_streams.update(request_id, stream_log.streamed_tokens())
+                    if chunk and not ttft_recorded:
+                        if log_id:
+                            with DBManager() as db:
+                                db.set_time_at_first_token(log_id)
+                        _record_ettft_accuracy(scheduling_stats)
+                        ttft_recorded = True
+            # The upstream stream is exhausted. When the executor recovered from
+            # a mid-stream transport failure it set stream_status.error (and
+            # error_at) and ended the iterator without raising — so end the exec
+            # figure at that failure instant, not the last good chunk's arrival.
+            # Otherwise the provider's last byte is the last chunk's arrival
+            # (last_chunk_at), stamped before any enrichment or terminal-frame
+            # delivery keeps that logos-side work out of the provider's numbers.
+            if request_id:
+                if stream_status.error is not None:
+                    _pipeline.record_provider_response(request_id, at=stream_status.error_at)
+                else:
+                    _pipeline.record_provider_response(request_id, at=last_chunk_at)
+                provider_response_stamped = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
+            if translated_stream:
+                # A mid-stream failure the executor caught after the first byte
+                # ends the iterator without raising, so it reaches here rather
+                # than the except branch below — and closing the translated
+                # stream normally would hand the client a terminal event, i.e.
+                # a truncated answer that reads as a complete one. On an SSE
+                # upstream the executor also appends an error frame, which the
+                # translator has already turned into one of its own; both calls
+                # are idempotent, so whichever ran first wins.
+                #
+                # Otherwise this is the ordinary close: idempotent again, since
+                # a stream that ended on its protocol's terminal event ([DONE],
+                # response.completed, message_stop) has emitted its own, and
+                # this closes one that simply ran out of bytes.
+                terminal_chunks = (
+                    translated_stream.error(stream_status.error)
+                    if stream_status.error is not None
+                    else translated_stream.finish()
+                )
+                for client_chunk in terminal_chunks:
+                    yield client_chunk
         except Exception as exc:
             error_message = str(exc)
+            # The upstream failed mid-stream; stamp the failure instant the
+            # arrival pump recorded upstream (annotated on the exception), not
+            # the last chunk's arrival — the interval between the last good byte
+            # and the observed failure is provider time, and last_chunk_at would
+            # omit it.
+            if request_id:
+                _pipeline.record_provider_response(request_id, at=getattr(exc, _STREAM_FAILURE_AT, None))
+                provider_response_stamped = True
             if cost_enricher:
                 for outgoing_chunk in cost_enricher.finish():
-                    yield outgoing_chunk
-                    stream_log.feed(outgoing_chunk)
+                    for client_chunk in client_chunks(outgoing_chunk):
+                        yield client_chunk
             # Once bytes have reached the client, only SSE can carry the
-            # synthetic OpenAI error frame without corrupting its protocol.
-            if upstream_media_type == "text/event-stream":
+            # synthetic error frame without corrupting its protocol — and it
+            # has to be in the dialect the client is reading, which the
+            # translator knows and the raw upstream stream does not.
+            if translated_stream:
+                for client_chunk in translated_stream.error(str(exc)):
+                    yield client_chunk
+            elif upstream_media_type == "text/event-stream":
                 import json as _json
 
                 _, error_body = coerce_upstream_error(500, {"error": str(exc)})
@@ -3319,10 +2290,22 @@ async def _streaming_response(
             _live_streams.finish(request_id)
             if error_message is None:
                 error_message = stream_status.error
+            if error_message is None and stream_log.upstream_error:
+                error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
             failed = error_message is not None
             stream_log.finish()
+            # Client close after [DONE] jumps here via GeneratorExit before the
+            # post-loop stamp. Persist the captured terminal arrival so the
+            # exec figure does not fall back to completion (billing) time.
+            if request_id and not provider_response_stamped and stream_log.terminal_event_received:
+                _pipeline.record_provider_response(request_id, at=last_chunk_at)
             response_payload = stream_log.response_payload()
-            usage_tokens = _usage_tokens_from_payload(response_payload)
+            usage_tokens = _usage_tokens_from_payload(
+                response_payload,
+                prepared_payload,
+                request_path or "",
+                billable_request=not failed,
+            )
             if log_id:
                 with DBManager() as db:
                     db.set_response_payload(
@@ -3333,6 +2316,7 @@ async def _streaming_response(
                         usage_tokens,
                         policy_id,
                         classification_stats,
+                        service_tier=extract_service_tier(response_payload),
                         request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
                         queue_depth_at_arrival=(
                             scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
@@ -3363,6 +2347,7 @@ async def _streaming_response(
                     result_status="error" if failed else "success",
                     error_message=error_message,
                     cold_start=scheduling_stats.get("is_cold_start"),
+                    usage_tokens=usage_tokens,
                 )
             _log_request_completion(
                 model_id=model_id,
@@ -3374,10 +2359,57 @@ async def _streaming_response(
             )
             _release()
 
-    return StreamingResponse(
+    unconsumed_cleanup = _UnconsumedStreamCleanup(chunk_iter, _release)
+    response = StreamingResponse(
         http_streamer(),
         headers=response_headers,
     )
+    response._logos_unconsumed_cleanup = unconsumed_cleanup
+    return response
+
+
+def _persist_terminal_response(
+    log_id,
+    usage_tokens,
+    model_id: int,
+    provider_id: int,
+    service_tier,
+    set_first_token: bool,
+    request_id: Optional[str],
+    result_status: str,
+    error_message: Optional[str],
+    response_payload,
+    policy_id,
+    classification_stats,
+    *,
+    queue_depth_at_arrival=None,
+    utilization_at_arrival=None,
+) -> None:
+    """Persist the terminal billing and payload fields off the event loop."""
+    with DBManager() as db:
+        actual_log_id = _materialize_log_id(db, log_id)
+        if actual_log_id is None:
+            return
+        db.finalize_billing_row(
+            actual_log_id,
+            usage_tokens,
+            model_id=model_id,
+            provider_id=provider_id,
+            service_tier=service_tier,
+            set_first_token=set_first_token,
+            request_id=request_id,
+            result_status=result_status,
+            error_message=error_message,
+        )
+        db.store_response_payload(
+            actual_log_id,
+            response_payload,
+            policy_id=policy_id,
+            classified=classification_stats,
+            queue_depth_at_arrival=queue_depth_at_arrival,
+            utilization_at_arrival=utilization_at_arrival,
+            settle_cost=True,
+        )
 
 
 async def _sync_response(
@@ -3411,24 +2443,49 @@ async def _sync_response(
         )
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, upstream_payload)
+        # The provider-call stamp is taken at the actual dispatch below — after
+        # preparation, and for LogosNode after session acquisition and the
+        # send lock — so the queue/exec split excludes the rate-limit and
+        # budget checks that ran in between. A preparation failure never
+        # reaches the dispatch, so a request that never went out carries no stamp.
 
         timed_out = False
         error_message = None
         status_override = None
+        # The instant the provider's full response arrived. For a LogosNode
+        # sync this is the moment send_command returns — before logos merges
+        # the worker's perf trace and decodes the (possibly large base64) body.
+        # For a cloud sync it is the moment execute_sync returns. Capturing it
+        # at dispatch keeps that logos-side post-response work out of the
+        # provider's run figure.
+        response_at = None
 
         if context.provider_type == "logosnode" and context.lane_id:
             sync_payload = force_non_streaming_payload(prepared_payload)
             try:
-                rpc_result = await _logosnode_registry.send_command(
-                    provider_id=provider_id,
-                    action="infer",
-                    params={
-                        "lane_id": context.lane_id,
-                        "payload": sync_payload,
-                        "request_path": request_path,
-                    },
-                    timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
-                )
+                with perf_trace.phase(request_id, "rpc.send_command"):
+                    # Stamp on the actual WebSocket send, after session
+                    # acquisition and the send lock (see send_command).
+                    rpc_result = await _logosnode_registry.send_command(
+                        provider_id=provider_id,
+                        action="infer",
+                        params={
+                            "lane_id": context.lane_id,
+                            "payload": sync_payload,
+                            "request_path": request_path,
+                        },
+                        timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
+                        on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
+                    )
+                # The full response is in hand the moment send_command returns;
+                # capture it before the perf merge and body decoding below,
+                # which are logos work that must stay out of the provider's
+                # run figure.
+                response_at = datetime.datetime.now(datetime.timezone.utc)
+                # The worker returns its own (LOGOS_WORKER_PERF_TRACE-gated)
+                # phase breakdown inside the command result; merge it under
+                # rpc.worker.* so the transport cost is the difference.
+                perf_trace.merge_worker(request_id, rpc_result.get("perf"))
                 status_override = int(rpc_result.get("status_code", 200))
                 response_payload = rpc_result.get("body")
                 rpc_headers = rpc_result.get("headers") if isinstance(rpc_result.get("headers"), dict) else {}
@@ -3476,8 +2533,9 @@ async def _sync_response(
                     content_type=rpc_content_type,
                 )
             except LogosNodeOfflineError as exc:
-                status_override = 503
-                _, coerced_body = coerce_upstream_error(503, {"error": str(exc)})
+                timed_out = _is_timeout_failure(error=str(exc))
+                status_override = 504 if timed_out else 503
+                _, coerced_body = coerce_upstream_error(status_override, {"error": str(exc)})
                 exec_result = ExecutionResult(
                     success=False,
                     response=coerced_body,
@@ -3487,8 +2545,9 @@ async def _sync_response(
                     headers=None,
                 )
             except LogosNodeCommandError as exc:
-                status_override = 502
-                _, coerced_body = coerce_upstream_error(502, {"error": str(exc)})
+                timed_out = _is_timeout_failure(error=str(exc))
+                status_override = 504 if timed_out else 502
+                _, coerced_body = coerce_upstream_error(status_override, {"error": str(exc)})
                 exec_result = ExecutionResult(
                     success=False,
                     response=coerced_body,
@@ -3499,7 +2558,28 @@ async def _sync_response(
                 )
         else:
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
-        response_at = datetime.datetime.now(datetime.timezone.utc)
+            # The executor captured both instants where they belong: the
+            # dispatch after its request preparation (the multipart decode for
+            # file uploads) and the response before its body parsing — both of
+            # which are logos work. A preparation failure leaves dispatch_at
+            # unset — the request never reached the provider, so the call
+            # stamp stays off and the stats split falls back to the
+            # scheduling-based cut.
+            if request_id and exec_result.dispatch_at is not None:
+                _pipeline.record_provider_call(request_id, at=exec_result.dispatch_at)
+            if response_at is None:
+                response_at = exec_result.response_at
+        if response_at is None:
+            # No captured instant — a LogosNode dispatch that raised before a
+            # response arrived, or a transport failure with no response: the
+            # failure is observed now.
+            response_at = datetime.datetime.now(datetime.timezone.utc)
+        # The provider's full response has arrived; logos' own post-provider
+        # work (rate-limit header handling, the cost lookup) runs from here.
+        # Ending the exec figure at this instant keeps that internal time out
+        # of the provider's numbers.
+        if request_id:
+            _pipeline.record_provider_response(request_id, at=response_at)
 
         # Update rate limits from response headers
         if exec_result.headers:
@@ -3531,57 +2611,77 @@ async def _sync_response(
                 f"Request failed (model_id={model_id}, provider_id={provider_id}): "
                 f"{exec_result.error}, response={response_payload}"
             )
+            # Worker command timeouts used to land here with timed_out still
+            # False (the flag was never set), so they settled as error. Catch
+            # them from the error text and from HTTP 504 as well.
+            if not timed_out:
+                timed_out = _is_timeout_failure(
+                    error=exec_result.error,
+                    status_code=status_override if status_override is not None else exec_result.status_code,
+                )
+                if timed_out:
+                    error_message = exec_result.error
+                    if status_override is None:
+                        status_override = 504
 
         if exec_result.success and context.provider_type == "cloud":
-            response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
+            response_payload, _ = _response_with_cost(
+                response_payload,
+                provider_id,
+                model_id,
+                response_at,
+                request_payload=prepared_payload,
+                path=request_path or "",
+                allow_derived_only=True,
+            )
 
-        usage_tokens = _usage_tokens_from_payload(response_payload)
+        usage_tokens = _usage_tokens_from_payload(
+            response_payload,
+            prepared_payload,
+            request_path or "",
+            billable_request=exec_result.success,
+        )
 
         if log_id:
-            with DBManager() as db:
-                if exec_result.success:
-                    db.set_time_at_first_token(log_id)
-                db.set_response_payload(
-                    log_id,
-                    response_payload,
-                    provider_id,
-                    model_id,
-                    usage_tokens,
-                    policy_id,
-                    classification_stats,
-                    request_id=(scheduling_stats.get("request_id") if scheduling_stats else None),
-                    queue_depth_at_arrival=(
-                        scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None
-                    ),
-                    utilization_at_arrival=(
-                        scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None
-                    ),
-                )
-                # Persist the final result_status directly by log_id. record_completion
-                # below only runs when scheduling_stats is present (it keys off
-                # request_id), which left cloud requests with no scheduling stats —
-                # e.g. a failed Azure call — at result_status NULL, rendering grey
-                # (neither success nor error) on the statistics page.
-                db.update_log_entry_metrics(
-                    log_id=log_id,
-                    provider_id=provider_id,
-                    model_id=model_id,
-                    result_status=("timeout" if timed_out else ("success" if exec_result.success else "error")),
-                    error_message=(
-                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
-                    ),
-                )
+            _result_status = "timeout" if timed_out else ("success" if exec_result.success else "error")
+            _error_message = error_message if timed_out else (exec_result.error if not exec_result.success else None)
+            write_queue.get_write_queue().enqueue(
+                _persist_terminal_response,
+                log_id,
+                usage_tokens,
+                model_id,
+                provider_id,
+                extract_service_tier(response_payload),
+                exec_result.success,
+                scheduling_stats.get("request_id") if scheduling_stats else None,
+                _result_status,
+                _error_message,
+                response_payload,
+                policy_id,
+                classification_stats,
+                queue_depth_at_arrival=(scheduling_stats.get("queue_depth_at_arrival") if scheduling_stats else None),
+                utilization_at_arrival=(scheduling_stats.get("utilization_at_arrival") if scheduling_stats else None),
+            )
 
         if scheduling_stats:
             status = "timeout" if timed_out else ("success" if exec_result.success else "error")
-            _pipeline.record_completion(
-                request_id=scheduling_stats.get("request_id"),
-                result_status=status,
-                error_message=(
-                    error_message if timed_out else (exec_result.error if not exec_result.success else None)
-                ),
-                cold_start=scheduling_stats.get("is_cold_start"),
-            )
+            with perf_trace.phase(request_id, "monitoring.record_complete"):
+                # The terminal accounting (settle + buffer pop) mutates the
+                # recorder's shared state, which is owned by this event-loop
+                # thread — only the DB write may ride the write-behind queue
+                # (its worker must never pop the shared dicts,  review).
+                fields = _pipeline.settle_completion(
+                    request_id=scheduling_stats.get("request_id"),
+                    result_status=status,
+                    error_message=(
+                        error_message if timed_out else (exec_result.error if not exec_result.success else None)
+                    ),
+                    cold_start=scheduling_stats.get("is_cold_start"),
+                    usage_tokens=usage_tokens,
+                )
+                write_queue.get_write_queue().enqueue(
+                    _pipeline.write_completion, scheduling_stats.get("request_id"), fields
+                )
 
         if rl_key:
             from logos.rate_limiter import get_rate_limiter
@@ -3618,6 +2718,26 @@ async def _sync_response(
                 status_code, response_payload or {"error": exec_result.error}
             )
 
+        # A Messages request whose upstream has no Messages route was forwarded
+        # as chat/completions or a Responses call; the client still expects an
+        # Anthropic message back. Translated here, last, so that the logging,
+        # billing and rate-limit bookkeeping above all ran against the
+        # upstream's own OpenAI-shaped body.
+        if context.anthropic_dialect not in (None, UpstreamDialect.NATIVE):
+            response_payload = (
+                translate_response(response_payload, context.anthropic_dialect, model_name=context.model_name)
+                if exec_result.success
+                else translate_error(response_payload)
+            )
+        # The mirror case, and it needs no error branch: an Anthropic failure
+        # body is ``{"error": {"message", "type"}}`` under a wrapper, which is
+        # the OpenAI shape ``coerce_upstream_error`` has already unwrapped it
+        # to just above.
+        elif (
+            getattr(context, "messages_upstream", False) and exec_result.success and isinstance(response_payload, dict)
+        ):
+            response_payload = from_message(response_payload, model_name=context.model_name)
+
         # Return dict for async jobs, JSONResponse for sync endpoints
         if is_async_job:
             if exec_result.raw_body is not None and exec_result.success:
@@ -3652,16 +2772,17 @@ async def _sync_response(
                 job_data = response_payload
             return {"status_code": status_code, "data": job_data}
         else:
-            response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
-            if exec_result.raw_body is not None and exec_result.success:
-                if exec_result.content_type:
-                    response_headers["content-type"] = exec_result.content_type
-                return Response(
-                    content=exec_result.raw_body,
-                    status_code=status_code,
-                    headers=response_headers,
-                )
-            return JSONResponse(content=response_payload, status_code=status_code, headers=response_headers)
+            with perf_trace.phase(request_id, "http.response_build"):
+                response_headers = _decision_response_headers(request_id, scheduling_stats) or {}
+                if exec_result.raw_body is not None and exec_result.success:
+                    if exec_result.content_type:
+                        response_headers["content-type"] = exec_result.content_type
+                    return Response(
+                        content=exec_result.raw_body,
+                        status_code=status_code,
+                        headers=response_headers,
+                    )
+                return JSONResponse(content=response_payload, status_code=status_code, headers=response_headers)
 
     finally:
         if scheduling_stats and scheduling_stats.get("request_id"):
@@ -3694,9 +2815,11 @@ def _proxy_streaming_response(
 
     from fastapi.responses import StreamingResponse
 
+    _proxy_path = forward_url.rsplit("/v1/", 1)[-1] if "/v1/" in forward_url else forward_url
+
     async def streamer():
         stream_log = _StreamingLogAccumulator()
-        cost_enricher = _StreamingCostEnricher(provider_id, model_id)
+        cost_enricher = _StreamingCostEnricher(provider_id, model_id, request_payload=payload, path=_proxy_path)
         stream_status = StreamingExecutionStatus()
         ttft = None
         error_message = None
@@ -3730,12 +2853,19 @@ def _proxy_streaming_response(
         finally:
             if error_message is None:
                 error_message = stream_status.error
+            if error_message is None and stream_log.upstream_error:
+                error_message = str(stream_log.upstream_error.get("message") or stream_log.upstream_error)
             failed = error_message is not None
             # Log completion
             if log_id:
                 stream_log.finish()
                 response_payload = stream_log.response_payload()
-                usage_tokens = _usage_tokens_from_payload(response_payload)
+                usage_tokens = _usage_tokens_from_payload(
+                    response_payload,
+                    payload,
+                    _proxy_path,
+                    billable_request=not failed,
+                )
 
                 with DBManager() as db:
                     if ttft is None and stream_log.first_chunk is not None and not error_message:
@@ -3748,6 +2878,7 @@ def _proxy_streaming_response(
                         usage_tokens,
                         policy_id,
                         classified,
+                        service_tier=extract_service_tier(response_payload),
                     )
                     db.update_log_entry_metrics(
                         log_id=log_id,
@@ -3784,15 +2915,27 @@ async def _proxy_sync_response(
     response_payload = exec_result.response
     if not exec_result.success and not response_payload and exec_result.error:
         response_payload = {"error": exec_result.error}
+    _proxy_path = forward_url.rsplit("/v1/", 1)[-1] if "/v1/" in forward_url else forward_url
     if exec_result.success:
-        response_payload, _ = _response_with_cost(response_payload, provider_id, model_id, response_at)
+        response_payload, _ = _response_with_cost(
+            response_payload,
+            provider_id,
+            model_id,
+            response_at,
+            request_payload=payload,
+            path=_proxy_path,
+            allow_derived_only=True,
+        )
 
     if log_id:
-        usage_tokens = _usage_tokens_from_payload(response_payload)
+        usage_tokens = _usage_tokens_from_payload(
+            response_payload,
+            payload,
+            _proxy_path,
+            billable_request=exec_result.success,
+        )
 
         with DBManager() as db:
-            if exec_result.success:
-                db.set_time_at_first_token(log_id)
             db.set_response_payload(
                 log_id,
                 response_payload,
@@ -3801,12 +2944,18 @@ async def _proxy_sync_response(
                 usage_tokens,
                 policy_id,
                 classified,
+                service_tier=extract_service_tier(response_payload),
+                set_first_token=exec_result.success,
             )
             db.update_log_entry_metrics(
                 log_id=log_id,
                 provider_id=provider_id,
                 model_id=model_id,
-                result_status="success" if exec_result.success else "error",
+                result_status=(
+                    "timeout"
+                    if _is_timeout_failure(error=exec_result.error, status_code=exec_result.status_code)
+                    else ("success" if exec_result.success else "error")
+                ),
                 error_message=None if exec_result.success else exec_result.error,
             )
 
@@ -3842,6 +2991,8 @@ async def _execute_proxy_mode(
     is_async_job: bool,
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
@@ -3853,25 +3004,34 @@ async def _execute_proxy_mode(
     if not requested_model_name:
         raise HTTPException(status_code=400, detail="Proxy mode requires 'model' in payload")
 
-    with DBManager() as db:
-        models_info = db.get_models_info(auth.key_value)
-
-    model_name = _resolve_requested_model_name(
-        requested_model_name,
-        [str(row["name"]) for row in models_info if row.get("name")],
-    )
-    if model_name is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Model '{requested_model_name}' not available for this key",
-        )
-
-    model_id = None
-    for row in models_info:
-        mid, name = row["id"], row["name"]
-        if name == model_name:
-            model_id = mid
-            break
+    is_internal_benchmark = auth.environment == "model-provider-benchmark" and required_provider_id is not None
+    if is_internal_benchmark:
+        matching_deployments = [
+            deployment for deployment in deployments if deployment["provider_id"] == required_provider_id
+        ]
+        model_id = matching_deployments[0]["model_id"] if len(matching_deployments) == 1 else None
+        model_name = requested_model_name if model_id is not None else None
+    else:
+        # auth_parse_log resolved the model in the same session as the
+        # deployment lookup (same permission data, one checkout — );
+        # reuse it when present. The reuse is not traced again under
+        # "mode.resolve_model": the pre-resolve already recorded the phase,
+        # a second near-zero sample under the same name would skew its p50.
+        resolved = auth.resolved_proxy_model
+        if resolved is None:
+            # Not resolved on the auth path (other callers, or no "model" at
+            # auth time): permission data — read fresh per request, never
+            # from the ref cache (a removed model permission must not wait
+            # for a TTL).
+            with perf_trace.phase(request_id, "mode.resolve_model"):
+                with DBManager() as db:
+                    resolved = db.resolve_proxy_model(auth.api_key_id, requested_model_name)
+        if resolved is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Model '{requested_model_name}' not available for this key",
+            )
+        model_id, model_name = resolved
 
     if model_id is None:
         raise HTTPException(
@@ -3902,6 +3062,8 @@ async def _execute_proxy_mode(
         request_id=request_id,
         request_path=request_path,
         skip_laura=True,
+        priority=priority,
+        required_provider_id=required_provider_id,
     )
 
 
@@ -3916,6 +3078,8 @@ async def _execute_resource_mode(
     request_id: Optional[str] = None,
     request_path: Optional[str] = None,
     skip_laura: bool = False,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -3930,7 +3094,7 @@ async def _execute_resource_mode(
     current system state.
 
     The scheduler is aware of:
-    - Real-time model availability (via Ollama/Azure SDI facades)
+    - Real-time model availability (via LogosNode/Azure SDI facades)
     - Current queue depths per model
     - Cold start penalties
     - Model utilization levels
@@ -3969,11 +3133,18 @@ async def _execute_resource_mode(
         deployments=deployments,
         skip_laura=skip_laura,
         request_path=request_path,
-        # The key owner's queue priority; 0 falls back to the
-        # policy-level priority inside the pipeline.
+        required_provider_id=required_provider_id,
+        # The key owner's queue priority; 0 falls back to the team's, then
+        # the policy-level priority inside the pipeline.
         default_priority=auth.default_priority,
+        team_priority=auth.team_priority,
+        role_rank=queue_role_rank(auth.key_type, auth.user_role),
         api_key_id=auth.api_key_id,
     )
+
+    # Deferred logs must exist before the pipeline's enqueue identity UPDATE
+    # (FIFO on the write-behind worker). Already-materialized rows are a no-op.
+    _enqueue_pending_log_for_live_feed(log_id)
 
     # Process through classification and scheduling
     result = await _pipeline.process(pipeline_req)
@@ -3988,7 +3159,7 @@ async def _execute_resource_mode(
             provider_id=result.provider_id,
             classification_stats=result.classification_stats,
             scheduling_stats=result.scheduling_stats,
-            result_status="timeout" if "timeout" in error_msg.lower() else "error",
+            result_status="timeout" if _is_timeout_failure(error=error_msg) else "error",
         )
         if is_async_job:
             return {"status_code": 503, "data": {"error": error_msg}}
@@ -4008,6 +3179,12 @@ async def _execute_resource_mode(
         if rl_info:
             rl_cfg = RateLimitConfig(rpm=rl_info.get("rpm"), tpm=rl_info.get("tpm"))
             allowed, reason = get_rate_limiter().check_and_record(rl_key, rl_cfg)
+            # Persist the admission decision before execution: the /me/keys
+            # usage window counts an admitted request while it is still
+            # running, and must skip the ones this check rejects — the log row
+            # already carries timestamp_forwarding from scheduling, so without
+            # the flag a rejected request would show up as usage.
+            _record_rate_limit_admission(result.scheduling_stats.get("request_id") or request_id, allowed)
             if not allowed:
                 try:
                     _pipeline.scheduler.release(
@@ -4034,36 +3211,47 @@ async def _execute_resource_mode(
             if rl_info.get("tpm") is not None:
                 rl_tpm_key = rl_key
 
-    with DBManager() as db:
-        try:
-            _check_budget_if_cloud(
-                db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
-            )
-        except Exception as e:
+    with perf_trace.phase(request_id, "mode.budget_check"):
+        # Budgets only meter cloud usage — for a scheduled logosnode provider
+        # the check returns before touching the database, so the pool checkout
+        # exists to be checked out for nothing .
+        with DBManager() if provider_type != "logosnode" else nullcontext() as db:
             try:
-                _pipeline.scheduler.release(
-                    result.model_id,
-                    result.provider_id,
-                    provider_type,
-                    result.scheduling_stats.get("request_id") or request_id,
+                _check_budget_if_cloud(
+                    db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
                 )
-            except Exception:
-                logger.warning("Failed to release scheduler slot after budget reject")
-            if isinstance(e, HTTPException) and is_async_job:
-                _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
-                _record_log_failure(
-                    log_id,
-                    result.scheduling_stats.get("request_id") or request_id,
-                    str(e.detail),
-                    model_id=result.model_id,
-                    provider_id=result.provider_id,
-                    classification_stats=result.classification_stats,
-                    scheduling_stats=result.scheduling_stats,
-                )
-                return {"status_code": e.status_code, "data": err_body}
-            raise
+            except Exception as e:
+                try:
+                    _pipeline.scheduler.release(
+                        result.model_id,
+                        result.provider_id,
+                        provider_type,
+                        result.scheduling_stats.get("request_id") or request_id,
+                    )
+                except Exception:
+                    logger.warning("Failed to release scheduler slot after budget reject")
+                if isinstance(e, HTTPException) and is_async_job:
+                    _, err_body = coerce_upstream_error(e.status_code, {"error": str(e.detail)})
+                    _record_log_failure(
+                        log_id,
+                        result.scheduling_stats.get("request_id") or request_id,
+                        str(e.detail),
+                        model_id=result.model_id,
+                        provider_id=result.provider_id,
+                        classification_stats=result.classification_stats,
+                        scheduling_stats=result.scheduling_stats,
+                    )
+                    return {"status_code": e.status_code, "data": err_body}
+                raise
 
     # Execute and Respond
+    #
+    # The provider-call / provider-response timestamps are stamped inside the
+    # execution paths (_sync_response, _streaming_response) at the actual
+    # dispatch and response points — not here — because payload preparation
+    # and, for LogosNode streams, the deferred WebSocket dispatch happen in
+    # between. Stamping before them would count that logos-side work as
+    # provider time.
     try:
         if is_async_job:
             # Async jobs are always non-streaming - use helper
@@ -4152,6 +3340,8 @@ async def route_and_execute(
     log_id: Optional[int],
     is_async_job: bool = False,
     request_id: Optional[str] = None,
+    priority: int = 1,
+    required_provider_id: Optional[int] = None,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -4214,10 +3404,16 @@ async def route_and_execute(
         else:
             raise HTTPException(status_code=404, detail="No models available for this API key.")
 
+    # Jobs reach this point without going through handle_sync_request, so they
+    # publish their live view here. start() is non-destructive, so a request
+    # that already arrived on the sync path keeps the entry it has.
+    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(body), prompt_estimated=True)
+
+    response = None
     try:
         # PROXY mode (body["model"] specified → direct forwarding)
         if body.get("model"):
-            return await _execute_proxy_mode(
+            response = await _execute_proxy_mode(
                 body=body,
                 headers=headers,
                 auth=auth,
@@ -4226,19 +3422,25 @@ async def route_and_execute(
                 is_async_job=is_async_job,
                 request_id=request_id,
                 request_path=path,
+                priority=priority,
+                required_provider_id=required_provider_id,
             )
 
-        # RESOURCE mode (no body["model"] → classification + scheduling)
-        return await _execute_resource_mode(
-            deployments=deployments,
-            body=body,
-            headers=headers,
-            auth=auth,
-            log_id=log_id,
-            is_async_job=is_async_job,
-            request_id=request_id,
-            request_path=path,
-        )
+        else:
+            # RESOURCE mode (no body["model"] → classification + scheduling)
+            response = await _execute_resource_mode(
+                deployments=deployments,
+                body=body,
+                headers=headers,
+                auth=auth,
+                log_id=log_id,
+                is_async_job=is_async_job,
+                request_id=request_id,
+                request_path=path,
+                priority=priority,
+                required_provider_id=required_provider_id,
+            )
+        return response
     except HTTPException as exc:
         _record_log_failure(log_id, request_id, str(exc.detail), result_status="error")
         if is_async_job:
@@ -4247,6 +3449,11 @@ async def route_and_execute(
     except Exception as exc:
         _record_log_failure(log_id, request_id, str(exc), result_status="error")
         raise
+    finally:
+        # Same hand-off as handle_sync_request: a stream keeps its entry until
+        # the streamer ends it, everything else ends here.
+        if not isinstance(response, StreamingResponse):
+            _live_streams.finish(request_id)
 
 
 _CLIENT_DISCONNECT_POLL_SECONDS = 1.0
@@ -4271,14 +3478,62 @@ async def _settle(task: asyncio.Task) -> Any:
     return None
 
 
+class _UnconsumedStreamCleanup:
+    """Close a prefetched upstream iterator and free its scheduler slot.
+
+    ``_streaming_response`` peeks the first chunk before building the
+    ``StreamingResponse``, so the upstream connection and the booked lane
+    already exist. Closing the never-started ``http_streamer`` body does
+    not run its ``finally``, so discard must tear those down explicitly.
+    Once the streamer starts it claims this object and owns cleanup itself.
+    """
+
+    __slots__ = ("_chunk_iter", "_release", "_claimed")
+
+    def __init__(self, chunk_iter, release) -> None:
+        self._chunk_iter = chunk_iter
+        self._release = release
+        self._claimed = False
+
+    def claim_for_streamer(self) -> None:
+        """The body generator is consuming the upstream; skip discard cleanup."""
+        self._claimed = True
+        self._chunk_iter = None
+        self._release = None
+
+    async def close(self) -> None:
+        if self._claimed:
+            return
+        self._claimed = True
+        chunk_iter = self._chunk_iter
+        release = self._release
+        self._chunk_iter = None
+        self._release = None
+        if chunk_iter is not None:
+            with suppress(Exception):
+                await chunk_iter.aclose()
+        if release is not None:
+            with suppress(Exception):
+                release()
+
+
 async def _discard_response(response: Any) -> None:
     """Close a response nobody is left to read.
 
     ``_streaming_response`` pulls the first chunk before handing the response
-    over, so by then the upstream connection is already open. Closing the body
-    iterator unwinds the executor's stream contexts instead of leaving them to
-    the garbage collector.
+    over, so by then the upstream connection is already open. Closing only
+    the never-started body generator would leave that iterator and the
+    scheduler slot behind — the attached cleanup closes both, then the body
+    iterator is closed for any streamer that did start.
     """
+    if response is None:
+        return
+    cleanup = getattr(response, "_logos_unconsumed_cleanup", None)
+    if cleanup is not None:
+        with suppress(Exception):
+            await cleanup.close()
+        with suppress(Exception):
+            response._logos_unconsumed_cleanup = None
     iterator = getattr(response, "body_iterator", None)
     if iterator is None:
         return
@@ -4331,6 +3586,94 @@ async def _execute_cancelling_on_disconnect(request: Request, **kwargs):
     # 499, as nginx uses it: the client closed the request. Nobody is left to
     # read this, but the status keeps the access log honest.
     return JSONResponse(status_code=499, content={"detail": "Client closed request"})
+
+
+def _benchmark_provider_affinity(
+    headers: Dict[str, str],
+    body: Dict[str, Any],
+    deployments: list[Deployment],
+) -> Optional[int]:
+    """Validate a signed active benchmark job and return its required worker."""
+
+    normalized_headers = {str(name).lower(): str(value) for name, value in headers.items()}
+    job_value = normalized_headers.get(BENCHMARK_JOB_HEADER)
+    provider_value = normalized_headers.get(BENCHMARK_PROVIDER_HEADER)
+    token = normalized_headers.get(BENCHMARK_TOKEN_HEADER)
+    phase = normalized_headers.get(BENCHMARK_PHASE_HEADER, "measurement")
+    affinity_values = (job_value, provider_value, token)
+
+    if not any(affinity_values):
+        return None
+    if not all(affinity_values) or not _INTERNAL_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    if phase not in {"warmup", "measurement"}:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    try:
+        job_id = int(job_value)
+        provider_id = int(provider_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if job_id <= 0 or provider_id <= 0:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    model_name = str(body.get("model") or "").strip()
+    expected_token = benchmark_affinity_token(
+        secret=_INTERNAL_SECRET,
+        job_id=job_id,
+        provider_id=provider_id,
+        model=model_name,
+    )
+    if not hmac.compare_digest(token.encode("utf-8"), expected_token.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    with DBManager() as db:
+        job = db.get_job(job_id)
+    if not job or job.get("environment") != "model-provider-benchmark":
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    job_status = job.get("status")
+    if hasattr(job_status, "value"):
+        job_status = job_status.value
+    if job_status != JobStatus.RUNNING.value:
+        raise HTTPException(status_code=409, detail="Benchmark job is no longer running")
+
+    payload = job.get("request_payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+
+    try:
+        payload_provider_id = int(payload.get("provider_id"))
+        payload_model_id = int(payload.get("model_id"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
+    if payload_provider_id != provider_id or str(payload.get("model_name") or "") != model_name:
+        raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    expected_session_id = payload.get("provider_session_id")
+    if expected_session_id:
+        snapshot = _logosnode_registry.peek_runtime_snapshot(provider_id)
+        if snapshot is None or snapshot.get("session_id") != expected_session_id:
+            raise HTTPException(status_code=409, detail="Benchmark provider restarted or disconnected")
+
+    if not any(
+        deployment["provider_id"] == provider_id and deployment["model_id"] == payload_model_id
+        for deployment in deployments
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Benchmark API key cannot access the required provider-model pair",
+        )
+
+    if phase == "measurement":
+        with DBManager() as db:
+            db.record_benchmark_request_started(job_id)
+
+    return provider_id
 
 
 # How often the startup grace period re-checks for a (re)connected worker.
@@ -4423,6 +3766,349 @@ async def _wait_for_worker_connect(
     return deployments
 
 
+# ── Keepalives while a streaming request is still being processed ──────────
+#
+# A streaming client sees no bytes until the first token: the scheduling wait,
+# the context resolution, and the upstream's pre-token silence all happen
+# before a single byte is on the wire. A reverse proxy in front of Logos (the
+# deployment's Traefik defaults to a 180 s respond timeout) gives up with a 504
+# long before a queued or cold-loading request produces its first token, and the
+# client reports a network failure. Committing the response early and dribbling
+# keepalive bytes keeps the connection alive through the whole wait.
+
+# How often a keepalive goes out when nothing else is. Well under the 180 s the
+# proxy allows, so a single dropped keepalive cannot open the 504 window.
+_KEEPALIVE_INTERVAL_S = float(os.getenv("LOGOS_STREAM_KEEPALIVE_S", "15"))
+# An SSE comment: a valid, ignorable line in every SSE stream (Anthropic and
+# OpenAI alike), and safe to send before the upstream dialect is even known.
+_KEEPALIVE_BYTES = b": keepalive\n\n"
+# Marks the end of the content stream in the keepalive queue.
+_KEEPALIVE_DONE = object()
+# Local HTTP providers may stream NDJSON (or other non-SSE byte protocols).
+# Committing ``text/event-stream`` early and injecting SSE comments would
+# corrupt those responses, so they keep the late-commit path.
+_KEEPALIVE_NON_SSE_PROVIDER_TYPES = frozenset({"local"})
+
+
+def _deployments_guarantee_sse(deployments) -> bool:
+    """Whether every candidate deployment streams SSE to the client.
+
+    The keepalive wrapper commits ``text/event-stream`` before the upstream
+    content type is known. That is correct for logosnode and cloud OpenAI-
+    compatible providers; a ``local`` deployment may return NDJSON and must
+    not take this path.
+    """
+    for deployment in deployments or ():
+        if str(deployment.get("type") or "").lower() in _KEEPALIVE_NON_SSE_PROVIDER_TYPES:
+            return False
+    return True
+
+
+def _deployments_for_keepalive_gate(body: dict, auth: "AuthContext", deployments) -> list:
+    """Narrow deployments to the requested model before the SSE keepalive gate.
+
+    A key may reach both a logosnode chat model and an unrelated ``local``
+    deployment. Keepalive eligibility must follow the model that will actually
+    run, not every deployment the key can see.
+    """
+    requested = str(body.get("model") or "").strip()
+    if not requested or not deployments:
+        return list(deployments or ())
+    model_id = None
+    resolved = getattr(auth, "resolved_proxy_model", None)
+    if isinstance(resolved, (tuple, list)) and resolved:
+        model_id = resolved[0]
+    if model_id is not None:
+        narrowed = [d for d in deployments if d.get("model_id") == model_id]
+        if narrowed:
+            return narrowed
+    narrowed = [d for d in deployments if str(d.get("model_name") or "") == requested]
+    return narrowed or list(deployments)
+
+
+def _sse_event_end(buf: bytearray) -> int:
+    """Exclusive end index of the first complete SSE event in ``buf``, or -1.
+
+    SSE events end at a blank line. Upstream may use LF (``\\n\\n``) or CRLF
+    (``\\r\\n\\r\\n``); both are recognized, and the returned slice preserves
+    whichever delimiter the upstream sent.
+    """
+    lf = buf.find(b"\n\n")
+    crlf = buf.find(b"\r\n\r\n")
+    if lf < 0 and crlf < 0:
+        return -1
+    if lf < 0:
+        return crlf + 4
+    if crlf < 0:
+        return lf + 2
+    # Whichever blank line appears first delimits the event.
+    if crlf < lf:
+        return crlf + 4
+    return lf + 2
+
+
+def _error_frames(path: str, status: int, body: Any) -> list:
+    """A failure as SSE frames in the dialect the client speaks.
+
+    Once the keepalive response has committed (200, text/event-stream), a
+    failure can no longer ride a proper HTTP status — it has to travel in the
+    stream, the way a mid-stream failure already does. The frame shape follows
+    the inbound path: a Messages client gets an ``error`` event, a chat
+    client an OpenAI ``data:`` error frame plus ``[DONE]``.
+    """
+    _, openai_body = coerce_upstream_error(status, body)
+    if is_messages_path(path):
+        return [sse("error", translate_error(openai_body))]
+    return [b"\n\n", f"data: {json.dumps(openai_body)}\n\n".encode(), b"data: [DONE]\n\n"]
+
+
+def _instream_error_frames(path: str, exc: Exception) -> list:
+    """An exception from the execution path as in-stream error frames."""
+    if isinstance(exc, HTTPException):
+        return _error_frames(path, exc.status_code, {"error": str(exc.detail)})
+    return _error_frames(path, 500, {"error": str(exc)})
+
+
+def _instream_sync_frames(response: Response, path: str) -> list:
+    """A synchronous response that the keepalive response has to carry.
+
+    ``route_and_execute`` can answer a ``stream: true`` request without a
+    stream — a pre-stream error, or a request the pipeline resolved to a
+    non-streaming answer (Whisper ignores ``stream``). The keepalive response
+    is already committed, so the answer rides in the stream: an error becomes
+    an error frame, and a 200 body is handed over as-is.
+    """
+    status = getattr(response, "status_code", 200)
+    raw = getattr(response, "body", b"")
+    if status != 200:
+        try:
+            body = json.loads(raw) if raw else {"error": "request failed"}
+        except (ValueError, TypeError):
+            body = {"error": raw.decode(errors="replace") if raw else "request failed"}
+        return _error_frames(path, status, body)
+    return [raw] if raw else []
+
+
+def _resolves_to_whisper(body: dict, path: str, auth: "AuthContext") -> bool:
+    """Whether a request will be answered synchronously by a Whisper model.
+
+    Whisper ignores ``stream`` and keeps its upstream content type, so such a
+    request must not commit an SSE keepalive response — it would hand the
+    transcription back as a raw JSON body under ``text/event-stream``. The
+    check covers the requested name, the audio upload path, and the resolved
+    model, because a logical alias (e.g. ``transcription-production``) can
+    point at ``whisper-1`` even though the requested text does not say so.
+    """
+    if is_whisper_payload(body) or is_audio_upload_path(path):
+        return True
+    resolved = getattr(auth, "resolved_proxy_model", None)
+    model_name = resolved[1] if isinstance(resolved, (tuple, list)) else resolved
+    return "whisper" in str(model_name or "").lower()
+
+
+def _scheduling_comment(headers) -> Optional[bytes]:
+    """The scheduling decision as an SSE comment, or None if it carried none.
+
+    The ETTFT estimate and warmth state are only known once the pipeline has
+    run — after the keepalive response is committed, so they cannot ride the
+    response headers. The benchmark client correlates the scheduler's view with
+    the observed TTFT, so the values travel in the stream as a comment (ignored
+    by every other client) under the same names the headers used.
+    """
+    names = ("x-logos-ettft-ms", "x-logos-ettft-tier", "x-logos-warmth-state")
+    parts = [f"{name}={headers[name]}" for name in names if headers.get(name) is not None]
+    if not parts:
+        return None
+    return (": " + " ".join(["logos-schedule"] + parts) + "\n\n").encode()
+
+
+async def _keepalive_producer(inner_iterator, queue: "asyncio.Queue") -> None:
+    """Feed the content streamer's chunks into ``queue``.
+
+    A producer task (rather than awaiting the streamer inline) keeps the drain
+    robust under cancellation: when the client walks away, cancelling this task
+    unwinds the ``aclosing`` context, which closes the inner streamer and runs
+    its cleanup — the worker cancel, the scheduler release — promptly, instead
+    of leaving the streamer to the async-generator GC hook.
+    """
+    try:
+        async with aclosing(inner_iterator):
+            async for chunk in inner_iterator:
+                await queue.put(chunk)
+        await queue.put(_KEEPALIVE_DONE)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        with suppress(asyncio.CancelledError):
+            await queue.put(exc)
+
+
+async def _keepalive_streaming_response(request: Request, **execute_kwargs):
+    """Answer a streaming request with a response that stays alive while it works.
+
+    Returns a ``StreamingResponse`` immediately, so the headers — and thus the
+    first bytes — reach the client (and any proxy) within milliseconds, well
+    inside the proxy's respond timeout. The generator then runs the usual
+    execution path and dribbles a keepalive byte whenever the gap since the
+    last real byte exceeds ``_KEEPALIVE_INTERVAL_S``.
+
+    Two phases, because both can sit behind a long silence:
+
+    * **Pipeline** — ``route_and_execute`` schedules, resolves the context and
+      (on the HTTP path) peeks the upstream's first chunk. All of it runs
+      before any token exists, and it is what can take minutes.
+    * **Content** — the resolved stream's body, drained through a queue so the
+      keepalives keep flowing across the upstream's own pre-token silence.
+
+    A keepalive is yielded by this wrapper, not by the streamer, so it never
+    reaches the logging, billing or translation that the streamer performs on
+    real content. Failures that used to be an HTTP status (a scheduling
+    timeout, a context error, a pre-stream non-2xx) become in-stream error
+    events once the response has committed; the no-deployment 404 is raised
+    before this point and keeps its status.
+    """
+    request_id = execute_kwargs.get("request_id")
+    log_id = execute_kwargs.get("log_id")
+    path = execute_kwargs.get("path")
+    headers = {"X-Request-ID": request_id} if request_id else None
+
+    async def gen():
+        work = asyncio.create_task(route_and_execute(**execute_kwargs))
+        watcher = asyncio.create_task(_wait_for_client_disconnect(request))
+        producer: Optional[asyncio.Task] = None
+        inner_iterator = None
+        response: Optional[Response] = None
+        try:
+            # Phase 1 — the pipeline, keepaliving across its silence.
+            try:
+                while True:
+                    done, _ = await asyncio.wait(
+                        {work, watcher},
+                        timeout=_KEEPALIVE_INTERVAL_S,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    # The watcher's probe consumes the http.disconnect message,
+                    # so a disconnect that lands in the same tick as a finished
+                    # task wins: streaming into a closed socket would be lost
+                    # either way.
+                    if watcher in done:
+                        logger.info(
+                            "Cancelled request %s: client disconnected before the response was ready", request_id
+                        )
+                        _record_log_failure(
+                            log_id,
+                            request_id,
+                            "Client disconnected before the response was ready; upstream request cancelled.",
+                        )
+                        # The response may have been produced in this same tick:
+                        # on the HTTP path its first chunk is already peeked, so
+                        # the upstream connection is open. Close it (and let the
+                        # scheduler slot release) instead of leaving it to the
+                        # client that is already gone.
+                        await _discard_response(await _settle(work))
+                        return
+                    if work in done:
+                        response = work.result()
+                        break
+                    yield _KEEPALIVE_BYTES
+            except Exception as exc:
+                for frame in _instream_error_frames(path, exc):
+                    yield frame
+                return
+
+            # The response is ready; Starlette's own watcher takes over the
+            # disconnect for the body phase.
+            watcher.cancel()
+
+            if isinstance(response, StreamingResponse):
+                # Own the upstream stream before yielding anything else: if the
+                # client disconnects while the scheduling comment is sent,
+                # ``finally`` must still cancel the producer / close this
+                # iterator so the worker connection and scheduler slot release.
+                inner_iterator = response.body_iterator
+                queue: "asyncio.Queue" = asyncio.Queue(maxsize=1024)
+                producer = asyncio.create_task(_keepalive_producer(inner_iterator, queue))
+                # The scheduling decision (ETTFT estimate, warmth) was only
+                # known once the pipeline ran — too late for the committed
+                # headers — so it rides in the stream as a comment for the
+                # benchmark client that correlates it with the observed TTFT.
+                comment = _scheduling_comment(response.headers)
+                if comment:
+                    yield comment
+                # Phase 2 — the content stream, keepaliving across the
+                # upstream's pre-token silence. Upstream chunks can split an
+                # SSE event across reads; buffer until a blank-line boundary
+                # so a keepalive comment is never injected mid-event.
+                pending = bytearray()
+                while True:
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=_KEEPALIVE_INTERVAL_S)
+                    except asyncio.TimeoutError:
+                        if not pending:
+                            yield _KEEPALIVE_BYTES
+                        continue
+                    if item is _KEEPALIVE_DONE:
+                        break
+                    if isinstance(item, Exception):
+                        for frame in _instream_error_frames(path, item):
+                            yield frame
+                        break
+                    if isinstance(item, (bytes, bytearray, memoryview)):
+                        pending.extend(item)
+                        while True:
+                            end = _sse_event_end(pending)
+                            if end < 0:
+                                break
+                            event = bytes(pending[:end])
+                            del pending[:end]
+                            yield event
+                    else:
+                        # Rare non-bytes chunk from a custom streamer: flush
+                        # any buffered SSE first so order stays intact.
+                        if pending:
+                            yield bytes(pending)
+                            pending.clear()
+                        yield item
+                if pending:
+                    yield bytes(pending)
+            else:
+                for frame in _instream_sync_frames(response, path):
+                    yield frame
+        finally:
+            watcher.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await watcher
+            completed = response
+            if not work.done():
+                work.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                settled = await work
+                if completed is None:
+                    completed = settled
+            if producer is not None:
+                if not producer.done():
+                    producer.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await producer
+            # Always discard the settled response. Closing only a never-started
+            # body_iterator (e.g. cancel at the scheduling-comment yield before
+            # the producer enters http_streamer) bypasses its finally and would
+            # leave the prefetched upstream / reserved slot behind; discard runs
+            # the attached cleanup first, then closes the body.
+            if completed is not None:
+                await _discard_response(completed)
+            elif inner_iterator is not None:
+                with suppress(Exception):
+                    await inner_iterator.aclose()
+            # handle_sync_request hands the live-feed entry to this generator for
+            # StreamingResponse; without finish here a cancel before the body
+            # producer starts (or any path that never enters a streamer finally)
+            # leaves the request registered forever.
+            _live_streams.finish(request_id)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
+
+
 async def handle_sync_request(path: str, request: Request):
     """
     Handle synchronous (non-job) requests for both /v1 and /openai endpoints.
@@ -4430,58 +4116,134 @@ async def handle_sync_request(path: str, request: Request):
     priority is derived from the authenticated API key's default_priority
     (falling back to the policy-level priority inside the pipeline).
     """
-    # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs endpoints)
-    headers, auth, body, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+    # Batch API operations (file uploads, batch jobs) carry no model to
+    # classify or schedule, so they bypass the per-request pipeline and are
+    # forwarded to a Batch-capable cloud provider the key may use.
+    if is_batch_api_path(path):
+        return await handle_batch_api_request(request)
+
+    # The request id is minted before authentication so perf tracing can cover
+    # the auth phases as well; the log insert inside auth_parse_log stores it
+    # together with the timeout, so no follow-up metrics UPDATE is needed.
     request_id = secrets.token_urlsafe(16)
+    perf_trace.begin(request_id)
 
+    log_id: Optional[int] = None
+    response = None
     try:
-        with DBManager() as db:
-            if log_id:
-                db.update_log_entry_metrics(
-                    log_id=log_id,
-                    request_id=request_id,
-                    timeout_s=body.get("timeout_s"),
+        try:
+            # Authenticate with profile-based auth (REQUIRED for v1/openai/jobs
+            # endpoints). Inside the try: a failure after the log insert (for
+            # example in the deployment lookup) must reach the same failure
+            # recording as failures later in the setup.
+            with perf_trace.phase(request_id, "auth.parse_log"):
+                headers, auth, body, client_ip, log_id, raw_deployments = await auth_parse_log(
+                    request, use_profile_auth=True, request_id=request_id
                 )
-            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
-    except PermissionError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        raise HTTPException(status_code=401, detail=str(e))
-    except ValueError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        raise HTTPException(status_code=400, detail=str(e))
 
-    if not deployments and raw_deployments:
-        # The key is granted models that no worker serves right now — either
-        # the orchestrator just (re)started and the workers are still
-        # (re)attaching, or a worker dropped a moment ago (reboot) and its
-        # models are unroutable until it comes back. Give the missing
-        # workers a chance to (re)connect instead of failing instantly; the
-        # window stays in effect even though other workers may already have
-        # re-attached.
-        deployments = await _wait_for_worker_connect(
-            raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
+            # Publish the request to the live view from the moment it is known, so the
+            # statistics feed shows its (estimated) prompt size while it waits for a
+            # deployment or a reconnecting worker instead of sitting as a blank row.
+            _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(body), prompt_estimated=True)
+
+            required_provider_id = _benchmark_provider_affinity(headers, body, raw_deployments)
+            if required_provider_id is not None:
+                raw_deployments = [
+                    deployment for deployment in raw_deployments if deployment["provider_id"] == required_provider_id
+                ]
+            with perf_trace.phase(request_id, "setup.filter_logosnode"):
+                deployments = await _filter_logosnode_deployments(raw_deployments, payload=body)
+        except HTTPException as e:
+            _record_log_failure(log_id, request_id, str(e.detail), result_status="error")
+            raise
+        except PermissionError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            raise HTTPException(status_code=401, detail=str(e))
+        except ValueError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            raise HTTPException(status_code=400, detail=str(e))
+
+        if not deployments and raw_deployments:
+            # The key is granted models that no worker serves right now — either
+            # the orchestrator just (re)started and the workers are still
+            # (re)attaching, or a worker dropped a moment ago (reboot) and its
+            # models are unroutable until it comes back. Give the missing
+            # workers a chance to (re)connect instead of failing instantly; the
+            # window stays in effect even though other workers may already have
+            # re-attached.
+            deployments = await _wait_for_worker_connect(
+                raw_deployments, payload=body, request=request, client_timeout_s=_client_timeout_s(body)
+            )
+
+        if not deployments:
+            requested_model = body.get("model", "unknown")
+            msg = f"No available model deployments for model '{requested_model}' for this key"
+            _record_log_failure(log_id, request_id, msg, result_status="error")
+            raise HTTPException(status_code=404, detail=msg)
+
+        execute_kwargs = dict(
+            deployments=deployments,
+            body=body,
+            headers=headers,
+            auth=auth,
+            path=path,
+            log_id=log_id,
+            request_id=request_id,
+            required_provider_id=required_provider_id,
         )
+        # A streaming request commits its response immediately and stays alive
+        # with keepalives while it is processed: the scheduling wait and the
+        # upstream's pre-token silence otherwise sit behind zero bytes and a
+        # proxy's respond timeout (Traefik's default 180 s) 504s the client
+        # before the first token. A request the pipeline answers synchronously
+        # (Whisper ignores stream) keeps the synchronous path and its upstream
+        # content type. Model-free resource-mode requests also stay sync: the
+        # model is chosen later, and committing SSE here would mis-label a
+        # Whisper answer selected by classification. Local deployments may
+        # stream NDJSON rather than SSE, so they keep the late-commit path too.
+        if (
+            body.get("model")
+            and payload_requests_streaming(body)
+            and not _resolves_to_whisper(body, path, auth)
+            and _deployments_guarantee_sse(_deployments_for_keepalive_gate(body, auth, deployments))
+        ):
+            response = await _keepalive_streaming_response(request, **execute_kwargs)
+            return response
+        response = await _execute_cancelling_on_disconnect(request, **execute_kwargs)
+        return response
+    finally:
+        # A streaming response hands the live entry to its generator: the
+        # streamer drops it when the stream ends. Every other outcome — sync
+        # response, an error raise, the client walking away — ends the request
+        # here.
+        if not isinstance(response, StreamingResponse):
+            _live_streams.finish(request_id)
+        # For streaming responses the trace ends here as well (early by design:
+        # the interesting pre-stream phases are what the trace captures).
+        perf_trace.finish(request_id)
 
-    if not deployments:
-        requested_model = body.get("model", "unknown")
-        msg = f"No available model deployments for model '{requested_model}' for this key"
-        _record_log_failure(log_id, request_id, msg, result_status="error")
-        raise HTTPException(status_code=404, detail=msg)
 
-    execute_kwargs = dict(
-        deployments=deployments,
-        body=body,
-        headers=headers,
-        auth=auth,
-        path=path,
-        log_id=log_id,
-        request_id=request_id,
-    )
-    return await _execute_cancelling_on_disconnect(request, **execute_kwargs)
+def _cached_team(team_id: Optional[int]) -> Optional[dict]:
+    """Team row (rate-limit defaults) from the short-TTL ref cache .
+
+    The team row is the only reference data this cache fronts: its contents
+    are configuration (rate-limit defaults), not authorization. The api-key
+    row and the permission lookups (deployments, resolve_proxy_model) are
+    deliberately read fresh per request — caching them would delay a key
+    revocation or a permission removal until the TTL expires, which would be
+    an authorization behavior change .
+    """
+    if team_id is None:
+        return None
+
+    def _load():
+        with DBManager() as db:
+            return db.get_team(team_id)
+
+    return refcache.get_ref_cache().load(("team", team_id), _load)
 
 
-async def auth_parse_log(request: Request, use_profile_auth: bool = False):
+async def auth_parse_log(request: Request, use_profile_auth: bool = False, request_id: Optional[str] = None):
     """
     Authenticate, parse, and log incoming requests.
 
@@ -4494,9 +4256,17 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
 
     Returns:
         If use_profile_auth=False (default):
-            (headers, logos_key, process_id, body, client_ip, log_id)
+            (headers, None, body, client_ip, None, [])
         If use_profile_auth=True:
-            (headers, auth_context, body, client_ip, log_id)
+            (headers, auth_context, body, client_ip, log_id, raw_deployments)
+
+        The team row comes from the short-TTL ref cache ; the
+        deployment rows are permission data and are read fresh in the same
+        session as the log insert — so the request path's pre-execution work
+        is one pool checkout: log insert, deployment lookup, and (when the
+        body names a model) the proxy-mode resolution, whose result the
+        request-scoped auth context carries. The log row already carries
+        request_id and timeout_s — no follow-up metrics UPDATE is needed.
 
     Raises:
         HTTPException(400): Invalid JSON body
@@ -4506,7 +4276,8 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
     # callers from consuming the audio upload/base64 memory budget.
     headers = dict(request.headers)
     client_ip = get_client_ip(request)
-    auth = authenticate_api_key(headers) if use_profile_auth else None
+    with perf_trace.phase(request_id, "auth.api_key"):
+        auth = authenticate_api_key(headers, client_ip=client_ip) if use_profile_auth else None
 
     # OpenAI-compatible audio uploads use multipart/form-data. Other inference
     # operations retain the existing JSON request contract.
@@ -4524,94 +4295,103 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False):
         raise HTTPException(status_code=400, detail="JSON payload must be an object")
 
     if use_profile_auth:
-        with DBManager() as db:
+        log_id: Optional[int] = None
 
-            # Rate limits apply to every key, including those owned by
-            # logos_admins. Admin keys derive their limits from their team /
-            # key settings exactly like any other key. Budget is checked later,
-            # once permitted deployments are known (see _check_budget_if_cloud).
-            s = auth.settings or {}
-            team_info = db.get_team(auth.team_id) if auth.team_id is not None else None
+        # Rate limits apply to every key, including those owned by
+        # logos_admins. Admin keys derive their limits from their team /
+        # key settings exactly like any other key. Budget is checked later,
+        # once permitted deployments are known (see _check_budget_if_cloud).
+        s = auth.settings or {}
+        with perf_trace.phase(request_id, "auth.team_lookup"):
+            # The team row (rate-limit defaults) is reference data — the
+            # short-TTL ref cache serves it instead of a per-request checkout
+            # .
+            team_info = _cached_team(auth.team_id)
 
-            generic_rpm = s.get("rpm_limit")
-            generic_tpm = s.get("tpm_limit")
+        generic_rpm = s.get("rpm_limit")
+        generic_tpm = s.get("tpm_limit")
 
-            cloud_rpm = (
-                s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
-            )
-            cloud_tpm = (
-                s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
-            )
-            local_rpm = (
-                s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
-            )
-            local_tpm = (
-                s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
-            )
+        cloud_rpm = s.get("cloud_rpm_limit") or generic_rpm or (team_info and team_info.get("default_cloud_rpm_limit"))
+        cloud_tpm = s.get("cloud_tpm_limit") or generic_tpm or (team_info and team_info.get("default_cloud_tpm_limit"))
+        local_rpm = s.get("local_rpm_limit") or generic_rpm or (team_info and team_info.get("default_local_rpm_limit"))
+        local_tpm = s.get("local_tpm_limit") or generic_tpm or (team_info and team_info.get("default_local_tpm_limit"))
 
-            if cloud_rpm is not None or cloud_tpm is not None:
-                auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
-            if local_rpm is not None or local_tpm is not None:
-                auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
+        if cloud_rpm is not None or cloud_tpm is not None:
+            auth.cloud_rl = {"rpm": cloud_rpm, "tpm": cloud_tpm}
+        if local_rpm is not None or local_tpm is not None:
+            auth.local_rl = {"rpm": local_rpm, "tpm": local_tpm}
 
-            r_log, c_log = db.log_usage(
-                api_key_id=auth.api_key_id,
-                team_id=auth.team_id,
-                user_id=auth.user_id,
-                environment=auth.environment,
-                log_level=auth.log_level,
-                client_ip=client_ip,
-                input_payload=sanitized_payload_for_logging(body),
-                headers=sanitized_headers_for_persistence(headers),
-            )
-            if c_log == 200:
-                log_id = int(r_log["log-id"])
+        deployment_cache = refcache.get_ref_cache()
+        cached_deployments = deployment_cache.get(("deployments", auth.api_key_id))
+        log_fields = {
+            "api_key_id": auth.api_key_id,
+            "team_id": auth.team_id,
+            "user_id": auth.user_id,
+            "environment": auth.environment,
+            "log_level": auth.log_level,
+            "client_ip": client_ip,
+            "input_payload": sanitized_payload_for_logging(body),
+            "headers": sanitized_headers_for_persistence(headers),
+            "request_id": request_id,
+            "timeout_s": body.get("timeout_s"),
+        }
+        can_defer_log = (
+            cached_deployments is not refcache._MISSING
+            and auth.role not in ("logos_admin", "app_admin")
+            and not payload_requests_streaming(body)
+        )
+        if can_defer_log:
+            raw_deployments, _ = cached_deployments
+            log_id = _PendingLog(log_fields)
+        else:
+            with DBManager() as db:
+                with perf_trace.phase(request_id, "auth.log_usage_insert"):
+                    r_log, c_log = db.log_usage(**log_fields)
 
-        return headers, auth, body, client_ip, log_id
+                if c_log == 200:
+                    log_id = int(r_log["log-id"])
 
-    return headers, None, body, client_ip, None
+                    with perf_trace.phase(request_id, "setup.deployments"):
+                        if cached_deployments is refcache._MISSING:
+                            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+                            deployment_cache.set(
+                                ("deployments", auth.api_key_id),
+                                (raw_deployments, allowed_models),
+                            )
+                        else:
+                            raw_deployments, _ = cached_deployments
 
+                    requested_model_name = str(body.get("model") or "").strip()
+                    if requested_model_name:
+                        with perf_trace.phase(request_id, "mode.resolve_model"):
+                            if auth.role in ("logos_admin", "app_admin"):
+                                auth.resolved_proxy_model = db.resolve_proxy_model(
+                                    auth.api_key_id, requested_model_name
+                                )
+                            else:
+                                auth.resolved_proxy_model = resolve_proxy_model_from_deployments(
+                                    raw_deployments, requested_model_name
+                                )
+        if can_defer_log:
+            requested_model_name = str(body.get("model") or "").strip()
+            if requested_model_name:
+                with perf_trace.phase(request_id, "mode.resolve_model"):
+                    auth.resolved_proxy_model = resolve_proxy_model_from_deployments(
+                        raw_deployments, requested_model_name
+                    )
 
-def _check_budget_if_cloud(db: DBManager, auth: "AuthContext", is_cloud: bool, month_start: str) -> None:
-    """
-    Raise HTTPException(402) if this key/team is over its monthly budget.
+        return headers, auth, body, client_ip, log_id, raw_deployments
 
-    Only cloud usage is metered (logosnode/local providers have no configured
-    token pricing in token_prices, so they always cost $0), so this is a
-    no-op when the request that actually got scheduled isn't routing to a
-    cloud provider at all. Called post-scheduling (see _execute_resource_mode)
-    with the real resolved provider type, not a guess from the permission list --
-    that's what lets this be exact for mixed cloud+local keys instead of only
-    for pure-type ones.
-    """
-    if not is_cloud:
-        return
-
-    key_type = getattr(auth, "key_type", "user")
-
-    if key_type == "application":
-        app_budget_limit = db.get_api_key_budget_limit(auth.api_key_id)
-        if app_budget_limit is not None:
-            app_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-            if app_used >= app_budget_limit:
-                raise HTTPException(status_code=402, detail="Application monthly budget exceeded.")
-    else:
-        if auth.team_id is not None:
-            team_info = db.get_team(auth.team_id)
-            if team_info and team_info.get("team_monthly_budget_micro_cents"):
-                team_limit = team_info["team_monthly_budget_micro_cents"]
-                team_used = db.get_team_budget_usage(auth.team_id, month_start)
-                if team_used >= team_limit:
-                    raise HTTPException(status_code=402, detail="Team monthly budget exceeded. Contact your admin.")
-
-        personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
-        if personal_limit is not None:
-            personal_used = db.get_api_key_budget_usage(auth.api_key_id, month_start)
-            if personal_used >= personal_limit:
-                raise HTTPException(status_code=402, detail="Personal monthly budget exceeded.")
+    return headers, None, body, client_ip, None, []
 
 
-async def submit_job_request(path: str, request: Request) -> JSONResponse:
+# The budget guard lives in logos.billing.budget so the Batch API can apply the
+# same limits without importing main (which imports it). Kept bound here under
+# its original name: it is called above and patched by name in the tests.
+_check_budget_if_cloud = check_monthly_budget
+
+
+async def submit_job_request(path: str, request: Request) -> Response:
     """
     Accept a proxy request, persist it as a job, and launch async processing (poll for result via /jobs/{id}).
 
@@ -4620,13 +4400,19 @@ async def submit_job_request(path: str, request: Request) -> JSONResponse:
         request: Incoming FastAPI request containing headers/body.
 
     Returns:
-        202 Accepted with job id and status URL.
+        202 Accepted with job id and status URL — or the provider's
+        Batch API response when the path is a batch operation.
 
     Raises:
         HTTPException(400/401) on invalid payload or auth.
     """
+    # Same dispatch as the sync path: batch operations never become Logos
+    # jobs, they are forwarded to the provider's Batch API.
+    if is_batch_api_path(path):
+        return await handle_batch_api_request(request)
+
     # Auth with full context + initial logging
-    headers, auth, json_data, client_ip, log_id = await auth_parse_log(request, use_profile_auth=True)
+    headers, auth, json_data, client_ip, log_id, _job_deployments = await auth_parse_log(request, use_profile_auth=True)
 
     # Persist job and run it asynchronously
     job_payload = JobSubmission(
@@ -4718,275 +4504,60 @@ async def execute_proxy_job(
 
     request_id = secrets.token_urlsafe(16)
 
-    # Get available models for this API key
+    # Same early publication as the sync path: the moment the job has a
+    # request id, its (estimated) prompt is on the feed instead of the row
+    # sitting blank through the worker wait below.
+    _live_streams.start(request_id, prompt_tokens=estimate_prompt_tokens(json_data), prompt_estimated=True)
     try:
-        with DBManager() as db:
-            if log_id:
-                db.update_log_entry_metrics(
-                    log_id=log_id,
-                    request_id=request_id,
-                    timeout_s=json_data.get("timeout_s"),
-                )
-            raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
-        deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
-    except PermissionError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        _, err_body = coerce_upstream_error(401, {"error": str(e)})
-        return {"status_code": 401, "data": err_body}
-    except ValueError as e:
-        _record_log_failure(log_id, request_id, str(e), result_status="error")
-        _, err_body = coerce_upstream_error(400, {"error": str(e)})
-        return {"status_code": 400, "data": err_body}
+        # Get available models for this API key
+        try:
+            with DBManager() as db:
+                if log_id:
+                    db.update_log_entry_metrics(
+                        log_id=log_id,
+                        request_id=request_id,
+                        timeout_s=json_data.get("timeout_s"),
+                    )
+                # Deployment rows are permission data — read fresh in this
+                # session, never from the ref cache .
+                raw_deployments, allowed_models = request_setup(headers, auth.api_key_id, db=db)
+            deployments = await _filter_logosnode_deployments(raw_deployments, payload=json_data)
+        except PermissionError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            _, err_body = coerce_upstream_error(401, {"error": str(e)})
+            return {"status_code": 401, "data": err_body}
+        except ValueError as e:
+            _record_log_failure(log_id, request_id, str(e), result_status="error")
+            _, err_body = coerce_upstream_error(400, {"error": str(e)})
+            return {"status_code": 400, "data": err_body}
 
-    # Same windows as the sync path: a job submitted while no worker is
-    # connected (startup or a worker reboot) must not fail before the
-    # workers re-attach.
-    if not deployments and raw_deployments:
-        deployments = await _wait_for_worker_connect(
-            raw_deployments, payload=json_data, client_timeout_s=_client_timeout_s(json_data)
+        # Same windows as the sync path: a job submitted while no worker is
+        # connected (startup or a worker reboot) must not fail before the
+        # workers re-attach.
+        if not deployments and raw_deployments:
+            deployments = await _wait_for_worker_connect(
+                raw_deployments, payload=json_data, client_timeout_s=_client_timeout_s(json_data)
+            )
+
+        # Force non-streaming for jobs without adding unsupported multipart fields.
+        json_data = force_non_streaming_payload(json_data)
+
+        # Route and execute request
+        return await route_and_execute(
+            deployments=deployments,
+            body=json_data,
+            headers=headers,
+            auth=auth,
+            path=path,
+            log_id=log_id,
+            is_async_job=True,
+            request_id=request_id,
         )
-
-    # Force non-streaming for jobs without adding unsupported multipart fields.
-    json_data = force_non_streaming_payload(json_data)
-
-    # Route and execute request
-    return await route_and_execute(
-        deployments=deployments,
-        body=json_data,
-        headers=headers,
-        auth=auth,
-        path=path,
-        log_id=log_id,
-        is_async_job=True,
-        request_id=request_id,
-    )
-
-
-# ============================================================================
-# LOGOSNODE PROVIDER ENDPOINTS
-# ============================================================================
-
-
-def _is_tls_websocket(websocket: WebSocket) -> bool:
-    if _logosnode_insecure_dev_mode_enabled():
-        return True
-    if websocket.url.scheme in {"wss", "https"}:
-        return True
-    forwarded = websocket.headers.get("x-forwarded-proto", "")
-    forwarded_values = [item.strip().lower() for item in forwarded.split(",") if item.strip()]
-    return "https" in forwarded_values or "wss" in forwarded_values
-
-
-@app.post("/logosdb/providers/logosnode/register", tags=["logosnode"])
-async def logosnode_register(data: LogosNodeRegisterRequest):
-    """
-    Root-only provider bootstrap endpoint for LogosWorkerNode providers.
-    """
-    _require_root_access(data.logos_key)
-
-    provider_name = (data.provider_name or "").strip()
-    if not provider_name:
-        raise HTTPException(status_code=400, detail="provider_name is required")
-
-    shared_key = secrets.token_urlsafe(48)
-    with DBManager() as db:
-        result, code = db.add_provider(
-            logos_key=data.logos_key,
-            provider_name=provider_name,
-            base_url=(data.base_url or "").strip(),
-            api_key=shared_key,
-            auth_name="",
-            auth_format="{}",
-            provider_type="logosnode",
-        )
-
-    if code != 200:
-        return JSONResponse(status_code=code, content=result)
-
-    provider_id = result.get("provider-id")
-
-    # Create logosnode_provider_keys entry so deployment queries work
-    try:
-        with DBManager() as db:
-            db.sync_logosnode_capabilities(provider_id, [])
-    except Exception:
-        logger.exception("Failed to create logosnode_provider_keys for provider %s", provider_name)
-
-    return {
-        "provider_id": provider_id,
-        "provider_name": provider_name,
-        "provider_type": "logosnode",
-        "shared_key": shared_key,
-    }
-
-
-@app.post("/logosdb/providers/logosnode/auth", tags=["logosnode"])
-async def logosnode_auth(data: LogosNodeAuthRequest, request: Request):
-    """
-    Authenticate a LogosWorkerNode by its API key.
-
-    The server resolves the provider from the key. The worker never needs
-    to know or send a provider_id.
-    """
-    _require_tls_request(request)
-    with DBManager() as db:
-        provider = db.get_logosnode_provider_by_api_key(data.shared_key)
-
-    if not provider:
-        raise HTTPException(status_code=404, detail="Provider not found for this API key")
-    provider_type = _normalize_provider_type(provider.get("provider_type"))
-    if provider_type != "logosnode":
-        raise HTTPException(status_code=403, detail="Provider is not configured as logosnode")
-
-    provider_id = provider["id"]
-    worker_id = provider.get("name") or f"worker-{provider_id}"
-
-    conflicting_session = await _logosnode_registry.get_conflicting_session(
-        provider_id,
-        worker_id,
-        stale_after_seconds=_LOGOSNODE_STATS_STALE_AFTER_SECONDS,
-    )
-    if conflicting_session is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Worker '{conflicting_session.worker_id}' is already connected. " f"Stop the existing worker first."
-            ),
-        )
-    token = await _logosnode_registry.issue_ticket(
-        provider_id=provider_id,
-        worker_id=worker_id,
-        capabilities_models=data.capabilities_models,
-        configured_models=data.configured_models or None,
-        ttl_seconds=60,
-    )
-    return {
-        "session_token": token,
-        "ws_url": _build_logosnode_ws_url(request, token),
-        "worker_id": worker_id,
-        "expires_in_seconds": 60,
-    }
-
-
-@app.websocket("/logosdb/providers/logosnode/session")
-async def logosnode_session(websocket: WebSocket, token: str):
-    if not _is_tls_websocket(websocket):
-        await websocket.close(code=1008, reason="TLS required")
-        return
-
-    ticket = await _logosnode_registry.consume_ticket(token)
-    if ticket is None:
-        await websocket.close(code=1008, reason="Invalid or expired token")
-        return
-
-    await websocket.accept()
-    try:
-        await _logosnode_registry.attach_session(ticket, websocket)
-    except LogosNodeSessionConflictError as exc:
-        await websocket.close(code=1008, reason=str(exc))
-        return
-
-    try:
-        while True:
-            payload = await websocket.receive_json()
-            if not isinstance(payload, dict):
-                continue
-            msg_type = payload.get("type")
-            if msg_type == "hello":
-                await _logosnode_registry.on_hello(
-                    provider_id=ticket.provider_id,
-                    worker_id=str(payload.get("worker_id", "")).strip() or ticket.worker_id,
-                    capabilities_models=(
-                        payload.get("capabilities_models")
-                        if isinstance(payload.get("capabilities_models"), list)
-                        else None
-                    ),
-                    configured_models=(
-                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
-                    ),
-                    max_lanes=(
-                        int(payload.get("max_lanes", 0)) if isinstance(payload.get("max_lanes"), (int, float)) else 0
-                    ),
-                    calibrating=(
-                        bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
-                    ),
-                    actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
-                )
-            elif msg_type == "status":
-                runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
-                await _logosnode_registry.update_runtime(
-                    provider_id=ticket.provider_id,
-                    runtime=runtime,
-                    capabilities_models=(
-                        payload.get("capabilities_models")
-                        if isinstance(payload.get("capabilities_models"), list)
-                        else None
-                    ),
-                    configured_models=(
-                        payload.get("configured_models") if isinstance(payload.get("configured_models"), list) else None
-                    ),
-                    calibrating=(
-                        bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
-                    ),
-                )
-                _capture_logosnode_provider_snapshot(ticket.provider_id, runtime)
-            elif msg_type == "event":
-                event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-                await _logosnode_registry.append_event(
-                    provider_id=ticket.provider_id,
-                    event=event,
-                    replay=bool(payload.get("replay", False)),
-                )
-                if event.get("event") == "calibration_probe_log":
-                    try:
-                        await asyncio.to_thread(_capture_calibration_probe_log, ticket.provider_id, event)
-                    except Exception:
-                        logger.debug(
-                            "Failed to persist calibration probe log for provider %s",
-                            _resolve_provider_name(ticket.provider_id),
-                            exc_info=True,
-                        )
-            elif msg_type == "heartbeat":
-                await _logosnode_registry.mark_heartbeat(ticket.provider_id)
-            elif msg_type == "command_result":
-                await _logosnode_registry.on_command_result(ticket.provider_id, payload)
-            elif msg_type == "stream_start":
-                await _logosnode_registry.on_stream_start(ticket.provider_id, payload)
-            elif msg_type == "stream_chunk":
-                await _logosnode_registry.on_stream_chunk(ticket.provider_id, payload)
-            elif msg_type == "stream_end":
-                await _logosnode_registry.on_stream_end(ticket.provider_id, payload)
-    except WebSocketDisconnect:
-        pass
     finally:
-        await _logosnode_registry.detach_session(ticket.provider_id, websocket)
-
-
-@app.post("/logosdb/providers/logosnode/status", tags=["logosnode"])
-async def logosnode_status(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
-    try:
-        return await _logosnode_registry.get_runtime_snapshot(data.provider_id)
-    except LogosNodeOfflineError as exc:
-        return JSONResponse(status_code=503, content={"error": str(exc)})
-
-
-@app.post("/logosdb/providers/logosnode/devices", tags=["logosnode"])
-async def logosnode_devices(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
-    try:
-        return {"devices": await _logosnode_registry.get_devices(data.provider_id)}
-    except LogosNodeOfflineError as exc:
-        return JSONResponse(status_code=503, content={"error": str(exc)})
-
-
-@app.post("/logosdb/providers/logosnode/lanes", tags=["logosnode"])
-async def logosnode_lanes(data: LogosNodeStatusRequest):
-    _require_root_access(data.logos_key)
-    try:
-        return {"lanes": await _logosnode_registry.get_lanes(data.provider_id)}
-    except LogosNodeOfflineError as exc:
-        return JSONResponse(status_code=503, content={"error": str(exc)})
+        # A job never streams, so nothing here hands the entry on: every way
+        # out — error dict above, route_and_execute's own finally, an
+        # unexpected raise — ends the entry here at the latest.
+        _live_streams.finish(request_id)
 
 
 _LOGOSNODE_CMD_TIMEOUTS: dict[str, int] = {
@@ -5016,56 +4587,6 @@ async def _dispatch_logosnode_command(provider_id: int, action: str, params: dic
         return JSONResponse(status_code=502, content={"error": str(exc)})
 
 
-@app.post("/logosdb/providers/logosnode/lanes/apply", tags=["logosnode"])
-async def logosnode_apply_lanes(data: LogosNodeApplyLanesRequest):
-    _require_root_access(data.logos_key)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="apply_lanes",
-        params={"lanes": data.lanes},
-    )
-
-
-@app.post("/logosdb/providers/logosnode/lanes/sleep", tags=["logosnode"])
-async def logosnode_sleep_lane(data: LogosNodeSleepLaneRequest):
-    _require_root_access(data.logos_key)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="sleep_lane",
-        params={"lane_id": data.lane_id, "level": data.level, "mode": data.mode},
-    )
-
-
-@app.post("/logosdb/providers/logosnode/lanes/wake", tags=["logosnode"])
-async def logosnode_wake_lane(data: LogosNodeWakeLaneRequest):
-    _require_root_access(data.logos_key)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="wake_lane",
-        params={"lane_id": data.lane_id},
-    )
-
-
-@app.post("/logosdb/providers/logosnode/lanes/delete", tags=["logosnode"])
-async def logosnode_delete_lane(data: LogosNodeDeleteLaneRequest):
-    _require_root_access(data.logos_key)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="delete_lane",
-        params={"lane_id": data.lane_id},
-    )
-
-
-@app.post("/logosdb/providers/logosnode/lanes/reconfigure", tags=["logosnode"])
-async def logosnode_reconfigure_lane(data: LogosNodeReconfigureLaneRequest):
-    _require_root_access(data.logos_key)
-    return await _dispatch_logosnode_command(
-        provider_id=data.provider_id,
-        action="reconfigure_lane",
-        params={"lane_id": data.lane_id, "updates": data.updates},
-    )
-
-
 def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
     """Return every configured model on a provider that still needs calibration.
 
@@ -5074,220 +4595,43 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
     but this lets the API caller see the candidate list up front. Sourced
     from configured_models so models the worker stripped from
     capabilities_models (because they have no profile yet) are visible.
+
+    Reads the live session snapshot directly rather than through
+    _logosnode_facade: the facade's provider entry is populated from DB
+    model_provider links, which sync_logosnode_capabilities prunes to
+    match capabilities_models. A worker with every model uncalibrated
+    reports an empty capabilities_models, so that sync deletes all of its
+    links and the facade drops the provider entirely — leaving nothing
+    here to discover, even though the raw snapshot still has it all.
     """
-    if _logosnode_facade is None:
+    snap = _logosnode_registry.peek_runtime_snapshot(provider_id)
+    if snap is None:
         return []
-    candidates = _logosnode_facade.get_configured_models(provider_id)
-    if not candidates:
-        candidates = _logosnode_facade.get_worker_capabilities(provider_id)
-    try:
-        profiles = _logosnode_facade.get_model_profiles(provider_id)
-    except Exception:
-        profiles = {}
+    candidates = snap.get("configured_models") or snap.get("capabilities_models") or []
+    raw_profiles = (snap.get("runtime") or {}).get("model_profiles")
+    profiles = raw_profiles if isinstance(raw_profiles, dict) else {}
     uncalibrated: list[str] = []
     for model_name in candidates:
         profile = profiles.get(model_name)
+        if not isinstance(profile, dict):
+            profile = None
         collapsed_envelope = (
             profile is not None
-            and profile.min_kv_cache_mb is not None
-            and profile.max_kv_cache_mb is not None
-            and profile.min_kv_cache_mb > 0
-            and profile.min_kv_cache_mb == profile.max_kv_cache_mb
+            and profile.get("min_kv_cache_mb") is not None
+            and profile.get("max_kv_cache_mb") is not None
+            and profile.get("min_kv_cache_mb") > 0
+            and profile.get("min_kv_cache_mb") == profile.get("max_kv_cache_mb")
         )
         if (
             profile is None
-            or profile.base_residency_mb is None
-            or profile.sleeping_residual_mb is None
-            or profile.sleep_l1_transient_host_ram_mb is None
-            or (
-                profile is not None
-                and profile.residency_source == "calibrated"
-                and not profile.kv_cache_to_max_model_len_pairs
-            )
+            or profile.get("base_residency_mb") is None
+            or profile.get("sleeping_residual_mb") is None
+            or profile.get("sleep_l1_transient_host_ram_mb") is None
+            or (profile.get("residency_source") == "calibrated" and not profile.get("kv_cache_to_max_model_len_pairs"))
             or collapsed_envelope
         ):
             uncalibrated.append(model_name)
     return uncalibrated
-
-
-@app.post("/logosdb/providers/logosnode/calibrate_uncalibrated", tags=["logosnode"])
-async def logosnode_calibrate_uncalibrated(data: LogosNodeStatusRequest):
-    """Kick off a worker-driven calibration session immediately.
-
-    The worker picks which uncalibrated models to run and walks them one at
-    a time, emitting ``calibration_*`` events as each completes. The server
-    no longer chooses models or polls status — the response just confirms
-    the session was started and reports which models the worker will see
-    as uncalibrated right now.
-    """
-    _require_root_access(data.logos_key)
-    snap = _logosnode_registry.peek_runtime_snapshot(data.provider_id)
-    if snap is None:
-        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
-    if not snap.get("first_status_received"):
-        return JSONResponse(
-            status_code=503,
-            content={"error": "Worker has not sent its first status yet"},
-        )
-    models = _find_uncalibrated_models_on_provider(data.provider_id)
-    if not models:
-        return {
-            "message": "No uncalibrated models on this worker",
-            "count": 0,
-            "models": [],
-        }
-    sleep_level = _calibration_orchestrator._config.sleep_level if _calibration_orchestrator is not None else 1
-    pname = _resolve_provider_name(data.provider_id)
-    try:
-        await _logosnode_registry.send_command(
-            data.provider_id,
-            "start_calibration_session",
-            params={"sleep_level": sleep_level},
-            timeout_seconds=30,
-        )
-    except LogosNodeOfflineError as exc:
-        logger.warning("Admin calibrate-uncalibrated: provider=%s offline: %s", pname, exc)
-        return JSONResponse(status_code=503, content={"error": "Worker not connected"})
-    except LogosNodeCommandError as exc:
-        logger.warning(
-            "Admin calibrate-uncalibrated: start_calibration_session refused on provider=%s: %s",
-            pname,
-            exc,
-        )
-        return JSONResponse(status_code=409, content={"error": str(exc)})
-    logger.info(
-        "Admin calibrate-uncalibrated: session started on provider=%s (%d candidate model(s))",
-        pname,
-        len(models),
-    )
-    return {
-        "message": f"Calibration session started on {pname} ({len(models)} candidate model(s))",
-        "count": len(models),
-        "models": models,
-    }
-
-
-# ============================================================================
-# DATABASE MANAGEMENT ENDPOINTS
-# ============================================================================
-
-
-@app.post("/logosdb/update_provider_sdi_config", tags=["admin"])
-async def update_provider_sdi_config(data: UpdateProviderSdiConfigRequest):
-    with DBManager() as db:
-        result = db.update_provider_sdi_config(**data.dict())
-    await refresh_pipeline_runtime_state()
-    return result
-
-
-@app.post("/logosdb/connect_model_provider", tags=["admin"])
-async def connect_model_provider(data: ConnectModelProviderRequest):
-    with DBManager() as db:
-        result = db.connect_model_provider(**data.dict())
-    await refresh_pipeline_runtime_state()
-    return result
-
-
-@app.get("/logosdb/scheduler_state", tags=["admin"])
-async def scheduler_state(request: Request):
-    """
-    Debug endpoint to inspect in-memory scheduler and LogosWorkerNode capacity state.
-    """
-    headers = dict(request.headers)
-    authenticate_api_key(headers)
-
-    if not _pipeline or not _logosnode_facade:
-        return JSONResponse(content={"error": "Scheduler not initialized"}, status_code=503)
-
-    payload = {
-        "queue_total": _pipeline.scheduler.get_total_queue_depth(),
-        "logosnode": _logosnode_facade.debug_state(),
-    }
-    prefix_router = getattr(_pipeline.scheduler, "_prefix_router", None)
-    if prefix_router is not None:
-        payload["prefix_affinity"] = prefix_router.debug_state()
-    return JSONResponse(content=payload, status_code=200)
-
-
-def _today_utc() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-@app.post("/logosdb/get_ollama_vram_stats", tags=["admin"])
-async def get_ollama_vram_stats(request: Request):
-    """
-    Return live LogosWorkerNode provider VRAM usage for dashboards.
-
-    Request body:
-    {
-        "day": "2025-01-05",                    # Optional, ignored for runtime-backed stats
-        "bucket_seconds": 5,                    # Optional, ignored for compatibility
-        "after_snapshot_id": 0                  # Optional, return only snapshots with
-                                                # snapshot_id > this (incremental polling)
-    }
-
-    Response:
-    {
-        "providers": [
-            {
-                "url": "http://host.docker.internal:11435",
-                "data": [
-                    {"timestamp": "2025-01-05T10:00:00Z", "vram_mb": 4608},
-                    ...
-                ]
-            }
-        ]
-    }
-    """
-    headers = dict(request.headers)
-    auth = authenticate_api_key(headers)
-    logos_key = auth.key_value
-
-    day = _today_utc()
-    after_snapshot_id = 0
-
-    # Tolerate empty/no-body requests for compatibility with older clients.
-    try:
-        body = await request.json()
-        if isinstance(body, dict):
-            if isinstance(body.get("day"), str) and body.get("day", "").strip():
-                day = body["day"].strip()
-            # Honor the incremental cursor so per-second pollers can fetch only
-            # new snapshots instead of re-receiving the whole day on every call.
-            raw_cursor = body.get("after_snapshot_id")
-            if raw_cursor is not None:
-                try:
-                    after_snapshot_id = max(0, int(raw_cursor))
-                except (TypeError, ValueError):
-                    after_snapshot_id = 0
-    except json.JSONDecodeError:
-        pass
-
-    return JSONResponse(
-        content=_build_live_local_provider_vram_payload(logos_key, day=day, after_snapshot_id=after_snapshot_id),
-        status_code=200,
-    )
-
-
-@app.options("/logosdb/get_ollama_vram_stats", tags=["admin"])
-async def get_ollama_vram_stats_options():
-    """CORS preflight for get_ollama_vram_stats."""
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, logos_key",
-        },
-    )
-
-
-@app.get("/forward_host", tags=["admin"])
-async def forward_host(request: Request):
-    forwarded = request.headers.get("X-Forwarded-Host") or request.headers.get("Forwarded")
-    return JSONResponse(content={"host": forwarded})
 
 
 # ============================================================================
@@ -5295,70 +4639,118 @@ async def forward_host(request: Request):
 # ============================================================================
 
 
-def _lane_served_context_window(lane: dict, model_profiles: dict) -> int:
-    """Served context window of one lane in tokens, 0 when unknown.
+# The high-water mark only changes when a worker snapshot arrives (a few to a
+# dozen seconds per node), and every model endpoint calls into this, so the
+# lookup result is cached for a short TTL instead of opening a fresh
+# DBManager session per call — /v1/models took two connections where it
+# previously took one. A failed lookup is never cached, so a broken database
+# recovers on the very next call. No lock is needed: every caller runs on the
+# asyncio event loop.
+_HISTORIC_MAX_CONTEXT_TTL_SECONDS = 10.0
+_historic_max_context_cache: tuple[float, dict[str, int]] | None = None
 
-    Mirrors the worker's --max-model-len precedence for vLLM lanes
-    (vllm_process.py): explicit vllm_config value, then a non-sentinel lane
-    context_length (4096 is the shared lane-schema default, meaning "unset"
-    for vLLM), then the calibrated profile value. Ollama lanes always run at
-    their configured context_length. A vLLM lane where none of these are set
-    lets vLLM pick the model's native maximum, which the worker does not
-    report — such lanes yield 0 rather than a guess.
+# The cloud view is refreshed by the model sync (every 15 minutes by default),
+# so it is cached on the same terms as the historic maxima above.
+_cloud_context_cache: tuple[float, dict[str, dict[str, int]]] | None = None
+
+# The catalog view is refreshed once a day by the webservice, so it changes
+# even less often than the snapshots; the same short TTL keeps every model
+# endpoint off the database between refreshes.
+_catalog_context_cache: tuple[float, dict[str, int]] | None = None
+
+
+def _clear_historic_max_context_cache() -> None:
+    """Drop the cached context lookups (used by the tests; production never needs it)."""
+    global _historic_max_context_cache, _cloud_context_cache, _catalog_context_cache
+    _historic_max_context_cache = None
+    _cloud_context_cache = None
+    _catalog_context_cache = None
+
+
+def _cloud_context_by_model() -> dict[str, dict[str, int]]:
+    """Model name -> the context windows cloud upstreams report for it.
+
+    The cloud counterpart of the logosnode runtime snapshots: a cloud provider
+    has no lane to inspect, so what it publishes on its own ``/v1/models`` is
+    the only measurement there is. ``CloudModelSyncService`` records it per
+    provider; this reduces it across providers. Returns an empty mapping when
+    the database cannot be reached, so a broken lookup reads as "no cloud
+    provider reports a window" for one TTL rather than failing the endpoint.
     """
-    model = lane.get("model")
-    if not model:
-        return 0
-
-    def _as_len(value) -> int:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            return 0
-        return value if value > 0 else 0
-
-    if not lane.get("vllm"):
-        return _as_len(lane.get("context_length"))
-
-    backend_metrics = lane.get("backend_metrics")
-    explicit = _as_len(backend_metrics.get("max_model_len")) if isinstance(backend_metrics, dict) else 0
-    if explicit:
-        return explicit
-    lane_ctx = _as_len(lane.get("context_length"))
-    if lane_ctx and lane_ctx != 4096:
-        return lane_ctx
-    profile = model_profiles.get(model)
-    if isinstance(profile, dict):
-        return _as_len(profile.get("calibration_max_model_len")) or _as_len(profile.get("max_context_length"))
-    return 0
+    global _cloud_context_cache
+    now = time.monotonic()
+    cached = _cloud_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            contexts = db.get_cloud_context_by_model()
+    except Exception:
+        logger.warning("Failed to load the cloud context windows by model", exc_info=True)
+        return {}
+    _cloud_context_cache = (now, contexts)
+    return contexts
 
 
-def _profile_native_context_length(profile: dict) -> int:
-    """Largest context window a model could ever be served with here.
+def _historic_max_context_by_model() -> dict[str, int]:
+    """Model name -> widest context ever reported for it, from the database.
 
-    The model's own architectural limit (``max_context_length``) when the
-    worker reported it, otherwise the widest window any calibrated KV point
-    reached. This is the "all-time maximum" — what the model offers when a
-    lane gets all the KV cache it wants — as opposed to the window a lane
-    happens to run with right now.
+    The durable counterpart of the live runtime snapshots: ``upsert_model_profiles``
+    keeps a high-water mark per (provider, model) in ``model_profiles`` on every
+    worker snapshot, so this is still what a model's context is when no
+    workernode is connected to say otherwise. Returns an empty mapping when the
+    database cannot be reached — the live figures then stand on their own, as
+    before. The result is cached for a short TTL (see above) because the value
+    only changes when a worker snapshot arrives.
     """
-    if not isinstance(profile, dict):
-        return 0
+    global _historic_max_context_cache
+    now = time.monotonic()
+    cached = _historic_max_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            historic = db.get_historic_max_context_by_model()
+    except Exception:
+        # Fail open — the live snapshots still stand on their own — but say so:
+        # a persistently broken lookup must not look like "no model has a
+        # historic context".
+        logger.warning("Failed to load the historic max context by model", exc_info=True)
+        return {}
+    _historic_max_context_cache = (now, historic)
+    return historic
 
-    def _as_len(value) -> int:
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            return 0
-        return value if value > 0 else 0
 
-    native = _as_len(profile.get("max_context_length"))
-    pairs = profile.get("kv_cache_to_max_model_len_pairs")
-    if isinstance(pairs, list):
-        for item in pairs:
-            if isinstance(item, dict):
-                native = max(native, _as_len(item.get("max_model_len")))
-    return native
+def _catalog_context_by_model() -> dict[str, int]:
+    """Model name -> the input context window the model catalog publishes for it.
+
+    The last word in the chain of sources: a cloud provider's own
+    ``/v1/models`` (what it publishes) and the workernode snapshots (what is
+    served) both report nothing for a model whose upstream publishes no window
+    at all — the Azure family first among them. For those, the size the
+    webservice refreshes from the upstream registry into
+    ``model_capabilities`` is the best knowledge there is: not a measurement
+    of what Logos serves, but the published limit of the model itself, which
+    a provider serves in full whenever it serves it. Returns an empty mapping
+    when the database cannot be reached, on the same terms as the other
+    lookups: the endpoints answer without the catalog rather than failing.
+    """
+    global _catalog_context_cache
+    now = time.monotonic()
+    cached = _catalog_context_cache
+    if cached is not None and now - cached[0] < _HISTORIC_MAX_CONTEXT_TTL_SECONDS:
+        return cached[1]
+    try:
+        with DBManager() as db:
+            contexts = db.get_catalog_context_by_model()
+    except Exception:
+        # Fail open — every measured source still stands on its own — and the
+        # endpoints keep the model objects they had before the catalog
+        # existed, for one TTL.
+        logger.warning("Failed to load the catalog context windows by model", exc_info=True)
+        return {}
+    _catalog_context_cache = (now, contexts)
+    return contexts
 
 
 def _served_context_window_stats() -> dict[str, dict[str, int]]:
@@ -5377,13 +4769,24 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
                      runs at once it gets all the KV cache it asks for.
                      Independent of what is loaded at the moment, so it is
                      known even for a model with no live lane, and it is the
-                     ceiling ``current_max`` can grow to.
+                     ceiling ``current_max`` can grow to. The live snapshots
+                     only say this while a workernode is connected, so the
+                     number is topped up from the historic maximum the
+                     database keeps per model: when every workernode
+                     is offline, that — not a client-side guess — is what the
+                     clients size the session from.
+
+    When no source above says anything at all — a cloud model whose upstream
+    publishes no window of its own — the window the model catalog records for
+    it stands in: the published limit of the model, which the provider serves
+    in full whenever it serves it. It fills in a model only when nothing
+    measured is known, never over a figure a source reported.
     """
     stats: dict[str, dict[str, int]] = {}
     try:
         provider_ids = _logosnode_registry.active_provider_ids()
     except Exception:
-        return stats
+        provider_ids = []
 
     def _record(model: str, field: str, value: int, *, keep_smallest: bool = False) -> None:
         entry = stats.setdefault(model, {})
@@ -5419,6 +4822,50 @@ def _served_context_window_stats() -> dict[str, dict[str, int]]:
             model = lane["model"]
             _record(model, "current_min", window, keep_smallest=True)
             _record(model, "current_max", window)
+
+    # Cloud upstreams have no lane to read, so their windows come from what
+    # they publish themselves. Folded in on the same terms as a workernode's:
+    # current_min keeps the smallest, because a request may be routed to any
+    # deployment of the model — cloud or local — and only the smallest holds
+    # unconditionally. Without this a model served only through a cloud
+    # provider had no window at all, which is what made a downstream Logos
+    # instance hide the context its upstream had measured.
+    for model, entry in _cloud_context_by_model().items():
+        # One window an upstream serves is its own minimum, maximum and
+        # ceiling alike, so a partially-reported entry widens the same way a
+        # lane's single number does rather than leaving the other two blank.
+        current_min = entry.get("current_min")
+        current_max = entry.get("current_max") or current_min
+        overall = entry.get("overall") or current_max
+        if current_min:
+            _record(model, "current_min", current_min, keep_smallest=True)
+        if current_max:
+            _record(model, "current_max", current_max)
+        if overall:
+            _record(model, "overall", overall)
+
+    # The live snapshots above only exist while workernodes are connected.
+    # Top the "overall" figure up with the historic maximum the database keeps
+    # per model, so it is still known when every node is offline  and so
+    # a wider window reported on another node (or by an earlier calibration)
+    # is not lost while this node runs the model narrower.
+    for model, value in _historic_max_context_by_model().items():
+        entry = stats.setdefault(model, {})
+        if value > entry.get("overall", 0):
+            entry["overall"] = value
+
+    # Nothing measured so far — no live lane, no cloud self-report, no
+    # historic mark — and the model is known to the upstream catalog: publish
+    # the window the catalog records for it. A provider serves a catalog
+    # model at its full published size whenever it serves it at all, so the
+    # single number is the minimum, the maximum and the ceiling alike.
+    # Measured sources are folded in before this, so a model they already
+    # know keeps their narrower figures: the catalog must never widen what
+    # was actually served.
+    for model, value in _catalog_context_by_model().items():
+        if model in stats:
+            continue
+        stats[model] = {"current_min": value, "current_max": value, "overall": value}
     return stats
 
 
@@ -5452,8 +4899,9 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
 
     ``max_model_len`` repeats the first of those under the name vLLM itself
     uses, so an OpenAI-compatible client that already reads that field keeps
-    working. Every field is omitted when unknown, so cloud models and
-    never-calibrated models keep the object they had before any of this existed.
+    working. Every field is omitted when no source knows it, so a model whose
+    window is measured by nothing — and known to no catalog — keeps the object
+    it had before any of this existed.
     """
     if not entry:
         return {}
@@ -5468,428 +4916,23 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
     return fields
 
 
-@app.get("/v1/models", tags=["user-facing"])
-@app.get("/openai/models", tags=["user-facing"], include_in_schema=False)
-async def list_models(request: Request):
-    """
-    List models accessible to the authenticated user (OpenAI-compatible).
-
-    Also served under /openai/models: the /openai prefix mirrors /v1, and the
-    POST catch-all alias cannot answer this GET.
-
-    Returns an OpenAI-compatible response listing all models the user's
-    current API key has access to (Union of Team models and specific API Key models).
-
-    Returns:
-        JSONResponse matching the OpenAI GET /v1/models spec.
-    """
-    auth = authenticate_api_key(dict(request.headers))
-
-    with DBManager() as db:
-        models = db.get_models_for_api_key(auth.api_key_id)
-
-    stats = _served_context_window_stats()
-    data = [
-        {
-            "id": model["name"],
-            "object": "model",
-            "created": _SERVER_START_TIME,
-            "owned_by": "logos",
-            **_model_context_fields(stats.get(model["name"])),
-        }
-        for model in models
-    ]
-
-    return JSONResponse(content={"object": "list", "data": data})
-
-
-@app.get("/v1/models/{model_id:path}", tags=["user-facing"])
-@app.get("/openai/models/{model_id:path}", tags=["user-facing"], include_in_schema=False)
-async def retrieve_model(model_id: str, request: Request):
-    """
-    Retrieve a single model by name (OpenAI-compatible).
-
-    Verifies the authenticated user has access to the requested model
-    through their combined (Team + API Key) model permissions.
-
-    Params:
-        model_id: The model name (used as the OpenAI-style model id).
-        request: Incoming request.
-
-    Returns:
-        JSONResponse matching the OpenAI GET /v1/models/{model} spec.
-
-    Raises:
-        HTTPException(404): Model not found or user lacks access.
-    """
-    auth = authenticate_api_key(dict(request.headers))
-
-    with DBManager() as db:
-        model = db.get_model_for_api_key(auth.api_key_id, model_id)
-        if not model:
-            models = db.get_models_for_api_key(auth.api_key_id)
-            canonical_model_name = _resolve_requested_model_name(
-                model_id,
-                [str(entry.get("name") or "").strip() for entry in models],
-            )
-            if canonical_model_name is not None:
-                model = next(
-                    (entry for entry in models if entry.get("name") == canonical_model_name),
-                    None,
-                )
-
-    if not model:
-        raise HTTPException(status_code=404, detail="Model not found or access denied")
-
-    stats = _served_context_window_stats()
-    return JSONResponse(
-        content={
-            "id": model["name"],
-            "object": "model",
-            "created": _SERVER_START_TIME,
-            "owned_by": "logos",
-            **_model_context_fields(stats.get(model["name"])),
-        }
-    )
-
-
-def _resolve_accessible_model_name(api_key_id: int, model_id: str) -> Optional[str]:
-    """Canonical name of ``model_id`` if this key may use it, else None.
-
-    Shared by the model endpoints below: they all have to accept the same
-    aliases (planner-sanitized underscores, case differences) and all have to
-    refuse a model the key has no permission for.
-    """
-    with DBManager() as db:
-        model = db.get_model_for_api_key(api_key_id, model_id)
-        if model:
-            return model["name"]
-        models = db.get_models_for_api_key(api_key_id)
-        return _resolve_requested_model_name(
-            model_id,
-            [str(entry.get("name") or "").strip() for entry in models],
-        )
-
-
-@app.post("/v1/models/{model_id:path}/warmup", tags=["user-facing"])
-@app.post("/openai/models/{model_id:path}/warmup", tags=["user-facing"], include_in_schema=False)
-async def warmup_model(model_id: str, request: Request):
-    """Tell the planner a model is about to be used, and return immediately.
-
-    A coding assistant asks for the model list when it starts and then sits
-    idle while the developer reads the terminal — the first real request lands
-    seconds later, and pays for a cold load it could have overlapped with that
-    pause. This turns the startup into a hint.
-
-    It is a *hint*, not a reservation: it records the same latent demand the
-    scheduler records when classification prefers a model it did not get, and
-    wakes the planner cycle early. The planner still decides what to load using
-    its own fairness rules, so a warmup can never evict a lane that real
-    traffic is using, and a burst of them coalesces into one extra cycle. That
-    is also what keeps it from being a way to make the cluster thrash: the most
-    an authenticated caller can do is raise a model it already has access to
-    slightly in the queue of things worth loading.
-
-    Deliberately not "send a tiny request": that bills the caller, occupies a
-    slot, and returns a completion nobody wanted.
-    """
-    auth = authenticate_api_key(dict(request.headers))
-    model_name = _resolve_accessible_model_name(auth.api_key_id, model_id)
-    if model_name is None:
-        raise HTTPException(status_code=404, detail="Model not found or access denied")
-
-    stats = _served_context_window_stats().get(model_name) or {}
-    # A reported window means some lane is serving the model right now, which is
-    # the closest thing to "ready" this endpoint can answer without asking every
-    # worker. Already-warm models still record the hint: it keeps the model from
-    # decaying out of the planner's demand view while a session is open.
-    already_serving = bool(stats.get("current_min"))
-
-    accepted = False
-    if _demand_tracker is not None:
-        _demand_tracker.record_latent_demand(model_name)
-        accepted = True
-    if _capacity_planner is not None:
-        # announce_upcoming_use, not hint_capacity_needed: the hint only wakes
-        # the cycle early, and the demand increment above cannot survive the
-        # per-cycle decay that runs before the planner evaluates it, so on its
-        # own a warmup would wake a cycle that then decides to do nothing —
-        # which is exactly what it did. The announcement is what lets the
-        # planner cold-load on VRAM that is free anyway.
-        _capacity_planner.announce_upcoming_use(model_name)
-        accepted = True
-
-    logger.info(
-        "Warmup requested for model=%s (already serving: %s, hint accepted: %s)",
-        model_name,
-        already_serving,
-        accepted,
-    )
-    return JSONResponse(
-        status_code=202,
-        content={
-            "model": model_name,
-            "status": "serving" if already_serving else "preparing",
-            "hint_accepted": accepted,
-            **_model_context_fields(stats),
-        },
-    )
-
-
 # ============================================================================
-# MAIN API ENDPOINTS
+# ROUTERS
 # ============================================================================
+#
+# The route handlers live in logos/routers/, grouped by domain. They are
+# imported here, at the bottom of the module, because the routers import the
+# module-level state defined above; importing them at the top would make main
+# and the routers import each other mid-initialisation.
+#
+# The include order matters: user_facing holds the /v1/{path:path} catch-all
+# and is included last, so no route of another router can be shadowed by it.
+# Add new routers above that line.
 
+from logos.routers import admin, internal, logosnode, monitoring, user_facing  # noqa: E402
 
-_AUDIO_BASE_PROPERTIES = {
-    "file": {"type": "string", "format": "binary"},
-    "model": {"type": "string"},
-    "prompt": {"type": "string"},
-    "response_format": {
-        "type": "string",
-        "enum": ["json", "text", "srt", "verbose_json", "vtt"],
-        "default": "json",
-    },
-    "temperature": {"type": "number", "minimum": 0, "maximum": 1},
-}
-
-_TRANSCRIPTION_UPLOAD_REQUEST_SCHEMA = {
-    "required": True,
-    "content": {
-        "multipart/form-data": {
-            "schema": {
-                "type": "object",
-                "required": ["file", "model"],
-                "properties": {
-                    **_AUDIO_BASE_PROPERTIES,
-                    "language": {"type": "string", "description": "ISO-639-1 language code"},
-                    "timestamp_granularities[]": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": ["word", "segment"]},
-                        "description": "whisper-1 with response_format=verbose_json only",
-                    },
-                    "stream": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Ignored by whisper-1; supported by newer transcription models",
-                    },
-                },
-            }
-        }
-    },
-}
-
-_TRANSLATION_UPLOAD_REQUEST_SCHEMA = {
-    "required": True,
-    "content": {
-        "multipart/form-data": {
-            "schema": {
-                "type": "object",
-                "required": ["file", "model"],
-                "description": "OpenAI translations currently support the whisper-1 model",
-                "properties": _AUDIO_BASE_PROPERTIES,
-            }
-        }
-    },
-}
-
-_AUDIO_UPLOAD_RESPONSES = {
-    200: {
-        "description": "Transcription result in the requested response format",
-        "content": {
-            "application/json": {},
-            "text/plain": {},
-            "text/vtt": {},
-            "application/x-subrip": {},
-            "text/event-stream": {},
-        },
-    }
-}
-
-
-@app.post(
-    "/v1/audio/transcriptions",
-    tags=["audio"],
-    summary="Create an audio transcription",
-    response_class=Response,
-    responses=_AUDIO_UPLOAD_RESPONSES,
-    openapi_extra={"requestBody": _TRANSCRIPTION_UPLOAD_REQUEST_SCHEMA},
-)
-async def create_audio_transcription(request: Request):
-    """Transcribe an uploaded audio file through an authorized model."""
-    return await handle_sync_request("v1/audio/transcriptions", request)
-
-
-@app.post(
-    "/v1/audio/translations",
-    tags=["audio"],
-    summary="Create an English audio translation",
-    response_class=Response,
-    responses=_AUDIO_UPLOAD_RESPONSES,
-    openapi_extra={"requestBody": _TRANSLATION_UPLOAD_REQUEST_SCHEMA},
-)
-async def create_audio_translation(request: Request):
-    """Transcribe and translate an uploaded audio file into English."""
-    return await handle_sync_request("v1/audio/translations", request)
-
-
-@app.post("/v1/{path:path}", tags=["user-facing"])
-async def logos_service_sync(path: str, request: Request):
-    """
-    Dynamic proxy for OpenAI-compatible API endpoints (/v1/*).
-    Supports both PROXY and RESOURCE modes with streaming.
-
-    POST only: every proxied operation (chat/completions, completions,
-    responses, embeddings, ...) is a POST in the upstream APIs. Other methods
-    get a proper 405 from the router instead of the misleading
-    "400 Invalid JSON body" the body parser used to raise on body-less GETs.
-    """
-    return await handle_sync_request(f"v1/{path}", request)
-
-
-@app.post("/v2/{path:path}", tags=["user-facing"])
-async def logos_service_v2_sync(path: str, request: Request):
-    """
-    Dynamic proxy for Cohere-compatible API endpoints (/v2/embed, /v2/rerank).
-    """
-    return await handle_sync_request(f"v2/{path}", request)
-
-
-@app.post(
-    "/openai/{path:path}",
-    tags=["user-facing"],
-)
-async def logos_service_long_sync(request: Request, path: str = None):
-    """
-    Dynamic proxy for LLM API endpoints (OpenAI-compatible paths).
-    Supports two modes:
-    - PROXY MODE: Direct forwarding to provider (no classification/scheduling)
-    - RESOURCE MODE: Classification + scheduling with SDI-aware pipeline
-
-    :param request: Request object containing headers, body, and client metadata
-    :param path: API endpoint path (e.g., 'chat/completions', 'completions', 'embeddings')
-    :return: StreamingResponse for streaming requests, JSONResponse for synchronous requests
-    """
-    return await handle_sync_request(f"v1/{path}", request)
-
-
-# vLLM non-prefixed endpoints (not part of OpenAI API spec, but user-facing).
-# These are canonical paths for pooling, scoring, reranking, and tokenization.
-async def _handle_vllm_native(request: Request):
-    """Forward to vLLM using the original request path."""
-    path = request.url.path.lstrip("/")
-    return await handle_sync_request(path, request)
-
-
-for _vllm_path in ("/pooling", "/score", "/rerank", "/tokenize", "/detokenize"):
-    app.add_api_route(
-        _vllm_path,
-        _handle_vllm_native,
-        methods=["POST"],
-        tags=["user-facing"],
-        name=f"vllm_native_{_vllm_path.lstrip('/')}",
-    )
-
-
-@app.post(
-    "/jobs/v1/{path:path}",
-    tags=["user-facing"],
-)
-async def logos_service_async(path: str, request: Request):
-    """
-    Async job-based proxy for long running/low-priority requests.
-
-    Params:
-        path: Upstream path to forward.
-        request: Incoming request.
-
-    Returns:
-        202 with job metadata; poll /jobs/{id} for result.
-    """
-    return await submit_job_request(f"v1/{path}", request)
-
-
-@app.post(
-    "/jobs/v2/{path:path}",
-    tags=["user-facing"],
-)
-async def logos_service_v2_async(path: str, request: Request):
-    """Async job-based proxy for Cohere-compatible endpoints."""
-    return await submit_job_request(f"v2/{path}", request)
-
-
-@app.post(
-    "/jobs/openai/{path:path}",
-    tags=["user-facing"],
-)
-async def logos_service_long_async(path: str, request: Request):
-    """
-    Async job-based proxy for OpenAI-compatible, long running/low-priority requests.
-
-    Params:
-        path: Upstream path to forward.
-        request: Incoming request.
-
-    Returns:
-        202 with job metadata; poll /jobs/{id} for result.
-    """
-    return await submit_job_request(f"v1/{path}", request)
-
-
-@app.get("/jobs/{job_id}", tags=["user-facing"])
-async def get_job_status(job_id: int, request: Request):
-    """
-    Return current state of a submitted job, including result or error when finished.
-    Uses team-based authorization - you can only view jobs created by your current team.
-    Logos Admins can view all jobs.
-    """
-    auth = authenticate_api_key(dict(request.headers))
-
-    job = JobService.fetch(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    # Authorization checks
-    job_api_key_id = job.get("api_key_id")
-    job_team_id = job.get("team_id")
-
-    with DBManager() as db:
-        user_info = db.get_user_by_api_key(auth.key_value)
-        is_admin = user_info and user_info.get("role") == "logos_admin"
-
-    if not is_admin:
-        if job_api_key_id != auth.api_key_id:
-            raise HTTPException(status_code=403, detail="Not authorized to access this job")
-        if job_team_id != auth.team_id:
-            raise HTTPException(status_code=403, detail="Job belongs to a different team.")
-
-    return_payload = {
-        "job_id": job_id,
-        "status": job["status"],
-        "result": (job["result_payload"] if job["status"] == JobStatus.SUCCESS.value else None),
-        "error": (job["error_message"] if job["status"] == JobStatus.FAILED.value else None),
-        "created_at": job.get("created_at"),
-        "updated_at": job.get("updated_at"),
-        "team_id": job_team_id,
-    }
-
-    # When a completed job has a non-2xx upstream status code, surface the
-    # error body with the correct HTTP status so OpenAI-spec clients behave
-    # correctly (e.g. don't blind-retry a 400 context-length error).
-    if job["status"] == JobStatus.SUCCESS.value:
-        result_payload = job.get("result_payload") or {}
-        job_status_code = result_payload.get("status_code") if isinstance(result_payload, dict) else None
-        if isinstance(job_status_code, int) and job_status_code >= 400:
-            job_data = result_payload.get("data") or {}
-            corrected_sc, error_body = coerce_upstream_error(job_status_code, job_data)
-            return JSONResponse(
-                content={**return_payload, "result": None, "error": error_body},
-                status_code=corrected_sc,
-            )
-
-    if job["status"] == JobStatus.FAILED.value and job.get("error_message"):
-        # Wrap plain-string failure message in OpenAI error shape
-        _, error_body = coerce_upstream_error(500, {"error": job["error_message"]})
-        return JSONResponse(content={**return_payload, "error": error_body}, status_code=500)
-
-    return return_payload
+app.include_router(monitoring.router)
+app.include_router(internal.router)
+app.include_router(logosnode.router)
+app.include_router(admin.router)
+app.include_router(user_facing.router)

@@ -70,9 +70,16 @@ def is_transcription_visible(
         Mapping[str, Any] | list[Mapping[str, Any]] | None
     ) = None,
     now: datetime | None = None,
+    *,
+    bypass_release: bool = False,
 ) -> bool:
-    """Return whether a transcription and its associated slide are visible."""
-    if not is_unit_released(lecture_unit_properties, now):
+    """Return whether a transcription and its associated slide are visible.
+
+    ``bypass_release`` skips only the unit-level release-date gate (for staff/admins,
+    mirroring Artemis ``isAllowedToSeeLectureUnit``). Slide-level ``hidden_until`` is
+    still enforced for everyone.
+    """
+    if not bypass_release and not is_unit_released(lecture_unit_properties, now):
         return False
 
     page_number = transcription_properties.get(

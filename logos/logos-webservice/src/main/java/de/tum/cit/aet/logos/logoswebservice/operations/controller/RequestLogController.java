@@ -46,12 +46,36 @@ public class RequestLogController {
         String end = body.get("end") instanceof String s ? s : null;
         Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
         Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
+        Integer providerId = body.get("provider_id") instanceof Number n ? n.intValue() : null;
+        boolean errorsOnly = Boolean.TRUE.equals(body.get("errors_only"));
+        // The feed's state bucket; absent means all states. A supplied value
+        // that names none of the four buckets matches no rows — the same
+        // fail-closed answer an unknown user_id gives. Blank and non-string
+        // values collapse to the all-states sentinel. The client's
+        // normalizeFeedStatus widens on *any* value outside the four buckets —
+        // including an unknown non-blank string this one keeps and fails
+        // closed on. The two sides deliberately differ: a picker that stops
+        // showing everything reads as broken, so the feed widens there, while
+        // a value aimed straight at this admin-only endpoint must not
+        // silently widen it to the whole platform.
+        String status = body.get("status") instanceof String s && !s.isBlank() ? s : null;
         String cursorTs = body.get("cursor_ts") instanceof String s ? s : null;
         String cursorId = body.get("cursor_id") instanceof String s ? s : null;
         int limit = body.get("limit") instanceof Number n
             ? n.intValue() : RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
         return ResponseEntity.ok(requestLogService.getLatestRequests(
-            start, end, userId, teamId, cursorTs, cursorId, limit, true));
+            start, end, userId, teamId, providerId, errorsOnly, status, cursorTs, cursorId, limit, true,
+            RequestLogService.readFeedIds(body, "model_ids"), RequestLogService.readFeedIds(body, "provider_ids")));
+    }
+
+    /** Payloads are excluded from the feed and fetched explicitly for one row. */
+    @PostMapping("/request_payloads")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> requestPayloads(@RequestBody Map<String, Object> body) {
+        if (!(body.get("request_id") instanceof String requestId) || requestId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "request_id must be a non-empty string"));
+        }
+        return ResponseEntity.ok(requestLogService.getRequestPayloads(requestId));
     }
 
     @PostMapping("/request_logs")

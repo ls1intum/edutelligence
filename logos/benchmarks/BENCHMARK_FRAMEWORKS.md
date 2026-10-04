@@ -1,7 +1,7 @@
 # Benchmark Scenarios, Frameworks & Prerequisites
 
 This benchmark compares **Logos** against two external dynamic serving frameworks
-on the **same 4-GPU cluster** (2 nodes × 2 GPUs: `deipapa`, `deimama`). All
+on the **same 4-GPU cluster** (2 nodes × 2 GPUs, called **GPU node A** and **GPU node B** below). All
 scenarios serve the **same 5 models** and use the **same vLLM engine parameters**
 so they are directly comparable.
 
@@ -64,7 +64,7 @@ computes its own per load. All values are reported alongside results.
 
 ## Prerequisites
 
-### Common (GPU nodes `deipapa`, `deimama`)
+### Common (both GPU nodes)
 - NVIDIA driver supporting CUDA 13.0 (Ray image is cu130); validated on driver 580.
 - HuggingFace cache present at **`/mnt/ceph/.hf_cache`** on both nodes (models are
   read from here; gated models need a token).
@@ -82,12 +82,12 @@ computes its own per load. All values are reported alongside results.
 
 ### Ray Serve scenario
 - Docker on each GPU node; image `rayproject/ray-llm:2.56.0.637fd0-extra-py312-cu130`
-  pulled (the harness starts a Ray head on `deipapa` + worker on `deimama`).
-- **UFW:** allow `logos-test → deipapa:8000` (Ray Serve OpenAI endpoint).
+  pulled (the harness starts a Ray head on GPU node A + worker on GPU node B).
+- **UFW:** allow `logos-test → GPU node A:8000` (Ray Serve OpenAI endpoint).
 - No k8s needed — standalone Ray in containers.
 
 ### KServe scenario (k3s)
-A k3s cluster on the GPU nodes (server on `deipapa`, agent on `deimama`) with:
+A k3s cluster on the GPU nodes (server on GPU node A, agent on GPU node B) with:
 - **NVIDIA k8s device plugin** + `RuntimeClass` named `nvidia` (GPU scheduling).
 - **cert-manager**.
 - **Istio** (ingress gateway).
@@ -97,7 +97,7 @@ A k3s cluster on the GPU nodes (server on `deipapa`, agent on `deimama`) with:
   - `kubernetes.podspec-volumes-hostpath: enabled`
   - `config-defaults: max-revision-timeout-seconds: "3600"`
 - **KServe** controller (`kserve-resources` chart, **v0.19.0**) in **Serverless** mode.
-- **UFW:** the harness opens `logos-test → deipapa:<NodePort>` (pinned to
+- **UFW:** the harness opens `logos-test → GPU node A:<NodePort>` (pinned to
   **31080**) for the benchmark host’s IP only.
 
 The harness deploys one `InferenceService` per model (`minReplicas: 0`), pins the

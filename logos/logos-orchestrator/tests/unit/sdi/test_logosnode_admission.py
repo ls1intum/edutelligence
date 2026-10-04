@@ -23,7 +23,6 @@ def _lane(
     model: str = "m",
     *,
     num_parallel: int = 10,
-    vllm: bool = True,
     runtime_state: str = "loaded",
     queue_waiting: float = 0,
     requests_running: float = 0,
@@ -40,7 +39,7 @@ def _lane(
         "lane_id": lane_id or f"lane-{model}-{num_parallel}-{runtime_state}",
         "model": model,
         "runtime_state": runtime_state,
-        "vllm": vllm,
+        "vllm": True,
         "num_parallel": num_parallel,
         "backend_metrics": backend_metrics,
     }
@@ -177,14 +176,6 @@ def test_kv_cache_pressure_holds_the_request(monkeypatch):
 
 def test_kv_cache_below_threshold_still_admits(monkeypatch):
     provider = _provider(monkeypatch, [_lane(num_parallel=10, requests_running=2, gpu_cache_usage_percent=60.0)])
-    assert provider.evaluate_admission(1).can_admit is True
-
-
-def test_kv_cache_pressure_is_ignored_for_non_vllm_lanes(monkeypatch):
-    provider = _provider(
-        monkeypatch,
-        [_lane(num_parallel=4, vllm=False, gpu_cache_usage_percent=99.0)],
-    )
     assert provider.evaluate_admission(1).can_admit is True
 
 

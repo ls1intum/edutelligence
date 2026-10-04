@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 import logos as main
+from logos.routers import user_facing as user_facing_mod
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -27,8 +28,14 @@ def _make_request(headers: dict | None = None):
 class DummyDB:
     """Minimal DBManager stub used via monkeypatch."""
 
-    def __init__(self, models=None):
+    def __init__(self, models=None, historic=None, cloud=None, catalog=None):
         self._models = models if models is not None else []
+        # Model name -> widest context ever reported (model_profiles high-water mark).
+        self._historic = historic if historic is not None else {}
+        # Model name -> the windows cloud upstreams report (cloud_model_context).
+        self._cloud = cloud if cloud is not None else {}
+        # Model name -> the input context window the model catalog publishes (model_capabilities).
+        self._catalog = catalog if catalog is not None else {}
 
     def __enter__(self):
         return self
@@ -41,6 +48,15 @@ class DummyDB:
 
     def get_model_for_api_key(self, _api_key_id: int, model_name: str):
         return next((m for m in self._models if m["name"] == model_name), None)
+
+    def get_historic_max_context_by_model(self):
+        return self._historic
+
+    def get_cloud_context_by_model(self):
+        return self._cloud
+
+    def get_catalog_context_by_model(self):
+        return self._catalog
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +72,12 @@ async def test_list_models_returns_openai_format(monkeypatch):
         {"id": 2, "name": "gpt-3.5-turbo", "description": None},
     ]
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.list_models(_make_request())
+        response = await user_facing_mod.list_models(_make_request())
 
     body = response.body
     import json
@@ -85,12 +101,12 @@ async def test_list_models_returns_openai_format(monkeypatch):
 @pytest.mark.asyncio
 async def test_list_models_empty(monkeypatch):
     """When a profile has no models, returns an empty list."""
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=[]))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=[]))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.list_models(_make_request())
+        response = await user_facing_mod.list_models(_make_request())
 
     import json
 
@@ -102,11 +118,11 @@ async def test_list_models_empty(monkeypatch):
 @pytest.mark.asyncio
 async def test_list_models_auth_failure():
     """Missing/invalid key returns 401."""
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
 
         with pytest.raises(HTTPException) as exc:
-            await main.list_models(_make_request(headers={}))
+            await user_facing_mod.list_models(_make_request(headers={}))
 
         assert exc.value.status_code == 401
 
@@ -124,12 +140,12 @@ async def test_retrieve_model_success(monkeypatch):
         {"id": 2, "name": "gpt-3.5-turbo", "description": None},
     ]
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.retrieve_model("gpt-4o", _make_request())
+        response = await user_facing_mod.retrieve_model("gpt-4o", _make_request())
 
     import json
 
@@ -145,13 +161,13 @@ async def test_retrieve_model_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_retrieve_model_not_found(monkeypatch):
     """Requesting a model that doesn't exist returns 404."""
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=[]))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=[]))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         with pytest.raises(HTTPException) as exc:
-            await main.retrieve_model("nonexistent-model", _make_request())
+            await user_facing_mod.retrieve_model("nonexistent-model", _make_request())
 
         assert exc.value.status_code == 404
 
@@ -162,13 +178,13 @@ async def test_retrieve_model_no_access(monkeypatch):
     fake_models = [
         {"id": 1, "name": "gpt-4o", "description": "GPT-4o"},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
         with pytest.raises(HTTPException) as exc:
-            await main.retrieve_model("gpt-3.5-turbo", _make_request())
+            await user_facing_mod.retrieve_model("gpt-3.5-turbo", _make_request())
 
         assert exc.value.status_code == 404
 
@@ -180,12 +196,12 @@ async def test_retrieve_model_with_slashes(monkeypatch):
     fake_models = [
         {"id": 1, "name": slash_model, "description": "Llama 3 8B"},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.retrieve_model(slash_model, _make_request())
+        response = await user_facing_mod.retrieve_model(slash_model, _make_request())
 
     import json
 
@@ -206,12 +222,12 @@ async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
     fake_models = [
         {"id": 1, "name": canonical_model, "description": "Qwen 0.5B"},
     ]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=fake_models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=fake_models))
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
 
-        response = await main.retrieve_model(alias_model, _make_request())
+        response = await user_facing_mod.retrieve_model(alias_model, _make_request())
 
     import json
 
@@ -224,11 +240,11 @@ async def test_retrieve_model_with_planner_sanitized_alias(monkeypatch):
 @pytest.mark.asyncio
 async def test_retrieve_model_auth_failure():
     """Missing/invalid key on retrieve returns 401."""
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.side_effect = HTTPException(status_code=401, detail="Invalid logos key")
 
         with pytest.raises(HTTPException) as exc:
-            await main.retrieve_model("gpt-4o", _make_request(headers={}))
+            await user_facing_mod.retrieve_model("gpt-4o", _make_request(headers={}))
 
         assert exc.value.status_code == 401
 
@@ -264,14 +280,22 @@ def _vllm_lane(model, max_model_len=0, context_length=4096):
     }
 
 
-async def _list_ids_to_entries(monkeypatch, models, registry):
+async def _list_ids_to_entries(monkeypatch, models, registry, historic=None, cloud=None, catalog=None):
     import json
 
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models))
+    # The handler reads DBManager from its router module; the historic-max,
+    # cloud-window and catalog lookups it goes through read it from main's
+    # globals — both need the fake.
+    monkeypatch.setattr(
+        main, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog)
+    )
+    monkeypatch.setattr(
+        user_facing_mod, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog)
+    )
     monkeypatch.setattr(main, "_logosnode_registry", registry)
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        response = await main.list_models(_make_request())
+        response = await user_facing_mod.list_models(_make_request())
     return {entry["id"]: entry for entry in json.loads(response.body)["data"]}
 
 
@@ -291,10 +315,11 @@ async def test_list_models_includes_served_context_window(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_list_models_ollama_lane_context_length(monkeypatch):
-    """Ollama lanes report their configured context length directly."""
+async def test_list_models_lane_configured_context_length(monkeypatch):
+    """A lane whose engine has not reported a window falls back to its
+    configured context_length (the 4096 sentinel means "unset")."""
     models = [{"id": 1, "name": "mistral-7b", "description": None}]
-    lane = {"model": "mistral-7b", "vllm": False, "context_length": 16384, "backend_metrics": {}}
+    lane = _vllm_lane("mistral-7b", max_model_len=0, context_length=16384)
     registry = DummyRegistry({7: _snapshot([lane])})
 
     entries = await _list_ids_to_entries(monkeypatch, models, registry)
@@ -366,16 +391,16 @@ async def test_retrieve_model_includes_served_context_window(monkeypatch):
     import json
 
     models = [{"id": 1, "name": "qwen-14b", "description": None}]
-    monkeypatch.setattr(main, "DBManager", lambda: DummyDB(models=models))
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=models))
     monkeypatch.setattr(
         main,
         "_logosnode_registry",
         DummyRegistry({7: _snapshot([_vllm_lane("qwen-14b", max_model_len=40960)])}),
     )
 
-    with patch("logos.main.authenticate_api_key") as mock_auth:
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
         mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
-        response = await main.retrieve_model("qwen-14b", _make_request())
+        response = await user_facing_mod.retrieve_model("qwen-14b", _make_request())
 
     assert json.loads(response.body)["max_model_len"] == 40960
 
@@ -434,3 +459,374 @@ async def test_list_models_omits_every_context_field_when_unknown(monkeypatch):
     entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}))
 
     assert set(entries["gpt-4o"]) == {"id", "object", "created", "owned_by"}
+
+
+# ---------------------------------------------------------------------------
+# Historic maximum from the database — the all-workernodes-offline fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_historic_max_when_all_workernodes_offline(monkeypatch):
+    """With no node connected, the historic maximum the database keeps is what
+    /v1/models can still promise.
+
+    Only ``max_model_len_overall`` comes back: no lane is up that would make
+    any of the current_* figures true, and claiming one would size the client
+    against a window nothing actually serves. The claude-logos wrapper's
+    cascade (current_max → current_min → overall) is built for exactly this:
+    it now lands on the historic max instead of its blind fallback constant.
+    """
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), historic={"qwen-27b": 262144})
+
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+    assert "max_model_len" not in entries["qwen-27b"]
+    assert "max_model_len_current_min" not in entries["qwen-27b"]
+    assert "max_model_len_current_max" not in entries["qwen-27b"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_historic_max_tops_up_a_narrower_live_overall(monkeypatch):
+    """A re-calibration on a node with less VRAM reports a narrower window than
+    an earlier calibration on a bigger node. The live profile says 33000, but
+    the model has been served at 262144 before — that is what "overall" means,
+    so the historic mark stands."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([], model_profiles={"qwen-27b": {"max_context_length": 33000}})})
+    entries = await _list_ids_to_entries(monkeypatch, models, registry, historic={"qwen-27b": 262144})
+
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+    assert "max_model_len" not in entries["qwen-27b"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_historic_max_never_shrinks_a_live_overall(monkeypatch):
+    """The top-up only ever raises: a live figure the nodes report now is never
+    lowered by a stale historic one."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([], model_profiles={"qwen-27b": {"max_context_length": 262144}})})
+    entries = await _list_ids_to_entries(monkeypatch, models, registry, historic={"qwen-27b": 33000})
+
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_a_cloud_upstreams_context_window(monkeypatch):
+    """A model reachable only through a cloud provider used to be published with
+    no window at all, because the numbers came solely from the workernode
+    snapshots. A downstream Logos instance therefore hid the very window its
+    upstream had measured, and claude-logos fell back to a guess."""
+    models = [{"id": 1, "name": "Qwen/Qwen3.8-27B", "description": None}]
+    entries = await _list_ids_to_entries(
+        monkeypatch,
+        models,
+        DummyRegistry({}),
+        cloud={"Qwen/Qwen3.8-27B": {"current_min": 262144, "current_max": 262144, "overall": 262144}},
+    )
+
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_current_min"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_current_max"] == 262144
+    assert entries["Qwen/Qwen3.8-27B"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_cloud_window_does_not_widen_the_guaranteed_minimum(monkeypatch):
+    """A model served both locally and through a cloud upstream keeps the
+    smallest window as its guaranteed one: the request may be routed to either,
+    so only the narrower number holds unconditionally."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)])})
+    entries = await _list_ids_to_entries(
+        monkeypatch, models, registry, cloud={"qwen-27b": {"current_min": 262144, "overall": 262144}}
+    )
+
+    assert entries["qwen-27b"]["max_model_len"] == 33000
+    assert entries["qwen-27b"]["max_model_len_current_max"] == 262144
+    assert entries["qwen-27b"]["max_model_len_overall"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_list_models_cloud_model_without_a_reported_window_stays_bare(monkeypatch):
+    """Most OpenAI-shaped upstreams report no window; those models keep the
+    object they had before any of this existed."""
+    models = [{"id": 1, "name": "gpt-4.1-nano", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), cloud={})
+
+    assert "max_model_len" not in entries["gpt-4.1-nano"]
+
+
+# ---------------------------------------------------------------------------
+# Catalog windows — the last resort for models no source has measured
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_models_reports_the_catalog_window_for_a_cloud_model(monkeypatch):
+    """A cloud model whose upstream publishes no window of its own used to reach
+    /v1/models without a size, and a wrapper sizing a session from the listing
+    fell back to a blind constant. The window the model catalog records for the
+    model is the best knowledge there is: a provider serves a catalog model at
+    its full published size, so the single number is the minimum, the maximum
+    and the ceiling alike."""
+    models = [{"id": 1, "name": "gpt-5.6-luna", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), catalog={"gpt-5.6-luna": 1050000})
+
+    assert entries["gpt-5.6-luna"]["max_model_len"] == 1050000
+    assert entries["gpt-5.6-luna"]["max_model_len_current_min"] == 1050000
+    assert entries["gpt-5.6-luna"]["max_model_len_current_max"] == 1050000
+    assert entries["gpt-5.6-luna"]["max_model_len_overall"] == 1050000
+
+
+@pytest.mark.asyncio
+async def test_list_models_measured_window_wins_over_the_catalog(monkeypatch):
+    """A lane running the model narrower than the published size is the truth
+    for what Logos serves: the catalog must not widen any figure a source
+    measured, whichever of the three fields it would reach."""
+    models = [{"id": 1, "name": "gpt-oss-120b", "description": None}]
+    registry = DummyRegistry(
+        {
+            7: _snapshot(
+                [_vllm_lane("gpt-oss-120b", max_model_len=33000)],
+                model_profiles={"gpt-oss-120b": {"max_context_length": 33000}},
+            )
+        }
+    )
+    entries = await _list_ids_to_entries(monkeypatch, models, registry, catalog={"gpt-oss-120b": 131072})
+
+    assert entries["gpt-oss-120b"]["max_model_len"] == 33000
+    assert entries["gpt-oss-120b"]["max_model_len_current_max"] == 33000
+    assert entries["gpt-oss-120b"]["max_model_len_overall"] == 33000
+
+
+@pytest.mark.asyncio
+async def test_list_models_cloud_self_report_wins_over_the_catalog(monkeypatch):
+    """What an upstream publishes about itself is a measurement and beats the
+    catalog's published limit, narrow or wide."""
+    models = [{"id": 1, "name": "some-cloud-model", "description": None}]
+    entries = await _list_ids_to_entries(
+        monkeypatch,
+        models,
+        DummyRegistry({}),
+        cloud={"some-cloud-model": {"current_min": 65536, "current_max": 65536, "overall": 65536}},
+        catalog={"some-cloud-model": 131072},
+    )
+
+    assert entries["some-cloud-model"]["max_model_len"] == 65536
+    assert entries["some-cloud-model"]["max_model_len_overall"] == 65536
+
+
+@pytest.mark.asyncio
+async def test_list_models_catalog_window_never_added_for_an_unlisted_model(monkeypatch):
+    """The catalog only sizes models this key may actually use: a catalog
+    entry for a model outside the listing must not surface in /v1/models."""
+    models = [{"id": 1, "name": "qwen-14b", "description": None}]
+    entries = await _list_ids_to_entries(monkeypatch, models, DummyRegistry({}), catalog={"other-model": 131072})
+
+    assert set(entries) == {"qwen-14b"}
+    assert "max_model_len" not in entries["qwen-14b"]
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/models — Anthropic shape (the ``anthropic-version`` header gate)
+# ---------------------------------------------------------------------------
+
+
+def _anthropic_request(query_params: dict | None = None):
+    """A mock request the way an Anthropic SDK / Claude Code call arrives:
+    with the mandatory ``anthropic-version`` header and a real query string."""
+    req = _make_request(headers={"authorization": "Bearer test-key", "anthropic-version": "2023-06-01"})
+    # The OpenAI path never reads query params, but the Anthropic one does —
+    # a bare MagicMock would hand back a truthy .get() result for after_id.
+    req.query_params = query_params if query_params is not None else {}
+    return req
+
+
+async def _list_anthropic_body(
+    monkeypatch,
+    models,
+    registry,
+    historic=None,
+    cloud=None,
+    catalog=None,
+    query_params=None,
+):
+    """Call list_models the way an Anthropic client does and return the body."""
+    import json
+
+    monkeypatch.setattr(
+        main, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog)
+    )
+    monkeypatch.setattr(
+        user_facing_mod, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog)
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
+        response = await user_facing_mod.list_models(_anthropic_request(query_params))
+    return json.loads(response.body)
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_shape(monkeypatch):
+    """With the header, the same endpoint returns the Anthropic models shape."""
+    models = [
+        {"id": 1, "name": "qwen-27b", "description": "Qwen 27B"},
+        {"id": 2, "name": "gpt-4o", "description": None},
+    ]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)])})
+    body = await _list_anthropic_body(monkeypatch, models, registry)
+
+    assert body["first_id"] == "qwen-27b"
+    assert body["last_id"] == "gpt-4o"
+    assert body["has_more"] is False
+    assert [entry["id"] for entry in body["data"]] == ["qwen-27b", "gpt-4o"]
+
+    first = body["data"][0]
+    assert first["type"] == "model"
+    assert first["display_name"] == "Qwen 27B"
+    # RFC 3339 timestamp, rendered from the same server start the OpenAI shape uses.
+    assert first["created_at"].endswith("Z") and "T" in first["created_at"]
+    assert first["max_input_tokens"] == 33000
+    assert first["max_tokens"] is None
+    assert first["capabilities"] is None
+    assert first["allowed_fallback_models"] is None
+
+    second = body["data"][1]
+    # No description: the id is the display name. No known window: null.
+    assert second["display_name"] == "gpt-4o"
+    assert second["max_input_tokens"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_max_input_prefers_the_guaranteed_window(monkeypatch):
+    """max_input_tokens is the window a request is sure to get (smallest
+    served), not the widest one."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry(
+        {
+            7: _snapshot([_vllm_lane("qwen-27b", max_model_len=262144)]),
+            8: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)]),
+        }
+    )
+    body = await _list_anthropic_body(monkeypatch, models, registry)
+    assert body["data"][0]["max_input_tokens"] == 33000
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_max_input_falls_back_to_overall(monkeypatch):
+    """A model that nothing serves right now but that has a known ceiling
+    reports it — a config file can still be written from the listing."""
+    models = [{"id": 1, "name": "cold-model", "description": None}]
+    registry = DummyRegistry({7: _snapshot([], model_profiles={"cold-model": {"max_context_length": 131072}})})
+    body = await _list_anthropic_body(monkeypatch, models, registry)
+    assert body["data"][0]["max_input_tokens"] == 131072
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_max_input_unknown_is_null(monkeypatch):
+    """No source knows the window: null rather than a made-up number."""
+    models = [{"id": 1, "name": "mystery", "description": None}]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
+    assert body["data"][0]["max_input_tokens"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_without_header_stays_openai_shape(monkeypatch):
+    """The gate is the header alone: a request without it sees the OpenAI
+    shape exactly as before (this is what the claude-logos wrapper probes)."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=models))
+    monkeypatch.setattr(main, "_logosnode_registry", DummyRegistry({}))
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
+        response = await user_facing_mod.list_models(_make_request())
+
+    import json
+
+    body = json.loads(response.body)
+    assert body["object"] == "list"
+    assert set(body) == {"object", "data"}
+    assert set(body["data"][0]) == {"id", "object", "created", "owned_by"}
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_limit_caps_the_page(monkeypatch):
+    """limit=2 yields two models and tells the client more remain."""
+    models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(5)]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"limit": "2"})
+
+    assert [entry["id"] for entry in body["data"]] == ["model-0", "model-1"]
+    assert body["first_id"] == "model-0"
+    assert body["last_id"] == "model-1"
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_limit_without_a_remainder(monkeypatch):
+    """A limit that covers the whole list still says has_more: false."""
+    models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(3)]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"limit": "10"})
+    assert len(body["data"]) == 3
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_after_id_cursors_past_a_model(monkeypatch):
+    """after_id starts the page after the named model, so pagination walks
+    the listing without repeating entries."""
+    models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(3)]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"after_id": "model-1"})
+
+    assert [entry["id"] for entry in body["data"]] == ["model-2"]
+    assert body["first_id"] == "model-2"
+    assert body["last_id"] == "model-2"
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_stale_after_id_starts_over(monkeypatch):
+    """A cursor that matches nothing (renamed model, other key) degrades to
+    the full listing rather than an error."""
+    models = [{"id": 1, "name": "model-a", "description": None}]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"after_id": "gone"})
+    assert [entry["id"] for entry in body["data"]] == ["model-a"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_lists_aliases_with_their_model(monkeypatch):
+    """Aliases resolve to one model and advertise its window under the alias
+    id, so a Messages client can discover and request them directly."""
+    models = [
+        {"id": 1, "name": "qwen-27b", "description": "Qwen 27B", "aliases": ["local-most-powerful"]},
+        {"id": 2, "name": "other-model", "description": None, "aliases": []},
+    ]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)])})
+    body = await _list_anthropic_body(monkeypatch, models, registry)
+
+    ids = [entry["id"] for entry in body["data"]]
+    assert ids == ["qwen-27b", "local-most-powerful", "other-model"]
+
+    alias = body["data"][1]
+    assert alias["max_input_tokens"] == 33000
+    assert alias["display_name"] == "Qwen 27B"
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_omits_ambiguous_aliases(monkeypatch):
+    """An alias owned by two accessible models is unresolvable and stays
+    out of the listing, mirroring the OpenAI shape's rule."""
+    models = [
+        {"id": 1, "name": "model-a", "description": None, "aliases": ["shared"]},
+        {"id": 2, "name": "model-b", "description": None, "aliases": ["shared"]},
+    ]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
+    assert [entry["id"] for entry in body["data"]] == ["model-a", "model-b"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_empty_listing(monkeypatch):
+    """A key without models gets an empty Anthropic envelope, not an error."""
+    body = await _list_anthropic_body(monkeypatch, [], DummyRegistry({}))
+    assert body == {"data": [], "first_id": None, "last_id": None, "has_more": False}

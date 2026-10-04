@@ -36,18 +36,32 @@ import logging
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterable, Iterator
+
+from logos_worker_node.vllm_compat import (
+    _BAKED_QUANT_METHODS_FILENAME,
+    _DEFAULT_VLLM,
+    _FATAL_LOAD_ERROR_PATTERNS,
+    FatalLoadErrorPattern,
+    _extract_vllm_kv_gib_needed_for_full,
+    _extract_vllm_max_concurrency,
+    _extract_vllm_max_model_len_suggestion,
+    _extract_vllm_max_num_seqs_suggestion,
+    _extract_vllm_max_seq_len,
+    _extract_vllm_served_context,
+)
 
 try:
     import yaml
@@ -62,7 +76,6 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-_DEFAULT_VLLM = "vllm"
 _READY_TIMEOUT_S = 600.0
 _SLEEP_TIMEOUT_S = 120.0
 _VLLM_STOP_TIMEOUT_S = 30.0
@@ -74,6 +87,11 @@ _CALIBRATION_PORT = 11499
 _KV_CACHE_MIN_STEP_MB = 1024.0  # sweep step and safety margin
 _KV_CACHE_VRAM_CAP_RATIO = 0.8  # fraction of total GPU VRAM used as KV search ceiling
 _FINAL_MEASUREMENT_RETRIES = 3  # retries for the final VRAM measurement startup
+# Delay before each retry of the Phase-1 baseline VRAM read. First retry
+# short (most nvidia-smi blips clear in seconds); last keeps the original
+# 15s — no telemetry rules out a slower teardown after a huge model, so
+# the last chance stays unshortened.
+_BASELINE_VRAM_RETRY_DELAYS_S: tuple[float, ...] = (2.0, 15.0)
 _LOG_DIAGNOSTIC_TAIL_LINES = 80  # lines of probe log echoed into worker logs on failure
 _FAILED_COMMANDS_FILE = "calibration_failed_commands.txt"
 _SUCCEEDED_COMMANDS_FILE = "calibration_succeeded_commands.txt"
@@ -252,7 +270,8 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
 # the per-command blacklist (and another stuck-GPU recovery to vLLM's restart
 # logic). We need a coarser "do not retry this MODEL at all" record.
 #
-# Adding a pattern: append to ``_FATAL_LOAD_ERROR_PATTERNS`` below. Keep
+# Adding a pattern: append to ``_FATAL_LOAD_ERROR_PATTERNS`` in
+# vllm_compat.py. Keep
 # patterns NARROW — only error signatures that prove the failure is (a)
 # deterministic, (b) about the model itself (not the GPU or vLLM version
 # or some transient I/O issue), and (c) unfixable by kv-cache tuning.
@@ -262,51 +281,38 @@ def _remove_failed_command(failed_path: Path, fingerprint: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class FatalLoadErrorPattern:
-    """A vLLM log signature that proves the model can never load on this worker.
+# ---------------------------------------------------------------------------
+# Deployment failure domains.
+#
+# Every classified error belongs to exactly one domain — the phase of the
+# vLLM startup sequence it happens in. Domains are the single source of
+# truth for the "stage" checklist shown in the error-report UI: each
+# pattern below declares its own ``domain=`` field, so extending the
+# taxonomy is a one-place change (add a pattern with a domain= tag) rather
+# than a pattern PLUS a separate reason-code-to-stage mapping kept in sync
+# by hand elsewhere.
+#
+# A domain with no reason codes assigned (weight_loading, kv_cache_fit) is
+# not a dead entry — CUDA OOM and similar resource-exhaustion errors can
+# happen during EITHER of those phases (or during download), so they are
+# deliberately left unassigned to any single domain (`domain=None` on
+# their pattern) and instead resolved positionally: whichever domain's
+# completion signal is the first one NOT yet seen in the log is where the
+# checklist attaches the error. That's more accurate than a fixed guess
+# for anything that can occur at more than one point in the sequence.
+#
+# FatalLoadErrorPattern/_FATAL_LOAD_ERROR_PATTERNS themselves now live in
+# vllm_compat.py (imported above) — domain values there are plain strings
+# matching these ids, not these constants, to avoid a circular import.
+# ---------------------------------------------------------------------------
 
-    Matched as a substring against the vLLM log tail captured after a probe
-    failure. Case-sensitive — vLLM's own error strings are stable, so
-    fuzzy-matching is unnecessary and just invites false positives.
-    """
-
-    needle: str
-    reason_code: str  # short, kebab-case; surfaced in logs and the persisted file
-    description: str  # human-readable, shown to ops in the file and in error responses
-
-
-_FATAL_LOAD_ERROR_PATTERNS: tuple[FatalLoadErrorPattern, ...] = (
-    FatalLoadErrorPattern(
-        needle="Invalid repository ID or local directory specified",
-        reason_code="invalid-repo-id",
-        description=(
-            "vLLM cannot resolve the model name to either a Hugging Face "
-            "repository or a local directory containing config.json. The "
-            "identifier is misspelled, the repository is private/withdrawn, "
-            "or the local directory is missing config.json / params.json."
-        ),
-    ),
-    FatalLoadErrorPattern(
-        needle="Cannot access gated repo",
-        reason_code="gated-repo-no-token",
-        description=(
-            "Hugging Face flags this repository as gated. The worker has no "
-            "HF token (or the token lacks access). Fix by adding a "
-            "HUGGING_FACE_HUB_TOKEN with read access to the repo before "
-            "removing this entry."
-        ),
-    ),
-    FatalLoadErrorPattern(
-        needle="does not recognize this architecture",
-        reason_code="unsupported-architecture",
-        description=(
-            "The installed vLLM build does not implement this model's "
-            "architecture. Upgrade vLLM (and remove this entry) if support "
-            "has been added since this worker was deployed."
-        ),
-    ),
-)
+_DOMAIN_NODE_PREFLIGHT = "node_preflight"
+_DOMAIN_MODEL_RESOLUTION = "model_resolution"
+_DOMAIN_ENGINE_INIT = "engine_init"
+_DOMAIN_WEIGHT_LOADING = "weight_loading"
+_DOMAIN_KV_CACHE_FIT = "kv_cache_fit"
+_DOMAIN_MULTI_GPU_COORDINATION = "multi_gpu_coordination"
+_DOMAIN_SERVER_START = "server_start"
 
 
 def _classify_fatal_load_error(log_tail: str) -> FatalLoadErrorPattern | None:
@@ -425,31 +431,6 @@ def _record_unsupported_model(path: Path, entry: UnsupportedModelEntry) -> None:
     )
 
 
-def _remove_unsupported_model(path: Path, model: str) -> int:
-    """Remove all entries for *model* from the file. Returns the number of
-    lines removed. Used when calibration succeeds despite a prior entry
-    (operator manually cleared the underlying issue and re-ran).
-    """
-    if not path.exists():
-        return 0
-    lines = path.read_text(encoding="utf-8").splitlines()
-    remaining: list[str] = []
-    removed = 0
-    for ln in lines:
-        stripped = ln.strip()
-        if not stripped or stripped.startswith("#"):
-            remaining.append(ln)
-            continue
-        head = stripped.split("\t", 1)[0].strip()
-        if head == model:
-            removed += 1
-            continue
-        remaining.append(ln)
-    if removed:
-        path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
-    return removed
-
-
 def is_model_unsupported(log_dir: Path, model: str) -> UnsupportedModelEntry | None:
     """Public helper for callers outside this module (e.g. logos_bridge).
 
@@ -477,14 +458,20 @@ def is_model_unsupported(log_dir: Path, model: str) -> UnsupportedModelEntry | N
 #   - write to the per-model unsupported list (calibration_unsupported_models.txt)
 #
 # It SHOULD:
-#   - log loudly (this will surface in worker logs and, via the bridge,
-#     server logs too — feature #3 wires this through the heartbeat to
-#     the master so the orchestrator stops scheduling calibrations on
-#     unhealthy nodes),
+#   - log loudly (this will surface in worker logs),
 #   - abort the kv-cache search immediately (every probe will fail
 #     identically until the underlying issue is fixed),
 #   - return a CalibrationResult with ``node_unhealthy_reason`` set so
-#     the bridge can update node health state in the runtime status.
+#     it's recorded on the calibration_probe_logs row and shown in the
+#     model-error-report UI.
+#
+# NOTE: this is display-only — it does NOT feed the scheduler. The thing
+# that actually makes the orchestrator stop sending work to a degraded
+# node is the separate, proactive node_health.py sensor module (GPU/
+# filesystem checks run on every heartbeat, independent of calibration).
+# calibration_orchestrator.py's provider-selection loop skips a provider
+# based on THAT signal (WorkerRuntimeStatus.node_health.healthy), never
+# based on this field. Don't conflate the two when editing this comment.
 #
 # Adding a pattern: append to ``_NODE_LEVEL_TRANSIENT_PATTERNS`` below.
 # Keep patterns NARROW — only signatures that are unambiguously
@@ -505,6 +492,9 @@ class NodeTransientErrorPattern:
     needle: str
     reason_code: str  # short kebab-case identifier surfaced in worker + master logs
     description: str  # human-readable, shown to ops
+    # See FatalLoadErrorPattern.domain — same convention, None means
+    # "resolve positionally" rather than "uncategorized".
+    domain: str | None = None
 
 
 _NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
@@ -512,7 +502,8 @@ _NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
         # Kernel reports EIO when the backing device returns hard read errors
         # (bad disk, network block device that lost its OSD, Ceph PG in
         # recovery, …). Files exist on the filesystem but reading them
-        # returns Errno 5.
+        # returns Errno 5. Can hit at ANY disk access (download, weight
+        # load, log write, …) — domain=None, resolved positionally.
         needle="Input/output error",
         reason_code="filesystem-eio",
         description=(
@@ -525,6 +516,7 @@ _NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
     NodeTransientErrorPattern(
         # Less common — usually reads (EIO) appear before writes. Kept
         # because it's the unambiguous "kernel remounted r/o" signal.
+        # Same positional reasoning as filesystem-eio above.
         needle="Read-only file system",
         reason_code="filesystem-readonly",
         description=(
@@ -533,6 +525,43 @@ _NODE_LEVEL_TRANSIENT_PATTERNS: tuple[NodeTransientErrorPattern, ...] = (
             "store, or calibration logs. Investigate and remount (or "
             "reboot the node)."
         ),
+    ),
+    NodeTransientErrorPattern(
+        # Stable OS errno-28 string. Unambiguous cause, but can surface at
+        # any disk-writing point — domain=None, resolved positionally.
+        needle="No space left on device",
+        reason_code="disk-space-exhausted",
+        description=(
+            "The node's disk is full. Model weights, cache, or logs "
+            "cannot be written. Free up space (old model caches, logs) "
+            "or expand storage, then retry."
+        ),
+    ),
+    NodeTransientErrorPattern(
+        # Standard CUDA runtime string — hardware/driver missing or not
+        # visible to this process. Fires the moment vLLM touches CUDA,
+        # before any model-specific work — always node_preflight.
+        needle="no CUDA-capable device is detected",
+        reason_code="cuda-device-not-detected",
+        description=(
+            "No GPU is visible to vLLM on this node. Check that the "
+            "driver is loaded, the device isn't held by another process, "
+            "and container/VM GPU passthrough is configured correctly."
+        ),
+        domain=_DOMAIN_NODE_PREFLIGHT,
+    ),
+    NodeTransientErrorPattern(
+        # Standard CUDA runtime string when the installed driver is older
+        # than the CUDA toolkit vLLM was built against — same reasoning
+        # as cuda-device-not-detected: always node_preflight.
+        needle="CUDA driver version is insufficient for CUDA runtime version",
+        reason_code="cuda-driver-runtime-mismatch",
+        description=(
+            "The installed NVIDIA driver is older than the CUDA runtime "
+            "vLLM requires. Upgrade the node's driver (or pin an older "
+            "vLLM/CUDA build) to resolve."
+        ),
+        domain=_DOMAIN_NODE_PREFLIGHT,
     ),
 )
 
@@ -553,164 +582,419 @@ def _classify_node_transient_error(log_tail: str) -> NodeTransientErrorPattern |
     return None
 
 
-# vLLM raises a specific ValueError when the configured KV cache budget is too
-# small to serve a single request at the model's default max_seq_len, e.g.::
+# A genuine CUDA/torch allocator OOM — distinct from the KV-too-small and
+# max-num-seqs validation rejections above, which name their own fix
+# instead of exhausting the GPU. Lowercase: matched case-insensitively,
+# since vLLM's cumem allocator capitalizes "Error" where torch doesn't.
+_CUDA_OOM_MARKERS: tuple[str, ...] = ("cuda out of memory", "cuda error: out of memory")
+
+
+def _is_cuda_oom_log(log_tail: str) -> bool:
+    """True when the log shows a genuine CUDA/torch OOM, not one of the
+    recoverable validation rejections handled by the suggestion-based
+    retries. Weights are fixed for a given tp, so once this appears, a
+    larger kv can only need more memory — never less."""
+    if not log_tail:
+        return False
+    lowered = log_tail.lower()
+    return any(m in lowered for m in _CUDA_OOM_MARKERS)
+
+
+# ---------------------------------------------------------------------------
+# Observed transient failures — informational only, no side effects.
 #
-#     ValueError: To serve at least one request with the model's max seq len
-#     (131072), (8.0 GiB KV cache is needed, which is larger than the available
-#     KV cache memory (6.0 GiB). Based on the available memory, the estimated
-#     maximum model length is 98304.
+# CUDA OOM, HF network blips, NCCL handshake failures etc. are deliberately
+# excluded from both patterns above: they're non-deterministic and the
+# kv-cache binary search / retry loop already handles them, so classifying
+# them as fatal or node-unhealthy would be wrong. But that also means ops
+# gets no structured signal for what is, in practice, the most common class
+# of failure — this table exists purely to surface *what was last observed*
+# for display, with no blacklist or node-health side effect whatsoever.
 #
-# This is recoverable WITHOUT enlarging the KV budget: pass --max-model-len at
-# the suggested value (or below). The calibration probe loop uses this helper
-# to extract the number and auto-retry the same kv_mb with the suggestion
-# injected, instead of blacklisting the command and failing the model.
-_VLLM_MAX_MODEL_LEN_SUGGESTION_RE = re.compile(r"estimated maximum model length is (\d+)")
-_VLLM_MAX_SEQ_LEN_RE = re.compile(r"max seq len \((\d+)\)")
-_VLLM_MAX_MODEL_LEN_CONFIG_RE = re.compile(r"max_model_len\s*[=:]\s*(\d+)")
-# "... the model's max seq len (131072), 8.94 GiB KV cache is needed ..." — the
-# KV required to serve the model's FULL context. With the max seq len this gives
-# the KV→context rate, letting the sweep COMPUTE the curve instead of crawling.
-_VLLM_KV_GIB_NEEDED_RE = re.compile(r"([\d.]+)\s*GiB KV cache is needed")
+# Adding a pattern: append to ``_OBSERVED_TRANSIENT_PATTERNS`` below. Unlike
+# the two tables above, patterns here don't need to be narrow or exclusive —
+# worst case a mislabeled "observed" reason is just a cosmetic annoyance in
+# the error-report UI, not a wrongly parked model or node.
+# ---------------------------------------------------------------------------
 
 
-def _extract_vllm_kv_gib_needed_for_full(log_tail: str) -> float | None:
-    """GiB of KV cache vLLM says it needs to serve the model's full max seq len."""
-    m = _VLLM_KV_GIB_NEEDED_RE.search(log_tail)
-    if not m:
-        return None
-    try:
-        return float(m.group(1))
-    except ValueError:
-        return None
+@dataclass(frozen=True)
+class ObservedTransientErrorPattern:
+    """A vLLM log signature worth surfacing to ops, without any control-flow
+    side effect (no blacklisting, no node-health change).
+
+    Matched as a substring against the vLLM log tail captured after a probe
+    failure. Case-sensitive.
+    """
+
+    needle: str
+    reason_code: str  # short kebab-case identifier surfaced in the UI only
+    description: str  # human-readable, shown to ops
+    # See FatalLoadErrorPattern.domain — same convention.
+    domain: str | None = None
 
 
-def _extract_vllm_max_model_len_suggestion(log_tail: str) -> int | None:
-    """Return vLLM's suggested ``--max-model-len`` when the KV budget is too
-    small for the model's default max_seq_len, otherwise None.
+_OBSERVED_TRANSIENT_PATTERNS: tuple[ObservedTransientErrorPattern, ...] = (
+    ObservedTransientErrorPattern(
+        # Can happen while loading weights onto the GPU OR while
+        # reserving KV cache — genuinely two different domains depending
+        # on how far the attempt got. domain=None, resolved positionally.
+        needle="CUDA out of memory",
+        reason_code="cuda-oom",
+        description=(
+            "The GPU ran out of memory while loading the model or "
+            "reserving KV cache. The calibration kv-cache search will "
+            "retry with a smaller budget automatically."
+        ),
+    ),
+    ObservedTransientErrorPattern(
+        # cudaErrorMemoryAllocation (cuBLAS, NCCL, graph capture) is worded
+        # this way instead of torch's "CUDA out of memory"; must match
+        # before the generic "CUDA error:" prefix below.
+        needle="CUDA error: out of memory",
+        reason_code="cuda-oom",
+        description=(
+            "The GPU ran out of memory while loading the model or "
+            "reserving KV cache. The calibration kv-cache search will "
+            "retry with a smaller budget automatically."
+        ),
+    ),
+    ObservedTransientErrorPattern(
+        # torch.AcceleratorError's "CUDA error: <reason>" prefix for any
+        # non-OOM runtime failure, e.g. "unspecified launch failure" during
+        # multi-GPU CUDA-graph warmup. Can occur wherever kernels run, so
+        # domain=None, resolved positionally like cuda-oom.
+        needle="CUDA error:",
+        reason_code="cuda-runtime-error",
+        description=(
+            "A CUDA runtime error occurred (not out-of-memory — see the "
+            "full log for the specific error, e.g. 'unspecified launch "
+            "failure' or 'an illegal memory access'). Often a driver, "
+            "kernel, or multi-GPU synchronization crash. The calibration "
+            "search will retry; if it recurs on every attempt, the node's "
+            "driver/hardware likely needs investigation."
+        ),
+    ),
+    ObservedTransientErrorPattern(
+        # HF Hub HTTP calls only happen while resolving/downloading the
+        # model — single deterministic domain.
+        needle="Read timed out",
+        reason_code="hf-network-timeout",
+        description=(
+            "A Hugging Face Hub request timed out while downloading " "model files. Usually transient — will retry."
+        ),
+        domain=_DOMAIN_MODEL_RESOLUTION,
+    ),
+    ObservedTransientErrorPattern(
+        # "Too Many Requests" alone, not the full "429 Client Error: ..."
+        # wrapper — huggingface_hub's HTTP client changed from `requests`
+        # (which raises "429 Client Error: Too Many Requests for url: ...")
+        # to httpx (which raises "Client error '429 Too Many Requests' for
+        # url ...") between versions. Matching just the reason phrase is
+        # correct under both.
+        needle="Too Many Requests",
+        reason_code="hf-rate-limited",
+        description=(
+            "Hugging Face Hub rate-limited the download request. Usually "
+            "transient — will retry, possibly after a backoff."
+        ),
+        domain=_DOMAIN_MODEL_RESOLUTION,
+    ),
+    ObservedTransientErrorPattern(
+        # Multi-rank process-group handshake — only meaningful (and only
+        # possible) once tensor-parallel workers are being coordinated.
+        needle="NCCL error",
+        reason_code="nccl-handshake-failure",
+        description=(
+            "NCCL failed to establish communication between vLLM ranks "
+            "(multi-GPU/tensor-parallel setups). Often transient — "
+            "network or process-startup timing."
+        ),
+        domain=_DOMAIN_MULTI_GPU_COORDINATION,
+    ),
+    ObservedTransientErrorPattern(
+        # The HTTP server bind is the only place vLLM opens a listening
+        # socket — single deterministic domain.
+        needle="Address already in use",
+        reason_code="port-in-use",
+        description=(
+            "The port vLLM tried to bind was still held by a prior "
+            "process (e.g. TIME_WAIT after a previous probe). Usually "
+            "resolves on the next retry."
+        ),
+        domain=_DOMAIN_SERVER_START,
+    ),
+)
+
+
+def _classify_observed_transient_error(
+    log_tail: str,
+) -> ObservedTransientErrorPattern | None:
+    """Return the first matching :class:`ObservedTransientErrorPattern`.
+
+    Purely informational — the result is surfaced for display only and
+    must never gate blacklisting or node-health decisions.
     """
     if not log_tail:
         return None
-    m = _VLLM_MAX_MODEL_LEN_SUGGESTION_RE.search(log_tail)
-    if not m:
-        return None
-    try:
-        value = int(m.group(1))
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
+    for pattern in _OBSERVED_TRANSIENT_PATTERNS:
+        if pattern.needle in log_tail:
+            return pattern
+    return None
 
 
-def _extract_vllm_max_seq_len(log_tail: str, *, allow_config_fallback: bool = True) -> int | None:
-    """Return the model's default max seq len mentioned by vLLM, if present.
-
-    This appears in KV-too-small startup failures and lets calibration record
-    the plateau ``max_model_len`` once the default fits again.
-
-    ``allow_config_fallback=False`` restricts the search to the authoritative
-    "max seq len (N)" phrasing of vLLM's KV-too-small ValueError and skips the
-    ``max_model_len=N`` config-dump fallback. Callers MUST pass False whenever
-    calibration itself injected ``--max-model-len`` for the probe being parsed:
-    the config dump then echoes OUR OWN injected value, so treating it as the
-    model default silently pins the whole sweep to the floor probe's shrunken
-    context (deipapa/deimama 2026-08-18: Qwen3.8-27B recorded a flat 27440
-    curve although probes at 10-20G served the model's full 262144).
-    """
-    if not log_tail:
-        return None
-    m = _VLLM_MAX_SEQ_LEN_RE.search(log_tail)
-    if not m and allow_config_fallback:
-        m = _VLLM_MAX_MODEL_LEN_CONFIG_RE.search(log_tail)
-    if not m:
-        return None
-    try:
-        value = int(m.group(1))
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
-
-
-# Hybrid Mamba/SSM models (Qwen3-Coder-Next, …) allocate a fixed pool of
-# state-cache blocks sized from the leftover VRAM after weights + KV. Each
-# in-flight decode sequence needs one block, so when max_num_seqs (vLLM's
-# default 1024) exceeds the pool, CUDA-graph capture aborts at startup with:
+# ---------------------------------------------------------------------------
+# Deployment domain checklist.
 #
-#     RuntimeError: ... 'max_num_seqs (1024) exceeds available Mamba cache
-#     blocks (160). Each decode sequence requires one Mamba cache block, so
-#     CUDA graph capture cannot proceed. Please lower max_num_seqs to at most
-#     160 or increase gpu_memory_utilization.'
+# The 7 failure domains declared above (_DOMAIN_*) — each is one row in the
+# error-report UI's
+# checklist. A domain's completion is proven by a regex signature vLLM
+# reliably prints when that phase finishes; a domain with no such signal
+# of its own (node_preflight — CUDA/driver failures happen before any
+# meaningful log output at all) is inferred complete once any LATER
+# domain's signal is seen.
 #
-# Recoverable by passing --max-num-seqs at (or below) the suggested ceiling.
-# The probe loop extracts the number and auto-retries the same kv_mb with the
-# flag injected, instead of blacklisting the command and failing the model.
-_VLLM_MAX_NUM_SEQS_SUGGESTION_RE = re.compile(r"lower max_num_seqs to at most (\d+)")
+# Extending this taxonomy is a two-step, single-direction change:
+#   1. If the new error needs a new domain, add a _DOMAIN_* id (near
+#      FatalLoadErrorPattern above) and a CalibrationDomain entry below.
+#   2. Tag the new Fatal/NodeTransient/ObservedTransientErrorPattern with
+#      domain=that_id (or leave domain=None if it can occur at more than
+#      one point — see the None-domain patterns above for why that's a
+#      deliberate choice, not an omission).
+# No separate reason-code-to-stage mapping exists to fall out of sync.
+# ---------------------------------------------------------------------------
 
 
-def _extract_vllm_max_num_seqs_suggestion(log_tail: str) -> int | None:
-    """Return vLLM's suggested ``--max-num-seqs`` ceiling when a hybrid
-    Mamba/SSM model's state-cache pool is smaller than max_num_seqs, else None.
+@dataclass(frozen=True)
+class CalibrationDomain:
+    """One failure-domain checklist row.
+
+    ``completion_patterns`` — ANY match proves the domain finished (empty
+    tuple = no direct signal, inferred from later domains instead).
+    ``requires`` — a tag deciding whether this domain applies to a given
+    attempt at all (e.g. "multi_gpu"). None = always applies. A single
+    string tag is deliberately simpler than a callback: there's exactly
+    one condition today; add a new tag + branch in _domain_applies if a
+    second one is ever needed.
     """
-    if not log_tail:
-        return None
-    m = _VLLM_MAX_NUM_SEQS_SUGGESTION_RE.search(log_tail)
-    if not m:
-        return None
-    try:
-        value = int(m.group(1))
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
+
+    id: str
+    label: str
+    completion_patterns: tuple["re.Pattern[str]", ...]
+    requires: str | None = None
 
 
-# vLLM prints the achievable concurrency at every engine init, e.g.
-#   "Maximum concurrency for 33,888 tokens per request: 2.00x"
-# This is total_kv_cache_tokens / max_model_len — i.e. how many simultaneous
-# full-context requests the KV pool can serve. We read it back (rather than
-# pinning --max-num-seqs) to record the "parallelity factor" of each KV point.
-_VLLM_MAX_CONCURRENCY_RE = re.compile(r"Maximum concurrency for ([\d,]+) tokens per request:\s*([\d.]+)x")
+_CALIBRATION_DOMAINS: tuple[CalibrationDomain, ...] = (
+    CalibrationDomain(
+        id=_DOMAIN_NODE_PREFLIGHT,
+        label="Node Preflight",
+        completion_patterns=(),
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_MODEL_RESOLUTION,
+        label="Model Resolution & Download",
+        completion_patterns=(re.compile(r"non-default args:"),),
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_ENGINE_INIT,
+        label="Engine Initialization",
+        completion_patterns=(re.compile(r"Initializing a V1 LLM engine"),),
+    ),
+    CalibrationDomain(
+        # NCCL/process-group setup for multi-GPU runs happens as part of
+        # engine construction, before weight loading — placed right after
+        # engine_init. No completion pattern of its own: no vLLM log line
+        # proves multi-GPU coordination specifically succeeded, as opposed
+        # to engine construction in general.
+        # Inferred complete once a LATER domain's signal fires, same rule
+        # as node_preflight. nccl-handshake-failure still gets a FIXED
+        # domain assignment on its pattern (below) despite that — the
+        # semantic link (an NCCL error IS a multi-GPU coordination
+        # problem) is certain even without positional proof.
+        id=_DOMAIN_MULTI_GPU_COORDINATION,
+        label="Multi-GPU Coordination",
+        completion_patterns=(),
+        requires="multi_gpu",
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_WEIGHT_LOADING,
+        label="Weight Loading",
+        completion_patterns=(re.compile(r"Model loading took"),),
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_KV_CACHE_FIT,
+        label="KV-Cache Memory Fit",
+        # Calibration always sets kv_cache_memory_bytes, which skips vLLM's
+        # profiling path ("Available KV cache memory" never appears). This
+        # line is logged once the KV cache is sized, on either path.
+        completion_patterns=(re.compile(r"GPU KV cache size:"),),
+    ),
+    CalibrationDomain(
+        id=_DOMAIN_SERVER_START,
+        label="Server Start",
+        completion_patterns=(
+            re.compile(r"Starting vLLM server on"),
+            re.compile(r"Application startup complete\."),
+        ),
+    ),
+)
 
 
-def _extract_vllm_max_concurrency(log_tail: str) -> float | None:
-    """Return vLLM's reported achievable concurrency (the ``X.XXx`` factor), else None.
+def _domain_applies(domain: CalibrationDomain, tensor_parallel_size: int) -> bool:
+    """Whether *domain* is even reachable given this attempt's plan."""
+    if domain.requires == "multi_gpu":
+        return tensor_parallel_size > 1
+    return True
 
-    Uses the LAST occurrence in the log so a re-probe at a different KV size
-    reflects the final successful load rather than an earlier attempt.
+
+_GENERIC_CALIBRATION_ERROR_RE = re.compile(
+    r"\b(?:ERROR|CRITICAL|FATAL|Exception|Traceback|ValueError|"
+    r"RuntimeError|TypeError|KeyError|ImportError|AssertionError)\b"
+)
+_GENERIC_CALIBRATION_ERROR_FALLBACK_RE = re.compile(r"error\s*:", re.IGNORECASE)
+
+# Lines confirmed, against real production logs, to be benign vLLM
+# fallback/informational messages that happen to be tagged at ERROR log
+# level — NOT failures. Without this, the generic grep below (which takes
+# the FIRST line matching the patterns above) picks these over the actual
+# root cause further down the log. Add a needle here only after
+# confirming — via a real log where the attempt succeeded, or where a
+# later, genuine error is the true cause — that the line is truly benign.
+_GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES: tuple[str, ...] = (
+    # FA2 requires compute capability >= 8; vLLM logs this at ERROR level
+    # then gracefully falls back to TRITON_ATTN/FLEX_ATTENTION and
+    # continues — confirmed benign against two real logs, one of which
+    # completed successfully with this exact line present (2026-09-07).
+    "Cannot use FA version 2 is not supported",
+    # vLLM's optional-dependency soft-check (_has_module in
+    # vllm/utils/import_utils.py) logs a full WARNING-level traceback for
+    # ANY optional module that fails to import (numba confirmed benign
+    # in a real log where calibration succeeded, 2026-09-07) — by design
+    # it never fails calibration. vLLM tags every physical line of the
+    # dump with the same "[import_utils.py:<N>]" source location, so
+    # matching that prefix (not a version-specific line number) covers
+    # the WHOLE block, including lines deep in the trace (e.g. "raise
+    # ImportError") that a narrower, opening-line-only needle would miss.
+    "[import_utils.py:",
+)
+
+
+# Deliberately tight (not e.g. 5+): a wide window risks suppressing a
+# genuinely unrelated real error that happens to occur near a benign
+# marker. 1 is the minimum that covers both confirmed cases above — the
+# marker is either ON the matched line itself (FA2) or exactly one line
+# before it (numba's "Traceback (most recent call last):" immediately
+# follows its "failed to import" line).
+_GENERIC_CALIBRATION_ERROR_IGNORE_WINDOW = 1
+
+# Cap on how many lines of trailing log we keep as generic_error_detail —
+# the match can land near the top of a long probe log, and the untrimmed
+# remainder has ended up dumping the entire log into the stored detail.
+_GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80
+
+
+def _get_generic_calibration_error(probe_log: str) -> tuple[str, str] | None:
+    """Last-resort (summary, detail) pair for an unclassified failure.
+
+    Ports getCalibrationError (model-error-report.ts) — a plain keyword
+    grep over the log, used only when none of the three reason
+    classifiers above matched.
     """
-    if not log_tail:
+    lines = [line for line in probe_log.split("\n") if line.strip()]
+
+    def _is_ignored(index: int) -> bool:
+        # The trigger keyword (e.g. "Traceback") often lands on a
+        # different line than the marker that identifies a known-benign
+        # block (e.g. "Module numba was found but failed to import" one
+        # line above it) — check a small preceding window, not just the
+        # matched line itself.
+        window = lines[max(0, index - _GENERIC_CALIBRATION_ERROR_IGNORE_WINDOW) : index + 1]
+        return any(
+            needle in window_line for window_line in window for needle in _GENERIC_CALIBRATION_ERROR_IGNORE_NEEDLES
+        )
+
+    index = next(
+        (i for i, line in enumerate(lines) if _GENERIC_CALIBRATION_ERROR_RE.search(line) and not _is_ignored(i)),
+        -1,
+    )
+    if index == -1:
+        index = next(
+            (
+                i
+                for i, line in enumerate(lines)
+                if _GENERIC_CALIBRATION_ERROR_FALLBACK_RE.search(line) and not _is_ignored(i)
+            ),
+            -1,
+        )
+    if index == -1:
         return None
-    matches = _VLLM_MAX_CONCURRENCY_RE.findall(log_tail)
-    if not matches:
-        return None
-    try:
-        value = float(matches[-1][1])
-    except (TypeError, ValueError, IndexError):
-        return None
-    return value if value > 0 else None
+    detail_lines = lines[index : index + _GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES]
+    return lines[index], "\n".join(detail_lines)
 
 
-def _extract_vllm_served_context(log_tail: str) -> int | None:
-    """Return the context length vLLM actually loaded, from the same line.
+def _classify_calibration_stages(
+    probe_log: str,
+    reason_kind: str | None,
+    reason_code: str | None,
+    reason_domain: str | None,
+    reason_needle: str | None,
+    tensor_parallel_size: int,
+) -> list[dict[str, Any]]:
+    """Failure-domain checklist for ONE (failed) probe attempt.
 
-    "Maximum concurrency for 262,144 tokens per request: 2.21x" names the
-    engine's resolved ``max_model_len``, printed on every successful init. It
-    is the ONLY authoritative answer to "what did this probe really serve" —
-    a probe that starts without an injected ``--max-model-len`` carries no
-    suggestion and no fresh config echo, so without this the sweep has to fall
-    back to a cached model-default and can attribute the floor probe's
-    shrunken context to every larger KV size (see ``_extract_vllm_max_seq_len``).
+    Domains that don't apply to this attempt's plan (e.g. multi-GPU
+    coordination on a tensor_parallel_size=1 run) are omitted entirely,
+    not shown as "unknown" — there was never anything to reach.
 
-    Uses the LAST occurrence so retries within one probe report the final load.
+    Prefers ``reason_domain`` (declared directly on whichever pattern
+    matched) to pin the failing row. If the matched pattern has no fixed
+    domain (domain=None — see the module note above _CALIBRATION_DOMAINS,
+    e.g. CUDA OOM), falls back to "first domain whose completion signal
+    wasn't seen yet in the log" — positionally accurate for exactly the
+    errors that can occur at more than one point in the sequence.
     """
-    if not log_tail:
-        return None
-    matches = _VLLM_MAX_CONCURRENCY_RE.findall(log_tail)
-    if not matches:
-        return None
-    try:
-        value = int(matches[-1][0].replace(",", ""))
-    except (TypeError, ValueError, IndexError):
-        return None
-    return value if value > 0 else None
+    domains = [domain for domain in _CALIBRATION_DOMAINS if _domain_applies(domain, tensor_parallel_size)]
+
+    completed = [any(pattern.search(probe_log) for pattern in domain.completion_patterns) for domain in domains]
+    # A domain with no completion signal of its own is inferred complete
+    # once any LATER domain's signal has fired.
+    for index, domain in enumerate(domains):
+        if not domain.completion_patterns:
+            completed[index] = any(completed[index + 1 :])
+
+    # -1 when every domain is already complete — the probe still failed
+    # (this is only ever called for a failed probe), so fall back to the
+    # last domain rather than leaving no stage marked as the failure.
+    first_incomplete_index = next((i for i, done in enumerate(completed) if not done), len(domains) - 1)
+
+    domain_index_by_id = {domain.id: i for i, domain in enumerate(domains)}
+    mapped_index = domain_index_by_id.get(reason_domain, -1) if reason_domain else -1
+    effective_index = mapped_index if mapped_index != -1 else first_incomplete_index
+
+    stages: list[dict[str, Any]] = []
+    for index, domain in enumerate(domains):
+        if index != effective_index:
+            stages.append({"name": domain.label, "status": "success" if completed[index] else "unknown"})
+            continue
+        generic = None if reason_code else _get_generic_calibration_error(probe_log)
+        stages.append(
+            {
+                "name": domain.label,
+                "status": "failure",
+                "reason_kind": reason_kind,
+                "reason_code": reason_code,
+                "generic_error_message": generic[0] if generic else None,
+                "generic_error_detail": generic[1] if generic else None,
+                # Literal substring guaranteed to exist in the raw log —
+                # the matched pattern's needle for a classified reason,
+                # else the generic grep's own (already raw) summary line.
+                # Distinct from the human-facing message/label above:
+                # the UI uses THIS to scroll to and highlight the actual
+                # log line, which a polished label would never match.
+                "log_anchor": reason_needle if reason_code else (generic[0] if generic else None),
+            }
+        )
+    return stages
 
 
 # ---------------------------------------------------------------------------
@@ -770,6 +1054,56 @@ def parse_gpu_indices(gpu_devices: str) -> list[int] | None:
     return [int(x.strip()) for x in gd.split(",") if x.strip().isdigit()]
 
 
+def extract_revision_arg(extra_args: list[str] | None) -> str | None:
+    """The ``--revision`` vLLM will actually load, if pinned via
+    ``extra_args`` (``--revision X`` or ``--revision=X``) — HF metadata
+    must be fetched from this same revision, or a precheck against the
+    unrelated default branch can use weights/config from a checkpoint the
+    plan never serves, permanently misclassifying a model pinned to an
+    older or smaller commit. Last occurrence wins, matching argparse."""
+    if not extra_args:
+        return None
+    revision: str | None = None
+    args = [str(a) for a in extra_args]
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--revision" and i + 1 < len(args):
+            revision = args[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--revision="):
+            revision = arg.split("=", 1)[1]
+        i += 1
+    return revision or None
+
+
+# ---------------------------------------------------------------------------
+# vLLM registry introspection
+# ---------------------------------------------------------------------------
+
+
+def query_vllm_quantization_methods(vllm_binary: str) -> list[str]:
+    """Quantization method names this vLLM install recognizes — name
+    only, not a platform/hardware check. Doesn't see plugin-registered
+    methods (see the caller: a miss is informational, never blocking).
+    Build-time-baked file only; [] if it isn't there (see Dockerfile)."""
+    # A bare command (no path separator, e.g. the "vllm" default) needs a
+    # real PATH search, like the OS does when spawning it — Path(...).
+    # resolve() alone silently resolves it against the CWD instead.
+    resolved = vllm_binary
+    if "/" not in vllm_binary and "\\" not in vllm_binary:
+        resolved = shutil.which(vllm_binary) or vllm_binary
+    venv_bin = Path(resolved).resolve().parent
+    baked = venv_bin / _BAKED_QUANT_METHODS_FILENAME
+    if not baked.exists():
+        return []
+    try:
+        return json.loads(baked.read_text())
+    except (OSError, ValueError):
+        return []  # corrupt/unreadable — nothing to compare against
+
+
 # ---------------------------------------------------------------------------
 # HTTP helpers (stdlib only — no httpx dependency at calibration time)
 # ---------------------------------------------------------------------------
@@ -804,6 +1138,45 @@ def _get(url: str, timeout_s: float = 10.0) -> tuple[int, Any]:
 
 def _post(url: str, body: dict | None = None, timeout_s: float = 30.0) -> tuple[int, Any]:
     return _http("POST", url, body=body, timeout_s=timeout_s)
+
+
+def _post_multipart(
+    url: str,
+    *,
+    fields: dict[str, str],
+    file_field: str,
+    filename: str,
+    file_bytes: bytes,
+    file_content_type: str = "audio/wav",
+    timeout_s: float = 30.0,
+) -> tuple[int, Any]:
+    """POST a ``multipart/form-data`` body — stdlib-only, no extra HTTP
+    client dependency for the (single) transcription probe use.
+    """
+    boundary = uuid.uuid4().hex
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; '
+        f'filename="{filename}"\r\nContent-Type: {file_content_type}\r\n\r\n'.encode() + file_bytes + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode())
+    payload = b"".join(parts)
+    headers = {
+        "User-Agent": "logos-calibrate/1.0",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    }
+    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            raw = resp.read()
+            parsed: Any = json.loads(raw) if raw else {}
+            return resp.status, parsed
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+    except Exception:
+        return 0, {}
 
 
 # ---------------------------------------------------------------------------
@@ -1062,13 +1435,19 @@ def _read_log_since(log_path: Path, offset: int, max_lines: int | None = None) -
     return "\n".join(tail)
 
 
-def stop_vllm(proc: subprocess.Popen[str]) -> None:
+def stop_vllm(proc: subprocess.Popen[str] | None) -> None:
     """Stop a vLLM process and all its child workers.
 
     Uses process-group kill (enabled by ``start_new_session=True`` in
     ``spawn_vllm``) so orphaned ``VLLM::Worker`` subprocesses are
-    cleaned up even when the parent has already crashed.
+    cleaned up even when the parent has already crashed. ``proc`` is
+    None when a probe never got far enough to spawn one (e.g. a
+    _try_start short-circuit) — callers' finally blocks call this
+    unconditionally, so that must be a no-op rather than an
+    AttributeError on ``proc.pid``.
     """
+    if proc is None:
+        return
     pgid: int | None = None
     try:
         pgid = os.getpgid(proc.pid)
@@ -1143,18 +1522,8 @@ def wait_ready(
     raise TimeoutError(f"vLLM not ready after {timeout_s:.0f}s")
 
 
-def warmup_inference(base_url: str, model: str, timeout_s: float = 120.0) -> bool:
-    """Trigger a single 1-token completion to force lazy GPU allocations.
-
-    Without this, ``/health=200`` only guarantees weights are loaded — CUDA
-    graphs are captured lazily on the first real request, FlashInfer kernels
-    JIT on first use, and Triton autotunes per-shape. The peak VRAM the
-    planner needs to budget for is post-first-request, not post-load.
-
-    Sends one ``/v1/completions`` with ``max_tokens=1``. Returns True on
-    success, False on any HTTP error (caller logs and continues — failure
-    here doesn't fail calibration, the awake measurement is still useful).
-    """
+def probe_generative(base_url: str, model: str, timeout_s: float) -> bool:
+    """1-token ``/v1/completions`` probe — the generative serving path."""
     body = {
         "model": model,
         "prompt": "hi",
@@ -1164,6 +1533,174 @@ def warmup_inference(base_url: str, model: str, timeout_s: float = 120.0) -> boo
     }
     status, _ = _post(f"{base_url}/v1/completions", body=body, timeout_s=timeout_s)
     return status == 200
+
+
+def probe_pooling(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/v1/embeddings`` request — embedding models' real serving path."""
+    body = {"model": model, "input": "hi"}
+    status, _ = _post(f"{base_url}/v1/embeddings", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+def probe_classification(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/classify`` request — sequence-classification models' real
+    serving path (vLLM never serves these from ``/v1/embeddings``)."""
+    body = {"model": model, "input": "hi"}
+    status, _ = _post(f"{base_url}/classify", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+def probe_reranking(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/rerank`` request — reranker models' real serving path (query
+    + documents, not a bare embeddings call)."""
+    body = {"model": model, "query": "hi", "documents": ["hi"]}
+    status, _ = _post(f"{base_url}/rerank", body=body, timeout_s=timeout_s)
+    return status == 200
+
+
+# Sub-second mono 16kHz WAV — no network dependency for the transcription
+# probe.
+_PROBE_AUDIO_PATH = Path(__file__).with_name("fixtures") / "calibration_probe.wav"
+
+
+def probe_transcription(base_url: str, model: str, timeout_s: float) -> bool:
+    """One ``/v1/audio/transcriptions`` request against a bundled WAV
+    fixture — the real endpoint voice-only models (Whisper & co.) serve.
+    """
+    try:
+        audio_bytes = _PROBE_AUDIO_PATH.read_bytes()
+    except OSError:
+        logger.warning("  calibration probe fixture missing: %s", _PROBE_AUDIO_PATH)
+        return False
+    status, _ = _post_multipart(
+        f"{base_url}/v1/audio/transcriptions",
+        fields={"model": model},
+        file_field="file",
+        filename="calibration_probe.wav",
+        file_bytes=audio_bytes,
+        timeout_s=timeout_s,
+    )
+    return status == 200
+
+
+_PROBE_BY_MODEL_KIND: dict[str, Callable[[str, str, float], bool]] = {
+    "generative": probe_generative,
+    "pooling": probe_pooling,
+    "classification": probe_classification,
+    "reranking": probe_reranking,
+    "transcription": probe_transcription,
+}
+
+# Model kinds calibration can positively verify end-to-end — a failed
+# probe for these fails calibration outright (see _calibrate_model_probe
+# Phase 2.5 / 5.5). "generative" stays non-fatal, deliberately, to avoid
+# false positives on transient first-token flakiness — only the classes
+# with a real, working functional probe are fatal.
+_FATAL_PROBE_MODEL_KINDS = frozenset({"pooling", "classification", "reranking", "transcription"})
+
+# The endpoint each fatal kind's probe targets — used only to check the
+# route actually exists before trusting a probe failure there (see
+# _resolve_probed_model_kind below).
+_ENDPOINT_BY_MODEL_KIND: dict[str, str] = {
+    "pooling": "/v1/embeddings",
+    "classification": "/classify",
+    "reranking": "/rerank",
+    "transcription": "/v1/audio/transcriptions",
+}
+
+# Stable across model/model_kind — safe as the model-error-report UI's
+# literal highlight needle (see OBSERVED_REASON_DESCRIPTIONS in
+# model-error-report.ts).
+_FUNCTIONAL_PROBE_FAILURE_NEEDLE = "did not answer one request on its own serving endpoint"
+
+
+def _record_functional_probe_failure(result: Any, log_path: Path, model: str, model_kind: str) -> None:
+    """Stamp a fatal functional-probe failure and make it visible in the
+    Model Error Report — vLLM's own log looks fully successful here (we
+    detected the failure, vLLM never raised it), so the message is
+    appended, or the checklist would show "Unknown calibration error".
+    """
+    message = f"functional probe failed ({model_kind}): {model} {_FUNCTIONAL_PROBE_FAILURE_NEEDLE}"
+    result.error = message
+    result.observed_reason = "functional-probe-failed"
+    logger.warning("  ERROR: %s", message)
+    try:
+        with log_path.open("a") as f:
+            f.write(f"\n[LOGOS] {message}\n")
+    except OSError:
+        logger.debug("Failed to append functional-probe-failure note to %s", log_path, exc_info=True)
+
+
+def _endpoint_registered(base_url: str, path: str, timeout_s: float) -> bool | None:
+    """Whether vLLM actually registered *path* for the loaded checkpoint,
+    read from its own ``/openapi.json`` — ground truth from the live
+    process, not a guess from HF metadata. HF's pipeline_tag/architectures
+    can say "this model is a reranker" while the checkpoint itself is a
+    plain CausalLM vLLM only ever serves generatively (e.g. Qwen3-Reranker:
+    ``pipeline_tag="text-ranking"``, but vLLM logs ``Supported tasks:
+    ['generate']`` and never registers ``/rerank`` at all).
+
+    Returns None — "unknown" — when the check itself didn't complete
+    (network hiccup, non-200, unparseable body). Callers must never read
+    None as "confirmed missing": that would turn a transient glitch into
+    a silent kind downgrade.
+    """
+    status, payload = _get(f"{base_url}/openapi.json", timeout_s=timeout_s)
+    if status != 200 or not isinstance(payload, dict):
+        return None
+    paths = payload.get("paths")
+    if not isinstance(paths, dict):
+        return None
+    return path in paths
+
+
+def _resolve_probed_model_kind(base_url: str, model: str, model_kind: str, timeout_s: float = 10.0) -> str:
+    """Downgrade *model_kind* to "generative" when vLLM never registered
+    its fatal probe's endpoint — a classification mismatch, not a broken
+    lane, so it must not fail calibration the way a real serving bug does
+    (see the Qwen3-Reranker case in _FATAL_PROBE_MODEL_KINDS' own comment).
+    Leaves model_kind untouched when the endpoint exists, or when the
+    registration check itself is inconclusive — an actually-broken lane
+    must still be caught fatally, same as before this existed.
+    """
+    if model_kind not in _FATAL_PROBE_MODEL_KINDS:
+        return model_kind
+    expected_path = _ENDPOINT_BY_MODEL_KIND.get(model_kind)
+    if expected_path is None:
+        return model_kind
+    if _endpoint_registered(base_url, expected_path, timeout_s) is False:
+        logger.warning(
+            "  %s classified as %r, but vLLM never registered %s for this "
+            "checkpoint (Supported tasks mismatch) — falling back to the "
+            "generative probe instead of failing calibration outright",
+            model,
+            model_kind,
+            expected_path,
+        )
+        return "generative"
+    return model_kind
+
+
+def warmup_inference(
+    base_url: str,
+    model: str,
+    timeout_s: float = 120.0,
+    *,
+    model_kind: str = "generative",
+) -> bool:
+    """Send one real request through *model*'s own serving endpoint.
+
+    Also forces lazy GPU allocations (CUDA graph capture, FlashInfer JIT,
+    Triton autotune, real KV page allocation) so the awake VRAM sample
+    reflects post-first-request peak, not post-load. ``model_kind`` (from
+    ``classify_model_kind``) picks the matching endpoint — completions,
+    embeddings, classify, rerank, or transcription — instead of always
+    assuming ``/v1/completions``, which silently no-ops for pooling/
+    classification/reranking/ASR models and never catches a serving-breaking
+    config for them.
+    """
+    probe = _PROBE_BY_MODEL_KIND.get(model_kind, probe_generative)
+    return probe(base_url, model, timeout_s)
 
 
 def wait_sleep_state(base_url: str, target: bool, timeout_s: float) -> None:
@@ -1244,6 +1781,33 @@ class CalibrationResult:
     # makes sleeping and the model cache compete for one pool. None when the
     # run skipped the sleep phases, or when /proc/meminfo was unreadable.
     host_ram_residual_mb: float | None = None
+    # Wall-clock seconds from the final measurement probe's successful spawn
+    # attempt (the same configuration the serving lane runs with — final KV
+    # size, resolved max_model_len, ...) until the first request it served
+    # completed: the Phase 2.5 warmup 1-token completion. The anchor is the
+    # successful attempt itself: _try_start recurses through its
+    # max_model_len / max_num_seqs retries and a rejected start typically
+    # fails only after loading the weights, so anchoring before the first
+    # attempt would bill those near-full loads to the interval. The span
+    # covers vLLM startup, the weight load, and the first-request overhead
+    # (CUDA graph capture, JIT, KV page allocation). CAVEAT: this is a
+    # page-cache-WARM figure — the KV search spawns the same model once per
+    # candidate before the final spawn (and prior runs on this host
+    # otherwise leave the weights resident), so the load is served from the
+    # OS page cache, not from disk. It is therefore a LOWER BOUND on a true
+    # from-disk cold load; a deliberately cold reading (dropping the host
+    # page cache) is out of scope here, and consumers must not substitute
+    # this value for a from-disk cold-start constant (estimator-side
+    # consumption is tracked in ). None when the warmup request did not
+    # serve: a value that never actually served a request must not pose as a
+    # cold-load measurement.
+    cold_load_time_s: float | None = None
+    # Wall-clock seconds from the Phase 5.5 /wake_up trigger until the
+    # post-wake test request completed — the same "trigger → first served
+    # request" interval as cold_load_time_s, for the path a lane takes when a
+    # request finds it asleep. None when the run skipped the sleep phases,
+    # the wake failed verification, or the post-wake request did not serve.
+    wake_from_sleep_time_s: float | None = None
     # Set when calibrate_model bails because the model itself can never
     # load on this worker (bad repo id, gated repo, unsupported architecture).
     # Caller persists the model into model_profiles.yml so the master's
@@ -1255,13 +1819,41 @@ class CalibrationResult:
     # state (filesystem EIO, read-only mount, etc. — see
     # ``_NODE_LEVEL_TRANSIENT_PATTERNS``). Distinct from
     # ``unsupported_reason``: that one marks a single model permanently,
-    # this one marks the whole node as broken until ops intervenes.
-    # The bridge surfaces this into the runtime status so the master's
-    # orchestrator stops sending calibration commands until the node
-    # recovers. Critically: when this is set, NO blacklist entry of any
-    # kind was written — the failure isn't the calibration's fault and
-    # leaving artefacts behind just pollutes things (see deioma 2026-06-04).
+    # this one describes the whole node as broken for this one probe.
+    # Display-only: it's recorded on the calibration_probe_logs row for
+    # the model-error-report UI, nothing more — it does NOT reach the
+    # orchestrator's scheduler. Live avoidance of a degraded node is
+    # handled entirely by the separate node_health.py sensor module
+    # (proactive, runs every heartbeat) — see the design note above
+    # _NODE_LEVEL_TRANSIENT_PATTERNS. Critically: when this is set, NO
+    # blacklist entry of any kind was written — the failure isn't the
+    # calibration's fault and leaving artefacts behind just pollutes
+    # the blacklists.
     node_unhealthy_reason: str | None = None
+    # Set when the last failing probe matched an
+    # ``_OBSERVED_TRANSIENT_PATTERNS`` entry, or "metal-oom" (see
+    # calibration_metal.py). Informational only — never gates
+    # blacklisting or node-health state.
+    observed_reason: str | None = None
+    # Stage-by-stage checklist (see _classify_calibration_stages) for the
+    # last-evaluated failing probe — None on success (the UI derives a
+    # synthetic all-success stage view for successful nodes) and on any
+    # failure where no probe ever produced a classifiable log segment.
+    stages: list[dict[str, Any]] | None = None
+    # True when the KV search exhausted its range because a probe actually
+    # hit a CUDA/torch allocator OOM (``_is_cuda_oom_log`` / the
+    # ``_capacity_oom_box`` latch), not merely because no kv value ever
+    # loaded. The generic "no working kv" terminal error is also set for
+    # non-capacity causes (e.g. a tp the model's attention-head count
+    # can't divide, which never even reaches a real OOM) — callers that
+    # decide whether a lower-tp fallback can help must use this explicit
+    # flag, not string-match ``error``, or they wrongly skip a fallback
+    # that would have recovered from a config/arch quirk.
+    capacity_oom: bool = False
+    # Set only by a failed Metal probe that looks like a memory-capacity
+    # issue. Value = this node's own working-set budget (MB) — evidence the
+    # model needs more than that here. None on CUDA results and on success.
+    metal_capacity_floor_mb: float | None = None
     # ``max_model_len`` actually used during the successful probe(s). When
     # vLLM refuses to start because the configured KV budget can't hold one
     # request at the model's default max_seq_len, calibration parses vLLM's
@@ -1349,6 +1941,183 @@ def _track_host_ram_transient(
         result["transient_mb"] = max(baseline - min_seen, 0.0)
 
 
+def _reserve_and_admit_calibration_copy(
+    model_cache: Any,
+    model: str,
+    *,
+    cache_use_reserved: list[bool],
+    establish_host_ram_floor: Callable[[], bool] | None = None,
+) -> tuple[str | None, str | None]:
+    """Reserve the entry, (re-)establish the host-RAM floor, and admit the
+    probe's synchronous copy.
+
+    Returns ``(hf_home, blocked_reason)``: ``hf_home`` is the tmpfs path to
+    load from, or ``None`` when this calibration must read the source (no
+    usable copy, or the floor could not be established); ``blocked_reason``
+    is non-None when the probe must not start AT ALL — the source fallback
+    left a cached tree resident and reconciliation could not confirm the
+    host is safe (see ``_reconcile_ram_cache_after_source_fallback``), so a
+    disk-backed load would pile pressure onto an already over-committed
+    host. The provisional reservation is released whenever the entry is not
+    read from tmpfs (the ``calibrate_model`` wrapper's finally releases it
+    on every other exit). When the fallback leaves an already-cached entry
+    behind (the raised floor rejected it), one more re-plan pass reclaims
+    the now-unprotected entry before returning, so the source probe does
+    not start on a host still below the floor.
+
+    Reserve-then-floor-then-admit: ``ensure_cached_sync`` hands back the
+    tmpfs path the moment the entry is (already) cached, and the re-plan
+    runs on the event loop while this probe runs in an executor — a tick
+    in the gap between that return and a reservation taken after it can
+    reclaim the just-selected entry, leaving spawn_vllm to read a deleted
+    HF_HOME. The reservation alone only makes the entry visible to FUTURE
+    re-plans, so with a caller-supplied ``establish_host_ram_floor`` one
+    re-plan pass for the new reservation establishes the floor (sleep
+    reserve + safety margin) before the admission checks run. That pass
+    completing successfully is MANDATORY for admission: the callback
+    returns True only once the floor is set, and a timed-out or failed
+    pass (e.g. unresponsive lanes stretching the pass past its wait)
+    leaves the floor stale — both admission checks fail open against a
+    zero floor — so the copy is never admitted in that case and this
+    calibration falls back to the source HF_HOME. When the target was
+    ALREADY cached before the call, the failed pass says nothing about
+    the resident tree, so that fallback is subject to the same
+    confirmed-safety requirement as the rejection fallback below: the
+    probe proceeds from source only once the entry is gone or the host
+    is at/above a just-established floor, and aborts otherwise.
+
+    The admission itself is serialized with the background cache worker
+    through the per-model writer lock inside ``ensure_cached_sync`` (see
+    ModelRamCache): if the worker already owns this model's copy — queued
+    or in flight when the calibration started — the sync path waits for
+    that attempt instead of starting a second writer for the same
+    <model>.partial tree, and on a timed-out wait falls back to the
+    source.
+    """
+    if not cache_use_reserved[0]:
+        model_cache.reserve_cache_use(model)
+        cache_use_reserved[0] = True
+        if establish_host_ram_floor is None:
+            # Boot/CLI path: no event loop to escalate on — keep the
+            # pre-fix behaviour of admitting against the current floor.
+            _floor_ok = True
+        else:
+            try:
+                _floor_ok = bool(establish_host_ram_floor())
+            except Exception:  # noqa: BLE001
+                _floor_ok = False
+                logger.warning(
+                    "  [RAM cache] host-RAM floor escalation before the " "synchronous copy of %s raised",
+                    model,
+                    exc_info=True,
+                )
+        if not _floor_ok:
+            # Stale/unknown floor: admit NOTHING. This run reads the
+            # source HF_HOME (no tmpfs bytes), so the provisional
+            # copy-only reservation is released again.
+            model_cache.release_cache_use(model)
+            cache_use_reserved[0] = False
+            logger.warning(
+                "  [RAM cache] host-RAM floor could not be established "
+                "before the synchronous copy of %s — loading from the "
+                "source for the rest of this calibration",
+                model,
+            )
+            if model_cache.is_cached(model):
+                # The target was cached BEFORE this call: the failed pass
+                # either never ran or ran while this reservation protected
+                # the entry, so it says nothing about the resident tree.
+                # The same confirmed-safety requirement as the rejection
+                # fallback applies — the probe may proceed from source
+                # only once the entry is gone or the host is at/above a
+                # just-established floor.
+                _blocked = _reconcile_ram_cache_after_source_fallback(model_cache, establish_host_ram_floor, model)
+                if _blocked is not None:
+                    return None, _blocked
+            return None, None
+    hf_home = model_cache.ensure_cached_sync(model) or None
+    if hf_home:
+        if hasattr(model_cache, "_cache_hub") and hf_home == str(model_cache._cache_hub.parent):
+            logger.info("  [RAM cache] %s → loading from tmpfs", model)
+            return hf_home, None
+        # Source fallback (raised floor, full tmpfs, missing weights):
+        # this run reads no tmpfs bytes, so the copy must not stay
+        # pinned for the rest of the calibration.
+        model_cache.release_cache_use(model)
+        cache_use_reserved[0] = False
+        if model_cache.is_cached(model):
+            # An already-resident entry the raised floor now rejects: the
+            # pre-admission pass ran while this reservation was live, so it
+            # could not reclaim the very entry that is now unused — and
+            # nothing re-plans when the reservation drops. One more pass
+            # re-measures with the release visible and must CONFIRM the
+            # host is safe before the source probe starts (a disk-backed
+            # load on an already below-floor host is exactly the OOM
+            # window the floor exists to close).
+            _blocked = _reconcile_ram_cache_after_source_fallback(model_cache, establish_host_ram_floor, model)
+            if _blocked is not None:
+                return None, _blocked
+        logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+    else:
+        # No usable path at all — nothing to pin.
+        model_cache.release_cache_use(model)
+        cache_use_reserved[0] = False
+    return None, None
+
+
+def _reconcile_ram_cache_after_source_fallback(
+    model_cache: Any,
+    establish_host_ram_floor: Callable[[], bool] | None,
+    model: str,
+) -> str | None:
+    """Reclaim the now-unprotected entry and CONFIRM the host is safe
+    before the source-backed probe starts.
+
+    Runs one more re-plan pass with the release visible, then requires
+    confirmed safety: the pass must have COMPLETED (the callback's True —
+    a timed-out or failed pass proves nothing about the tree), and either
+    the entry must be gone, or the host must be back at/above the floor
+    (the entry is then legitimately retained by another live reference —
+    a live lane reading it — and the host absorbed it). Returns ``None``
+    when the probe may proceed, otherwise a human-readable reason it must
+    abort: a source load stacks disk-read pressure on a host that is
+    already below the RAM-cache floor with a resident tree the pass could
+    not (or did not get to) remove.
+
+    A missing callback (boot/CLI path — no event loop to re-plan on)
+    keeps the pre-fix behaviour: the next periodic tick reconciles.
+    """
+    if establish_host_ram_floor is None:
+        return None
+    try:
+        _pass_ok = bool(establish_host_ram_floor())
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "  [RAM cache] post-fallback re-plan after the source fallback for %s raised",
+            model,
+            exc_info=True,
+        )
+        _pass_ok = False
+    if not _pass_ok:
+        return (
+            "the post-fallback re-plan pass did not complete (timed out "
+            "or failed), so the cached copy may still be resident while "
+            "the host is below the RAM-cache floor"
+        )
+    if not model_cache.is_cached(model):
+        # Confirmed removal: the pass reclaimed the now-unused entry.
+        return None
+    if model_cache.host_ram_headroom_ok():
+        # The pass retained the entry for another live reference and the
+        # host is at/above the floor it just set: a consistent state.
+        return None
+    return (
+        "the post-fallback re-plan pass retained the cached copy for "
+        "another live reference and the host is still below the "
+        "RAM-cache floor"
+    )
+
+
 def calibrate_model(
     plan: dict[str, Any],
     *,
@@ -1361,6 +2130,80 @@ def calibrate_model(
     hf_home: str | None = None,
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
+) -> CalibrationResult:
+    """Calibrate one model on this worker — the public entry point.
+
+    Runs the full probe sequence (``_calibrate_model_probe``) and owns the
+    RAM-cache entry's reservation lifecycle around it: the probe reserves the
+    entry the moment it actually reads it from tmpfs — only that moment, a
+    source fallback reads no tmpfs bytes — and holds it for the probe
+    lifetime so the re-plan cannot reclaim the tree mid-session; this
+    function releases it when the run ends, on every exit.
+
+    ``establish_host_ram_floor`` is called right after that reservation and
+    before the probe's synchronous copy admission: the reservation alone only
+    makes the entry visible to future re-plans, while this probe runs on an
+    executor thread with no tick in between, so the caller (which owns the
+    event loop) supplies a callback that runs one re-plan pass for the new
+    reservation and waits. The callback must return True only once that pass
+    has completed and the floor is established — it is MANDATORY for
+    admission, because a timed-out or failed pass leaves the floor stale and
+    both admission checks fail open against it (a zero floor admits copies
+    that eat the safety margin). A callback that returns False or raises
+    therefore admits no RAM-cache copy at all: the probe loads from the
+    source HF_HOME for the rest of the calibration instead. A missing
+    callback (boot/CLI path) keeps the pre-fix behaviour of admitting
+    against the current floor. When the floor rejects an ALREADY-CACHED
+    copy (source fallback with the entry still resident), the probe may
+    continue only once a post-fallback re-plan pass has confirmed the
+    entry was reclaimed or the host is back at/above the floor —
+    otherwise the run aborts with that reason, because a disk-backed load
+    would pile pressure onto an already over-committed host.
+    """
+    # One-element list (not a plain bool) so the reservation taken deep
+    # inside the probe's closures is observable here without a shared
+    # mutable object threaded through every level.
+    cache_use_reserved: list[bool] = [False]
+    try:
+        return _calibrate_model_probe(
+            plan,
+            vllm_binary=vllm_binary,
+            port=port,
+            log_dir=log_dir,
+            sleep_level=sleep_level,
+            ready_timeout_s=ready_timeout_s,
+            nccl_p2p_available=nccl_p2p_available,
+            hf_home=hf_home,
+            model_cache=model_cache,
+            cancel_event=cancel_event,
+            cache_use_reserved=cache_use_reserved,
+            establish_host_ram_floor=establish_host_ram_floor,
+            proc_callback=proc_callback,
+        )
+    finally:
+        # Release on EVERY exit — a failed, cancelled, or early-returned run
+        # must not keep the entry pinned for the next model.
+        if cache_use_reserved[0] and model_cache is not None:
+            model_cache.release_cache_use(plan["model"])
+
+
+def _calibrate_model_probe(
+    plan: dict[str, Any],
+    *,
+    vllm_binary: str,
+    port: int,
+    log_dir: Path,
+    sleep_level: int,
+    ready_timeout_s: float,
+    nccl_p2p_available: bool = False,
+    hf_home: str | None = None,
+    model_cache: Any | None = None,
+    cancel_event: threading.Event | None = None,
+    cache_use_reserved: list[bool],
+    establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model on this worker and return a :class:`CalibrationResult`.
 
@@ -1385,6 +2228,16 @@ def calibrate_model(
         model_cache: Optional model cache; the first real spawn copies the
             model into it.
         cancel_event: When set, aborts the run at the next checkpoint.
+        cache_use_reserved: One-element flag the ``calibrate_model`` wrapper
+            reads in its ``finally`` to release the reservation: ``_try_start``
+            sets ``cache_use_reserved[0]`` (and takes the reservation) when
+            this run's probe actually reads the model from the tmpfs entry.
+        establish_host_ram_floor: Optional callback (the caller owns the
+            event loop) that runs one re-plan pass for the just-taken
+            reservation and returns True only once the host-RAM floor is
+            established. Mandatory for the synchronous copy admission in
+            ``_try_start`` — on timeout or failure the probe falls back to
+            the source HF_HOME instead of admitting against a stale floor.
 
     Returns:
         A ``CalibrationResult`` with ``success=True`` and the measured
@@ -1419,6 +2272,10 @@ def calibrate_model(
     plan = {**plan, "enforce_eager": eager_mode, "enable_sleep_mode": sleep_level > 0}
 
     model = plan["model"]
+    # "model_kind" is an operator override (engines.vllm.model_overrides);
+    # "_detected_model_kind" is the HF-precheck's auto-classification
+    # (logos_bridge.py). Both route the functional probe below.
+    model_kind = str(plan.get("model_kind") or plan.get("_detected_model_kind") or "generative")
     gpu_devices = str(plan.get("gpu_devices") or "")
     tp = int(plan.get("tensor_parallel_size", 1))
     gpu_indices = parse_gpu_indices(gpu_devices)
@@ -1475,23 +2332,26 @@ def calibrate_model(
         return partial
 
     # Phase 1 — Baseline: measure before any model process exists.
-    # Retry up to 3 times with a short delay — nvidia-smi can be temporarily
-    # sluggish right after a previous heavy calibration run (GPU driver busy).
-    logger.info("  [1/5] Baseline VRAM...")
+    # Retry a few times with a short, growing delay — nvidia-smi can be
+    # temporarily sluggish right after a heavy calibration run (GPU driver
+    # busy), but that's usually gone within seconds, not 15s per retry.
+    logger.info("  [1/6] Baseline VRAM...")
     baseline_mb: float | None = None
-    for _attempt in range(3):
+    for _attempt in range(1 + len(_BASELINE_VRAM_RETRY_DELAYS_S)):
         try:
             baseline_mb = sample_vram_mb(gpu_indices)
             break
         except Exception as exc:
             last_exc = exc
-            if _attempt < 2:
+            if _attempt < len(_BASELINE_VRAM_RETRY_DELAYS_S):
+                delay = _BASELINE_VRAM_RETRY_DELAYS_S[_attempt]
                 logger.warning(
-                    "  nvidia-smi baseline attempt %d failed: %s — retrying in 15s",
+                    "  nvidia-smi baseline attempt %d failed: %s — retrying in %.0fs",
                     _attempt + 1,
                     exc,
+                    delay,
                 )
-                time.sleep(15)
+                time.sleep(delay)
     if baseline_mb is None:
         partial.error = f"nvidia-smi baseline failed: {last_exc}"
         logger.warning("  ERROR: %s", partial.error)
@@ -1524,6 +2384,29 @@ def calibrate_model(
             "  Could not query GPU VRAM for KV cache cap: %s — no cap applied",
             exc,
         )
+
+    # HF precheck weight estimate narrows the KV ceiling, recomputed per
+    # tp. Non-positive means weights alone exceed the cap — leave max_kv_mb
+    # as-is; the sweep's OOM handling takes it from there (the hard-skip
+    # in logos_bridge.py already ruled out "no tp works at all").
+    hf_weight_bytes = plan.get("_hf_weight_bytes")
+    if hf_weight_bytes and max_kv_mb < float("inf"):
+        weight_per_gpu_mb = (float(hf_weight_bytes) / (1024 * 1024)) / max(tp, 1)
+        hf_kv_ceiling_mb = max_kv_mb - weight_per_gpu_mb
+        if hf_kv_ceiling_mb > 0:
+            # Below the min step, the sweep's floor(.../1024)*1024 rounding
+            # would collapse this to a 0 MB ceiling — clamp to the floor so
+            # the required 1 GiB probe survives instead of disabling the
+            # search entirely.
+            hf_kv_ceiling_mb = max(hf_kv_ceiling_mb, _KV_CACHE_MIN_STEP_MB)
+            logger.info(
+                "  HF-derived weights ≈%.0f MB/GPU at tp=%d — narrowing KV search ceiling %.0f → %.0f MB",
+                weight_per_gpu_mb,
+                tp,
+                max_kv_mb,
+                hf_kv_ceiling_mb,
+            )
+            max_kv_mb = hf_kv_ceiling_mb
 
     # Phase 2 — Sweep KV cache sizes and derive the reachable max_model_len
     # curve on this hardware.
@@ -1602,10 +2485,49 @@ def calibrate_model(
     # Sibling latch for node-level transient failures (filesystem EIO,
     # read-only mount, …). When set, the kv-cache search aborts without
     # writing ANY blacklist artefact — neither the per-command file nor
-    # the per-model unsupported list. The bridge reads the latch via
-    # ``partial.node_unhealthy_reason`` and surfaces it into the runtime
-    # status so the master skips this worker until ops intervenes.
+    # the per-model unsupported list. Copied into
+    # ``partial.node_unhealthy_reason`` — display-only for the
+    # model-error-report UI (see the CalibrationResult field docstring).
+    # Actually avoiding this node again is node_health.py's job, not this.
     _node_unhealthy_box: list[NodeTransientErrorPattern] = []
+
+    # Sibling latch for informational-only observed reasons (CUDA OOM, HF
+    # network blips, NCCL handshake failures, port conflicts, …). Updated
+    # on every probe failure regardless of whether the two latches above
+    # also fire — it never gates blacklisting or node-health decisions,
+    # it only gives the error-report UI a more specific "last observed"
+    # label than a generic regex-grepped error line.
+    _observed_reason_box: list[ObservedTransientErrorPattern] = []
+
+    # Sibling latch for the deployment-stage checklist (see
+    # _classify_calibration_stages) of the last-evaluated failing probe.
+    # Same "last observed wins" semantics as _observed_reason_box — the
+    # two terminal failure branches in _try_start below overwrite it every
+    # time, so it ends up holding the checklist for whichever attempt was
+    # the deciding one when the search finally gives up.
+    _stages_box: list[list[dict[str, Any]]] = []
+
+    # Sibling latch for the host-RAM block: the source fallback left a
+    # cached tree the host cannot absorb (see
+    # _reconcile_ram_cache_after_source_fallback). Once set, every
+    # remaining _try_start short-circuits — the state is stable until the
+    # host frees RAM or the holding reference goes away, so retrying other
+    # kv values would only pile more disk-read pressure onto an already
+    # over-committed host. The run fails with the reason instead of a
+    # generic "no working kv".
+    _host_ram_blocked_box: list[str] = []
+
+    # Sibling latch for a fatal pattern with persist=False (see
+    # FatalLoadErrorPattern) — stops the kv-cache search like
+    # _unsupported_box, but is never written to the unsupported-models
+    # file, so a same-run retry isn't blocked by its own side effect.
+    _retryable_fatal_box: list[FatalLoadErrorPattern] = []
+
+    # Sibling latch for a genuine CUDA/torch OOM. Once set, the kv_lo scan
+    # below stops climbing to ever-larger (and therefore hungrier) kv sizes
+    # — a real capacity shortfall at this tp can't be fixed by asking for
+    # more kv, only for less.
+    _capacity_oom_box: list[bool] = []
 
     # Cap on per-probe ``--max-model-len`` shrink-and-retry attempts. We keep
     # this local to one probe so each KV step starts from the model default
@@ -1628,10 +2550,23 @@ def calibrate_model(
         failures (filesystem EIO, …) win over model-level fatalities
         because they invalidate every measurement on this run.
         """
+        if _observed_reason_box:
+            partial.observed_reason = _observed_reason_box[0].reason_code
+        if _stages_box:
+            partial.stages = _stages_box[0]
         if _node_unhealthy_box:
             pat = _node_unhealthy_box[0]
             partial.node_unhealthy_reason = pat.reason_code
             partial.error = f"node degraded ({pat.reason_code}): {pat.description}"
+            return
+        if _host_ram_blocked_box:
+            partial.error = f"host RAM below the RAM-cache floor: {_host_ram_blocked_box[0]}"
+            return
+        # Not unsupported_reason: this one isn't persisted, so it must not
+        # read as permanently blacklisted elsewhere (DB, orchestrator, UI).
+        if _retryable_fatal_box:
+            pat = _retryable_fatal_box[0]
+            partial.error = f"retryable fatal error ({pat.reason_code}): {pat.description}"
             return
         if not _unsupported_box:
             return
@@ -1654,13 +2589,16 @@ def calibrate_model(
             (known-good from a previous run) — no process spawned.
           - ``None`` on failure, blacklist skip, or when an earlier probe
             in this calibration already detected a permanent
-            model-identity-level failure (see ``_unsupported_box``) or a
-            node-level transient failure (see ``_node_unhealthy_box``).
+            model-identity-level failure (see ``_unsupported_box``), a
+            node-level transient failure (see ``_node_unhealthy_box``), or
+            a host-RAM block that makes any further probe unsafe (see
+            ``_host_ram_blocked_box``).
         """
-        nonlocal hf_home, _ram_cached
+        nonlocal hf_home, _ram_cached, final_spawn_at
         # Short-circuit: a prior probe already proved this model can't load,
-        # or proved the node itself is degraded.
-        if _unsupported_box or _node_unhealthy_box:
+        # proved the node itself is degraded, or the host-RAM block made
+        # starting any probe unsafe.
+        if _unsupported_box or _retryable_fatal_box or _node_unhealthy_box or _host_ram_blocked_box:
             return None
         kv_str = _format_kv_mb(kv_mb)
         planned = {**plan, "kv_cache_memory_bytes": kv_str}
@@ -1688,19 +2626,38 @@ def calibrate_model(
         # Lazy RAM cache: copy model into tmpfs on first real spawn.
         if not _ram_cached and model_cache is not None:
             logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
-            _hf = model_cache.ensure_cached_sync(model) or None
-            if _hf:
-                is_tmpfs = hasattr(model_cache, "_cache_hub") and _hf == str(model_cache._cache_hub.parent)
-                if is_tmpfs:
-                    hf_home = _hf
-                    logger.info("  [RAM cache] %s → loading from tmpfs", model)
-                else:
-                    logger.info("  [RAM cache] %s → loading from disk (tmpfs full)", model)
+            _tmpfs_hf, _host_ram_block = _reserve_and_admit_calibration_copy(
+                model_cache,
+                model,
+                cache_use_reserved=cache_use_reserved,
+                establish_host_ram_floor=establish_host_ram_floor,
+            )
+            if _host_ram_block:
+                # The source fallback left a cached tree the host cannot
+                # absorb: latch so every remaining attempt short-circuits
+                # and the run fails with this reason (see
+                # _override_error_if_unsupported) instead of a generic
+                # "no working kv" — nothing more to try, the state is
+                # stable until the host frees RAM or the holding
+                # reference goes away.
+                if not _host_ram_blocked_box:
+                    _host_ram_blocked_box.append(_host_ram_block)
+                logger.error(
+                    "  [RAM cache] %s — %s; aborting the calibration probe",
+                    model,
+                    _host_ram_block,
+                )
+                return None
+            if _tmpfs_hf:
+                hf_home = _tmpfs_hf
+            # The copy was admitted (or fell back to the source) — never
+            # retry the decision on a later probe attempt.
             _ram_cached = True
         # Remember where this probe's output starts so every later extraction
         # parses THIS probe rather than the tail of the shared append log.
         _spawn_log_offset = _log_size(log_path)
         _last_probe_log_offset[0] = _spawn_log_offset
+        t_spawn = time.perf_counter()  # cold-load anchor candidate: this attempt's spawn
         proc, cmd = spawn_vllm(
             planned,
             vllm_binary,
@@ -1721,6 +2678,11 @@ def calibrate_model(
         t0 = time.perf_counter()
         try:
             wait_ready(base_url, ready_timeout_s, proc, gpu_indices, cancel_event=cancel_event)
+            # This attempt actually came up — anchor the cold-load
+            # measurement at ITS spawn, not before the outer call: the
+            # retry attempts that recursed into this one each cost a
+            # near-full weight load before failing.
+            final_spawn_at = t_spawn
             logger.info(
                 "        OK kv_cache=%s ready in %.1fs",
                 kv_str,
@@ -1768,15 +2730,24 @@ def calibrate_model(
             stop_vllm(proc)
             time.sleep(_VRAM_SETTLE_S)
 
+            # Informational only, checked on every failure regardless of
+            # whether the node/fatal classifiers below also match — never
+            # gates blacklisting or node-health state. Reflects the MOST
+            # RECENT failing probe (overwritten, not first-match-wins like
+            # the two latches below), since it's just "what was last seen".
+            observed_pattern = _classify_observed_transient_error(probe_log)
+            if observed_pattern is not None:
+                _observed_reason_box[:] = [observed_pattern]
+
             # Check node-level transient failures FIRST — these (filesystem
             # EIO, read-only mount, …) are not the calibration's fault and
             # must NOT leave any artefact behind. If we recorded per-command
             # blacklist lines for them we'd accumulate dozens of garbage
             # entries during a single 10-minute Ceph outage (see deioma
-            # 2026-06-04). Latch the box, log loudly, and abort. The bridge
-            # reads the partial result, surfaces ``node_unhealthy_reason``
-            # into the runtime status, and the master orchestrator skips
-            # this worker until the node recovers.
+            # 2026-06-04). Latch the box, log loudly, and abort. This only
+            # records ``node_unhealthy_reason`` for the model-error-report
+            # UI — node_health.py's own sensors, not this, are what make
+            # the orchestrator actually stop scheduling on this node.
             node_pattern = _classify_node_transient_error(probe_log)
             if node_pattern is not None:
                 if not _node_unhealthy_box:
@@ -1791,6 +2762,16 @@ def calibrate_model(
                         node_pattern.description,
                         model,
                     )
+                _stages_box[:] = [
+                    _classify_calibration_stages(
+                        probe_log,
+                        "node_unhealthy",
+                        node_pattern.reason_code,
+                        node_pattern.domain,
+                        node_pattern.needle,
+                        tp,
+                    )
+                ]
                 return None
 
             # KV-too-small-for-default-max-seq-len recovery. vLLM refuses to
@@ -1881,6 +2862,12 @@ def calibrate_model(
                         allow_whitelist=allow_whitelist,
                     )
 
+            # Neither suggestion-based recovery applied — a genuine CUDA
+            # OOM here means climbing to a larger kv can only ask for more
+            # memory, never less. Latch it for the kv_lo scan below.
+            if not _capacity_oom_box and _is_cuda_oom_log(probe_log):
+                _capacity_oom_box.append(True)
+
             # Normal recoverable failure (OOM at this kv, NCCL timeout, …):
             # record the per-command blacklist line so the kv search avoids
             # re-trying this exact fingerprint on the next pass.
@@ -1898,25 +2885,58 @@ def calibrate_model(
             # latch ``_unsupported_box`` so the search loops bail without
             # spawning vLLM again.
             fatal_pattern = _classify_fatal_load_error(probe_log)
-            if fatal_pattern is not None and not _unsupported_box:
-                _record_unsupported_model(
-                    unsupported_path,
-                    UnsupportedModelEntry(
-                        model=model,
-                        reason_code=fatal_pattern.reason_code,
-                        recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        description=fatal_pattern.description,
-                    ),
-                )
+            if fatal_pattern is not None and not _unsupported_box and not _retryable_fatal_box:
+                if fatal_pattern.persist:
+                    _record_unsupported_model(
+                        unsupported_path,
+                        UnsupportedModelEntry(
+                            model=model,
+                            reason_code=fatal_pattern.reason_code,
+                            recorded_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                            description=fatal_pattern.description,
+                        ),
+                    )
+                    _unsupported_box.append(fatal_pattern)
+                else:
+                    _retryable_fatal_box.append(fatal_pattern)
                 logger.warning(
                     "  %s detected — aborting kv-cache search for model %s.",
                     fatal_pattern.reason_code,
                     model,
                 )
-                _unsupported_box.append(fatal_pattern)
+
+            if fatal_pattern is not None:
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = (
+                    # A non-persisted pattern is retried, never blacklisted.
+                    "unsupported" if fatal_pattern.persist else "observed",
+                    fatal_pattern.reason_code,
+                    fatal_pattern.domain,
+                    fatal_pattern.needle,
+                )
+            elif observed_pattern is not None:
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = (
+                    "observed",
+                    observed_pattern.reason_code,
+                    observed_pattern.domain,
+                    observed_pattern.needle,
+                )
+            else:
+                _reason_kind, _reason_code, _reason_domain, _reason_needle = None, None, None, None
+            _stages_box[:] = [
+                _classify_calibration_stages(probe_log, _reason_kind, _reason_code, _reason_domain, _reason_needle, tp)
+            ]
             return None
 
     proc: subprocess.Popen[str] | None = None
+    # perf_counter anchor for the cold-load measurement: the spawn time of
+    # the successful attempt, set by _try_start when wait_ready comes back
+    # on it. _try_start recurses through its max_model_len / max_num_seqs
+    # retries and a rejected start typically fails only after loading the
+    # weights, so the anchor must be the successful attempt's spawn —
+    # arming it before the outer call would bill those near-full loads to
+    # the span. None until a spawn has actually succeeded.
+    final_spawn_at: float | None = None
+    cold_load_time_s: float | None = None
 
     if kv_search:
         search_lo = _KV_CACHE_MIN_STEP_MB  # 1 GB floor
@@ -2048,8 +3068,18 @@ def calibrate_model(
                 kv_lo = kv
                 first_mml = mml
                 break
+            if _capacity_oom_box:
+                break  # real OOM — a larger kv will only need more, not less
             kv += _KV_CACHE_MIN_STEP_MB
         if kv_lo is None:
+            # This text fires for two distinct causes: a real capacity
+            # shortfall (_capacity_oom_box latched a genuine CUDA OOM) or
+            # every probe in the range failing for an unrelated reason
+            # (e.g. this tp's attention-head count isn't divisible) — the
+            # message reads the same either way, so record which one it
+            # actually was in capacity_oom instead of letting a caller
+            # infer it from this string.
+            partial.capacity_oom = bool(_capacity_oom_box)
             partial.error = (
                 f"No working KV cache size found between {_format_kv_mb(search_lo)} and "
                 f"{_format_kv_mb(original_ceiling)} on tp={tp}. Model weights likely exceed available GPU VRAM."
@@ -2334,6 +3364,18 @@ def calibrate_model(
         partial.error = "cancelled"
         return partial
 
+    # Make the live process reachable to stop_calibration_session: it has
+    # no other way to unblock the plain blocking warmup call below once its
+    # 15s grace period elapses (see kill_current_proc in logos_bridge.py).
+    if proc_callback is not None:
+        proc_callback(proc)
+
+    # Ground-truth check before trusting a fatal probe: does this vLLM
+    # process actually serve model_kind's endpoint at all? See
+    # _resolve_probed_model_kind — downgrades to "generative" on a
+    # confirmed mismatch, leaves model_kind alone otherwise.
+    model_kind = _resolve_probed_model_kind(base_url, model, model_kind)
+
     try:
         # Phase 2.5 — Warmup with a 1-token completion. Forces:
         #   • CUDA graph capture (when enforce_eager=False)
@@ -2349,13 +3391,41 @@ def calibrate_model(
                 "  [2.5/6] Warming up engine (1-token completion, capturing CUDA graphs — may take a couple minutes)..."
             )
         warmup_t0 = time.perf_counter()
-        warmup_ok = warmup_inference(base_url, model, timeout_s=600.0)
+        warmup_ok = warmup_inference(base_url, model, timeout_s=600.0, model_kind=model_kind)
         warmup_dt = time.perf_counter() - warmup_t0
+        # A killed-to-unblock probe answers this call with a connection
+        # error just like a genuine failure — check cancellation first so
+        # it reports as "cancelled", not as a fatal/serving-failure verdict.
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info("  Calibration cancelled during warmup.")
+            partial.error = "cancelled"
+            return partial
         if warmup_ok:
             logger.info(
                 "        warmup done in %.1fs — graphs/JIT/KV pools allocated",
                 warmup_dt,
             )
+            # The warmup IS the first request the probe served, so this point
+            # is the end of the load a client would experience for a lane
+            # spawned with this exact configuration: final_spawn_at → here
+            # spans vLLM startup, weight load, and the first-request overhead
+            # (CUDA graph capture, JIT, KV page allocation). The weights
+            # themselves were already in the OS page cache by now (the search
+            # probes — or prior runs on this host — loaded them), so this is
+            # a cache-warm figure: a lower bound on a from-disk cold load.
+            if final_spawn_at is not None:
+                cold_load_time_s = time.perf_counter() - final_spawn_at
+                logger.info(
+                    "        cold load (spawn → first served request, page-cache-warm) = %.1fs",
+                    cold_load_time_s,
+                )
+        elif model_kind in _FATAL_PROBE_MODEL_KINDS:
+            # A classified pooling/classification/reranking/transcription
+            # model has a real, working probe — a failure here is the model
+            # itself not serving one request on its own endpoint, not a
+            # missed /v1/completions mismatch. Must not reach [CALIBRATED].
+            _record_functional_probe_failure(partial, log_path, model, model_kind)
+            return partial
         else:
             logger.warning(
                 "        warmup failed (%.1fs) — awake VRAM may underestimate peak",
@@ -2403,6 +3473,7 @@ def calibrate_model(
         sleep_transient_mb: float | None = None
         host_ram_residual_mb: float | None = None
         sleep_mode_disabled: bool | None = None
+        wake_from_sleep_time_s: float | None = None
         if sleep_level <= 0:
             logger.info(
                 "  [4/6 + 5/6 + 5.5/6] Sleep phases skipped (sleep mode disabled for this model) — "
@@ -2536,6 +3607,10 @@ def calibrate_model(
                     partial.error = "cancelled"
                     return partial
                 logger.info("  [5.5/6] Waking model and verifying it serves again...")
+                # Anchor for the wake measurement: from this trigger to the
+                # post-wake test request serving is exactly what a request
+                # queued on the sleeping lane waits for.
+                wake_t0 = time.perf_counter()
                 wake_status, _ = _post(f"{base_url}/wake_up", timeout_s=_SLEEP_TIMEOUT_S)
                 if wake_status not in (200, 204):
                     sleep_phase_failed = True
@@ -2550,24 +3625,39 @@ def calibrate_model(
                     # Test request 2: a lane that wakes but cannot serve is as
                     # unusable as one that never wakes. Same call as the Phase
                     # 2.5 warmup — one 1-token completion.
-                    post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0)
+                    post_wake_ok = warmup_inference(base_url, model, timeout_s=600.0, model_kind=model_kind)
+                    if cancel_event is not None and cancel_event.is_set():
+                        logger.info("  Calibration cancelled during post-wake warmup.")
+                        partial.error = "cancelled"
+                        return partial
                     if not post_wake_ok and warmup_ok:
                         # Served before sleep but not after: the sleep/wake
                         # cycle broke serving.
                         sleep_phase_failed = True
                         sleep_failure_reason = "post-wake test request failed — model does not serve after sleep/wake"
                     elif not post_wake_ok:
-                        # Did not serve one before sleep either, so this
-                        # failure carries no evidence of a wake regression —
-                        # whatever the cause (embedding-only lanes expose no
-                        # /v1/completions, a transient 5xx, ...), it predates
-                        # the sleep. The wake itself is verified by
-                        # /is_sleeping above, so accept it.
+                        # Did not serve one before sleep either. For a
+                        # classified pooling/classification/reranking/
+                        # transcription model that is unreachable here —
+                        # Phase 2.5 already failed the
+                        # run outright on the same probe. This remains a
+                        # genuine "no evidence" case only for an
+                        # unclassified/generative model (a transient 5xx,
+                        # etc.); the wake itself is verified by /is_sleeping
+                        # above, so accept it.
                         logger.warning(
                             "        post-wake test request failed, but the pre-sleep warmup "
-                            "did not serve either — no evidence of a wake regression (the "
-                            "request type may simply be unsupported by this model, e.g. an "
-                            "embedding lane); accepting wake on /is_sleeping evidence"
+                            "did not serve either — no evidence of a wake regression; "
+                            "accepting wake on /is_sleeping evidence"
+                        )
+                    else:
+                        # First request served after the wake completed — the
+                        # interval from the /wake_up trigger to here is the
+                        # awake-from-sleep time a queued request pays.
+                        wake_from_sleep_time_s = time.perf_counter() - wake_t0
+                        logger.info(
+                            "        wake (wake_up → first served request) = %.1fs",
+                            wake_from_sleep_time_s,
                         )
             if sleep_phase_failed:
                 # A residual measured for a sleep that cannot be reversed must
@@ -2612,6 +3702,20 @@ def calibrate_model(
                 "    host_ram_residual_mb = %.0f MB  (held on the host for the whole sleep)",
                 host_ram_residual_mb,
             )
+        if cold_load_time_s is None:
+            logger.info("    cold_load_time_s     = n/a  (first served request did not complete)")
+        else:
+            logger.info(
+                "    cold_load_time_s     = %.1fs  (spawn → first served request, page-cache-warm)",
+                cold_load_time_s,
+            )
+        if wake_from_sleep_time_s is None:
+            logger.info("    wake_from_sleep_time_s = n/a  (sleep phases skipped or post-wake request did not serve)")
+        else:
+            logger.info(
+                "    wake_from_sleep_time_s = %.1fs  (wake_up → first served request after wake)",
+                wake_from_sleep_time_s,
+            )
         logger.info(
             "    Scheduler uses base_residency directly — no KV added on top",
         )
@@ -2631,6 +3735,8 @@ def calibrate_model(
             sleep_l1_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 1 else None),
             sleep_l2_transient_host_ram_mb=(sleep_transient_mb if sleep_level == 2 else None),
             host_ram_residual_mb=host_ram_residual_mb,
+            cold_load_time_s=cold_load_time_s,
+            wake_from_sleep_time_s=wake_from_sleep_time_s,
             min_kv_cache_mb=min_kv_observed_mb,
             max_kv_cache_mb=max_kv_observed_mb,
             max_model_len=partial.max_model_len,
@@ -2641,6 +3747,8 @@ def calibrate_model(
         )
 
     finally:
+        if proc_callback is not None:
+            proc_callback(None)
         logger.info("  Stopping vLLM...")
         stop_vllm(proc)
         # Kill any orphaned TP workers left behind by CUDA/NCCL crashes during
@@ -2695,6 +3803,15 @@ def result_to_profile_dict(r: CalibrationResult) -> dict[str, Any]:
             round(r.sleep_l2_transient_host_ram_mb, 1) if r.sleep_l2_transient_host_ram_mb is not None else None
         ),
         "host_ram_residual_mb": (round(r.host_ram_residual_mb, 1) if r.host_ram_residual_mb is not None else None),
+        # Cold-load and wake timings (see CalibrationResult): what a client
+        # waits for when it finds the model cold or asleep. None when the run
+        # that produced this result did not complete the request each
+        # interval is anchored on — merge_profile then keeps the value an
+        # earlier calibration recorded, same as the other sleep fields.
+        "cold_load_time_s": (round(r.cold_load_time_s, 1) if r.cold_load_time_s is not None else None),
+        "wake_from_sleep_time_s": (
+            round(r.wake_from_sleep_time_s, 1) if r.wake_from_sleep_time_s is not None else None
+        ),
         # Not part of ModelProfileRecord but useful for auditing
         "_calibration_kv_cache_mb": round(r.kv_cache_sent_mb, 1),
         # Discovered KV cache size for use by the lane manager at runtime
@@ -2892,12 +4009,22 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
+def _max_tp_for_plan(
+    plan: dict[str, Any],
+    available_gpus: int,
+    *,
+    weight_derived_max_tp: int | None = None,
+) -> int:
     """Return the maximum tensor_parallel_size allowed for *plan*.
 
     TP must be a power of 2 for most model architectures (attention heads
     must be evenly divisible).  Round down to the largest power of 2 that
     fits within the available GPUs.
+
+    ``weight_derived_max_tp``, when given, tightens this further: the HF
+    compatibility precheck's estimate of the smallest TP the model's weights
+    actually fit at, so the search doesn't start at hardware-max TP for a
+    model that never needed it.
     """
     gpu_devices = str(plan.get("gpu_devices") or "").strip().lower()
     if not gpu_devices or gpu_devices == "all":
@@ -2906,8 +4033,86 @@ def _max_tp_for_plan(plan: dict[str, Any], available_gpus: int) -> int:
         n = len([x for x in gpu_devices.split(",") if x.strip().isdigit()])
     # Largest power of 2 ≤ n  (e.g. 3 → 2, 5 → 4, 7 → 4, 8 → 8)
     if n < 1:
-        return 1
-    return 1 << (n.bit_length() - 1)
+        hw_max = 1
+    else:
+        hw_max = 1 << (n.bit_length() - 1)
+
+    if weight_derived_max_tp is not None and weight_derived_max_tp >= 1:
+        return max(1, min(hw_max, weight_derived_max_tp))
+    return hw_max
+
+
+def calibration_gpu_slice(available_gpus: int) -> list[int]:
+    """Return the GPU indices a calibration run should be pinned to.
+
+    The largest power-of-two slice of the node's GPUs, starting at index 0
+    (3 GPUs → ``[0, 1]``, 5 → ``[0, 1, 2, 3]``, 8 → ``[0..7]``). The slice
+    length equals the maximum tensor-parallel size the node supports, so the
+    existing max-first TP escalation fits inside it unchanged.
+
+    Pinning the calibration to this concrete slice leaves the
+    leftover GPUs (``slice_size..N-1``) free for production lanes, which would
+    otherwise sit idle for the entire calibration window, and makes the VRAM
+    baseline a well-defined sum over exactly the GPUs the probe uses.
+    """
+    n = int(available_gpus) if available_gpus else 0
+    if n < 1:
+        return []
+    slice_size = 1 << (n.bit_length() - 1)
+    return list(range(slice_size))
+
+
+def select_calibration_gpus(available_gpus: int, busy_gpus: Iterable[int] = ()) -> list[int]:
+    """GPU indices a calibration run should use, preferring idle ones.
+
+    Same slice size as :func:`calibration_gpu_slice` (the largest power-of-two
+    ≤ ``available_gpus``), but the indices favor GPUs outside *busy_gpus* —
+    so on a 3-GPU node with a model loaded only on GPU 0, calibration picks
+    ``[1, 2]`` instead of unconditionally killing lanes on ``[0, 1]``. When
+    too few GPUs are idle to cover the needed size, every idle GPU is still
+    kept and only the remaining slots are filled from the busy ones — a
+    3-GPU node with 0 and 1 busy picks ``[2, 0]``, not the naive ``[0, 1]``,
+    which would tear down both serving lanes when sparing one was possible.
+    """
+    n = int(available_gpus) if available_gpus else 0
+    if n < 1:
+        return []
+    slice_size = 1 << (n.bit_length() - 1)
+    if slice_size == n:
+        # The slice spans the whole node — every GPU is used either way,
+        # so idle preference cannot change what gets torn down.
+        return list(range(n))
+    busy = {int(i) for i in busy_gpus}
+    idle = [i for i in range(n) if i not in busy]
+    ordered = idle + [i for i in range(n) if i in busy]
+    return ordered[:slice_size]
+
+
+def _plan_needs_gpu_pin(gpu_devices: str) -> bool:
+    """True when a plan's ``gpu_devices`` is still the 'use every GPU' default.
+
+    Blank and "all" mean the plan has not been pinned yet, so the calibration
+    slice may be filled in. A specific set ("0,1") or "none" is an explicit
+    operator choice and is never overridden.
+    """
+    return (gpu_devices or "").strip().lower() in {"", "all"}
+
+
+def pin_plan_gpu_devices(plan: dict[str, Any], available_gpus: int) -> dict[str, Any]:
+    """Return *plan* with a concrete ``gpu_devices`` slice.
+
+    A plan that already names a specific GPU set — or "none" — is returned
+    unchanged: the operator's choice is authoritative. A plan left at
+    "all"/blank is pinned to the node's calibration slice so the probe only
+    touches that slice (``CUDA_VISIBLE_DEVICES``) and its VRAM baseline is
+    measured over a well-defined set of GPUs.
+    """
+    if not _plan_needs_gpu_pin(str(plan.get("gpu_devices") or "")):
+        return plan
+    slice_ = calibration_gpu_slice(available_gpus)
+    if not slice_:
+        return plan
+    return {**plan, "gpu_devices": ",".join(str(i) for i in slice_)}
 
 
 def _reset_calibration_log(log_dir: Path, model_name: str) -> None:
@@ -2931,6 +4136,8 @@ def _try_calibrate(
     hf_home: str | None = None,
     model_cache: Any | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Call ``calibrate_model`` with exception → failure conversion."""
     model_name = plan["model"]
@@ -2946,6 +4153,8 @@ def _try_calibrate(
             hf_home=hf_home,
             model_cache=model_cache,
             cancel_event=cancel_event,
+            establish_host_ram_floor=establish_host_ram_floor,
+            proc_callback=proc_callback,
         )
     except Exception as exc:
         logger.warning("Calibration failed for %s: %s", model_name, exc)
@@ -2972,6 +4181,8 @@ def calibrate_with_tp_escalation(
     model_cache: Any | None = None,
     available_gpus: int | None = None,
     cancel_event: threading.Event | None = None,
+    establish_host_ram_floor: Callable[[], bool] | None = None,
+    proc_callback: Callable[[subprocess.Popen[str] | None], None] | None = None,
 ) -> CalibrationResult:
     """Calibrate one model using a max-first, search-down TP strategy.
 
@@ -2996,14 +4207,32 @@ def calibrate_with_tp_escalation(
         except Exception:
             available_gpus = 1
 
+    # Pin the run to a concrete GPU slice before any probe: with "all"/blank
+    # the probe sees every GPU and its VRAM baseline sums them all, so a
+    # production lane on a leftover GPU silently inflates base_residency_mb.
+    # The slice length equals the max TP below, so the escalation is unchanged.
+    plan = pin_plan_gpu_devices(plan, available_gpus)
+
+    # Whether the operator/orchestrator actually pinned a tp, as opposed to
+    # this function defaulting to 1 below. Only an explicit pin overrides
+    # the OOM-fallback guard further down — a bare default must not.
+    explicit_tp = plan.get("tensor_parallel_size") is not None
     original_tp = int(plan.get("tensor_parallel_size", 1))
-    max_tp = _max_tp_for_plan(plan, available_gpus)
+    hardware_max_tp = _max_tp_for_plan(plan, available_gpus)
+    max_tp = _max_tp_for_plan(plan, available_gpus, weight_derived_max_tp=plan.get("_hf_max_tp_ceiling"))
+    max_tp = max(max_tp, original_tp)  # never search below what the operator pinned
 
     # RAM caching is deferred: calibrate_model triggers it on the first
     # actual vLLM spawn so we don't waste time copying when all probes are
     # blacklisted.  Pass the cache object through; it will call
     # ensure_cached_sync only when needed.
     _mc = model_cache if (model_cache is not None and getattr(model_cache, "enabled", False)) else None
+    # The probes reserve this model's tmpfs entry themselves — and only
+    # once a probe actually reads it from tmpfs (calibrate_model's finally
+    # releases it when the run ends). A session-level reservation here
+    # would pin an entry a source-fallback probe never reads while host
+    # RAM is below the floor, blocking the re-plan's reclaim for the
+    # whole run.
     cal_kwargs: dict[str, Any] = dict(
         vllm_binary=vllm_binary,
         port=port,
@@ -3013,36 +4242,80 @@ def calibrate_with_tp_escalation(
         nccl_p2p_available=nccl_p2p_available,
         model_cache=_mc,
         cancel_event=cancel_event,
+        establish_host_ram_floor=establish_host_ram_floor,
+        proc_callback=proc_callback,
     )
 
-    tp = max_tp
-    current_plan = {**plan, "tensor_parallel_size": tp}
-    result = _try_calibrate(current_plan, **cal_kwargs)
-
-    # Auto-retry with --trust-remote-code when vLLM demands it.
-    # vLLM phrasings seen in the wild:
-    #   "Please pass the argument `trust_remote_code=True`..."
-    #   "The repository ... contains custom code which must be executed..."
-    _err = result.error or ""
-    if not result.success and ("trust_remote_code=True" in _err or "contains custom code" in _err):
-        logger.info(
-            "  %s requires trust_remote_code — adding flag and retrying",
-            model_name,
-        )
+    def _retry_with_trust_remote_code_if_needed(
+        plan: dict[str, Any], tp: int, result: CalibrationResult
+    ) -> tuple[dict[str, Any], CalibrationResult]:
+        """Auto-retry *this* tp with --trust-remote-code when vLLM demands
+        it. Must run after every probe, not just the first — a low tp can
+        OOM before vLLM ever reaches the custom-code check, so the
+        requirement only surfaces once a wider tp gets far enough."""
+        _err = result.error or ""
+        if result.success or ("requires-trust-remote-code" not in _err and "contains custom code" not in _err):
+            return plan, result
+        logger.info("  %s requires trust_remote_code — adding flag and retrying", model_name)
         extra = list(plan.get("extra_args") or [])
         if "--trust-remote-code" not in extra:
             extra.append("--trust-remote-code")
         plan = {**plan, "extra_args": extra}
+        retried_plan = {**plan, "tensor_parallel_size": tp}
+        return plan, _try_calibrate(retried_plan, **cal_kwargs)
+
+    def _is_fatal(result: CalibrationResult) -> bool:
+        # calibrate_model normalizes fatal model-level errors into
+        # result.error ("unsupported model (<code>): ...") and records the
+        # reason code in result.unsupported_reason — the raw vLLM needle is
+        # no longer present in result.error, so the reason code is the only
+        # reliable fatal predicate (and it covers every pattern in
+        # vllm_compat._FATAL_LOAD_ERROR_PATTERNS, not just two of them).
+        return result.unsupported_reason is not None
+
+    def _is_capacity_exhausted(result: CalibrationResult) -> bool:
+        """True when weights/kv don't fit anywhere in the kv search range
+        at this tp — a real VRAM shortfall, not a config/arch quirk. A
+        lower tp needs *more* VRAM per GPU, not less, so it can't recover
+        from this (see ``min_feasible_tp``'s same math in the HF precheck).
+
+        Reads the explicit ``capacity_oom`` flag, not ``result.error`` —
+        the generic "no working kv" message is also set when every probe
+        fails for a non-capacity reason (e.g. a tp this model's attention
+        heads can't divide), which never latches a real OOM and would
+        otherwise wrongly suppress the lower-tp fallback below.
+        """
+        return result.capacity_oom
+
+    tp = max_tp
+    current_plan = {**plan, "tensor_parallel_size": tp}
+    result = _try_calibrate(current_plan, **cal_kwargs)
+    plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+    _fatal = _is_fatal(result)
+
+    # _hf_max_tp_ceiling is only the smallest TP the HF byte-count estimate
+    # expects to fit — an optimization to skip needlessly high probes, not
+    # a guarantee. On failure, widen to the true hardware max before
+    # falling back to the pinned tp, same as an unconstrained failure did.
+    if not result.success and not _fatal and tp < hardware_max_tp:
+        logger.info(
+            "  %s failed at HF-derived ceiling tp=%d — retrying at hardware max tp=%d",
+            model_name,
+            tp,
+            hardware_max_tp,
+        )
+        tp = hardware_max_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
+        plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+        _fatal = _is_fatal(result)
 
-    # If max tp fails, try the configured (original) tp before giving up.
-    # Models may have attention-head counts that aren't divisible by max_tp
-    # (e.g. 64 heads on 3 GPUs) but work fine at the configured tp.
-    _fatal = "does not recognize this architecture" in (result.error or "") or "Cannot access gated repo" in (
-        result.error or ""
-    )
-    if not result.success and not _fatal and tp > original_tp:
+    # If max tp fails, try the configured (original) tp before giving up —
+    # handles head-count divisibility quirks. Skip it on a genuine capacity
+    # shortfall (lower tp needs *more* VRAM/GPU, not less) unless the
+    # operator/orchestrator explicitly pinned that lower tp themselves.
+    _skip_capacity_fallback = _is_capacity_exhausted(result) and not explicit_tp
+    if not result.success and not _fatal and tp > original_tp and not _skip_capacity_fallback:
         logger.info(
             "  %s failed at max tp=%d — falling back to configured tp=%d",
             model_name,
@@ -3052,6 +4325,17 @@ def calibrate_with_tp_escalation(
         tp = original_tp
         current_plan = {**plan, "tensor_parallel_size": tp}
         result = _try_calibrate(current_plan, **cal_kwargs)
+        plan, result = _retry_with_trust_remote_code_if_needed(plan, tp, result)
+        _fatal = _is_fatal(result)
+    elif _skip_capacity_fallback and tp > original_tp:
+        logger.info(
+            "  %s failed at tp=%d with a genuine VRAM shortfall — skipping "
+            "the tp=%d fallback (not operator-pinned, and fewer GPUs only "
+            "means more memory per GPU, not less)",
+            model_name,
+            tp,
+            original_tp,
+        )
 
     if not result.success or _fatal:
         return result

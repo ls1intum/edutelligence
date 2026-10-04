@@ -2,7 +2,7 @@
 
 from .azure_facade import AzureSchedulingDataFacade
 from .logosnode_facade import LogosNodeSchedulingDataFacade
-from .models import AdmissionDecision, AzureCapacity, ModelStatus, OllamaCapacity, RequestMetrics
+from .models import AdmissionDecision, AzureCapacity, ModelStatus, RequestMetrics, WorkerCapacity
 from .providers import AzureDataProvider, LogosNodeDataProvider, extract_azure_deployment_name
 
 __all__ = [
@@ -13,9 +13,9 @@ __all__ = [
     "extract_azure_deployment_name",
     "AdmissionDecision",
     "ModelStatus",
-    "OllamaCapacity",
+    "WorkerCapacity",
     "AzureCapacity",
     "RequestMetrics",
 ]
 
-__version__ = "2.7"
+__version__ = "3.0"

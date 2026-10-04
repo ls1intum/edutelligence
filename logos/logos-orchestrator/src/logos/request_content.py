@@ -23,11 +23,21 @@ MULTIPART_PAYLOAD_KEY = "_logos_multipart"
 MAX_AUDIO_UPLOAD_BYTES = int(os.getenv("LOGOS_MAX_AUDIO_UPLOAD_BYTES", str(25 * 1024 * 1024)))
 MAX_AUDIO_FORM_FIELD_BYTES = int(os.getenv("LOGOS_MAX_AUDIO_FORM_FIELD_BYTES", str(64 * 1024)))
 MAX_AUDIO_REQUEST_BYTES = int(os.getenv("LOGOS_MAX_AUDIO_REQUEST_BYTES", str(MAX_AUDIO_UPLOAD_BYTES + 5 * 1024 * 1024)))
+# Batch file uploads are forwarded to the provider as-is (no base64 copy in
+# the payload), so the file bytes are the whole memory budget. Batch JSONLs
+# are larger than audio files, hence the wider default; both stay tunable.
+MAX_BATCH_FILE_BYTES = int(os.getenv("LOGOS_MAX_BATCH_FILE_BYTES", str(50 * 1024 * 1024)))
+MAX_BATCH_REQUEST_BYTES = int(os.getenv("LOGOS_MAX_BATCH_REQUEST_BYTES", str(MAX_BATCH_FILE_BYTES + 1024 * 1024)))
 _AUDIO_UPLOAD_OPERATIONS = frozenset({"audio/transcriptions", "audio/translations"})
 _METERED_WHISPER_RESPONSE_FORMATS = frozenset({"json", "text", "srt", "vtt"})
 
+# Inbound prefixes under which the OpenAI-shaped API is mirrored. ``jobs/``
+# is the async-job mirror (itself versioned), ``openai/`` the legacy mirror,
+# and v1/ v2/ the version segments (v1 OpenAI, v2 Cohere).
+_PROXY_PREFIXES = ("jobs/", "openai/", "v1/", "v2/")
 
-class _AudioRequestTooLarge(MultiPartException):
+
+class _MultipartRequestTooLarge(MultiPartException):
     """Signal an over-limit stream through Starlette's multipart cleanup path."""
 
 
@@ -35,13 +45,55 @@ def _audio_request_limit_detail() -> str:
     return f"Audio request exceeds the {MAX_AUDIO_REQUEST_BYTES}-byte request limit"
 
 
-def is_audio_upload_path(path: str) -> bool:
-    """Return whether an inbound path addresses an audio file-upload API."""
+def _batch_request_limit_detail() -> str:
+    return f"Batch file upload exceeds the {MAX_BATCH_REQUEST_BYTES}-byte request limit"
+
+
+def strip_proxy_prefixes(path: str) -> str:
+    """Strip the inbound proxy prefixes (jobs/, openai/, v1/, v2/) from a path.
+
+    A path can carry at most one of each, and they nest (``jobs/v1/...``), so
+    the prefixes are peeled in order until none matches.
+    """
     normalized = (path or "").strip("/")
-    for prefix in ("jobs/", "openai/", "v1/", "v2/"):
+    for prefix in _PROXY_PREFIXES:
         if normalized.startswith(prefix):
             normalized = normalized[len(prefix) :]
-    return normalized in _AUDIO_UPLOAD_OPERATIONS
+    return normalized
+
+
+def is_audio_upload_path(path: str) -> bool:
+    """Return whether an inbound path addresses an audio file-upload API."""
+    return strip_proxy_prefixes(path) in _AUDIO_UPLOAD_OPERATIONS
+
+
+_BATCH_API_OPERATIONS = frozenset({"batches", "files"})
+
+
+def is_batch_api_path(path: str) -> bool:
+    """Return whether an inbound path addresses the OpenAI Batch API.
+
+    The Batch API is the OpenAI ``v1`` surface (``/v1/files`` for batch file
+    uploads, ``/v1/batches`` for the batch job lifecycle) and its ``openai/``
+    and ``jobs/`` mirrors (which can nest, ``jobs/openai/v1/...``). The
+    version segment is optional after the mirrors because the ``openai/`` and
+    ``jobs/`` catch-alls re-prefix the path with ``v1/`` before dispatch.
+    The ``v2`` (Cohere) mirror has no batch routes and never matches.
+    """
+    normalized = (path or "").strip("/")
+    changed = True
+    while changed:
+        changed = False
+        for prefix in ("jobs/", "openai/"):
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix) :]
+                changed = True
+                break
+    if normalized.startswith("v2/"):
+        return False
+    if normalized.startswith("v1/"):
+        normalized = normalized[len("v1/") :]
+    return normalized.split("/", 1)[0] in _BATCH_API_OPERATIONS
 
 
 def is_multipart_payload(payload: object) -> bool:
@@ -64,7 +116,7 @@ async def parse_audio_upload(request: Request) -> Dict[str, Any]:
             detail="Audio transcription requests require multipart/form-data",
         )
 
-    limited_request = _request_with_size_limit(request)
+    limited_request = _request_with_size_limit(request, MAX_AUDIO_REQUEST_BYTES, _audio_request_limit_detail())
     form: FormData | None = None
     try:
         form = await limited_request.form(
@@ -73,7 +125,7 @@ async def parse_audio_upload(request: Request) -> Dict[str, Any]:
             max_part_size=MAX_AUDIO_FORM_FIELD_BYTES,
         )
         return await _encode_form_data(form)
-    except _AudioRequestTooLarge as exc:
+    except _MultipartRequestTooLarge as exc:
         raise HTTPException(status_code=413, detail=exc.message) from exc
     except StarletteHTTPException as exc:
         if exc.detail == _audio_request_limit_detail():
@@ -86,15 +138,15 @@ async def parse_audio_upload(request: Request) -> Dict[str, Any]:
             await form.close()
 
 
-def _request_with_size_limit(request: Request) -> Request:
-    """Return a request whose receive channel enforces the multipart body limit."""
+def _request_with_size_limit(request: Request, limit: int, detail: str) -> Request:
+    """Return a request whose receive channel enforces a multipart body limit."""
     content_length = request.headers.get("content-length")
     if content_length:
         try:
-            if int(content_length) > MAX_AUDIO_REQUEST_BYTES:
+            if int(content_length) > limit:
                 raise HTTPException(
                     status_code=413,
-                    detail=_audio_request_limit_detail(),
+                    detail=detail,
                 )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid Content-Length header") from exc
@@ -107,8 +159,8 @@ def _request_with_size_limit(request: Request) -> Request:
         message = await original_receive()
         if message.get("type") == "http.request":
             received += len(message.get("body", b""))
-            if received > MAX_AUDIO_REQUEST_BYTES:
-                raise _AudioRequestTooLarge(_audio_request_limit_detail())
+            if received > limit:
+                raise _MultipartRequestTooLarge(detail)
         return message
 
     return Request(request.scope, limited_receive)
@@ -158,6 +210,92 @@ def _validate_audio_upload(payload: Dict[str, Any]) -> None:
     files = multipart["files"]
     if len(files) != 1 or files[0].get("field_name") != "file":
         raise HTTPException(status_code=400, detail="Audio transcription requests require a 'file' upload")
+
+
+async def parse_batch_file_upload(request: Request) -> Dict[str, Any]:
+    """Parse and validate an OpenAI-compatible batch file upload.
+
+    Unlike audio uploads the parsed file is *not* base64-encoded into the
+    JSON payload — the batch forwarder hands the raw bytes to the provider's
+    Files API over HTTP. Returns
+    ``{"purpose", "metadata", "file": {"filename", "content_type", "bytes"}}``.
+
+    Only ``purpose="batch"`` is accepted: Logos serves the Files API as the
+    Batch API's input/output channel, not as a general-purpose file store.
+    """
+    content_type = request.headers.get("content-type", "")
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise HTTPException(
+            status_code=415,
+            detail="Batch file uploads require multipart/form-data",
+        )
+
+    limited_request = _request_with_size_limit(request, MAX_BATCH_REQUEST_BYTES, _batch_request_limit_detail())
+    form: FormData | None = None
+    try:
+        # max_part_size stays uncapped: the whole-upload limit is enforced on
+        # the receive channel and the file is checked while it is read.
+        form = await limited_request.form(max_files=1, max_fields=8)
+        return await _encode_batch_form_data(form)
+    except _MultipartRequestTooLarge as exc:
+        raise HTTPException(status_code=413, detail=exc.message) from exc
+    except StarletteHTTPException as exc:
+        if exc.detail == _batch_request_limit_detail():
+            raise HTTPException(status_code=413, detail=exc.detail) from exc
+        raise
+    except (MultiPartException, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid multipart form data: {exc}") from exc
+    finally:
+        if form is not None:
+            await form.close()
+
+
+async def _encode_batch_form_data(form: FormData) -> Dict[str, Any]:
+    files: list[dict[str, Any]] = []
+    fields: dict[str, str] = {}
+
+    for name, value in form.multi_items():
+        if isinstance(value, UploadFile):
+            if files:
+                raise HTTPException(status_code=400, detail="Batch file uploads accept exactly one file")
+            content = bytearray()
+            while chunk := await value.read(1024 * 1024):
+                content.extend(chunk)
+                if len(content) > MAX_BATCH_FILE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Batch file exceeds the {MAX_BATCH_FILE_BYTES}-byte upload limit",
+                    )
+            files.append(
+                {
+                    "field_name": name,
+                    "filename": value.filename or "batch.jsonl",
+                    "content_type": value.content_type or "application/octet-stream",
+                    "bytes": bytes(content),
+                }
+            )
+            continue
+
+        fields[str(name)] = str(value)
+
+    if not files or files[0]["field_name"] != "file":
+        raise HTTPException(status_code=400, detail="Batch file uploads require a 'file' part")
+    purpose = (fields.get("purpose") or "").strip()
+    if purpose != "batch":
+        raise HTTPException(
+            status_code=400,
+            detail="Only purpose 'batch' is supported for file uploads through Logos",
+        )
+    file = files[0]
+    return {
+        "purpose": purpose,
+        "metadata": fields.get("metadata"),
+        "file": {
+            "filename": file["filename"],
+            "content_type": file["content_type"],
+            "bytes": file["bytes"],
+        },
+    }
 
 
 def set_payload_field(payload: Dict[str, Any], name: str, value: Any) -> Dict[str, Any]:

@@ -5,6 +5,7 @@ Backend execution - makes HTTP calls to AI providers.
 The Executor is a pure HTTP client that makes streaming or synchronous requests.
 """
 
+import datetime
 import json
 import logging
 from dataclasses import dataclass
@@ -36,6 +37,13 @@ class ExecutionResult:
     status_code: Optional[int] = None
     raw_body: Optional[bytes] = None
     content_type: Optional[str] = None
+    # Captured in execute_sync around the HTTP send so the caller can stamp
+    # the provider window from them: dispatch after logos' request preparation
+    # *and* HTTP client setup, response before client teardown and body
+    # parsing. dispatch_at stays None when preparation or client init fails —
+    # the request never reached the provider.
+    dispatch_at: Optional[datetime.datetime] = None
+    response_at: Optional[datetime.datetime] = None
 
 
 @dataclass
@@ -43,6 +51,15 @@ class StreamingExecutionStatus:
     """Mutable terminal status shared with a streaming response consumer."""
 
     error: Optional[str] = None
+    # The instant the mid-stream transport failure was observed, captured here
+    # (upstream) so the response stamp does not wait for a slow client to drain
+    # buffered chunks before the failure time is recorded.
+    error_at: Optional[datetime.datetime] = None
+    # The instant the request was handed to the upstream, captured inside the
+    # entered HTTP client context immediately before the stream send — so
+    # client construction/setup stays out of the provider window, and a client
+    # init failure leaves this unset (no send happened).
+    dispatch_at: Optional[datetime.datetime] = None
 
 
 class Executor:
@@ -98,6 +115,11 @@ class Executor:
 
         request_kwargs = self._request_kwargs(payload)
         async with httpx.AsyncClient(timeout=None) as client:
+            if status is not None:
+                # Inside the entered client, immediately before the send: client
+                # construction/setup is logos work, and a client that fails to
+                # open never reaches this stamp.
+                status.dispatch_at = datetime.datetime.now(datetime.timezone.utc)
             async with client.stream("POST", url, headers=headers, **request_kwargs) as resp:
                 resp_headers = dict(resp.headers)
                 if on_response_start:
@@ -140,6 +162,7 @@ class Executor:
                         raise
                     if status is not None:
                         status.error = str(exc)
+                        status.error_at = datetime.datetime.now(datetime.timezone.utc)
                     if not is_sse:
                         return
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})
@@ -172,14 +195,26 @@ class Executor:
 
         logger.info(f"Sync request to {url}")
 
+        # Captured here, not by the caller: the request preparation (the
+        # multipart decode for file uploads), HTTP client setup/teardown, and
+        # the response parsing are logos work and must stay out of the
+        # provider's window.
+        dispatch_at = None
+        response_at = None
         try:
+            request_kwargs = self._request_kwargs(payload)
             async with httpx.AsyncClient() as client:
+                # Inside the entered client, immediately before/after the send:
+                # a client that fails to open leaves dispatch_at unset, and
+                # teardown after response_at stays out of the provider window.
+                dispatch_at = datetime.datetime.now(datetime.timezone.utc)
                 response = await client.post(
                     url,
                     headers=headers,
                     timeout=None,  # No timeout to handle long-running LLM requests and cold starts
-                    **self._request_kwargs(payload),
+                    **request_kwargs,
                 )
+                response_at = datetime.datetime.now(datetime.timezone.utc)
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
 
@@ -211,6 +246,8 @@ class Executor:
                             is_streaming=False,
                             headers=dict(response.headers),
                             status_code=response.status_code,
+                            dispatch_at=dispatch_at,
+                            response_at=response_at,
                         )
                     else:
                         body = {"error": response.text[:500]}
@@ -233,6 +270,8 @@ class Executor:
                 status_code=response.status_code,
                 raw_body=raw_body,
                 content_type=content_type,
+                dispatch_at=dispatch_at,
+                response_at=response_at,
             )
 
         except Exception as e:
@@ -244,21 +283,36 @@ class Executor:
                 usage={},
                 is_streaming=False,
                 status_code=None,
+                # None when preparation or client init failed before the send:
+                # the request never reached the provider, so no dispatch instant.
+                dispatch_at=dispatch_at,
+                response_at=response_at,
             )
 
     @staticmethod
     def _streaming_payload(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare the payload for a streaming request.
 
-        ``stream_options.include_usage`` is a Chat-Completions-only parameter:
-        the Responses API rejects it as unknown and instead always reports
-        usage in its terminal ``response.completed`` event, so it is skipped
-        for ``/responses`` upstreams (both OpenAI ``/v1/responses`` and Azure
-        ``/openai/responses``).
+        ``stream_options.include_usage`` is a Chat-Completions-only parameter.
+        The Responses API rejects it as unknown and reports usage in its
+        terminal ``response.completed`` event instead, and the Anthropic
+        Messages API rejects it too — it reports usage in ``message_start`` and
+        ``message_delta``. So it is added only for the surface that needs it.
         """
-        if is_multipart_payload(payload) or Executor._is_responses_url(url):
+        if is_multipart_payload(payload) or not Executor._takes_stream_options(url):
             return set_payload_field(payload, "stream", True)
         return {**payload, "stream": True, "stream_options": {"include_usage": True}}
+
+    @staticmethod
+    def _takes_stream_options(url: str) -> bool:
+        """Whether this upstream surface accepts ``stream_options``."""
+        return not (Executor._is_responses_url(url) or Executor._is_messages_url(url))
+
+    @staticmethod
+    def _is_messages_url(url: str) -> bool:
+        """Whether the upstream URL targets the Anthropic Messages API."""
+        path = (url or "").split("?", 1)[0].rstrip("/")
+        return path.endswith("/messages")
 
     @staticmethod
     def _request_kwargs(payload: Dict[str, Any]) -> Dict[str, Any]:

@@ -3,7 +3,15 @@
 Defines all custom metrics and exposes a WSGI app for the /metrics endpoint.
 """
 
+import logging
+import sys
+from typing import Any
+
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram, generate_latest
+
+from logos.monitoring.vllm_metrics_merge import merge_metric_families
+
+logger = logging.getLogger("LogosLogger")
 
 registry = CollectorRegistry()
 
@@ -210,8 +218,287 @@ WORKER_VRAM_FREE_MB = Gauge(
 )
 
 # ---------------------------------------------------------------------------
+# Engine telemetry (per provider/model pair)
+# ---------------------------------------------------------------------------
+
+PREFIX_CACHE_HIT_RATE = Gauge(
+    "logos_prefix_cache_hit_rate",
+    "vLLM prefix-cache hit rate per provider/model pair (0..1, cumulative since lane start)",
+    ["model", "provider"],
+    registry=registry,
+)
+
+MTP_ACCEPTANCE_RATE = Gauge(
+    "logos_mtp_acceptance_rate",
+    "MTP/speculative-decoding draft-token acceptance rate per provider/model pair (0..1, "
+    "cumulative since lane start); absent for models running without speculative decoding",
+    ["model", "provider"],
+    registry=registry,
+)
+
+# ---------------------------------------------------------------------------
+# Token usage (per request, cloud and local providers alike)
+# ---------------------------------------------------------------------------
+
+PROMPT_TOKENS_TOTAL = Counter(
+    "logos_prompt_tokens_total",
+    "Input (prompt) tokens processed per model/provider pair, all request outcomes",
+    ["model", "provider"],
+    registry=registry,
+)
+
+GENERATION_TOKENS_TOTAL = Counter(
+    "logos_generation_tokens_total",
+    "Output (generation) tokens produced per model/provider pair, all request outcomes",
+    ["model", "provider"],
+    registry=registry,
+)
+
+CACHED_PROMPT_TOKENS_TOTAL = Counter(
+    "logos_cached_prompt_tokens_total",
+    "Prompt tokens served from the prefix cache per model/provider pair; rate = "
+    "this counter / logos_prompt_tokens_total in Grafana",
+    ["model", "provider"],
+    registry=registry,
+)
+
+REQUEST_CONTEXT_TOKENS = Histogram(
+    "logos_request_context_tokens",
+    "Context window used by a completed request (prompt + generation tokens), per model",
+    ["model"],
+    # Top out at 512k: calibrated lanes run at up to 262144 tokens, and a
+    # generation can push the used window past the prompt length. Anything
+    # beyond the highest bucket would clamp every high percentile to the
+    # boundary, the same failure mode documented on REQUEST_DURATION_SECONDS.
+    buckets=(256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288),
+    registry=registry,
+)
+
+# ---------------------------------------------------------------------------
+# Scheduling metrics — ETTFT accuracy, component decomposition, tier
+# ---------------------------------------------------------------------------
+
+ETTFT_ACCURACY_SECONDS = Histogram(
+    "logos_ettft_accuracy_seconds",
+    "Absolute error |ettft_estimate_s - actual_ttft_s| per provider and tier at first-token time",
+    ["provider", "tier"],
+    buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0),
+    registry=registry,
+)
+
+ETTFT_COMPONENTS_SECONDS = Histogram(
+    "logos_ettft_components_seconds",
+    "Duration of each ETTFT phase for the selected scheduling candidate",
+    # component: state_overhead | queue_wait | prefill | learned_ttft | reclaim_overhead
+    ["component", "model", "provider", "tier"],
+    buckets=(0.001, 0.01, 0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+    registry=registry,
+)
+
+SCHEDULING_TIER_TOTAL = Counter(
+    "logos_scheduling_tier_total",
+    "Scheduling decisions by readiness tier of the selected candidate",
+    ["model", "provider", "tier"],
+    registry=registry,
+)
+
+SCHEDULING_UNAVAILABLE_TOTAL = Counter(
+    "logos_scheduling_unavailable_total",
+    "Candidates scored UNAVAILABLE during a scheduling pass (reclaim-check returned inf)",
+    ["model", "provider"],
+    registry=registry,
+)
+
+ADMISSION_HOLD_DURATION_SECONDS = Histogram(
+    "logos_admission_hold_duration_seconds",
+    "Wall-clock time a request spent waiting in the scheduler queue before being dispatched",
+    buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1200.0),
+    registry=registry,
+)
+
+# ---------------------------------------------------------------------------
+# Latency-store EWMA values — learned infrastructure parameters
+# ---------------------------------------------------------------------------
+
+LATENCY_STORE_LEARNED_SECONDS = Gauge(
+    "logos_latency_store_learned_seconds",
+    "Current EWMA value from the latency store per (model, provider, metric). "
+    "metric is one of: cold, cold_reclaim, sleeping, sleeping_reclaim, ttft, e2e, prefill_s_per_token",
+    ["model", "provider", "metric"],
+    registry=registry,
+)
+
+LATENCY_STORE_OBSERVATION_COUNT = Gauge(
+    "logos_latency_store_observation_count",
+    "Number of observations feeding the EWMA for a (model, provider, metric)",
+    ["model", "provider", "metric"],
+    registry=registry,
+)
+
+# Label sets published by update_latency_store_metrics(), retired when keys vanish.
+_PUBLISHED_LATENCY_STORE_KEYS: set[tuple[str, str, str]] = set()
+
+# Label sets published by update_engine_cache_metrics(), so pairs whose lanes
+# are gone can be removed instead of keeping their last value forever.
+_PUBLISHED_ENGINE_METRIC_KEYS: set[tuple[str, str]] = set()
+
+
+def _remove_label_silently(metric: Any, model: str, provider: str) -> None:
+    """Remove a (model, provider) label set, tolerating a never-published gauge.
+
+    ``prometheus_client``'s ``remove()`` raises ``KeyError`` for a label set
+    that was never created, and a pair can legitimately be missing one side:
+    a model without speculative decoding never publishes an MTP acceptance
+    rate (no ``MTP_ACCEPTANCE_RATE`` child exists for it), and a lane that
+    reports no prefix data never publishes a prefix rate. Retiring such a pair
+    must not raise — a raised error here would abort the planner cycle before
+    it does any capacity planning.
+    """
+    try:
+        # `remove()` lives on the parent metric and takes positional label
+        # values; a child obtained from .labels() has no working remove of its own.
+        metric.remove(model, provider)
+    except KeyError:
+        pass
+
+
+def update_engine_cache_metrics(entries: list[tuple[str, str, float | None, float | None]]) -> None:
+    """Publish per-(model, provider) engine rates and retire stale label sets.
+
+    Each entry is ``(model, provider, prefix_cache_hit_rate, mtp_acceptance_rate)``;
+    a ``None`` rate is simply not published for that metric (the previous value
+    stays until the pair disappears). Label sets that were published before but
+    are missing from *entries* are removed from the gauges that hold them.
+
+    The tracked-key state is refreshed in a ``finally`` so that a failure
+    during retirement can never leave it frozen — a stale diff set would
+    re-raise on every subsequent call and keep the caller (the planner cycle)
+    dead.
+    """
+    current: set[tuple[str, str]] = set()
+    for model, provider, prefix_rate, mtp_rate in entries:
+        current.add((model, provider))
+        if prefix_rate is not None:
+            PREFIX_CACHE_HIT_RATE.labels(model=model, provider=provider).set(prefix_rate)
+        if mtp_rate is not None:
+            MTP_ACCEPTANCE_RATE.labels(model=model, provider=provider).set(mtp_rate)
+    try:
+        for model, provider in _PUBLISHED_ENGINE_METRIC_KEYS - current:
+            _remove_label_silently(PREFIX_CACHE_HIT_RATE, model, provider)
+            _remove_label_silently(MTP_ACCEPTANCE_RATE, model, provider)
+    finally:
+        _PUBLISHED_ENGINE_METRIC_KEYS.clear()
+        _PUBLISHED_ENGINE_METRIC_KEYS.update(current)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def record_ettft_outcome(
+    estimate_s: float,
+    actual_ttft_s: float,
+    provider: str,
+    tier: str,
+) -> None:
+    """Observe ETTFT accuracy: |estimate_s - actual_ttft_s| for the given provider/tier.
+
+    Call this once per request when the first token arrives, passing the
+    ETTFT estimate from SchedulingResult.ettft_estimate_ms / 1000 and the
+    wall-clock duration from scheduling-start to first token.
+    """
+    import math
+
+    if not (math.isfinite(estimate_s) and math.isfinite(actual_ttft_s)):
+        return
+    ETTFT_ACCURACY_SECONDS.labels(provider=provider, tier=tier).observe(abs(estimate_s - actual_ttft_s))
+
+
+def record_ettft_components(
+    model: str,
+    provider: str,
+    tier: str,
+    state_overhead_s: float,
+    queue_wait_s: float,
+    prefill_s: float,
+    learned_ttft_s: float,
+    reclaim_overhead_s: float,
+) -> None:
+    """Observe the five ETTFT phase durations for a scheduled candidate."""
+    labels_base = dict(model=model, provider=provider, tier=tier)
+    ETTFT_COMPONENTS_SECONDS.labels(component="state_overhead", **labels_base).observe(state_overhead_s)
+    ETTFT_COMPONENTS_SECONDS.labels(component="queue_wait", **labels_base).observe(queue_wait_s)
+    ETTFT_COMPONENTS_SECONDS.labels(component="prefill", **labels_base).observe(prefill_s)
+    ETTFT_COMPONENTS_SECONDS.labels(component="learned_ttft", **labels_base).observe(learned_ttft_s)
+    ETTFT_COMPONENTS_SECONDS.labels(component="reclaim_overhead", **labels_base).observe(reclaim_overhead_s)
+
+
+def update_latency_store_metrics(
+    rows: "list[tuple[str, str, str, float, int]]",
+) -> None:
+    """Publish per-(model, provider, metric) EWMA gauges from a latency-store snapshot.
+
+    Each row is ``(model_name, provider_label, metric_name, value_s, observation_count)``.
+    Retired keys are removed from both gauges so stale label sets don't linger.
+    Call this once per capacity-planner cycle (or any other periodic driver).
+    """
+    current: set[tuple[str, str, str]] = set()
+    try:
+        for model, provider, metric, value, n in rows:
+            current.add((model, provider, metric))
+            LATENCY_STORE_LEARNED_SECONDS.labels(model=model, provider=provider, metric=metric).set(value)
+            LATENCY_STORE_OBSERVATION_COUNT.labels(model=model, provider=provider, metric=metric).set(n)
+        for model, provider, metric in _PUBLISHED_LATENCY_STORE_KEYS - current:
+            try:
+                LATENCY_STORE_LEARNED_SECONDS.remove(model, provider, metric)
+            except KeyError:
+                pass
+            try:
+                LATENCY_STORE_OBSERVATION_COUNT.remove(model, provider, metric)
+            except KeyError:
+                pass
+    finally:
+        _PUBLISHED_LATENCY_STORE_KEYS.clear()
+        _PUBLISHED_LATENCY_STORE_KEYS.update(current)
+
+
+class _VLLMForwardedMetricsCollector:
+    """Folds every connected worker's forwarded vLLM ``/metrics`` into this
+    registry's scrape output.
+
+    Each worker pushes its own already lane-merged text over the bridge (see
+    LogosNodeBridge._send_vllm_metrics); this collector only relabels those
+    snapshots by worker_id and merges them, doing no I/O of its own — a
+    single stuck or disconnected worker just means its last-known snapshot
+    (or nothing, if it never sent one) rather than a slow or failed scrape.
+    """
+
+    def collect(self):
+        # logos.main assembles this module before it finishes defining
+        # _logosnode_registry, so binding it at module level here would
+        # capture a not-yet-populated module — deferred to call time instead.
+        # A plain sys.modules lookup (rather than `import logos.main as _m`)
+        # avoids depending on `main` being resolvable as an attribute of the
+        # `logos` package, which importing it repeatedly at arbitrary call
+        # times cannot guarantee; it also degrades to "no data yet" instead
+        # of raising if this ever runs before logos.main has loaded.
+        main = sys.modules.get("logos.main")
+        registry = getattr(main, "_logosnode_registry", None)
+        if registry is None:
+            return iter(())
+
+        sources = []
+        for provider_id in registry.active_provider_ids():
+            found = registry.peek_vllm_metrics(provider_id)
+            if found is None:
+                continue
+            worker_id, metrics_text = found
+            sources.append(({"worker_id": worker_id}, metrics_text))
+        return iter(merge_metric_families(sources))
+
+
+registry.register(_VLLMForwardedMetricsCollector())
 
 
 def metrics_response() -> tuple[bytes, str]:

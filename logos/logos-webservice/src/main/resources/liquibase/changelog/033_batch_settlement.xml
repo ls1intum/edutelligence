@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The settlement lease on batch_objects.
+
+         A provider-run batch is metered when its output file is read: the
+         settlement downloads the file, books one usage row per request line,
+         and only then stamps settled_at. The claim that makes the settlement
+         exclusive (a client's poll and the reconciler can reach the batch at
+         the same time) is a lease, not the settled_at stamp itself: stamping
+         first would make a settlement that dies between the stamp and the
+         ledger write unretryable, and the batch's provider cost would be lost
+         with it. The lease expires on its own, which is the recovery, and the
+         ledger write is idempotent per row (request_id unique in log_entry),
+         so a lapsed lease cannot double-bill. -->
+    <changeSet id="033-batch-settlement-lease" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="batch_objects" columnName="settlement_lease_expires_at"/></not>
+        </preConditions>
+        <addColumn tableName="batch_objects">
+            <column name="settlement_lease_expires_at" type="TIMESTAMP WITH TIME ZONE"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="batch_objects" columnName="settlement_lease_expires_at"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

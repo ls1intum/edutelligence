@@ -81,21 +81,6 @@
   margin-left: auto;
 }
 
-.badge {
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--letter-spacing-wider);
-  border-radius: 8px;
-  padding: 2px 6px;
-
-  &--vllm,
-  &--ollama {
-    background: rgb(var(--color-outline-200)  / var(--opacity-soft));
-    color: rgb(var(--color-typography-300));
-  }
-}
-
 .btn-unload {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
@@ -210,16 +195,6 @@
   &.neutral {
     color: rgb(var(--color-typography-300));
   }
-}
-
-.lane-na {
-  font-size: var(--font-size-xs);
-  color: rgb(var(--color-typography-500));
-  margin-top: 4px;
-}
-
-.neutral {
-  color: rgb(var(--color-typography-300));
 }
 
 // ── GPU placement line ───────────────────────────────────────────────────────

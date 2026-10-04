@@ -18,14 +18,25 @@ This document covers the four places that fact shows up.
 ## 1. What the API reports
 
 `GET /v1/models` (and `/v1/models/{id}`) carry up to four fields per model. Each
-is omitted when unknown, so cloud models and never-calibrated models keep the
-object they had before any of this existed.
+is omitted when unknown, so a model whose window no source knows keeps the
+object it had before any of this existed. The sources, in the order they are
+folded in: the workernode runtime snapshots (what is served), the windows a
+cloud upstream publishes on its own `/v1/models` (measured), the historic
+maximum the database keeps per model, and — for a model no measured source
+knows at all, the Azure family first among them — the input context window the
+upstream registry publishes for the model. The webservice refreshes
+`model_capabilities` from that registry once a day; the orchestrator folds the
+value in only for models nothing else reports, so it never widens a window a
+source measured. And only for models a cloud provider is associated with: a
+cloud upstream serves a catalog model at its published size, but a local
+model's window is a property of the calibrated lane, so a local-only model
+with no lane up must not be reported as serving the registry's figure.
 
 | Field                       | Meaning                                                                    |
 | --------------------------- | -------------------------------------------------------------------------- |
 | `max_model_len_current_min` | Smallest window being served right now. Holds whichever deployment answers, so a client that never wants a rejected request sizes itself from this. |
 | `max_model_len_current_max` | Largest window being served right now. Reachable because of the routing in §3. |
-| `max_model_len_overall`     | The widest this model is ever served with — what a lane runs at once it gets all the KV cache it asks for. Independent of what is loaded at the moment, so it is known even for a model with no live lane, and it is the number to write into a config file that is only read at startup. |
+| `max_model_len_overall`     | The widest this model is ever served with — what a lane runs at once it gets all the KV cache it asks for. Independent of what is loaded at the moment, so it is known even for a model with no live lane, and it is the number to write into a config file that is only read at startup. The live snapshots only say this while a workernode is connected, so the number is topped up from the historic maximum Logos persists per model in `model_profiles` (`max_reported_context_length`, a high-water mark the profile upsert maintains): it is still known when **every** workernode is offline, and that — not a client-side guess — is what the claude-logos wrapper sizes a session from in that state. |
 | `max_model_len`             | Repeats `max_model_len_current_min` under the name vLLM itself uses, so an OpenAI-compatible client that already reads that field keeps working. |
 
 The same three are exposed to the Spring webservice on
@@ -83,9 +94,12 @@ The first is temporary — it clears when VRAM frees up. The second will not: no
 calibrated point on that node reaches the floor at any KV size, so either lower
 `min_context_fraction` for that model or re-calibrate it.
 
-A model whose context length is unknown is never blocked by the floor. It exists
-to stop the planner *choosing* a narrow window, not to keep uncalibrated models
-off the cluster.
+A model whose context length is unknown is never blocked by the floor itself —
+it exists to stop the planner *choosing* a narrow window, not to gate on
+calibration. That gate is separate: `_passes_minimum_load_feasibility` refuses
+to load any model that has never been calibrated on that node, unless the
+provider is Metal/MLX (which runs on operator-provided override profiles
+instead — calibration is impossible there by design).
 
 ## 3. Context-aware routing — send long requests where they fit
 
@@ -143,6 +157,11 @@ it asks `GET /v1/models`, prints the window it got, and exports the result into
 its own child process — nothing outside the wrapper is touched, so plain
 `claude` keeps using an Anthropic subscription unchanged.
 
+`LOGOS_MODEL` is optional. When unset, Claude Code discovers Logos models from
+that listing and you switch with `/model`. When set, every Claude Code model
+slot (`opus`, `sonnet`, `haiku`, …) is pinned to that id — useful as a default,
+not required for the setup flow.
+
 It also does two things with the listing it already has in hand:
 
 - **Warms the model up.** `POST /v1/models/{model}/warmup` tells the planner the
@@ -153,6 +172,7 @@ It also does two things with the listing it already has in hand:
   reservation: the planner still decides using its own fairness rules, a warmup
   can never evict a lane real traffic is using, and no inference request is ever
   sent on the caller's behalf. Warming a model the key has no access to is a 404.
+  Warmup runs only when `LOGOS_MODEL` is pinned.
 - **Names models that are new to you.** The id list is compared against the one
   from the last run (`~/.config/claude-logos/known-models`); additions are
   printed. The first run records the baseline silently rather than announcing
@@ -188,6 +208,54 @@ Two things follow:
 carries on. If a single turn grows past `window − reserve − 3000` it refuses to
 send and asks for a `/compact` instead. Neither is an error the user has to
 recover from — the failure mode this replaces was a 400 from vLLM mid-turn.
+
+#### The floor: 37,024 tokens
+
+The deductions above are fixed, so there is a window below which Claude Code
+cannot run **at all** — and it is much higher than it looks. Its own opening
+prompt (system prompt plus the schemas of every tool it carries) is around
+13,000 tokens before the user has typed anything, and none of it is compactable:
+
+```text
+floor       = 13000 opening prompt + 20000 reservation + 3000 hard stop + 1024 headroom  = 37024
+comfortable = 13000 opening prompt + 20000 reservation + 13000 auto-compact + 1024        = 47024
+```
+
+A 32,768-token lane leaves `32768 − 20000 = 12768` tokens of input — one token
+short of the opening prompt. The session's **first** message comes back as
+
+```text
+This model's maximum context length is 32768 tokens. However, you requested
+20000 output tokens and your prompt contains at least 12769 input tokens
+```
+
+and there is nothing to compact, so it never recovers. Between the floor and
+47,024 the session runs but auto-compaction fires from the first message on.
+
+Two places enforce this, because a model can be chosen in either:
+
+- **The AI Tools page** disables such a model for Claude Code (`claudeCodeFitFor`
+  in `ai-tools.ts`), names the window in the option label and blocks the wizard
+  on the model step with the arithmetic spelled out. OpenCode is unaffected — it
+  is told what to reserve (`min(8192, context/2)`), so a narrow window costs it
+  reply length, not the session. The figure judged is
+  `max_model_len_current_min` — the one a request meets whichever deployment
+  answers — falling through to the wider figures only when it is absent, and a
+  model no lane serves is never judged.
+- **The wrapper** refuses to start and prints what is left, what it costs and
+  the `LOGOS_MAX_OUTPUT_TOKENS` value that would fit — measured against the
+  auto-compact point rather than the hard stop, since a reservation that only
+  clears the hard stop leaves a session compacting on every turn. `--check`
+  prints all of it without refusing anything, which is what makes it the thing
+  to run when a session will not start.
+
+Lowering the reservation is the only lever on the client side: at 32,768 tokens
+`LOGOS_MAX_OUTPUT_TOKENS=5744` makes the model usable with shorter replies. The
+better lever is the window — §2 and §3.
+
+The check the wrapper used to have (`headroom + reservation >= window`) only
+caught the arithmetic going negative, which a 32,768-token window passes
+comfortably while being unusable.
 
 The "auto-compact fires at ~60%" effect that started this work is these two
 fixed deductions — 33,000 tokens in total — as a share of a window that was
@@ -246,6 +314,8 @@ capacity is tight; the routing in §3 gives them the best available shot.
 | Symptom | Cause |
 | --- | --- |
 | Claude Code compacts far earlier than the window suggests | The output reservation is being subtracted twice, or the session is running on `guaranteed` while `available` is much larger. Check `claude-logos --check`. |
+| `claude-logos` refuses to start with `BLOCKED` | The window is below the 37,024-token floor, so the session's first request would be rejected. Pick a wider model, or take the `LOGOS_MAX_OUTPUT_TOKENS` value the message names. |
+| The very first message of a session 400s with `you requested 20000 output tokens` | The lane came up narrower than the window the session was sized from — the cold-start case: with no lane up, only `max_model_len_overall` is known, and that is the widest window the model has *ever* been calibrated for, not what the planner will give a new lane from the capacity free right now. The next start sizes itself against the lane that is now up. |
 | `maximum context length is N tokens` 400s | The request landed on a deployment narrower than the estimate expected — most likely one that reports no window. Switch that wrapper to `LOGOS_CONTEXT_SOURCE=guaranteed`. |
 | A model is never placed on a node | The placement floor cannot be met there. Look for the "no calibrated KV point serves the required minimum" line and lower `min_context_fraction` for that model in the worker's config.yml. |
-| `max_model_len` absent from `/v1/models` | Nothing reports a window: a cloud model, or a vLLM lane running at the model's native maximum, which the worker does not report. |
+| `max_model_len` absent from `/v1/models` | Nothing reports a window that always holds: a cloud model whose upstream publishes no window and whose registry entry names none, a vLLM lane running at the model's native maximum (which the worker does not report), or every workernode offline. In the last case `max_model_len_overall` still carries the model's historic maximum, and the claude-logos wrapper sizes the session from it (startup line says "no lane is up yet"). |

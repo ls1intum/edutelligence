@@ -1,5 +1,28 @@
-import type { RequestLogStats, VramV2Sample, TimelineEnqueueEvent, VramSeriesPoint, VramProviderPayload } from './statistics.models';
+import type { RequestLogStats, VramV2Sample, VramSeriesPoint, VramProviderPayload } from './statistics.models';
 import { cssVar } from './statistics.constants';
+
+/**
+ * The stable identity of a model in the statistics charts.
+ *
+ * Live models are keyed by their database id, so a rename keeps its series.
+ * A deleted model's rows lost that id, so the key falls back to the name the
+ * delete captured. At most one bucket holds that name: the aggregate groups
+ * by (model_id, model_name), and two live models never carry the same name.
+ * Two generations with the same name (delete, re-add under it, delete again)
+ * merge into that one bucket — no finer distinction is left in the data.
+ *
+ * The two shapes carry distinct fixed prefixes. Without them a deleted model
+ * named "42" would share a key with live model id 42 and merge its usage
+ * into the live series, and a raw name could land on an inherited property
+ * of the plain-object maps the chart builds ("constructor", "__proto__", …).
+ */
+export function modelSeriesKey(modelId: number | null | undefined, modelName: string | null | undefined): string {
+  if (modelId != null) return `model-${modelId}`;
+  if (modelName && modelName.trim() !== '') return `deleted-${modelName}`;
+  // Rows with neither id nor name never reach the per-model views (the
+  // queries filter them out); the total key just keeps this function total.
+  return 'deleted-unknown';
+}
 
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
 
@@ -64,6 +87,69 @@ export function formatElapsed(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
+/**
+ * "Uptime since" label for a timestamp, e.g. "3d 4h", "5h 12m", "42m", "<1m".
+ */
+export function formatUptime(ts: string | null | undefined, nowMs: number): string | null {
+  if (!ts) return null;
+  const startMs = new Date(ts).getTime();
+  if (Number.isNaN(startMs)) return null;
+  const diffS = Math.floor((nowMs - startMs) / 1000);
+  // Negative = clock skew between worker/orchestrator/browser; hide rather
+  // than show a nonsense duration.
+  if (diffS < 0) return null;
+  const days = Math.floor(diffS / 86400);
+  const hours = Math.floor((diffS % 86400) / 3600);
+  const minutes = Math.floor((diffS % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return '<1m';
+}
+
+// ── Recent-requests state filter ──────────────────────────────────────────────
+
+/**
+ * The lifecycle buckets the request feed can be narrowed to, in the order the
+ * filter offers them. `queued` and `running` are the in-flight states; `error`
+ * and `finished` split the settled ones by outcome (a timeout counts as an
+ * error, matching how the row border colours timeouts as a failure).
+ */
+export const REQUEST_STATUS_FILTERS = ['queued', 'running', 'error', 'finished'] as const;
+
+export type RequestStatusFilter = (typeof REQUEST_STATUS_FILTERS)[number];
+
+/**
+ * Normalise the state-filter dropdown's value to the bucket the feed is
+ * narrowed by. The empty selection means "all states" (null); anything that is
+ * not one of the four buckets is treated the same, so a stale or tampered value
+ * widens back to the full feed instead of matching nothing.
+ */
+export function normalizeFeedStatus(value: string | null): string | null {
+  if (!value) return null;
+  return (REQUEST_STATUS_FILTERS as readonly string[]).includes(value) ? value : null;
+}
+
+/**
+ * The "of N" total the feed header shows.
+ *
+ * An unfiltered feed borrows the statistics aggregate (the page's KPI total),
+ * which it already matches. A status-filtered feed must show the count of that
+ * bucket instead — the aggregate is only as narrow as the team/user scope, not
+ * the state — so it shows the total the live push reports for the bucket, and
+ * nothing while that push is still in flight: the borrowed aggregate
+ * describes a different set, and a wrong "of N" reads as worse than an
+ * absent one.
+ */
+export function resolveFeedTotal(
+  status: string | null,
+  pushedTotal: number | null,
+  aggregateTotal: number,
+): number | null {
+  if (!status) return aggregateTotal;
+  return pushedTotal;
+}
+
 // ── Token count scale ─────────────────────────────────────────────────────────
 
 /**
@@ -101,6 +187,41 @@ export function formatTokenCount(count: number | null | undefined): string {
   );
   const tenths = Math.floor(count / (unit.value / 10));
   return `${(tenths / 10).toFixed(1).replace(/\.0$/, '')} ${unit.label}`;
+}
+
+// ── Percentage scale ──────────────────────────────────────────────────────────
+
+/**
+ * The share of `part` in `total` as a percentage that never collapses a
+ * non-zero share to "0%": 694 of 317.265 local starts is 0.22%, not the "0%"
+ * an integer rounding shows. Shares of 10% and up stay plain, single-digit
+ * shares keep one decimal, and below 1% the decimals widen (two by default,
+ * up to six) until the value reads non-zero. A share too small even for six
+ * decimals reads "<0.000001%" rather than "0%" — the card must not report a
+ * cold start that happened as none at all. A zero share — or an input that is
+ * not a positive finite total — reads "0%".
+ */
+export function formatPercent(
+  part: number | null | undefined,
+  total: number | null | undefined,
+): string {
+  if (
+    typeof part !== 'number' ||
+    typeof total !== 'number' ||
+    !Number.isFinite(part) ||
+    !Number.isFinite(total) ||
+    total <= 0
+  ) {
+    return '0%';
+  }
+  const pct = (part / total) * 100;
+  if (pct >= 10) return `${Math.round(pct)}%`;
+  let decimals = pct >= 1 ? 1 : 2;
+  while (pct > 0 && decimals < 6 && Number(pct.toFixed(decimals)) === 0) decimals += 1;
+  // Below the six-decimal cap the widening loop runs out and toFixed still
+  // rounds to zero. Bound it instead of printing "0%" for a share that is not.
+  if (pct > 0 && Number(pct.toFixed(decimals)) === 0) return '<0.000001%';
+  return `${pct.toFixed(decimals).replace(/\.0+$/, '')}%`;
 }
 
 // ── X-axis labels (shared by request-volume and VRAM charts) ─────────────────
@@ -526,6 +647,43 @@ export const extractProviderVramMb = (
   return { totalMb, usedMb, freeMb };
 };
 
+/**
+ * Host RAM of one provider's latest sample, in MiB.
+ *
+ * Parallel to extractProviderVramMb, but the answer can be "not reported":
+ * the numbers travel on the runtime's host_memory summary, which older
+ * workers never sent and non-Linux hosts report all-zero. `reported` is the
+ * flag callers gate on, so a missing summary reads as no data instead of a
+ * machine with 0 MB of RAM.
+ */
+export const extractProviderHostRamMb = (
+  sample: VramV2Sample | null | undefined
+): { totalMb: number; usedMb: number; freeMb: number; reported: boolean } => {
+  const prov = sample?.scheduler_signals?.provider;
+  const totalMb = prov?.host_ram_total_mb ?? 0;
+  if (totalMb <= 0) {
+    return { totalMb: 0, usedMb: 0, freeMb: 0, reported: false };
+  }
+  return {
+    totalMb,
+    usedMb: prov?.host_ram_used_mb ?? 0,
+    freeMb: prov?.host_ram_available_mb ?? 0,
+    reported: true,
+  };
+};
+
+/**
+ * Whether a provider's device reports a single unified memory pool — Apple
+ * Silicon (Metal) has no separate VRAM at all, GPU and CPU draw from the same
+ * bytes. The statistics page must not show such a worker a "VRAM" pie next to
+ * a "RAM" pie: the two charts would describe the same pool twice, and the
+ * VRAM total is a wired-down budget heuristic rather than a real pool. Gated
+ * on device_mode because it is the flag the worker sets for exactly this
+ * hardware; the page then shows one "Unified memory" chart instead.
+ */
+export const isUnifiedMemoryProvider = (sample: VramV2Sample | null | undefined): boolean =>
+  sample?.scheduler_signals?.provider?.device_mode === 'metal';
+
 export const buildVramSignature = (
   providers: VramProviderPayload[]
 ): string =>
@@ -555,89 +713,47 @@ export const chooseDynamicTargetBuckets = (spanMs: number): number => {
   const hour = 60 * 60 * 1000;
   const day = 24 * hour;
 
-  if (spanMs > 30 * day) return 90;
+  if (spanMs > 45 * day) return 90;
+  // ~month windows want one bar per day, not the old six-hour buckets.
+  if (spanMs > 14 * day) return 30;
   if (spanMs > 7 * day) return 96;
   if (spanMs > day) return 108;
-  return 120;
+  // Calendar day (and shorter): five-minute bars — 86_400 / 300 ≈ 288.
+  return 288;
 };
 
-export const chooseDynamicBucketMs = (spanMs: number): number => {
-  const minute = 60 * 1000;
-  const hour = 60 * minute;
-  const day = 24 * hour;
-  const safeSpanMs = Math.max(spanMs, minute);
-  const targetBuckets = chooseDynamicTargetBuckets(safeSpanMs);
-  const rawBucketMs = Math.max(safeSpanMs / targetBuckets, minute);
-  const niceCandidates = [
-    minute,
-    5 * minute,
-    15 * minute,
-    30 * minute,
-    hour,
-    3 * hour,
-    6 * hour,
-    12 * hour,
-    day,
-  ];
-
-  return niceCandidates.reduce((best, candidate) =>
-    Math.abs(candidate - rawBucketMs) < Math.abs(best - rawBucketMs)
-      ? candidate
-      : best
-  );
-};
-
-export const aggregateEventsToVolumeSeries = (
-  events: TimelineEnqueueEvent[],
-  startMs: number,
-  endMs: number,
-  bucketMs: number
-): RequestLogStats['timeSeries'] => {
-  const safeBucketMs = Math.max(bucketMs, 30 * 1000);
-  const alignedStart = Math.floor(startMs / safeBucketMs) * safeBucketMs;
-  const alignedEnd = Math.ceil(endMs / safeBucketMs) * safeBucketMs;
-  const buckets = new Map<
-    number,
-    { cloud: number; local: number; total: number }
-  >();
-
-  for (let ts = alignedStart; ts <= alignedEnd; ts += safeBucketMs) {
-    buckets.set(ts, { cloud: 0, local: 0, total: 0 });
+/**
+ * Explicit bucket range for volume-chart tooltips, e.g. "04:30 – 04:35" for
+ * five-minute bars or "Sep 1" for a daily bucket.
+ */
+export function formatBucketRange(startMs: number, bucketMs: number): string {
+  if (!Number.isFinite(startMs) || !Number.isFinite(bucketMs) || bucketMs <= 0) {
+    return new Date(startMs).toLocaleString();
   }
+  const start = new Date(startMs);
+  const end = new Date(startMs + bucketMs);
+  const dayMs = 86_400_000;
 
-  for (const event of events) {
-    const ts = Number(event.timestamp_ms);
-    if (!Number.isFinite(ts) || ts < alignedStart || ts > alignedEnd)
-      continue;
-    const bucketTs = Math.floor(ts / safeBucketMs) * safeBucketMs;
-    const bucket = buckets.get(bucketTs) || {
-      cloud: 0,
-      local: 0,
-      total: 0,
-    };
-    if (event.is_cloud) bucket.cloud += 1;
-    else bucket.local += 1;
-    bucket.total += 1;
-    buckets.set(bucketTs, bucket);
-  }
-
-  const rawSeries: RequestLogStats['timeSeries'] = [];
-  for (const [timestamp, bucket] of buckets.entries()) {
-    rawSeries.push({
-      timestamp,
-      label: '',
-      cloud: bucket.cloud,
-      local: bucket.local,
-      total: bucket.total,
-      avgRunSeconds: null,
-      avgVram: null,
+  if (bucketMs >= dayMs) {
+    if (bucketMs === dayMs) {
+      return start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+    const startLabel = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endLabel = new Date(end.getTime() - 1).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
     });
+    return `${startLabel} – ${endLabel}`;
   }
 
-  rawSeries.sort((a, b) => a.timestamp - b.timestamp);
-  return applyTimeSeriesLabels(
-    rawSeries,
-    new Date(alignedStart),
-    new Date(alignedEnd)
-  );
-};
+  const fmt = (d: Date) =>
+    `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  // Same calendar day: show times only. Crossing midnight keeps the day so
+  // "23:00 – 00:00" is not read as a backwards interval.
+  if (start.toDateString() === new Date(end.getTime() - 1).toDateString()) {
+    return `${fmt(start)} – ${fmt(end)}`;
+  }
+  const dayFmt = (d: Date) =>
+    `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${fmt(d)}`;
+  return `${dayFmt(start)} – ${dayFmt(end)}`;
+}

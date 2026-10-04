@@ -7,6 +7,7 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { TitleCasePipe } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ModelManagementService, ModelCapability } from '../../core/services/model-management.service';
@@ -14,20 +15,29 @@ import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
+import { ModelProfileRadarComponent } from '../../shared/components/model-profile-radar/model-profile-radar';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { Router } from '@angular/router';
-import { daysSince, formatLastUsed as formatLastUsedLabel } from '../../shared/utils/date';
+import {
+  daysSince,
+  formatLastUsedParts,
+  type LastUsedParts,
+} from '../../shared/utils/date';
+
+const PROFILE_AXES = ['latency', 'quality', 'price'] as const;
 
 @Component({
   selector: 'app-models',
   standalone: true,
   imports: [
     FormsModule,
+    TitleCasePipe,
     ModalFormComponent,
     ModalConfirmComponent,
     SearchInputComponent,
     DataTableComponent,
     ErrorMessageComponent,
+    ModelProfileRadarComponent,
   ],
   templateUrl: './models.html',
   changeDetection: ChangeDetectionStrategy.Eager,
@@ -43,6 +53,8 @@ export class Models implements OnInit {
    * deprecation candidate.
    */
   private static readonly STALE_AFTER_DAYS = 30;
+
+  readonly profileAxes = PROFILE_AXES;
 
   // ── List state ──────────────────────────────────────────────────────────
   models = signal<Model[]>([]);
@@ -69,10 +81,12 @@ export class Models implements OnInit {
   addName = signal('');
   addDesc = signal('');
   addTags = signal('');
+  addAliases = signal('');
   addWtLatency = signal('');
   addWtAccuracy = signal('');
   addWtCost = signal('');
   addWtQuality = signal('');
+  addProfile = signal<Record<string, number>>({});
   addLoading = signal(false);
   addError = signal('');
 
@@ -81,10 +95,12 @@ export class Models implements OnInit {
   editName = signal('');
   editDesc = signal('');
   editTags = signal('');
+  editAliases = signal('');
   editWtLatency = signal('');
   editWtAccuracy = signal('');
   editWtCost = signal('');
   editWtQuality = signal('');
+  editProfile = signal<Record<string, number>>({});
   editLoading = signal(false);
   editError = signal('');
 
@@ -96,7 +112,8 @@ export class Models implements OnInit {
           (m) =>
             m.name.toLowerCase().includes(q) ||
             (m.description ?? '').toLowerCase().includes(q) ||
-            (m.tags ?? '').toLowerCase().includes(q),
+            (m.tags ?? '').toLowerCase().includes(q) ||
+            (m.aliases ?? '').toLowerCase().includes(q),
         )
       : this.models();
     const dir = this.lastUsedSort();
@@ -111,6 +128,52 @@ export class Models implements OnInit {
   });
 
   addValid = computed(() => this.addName().trim().length > 0);
+
+  profileValue(profile: Record<string, number>, axis: string): number | '' {
+    const v = profile[axis];
+    return typeof v === 'number' ? v : '';
+  }
+
+  hasProfileRatings(model: Model): boolean {
+    const ratings = model.profile_ratings;
+    return !!ratings && Object.keys(ratings).length > 0;
+  }
+
+  setProfileAxis(
+    target: 'add' | 'edit',
+    axis: string,
+    raw: string,
+  ): void {
+    const n = Number(raw);
+    const sig = target === 'add' ? this.addProfile : this.editProfile;
+    sig.update((prev) => {
+      const next = { ...prev };
+      if (!raw || Number.isNaN(n) || n < 1 || n > 5) {
+        delete next[axis];
+      } else {
+        next[axis] = Math.round(n);
+      }
+      return next;
+    });
+  }
+
+  /**
+   * Splits the comma-separated alias input into a clean list. Aliases are
+   * trimmed, de-duplicated case-insensitively, and empty entries are dropped.
+   */
+  private parseAliases(text: string): string[] {
+    const seen = new Set<string>();
+    const aliases: string[] = [];
+    for (const raw of text.split(',')) {
+      const alias = raw.trim();
+      if (!alias) continue;
+      const key = alias.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      aliases.push(alias);
+    }
+    return aliases;
+  }
 
   ngOnInit(): void {
     this.fetchModels();
@@ -146,8 +209,8 @@ export class Models implements OnInit {
     this.lastUsedSort.update((dir) => (dir === 'none' ? 'asc' : dir === 'asc' ? 'desc' : 'none'));
   }
 
-  formatLastUsed(iso: string | null | undefined): string {
-    return formatLastUsedLabel(iso);
+  formatLastUsed(iso: string | null | undefined): LastUsedParts {
+    return formatLastUsedParts(iso);
   }
 
   isStaleModel(iso: string | null | undefined): boolean {
@@ -161,8 +224,9 @@ export class Models implements OnInit {
     return `Not used for ${daysSince(iso)} days`;
   }
 
-  openReport(model: Model): void {
-    this.router.navigate(['/models', model.id, 'errors']);
+  /** Model row click: the model details view, opened on the Access tab (hosting providers, team/key grant matrix). */
+  openModel(model: Model): void {
+    this.router.navigate(['/models', model.id, 'details'], { queryParams: { tab: 'access' } });
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────
@@ -197,10 +261,12 @@ export class Models implements OnInit {
     this.addName.set('');
     this.addDesc.set('');
     this.addTags.set('');
+    this.addAliases.set('');
     this.addWtLatency.set('');
     this.addWtAccuracy.set('');
     this.addWtCost.set('');
     this.addWtQuality.set('');
+    this.addProfile.set({});
     this.addError.set('');
     this.addOpen.set(true);
   }
@@ -219,24 +285,28 @@ export class Models implements OnInit {
       name: this.addName().trim(),
       description: this.addDesc().trim() || undefined,
       tags: this.addTags().trim() || undefined,
+      aliases: this.parseAliases(this.addAliases()),
     };
 
     const wtLatency = this.addWtLatency() ? Number(this.addWtLatency()) : undefined;
     const wtAccuracy = this.addWtAccuracy() ? Number(this.addWtAccuracy()) : undefined;
     const wtCost = this.addWtCost() ? Number(this.addWtCost()) : undefined;
     const wtQuality = this.addWtQuality() ? Number(this.addWtQuality()) : undefined;
+    const profile = this.addProfile();
     const hasWeights =
       wtLatency != null || wtAccuracy != null || wtCost != null || wtQuality != null;
+    const hasProfile = Object.keys(profile).length > 0;
 
     try {
       const newModelId = await this.modelService.addModel(payload);
-      if (hasWeights) {
+      if (hasWeights || hasProfile) {
         await this.modelService.updateModel({
           model_id: newModelId,
           weight_latency: wtLatency,
           weight_accuracy: wtAccuracy,
           weight_cost: wtCost,
           weight_quality: wtQuality,
+          ...(hasProfile ? { profile_ratings: profile } : {}),
         });
       }
       await this.fetchModels();
@@ -254,10 +324,12 @@ export class Models implements OnInit {
     this.editName.set(model.name ?? '');
     this.editDesc.set(model.description ?? '');
     this.editTags.set(model.tags ?? '');
+    this.editAliases.set(model.aliases ?? '');
     this.editWtLatency.set(model.weight_latency != null ? String(model.weight_latency) : '');
     this.editWtAccuracy.set(model.weight_accuracy != null ? String(model.weight_accuracy) : '');
     this.editWtCost.set(model.weight_cost != null ? String(model.weight_cost) : '');
     this.editWtQuality.set(model.weight_quality != null ? String(model.weight_quality) : '');
+    this.editProfile.set({ ...(model.profile_ratings ?? {}) });
     this.editError.set('');
   }
 
@@ -271,15 +343,18 @@ export class Models implements OnInit {
     if (!target || this.editLoading()) return;
     this.editLoading.set(true);
     this.editError.set('');
+    const profile = this.editProfile();
     const payload: UpdateModelPayload = {
       model_id: target.id,
       name: this.editName().trim() || undefined,
       description: this.editDesc().trim() || undefined,
       tags: this.editTags().trim() || undefined,
+      aliases: this.parseAliases(this.editAliases()),
       weight_latency: this.editWtLatency() ? Number(this.editWtLatency()) : undefined,
       weight_accuracy: this.editWtAccuracy() ? Number(this.editWtAccuracy()) : undefined,
       weight_cost: this.editWtCost() ? Number(this.editWtCost()) : undefined,
       weight_quality: this.editWtQuality() ? Number(this.editWtQuality()) : undefined,
+      profile_ratings: profile,
     };
     try {
       await this.modelService.updateModel(payload);
@@ -291,10 +366,12 @@ export class Models implements OnInit {
                 name: payload.name ?? m.name,
                 description: payload.description ?? m.description,
                 tags: payload.tags ?? m.tags,
+                aliases: payload.aliases ? payload.aliases.join(', ') : m.aliases,
                 weight_latency: payload.weight_latency ?? m.weight_latency,
                 weight_accuracy: payload.weight_accuracy ?? m.weight_accuracy,
                 weight_cost: payload.weight_cost ?? m.weight_cost,
                 weight_quality: payload.weight_quality ?? m.weight_quality,
+                profile_ratings: profile,
               }
             : m,
         ),

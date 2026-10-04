@@ -4,6 +4,7 @@ import {
   inject,
   signal,
   OnInit,
+  OnDestroy,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
@@ -41,7 +42,7 @@ import { SelectComponent, AppSelectOption } from '../../shared/components/select
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './providers.scss',
 })
-export class Providers implements OnInit {
+export class Providers implements OnInit, OnDestroy {
   private providerService = inject(ProviderManagementService);
   private modelService = inject(ModelManagementService);
 
@@ -54,6 +55,7 @@ export class Providers implements OnInit {
     'bedrock',
     'deepseek',
     'groq',
+    'logos',
     'none',
   ];
   readonly privacyLevels: PrivacyLevel[] = [
@@ -61,28 +63,51 @@ export class Providers implements OnInit {
     'CLOUD_IN_EU_BY_US_PROVIDER',
     'CLOUD_NOT_IN_EU_BY_US_PROVIDER',
     'CLOUD_IN_EU_BY_EU_PROVIDER',
+    // Hardware outside operator control — use it for a personal Mac MLX
+    // worker so that LOCAL-threshold requests never route onto a machine
+    // whose owner can inspect the running processes.
+    'THIRD_PARTY_HARDWARE',
   ];
 
   readonly String = String;
 
   readonly providerTypeOptions: AppSelectOption[] = this.providerTypes.map((t) => ({ value: t, label: t }));
 
-  private readonly defaultCloudProviderType: CloudProviderType = 'azure';
+  // A cloud provider that is none of the named vendors — Hetzner, a vLLM
+  // gateway, any other OpenAI-compatible endpoint — is left untyped. That is
+  // not an omission: an untyped cloud provider is exactly the one the generic
+  // machinery handles, addressed at /v1/chat/completions with a plain
+  // "Authorization: Bearer" and discovered over GET /v1/models.
+  private readonly untypedCloudLabel = 'other (OpenAI-compatible)';
+
+  // Deliberately not 'azure'. Azure is the one type excluded from the generic
+  // /v1/models sync — it has its own control-plane discovery — so defaulting to
+  // it meant a provider saved without touching the field was scraped by
+  // neither path and silently stayed empty.
+  private readonly defaultCloudProviderType: CloudProviderType = 'none';
   private readonly defaultCloudPrivacyLevel: PrivacyLevel = 'CLOUD_IN_EU_BY_US_PROVIDER';
 
   private cloudProviderTypeOptionsFor(type: ProviderType): AppSelectOption[] {
-    const types =
-      type === 'logosnode'
-        ? this.cloudProviderTypes.filter((t) => t === 'none')
-        : this.cloudProviderTypes.filter((t) => t !== 'none');
-    return types.map((t) => ({ value: t, label: t }));
+    if (type === 'logosnode') {
+      // Never rendered — the field is hidden for a logosnode — but the value
+      // still has to resolve to something the application server maps to NULL.
+      return [{ value: 'none', label: 'none' }];
+    }
+    return [
+      { value: 'none', label: this.untypedCloudLabel },
+      ...this.cloudProviderTypes.filter((t) => t !== 'none').map((t) => ({ value: t, label: t })),
+    ];
   }
 
   private privacyLevelOptionsFor(type: ProviderType): AppSelectOption[] {
+    // A logosnode is self-hosted hardware: either the operator's own box
+    // (LOCAL) or hardware outside operator control, e.g. a personal Mac MLX
+    // worker (THIRD_PARTY_HARDWARE). The CLOUD_* tiers describe jurisdiction
+    // of a cloud provider and never apply to a logosnode.
     const levels =
       type === 'logosnode'
-        ? this.privacyLevels.filter((l) => l === 'LOCAL')
-        : this.privacyLevels.filter((l) => l !== 'LOCAL');
+        ? this.privacyLevels.filter((l) => l === 'LOCAL' || l === 'THIRD_PARTY_HARDWARE')
+        : this.privacyLevels.filter((l) => l !== 'LOCAL' && l !== 'THIRD_PARTY_HARDWARE');
     return levels.map((l) => ({ value: l, label: l }));
   }
 
@@ -104,10 +129,19 @@ export class Providers implements OnInit {
     cloud: CloudProviderType,
     privacy: PrivacyLevel,
   ): { cloud: CloudProviderType; privacy: PrivacyLevel } {
-    if (type === 'logosnode') return { cloud: 'none', privacy: 'LOCAL' };
+    if (type === 'logosnode') {
+      // Preserve a valid logosnode selection instead of forcing LOCAL: a Mac
+      // saved as third-party hardware must keep that tier when the edit
+      // dialog reopens or the type toggle is cycled.
+      return { cloud: 'none', privacy: privacy === 'THIRD_PARTY_HARDWARE' ? privacy : 'LOCAL' };
+    }
+    // 'none' is kept, not rewritten to a vendor. An untyped cloud provider is a
+    // legitimate configuration, and coercing it to 'azure' here meant merely
+    // opening the edit dialog on one and saving re-labelled it as Azure —
+    // which drops it out of the /v1/models sync it was relying on.
     return {
-      cloud: cloud === 'none' ? this.defaultCloudProviderType : cloud,
-      privacy: privacy === 'LOCAL' ? this.defaultCloudPrivacyLevel : privacy,
+      cloud,
+      privacy: privacy === 'LOCAL' || privacy === 'THIRD_PARTY_HARDWARE' ? this.defaultCloudPrivacyLevel : privacy,
     };
   }
 
@@ -144,6 +178,10 @@ export class Providers implements OnInit {
   search = signal('');
   loadError = signal(false);
 
+  // ── Model refresh state ─────────────────────────────────────────────────
+  refreshing = signal(false);
+  refreshError = signal(false);
+
   // ── Expand state ─────────────────────────────────────────────────────────
   expandedId = signal<number | null>(null);
   providerModels = signal<Record<number, ModelConnection[]>>({});
@@ -168,6 +206,15 @@ export class Providers implements OnInit {
   addPrivacyLevel = signal<PrivacyLevel>('CLOUD_IN_EU_BY_US_PROVIDER');
   addLoading = signal(false);
   addError = signal('');
+
+  // ── Created-provider key modal ───────────────────────────────────────────
+  // Logosnode providers are given a generated shared key on creation; the
+  // operator must be able to copy it to configure the worker node, so we
+  // surface it in a follow-up modal once the add flow succeeds.
+  createdKeyOpen = signal(false);
+  createdKeyName = signal('');
+  createdKey = signal('');
+  createdKeyCopied = signal(false);
 
   // ── Edit modal ────────────────────────────────────────────────────────────
   editTarget = signal<Provider | null>(null);
@@ -247,12 +294,100 @@ export class Providers implements OnInit {
     }
   }
 
+  // ── Model refresh ─────────────────────────────────────────────────────────
+  // The orchestrator's cloud model sync is scheduled, not awaited: after the
+  // trigger returns it scrapes every cloud upstream in turn, so the trigger
+  // answer is not completion. Neither is an unchanged model list — the
+  // first write of a pass can land at any moment, and a mid-pass snapshot
+  // can look stable while a later provider is still ahead. The explicit
+  // signal is the orchestrator's pass-in-flight status: poll it while
+  // refetching the model lists, and stop only once it explicitly reports
+  // done — a status that cannot be read (timeout, rolling-deploy 404) is
+  // unknown, not done, and is retried on the next round. The rounds cap
+  // bounds both a stuck upstream (one provider may hold the pass for its
+  // full 30 s request timeout) and a status that never becomes readable.
+  private static readonly REFRESH_POLL_INTERVAL_MS = 2000;
+  private static readonly REFRESH_POLL_MAX_ROUNDS = 45;
+
+  private refreshPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async refreshModels(): Promise<void> {
+    if (this.refreshing()) return;
+    this.refreshing.set(true);
+    this.refreshError.set(false);
+    try {
+      await this.providerService.refreshModels();
+      await this.waitForSyncToFinish();
+    } catch {
+      this.refreshError.set(true);
+    } finally {
+      this.refreshPollTimer = null;
+      this.refreshing.set(false);
+    }
+  }
+
+  ngOnDestroy(): void {
+    if (this.refreshPollTimer !== null) clearTimeout(this.refreshPollTimer);
+  }
+
+  private async waitForSyncToFinish(): Promise<void> {
+    for (let round = 0; round < Providers.REFRESH_POLL_MAX_ROUNDS; round++) {
+      // Status first: when the pass is already done (e.g. there are no
+      // cloud providers at all), the refetch below is the final state and
+      // no further rounds are needed.
+      const running = await this.syncStatus();
+      await this.refetchModelLists();
+      // Only an explicit "not running" from the orchestrator ends the wait.
+      // A status that could not be read is unknown, not done — it must not
+      // report an accepted sync as settled while the pass may still be
+      // writing — so it is retried on the next round.
+      if (running === false) return;
+      await new Promise<void>((resolve) => {
+        this.refreshPollTimer = setTimeout(resolve, Providers.REFRESH_POLL_INTERVAL_MS);
+      });
+    }
+    // The cap ran out with the pass still running, or its status still
+    // unreadable (a stuck upstream, a rolling deploy): stop waiting and
+    // release the button — the next interval pass catches up.
+  }
+
+  /**
+   * true/false when the orchestrator answered, null when its status could
+   * not be read (network failure, or a response without a usable
+   * `running` field). Only an explicit false ends the refresh wait.
+   */
+  private async syncStatus(): Promise<boolean | null> {
+    try {
+      const { running } = await this.providerService.modelSyncStatus();
+      return running === true || running === false ? running : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Refetch the model lists this page shows — the global model catalogue and,
+   * for an expanded row, that provider's connections. Both move
+   * independently: the sync writes per provider, preserving the links the
+   * operator configured by hand.
+   */
+  private async refetchModelLists(): Promise<void> {
+    const models = await this.modelService.getModels();
+    this.allModels.set(models);
+    const expanded = this.expandedId();
+    if (expanded !== null) {
+      const conns = await this.providerService.getProviderModels(expanded);
+      this.providerModels.update((m) => ({ ...m, [expanded]: conns }));
+    }
+  }
+
   formatPrivacy(level: PrivacyLevel): string {
     const map: Record<PrivacyLevel, string> = {
       LOCAL: 'LOCAL',
       CLOUD_IN_EU_BY_US_PROVIDER: 'EU (US)',
       CLOUD_NOT_IN_EU_BY_US_PROVIDER: 'Non-EU (US)',
       CLOUD_IN_EU_BY_EU_PROVIDER: 'EU (EU)',
+      THIRD_PARTY_HARDWARE: 'Third-party HW',
     };
     return map[level] ?? level;
   }
@@ -345,14 +480,41 @@ export class Providers implements OnInit {
       privacy_level: this.addPrivacyLevel(),
     };
     try {
-      await this.providerService.addProvider(payload);
+      const res = await this.providerService.addProvider(payload);
       await this.fetchProviders();
       this.addOpen.set(false);
+      const generatedKey: string = (res && (res as { api_key?: string }).api_key) || '';
+      // Only surface the key when we actually generated one, i.e. the operator
+      // left the key field empty. An operator-supplied key is echoed back by the
+      // application server too, and there is nothing new to show for that case.
+      if (generatedKey && payload.api_key === undefined) {
+        this.createdKeyName.set(payload.name);
+        this.createdKey.set(generatedKey);
+        this.createdKeyCopied.set(false);
+        this.createdKeyOpen.set(true);
+      }
     } catch {
       this.addError.set('Failed to add provider, please try again.');
     } finally {
       this.addLoading.set(false);
     }
+  }
+
+  async copyCreatedKey(): Promise<void> {
+    const key = this.createdKey();
+    if (!key) return;
+    try {
+      await navigator.clipboard.writeText(key);
+      this.createdKeyCopied.set(true);
+      setTimeout(() => this.createdKeyCopied.set(false), 2000);
+    } catch {
+      // Clipboard unavailable (e.g. non-secure context) — the key is still
+      // visible in the field above for manual copying.
+    }
+  }
+
+  closeCreatedKeyDialog(): void {
+    this.createdKeyOpen.set(false);
   }
 
   // ── Edit flow ─────────────────────────────────────────────────────────────
@@ -392,7 +554,7 @@ export class Providers implements OnInit {
       auth_name: this.editAuthName().trim(),
       auth_format: this.editAuthFormat().trim(),
       provider_type: this.editProviderType(),
-      // Send 'none' literally — the backend treats null as "leave unchanged",
+      // Send 'none' literally — the application server treats null as "leave unchanged",
       // so mapping it to null makes resetting the cloud type a silent no-op.
       cloud_provider_type: this.editCloudProviderType(),
       privacy_level: this.editPrivacyLevel(),

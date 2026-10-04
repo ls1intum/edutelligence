@@ -11,14 +11,18 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /code
 
 # Poetry
-RUN pip install --no-cache-dir poetry==1.5.0
+ARG POETRY_VERSION=2.4.1
+ENV POETRY_HOME=/opt/poetry
+ENV PATH="/opt/poetry/bin:${PATH}"
+RUN python -m venv "${POETRY_HOME}" \
+    && "${POETRY_HOME}/bin/pip" install --no-cache-dir "poetry==${POETRY_VERSION}"
 
 # Dependencies
 COPY pyproject.toml poetry.lock ./
 # install dependencies
 RUN poetry config virtualenvs.create true \
     && poetry config virtualenvs.in-project true \
-    && poetry install --no-interaction --no-ansi
+    && poetry install --no-root --no-interaction --no-ansi
 
 # Project files
 COPY . ./

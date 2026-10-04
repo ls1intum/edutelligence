@@ -205,6 +205,7 @@ sa = _make_module(
         "Float": _noop,
         "Boolean": _noop,
         "Numeric": _noop,
+        "LargeBinary": _noop,
         "Enum": _noop,
         "JSON": _noop,
         "TIMESTAMP": _noop,
@@ -259,21 +260,7 @@ _du = _make_module("dateutil")
 _make_submodule(_du, "parser", {"isoparse": _noop, "parse": _noop})
 
 # ---------------------------------------------------------------------------
-# 10. aiohttp  (async HTTP for Ollama monitoring)
-# ---------------------------------------------------------------------------
-
-_aiohttp = _make_module(
-    "aiohttp",
-    {
-        "ClientSession": _noop,
-        "ClientTimeout": _noop,
-        "TCPConnector": _noop,
-        "ClientError": type("ClientError", (Exception,), {}),
-    },
-)
-
-# ---------------------------------------------------------------------------
-# 11. matplotlib  (plotting — only used in test_model_data.py)
+# 10. matplotlib  (plotting — only used in test_model_data.py)
 # ---------------------------------------------------------------------------
 
 _mpl = _make_module("matplotlib")
@@ -301,7 +288,37 @@ _make_submodule(
 # ---------------------------------------------------------------------------
 
 _hf = _make_module("huggingface_hub")
-_make_submodule(_hf, "utils", {"disable_progress_bars": _noop})
+_make_submodule(
+    _hf,
+    "utils",
+    {
+        "disable_progress_bars": _noop,
+        "validate_repo_id": _noop,
+        "build_hf_headers": lambda *, token=None, **_: {"authorization": f"Bearer {token}"} if token else {},
+        "hf_raise_for_status": lambda response, endpoint_name=None: response.raise_for_status(),
+    },
+)
+_make_submodule(_hf, "constants", {"ENDPOINT": "https://huggingface.co"})
+
+
+class _HfRepositoryNotFoundError(Exception):
+    pass
+
+
+class _HfGatedRepoError(_HfRepositoryNotFoundError):
+    pass
+
+
+_make_submodule(
+    _hf,
+    "errors",
+    {
+        "HFValidationError": type("HFValidationError", (ValueError,), {}),
+        "RepositoryNotFoundError": _HfRepositoryNotFoundError,
+        "GatedRepoError": _HfGatedRepoError,
+    },
+)
+
 
 _transformers = _make_module("transformers")
 _transformers_utils = _make_submodule(_transformers, "utils")
@@ -313,3 +330,35 @@ _make_submodule(
         "disable_progress_bar": _noop,
     },
 )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _clear_ref_cache():
+    """The short-TTL ref cache  is process-global: clear it around
+    every test so one test's cached rows never leak into the next."""
+    from logos import refcache
+
+    refcache.get_ref_cache().clear()
+    yield
+    refcache.get_ref_cache().clear()
+
+
+@pytest.fixture(autouse=True)
+def _sync_write_queue():
+    """The write-behind queue  runs on a background thread in
+    production, but tests must observe DB writes synchronously (they assert on
+    them right after the handler returns). Install a sync-mode queue — one
+    whose ``enqueue`` runs the write inline — around every test. The queue is
+    fresh per test so a prior test's counter (flushed/dropped) never leaks."""
+    from logos import write_queue
+
+    write_queue.set_write_queue(write_queue.WriteQueue(sync=True))
+    yield
+    write_queue.set_write_queue(write_queue.WriteQueue(sync=True))

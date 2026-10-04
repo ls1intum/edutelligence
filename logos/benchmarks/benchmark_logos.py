@@ -154,7 +154,7 @@ def _load_config_attr(attr: str, default):
 class GPUTracker:
     """
     GPU energy tracking via local NVML calls.
-    Use when the GPU is on the same machine as this script (e.g. direct Ollama).
+    Use when the GPU is on the same machine as this script (direct-backend scenarios).
     """
 
     def __init__(self, device_indices: list[int], poll_interval_ms: float = 100.0):
@@ -887,12 +887,12 @@ class RequestResult:
     energy_wall_j: Optional[float] = None
     scenario: str = ""
     # Scheduler view at decision time, from Logos response headers
-    # (X-Logos-Warmth-State / X-Logos-ETTFT-Ms); None for direct Ollama.
+    # (X-Logos-Warmth-State / X-Logos-ETTFT-Ms); None for direct backends.
     # warmth_state: -1 = cold, 0 = warm but not running, 1+x = running with
     # x requests queued.
     warmth_state: Optional[int] = None
     ettft_ms: Optional[float] = None
-    # Full generated text and the backend's finish_reason ("stop", "length", …).
+    # Full generated text and the application server's finish_reason ("stop", "length", …).
     # Logged so truncated/empty/garbage responses are visible after the run —
     # e.g. finish_reason="length" means the answer was cut off by a token cap.
     response_text: str = ""
@@ -1014,6 +1014,23 @@ def _raise_fd_limit() -> None:
         print(f"  [fd] could not raise RLIMIT_NOFILE (soft={soft}): {exc}", flush=True)
 
 
+def _error_from_sse_chunk(chunk: dict) -> Optional[str]:
+    """Extract a pipeline error message from one decoded SSE JSON object.
+
+    Logos and OpenAI-compatible servers often report mid-stream failures as
+    HTTP 200 with an error object in the body. Anthropic uses
+    ``{"type":"error","error":{...}}``.
+    """
+    err_obj = chunk.get("error")
+    if isinstance(err_obj, dict):
+        return str(err_obj.get("message") or err_obj.get("type") or err_obj)[:500]
+    if isinstance(err_obj, str) and err_obj.strip():
+        return err_obj.strip()[:500]
+    if chunk.get("type") == "error":
+        return str(chunk.get("message") or chunk)[:500]
+    return None
+
+
 async def _dispatch(
     client: httpx.AsyncClient,
     base_url: str,
@@ -1036,10 +1053,10 @@ async def _dispatch(
     # vanilla OpenAI-compatible servers) only emit it when explicitly asked —
     # without this, rows would be missing token counts (and derived metrics).
     payload = {**entry.body, "stream": True, "stream_options": {"include_usage": True}}
-    # No completion-token limit: a falsy/absent max_tokens means "let the backend
+    # No completion-token limit: a falsy/absent max_tokens means "let the application server
     # decide when to stop". Strip it defensively so a stale workload CSV that still
-    # carries max_tokens=512 can't silently truncate answers (issue: completion
-    # tokens pinned to exactly the cap). See benchmark_config.GSM8K_MAX_TOKENS.
+    # carries max_tokens=512 can't silently truncate answers when completion
+    # tokens are pinned to exactly the cap. See benchmark_config.GSM8K_MAX_TOKENS.
     if not payload.get("max_tokens"):
         payload.pop("max_tokens", None)
 
@@ -1126,6 +1143,18 @@ async def _dispatch(
 
             async for raw in resp.aiter_lines():
                 line = raw.strip()
+                if line.startswith(": logos-schedule"):
+                    # A streaming request commits its response before the
+                    # scheduling decision is known, so the ETTFT/warmth values
+                    # ride in the stream as a comment (they no longer appear in
+                    # the response headers).
+                    for kv in line.split()[1:]:
+                        name, _, value = kv.partition("=")
+                        if name == "x-logos-warmth-state":
+                            warmth_state = _parse_int_or_none(value)
+                        elif name == "x-logos-ettft-ms":
+                            ettft_ms = _parse_float_or_none(value)
+                    continue
                 if not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
@@ -1135,6 +1164,11 @@ async def _dispatch(
                     chunk = json.loads(data)
                 except json.JSONDecodeError:
                     continue
+
+                # Pipeline failures often ride HTTP 200 with an SSE error object.
+                # Without this, the run records success=True and empty error.
+                if error is None:
+                    error = _error_from_sse_chunk(chunk)
 
                 if not model:
                     model = chunk.get("model", "")
@@ -2848,8 +2882,8 @@ def _stop_workernode_via_ssh(
 
     Before tearing the container down, dump its full docker logs to
     ``{workernode_dir}/saved_logs/worker-<UTC timestamp>.log`` on the GPU host so
-    the worker-side record survives container removal (e.g. when the ollama
-    scenario replaces it) and can be analyzed after the run.
+    the worker-side record survives container removal and can be analyzed after
+    the run.
     """
     sudo = "sudo " if use_sudo else ""
     save_dir = f"{workernode_dir}/saved_logs"
@@ -2897,43 +2931,6 @@ def _start_workernode_via_ssh(
         print(f"  [logos] {host}: workernode started.")
 
 
-def _stop_logos_workernodes_if_running_via_ssh(
-    hosts: list[str],
-    ssh_user: str,
-    ssh_key: Optional[str],
-    workernode_dir: str,
-    use_sudo: bool,
-    relay_host: Optional[str] = None,
-    relay_user: Optional[str] = None,
-) -> None:
-    """Stop logos-workernode containers if any are running on the given hosts.
-
-    Called before starting Ollama when --only-ollama is set, so the workernode
-    doesn't hold GPU memory that Ollama needs. Safe to call even when the
-    workernode directory does not exist on the host.
-    """
-    sudo = "sudo " if use_sudo else ""
-    remote_cmd = (
-        f"if [ -d {shlex.quote(workernode_dir)} ]; then "
-        f"  cd {shlex.quote(workernode_dir)} && "
-        f"  running=$({sudo}docker compose ps -q 2>/dev/null | tr -d '[:space:]') && "
-        f'  if [ -n "$running" ]; then '
-        f"    echo '[ollama] logos-workernode containers found — stopping ...'; "
-        f"    {sudo}docker compose down; "
-        f"  else "
-        f"    echo '[ollama] No logos-workernode containers running.'; "
-        f"  fi; "
-        f"else "
-        f"  echo '[ollama] Workernode dir not found — skipping workernode check.'; "
-        f"fi"
-    )
-    for host in hosts:
-        print(f"  [ollama] {host}: Checking for running logos-workernode containers ...")
-        subprocess.run(
-            _build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user)
-        )  # non-fatal — best-effort only
-
-
 # ── Benchmark config patching (filter models + disable RAM cache) ──────────
 
 
@@ -2951,7 +2948,7 @@ def _apply_benchmark_workernode_config_via_ssh(
     """Back up config.yml and .env, then apply benchmark-only patches:
 
     config.yml: filter logos.capabilities_models to benchmark_models only.
-    .env: set OLLAMA_MODELS_MOUNT to local_cache_path (if given), clear
+    .env: set LOGOS_MODELS_MOUNT to local_cache_path (if given), clear
           LOGOS_TMPFS_CACHE_PATH and TMPFS_SIZE=0 to disable the RAM pre-pop
           that otherwise fills 400 GB of RAM before any lane can start.
     """
@@ -3043,16 +3040,30 @@ def _apply_benchmark_workernode_config_via_ssh(
 
         lines = env_res.stdout.splitlines()
         new_lines = []
+        models_mount_present = False
         for line in lines:
             stripped = line.strip()
             if stripped.startswith("LOGOS_TMPFS_CACHE_PATH="):
                 new_lines.append("LOGOS_TMPFS_CACHE_PATH=")
             elif stripped.startswith("TMPFS_SIZE="):
                 new_lines.append("TMPFS_SIZE=0")
-            elif local_cache_path and stripped.startswith("OLLAMA_MODELS_MOUNT="):
-                new_lines.append(f"OLLAMA_MODELS_MOUNT={local_cache_path}")
+            elif stripped.startswith("LOGOS_MODELS_MOUNT="):
+                # Compose resolves LOGOS_MODELS_MOUNT before the legacy
+                # OLLAMA_MODELS_MOUNT, so this line is authoritative for the
+                # mount the benchmark actually uses. Set it when a local cache
+                # path is given, keep it unchanged otherwise.
+                if local_cache_path:
+                    new_lines.append(f"LOGOS_MODELS_MOUNT={local_cache_path}")
+                else:
+                    new_lines.append(line)
+                models_mount_present = True
             else:
                 new_lines.append(line)
+        if local_cache_path and not models_mount_present:
+            # No LOGOS_MODELS_MOUNT line existed — e.g. a legacy-only .env that
+            # carries only OLLAMA_MODELS_MOUNT. Append one, or the old mount
+            # would stay active and the override would be silently ignored.
+            new_lines.append(f"LOGOS_MODELS_MOUNT={local_cache_path}")
         new_env = "\n".join(new_lines) + "\n"
 
         env_write_res = subprocess.run(
@@ -3071,7 +3082,7 @@ def _apply_benchmark_workernode_config_via_ssh(
             raise RuntimeError(f"  [config] {host}: Cannot write .env: {env_write_res.stderr.decode().strip()}")
         msg = "disabled RAM cache (TMPFS_SIZE=0, LOGOS_TMPFS_CACHE_PATH=)"
         if local_cache_path:
-            msg += f", OLLAMA_MODELS_MOUNT={local_cache_path}"
+            msg += f", LOGOS_MODELS_MOUNT={local_cache_path}"
         print(f"  [config] {host}: .env: {msg}")
 
 
@@ -3540,7 +3551,7 @@ async def _ensure_sllm_models(
             print(f"  [sllm] '{model}' already deployed — skipping.")
             continue
         # register downloads + converts the model onto a worker on first deploy
-        # (vLLM backend), so the first call for a large model can take minutes.
+        # (vLLM application server), so the first call for a large model can take minutes.
         num_gpus = _SLLM_MODEL_NUM_GPUS.get(model, _SLLM_DEFAULT_NUM_GPUS)
         print(
             f"  [sllm] Deploying '{model}' (backend={_SLLM_BACKEND}, num_gpus={num_gpus}; "
@@ -3574,17 +3585,17 @@ async def _ensure_sllm_models(
 # ── NVIDIA Dynamo (alternative serving framework) ──────────────────────────
 #
 # Dynamo (github.com/ai-dynamo/dynamo) is an OpenAI-compatible distributed
-# inference frontend over vLLM workers, coordinated by etcd + NATS. Unlike SLLM
+# inference gateway over vLLM workers, coordinated by etcd + NATS. Unlike SLLM
 # it loads HuggingFace models NATIVELY through vLLM (no custom checkpoint
 # conversion), so gemma-3 / MoE models that broke SLLM serve fine.
 #
 # Topology this benchmark uses (multi-node, all on the GPU nodes — nothing on the
-# benchmark host): etcd + NATS + the OpenAI frontend run on the FIRST GPU host
+# benchmark host): etcd + NATS + the OpenAI user interface run on the FIRST GPU host
 # ("head"); one vLLM worker per model is spread across the GPU hosts, each pinned
 # to its own GPU(s) and pointed at the head's etcd/NATS. The benchmark dispatches
-# to http://<head>:<frontend port>. Requires (host config, set up out-of-band like
+# to http://<head>:<gateway port>. Requires (host config, set up out-of-band like
 # any firewall change): the head allows the other GPU node + the benchmark host
-# (frontend port) through UFW, and each GPU node allows its peer.
+# (gateway port) through UFW, and each GPU node allows its peer.
 _DYNAMO_IMAGE = "nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.2.1"
 _DYNAMO_FRONTEND_PORT = 8000
 _DYNAMO_ETCD_PORT = 2379
@@ -3732,7 +3743,7 @@ def _stop_dynamo_via_ssh(
 ) -> None:
     """Stop all Dynamo containers: workers on every host, infra on the head."""
     sudo = "sudo " if use_sudo else ""
-    # Remove every dyn-* container (workers on all hosts; frontend/etcd/nats on head).
+    # Remove every dyn-* container (workers on all hosts; UI/etcd/nats on head).
     remote = f"for c in $({sudo}docker ps -aq --filter name=dyn-); do {sudo}docker rm -f $c >/dev/null 2>&1; done; true"
     for host in hosts:
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote, relay_host, relay_user))
@@ -3768,7 +3779,7 @@ async def _wait_for_dynamo(url: str, expected_models: list[str], timeout_s: floa
 
 # ── Ray Serve LLM (dynamic multi-model serving) ────────────────────────────
 #
-# Ray Serve LLM is an OpenAI-compatible vLLM frontend that does what Dynamo
+# Ray Serve LLM is an OpenAI-compatible vLLM gateway that does what Dynamo
 # couldn't: serve MORE models than fit on the GPUs by autoscaling each model to
 # zero when idle (min_replicas=0) and loading it on demand — so all 5 benchmark
 # models share the 4-GPU cluster via load/evict (validated: each cold-starts in
@@ -4356,26 +4367,6 @@ def _admin_base_from_url(logos_url: str, admin_port: int) -> str:
     return f"https://{host}:{admin_port}"
 
 
-async def _discover_provider_names(logos_url: str, logos_key: str) -> "dict[int, str]":
-    """Best-effort {provider_id: friendly_name} from the (non-root) vram-stats
-    endpoint, so the live lane poller works (and charts keep human names like
-    deimama/deipapa) even when --calibration-provider-ids was not given."""
-    url = f"{logos_url.rstrip('/')}/logosdb/get_ollama_vram_stats"
-    headers = {"logos_key": logos_key, "Content-Type": "application/json"}
-    names: "dict[int, str]" = {}
-    try:
-        async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(10.0)) as client:
-            resp = await client.post(url, json={"after_snapshot_id": 0}, headers=headers)
-            if resp.status_code == 200:
-                for prov in resp.json().get("providers") or []:
-                    pid = prov.get("provider_id")
-                    if isinstance(pid, int):
-                        names[pid] = str(prov.get("name") or f"provider-{pid}")
-    except Exception:
-        pass
-    return names
-
-
 async def _poll_model_states(
     admin_base: str,
     logos_key: str,
@@ -4748,8 +4739,7 @@ async def _benchmark_scenario(
     _poll_task: Optional[asyncio.Task] = None
     if logos_key is not None:
         admin_base = _admin_base_from_url(getattr(args, "logos_url", base_url) or base_url, args.logos_admin_port)
-        provider_names = await _discover_provider_names(base_url, logos_key)
-        provider_ids = list(getattr(args, "calibration_provider_ids", None) or []) or sorted(provider_names)
+        provider_ids = list(getattr(args, "calibration_provider_ids", None) or [])
         if provider_ids:
             print(f"  [timeline] polling live lane state for provider(s) {provider_ids} via {admin_base}")
             _poll_task = asyncio.create_task(
@@ -4760,13 +4750,12 @@ async def _benchmark_scenario(
                     t_run_start,
                     state_snapshots,
                     diag=_poll_diag,
-                    provider_names=provider_names,
                 )
             )
         else:
             print(
-                "  [timeline] WARNING: no provider IDs found (none passed and vram-stats "
-                "discovery returned none) — model_timeline.csv will be empty.",
+                "  [timeline] WARNING: no provider IDs found (pass "
+                "--calibration-provider-ids) — model_timeline.csv will be empty.",
                 file=sys.stderr,
             )
 
@@ -4853,8 +4842,8 @@ async def _benchmark_scenario(
 
     summary = compute_summary(results, scenario, tracker.method)
     # Authoritative scenario energy: integrate the power trace over the whole run
-    # and attribute per-request/token by simple division (issue: per-request
-    # windows over-count under concurrency).
+    # and attribute per-request/token by simple division; per-request windows
+    # over-count under concurrency.
     n_ok = summary["successful_requests"]
     n_tokens = summary["total_completion_tokens"]
     summary.update(_overall_energy_metrics(tracker, t_run_start, t_run_end, n_ok, n_tokens))
@@ -5008,7 +4997,7 @@ def _resolve_patterns(raw: Optional[str]) -> list[str]:
 #   - sllm: multi-node Ray serving never converged here (gemma-3 conversion drops a
 #     buffer, qwen3.6 MoE unsupported by the image, fragile instance bring-up).
 #   - dynamo: serves fine but CAN'T over-provision — 5 models need 6 GPU-slots on
-#     4 GPUs and its Planner has no working scale-to-zero (issue #6985), so it can't
+#     4 GPUs and its Planner has no working scale-to-zero, so it can't
 #     share GPUs across more models than fit. Not a fit for this cluster.
 # Both remain runnable explicitly, e.g. `--scenarios dynamo`.
 _ALL_SCENARIOS = ["logos-nosleep", "logos-sleep", "ray", "kserve"]
@@ -5096,9 +5085,9 @@ def _wipe_calibration_and_weights_via_ssh(
         (``calibration_failed_commands.txt`` / ``calibration_succeeded_commands.txt``)
         and ``calibration_unsupported_models.txt``.
       - everything under the model weight cache (``weight_cache_path``, i.e. the
-        ``OLLAMA_MODELS_MOUNT`` vLLM downloads into) so every model re-downloads
+        ``LOGOS_MODELS_MOUNT`` vLLM downloads into) so every model re-downloads
         from scratch. When ``weight_cache_path`` is not given it is read from
-        ``{workernode_dir}/.env`` (``OLLAMA_MODELS_MOUNT``).
+        ``{workernode_dir}/.env`` (``LOGOS_MODELS_MOUNT``).
     """
     sudo = "sudo " if use_sudo else ""
     data_dir = shlex.quote(f"{workernode_dir}/data")
@@ -5116,12 +5105,18 @@ def _wipe_calibration_and_weights_via_ssh(
             )
             weight_note = f" + weights ({weight_cache_path})"
         else:
+            # Prefer the new LOGOS_MODELS_MOUNT; fall back to the legacy
+            # OLLAMA_MODELS_MOUNT so a not-yet-migrated .env still wipes the
+            # weights Compose actually mounted (the same one-release fallback
+            # the compose file uses).
             parts.append(
-                f'{sudo}sh -c \'wp=$(grep -E "^OLLAMA_MODELS_MOUNT=" {env_path} 2>/dev/null '
+                f'{sudo}sh -c \'wp=$(grep -E "^LOGOS_MODELS_MOUNT=" {env_path} 2>/dev/null '
+                f'| head -1 | cut -d= -f2- | tr -d \\"); '
+                f'[ -n "$wp" ] || wp=$(grep -E "^OLLAMA_MODELS_MOUNT=" {env_path} 2>/dev/null '
                 f'| head -1 | cut -d= -f2- | tr -d \\"); '
                 f'if [ -n "$wp" ] && [ "$wp" != "/" ]; then rm -rf "$wp"/* "$wp"/.[!.]* 2>/dev/null; fi; true\''
             )
-            weight_note = " + weights (from .env OLLAMA_MODELS_MOUNT)"
+            weight_note = " + weights (from .env LOGOS_MODELS_MOUNT/OLLAMA_MODELS_MOUNT)"
         remote_cmd = " ; ".join(parts)
         print(f"  [calib] {host}: wiping calibration state + model weights ...")
         result = subprocess.run(_build_ssh_cmd(host, ssh_user, ssh_key, remote_cmd, relay_host, relay_user))
@@ -6740,7 +6735,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path on the GPU nodes to redirect the model cache during the benchmark "
         "(e.g. /mnt/nvme/model_cache). When set, the benchmark config patch writes this "
         "path into .env so vLLM uses local NVMe instead of Ceph. "
-        "Omit to leave the existing OLLAMA_MODELS_MOUNT unchanged.",
+        "Omit to leave the existing LOGOS_MODELS_MOUNT unchanged.",
     )
     svc_grp.add_argument(
         "--reset-calibration",

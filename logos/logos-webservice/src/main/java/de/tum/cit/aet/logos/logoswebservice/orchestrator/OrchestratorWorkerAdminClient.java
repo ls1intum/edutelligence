@@ -35,6 +35,10 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/logosnode/calibrate_uncalibrated", Map.of("provider_id", providerId));
     }
 
+    public ResponseEntity<Map> stopCalibration(int providerId) {
+        return post("/internal/logosnode/stop_calibration", Map.of("provider_id", providerId));
+    }
+
     public ResponseEntity<Map> deleteLane(int providerId, String laneId) {
         return post("/internal/logosnode/lanes/delete", Map.of("provider_id", providerId, "lane_id", laneId));
     }
@@ -48,12 +52,55 @@ public class OrchestratorWorkerAdminClient {
     }
 
     /**
+     * Takes a busy lane offline without dropping its in-flight requests: the
+     * orchestrator marks the lane out of the rotation, waits for the in-flight
+     * requests to finish, and only then sleeps the lane (or unloads it when
+     * the host cannot hold a resident sleeper). The wait plus the sleep
+     * command stay under this client's read timeout, so a plain post is
+     * enough.
+     */
+    public ResponseEntity<Map> drainLane(int providerId, String laneId) {
+        return post("/internal/logosnode/lanes/drain", Map.of("provider_id", providerId, "lane_id", laneId));
+    }
+
+    /**
      * Requests a lane load. The orchestrator only accepts the request and loads
      * in the background — a model can take minutes — so this returns as quickly
      * as any other admin call and this client's read timeout is enough.
      */
     public ResponseEntity<Map> addLane(int providerId, Map<String, Object> lane) {
         return post("/internal/logosnode/lanes/add", Map.of("provider_id", providerId, "lane", lane));
+    }
+
+    /**
+     * Asks the orchestrator for the outcome of the most recent manual load of a
+     * model. The load itself runs in the background after addLane's 202, and a
+     * refusal there (e.g. not enough VRAM) is otherwise only a log line — the
+     * statistics UI polls this while its "Loading" note is up.
+     */
+    public ResponseEntity<Map> getLaneLoadStatus(int providerId, String model) {
+        return post("/internal/logosnode/lanes/load_status", Map.of("provider_id", providerId, "model", model));
+    }
+
+    public ResponseEntity<Map> startModelBenchmark(int modelProviderId, int sampleSize, int maxOutputTokens,
+                                                   Map<String, Object> settings) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>(settings);
+        body.put("model_provider_id", modelProviderId);
+        body.put("samples", sampleSize);
+        body.put("max_output_tokens", maxOutputTokens);
+        return post("/internal/model_benchmarks/run", body);
+    }
+
+    public ResponseEntity<Map> benchmarkDatasets(String operation, Map<String, Object> body) {
+        return post("/internal/model_benchmarks/datasets/" + operation, body);
+    }
+
+    public ResponseEntity<Map> benchmarkLimits(Map<String, Object> body) {
+        return post("/internal/model_benchmarks/limits", body);
+    }
+
+    public ResponseEntity<Map> cancelModelBenchmark(int jobId) {
+        return post("/internal/model_benchmarks/jobs/" + jobId + "/cancel", Map.of());
     }
 
     private ResponseEntity<Map> post(String path, Map<String, Object> body) {

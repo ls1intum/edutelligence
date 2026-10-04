@@ -10,6 +10,7 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlMergeMode;
 import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -35,7 +36,121 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 class RequestLogControllerTest {
 
     @Autowired MockMvc mvc;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @MockitoBean JwtDecoder jwtDecoder;
+
+    @Test
+    void requestPayloads_returnsStoredJsonOnlyOnDemand() throws Exception {
+        jdbc.update("UPDATE log_entry SET input_payload = CAST(? AS jsonb), response_payload = CAST(? AS jsonb) WHERE request_id = ?",
+            "{\"messages\":[{\"content\":\"Hello\"}]}", "{\"answer\":\"Hi\"}", "req-aaa-111");
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"request_id\":\"req-aaa-111\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.input_payload.messages[0].content").value("Hello"))
+            .andExpect(jsonPath("$.response_payload.answer").value("Hi"));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.requests[*].input_payload").isEmpty())
+            .andExpect(jsonPath("$.requests[*].response_payload").isEmpty());
+    }
+
+    @Test
+    void requestPayloads_preservesMissingAndStreamingContent() throws Exception {
+        jdbc.update("UPDATE log_entry SET response_payload = CAST(? AS jsonb) WHERE request_id = ?",
+            "\"data: chunk\\n\\ndata: [DONE]\"", "req-aaa-111");
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"request_id\":\"req-aaa-111\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.input_payload").value(org.hamcrest.Matchers.nullValue()))
+            .andExpect(jsonPath("$.response_payload").value("data: chunk\n\ndata: [DONE]"));
+    }
+
+    @Test
+    void requestPayloads_validatesRequestAndRequiresAdmin() throws Exception {
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{}"))
+            .andExpect(status().isBadRequest());
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"request_id\":\"missing\"}"))
+            .andExpect(status().isNotFound());
+        mvc.perform(post("/logosdb/request_payloads").with(TestJwt.testUser())
+                .contentType("application/json").content("{\"request_id\":\"req-aaa-111\"}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/request_payloads")
+                .contentType("application/json").content("{\"request_id\":\"req-aaa-111\"}"))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void latestRequests_combinesModelProviderAndStatusSelectionsWithPaging() throws Exception {
+        jdbc.update("INSERT INTO providers (id, name, base_url, provider_type, privacy_level, auth_name, auth_format) "
+            + "VALUES (6002, 'second-provider', 'https://example.org', 'cloud', 'LOCAL', 'Authorization', 'Bearer {}')");
+        jdbc.update("UPDATE log_entry SET model_id = 5002, provider_id = 6002 WHERE request_id = 'req-bbb-222'");
+        String page1 = mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_ids\":[5001,5002],\"provider_ids\":[6001,6002],\"status\":\"finished\",\"limit\":1}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(2))
+            .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"))
+            .andExpect(jsonPath("$.has_more").value(true))
+            .andReturn().getResponse().getContentAsString();
+        var cursor = new ObjectMapper().readTree(page1).path("next_cursor");
+        var body = new java.util.LinkedHashMap<String, Object>();
+        body.put("model_ids", java.util.List.of(5001, 5002));
+        body.put("provider_ids", java.util.List.of(6001, 6002));
+        body.put("status", "finished");
+        body.put("limit", 1);
+        body.put("cursor_ts", cursor.path("ts").asText());
+        body.put("cursor_id", cursor.path("request_id").asText());
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content(new ObjectMapper().writeValueAsString(body)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(2))
+            .andExpect(jsonPath("$.requests[0].request_id").value("req-aaa-111"))
+            .andExpect(jsonPath("$.has_more").value(false));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"model_ids\":[5001],\"provider_ids\":[6001]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(1))
+            .andExpect(jsonPath("$.requests[0].request_id").value("req-aaa-111"));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"provider_ids\":[6002]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(1))
+            .andExpect(jsonPath("$.requests[0].request_id").value("req-bbb-222"));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"model_ids\":[5001],\"provider_ids\":[6002]}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(0))
+            .andExpect(jsonPath("$.requests").isEmpty());
+    }
+
+    @Test
+    void latestRequests_emptySelectionsAreUnfilteredAndUnknownIdsMatchNothing() throws Exception {
+        for (String body : java.util.List.of("{\"model_ids\":[] ,\"provider_ids\":[]}", "{}")) {
+            mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                    .contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(2));
+        }
+        for (String body : java.util.List.of("{\"model_ids\":[9999]}", "{\"provider_ids\":[9999]}",
+                "{\"model_ids\":[5001],\"provider_ids\":[6001],\"team_id\":2001,\"user_id\":1001,\"status\":\"running\"}")) {
+            mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                    .contentType("application/json").content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.total").value(0))
+                .andExpect(jsonPath("$.requests").isEmpty());
+        }
+    }
+
+    @Test
+    void latestRequests_rejectsMalformedSelections() throws Exception {
+        for (String body : java.util.List.of("{\"model_ids\":\"5001\"}", "{\"provider_ids\":[\"6001\"]}",
+                "{\"model_ids\":[1.5]}", "{\"provider_ids\":[-1]}")) {
+            mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                    .contentType("application/json").content(body))
+                .andExpect(status().isBadRequest());
+        }
+    }
 
     @Test
     void latestRequests_returnsUpToTenRows() throws Exception {
@@ -49,6 +164,11 @@ class RequestLogControllerTest {
            // The feed shows a page of the range, so it reports how big the range is.
            .andExpect(jsonPath("$.total").value(2))
            .andExpect(jsonPath("$.has_more").value(false))
+           // Key type + environment drive the recent-requests caller chips
+           // (developer: team+user; application: team+environment).
+           .andExpect(jsonPath("$.requests[0].api_key_name").value("dev key"))
+           .andExpect(jsonPath("$.requests[0].api_key_type").value("developer"))
+           .andExpect(jsonPath("$.requests[0].environment").value("production"))
            // Nothing left to page to, so no cursor to page with.
            .andExpect(jsonPath("$.next_cursor").isEmpty());
     }
@@ -110,6 +230,74 @@ class RequestLogControllerTest {
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"user_id\": 1002}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests").isEmpty())
+           .andExpect(jsonPath("$.total").value(0));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = {"/sql/seed-operations-status.sql"}, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void latestRequests_filtersByStatus() throws Exception {
+        // One seeded row per lifecycle bucket, merged over the shared seed (whose
+        // two "success" rows are themselves "finished"). Each bucket is the newest
+        // row of its kind, so it leads its filtered page.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"queued\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-queued"))
+           .andExpect(jsonPath("$.total").value(1))
+           .andExpect(jsonPath("$.has_more").value(false));
+
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"running\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-running"))
+           .andExpect(jsonPath("$.total").value(1));
+
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"error\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-error"))
+           .andExpect(jsonPath("$.total").value(1));
+
+        // "finished" is the settled-but-not-failed bucket: the seeded success row
+        // plus the shared seed's two success rows.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"finished\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(3))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-finished"))
+           .andExpect(jsonPath("$.total").value(3));
+
+        // The filters compose: team 2001 sits only on the shared req-aaa-111, so
+        // intersecting it with "finished" narrows to that one row.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"finished\", \"team_id\": 2001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-aaa-111"))
+           .andExpect(jsonPath("$.total").value(1));
+
+        // An unknown state matches no bucket — fail closed, like an unknown
+        // user_id, rather than quietly returning the unfiltered feed.
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"bogus\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.requests").isEmpty())
            .andExpect(jsonPath("$.total").value(0));

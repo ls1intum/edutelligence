@@ -4,7 +4,9 @@ import { firstValueFrom } from 'rxjs';
 import {
   Team, AdminUser, TeamDetail, TeamMember, TeamApiKey,
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
-  ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam,
+  ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
+  TeamRepositoryPayload, TeamWorkflowsResponse, ReviewRecommendationPayload,
+  StoreDeployKeyPayload, AiLlmCallRecommendation,
 } from '../../shared/models/team.model';
 
 export interface TeamMembersResponse {
@@ -46,8 +48,97 @@ export class TeamManagementService {
     return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}`, payload));
   }
 
+  /** Sets the queue priority of a team's traffic (logos_admin only); null unsets it. */
+  updateTeamPriority(teamId: number, priority: number | null): Promise<void> {
+    return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}/priority`, { priority }));
+  }
+
   getTeamApiKeys(teamId: number): Promise<TeamApiKey[]> {
     return firstValueFrom(this.http.get<TeamApiKey[]>(`/api/admin/teams/${teamId}/api-keys`));
+  }
+
+  getTeamRepositories(teamId: number): Promise<TeamRepository[]> {
+    return firstValueFrom(this.http.get<TeamRepository[]>(`/api/admin/teams/${teamId}/repositories`));
+  }
+
+  createTeamRepository(teamId: number, payload: TeamRepositoryPayload): Promise<TeamRepository> {
+    return firstValueFrom(
+      this.http.post<TeamRepository>(`/api/admin/teams/${teamId}/repositories`, payload),
+    );
+  }
+
+  updateTeamRepository(
+    teamId: number,
+    linkId: number,
+    payload: Partial<TeamRepositoryPayload>,
+  ): Promise<TeamRepository> {
+    return firstValueFrom(
+      this.http.patch<TeamRepository>(`/api/admin/teams/${teamId}/repositories/${linkId}`, payload),
+    );
+  }
+
+  deleteTeamRepository(teamId: number, linkId: number): Promise<void> {
+    return firstValueFrom(
+      this.http.delete<void>(`/api/admin/teams/${teamId}/repositories/${linkId}`),
+    );
+  }
+
+  getTeamWorkflows(teamId: number): Promise<TeamWorkflowsResponse> {
+    return firstValueFrom(
+      this.http.get<TeamWorkflowsResponse>(`/api/admin/teams/${teamId}/workflows`),
+    );
+  }
+
+  analyzeRepositoryAgent(teamId: number, linkId: number): Promise<unknown> {
+    return firstValueFrom(
+      this.http.post(`/api/admin/teams/${teamId}/repositories/${linkId}/analyze/agent`, {}),
+    );
+  }
+
+  /** Record which model a recommended call site uses; null clears it. */
+  setRecommendationModel(
+    teamId: number,
+    recId: number,
+    model: string | null,
+  ): Promise<AiLlmCallRecommendation> {
+    return firstValueFrom(
+      this.http.put<AiLlmCallRecommendation>(
+        `/api/admin/teams/${teamId}/recommendations/${recId}/model`,
+        { model },
+      ),
+    );
+  }
+
+  reviewRecommendation(
+    teamId: number,
+    recId: number,
+    payload: ReviewRecommendationPayload,
+  ): Promise<AiLlmCallRecommendation> {
+    return firstValueFrom(
+      this.http.post<AiLlmCallRecommendation>(
+        `/api/admin/teams/${teamId}/recommendations/${recId}/review`,
+        payload,
+      ),
+    );
+  }
+
+  storeRepositoryCredentials(
+    teamId: number,
+    linkId: number,
+    payload: StoreDeployKeyPayload,
+  ): Promise<{ has_credentials: boolean; public_key_fingerprint?: string }> {
+    return firstValueFrom(
+      this.http.put<{ has_credentials: boolean; public_key_fingerprint?: string }>(
+        `/api/admin/teams/${teamId}/repositories/${linkId}/credentials`,
+        payload,
+      ),
+    );
+  }
+
+  revokeRepositoryCredentials(teamId: number, linkId: number): Promise<void> {
+    return firstValueFrom(
+      this.http.delete<void>(`/api/admin/teams/${teamId}/repositories/${linkId}/credentials`),
+    );
   }
 
   getTeamModelPermissions(teamId: number): Promise<number[]> {
@@ -64,6 +155,16 @@ export class TeamManagementService {
 
   setTeamProviderPermissions(teamId: number, providerIds: number[]): Promise<void> {
     return firstValueFrom(this.http.put<void>(`/api/admin/teams/${teamId}/provider-permissions`, { provider_ids: providerIds }));
+  }
+
+  /** Atomic single-grant add (model access page) — no full-set replacement. */
+  addTeamProviderPermission(teamId: number, providerId: number): Promise<void> {
+    return firstValueFrom(this.http.post<void>(`/api/admin/teams/${teamId}/provider-permissions/${providerId}`, {}));
+  }
+
+  /** Atomic single-grant removal (model access page) — no full-set replacement. */
+  removeTeamProviderPermission(teamId: number, providerId: number): Promise<void> {
+    return firstValueFrom(this.http.delete<void>(`/api/admin/teams/${teamId}/provider-permissions/${providerId}`));
   }
 
   getAllProviders(): Promise<ProviderItem[]> {

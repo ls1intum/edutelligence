@@ -14,10 +14,11 @@ import os
 import time
 from datetime import datetime, timezone
 from itertools import combinations
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
+from logos.pipeline.latency_store import LatencyStore
 from logos.sdi.logosnode_facade import LogosNodeSchedulingDataFacade
 from logos.sdi.models import CapacityPlanAction, LaneSchedulerSignals, ModelProfile
 from logos.terminal_logging import (
@@ -115,12 +116,18 @@ class CapacityPlanner:
     LOAD_COMPETITIVE_RATIO = 2.0  # target must beat eviction set by 2×
     DRAIN_COMPETITIVE_RATIO = 3.0  # target must 3× outweigh victim (prevents flip-flop)
 
-    # Speculative replication: when a hot model is already loaded on at least
-    # one worker and other workers have free VRAM + capability, the planner
-    # can opportunistically load a replica without eviction. Caps and floors
-    # below; rollout is behind LOGOS_REPLICATE_ON_FREE_VRAM (default off).
+    # Speculative replication: when a hot model is already loaded, the planner
+    # can opportunistically load another copy — a second lane on the SAME
+    # worker (intra-node scale-out in the demand pass, e.g. two 8B instances
+    # sharing VRAM) or a lane on another worker (the cross-provider pass) —
+    # without eviction. On by default — opt out with
+    # LOGOS_REPLICATE_ON_FREE_VRAM=false; the only other gate is the
+    # sustained-demand floor below.
+    # There is deliberately no hard copy cap: the no-eviction rule bounds each
+    # copy to genuinely free VRAM, growth is at most one lane per worker plus
+    # one cross-provider replica per cycle, and idle replicas are reaped by the
+    # idle path when demand subsides — VRAM is the real limit, not a magic N.
     DEMAND_REPLICATION_FLOOR = 2.0  # twice DEMAND_LOAD_FLOOR — sustained hot
-    MAX_REPLICAS_PER_MODEL = 3  # safety cap; never more than N copies cluster-wide
 
     # Cross-provider best-first ranking: rough seconds-to-serve cost model.
     # Used by _rank_providers_for_demanded_models to pick the cheapest worker
@@ -154,6 +161,15 @@ class CapacityPlanner:
     # Demand-preemptive drain: graceful swap of busy lanes for starving models
     DRAIN_TIMEOUT_SECONDS = 60.0  # Max wait for active requests to finish
 
+    # The manual drain's whole endpoint call — the strict wait above plus the
+    # terminal step's own drain, command and confirmation — must answer before
+    # the webservice's 130 s read timeout cuts it. 115 s leaves headroom for
+    # the HTTP hop, and the remainder is carried into the executor as a shared
+    # deadline so the terminal step's steps spend one pot instead of stacking
+    # their individual budgets on top of the first wait (which alone can run
+    # the full DRAIN_TIMEOUT_SECONDS).
+    DRAIN_ENDPOINT_BUDGET_SECONDS = 115.0
+
     # Floor for the add_lane/apply_lanes worker-command timeout. Cold loads
     # of large models legitimately take many minutes (weight copy into the
     # RAM cache + torch.compile + CUDA graph capture — Qwen3.6-35B tp=2 was
@@ -162,6 +178,15 @@ class CapacityPlanner:
     # the worker still completes it, leading to duplicate loads on other
     # workers and spurious load-failure cooldowns.
     LANE_LOAD_COMMAND_TIMEOUT_S = 1800
+
+    # How long the outcome of a manual load stays queryable by the UI. Must
+    # outlive the whole attempt with margin: the _lane_lock wait, the
+    # LANE_LOAD_COMMAND_TIMEOUT_S command budget, the confirmation polling of
+    # the same length that follows it, plus polling/processing overhead. A
+    # TTL that only covered 1800 s + 1800 s could expire the "running" entry
+    # before the terminal outcome is written, and the UI would read an
+    # unknown (and keep polling) on a slow-but-healthy load.
+    MANUAL_LOAD_OUTCOME_TTL_SECONDS = 7200.0
 
     # Minimum tenure: after a model wakes/loads, give it at least this
     # long to serve its queue before it can be drained for another model.
@@ -266,6 +291,7 @@ class CapacityPlanner:
         cycle_seconds: float = 10.0,
         enabled: bool = True,
         on_state_change: Optional[Any] = None,
+        latency_store: Optional[LatencyStore] = None,
     ) -> None:
         self._facade = logosnode_facade
         self._registry = logosnode_registry
@@ -273,6 +299,7 @@ class CapacityPlanner:
         self._cycle_seconds = cycle_seconds
         self._enabled = enabled
         self._on_state_change = on_state_change
+        self._latency_store = latency_store
         self._lane_idle_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
@@ -351,12 +378,13 @@ class CapacityPlanner:
         )
         # Speculative replication: after the main demand pass, emit
         # additional load actions for hot models onto workers with free
-        # VRAM (no eviction). One replica per cycle per model. Off by
-        # default — this consumes more VRAM, so operators should opt in.
-        self._replicate_on_free_vram = os.environ.get("LOGOS_REPLICATE_ON_FREE_VRAM", "false").strip().lower() in (
-            "1",
-            "true",
-            "yes",
+        # VRAM (no eviction). One replica per cycle per model. On by
+        # default — it consumes extra VRAM on hot models, so operators who
+        # want to cap it opt out by setting the flag to false.
+        self._replicate_on_free_vram = os.environ.get("LOGOS_REPLICATE_ON_FREE_VRAM", "true").strip().lower() not in (
+            "0",
+            "false",
+            "no",
         )
 
         # ── Tunable switching/anti-starvation knobs (env-overridable) ──────────
@@ -388,6 +416,18 @@ class CapacityPlanner:
         # Track inflight removals separately: provider_id -> set of lane_ids
         self._inflight_removals: dict[int, set[str]] = {}
 
+        # Provider-wide in-flight lane-id reservation, shared by every load
+        # path: provider_id -> {lane_id -> (model_name, claiming task)}.
+        # The replica suffix scheme is not unique across models
+        # (planner-foo-2 is replica 2 of foo and replica 1 of foo-2), so two
+        # concurrent loads for different models can derive the same id from
+        # the same report. The manual path claims at pick time, the planner
+        # and request-time paths claim at dispatch time; the claim is what
+        # makes the second of them take the next suffix or skip, instead of
+        # dispatching over the lane the first is bringing up. Released when
+        # the load completes (or is dropped).
+        self._inflight_load_lane_ids: dict[int, dict[str, tuple[str, "asyncio.Task | None"]]] = {}
+
         # Phase 1b: Per-lane action locks to serialize operations on the same
         # lane without blocking unrelated lanes.
         self._lane_action_locks: dict[tuple[int, str], asyncio.Lock] = {}
@@ -411,6 +451,22 @@ class CapacityPlanner:
         # by the worker for a non-transient reason (e.g. no feasible GPU
         # subset). Suppresses new load actions on the lane until expiry.
         self._lane_load_failure_until: dict[tuple[int, str], float] = {}
+
+        # Persistent load-failure markers: lanes whose load the worker
+        # accepted but that never reached a serving state (timed out in
+        # ``starting``, landed in ``error``). Unlike the cooldown above these
+        # do not expire on a timer — a stuck lane keeps holding its id, so it
+        # must keep blocking allocation until the lane serves or leaves the
+        # worker. Reconciled every cycle in _reconcile_load_failures.
+        self._load_failed_lane_ids: set[tuple[int, str]] = set()
+
+        # Outcome of the most recent manual load per (provider_id, model_name),
+        # for the statistics UI: the "Load lane" endpoint answers 202 and the
+        # load runs in the background, so without this the UI could never tell
+        # a slow load from a denied one. Entries expire after
+        # MANUAL_LOAD_OUTCOME_TTL_SECONDS (a load gets LANE_LOAD_COMMAND_TIMEOUT_S
+        # plus confirmation polling, so the window covers the whole attempt).
+        self._manual_load_outcomes: dict[tuple[int, str], Dict[str, Any]] = {}
 
         # Workers the cycle is currently skipping, and when the skipping began.
         # Backs the stuck-worker warning in _note_unplannable: a worker no
@@ -692,11 +748,24 @@ class CapacityPlanner:
         # providers, so two providers don't independently agree to load the
         # same model in the same cycle.
         cycle_planned_models: set[str] = set()
+        # The subset of that which was a *speculative additional lane* — not
+        # a first lane serving demand. A first lane planned elsewhere must
+        # suppress a second first lane, but an extra copy must not suppress
+        # the demand-driven one on a worker without the model.
+        cycle_planned_additional_models: set[str] = set()
         # Balance-wake tracking: at most one balance-wake per model per cycle,
         # so a saturated winner doesn't fan out wakes to every sleeping
         # replica at once (one extra replica per cycle is the escalation step;
         # the next cycle re-evaluates with the updated queues).
         cycle_balance_wake_models: set[str] = set()
+        # Lane ids reserved per provider for this cycle: every id the worker
+        # reports plus every id a load planned earlier in the same cycle
+        # claimed. The replica suffix scheme is not unique across models
+        # (planner-foo-2 is foo's replica 2 and foo-2's replica 1), so two
+        # loads planned in one batch must never be handed the same id — the
+        # demand and replication passes draw on this set instead of the
+        # reported snapshot, which cannot show lanes that don't exist yet.
+        cycle_reserved_lane_ids: dict[int, set[str]] = {}
 
         provider_ids = list(self._facade.provider_ids())
         # Sort providers by current queue pressure so the worker most under
@@ -713,6 +782,8 @@ class CapacityPlanner:
 
             provider_ids.sort(key=_provider_pressure, reverse=True)
         self._log_cluster_summary(provider_ids)
+        self._refresh_engine_cache_metrics(provider_ids)
+        self._refresh_latency_store_metrics()
 
         # Cross-provider best-first ranking: pre-score every (provider,
         # model) candidate so the cheapest worker for each model wins,
@@ -730,8 +801,12 @@ class CapacityPlanner:
         # Count loaded lanes per model across the entire cluster, once per
         # cycle. Consumed by:
         #   - replicas-first eviction (Pass 1 in the eviction picker),
-        #   - speculative replication (skip models already at MAX_REPLICAS).
-        # Only built when at least one consumer is enabled.
+        #   - speculative replication (skip models not loaded anywhere yet).
+        # Only built when at least one consumer is enabled. It is never
+        # mutated within the cycle: loads planned mid-cycle are not loaded
+        # lanes — VRAM validation or dispatch can still drop them — and
+        # counting them would let the eviction pass treat a model's only
+        # live copy as a dispensable replica.
         cluster_lanes_by_model = (
             self._count_loaded_lanes_per_model()
             if (self._replica_first_eviction or self._replicate_on_free_vram)
@@ -752,6 +827,8 @@ class CapacityPlanner:
             except Exception:
                 continue
 
+            cycle_reserved_lane_ids.setdefault(provider_id, set()).update(lane.lane_id for lane in lanes)
+            self._reconcile_load_failures(provider_id, lanes)
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
@@ -760,9 +837,11 @@ class CapacityPlanner:
                     provider_id,
                     lanes,
                     cycle_planned_models=cycle_planned_models,
+                    cycle_planned_additional_models=cycle_planned_additional_models,
                     best_provider_for_model=best_provider_for_model,
                     cluster_lanes_by_model=cluster_lanes_by_model,
                     cycle_balance_wake_models=cycle_balance_wake_models,
+                    cycle_reserved_lane_ids=cycle_reserved_lane_ids,
                 )
             )
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
@@ -776,8 +855,8 @@ class CapacityPlanner:
         # Speculative replication: after the per-provider demand pass, look
         # for hot models that have a single (or few) loaded copy and idle
         # workers with capability + free VRAM. Emits one replica load per
-        # model per cycle, no eviction. Off by default; see
-        # LOGOS_REPLICATE_ON_FREE_VRAM.
+        # model per cycle, no eviction. On by default; opt out via
+        # LOGOS_REPLICATE_ON_FREE_VRAM=false.
         if self._replicate_on_free_vram and cluster_lanes_by_model is not None:
             all_actions.extend(
                 self._compute_replication_actions(
@@ -785,6 +864,8 @@ class CapacityPlanner:
                     self._demand.get_ranked_models(),
                     cluster_lanes_by_model,
                     cycle_planned_models,
+                    cycle_planned_additional_models,
+                    cycle_reserved_lane_ids,
                 )
             )
 
@@ -824,6 +905,63 @@ class CapacityPlanner:
                 )
 
         prom.CAPACITY_PLANNER_CYCLE_DURATION_SECONDS.observe(time.time() - cycle_start)
+
+    def _refresh_engine_cache_metrics(self, provider_ids: List[int]) -> None:
+        """Publish per-(provider, model) prefix-cache and MTP-acceptance rates.
+
+        Feeds the ``logos_prefix_cache_hit_rate`` / ``logos_mtp_acceptance_rate``
+        gauges from the workers' lane backend metrics. Aggregation mirrors the
+        live-statistics payload: the prefix hit rate is the plain mean across
+        the model's lanes, while the MTP acceptance rate is token-weighted
+        (sum of accepted / sum of draft tokens), because an unweighted mean of
+        per-lane rates misstates the model rate when lanes see different
+        draft volumes. Pairs with no lanes this cycle are retired by the
+        publish helper.
+        """
+        entries: list[tuple[str, str, float | None, float | None]] = []
+        for pid in provider_ids:
+            snap = self._registry.peek_runtime_snapshot(pid) if self._registry else None
+            if snap is None:
+                continue
+            provider_name = self._facade.get_provider_name(pid) or str(pid)
+            runtime = snap.get("runtime") or {}
+            lanes = runtime.get("lanes")
+            per_model: dict[str, dict[str, float]] = {}
+            for lane in lanes if isinstance(lanes, list) else []:
+                if not isinstance(lane, dict):
+                    continue
+                model = str(lane.get("model") or "").strip()
+                if not model:
+                    continue
+                backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
+                agg = per_model.setdefault(
+                    model, {"prefix_sum": 0.0, "prefix_count": 0.0, "mtp_draft": 0.0, "mtp_accepted": 0.0}
+                )
+                prefix_rate = lane_metric_float(backend_metrics.get("prefix_cache_hit_rate"))
+                if prefix_rate is not None:
+                    agg["prefix_sum"] += prefix_rate
+                    agg["prefix_count"] += 1
+                mtp_draft = lane_metric_float(backend_metrics.get("mtp_draft_tokens_total")) or 0.0
+                mtp_accepted = lane_metric_float(backend_metrics.get("mtp_accepted_tokens_total")) or 0.0
+                agg["mtp_draft"] += mtp_draft
+                agg["mtp_accepted"] += mtp_accepted
+            for model, agg in per_model.items():
+                prefix_rate = agg["prefix_sum"] / agg["prefix_count"] if agg["prefix_count"] > 0 else None
+                mtp_rate = agg["mtp_accepted"] / agg["mtp_draft"] if agg["mtp_draft"] > 0 else None
+                entries.append((model, provider_name, prefix_rate, mtp_rate))
+        prom.update_engine_cache_metrics(entries)
+
+    def _refresh_latency_store_metrics(self) -> None:
+        """Publish EWMA learned-latency gauges from the latency store."""
+        if getattr(self, "_latency_store", None) is None:
+            return
+        try:
+            rows = self._latency_store.snapshot_metrics(
+                get_provider_name=lambda pid: self._facade.get_provider_name(pid)
+            )
+            prom.update_latency_store_metrics(rows)
+        except Exception:
+            logger.debug("Failed to refresh latency store metrics", exc_info=True)
 
     def _log_cluster_summary(self, provider_ids: List[int]) -> None:
         """Print a colored cluster overview for the current planner cycle."""
@@ -1046,14 +1184,169 @@ class CapacityPlanner:
         self.hint_capacity_needed(model_name, provider_id=provider_id)
         return None
 
+    async def prepare_benchmark_lane(
+        self,
+        provider_id: int,
+        model_name: str,
+        timeout_seconds: float = 600.0,
+    ) -> bool:
+        """Prepare a benchmark model alongside other requests using normal capacity handling."""
+        if self._registry and not self._registry.has_received_first_status(provider_id):
+            raise RuntimeError(f"Worker {provider_id} has not reported its status yet. Retry after it connects.")
+
+        target = self._pick_request_target_lane(provider_id, model_name)
+        if target is not None and self._benchmark_lane_is_ready(target):
+            return True
+        if target is not None and target.runtime_state == "starting":
+            await self._wait_for_benchmark_lane_ready(provider_id, model_name, timeout_seconds)
+        elif target is not None and target.runtime_state in {"sleeping", "cold"}:
+            await self._prepare_existing_lane(provider_id, model_name, target, timeout_seconds, raise_on_failure=True)
+        else:
+            await self._cold_load_for_request(provider_id, model_name, timeout_seconds, raise_on_failure=True)
+
+        target = self._pick_request_target_lane(provider_id, model_name)
+        if target is None or not self._benchmark_lane_is_ready(target):
+            state = target.runtime_state if target is not None else "missing"
+            raise RuntimeError(f"Benchmark model '{model_name}' on worker {provider_id} is not ready (state: {state}).")
+        return True
+
+    async def prepare_configured_benchmark_lane(
+        self,
+        provider_id: int,
+        model_name: str,
+        overrides,
+        timeout_seconds: float = 600.0,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> bool:
+        """Reload an idle vLLM lane and wait for its new configuration to be reported."""
+        from logos.benchmarks.guidellm_runner import apply_serving_overrides
+        from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
+
+        validate_worker_overrides(
+            overrides, worker_limits(self._registry.peek_runtime_snapshot(provider_id), model_name)
+        )
+
+        if not await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds):
+            return False
+        target = self._pick_request_target_lane(provider_id, model_name)
+        if target is None:
+            raise RuntimeError(
+                f"Benchmark model '{model_name}' disappeared from worker {provider_id} before reconfiguration."
+            )
+        async with self._lane_lock(provider_id, target.lane_id):
+            snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
+            lane = next(
+                (
+                    lane
+                    for lane in (snapshot.get("runtime") or {}).get("lanes", [])
+                    if lane.get("lane_id") == target.lane_id
+                ),
+                None,
+            )
+            config = (lane or {}).get("lane_config") or {}
+            if not config.get("vllm"):
+                raise RuntimeError("Serving overrides require an existing vLLM lane on this worker")
+            validate_worker_overrides(overrides, worker_limits(snapshot, model_name))
+            current = config.get("vllm_config") or {}
+            updated = apply_serving_overrides(current, overrides)
+            if updated == current:
+                return True
+            self._mark_lane_cold(provider_id, target.lane_id)
+            try:
+                if progress_callback is not None:
+                    progress_callback("reconfiguring_worker")
+                result = await self._registry.send_command(
+                    provider_id,
+                    "reconfigure_lane",
+                    {"lane_id": target.lane_id, "updates": {"vllm_config": updated}, "require_idle": True},
+                    timeout_seconds=int(timeout_seconds),
+                )
+                reported = (result.get("lane_config") or {}).get("vllm_config")
+                if not isinstance(reported, dict):
+                    raise RuntimeError("Worker did not return its vLLM configuration after the model restart.")
+                differences = [
+                    f"{key}: requested {value!r}, reported {reported.get(key)!r}"
+                    for key, value in updated.items()
+                    if reported.get(key) != value
+                ]
+                if differences:
+                    raise RuntimeError("Worker did not apply the requested vLLM settings: " + "; ".join(differences))
+                if progress_callback is not None:
+                    progress_callback("waiting_for_model")
+                # The command already returned the applied configuration. Only
+                # wait for the next status report here, not another full startup timeout.
+                confirmation_timeout = min(timeout_seconds, 30.0)
+                deadline = time.monotonic() + confirmation_timeout
+                while time.monotonic() < deadline:
+                    snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
+                    lanes = (snapshot.get("runtime") or {}).get("lanes", [])
+                    lane = next((item for item in lanes if item.get("lane_id") == target.lane_id), {})
+                    actual = (lane.get("lane_config") or {}).get("vllm_config") or {}
+                    if all(actual.get(key) == value for key, value in updated.items()):
+                        break
+                    await asyncio.sleep(1)
+                else:
+                    raise RuntimeError(
+                        f"Worker {provider_id} applied the vLLM settings but did not report them "
+                        f"within {confirmation_timeout:g} seconds. Check its connection."
+                    )
+            finally:
+                self._unmark_lane_cold(provider_id, target.lane_id)
+        return await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds)
+
+    @staticmethod
+    def _benchmark_lane_is_ready(target: LaneSchedulerSignals) -> bool:
+        return target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping"
+
+    async def _wait_for_benchmark_lane_ready(
+        self,
+        provider_id: int,
+        model_name: str,
+        timeout_seconds: float,
+    ) -> bool:
+        """Wait for an already-starting lane instead of issuing a duplicate load."""
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            matching_lanes = [lane for lane in self._safe_get_lanes(provider_id) if lane.model_name == model_name]
+            target = best_lane([lane for lane in matching_lanes if lane.runtime_state not in {"stopped", "error"}])
+            if target is not None:
+                if target.runtime_state in {"loaded", "running"} and target.sleep_state != "sleeping":
+                    return True
+                if target.runtime_state in {"cold", "sleeping"}:
+                    raise RuntimeError(
+                        f"Benchmark model '{model_name}' on worker {provider_id} stopped starting "
+                        f"and entered state '{target.runtime_state}'."
+                    )
+            elif any(lane.runtime_state in {"stopped", "error"} for lane in matching_lanes):
+                raise RuntimeError(
+                    f"Benchmark model '{model_name}' failed to start on worker {provider_id}. Check its model logs."
+                )
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"Benchmark model '{model_name}' on worker {provider_id} did not become ready "
+                    f"within {timeout_seconds:g} seconds."
+                )
+            await asyncio.sleep(min(1.0, remaining))
+
     async def _prepare_existing_lane(
         self,
         provider_id: int,
         model_name: str,
         target: LaneSchedulerSignals,
         timeout_seconds: float,
+        allow_reclaim: bool = True,
+        *,
+        raise_on_failure: bool = False,
     ) -> dict[str, Any] | None:
         """Wake or prepare an existing lane for a request."""
+
+        def failed(reason: str) -> None:
+            if raise_on_failure:
+                raise RuntimeError(f"Benchmark model '{model_name}' on worker {provider_id}: {reason}")
+            return None
+
         profile = self._safe_get_profiles(provider_id).get(model_name)
         if target.runtime_state == "sleeping" and self._lane_is_in_wake_failure_cooldown(provider_id, target.lane_id):
             logger.info(
@@ -1061,17 +1354,19 @@ class CapacityPlanner:
                 target.lane_id,
                 self._facade.get_provider_name(provider_id) or provider_id,
             )
-            return None
+            return failed("A recent wake attempt failed; wait for the retry cooldown to expire.")
         if target.runtime_state in {"sleeping", "cold"}:
             ok = await self._ensure_request_capacity(
                 provider_id=provider_id,
                 target=target,
                 profile=profile,
                 timeout_seconds=timeout_seconds,
+                allow_reclaim=allow_reclaim,
             )
             if not ok:
-                self._pending_capacity[model_name] = (provider_id, time.time())
-                return None
+                if allow_reclaim and not raise_on_failure:
+                    self._pending_capacity[model_name] = (provider_id, time.time())
+                return failed("Could not make enough GPU capacity available to wake the model.")
 
         if target.runtime_state == "sleeping":
             async with self._lane_lock(provider_id, target.lane_id):
@@ -1103,7 +1398,9 @@ class CapacityPlanner:
                         timeout_seconds=max(timeout_seconds, self.REQUEST_WAKE_TIMEOUT_SECONDS),
                     )
                     if not woke:
-                        return None
+                        return failed(
+                            "The worker did not confirm that the model woke successfully. Check its model logs."
+                        )
 
         try:
             return await self._registry.select_lane_for_model(provider_id, model_name)
@@ -1114,7 +1411,9 @@ class CapacityPlanner:
                 model_name,
                 exc_info=True,
             )
-            return None
+            return failed(
+                "The prepared model is no longer available for requests. Check the worker connection and model logs."
+            )
 
     def _check_host_ram_headroom_for_cold_load(
         self,
@@ -1154,6 +1453,7 @@ class CapacityPlanner:
         provider_id: int,
         sleep_level: int,
         profile: ModelProfile | None,
+        lane_id: str | None = None,
     ) -> tuple[bool, float, float]:
         """Is there enough host RAM to safely sleep a lane?
 
@@ -1168,11 +1468,13 @@ class CapacityPlanner:
             estimate from ``disk_size_bytes`` when that is missing (the
             weight transfer dominates l2), and a flat
             ``HOST_RAM_SLEEP_HEADROOM_MB`` for pre-calibration profiles.
-          * the *residency* the lane keeps for as long as it stays asleep,
-            from ``host_ram_residual_mb``. sleep_l1 relocates the weights to
-            the host instead of dropping them, so the sleep does not hand
-            that memory back when it finishes — it holds it until the lane
-            wakes or is stopped.
+          * the *incremental* residency sleep will add on top of what the
+            lane already holds on the host. Lasting post-sleep footprint is
+            ``max(host_ram_residual_mb, live PSS)`` — sticky EngineCore shm
+            survives sleep→wake, and sleep_l1 also relocates weights to the
+            host. Live PSS is already reflected in ``MemAvailable``, so only
+            ``max(0, lasting − live)`` is charged here (not the full lasting
+            footprint, which would double-count).
 
         Only the transient used to be counted, which asks "can this sleep
         complete" and never "what does it leave behind". A worker could pass
@@ -1205,11 +1507,21 @@ class CapacityPlanner:
         if transient_mb is None:
             transient_mb = self.HOST_RAM_SLEEP_HEADROOM_MB
 
-        residency_mb = 0.0
-        if profile is not None and profile.host_ram_residual_mb:
-            residency_mb = max(float(profile.host_ram_residual_mb), 0.0)
+        live_mb = 0.0
+        if lane_id:
+            live_mb = max(self._lane_host_ram_from_snapshot(provider_id, lane_id), 0.0)
 
-        required = self.HOST_RAM_SAFETY_MARGIN_MB + max(transient_mb, residency_mb)
+        lasting_mb = 0.0
+        if profile is not None and profile.host_ram_residual_mb:
+            lasting_mb = max(float(profile.host_ram_residual_mb), 0.0)
+        if live_mb > lasting_mb:
+            lasting_mb = live_mb
+
+        # MemAvailable already subtracts live PSS; only the growth sleep adds
+        # (weight relocation beyond current host hold) is incremental demand.
+        incremental_mb = max(0.0, lasting_mb - live_mb)
+
+        required = self.HOST_RAM_SAFETY_MARGIN_MB + max(transient_mb, incremental_mb)
         return effective_available >= required, effective_available, required
 
     async def _stop_sleeping_lanes_for_headroom(
@@ -1256,8 +1568,17 @@ class CapacityPlanner:
         provider_id: int,
         model_name: str,
         timeout_seconds: float,
+        allow_reclaim: bool = True,
+        *,
+        raise_on_failure: bool = False,
     ) -> dict[str, Any] | None:
         """Load a model that has no lane at all (request-time cold load)."""
+
+        def failed(reason: str) -> None:
+            if raise_on_failure:
+                raise RuntimeError(f"Benchmark model '{model_name}' on worker {provider_id}: {reason}")
+            return None
+
         profile = self._safe_get_profiles(provider_id).get(model_name)
         capacity = self._safe_get_capacity(provider_id)
         if capacity is None:
@@ -1266,7 +1587,7 @@ class CapacityPlanner:
                 self._facade.get_provider_name(provider_id) or provider_id,
                 model_name,
             )
-            return None
+            return failed("Worker capacity information is unavailable; wait for its next status report.")
 
         # No early feasibility bail-out here — the reclaim loop below will
         # sleep/stop idle lanes to free VRAM.  The feasibility check against
@@ -1274,7 +1595,34 @@ class CapacityPlanner:
         # after reclaiming.  If the model truly can't fit (misconfiguration),
         # the reclaim loop will exhaust candidates and return None.
 
-        lane_id = self._planner_lane_id(model_name)
+        # The demand path's model-level backoff, applied here as well: a
+        # lane of this model that errored (or failed to confirm) still holds
+        # its id, so the allocation below would answer with the next free
+        # suffix — under sustained request traffic that leaves a fresh
+        # failed lane (planner-X-2, planner-X-3, ...) per request, and the
+        # per-lane cooldown check on the fresh id further down cannot see
+        # the broken sibling.
+        model_lanes = [lane for lane in self._safe_get_lanes(provider_id) if lane.model_name == model_name]
+        blocked_reason = self._model_cold_load_blocked_reason(provider_id, model_name, model_lanes)
+        if blocked_reason is not None:
+            logger.info(
+                "Skipping cold load of %s on worker=%s: %s",
+                model_name,
+                self._facade.get_provider_name(provider_id) or provider_id,
+                blocked_reason,
+            )
+            return None
+
+        # Reserved against every lane on the worker and every id an in-flight
+        # load already claims: another model may hold this one's replica-1 id
+        # (the suffix scheme is not unique across models), and the claim
+        # keeps the pick out of ids a concurrent load is about to take.
+        lane_id = self._next_lane_id_for_model(
+            provider_id,
+            model_name,
+            None,
+            reserved_ids=self._claimed_load_lane_ids(provider_id),
+        )
         load_action = CapacityPlanAction(
             action="load",
             provider_id=provider_id,
@@ -1291,7 +1639,7 @@ class CapacityPlanner:
                 self._facade.get_provider_name(provider_id) or provider_id,
                 lane_id,
             )
-            return None
+            return failed("A recent model load failed; wait for the retry cooldown to expire.")
 
         estimated = self._estimate_action_vram(load_action, profile, capacity)
         available = float(capacity.available_vram_mb)
@@ -1351,19 +1699,22 @@ class CapacityPlanner:
                 # the operator (or another planner cycle) frees enough host
                 # RAM — e.g. by stopping an unused lane — the retry will
                 # pass the gate naturally. We do NOT stop lanes here.
-                self._pending_capacity[model_name] = (provider_id, time.time())
-                return None
+                if allow_reclaim and not raise_on_failure:
+                    self._pending_capacity[model_name] = (provider_id, time.time())
+                return failed(
+                    f"Not enough host RAM to load the model: {projected_host_ram_mb:.0f} MiB required, "
+                    f"{eff_avail:.0f} MiB available after reservations."
+                )
 
         # Use the same reclaim engine as wake — it checks aggregate + per-GPU
         # VRAM with ledger awareness, and returns True immediately if sufficient.
         # If not, it runs the full reclaim loop (sleep loaded lanes, drain busy
-        # lanes, stop non-vLLM lanes) with provider capacity lock serialization.
+        # lanes, stop other lanes) with provider capacity lock serialization.
         synthetic_target = LaneSchedulerSignals(
             lane_id=lane_id,
             model_name=model_name,
             runtime_state="cold",
             sleep_state="unsupported",
-            is_vllm=profile.engine == "vllm" if profile else False,
             active_requests=0,
             queue_waiting=0.0,
             requests_running=0.0,
@@ -1378,6 +1729,7 @@ class CapacityPlanner:
             target=synthetic_target,
             profile=profile,
             timeout_seconds=timeout_seconds,
+            allow_reclaim=allow_reclaim,
         )
         if not ok:
             logger.info(
@@ -1385,8 +1737,9 @@ class CapacityPlanner:
                 model_name,
                 self._facade.get_provider_name(provider_id) or provider_id,
             )
-            self._pending_capacity[model_name] = (provider_id, time.time())
-            return None
+            if allow_reclaim and not raise_on_failure:
+                self._pending_capacity[model_name] = (provider_id, time.time())
+            return failed("Could not make enough GPU capacity available to load the model.")
 
         logger.info(
             "Cold-loading %s on worker=%s (lane=%s)",
@@ -1411,7 +1764,7 @@ class CapacityPlanner:
         finally:
             self._release_host_ram(host_ram_reservation_id)
         if not loaded:
-            return None
+            return failed("The worker did not confirm that the model loaded successfully. Check its model logs.")
 
         try:
             return await self._registry.select_lane_for_model(provider_id, model_name)
@@ -1422,7 +1775,9 @@ class CapacityPlanner:
                 model_name,
                 exc_info=True,
             )
-            return None
+            return failed(
+                "The loaded model is no longer available for requests. Check the worker connection and model logs."
+            )
 
     # ------------------------------------------------------------------
     # Idle tracking
@@ -1496,9 +1851,26 @@ class CapacityPlanner:
             self.LOAD_FAILURE_COOLDOWN_SECONDS,
             f": {details}" if details else "",
         )
+        # The cooldown expires on a timer; the marker does not. A lane that
+        # was just marked may still be sitting in ``starting`` long after the
+        # cooldown runs out, and it keeps holding its id meanwhile.
+        self._load_failed_ids().add(key)
 
     def _clear_load_failure(self, provider_id: int, lane_id: str) -> None:
         self._lane_load_failure_until.pop(self._lane_key(provider_id, lane_id), None)
+
+    def _load_failed_ids(self) -> set[tuple[int, str]]:
+        """Lanes with a load failure that has not been reconciled away yet.
+
+        Lazily initialised so planner instances built in tests without the
+        full ``__init__`` keep working: the markers only matter to the cycle
+        reconciliation and the cold-load gate.
+        """
+        ids = self.__dict__.get("_load_failed_lane_ids")
+        if ids is None:
+            ids = set()
+            self._load_failed_lane_ids = ids
+        return ids
 
     def _lane_is_in_load_failure_cooldown(
         self,
@@ -1516,6 +1888,198 @@ class CapacityPlanner:
             self._lane_load_failure_until.pop(key, None)
             return False
         return True
+
+    # ------------------------------------------------------------------
+    # Manual-load outcomes — the "Load lane" button answers 202 and the
+    # load runs in the background, so the UI can only learn the outcome by
+    # asking. Without this, a denied load (no room on the worker) looks
+    # identical to a slow one: the lane simply never appears, and the
+    # operator's only trace is a W line in the orchestrator log.
+    # ------------------------------------------------------------------
+
+    def record_manual_load_outcome(
+        self,
+        provider_id: int,
+        model_name: str,
+        status: str,
+        *,
+        lane_id: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Record the state of the most recent manual load of *model_name*.
+
+        *status* is one of ``"running"``, ``"succeeded"``, ``"failed"``;
+        *reason* is a human-readable explanation, meant for the operator who
+        clicked "Load lane" (e.g. which GPUs lacked how much VRAM). The entry
+        replaces any previous one for the (provider, model) pair — a retry
+        supersedes the attempt it retries.
+        """
+        entry: Dict[str, Any] = {"status": status, "updated_at": time.time()}
+        if lane_id is not None:
+            entry["lane_id"] = lane_id
+        if reason is not None:
+            entry["reason"] = reason
+        self._manual_load_outcome_store()[(provider_id, model_name)] = entry
+        self._purge_manual_load_outcomes()
+
+    def get_manual_load_outcome(self, provider_id: int, model_name: str) -> Dict[str, Any] | None:
+        """The most recent manual-load outcome for (provider, model), or None.
+
+        None means "no manual load of this model is known" — the caller must
+        not render it as a failure. Expired entries are dropped on read so
+        the store cannot grow unbounded.
+        """
+        store = self._manual_load_outcome_store()
+        entry = store.get((provider_id, model_name))
+        if entry is None:
+            return None
+        if time.time() - float(entry.get("updated_at") or 0.0) > self.MANUAL_LOAD_OUTCOME_TTL_SECONDS:
+            store.pop((provider_id, model_name), None)
+            return None
+        return dict(entry)
+
+    def _manual_load_outcome_store(self) -> Dict[tuple[int, str], Dict[str, Any]]:
+        """The outcome map, created on demand so harness planners that skip
+        __init__ work unchanged."""
+        store = self.__dict__.get("_manual_load_outcomes")
+        if store is None:
+            store = self._manual_load_outcomes = {}
+        return store
+
+    def _purge_manual_load_outcomes(self) -> None:
+        """Drop expired entries; bounded work, called on every record."""
+        now = time.time()
+        store = self._manual_load_outcome_store()
+        expired = [
+            key
+            for key, entry in store.items()
+            if now - float(entry.get("updated_at") or 0.0) > self.MANUAL_LOAD_OUTCOME_TTL_SECONDS
+        ]
+        for key in expired:
+            store.pop(key, None)
+
+    # The executor (_execute_action_with_confirmation) fails for reasons the
+    # manual-load path cannot know on its own — a denied VRAM reservation, a
+    # worker rejection, a confirmation timeout. It records a per-lane
+    # human-readable reason here; load_lane_manually picks it up for the
+    # outcome it records.
+    def record_lane_action_failure(self, provider_id: int, lane_id: str, reason: str) -> None:
+        self.__dict__.setdefault("_lane_action_failure", {})[self._lane_key(provider_id, lane_id)] = reason
+
+    def get_lane_action_failure(self, provider_id: int, lane_id: str) -> str | None:
+        return self.__dict__.get("_lane_action_failure", {}).get(self._lane_key(provider_id, lane_id))
+
+    def clear_lane_action_failure(self, provider_id: int, lane_id: str) -> None:
+        """Drop a recorded reason before a new attempt starts.
+
+        The map is per lane id, and the planner reuses lane ids across
+        attempts of the same model — without this, a new attempt that fails
+        without recording a fresh reason would report the previous attempt's
+        failure to the operator. Every executor failure path records a new
+        reason, so clearing here cannot hide information.
+        """
+        self.__dict__.get("_lane_action_failure", {}).pop(self._lane_key(provider_id, lane_id), None)
+
+    def manual_load_admission_rejection(self, provider_id: int, model_name: str) -> Optional[str]:
+        """Why a manual load must not be admitted now, or None if it may run.
+
+        The claim, not just the check, is what makes this atomic on the event
+        loop: the endpoint asks before it answers 202, and the marker it sets
+        when it answers None is what a second click for the same model meets —
+        a 409 the operator reads now, instead of a 202 whose background task
+        no-ops minutes later. ``load_lane_manually`` releases the marker when
+        the attempt settles, so a retry after a finished attempt is admitted
+        again.
+
+        A same-model load the planner is already bringing up is refused the
+        same way: the operator's click is redundant while it is minutes from
+        serving, and answering 202 for it would leave the operator's poll
+        waiting on an outcome the planner's run owns.
+        """
+        store = self.__dict__.setdefault("_manual_load_admission", {})
+        if (provider_id, model_name) in store:
+            return "A load of this model is already in flight on this worker"
+        if any(model.lower() == model_name.lower() for model in self._inflight_load_models(provider_id).values()):
+            return "A load of this model is already in flight on this worker"
+        store[(provider_id, model_name)] = True
+        return None
+
+    def _release_manual_load_admission(self, provider_id: int, model_name: str) -> None:
+        """Give up the admission marker when an attempt settles.
+
+        The marker blocks every other admission of the same model while it
+        lasts, so exactly one attempt runs per marker — a blind pop cannot
+        drop a newer attempt's marker. A release without an admission (a
+        direct call) is a no-op.
+        """
+        self.__dict__.get("_manual_load_admission", {}).pop((provider_id, model_name), None)
+
+    def _settle_manual_load_outcome(self, provider_id: int, model_name: str, lane_id: str, confirmed: bool) -> None:
+        """Publish the terminal state of a manual load whose outcome rides on
+        this lane.
+
+        The manual path records "running" before dispatch — against its own
+        lane, or against the lane of a same-model load already in flight when
+        the operator's click was a no-op (see ``_load_lane_manually``). The
+        entry belongs to the lane it names, so this only settles it when that
+        lane's outcome is in: a load of the same model on another lane must
+        not close it (the planner's failure must not pre-empt the operator's
+        own load, which may still be waiting for the lane lock). Only
+        lane-named entries are touched — the endpoint's lane-less "running"
+        placeholder is replaced with the attempt's own lane before dispatch —
+        and only "running" ones, so the manual path and the executor (which
+        settles every load outcome, planner's included) may both call this:
+        the second is a no-op.
+        """
+        entry = self.get_manual_load_outcome(provider_id, model_name)
+        if entry is None or entry.get("status") != "running":
+            return
+        if entry.get("lane_id") != lane_id:
+            return
+        if confirmed:
+            self.record_manual_load_outcome(provider_id, model_name, "succeeded", lane_id=lane_id)
+            return
+        # The executor recorded a human-readable reason for every failure mode
+        # it knows; fall back to a generic one if this one did not (a new
+        # branch that forgot it).
+        reason = self.get_lane_action_failure(provider_id, lane_id)
+        if reason is None:
+            reason = "the load was not confirmed by the worker"
+        self.record_manual_load_outcome(provider_id, model_name, "failed", lane_id=lane_id, reason=reason)
+
+    def _reconcile_load_failures(self, provider_id: int, lanes: List[LaneSchedulerSignals]) -> None:
+        """Keep the load-failure state in step with the lanes a worker reports.
+
+        The load-failure cooldown expires on a timer, but the lane it marks
+        does not: a load that timed out leaves its lane stuck in ``starting``
+        and holding its id long after the cooldown ran out, at which point the
+        allocator would hand out a fresh suffix for the model. The persistent
+        marker therefore follows the lane, not the clock — it is dropped only
+        when the lane reaches a serving state (the load finished after all) or
+        leaves the worker. Lanes still ``starting`` with a marker are the
+        timed-out ones; they keep the per-lane cooldown alive as well, so every
+        cooldown reader (cold-load gate, ranker, pre-pass) sees the failure.
+        Marking is throttled to the cooldown window, so a persistently broken
+        lane logs once per window rather than once per planner cycle.
+        """
+        failed = self._load_failed_ids()
+        present = {lane.lane_id for lane in lanes}
+        for key in [k for k in failed if k[0] == provider_id and k[1] not in present]:
+            failed.discard(key)
+        for lane in lanes:
+            key = (provider_id, lane.lane_id)
+            if lane.runtime_state in ("loaded", "running"):
+                # A marked lane is serving again — the load finished, healthy.
+                failed.discard(key)
+                self._clear_load_failure(provider_id, lane.lane_id)
+            elif lane.runtime_state == "error":
+                failed.add(key)
+                if not self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
+                    self._mark_load_failure(provider_id, lane.lane_id, details="lane in error state")
+            elif lane.runtime_state == "starting" and key in failed:
+                # Timed out in starting — the worker never confirmed the load.
+                if not self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
+                    self._mark_load_failure(provider_id, lane.lane_id, details="still starting after load failure")
 
     def _record_confirmed_action_state(self, action: CapacityPlanAction, confirmed_at: float) -> None:
         key = self._lane_key(action.provider_id, action.lane_id)
@@ -1539,6 +2103,9 @@ class CapacityPlanner:
         if action.action in {"wake", "load"}:
             self._clear_wake_failure(action.provider_id, action.lane_id)
             self._clear_load_failure(action.provider_id, action.lane_id)
+            # The lane confirmed healthy — any earlier failure mark on it is
+            # stale, whatever the cycle reconciliation would do later.
+            self._load_failed_ids().discard(key)
             self._lane_sleep_since.pop(key, None)
             self._lane_sleep_level.pop(key, None)
             self._lane_idle_since[key] = confirmed_at
@@ -1620,7 +2187,7 @@ class CapacityPlanner:
             # Skip awake vLLM lanes — these are reclaimed via sleep (which
             # is allowed even within cooldown) rather than direct stop.
             # After sleeping, the lane re-enters as a sleeping stop candidate.
-            if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
+            if lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
                 continue
 
             key = self._lane_key(provider_id, lane.lane_id)
@@ -1635,7 +2202,7 @@ class CapacityPlanner:
             current_vram = float(lane.effective_vram_mb or 0.0)
             if current_vram <= 0 and profile is not None:
                 current_vram = self._estimate_model_loaded_vram(profile)
-            if lane.is_vllm and lane.runtime_state == "sleeping" and profile is not None:
+            if lane.runtime_state == "sleeping" and profile is not None:
                 base_residency = float(getattr(profile, "base_residency_mb", 0) or 0)
                 if base_residency > current_vram:
                     current_vram = base_residency
@@ -1695,7 +2262,7 @@ class CapacityPlanner:
                 continue
             if lane.runtime_state in {"stopped", "error", "cold", "starting"}:
                 continue
-            if not (lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake"):
+            if not (lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake"):
                 continue
 
             # Check if this lane is actually blocked by tenure
@@ -1901,6 +2468,26 @@ class CapacityPlanner:
                         return True
         return any(lane.lane_id == lane_id for lane in self._safe_get_lanes(provider_id))
 
+    def _runtime_lane_model(self, provider_id: int, lane_id: str) -> Optional[str]:
+        """The model the worker (or the newest report) holds under this lane
+        id, or None when no lane exists there or the record that names it
+        carries no model. The manual load path uses this to tell "the id I
+        would take already runs my model's lane (no-op)" apart from "another
+        model's load raced me to the id (take the next suffix)".
+        """
+        if self._registry is not None:
+            snap = self._registry.peek_runtime_snapshot(provider_id)
+            lanes = ((snap or {}).get("runtime") or {}).get("lanes") or []
+            if isinstance(lanes, list):
+                for lane in lanes:
+                    if isinstance(lane, dict) and str(lane.get("lane_id") or "") == lane_id:
+                        model = str(lane.get("model") or "").strip()
+                        return model or None
+        for lane in self._safe_get_lanes(provider_id):
+            if lane.lane_id == lane_id:
+                return lane.model_name
+        return None
+
     # ------------------------------------------------------------------
     # GPU-aware eviction helpers
     # ------------------------------------------------------------------
@@ -2078,6 +2665,12 @@ class CapacityPlanner:
         never picked in this pass. Callers should fall back to a normal
         (non-replicas-only) call when this pass cannot cover the deficit.
 
+        The count must reflect confirmed loaded lanes only: loads planned
+        earlier in the same cycle are not counted, because VRAM validation
+        or dispatch can still drop them, and this pass must not evict a
+        last live copy on the assumption of a sibling that may never
+        materialise.
+
         ``target_lane_id`` is the lane_id of the lane about to be woken (wake
         path only; cold load has no existing wakee and passes ``None``). That
         lane is hard-excluded from the candidate set — it cannot evict itself
@@ -2187,7 +2780,7 @@ class CapacityPlanner:
             tp = max(len(lane_gpus), 1)
 
             # Prefer sleep (less disruptive); fall back to stop
-            if lane.is_vllm and lane.runtime_state in ("loaded", "running") and lane.sleep_state == "awake":
+            if lane.runtime_state in ("loaded", "running") and lane.sleep_state == "awake":
                 # Sleep_l1 is reversible but the scheduler needs time to
                 # finish dispatching any request it routed in the moment
                 # before the cycle decided to sleep. LANE_MIN_TENURE_SECONDS
@@ -2283,7 +2876,7 @@ class CapacityPlanner:
                 if residual_mb <= 0 and profile:
                     residual_mb = float(profile.sleeping_residual_mb or 0.0)
                 freed_total = residual_mb
-            elif lane.is_vllm and lane.runtime_state in ("loaded", "running") and lane.sleep_state == "unsupported":
+            elif lane.runtime_state in ("loaded", "running") and lane.sleep_state == "unsupported":
                 # Lane was started with enable_sleep_mode=False (static
                 # operator config). Sleep is impossible — the only way to
                 # reclaim its VRAM is a destructive cold stop. Apply the
@@ -2595,6 +3188,19 @@ class CapacityPlanner:
             elif key not in self._lane_idle_since:
                 self._lane_idle_since[key] = now
 
+            # A request that began or finished since the last poll is activity
+            # the instantaneous concurrency sample above cannot see: a blocking
+            # action (e.g. a long cold load) can stall the cycle long enough that
+            # a short request starts and completes entirely between two polls. The
+            # facade records a monotonic last-activity timestamp fed by request
+            # events; a lane cannot have been idle since before it last did work,
+            # so push the idle start forward to that point.
+            last_activity = self._facade.get_model_last_activity(provider_id, lane.model_name)
+            if last_activity is not None:
+                current = self._lane_idle_since.get(key)
+                if current is None or last_activity > current:
+                    self._lane_idle_since[key] = last_activity
+
             if is_sleeping:
                 self._lane_sleep_since.setdefault(key, now)
                 self._lane_sleep_level[key] = max(self._lane_sleep_level.get(key, 0), 1)
@@ -2656,10 +3262,6 @@ class CapacityPlanner:
 
             # Skip lanes that are already stopped/error
             if lane.runtime_state in ("stopped", "error", "cold"):
-                continue
-
-            # Only vLLM lanes support sleep
-            if not lane.is_vllm:
                 continue
 
             # Sleep L2 after 10 minutes of observed L1 sleep
@@ -2864,11 +3466,16 @@ class CapacityPlanner:
         # the model sat idle.
         #
         # Only the cold-load path is gated: a sleeping lane is a wake, which
-        # has its own cooldown and is already filtered above.
-        if not sleeping_lanes and self._lane_is_in_load_failure_cooldown(
-            provider_id, self._planner_lane_id(model_name)
-        ):
-            return None
+        # has its own cooldown and is already filtered above. The gate covers
+        # more than the replica-1 cooldown: an errored replica of the model
+        # holds its lane id, and loading another copy under a fresh suffix
+        # would just produce another errored lane — so the worker is
+        # infeasible while any of the model's lanes is errored or cooling
+        # down.
+        if not sleeping_lanes:
+            blocked_reason = self._model_cold_load_blocked_reason(provider_id, model_name, model_lanes)
+            if blocked_reason is not None:
+                return None
 
         profile = profiles.get(model_name)
 
@@ -2883,6 +3490,12 @@ class CapacityPlanner:
             else:
                 needed_mb = 0.0
         else:
+            # Never-calibrated on a non-Metal provider can't actually load
+            # here (see _load_requires_calibration) — mark infeasible before
+            # it wins the ranking on a falsely cheap 4096 MB guess, leaving
+            # every provider that could serve it deferring to a dead end.
+            if self._load_requires_calibration(profile, provider_id):
+                return None
             target_cost = self.TARGET_ACTION_COST_S["load"]
             # Cold-load VRAM need = full base_residency (with KV+TP if profile knows).
             if profile is not None:
@@ -2898,8 +3511,7 @@ class CapacityPlanner:
             # Eviction will be needed. Pick the cheapest available victim type:
             # sleep_l1 if any non-target lane can sleep, otherwise stop.
             other_can_sleep = any(
-                lane.is_vllm
-                and lane.runtime_state in ("loaded", "running")
+                lane.runtime_state in ("loaded", "running")
                 and lane.sleep_state == "awake"
                 and lane.model_name != model_name
                 for lane in lanes
@@ -3078,15 +3690,39 @@ class CapacityPlanner:
             f"≥ floor={self.BALANCE_WAKE_QUEUE_FLOOR}; VRAM free"
         )
 
+    def _provider_serves_model(self, provider_id: int, model_name: str) -> bool:
+        """True while the provider holds an awake lane for the model.
+
+        Same "active" predicate the demand pass applies to the worker it is
+        planning for: loaded/running and not asleep. The best-first gate
+        uses it to tell a winner that only wants a speculative additional
+        lane (scale-out) from one that still needs its first — an awake
+        winner can only plan scale-out for the model, a non-awake winner
+        plans a first lane of its own and best-first keeps deciding between
+        the two.
+        """
+        try:
+            provider_lanes = self._facade.get_all_provider_lane_signals(provider_id)
+        except Exception:
+            return False
+        return any(
+            lane.model_name == model_name
+            and lane.runtime_state in ("loaded", "running")
+            and lane.sleep_state != "sleeping"
+            for lane in provider_lanes
+        )
+
     def _compute_demand_actions(
         self,
         provider_id: int,
         lanes: List[LaneSchedulerSignals],
         *,
         cycle_planned_models: Optional[set[str]] = None,
+        cycle_planned_additional_models: Optional[set[str]] = None,
         best_provider_for_model: Optional[dict[str, int]] = None,
         cluster_lanes_by_model: Optional[dict[str, int]] = None,
         cycle_balance_wake_models: Optional[set[str]] = None,
+        cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
     ) -> List[CapacityPlanAction]:
         """Compute wake/load actions based on demand patterns.
 
@@ -3164,6 +3800,19 @@ class CapacityPlanner:
             lanes_by_model.setdefault(lane.model_name, []).append(lane)
 
         planned_models: set[str] = set()
+        # Which of those were speculative additional lanes — lifted into the
+        # cycle-wide set at the end so the dedup check and the replication
+        # pass can tell an extra copy apart from a demand-driven first lane.
+        planned_additional_models: set[str] = set()
+        # Every lane id this worker holds (seeded by the cycle) plus every
+        # id a load planned earlier this cycle claimed: the suffix scheme is
+        # not unique across models, so each new load must claim its id here
+        # before the next model's allocation runs. (An explicit None check:
+        # `or {}` would replace a caller's empty dict with a throwaway one
+        # and silently drop the claims.)
+        if cycle_reserved_lane_ids is None:
+            cycle_reserved_lane_ids = {}
+        reserved_lane_ids = cycle_reserved_lane_ids.setdefault(provider_id, set())
         # Track which lanes have already been claimed as eviction victims this
         # cycle so we don't evict the same lane twice for two different loads.
         claimed_victims: set[str] = set()
@@ -3181,28 +3830,68 @@ class CapacityPlanner:
         for model_name, score in candidates:
             if capabilities and model_name not in capabilities:
                 continue
+            # An awake, live lane for this model on this worker — i.e. the
+            # model is already served here. The negation (a first lane) is
+            # what both suppression exceptions below compare against: a
+            # first lane is demand-driven — it is the difference between
+            # serving and queueing — while a plan on a worker that already
+            # serves the model is only speculative scale-out.
+            first_lane_here = not any(
+                lane.model_name == model_name
+                and lane.runtime_state in ("loaded", "running")
+                and lane.sleep_state != "sleeping"
+                for lane in lanes_by_model.get(model_name, [])
+            )
             # Phase 1.3: skip a model that another provider already planned a
             # wake/load for in this same cycle. Prevents two providers from
             # racing to cold-load the same model when both have capability.
+            #
+            # Exception: what was planned elsewhere was only a speculative
+            # *additional* lane. A first lane on this worker is demand-driven
+            # — it is the difference between serving and queueing — while the
+            # extra copy is opportunistic, so the necessary action must not
+            # be displaced by the optional one.
             if self._cross_provider_dedup and cycle_planned_models is not None and model_name in cycle_planned_models:
-                logger.info(
-                    "Skipping demand action for worker=%s model=%s: already planned" " for another worker this cycle",
-                    self._facade.get_provider_name(provider_id) or provider_id,
-                    model_name,
-                )
-                continue
+                if not (
+                    first_lane_here
+                    and cycle_planned_additional_models is not None
+                    and model_name in cycle_planned_additional_models
+                ):
+                    logger.info(
+                        "Skipping demand action for worker=%s model=%s: already planned"
+                        " for another worker this cycle",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        model_name,
+                    )
+                    continue
             # Cross-provider best-first: if a pre-cycle ranking picked a
             # different worker as the cheapest for this model, skip here so
             # the winner can serve it (wake on a sleeping lane beats a cold
             # load on a different worker even when both have capability).
             #
-            # Exception: balance wake. The ranker's cost model answers
+            # Exception 1: balance wake. The ranker's cost model answers
             # "which worker is cheapest to make able to serve" — an awake
             # lane costs 0.0s and always wins over a 2.0s wake, so a
             # sleeping standby replica of a hot model is skipped forever
             # while the awake incumbent's queue grows. When the winner is
             # saturated, fall through so the WAKE branch can spread the
             # load (wake path only, never evicts — enforced below).
+            #
+            # Exception 2: a queued first lane against a serving winner.
+            # An awake winner costs 0.0, so it always wins the ranking —
+            # but a winner that already serves the model can only plan a
+            # speculative *additional* lane this cycle (scale-out), while
+            # this worker's first lane is the demand-driven action:
+            # requests are queued for it here and the replication pass
+            # cannot compensate (it never evicts, and it needs sustained
+            # demand the queued request may not yet produce). The optional
+            # copy must not veto the necessary one. Queued demand is the
+            # deliberate trigger: a mere speculative score keeps the
+            # ranker's decision (a cold load for score alone is a
+            # replication decision, not a demand one). The inverse stays
+            # suppressed: a winner without an awake lane plans a first
+            # lane of its own (wake or cold load), and best-first keeps
+            # deciding between two first lanes.
             balance_wake_reason: Optional[str] = None
             if (
                 self._cross_provider_best_first
@@ -3218,13 +3907,25 @@ class CapacityPlanner:
                     cycle_balance_wake_models,
                 )
                 if balance_wake_reason is None:
-                    logger.info(
-                        "Skipping demand action for worker=%s model=%s: best-first" " ranker picked worker=%s",
-                        self._facade.get_provider_name(provider_id) or provider_id,
-                        model_name,
-                        self._facade.get_provider_name(winner_pid) or winner_pid,
-                    )
-                    continue
+                    queued_here = self._get_queue_depth_for_model(provider_id, model_name, lanes)
+                    if first_lane_here and queued_here > 0 and self._provider_serves_model(winner_pid, model_name):
+                        logger.info(
+                            "Allowing first lane for worker=%s model=%s: best-first"
+                            " winner worker=%s already serves the model (it only plans an"
+                            " additional lane) and %d request(s) are queued here",
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                            model_name,
+                            self._facade.get_provider_name(winner_pid) or winner_pid,
+                            queued_here,
+                        )
+                    else:
+                        logger.info(
+                            "Skipping demand action for worker=%s model=%s: best-first" " ranker picked worker=%s",
+                            self._facade.get_provider_name(provider_id) or provider_id,
+                            model_name,
+                            self._facade.get_provider_name(winner_pid) or winner_pid,
+                        )
+                        continue
             model_lanes = lanes_by_model.get(model_name, [])
             # Phase 3.4: per-lane VRAM ledger gate — under v2, only skip this
             # model when an in-flight reservation overlaps the GPUs its target
@@ -3268,6 +3969,22 @@ class CapacityPlanner:
                 here_queue,
                 cross_queue,
             )
+
+            # Awake, live lanes — the model's currently active set on this
+            # worker. The cold-load path reads it to tell a first lane (full
+            # load semantics) apart from an additional one (replication
+            # semantics: sustained demand, no eviction, replication flag).
+            # A lane whose load failed is not "active" even while it sits in
+            # ``starting``: it does not serve, and counting it would let the
+            # model look already-covered after the cooldown expires.
+            failed = self._load_failed_ids()
+            active_lanes = [
+                lane
+                for lane in model_lanes
+                if lane.runtime_state not in {"stopped", "error"}
+                and lane.sleep_state != "sleeping"  # sleeping handled in the wake branch
+                and (provider_id, lane.lane_id) not in failed
+            ]
 
             # ── WAKE: sleeping lane exists ────────────────────────────────────
             sleeping_lanes = [
@@ -3447,7 +4164,7 @@ class CapacityPlanner:
                     # clear the floor and the bypass deadlocked the sequential
                     # switchover: model A's benchmark ends, model B is requested
                     # one at a time, B's request waits until it times out, and
-                    # A's lane sticks (#827). Victims are idle by construction,
+                    # A's lane sticks. Victims are idle by construction,
                     # so reclaiming them preempts no real work.
                     #
                     # Phase 3.2: under v2, branch (a) only fires when the
@@ -3551,15 +4268,39 @@ class CapacityPlanner:
                         )
                 continue  # sleeping lane found; don't also try cold load
 
-            # ── COLD LOAD: no usable lane exists ─────────────────────────────
-            active_lanes = [
-                lane
-                for lane in model_lanes
-                if lane.runtime_state not in {"stopped", "error"}
-                and lane.sleep_state != "sleeping"  # sleeping handled above
-            ]
-            if active_lanes:
-                continue  # has a usable (non-sleeping, non-stopped) lane
+            # ── COLD LOAD ────────────────────────────────────────────────────
+            # An additional lane — the model already runs awake on this
+            # worker — is speculative scale-out and gets the same deal as the
+            # cross-provider replication pass: sustained demand and the
+            # replication flag. The no-eviction rule is enforced once the
+            # placement is known (an extra copy must never push out another
+            # model's lane). A first lane keeps the full load semantics below.
+            # A copy of this model on this worker that errored — or just
+            # failed to confirm — still holds its lane id, and the allocator
+            # would answer with the next free suffix: under sustained demand
+            # that leaves a fresh errored lane behind every cycle. Back off
+            # instead, until the broken lane goes away or the cooldown runs
+            # out.
+            blocked_reason = self._model_cold_load_blocked_reason(provider_id, model_name, model_lanes)
+            if blocked_reason is not None:
+                logger.info(
+                    "Skipping cold load of %s on worker=%s: %s",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    blocked_reason,
+                )
+                continue
+            is_additional_lane = bool(active_lanes)
+            if is_additional_lane and (not self._replicate_on_free_vram or eff < self.DEMAND_REPLICATION_FLOOR):
+                logger.info(
+                    "Skipping additional lane of %s on worker=%s: extra copies need "
+                    "LOGOS_REPLICATE_ON_FREE_VRAM and eff=%.2f ≥ replication floor=%.1f",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                    eff,
+                    self.DEMAND_REPLICATION_FLOOR,
+                )
+                continue
 
             if self._would_evict_cooled_lane(provider_id, model_name, profiles, capacity):
                 logger.info(
@@ -3625,6 +4366,14 @@ class CapacityPlanner:
                     sorted(placement_gpus),
                 )
                 continue
+            if is_additional_lane and eviction_set:
+                logger.info(
+                    "Skipping additional lane of %s on worker=%s: no free VRAM without "
+                    "eviction — extra copies never evict",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                )
+                continue
             logger.info(
                 "Load candidate model=%s tp=%d load_cost=%.0fMB placement=%s eviction_needed=%s",
                 model_name,
@@ -3642,6 +4391,17 @@ class CapacityPlanner:
             # load that needs eviction, deadlocking the planner cycle).
             has_queued = self._get_queue_depth_for_model(provider_id, model_name, lanes) > 0
 
+            # The contention branch below skips _passes_minimum_load_
+            # feasibility entirely (see its own comment), so gate
+            # calibration here instead, before the if/else split.
+            if self._load_requires_calibration(profile, provider_id):
+                logger.info(
+                    "Skipping load of %s on worker=%s: never calibrated here " "and not a Metal/MLX provider",
+                    model_name,
+                    self._facade.get_provider_name(provider_id) or provider_id,
+                )
+                continue
+
             if not eviction_set:
                 # Resources freely available — act on floor score. An announced
                 # upcoming use counts alongside a queued request: nothing has to
@@ -3653,8 +4413,21 @@ class CapacityPlanner:
                     continue
                 if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                     continue
-                lane_id = self._planner_lane_id(model_name)
-                if eff >= self.DEMAND_LOAD_FLOOR or has_queued:
+                # Replica 1's id when still free, else the next free index —
+                # an extra copy of an already-loaded model needs its own lane id.
+                # Reserved against every lane on the worker, not just this
+                # model's: the suffix scheme is not unique across models
+                # (planner-foo-2 is foo's replica 2 and foo-2's replica 1).
+                lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes, reserved_ids=reserved_lane_ids)
+                # Claim the id for the rest of the cycle: the reported snapshot
+                # the other models' allocations read from cannot show it yet.
+                reserved_lane_ids.add(lane_id)
+                if is_additional_lane:
+                    reason = (
+                        f"Additional lane: sustained demand eff={eff:.2f} ≥ "
+                        f"replication floor={self.DEMAND_REPLICATION_FLOOR}; VRAM free, no eviction"
+                    )
+                elif eff >= self.DEMAND_LOAD_FLOOR or has_queued:
                     reason = f"Demand eff={eff:.2f} ≥ floor={self.DEMAND_LOAD_FLOOR}; VRAM free"
                 else:
                     reason = f"Announced upcoming use (eff={eff:.2f} below floor); VRAM free"
@@ -3678,10 +4451,12 @@ class CapacityPlanner:
                     )
                 )
                 planned_models.add(model_name)
+                if is_additional_lane:
+                    planned_additional_models.add(model_name)
             else:
                 # Contention. Same two-regime logic as the wake path (see the
                 # regime comment there, including why has_queued alone is the
-                # real-demand signal — #827): real queued requests bypass the
+                # real-demand signal — ): real queued requests bypass the
                 # ratio (victims are already idle by construction); speculative
                 # score is gated by LOAD_COMPETITIVE_RATIO to avoid thrashing
                 # on a model that *might* become popular.
@@ -3724,7 +4499,12 @@ class CapacityPlanner:
                     # the load gets rejected for "insufficient VRAM" that the
                     # planner itself is about to free in the same cycle. Trust
                     # the placement decision.
-                    lane_id = self._planner_lane_id(model_name)
+                    lane_id = self._next_lane_id_for_model(
+                        provider_id, model_name, lanes, reserved_ids=reserved_lane_ids
+                    )
+                    # Claim the id for the rest of the cycle: the reported snapshot
+                    # the other models' allocations read from cannot show it yet.
+                    reserved_lane_ids.add(lane_id)
                     for vlane, vaction, _ in eviction_set:
                         if vlane.lane_id in claimed_victims:
                             continue
@@ -3749,6 +4529,8 @@ class CapacityPlanner:
                         )
                     )
                     planned_models.add(model_name)
+                    if is_additional_lane:
+                        planned_additional_models.add(model_name)
                 else:
                     logger.info(
                         "Skipping load of %s on worker=%s: eff=%.2f not competitive vs eviction_max=%.2f×%.1f, no queued demand",  # noqa: E501
@@ -3766,13 +4548,26 @@ class CapacityPlanner:
             for model_name in capabilities:
                 if model_name in planned_models:
                     continue
+                # Same cycle-wide dedup as the main loop: an empty worker's
+                # seed is a first lane, so only a first lane planned elsewhere
+                # suppresses it (a speculative additional lane does not).
+                if (
+                    self._cross_provider_dedup
+                    and cycle_planned_models is not None
+                    and model_name in cycle_planned_models
+                    and not (
+                        cycle_planned_additional_models is not None and model_name in cycle_planned_additional_models
+                    )
+                ):
+                    continue
                 eff = self._effective_demand(model_name, provider_id, lanes)
                 if eff < self.DEMAND_LOAD_FLOOR:
                     continue
                 profile = profiles.get(model_name)
                 if not self._passes_minimum_load_feasibility(model_name, profile, capacity, provider_id=provider_id):
                     continue
-                lane_id = self._planner_lane_id(model_name)
+                lane_id = self._next_lane_id_for_model(provider_id, model_name, lanes, reserved_ids=reserved_lane_ids)
+                reserved_lane_ids.add(lane_id)
                 actions.append(
                     CapacityPlanAction(
                         action="load",
@@ -3791,6 +4586,13 @@ class CapacityPlanner:
         # set so subsequent providers in the iteration order skip them.
         if cycle_planned_models is not None:
             cycle_planned_models |= planned_models
+        if cycle_planned_additional_models is not None:
+            cycle_planned_additional_models |= planned_additional_models
+            # A first lane planned this pass ends the model's "additional
+            # only" status: a further first lane must dedupe against it
+            # again, so a cycle gets one demand-driven first lane per model
+            # — not one per worker without the model.
+            cycle_planned_additional_models -= planned_models - planned_additional_models
 
         return actions
 
@@ -3804,6 +4606,8 @@ class CapacityPlanner:
         ranked_models: list[tuple[str, float]],
         cluster_lanes_by_model: dict[str, int],
         cycle_planned_models: set[str],
+        cycle_planned_additional_models: Optional[set[str]] = None,
+        cycle_reserved_lane_ids: Optional[dict[int, set[str]]] = None,
     ) -> list[CapacityPlanAction]:
         """Cross-provider replication pass — runs once per cycle.
 
@@ -3815,20 +4619,23 @@ class CapacityPlanner:
           - has enough free VRAM to load it *without* eviction
             (``loaded_vram_mb + tp × PER_GPU_COLD_START_MB``), and
           - passes the per-GPU feasibility gate.
-        Emit a single ``load`` action onto that worker. At most one new
-        replica per model per cycle; capped at ``MAX_REPLICAS_PER_MODEL``
-        copies cluster-wide.
+        Emit a single ``load`` action onto that worker — at most one new
+        replica per model per cycle, onto a worker that does not already
+        host it (the cross-worker distribution; the demand pass owns
+        intra-node additional lanes).
 
-        Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM=false`` (the default).
+        Skipped when ``LOGOS_REPLICATE_ON_FREE_VRAM`` is set to false.
 
         Candidate workers pass through ``_is_plannable`` for the same
         reasons the main demand pass does — a replica is a plain ``load``,
         so it would take the VRAM a calibration session reserved for its
         probes just as readily.
 
-        Models that already had an action emitted this cycle (in
-        ``cycle_planned_models``) are skipped — the main demand pass
-        already handles them.
+        Models for which the main demand pass already emitted a *first*
+        lane this cycle are skipped. A speculative *additional* lane
+        (tracked in ``cycle_planned_additional_models``) does not
+        suppress this pass — a first lane on a worker without the model
+        is the cross-worker distribution this pass exists to provide.
         """
         if not self._replicate_on_free_vram:
             return []
@@ -3838,13 +4645,16 @@ class CapacityPlanner:
         for model_name, score in ranked_models:
             if score < self.DEMAND_REPLICATION_FLOOR:
                 continue
-            if model_name in cycle_planned_models:
-                continue  # main demand pass already planned something for this model
+            # A demand-driven first lane planned this cycle means the model is
+            # being served; skip. But a *speculative additional* lane planned
+            # on a worker that already hosts the model must NOT suppress a
+            # first lane on a worker without it — that is exactly the
+            # cross-worker distribution this pass exists to provide.
+            if model_name in cycle_planned_models and model_name not in (cycle_planned_additional_models or set()):
+                continue  # main demand pass already planned a first lane for it
             current_replicas = cluster_lanes_by_model.get(model_name, 0)
             if current_replicas == 0:
                 continue  # not loaded anywhere yet → main demand pass owns first load
-            if current_replicas >= self.MAX_REPLICAS_PER_MODEL:
-                continue
 
             for pid in provider_ids:
                 if not self._is_plannable(pid):
@@ -3853,12 +4663,21 @@ class CapacityPlanner:
                     lanes = self._facade.get_all_provider_lane_signals(pid)
                 except Exception:
                     continue
+                # The cycle seeds this set with the reported ids; the replica
+                # load about to be claimed must be visible to any further
+                # allocation on this worker in the same cycle. (None, not
+                # falsy: a caller's empty dict must keep receiving the claims.)
+                if cycle_reserved_lane_ids is None:
+                    cycle_reserved_lane_ids = {}
+                reserved_lane_ids = cycle_reserved_lane_ids.setdefault(pid, set())
                 # Skip workers that already host the model in any non-terminal
-                # state — including sleeping (would wake instead of replicate)
-                # and starting (an in-flight load is in progress).
+                # state — including sleeping (would wake instead of replicate),
+                # starting (an in-flight load is in progress), and error (the
+                # broken lane still holds replica 1's id, and a worker whose
+                # copy failed is not a target for a fresh replica).
                 if any(
                     lane.model_name == model_name
-                    and lane.runtime_state in ("loaded", "running", "sleeping", "starting")
+                    and lane.runtime_state in ("loaded", "running", "sleeping", "starting", "error")
                     for lane in lanes
                 ):
                     continue
@@ -3900,7 +4719,12 @@ class CapacityPlanner:
                 ):
                     continue
 
-                lane_id = self._planner_lane_id(model_name)
+                # Worker-wide reservation, not replica 1's id: the target
+                # does not host this model, but another model may hold this
+                # one's replica-1 id (the suffix scheme is not unique
+                # across models).
+                lane_id = self._next_lane_id_for_model(pid, model_name, lanes, reserved_ids=reserved_lane_ids)
+                reserved_lane_ids.add(lane_id)
                 actions.append(
                     CapacityPlanAction(
                         action="load",
@@ -3911,8 +4735,7 @@ class CapacityPlanner:
                         reason=(
                             f"Speculative replica: demand eff={score:.2f} ≥ "
                             f"floor={self.DEMAND_REPLICATION_FLOOR}, "
-                            f"current_replicas={current_replicas}, "
-                            f"max={self.MAX_REPLICAS_PER_MODEL}"
+                            f"current_replicas={current_replicas}"
                         ),
                     )
                 )
@@ -3982,7 +4805,6 @@ class CapacityPlanner:
                 model_name=model_name,
                 runtime_state="cold",
                 sleep_state="unsupported",
-                is_vllm=True,
                 active_requests=0,
                 queue_waiting=0.0,
                 requests_running=0.0,
@@ -4004,7 +4826,6 @@ class CapacityPlanner:
                     model_name=model_name,
                     runtime_state="cold",
                     sleep_state="unsupported",
-                    is_vllm=True,
                     active_requests=0,
                     queue_waiting=0.0,
                     requests_running=0.0,
@@ -4149,6 +4970,7 @@ class CapacityPlanner:
         target: LaneSchedulerSignals,
         profile: Optional[ModelProfile],
         timeout_seconds: float,
+        allow_reclaim: bool = True,
     ) -> bool:
         # Convert to an absolute deadline once so accumulated sleeps reduce the
         # remaining budget correctly on every subsequent loop iteration.
@@ -4160,6 +4982,14 @@ class CapacityPlanner:
             capacity = await self._wait_for_provider(provider_id, deadline)
             if capacity is None:
                 return False
+
+        if self._load_requires_calibration(profile, provider_id):
+            logger.info(
+                "ensure_capacity worker=%s model=%s: refusing — never calibrated " "on this (non-Metal) provider",
+                self._facade.get_provider_name(provider_id) or provider_id,
+                target.model_name,
+            )
+            return False
 
         target_action = CapacityPlanAction(
             action="wake" if target.runtime_state == "sleeping" else "load",
@@ -4385,6 +5215,14 @@ class CapacityPlanner:
                     )
                     return True
 
+                if not allow_reclaim:
+                    logger.info(
+                        "Cannot prepare benchmark lane for worker=%s model=%s " "without reclaiming existing capacity",
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        target.model_name,
+                    )
+                    return False
+
                 lanes = self._safe_get_lanes(provider_id)
                 profiles = self._safe_get_profiles(provider_id)
 
@@ -4401,9 +5239,20 @@ class CapacityPlanner:
                     # released by the driver yet.  Wait up to 60 s for the driver
                     # to free memory before giving up — the worker will re-report
                     # fresh VRAM numbers on each heartbeat cycle.
+                    #
+                    # Metal/MLX is excluded: with unified memory the
+                    # total-minus-free figure is the systemwide wired baseline
+                    # (kernel, window server, …), which is permanent. There is
+                    # no driver context to wait for, so the wait can only add
+                    # 60 s of latency before the same refusal.
                     total_vram = float(getattr(capacity, "total_vram_mb", 0) or 0)
                     phantom_mb = total_vram - available
-                    if not lanes and total_vram > 0 and phantom_mb > needed * 0.5:
+                    if (
+                        not lanes
+                        and total_vram > 0
+                        and phantom_mb > needed * 0.5
+                        and not self._provider_is_metal(provider_id)
+                    ):
                         if _phantom_wait_started is None:
                             _phantom_wait_started = time.monotonic()
                             logger.info(
@@ -4681,28 +5530,14 @@ class CapacityPlanner:
                         # emitting sleep_l1 — otherwise the worker would raise
                         # in _ensure_sleep_mode_ready and the action fails.
                         lane_can_sleep = lane.sleep_state != "unsupported"
-                        if lane.is_vllm and sleeping_residual > 0 and lane_can_sleep:
-                            # For vLLM lanes, ALWAYS prefer sleep over stop.
-                            # Sleeping frees 14-18 GB (loaded - residual) while
-                            # keeping the model warm for 2-3s wake.  Stopping
-                            # frees the full amount but costs 30-60s cold reload.
-                            # Even if freed_by_sleep < required_free_mb, sleep is
-                            # still the right choice — a second lane can be slept
-                            # or the residual alone may suffice.
-                            sleep_candidates.append(
-                                (
-                                    freed_by_sleep,
-                                    CapacityPlanAction(
-                                        action="sleep_l1",
-                                        provider_id=provider_id,
-                                        lane_id=lane.lane_id,
-                                        model_name=lane.model_name,
-                                        reason=f"Request-time reclaim (drain+sleep) for {target.model_name}",
-                                    ),
-                                )
-                            )
-                        elif freed_by_sleep >= required_free_mb and sleeping_residual > 0 and lane_can_sleep:
-                            # Non-vLLM lane: sleeping frees enough
+                        if sleeping_residual > 0 and lane_can_sleep:
+                            # ALWAYS prefer sleep over stop: sleeping frees
+                            # 14-18 GB (loaded - residual) while keeping the
+                            # model warm for a 2-3s wake, vs. a 30-60s cold
+                            # reload after a stop. Even if freed_by_sleep <
+                            # required_free_mb, sleep is still the right
+                            # choice — a second lane can be slept, or the
+                            # residual alone may suffice.
                             sleep_candidates.append(
                                 (
                                     freed_by_sleep,
@@ -4716,7 +5551,7 @@ class CapacityPlanner:
                                 )
                             )
                         else:
-                            # Non-vLLM, no residual, or sleep disabled: must
+                            # No sleep residual, or sleep disabled: must
                             # fully stop.
                             if not self._lane_is_in_load_cooldown(provider_id, lane.lane_id, now=now):
                                 stop_candidates.append(
@@ -4788,7 +5623,7 @@ class CapacityPlanner:
             # Add as last-resort stop candidates (high penalty) — only chosen
             # when sleeping awake lanes can't free enough VRAM AND the model
             # has nothing pending that would benefit from the fast wake.
-            if lane.is_vllm and lane.runtime_state == "sleeping":
+            if lane.runtime_state == "sleeping":
                 pending_demand = (
                     self._get_queue_depth_for_model(provider_id, lane.model_name, lanes) > 0
                     or self._demand.get_score(lane.model_name) >= self.DEMAND_LOAD_FLOOR
@@ -4809,7 +5644,7 @@ class CapacityPlanner:
                     )
                 continue
 
-            if lane.is_vllm and lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
+            if lane.runtime_state in {"loaded", "running"} and lane.sleep_state == "awake":
                 # Idle loaded vLLM lane — candidate for sleep.
                 # Tenure gate: a freshly-woken/loaded model has 0 active
                 # requests and looks "idle", but its queued requests haven't
@@ -5080,7 +5915,7 @@ class CapacityPlanner:
         """Record per-lane KV cache pressure every cycle (cheap, no actions)."""
         now = time.time()
         for lane in lanes:
-            if not lane.is_vllm or lane.gpu_cache_usage_percent is None:
+            if lane.gpu_cache_usage_percent is None:
                 continue
             if lane.runtime_state not in ("loaded", "running"):
                 continue
@@ -5120,7 +5955,7 @@ class CapacityPlanner:
         now = time.time()
 
         # Check if any lane has an emergency (bypasses interval)
-        has_emergency = any(self._is_kv_emergency(provider_id, lane.lane_id) for lane in lanes if lane.is_vllm)
+        has_emergency = any(self._is_kv_emergency(provider_id, lane.lane_id) for lane in lanes)
         if not has_emergency and (now - self._last_kv_rebalance_time) < self.KV_CACHE_REBALANCE_INTERVAL_SECONDS:
             return []
 
@@ -5144,8 +5979,6 @@ class CapacityPlanner:
         # Collect vLLM lanes with their profiles and per-lane GPU count
         vllm_lanes: list[tuple[LaneSchedulerSignals, ModelProfile, int]] = []
         for lane in lanes:
-            if not lane.is_vllm:
-                continue
             if lane.runtime_state not in ("loaded", "running", "sleeping"):
                 continue
             profile = profiles.get(lane.model_name)
@@ -5180,12 +6013,15 @@ class CapacityPlanner:
         actions: list[CapacityPlanAction] = []
 
         for i, (lane, profile, lane_gpu_count) in enumerate(vllm_lanes):
-            # Each lane's KV share is bounded by its own GPU VRAM, not the whole worker
-            kv_share = lane_kv_pools[i]
+            # lane_kv_pools[i] is the lane's total KV pool across all its
+            # GPUs; kv_cache_memory_bytes (like _current_lane_kv_mb below)
+            # is per-rank — divide by lane_gpu_count or a TP>1 lane gets
+            # its whole-lane pool reapplied on every GPU (~tp too much).
+            kv_share = lane_kv_pools[i] / lane_gpu_count
             kv_share = max(kv_share, self.KV_CACHE_MIN_MB)
 
             # Determine current KV budget
-            current_kv_mb = self._current_lane_kv_mb(profile)
+            current_kv_mb = self._current_lane_kv_mb(profile, lane_gpu_count)
             if current_kv_mb <= 0:
                 continue
 
@@ -5258,9 +6094,9 @@ class CapacityPlanner:
 
         return actions
 
-    def _current_lane_kv_mb(self, profile: ModelProfile) -> float:
+    def _current_lane_kv_mb(self, profile: ModelProfile, tp: int = 1) -> float:
         """KV cache budget in MB for an active lane — delegates to the shared estimation chain."""
-        return self._estimate_kv_mb(profile)
+        return self._estimate_kv_mb(profile, tp)
 
     def _flush_deferred_kv_reconfigs(
         self, provider_id: int, lanes: List[LaneSchedulerSignals]
@@ -5295,6 +6131,39 @@ class CapacityPlanner:
     # VRAM budget validation
     # ------------------------------------------------------------------
 
+    def _provider_is_metal(self, provider_id: Optional[int]) -> bool:
+        """True when this provider's devices report the Metal backend.
+
+        Metal/MLX providers run on unified memory: the "device" VRAM figure is
+        a wired-memory budget of the host RAM, and their host memory is
+        reported with a different source than /proc/meminfo — both of which
+        the capacity gates below key off.
+        """
+        if provider_id is None or self._registry is None:
+            return False
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if not snap:
+            return False
+        runtime = snap.get("runtime")
+        devices = runtime.get("devices") if isinstance(runtime, dict) else None
+        return isinstance(devices, dict) and devices.get("mode") == "metal"
+
+    def _load_requires_calibration(
+        self,
+        profile: Optional[ModelProfile],
+        provider_id: Optional[int],
+    ) -> bool:
+        """True when this profile must not be used to load a lane.
+
+        No profile at all always fails, even on Metal — only an override
+        profile is exempt there, not having nothing (see load_lane_manually).
+        """
+        if profile is None:
+            return True
+        if profile.residency_source in ("calibrated", "measured"):
+            return False
+        return not (profile.residency_source == "override" and self._provider_is_metal(provider_id))
+
     def _passes_minimum_load_feasibility(
         self,
         model_name: str,
@@ -5305,14 +6174,17 @@ class CapacityPlanner:
     ) -> bool:
         """Quick gate before emitting a planner-initiated load action.
 
-        Checks base_residency + KV cache ≤ available_vram (with safety margin).
-        Uses the profile's HF-derived data when available, falls back to a name
-        heuristic.  Returns True (allow) when no estimate is possible — unknown
-        models should not be silently blocked.
+        Refuses outright when the model has never been calibrated on this
+        node and the provider is not Metal/MLX, and refuses a missing
+        profile outright too, even on Metal — see
+        _load_requires_calibration. Past that gate, base_residency comes
+        from the profile itself, never guessed at from the model's name.
 
-        For TP > 1 models, also checks per-GPU feasibility from runtime snapshot
-        device info, since total free VRAM can be misleading on heterogeneous or
-        unevenly loaded multi-GPU nodes (e.g. 20 GB total free but split 18+2).
+        Checks base_residency + KV cache ≤ available_vram (with safety
+        margin). For TP > 1 models, also checks per-GPU feasibility from
+        runtime snapshot device info, since total free VRAM can be
+        misleading on heterogeneous or unevenly loaded multi-GPU nodes
+        (e.g. 20 GB total free but split 18+2).
         """
         if capacity is None:
             return False
@@ -5323,16 +6195,28 @@ class CapacityPlanner:
         if available_mb <= 0:
             return False
 
-        base_mb: Optional[float] = None
-        if profile is not None:
-            base_mb = profile.estimate_base_residency_mb()
-        if base_mb is None:
-            from logos.sdi.models import _base_residency_from_bytes, _estimated_disk_size_bytes_from_model_name
+        if self._load_requires_calibration(profile, provider_id):
+            logger.info(
+                "Feasibility FAILED for %s: never calibrated on worker=%s and "
+                "not a Metal/MLX provider — calibrate it before loading",
+                model_name,
+                provider_id,
+            )
+            return False
 
-            disk = _estimated_disk_size_bytes_from_model_name(model_name)
-            base_mb = _base_residency_from_bytes(disk)
+        # profile is guaranteed non-None here: _load_requires_calibration
+        # above already rejects a missing profile on every provider.
+        base_mb = profile.estimate_base_residency_mb()
         if base_mb is None:
-            return True  # can't estimate, allow
+            # Defensive: a profile can pass the gate above yet still have
+            # no usable size (base_residency_mb, disk_size_bytes and the
+            # name heuristic all unset) — not a case to guess from the name.
+            logger.info(
+                "Feasibility FAILED for %s: no usable size data on " "worker=%s to estimate from",
+                model_name,
+                provider_id,
+            )
+            return False
 
         is_calibrated = profile is not None and profile.residency_source in (
             "calibrated",
@@ -5393,18 +6277,9 @@ class CapacityPlanner:
                     )
                     return False
         else:
-            if kv_cache_bytes_str:
-                kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
-            elif profile is not None:
-                kv_mb = self._estimate_kv_mb(profile)
-            else:
-                kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
-
-            # Apply estimation slack to the disk → memory size estimate so
-            # the gate matches what _estimate_model_loaded_vram returns.
-            minimum_needed = (base_mb + kv_mb) * self.ESTIMATION_SLACK_RATIO
-
-            # Determine TP size for this model
+            # Determine TP size for this model first — the KV estimate below
+            # needs it to shard a whole-model kv_per_token_bytes figure down
+            # to the per-rank budget vLLM's --kv-cache-memory-bytes expects.
             tp = 1
             if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
                 tp = int(profile.tensor_parallel_size)
@@ -5412,6 +6287,22 @@ class CapacityPlanner:
                 inferred = self._infer_tensor_parallel(profile, capacity, provider_id) if profile else None
                 if inferred and inferred > 1:
                     tp = inferred
+
+            if kv_cache_bytes_str:
+                kv_mb = self._parse_kv_cache_to_mb(kv_cache_bytes_str)
+            elif profile is not None:
+                kv_mb = self._estimate_kv_mb(profile, tp)
+            else:
+                kv_mb = base_mb * self.KV_CACHE_HEADROOM_RATIO
+
+            # kv_mb above is a PER-RANK budget (vLLM applies it on each of
+            # the tp GPUs); multiply by tp to get the whole-lane total that
+            # is comparable to available_mb (summed across the node's GPUs).
+            kv_total_mb = kv_mb * tp
+
+            # Apply estimation slack to the disk → memory size estimate so
+            # the gate matches what _estimate_model_loaded_vram returns.
+            minimum_needed = (base_mb + kv_total_mb) * self.ESTIMATION_SLACK_RATIO
 
             if tp > 1:
                 # Add TP overhead: NCCL buffers, duplicated embedding/output layers
@@ -5424,7 +6315,11 @@ class CapacityPlanner:
                 "Feasibility FAILED for %s: need %.0fMB%s × %.2f margin, have %.0fMB",
                 model_name,
                 minimum_needed,
-                (" (calibrated, KV+TP included)" if is_calibrated else f" (base={base_mb:.0f}MB + kv={kv_mb:.0f}MB)"),
+                (
+                    " (calibrated, KV+TP included)"
+                    if is_calibrated
+                    else f" (base={base_mb:.0f}MB + kv={kv_total_mb:.0f}MB)"
+                ),
                 self.VRAM_SAFETY_MARGIN,
                 available_mb,
             )
@@ -5650,17 +6545,185 @@ class CapacityPlanner:
 
         return [action for action in actions if id(action) in validated_ids]
 
-    def _planner_lane_id(self, model_name: str) -> str:
-        sanitized = model_name.replace("/", "_").replace(":", "_").replace(" ", "_")
-        return f"planner-{sanitized}"
+    def _planner_lane_id(self, model_name: str, replica_index: int = 1) -> str:
+        """Planner-owned lane id for one replica of a model.
 
-    def manual_load_rejection_reason(self, provider_id: int) -> Optional[str]:
+        Replica 1 keeps the historical id (``planner-<sanitized>``) so lanes
+        placed before per-model replica counts existed stay addressable
+        unchanged. Replicas from two on append ``-<index>`` — the worker keys
+        lanes by lane id only, so a second copy of the same model needs an id
+        the worker does not hold yet.
+        """
+        sanitized = model_name.replace("/", "_").replace(":", "_").replace(" ", "_")
+        base = f"planner-{sanitized}"
+        if replica_index <= 1:
+            return base
+        return f"{base}-{replica_index}"
+
+    def _model_cold_load_blocked_reason(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: List[LaneSchedulerSignals],
+    ) -> Optional[str]:
+        """Why a new cold load of ``model_name`` must back off on this worker.
+
+        Returns a reason string, or ``None`` when a cold load may proceed.
+
+        A replica load the worker accepted can still fail afterwards: the
+        lane lands in ``error`` — or the confirmation times out with the lane
+        stuck — and it keeps holding its lane id for as long as it exists.
+        Left unchecked, ``_next_lane_id_for_model`` skips that id and answers
+        with the next free suffix, and the per-lane load-failure cooldown
+        never covers the new id — so sustained demand would allocate a fresh
+        errored lane every cycle. Back off while any lane of the model is in
+        error state or load-failure cooldown, or the replica-1 id is cooling
+        down after its lane already left the worker.
+        """
+        if self._lane_is_in_load_failure_cooldown(provider_id, self._planner_lane_id(model_name)):
+            return "replica lane in load-failure cooldown"
+        failed = self._load_failed_ids()
+        for lane in lanes:
+            if lane.model_name != model_name:
+                continue
+            if lane.runtime_state == "error":
+                return f"lane {lane.lane_id} is in error state"
+            if (provider_id, lane.lane_id) in failed:
+                # Follows the lane, not the cooldown timer: a load that timed
+                # out in starting keeps its id and must keep blocking until it
+                # serves again or leaves the worker.
+                return f"lane {lane.lane_id} failed to load and is not serving"
+        for lane in lanes:
+            if lane.model_name == model_name and self._lane_is_in_load_failure_cooldown(provider_id, lane.lane_id):
+                return f"lane {lane.lane_id} is in load-failure cooldown"
+        return None
+
+    def _next_lane_id_for_model(
+        self,
+        provider_id: int,
+        model_name: str,
+        lanes: Optional[List[LaneSchedulerSignals]] = None,
+        reserved_ids: Optional[set[str]] = None,
+    ) -> str:
+        """The lowest replica lane id no lane on the worker holds.
+
+        Every lane id the provider currently reports — in any runtime state,
+        an errored or stopping lane still holds its id on the worker, and in
+        *any model* — is off limits; the worker keys lanes by id alone and
+        refuses ``add_lane`` for an existing id. The reservation is
+        worker-wide rather than per-model because the replica suffix scheme
+        is not unique across models: ``planner-foo-2`` is both replica 2 of
+        ``foo`` and replica 1 of ``foo-2``, so a worker hosting one form
+        must not be handed a load for the other under the same id.
+        ``reserved_ids`` extends the reservation to ids claimed by loads
+        planned earlier in the same planning cycle — the reported snapshot
+        does not show those lanes yet, so without them two loads in one
+        batch would be handed the same id. With nothing held, replica 1's
+        id wins so a first load lands exactly where it always did.
+        """
+        if lanes is None:
+            lanes = self._safe_get_lanes(provider_id)
+        taken = {lane.lane_id for lane in lanes}
+        if reserved_ids:
+            taken |= reserved_ids
+        if self._planner_lane_id(model_name) not in taken:
+            return self._planner_lane_id(model_name)
+        index = 2
+        while self._planner_lane_id(model_name, index) in taken:
+            index += 1
+        return self._planner_lane_id(model_name, index)
+
+    # ------------------------------------------------------------------
+    # Provider-wide in-flight lane-id reservation
+    #
+    # Every load path — the manual "Load lane", the planner cycle, and the
+    # request-time cold load — allocates lane ids from the same report, and
+    # the replica suffix scheme is not unique across models (replica 2 of
+    # "foo" and replica 1 of "foo-2" both want "planner-foo-2"). The
+    # reservation below is the shared answer: a load claims the id it is
+    # about to take, other loads allocate around the claim, and the claim is
+    # released when the load completes.
+    # ------------------------------------------------------------------
+
+    def _inflight_load_owners(self, provider_id: int) -> dict[str, tuple[str, "asyncio.Task | None"]]:
+        """The provider's lane_id -> (model, claiming task) map, created on
+        demand so harness planners that skip __init__ work unchanged."""
+        owners = self.__dict__.get("_inflight_load_lane_ids")
+        if owners is None:
+            owners = self._inflight_load_lane_ids = {}
+        return owners.setdefault(provider_id, {})
+
+    def _claimed_load_lane_ids(self, provider_id: int) -> set[str]:
+        """Lane ids claimed by loads still in flight on this provider.
+
+        Stale entries (claiming task gone) do not count: they no longer gate
+        a dispatch, so letting them pin an id would only push future loads
+        onto ever higher suffixes.
+        """
+        return {
+            lane_id
+            for lane_id, (_model, owner) in self._inflight_load_owners(provider_id).items()
+            if owner is None or not owner.done()
+        }
+
+    def _inflight_load_models(self, provider_id: int) -> dict[str, str]:
+        """lane_id -> model for the loads in flight on this provider (live claims only)."""
+        return {
+            lane_id: model
+            for lane_id, (model, owner) in self._inflight_load_owners(provider_id).items()
+            if owner is None or not owner.done()
+        }
+
+    def _claim_load_lane_id(self, provider_id: int, lane_id: str, model_name: str) -> bool:
+        """Claim a lane id for an in-flight load.
+
+        Check-and-set with no await in between, so it is atomic on the event
+        loop: no other load can take the id between the reader's snapshot and
+        the claim. The claiming task may claim the same id again (the manual
+        path claims at pick time and the execution path re-claims at dispatch
+        time); a claim held by a live task elsewhere fails, which is the
+        collision signal.
+        """
+        owners = self._inflight_load_owners(provider_id)
+        task = asyncio.current_task()
+        entry = owners.get(lane_id)
+        if entry is not None:
+            _model, owner = entry
+            if owner is not None and owner is not task and not owner.done():
+                return False
+        owners[lane_id] = (model_name, task)
+        return True
+
+    def _release_load_lane_id(self, provider_id: int, lane_id: str) -> None:
+        """Give up a claimed lane id.
+
+        Owner-checked, so a release by someone else — or a second release of
+        a claim already gone — is a no-op.
+        """
+        owners = self._inflight_load_owners(provider_id)
+        entry = owners.get(lane_id)
+        if entry is None:
+            return
+        task = asyncio.current_task()
+        _model, owner = entry
+        if owner is not None and owner is not task:
+            return
+        owners.pop(lane_id, None)
+
+    def manual_load_rejection_reason(
+        self,
+        provider_id: int,
+        model_name: Optional[str] = None,
+    ) -> Optional[str]:
         """Why a manual load must not be attempted now, or None if it may run.
 
         The message is meant for the operator who clicked "Load lane", so the
         API layer calls this before it accepts the request: the load itself runs
         as a background task, and a refusal raised in there has nobody left to
         report to.
+
+        Passing ``model_name`` also rejects a model never calibrated here
+        (see _load_requires_calibration); omit it to skip that check.
         """
         if not self._is_plannable(provider_id):
             if self._registry is not None and self._registry.is_calibrating(provider_id):
@@ -5671,9 +6734,26 @@ class CapacityPlanner:
             # reservation, i.e. it would place the lane without checking whether
             # it fits. Request-time cold loads bail out here for the same reason.
             return "No capacity information for this provider yet; its free VRAM is unknown."
+        if model_name is not None:
+            profile = self._safe_get_profiles(provider_id).get(model_name)
+            if self._load_requires_calibration(profile, provider_id):
+                return (
+                    f"Model {model_name!r} has never been calibrated on this " "provider; calibrate it before loading."
+                )
         return None
 
     async def load_lane_manually(self, provider_id: int, model_name: str) -> bool:
+        """The endpoint-facing wrapper: releases the admission marker when the
+        attempt settles, whatever its outcome, so a retry is admitted again.
+        The marker is what a second click for the same model meets while this
+        runs (see manual_load_admission_rejection).
+        """
+        try:
+            return await self._load_lane_manually(provider_id, model_name)
+        finally:
+            self._release_manual_load_admission(provider_id, model_name)
+
+    async def _load_lane_manually(self, provider_id: int, model_name: str) -> bool:
         """Operator-initiated load ("Load lane" in the statistics UI).
 
         Runs on the planner's own execution path rather than dispatching
@@ -5699,64 +6779,438 @@ class CapacityPlanner:
         and report what it says; this re-checks anyway, because the snapshot can
         go away between that call and this one.
 
+        A model may hold more than one lane on a worker, so two copies of an
+        8B model can share a node's VRAM for extra parallelism. A manual load
+        adds one such lane with no count to enforce — the plannability and
+        capacity-snapshot checks above are the gate, and the worker's own
+        VRAM is the final word.
+
+        The lane id it takes is the next free replica id: replica 1's id
+        while that is free, the lowest unused index once it is — the same
+        rule the planner's demand path uses. Off limits are the ids the
+        worker reports *and* the ids other loads already claim: the replica
+        suffix scheme is not unique across models (``planner-foo-2`` is
+        replica 2 of ``foo`` and replica 1 of ``foo-2``), so two concurrent
+        loads for different models can derive the same id from the same
+        report. The pick is claimed against the provider-wide in-flight
+        reservation before the first await, so the second of them takes the
+        next suffix instead of dispatching over the lane the first is
+        bringing up. A second click for the same model is a no-op while the
+        first load is still in flight — its lane is not in the report yet,
+        and handing out the next suffix would place a second copy of the
+        very model the operator is already waiting for.
+
         Serialized on the per-lane lock, like every other path that loads or
         unloads a lane. The API answers 202 and leaves this running in the
-        background, so a second click — or a planner cycle deciding on the same
-        model — arrives while the first load is still in flight. Both derive the
-        same deterministic lane id, so without the lock both would dispatch
-        ``add_lane`` for it, and the check inside the lock is what turns the
-        second into a no-op instead of a duplicate.
+        background, so everything is re-read under the lock: a load takes
+        minutes, and the provider state this was admitted on is long stale
+        by the time the lock is free. If the claimed id turned out to hold a
+        lane of the same model after all (the report lagged the runtime),
+        the load is a no-op; if another model's load holds it, the load
+        takes the next suffix instead of giving up.
         """
-        rejection = self.manual_load_rejection_reason(provider_id)
+        rejection = self.manual_load_rejection_reason(provider_id, model_name)
         if rejection is not None:
             logger.warning("Refusing manual load of %s on worker=%s: %s", model_name, provider_id, rejection)
+            # Normally the endpoint already answered 409 with this text before
+            # creating the task; record it anyway so a race between the two
+            # checks leaves the UI with a failure, not a hanging "Loading".
+            self.record_manual_load_outcome(provider_id, model_name, "failed", reason=rejection)
             return False
 
-        lane_id = self._planner_lane_id(model_name)
+        # A load of this model already in flight on this worker. The
+        # endpoint's admission check answers this case 409 before any task
+        # exists, so what reaches this backstop is the planner starting the
+        # same model between the admission and now. Its lane is not in the
+        # report yet, so the pick below would hand out the next free suffix
+        # and place a second copy of the very model the operator is already
+        # waiting for.
+        in_flight = self._inflight_load_models(provider_id)
+        same_model_lane = next(
+            (lane_id for lane_id, model in in_flight.items() if model.lower() == model_name.lower()), None
+        )
+        if same_model_lane is not None:
+            # Ride the in-flight load's lane: it owns the outcome, and the
+            # executor settles the "running" entry for whatever load of this
+            # model that lane is bringing up — a planner failure included,
+            # which otherwise never reached the operator's poll. Re-asserting
+            # the entry over an identical one (a manual first copy) changes
+            # nothing the UI sees; over a stale terminal it restarts the
+            # waiting note the new click belongs to.
+            logger.info(
+                "Manual load of %s on worker=%s is a no-op: a load of the model is already in flight",
+                model_name,
+                provider_id,
+            )
+            self.record_manual_load_outcome(provider_id, model_name, "running", lane_id=same_model_lane)
+            return False
+
+        excluded: set[str] = set()
+        lane_id = ""
+        try:
+            for _attempt in range(3):
+                # Pick against the reported lanes and the ids in-flight loads
+                # already claim, then claim the result — no await in between,
+                # so the pick-then-claim is atomic on the event loop.
+                lane_id = self._next_lane_id_for_model(
+                    provider_id,
+                    model_name,
+                    None,
+                    reserved_ids=self._claimed_load_lane_ids(provider_id) | excluded,
+                )
+                if not self._claim_load_lane_id(provider_id, lane_id, model_name):
+                    # Lost a claim race: re-read the reservation and pick again.
+                    continue
+                async with self._lane_lock(provider_id, lane_id):
+                    # Everything below is re-read under the lock: a load takes
+                    # minutes, so the provider state this was admitted on is
+                    # long stale by the time the lock is free.
+                    if self._lane_exists_in_runtime(provider_id, lane_id):
+                        self._release_load_lane_id(provider_id, lane_id)
+                        existing_model = self._runtime_lane_model(provider_id, lane_id)
+                        if existing_model is None or existing_model.lower() == model_name.lower():
+                            logger.info(
+                                "Manual load of %s on worker=%s is a no-op: lane %s already exists",
+                                model_name,
+                                provider_id,
+                                lane_id,
+                            )
+                            # The model is loaded — the operator's goal is met,
+                            # so the UI note resolves as success. The hold-back
+                            # is a "running" entry that *names a lane*: it
+                            # belongs to a dispatch still executing, and that
+                            # dispatch's executor settles it. The exception is
+                            # the endpoint's lane-less "running" placeholder:
+                            # it is this attempt's own, and this attempt is
+                            # about to return without dispatching, so no
+                            # executor will ever settle it — leaving it would
+                            # pin the note at "Loading" for the outcome TTL
+                            # although the lane is already serving.
+                            current = self.get_manual_load_outcome(provider_id, model_name)
+                            held_by_dispatch = (
+                                bool(current) and current.get("status") == "running" and "lane_id" in current
+                            )
+                            if not held_by_dispatch:
+                                self.record_manual_load_outcome(provider_id, model_name, "succeeded", lane_id=lane_id)
+                            return False
+                        logger.info(
+                            "Manual load of %s on worker=%s: lane %s is held by %s; taking the next suffix",
+                            model_name,
+                            provider_id,
+                            lane_id,
+                            existing_model,
+                        )
+                        excluded.add(lane_id)
+                        continue
+
+                    rejection = self.manual_load_rejection_reason(provider_id, model_name)
+                    if rejection is not None:
+                        logger.warning(
+                            "Refusing manual load of %s on worker=%s after waiting for the lane lock: %s",
+                            model_name,
+                            provider_id,
+                            rejection,
+                        )
+                        self.record_manual_load_outcome(provider_id, model_name, "failed", reason=rejection)
+                        return False
+
+                    capacity = self._safe_get_capacity(provider_id)
+                    if capacity is None:
+                        logger.warning(
+                            "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
+                            model_name,
+                            provider_id,
+                        )
+                        self.record_manual_load_outcome(
+                            provider_id,
+                            model_name,
+                            "failed",
+                            lane_id=lane_id,
+                            reason="the worker stopped reporting its capacity before the load could start",
+                        )
+                        return False
+
+                    profile = self._safe_get_profiles(provider_id).get(model_name)
+                    action = CapacityPlanAction(
+                        action="load",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=model_name,
+                        params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
+                        reason="Manual load requested by an operator",
+                    )
+                    self.clear_lane_action_failure(provider_id, lane_id)
+                    self.record_manual_load_outcome(provider_id, model_name, "running", lane_id=lane_id)
+                    confirmed = await self._execute_action_with_confirmation(
+                        action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
+                    )
+                    # The executor's wrapper already settled the outcome for a
+                    # real run; this call is what settles it when the executor
+                    # was stood in for (the tests) and keeps the manual path
+                    # self-contained. Idempotent: settled entries are not
+                    # "running" anymore.
+                    self._settle_manual_load_outcome(provider_id, model_name, lane_id, confirmed)
+                    return confirmed
+            logger.warning(
+                "Manual load of %s on worker=%s: no free lane id after re-reading the runtime",
+                model_name,
+                provider_id,
+            )
+            self.record_manual_load_outcome(
+                provider_id,
+                model_name,
+                "failed",
+                reason="no free lane id was available on the worker",
+            )
+            return False
+        finally:
+            # The dispatch releases its (re)claim in its own finally; the
+            # owner check makes this a no-op when the claim is already gone.
+            if lane_id:
+                self._release_load_lane_id(provider_id, lane_id)
+
+    def _peek_lane(self, snapshot: Optional[Dict[str, Any]], lane_id: str) -> Optional[Dict[str, Any]]:
+        """The lane's entry in ``snapshot``, or None when the snapshot is
+        missing or does not contain the lane.
+
+        Callers that must tell the two apart (the manual drain must not call a
+        worker disconnect an unload) check the snapshot's availability first
+        and pass it in.
+        """
+        lanes = ((snapshot or {}).get("runtime") or {}).get("lanes") or []
+        return next(
+            (item for item in lanes if isinstance(item, dict) and str(item.get("lane_id") or "") == str(lane_id)),
+            None,
+        )
+
+    def _step_budget(self, deadline: Optional[float], default_seconds: float) -> float:
+        """A step's time budget: ``default_seconds``, capped by the time left
+        until the shared ``deadline`` (an absolute monotonic clock reading)
+        when one was carried in.
+
+        The manual drain hands its endpoint budget to the confirmed executor
+        as a deadline, so the executor's own drain, command and confirmation
+        spend the time left on the call instead of stacking their individual
+        budgets on top of the drain that already ran. Without a deadline the
+        default is returned untouched, so every existing caller behaves as
+        before.
+        """
+        if deadline is None:
+            return default_seconds
+        return max(0.0, min(default_seconds, deadline - time.monotonic()))
+
+    async def drain_lane_manually(self, provider_id: int, lane_id: str) -> Dict[str, Any]:
+        """Operator-initiated drain of a busy lane ("Drain" in the statistics UI).
+
+        The manual sleep endpoint is withheld from a lane that is still
+        serving — a click there would block for the whole drain, and the
+        worker's wait-mode drain is best-effort to boot: once its 30 s budget
+        runs out it proceeds and drops whatever is still in flight. A busy
+        lane an operator wants taken offline needs the strict version, which
+        is what this runs:
+
+        1. mark the lane cold so ``select_lane_for_model`` stops offering it —
+           no new requests are routed to it from here on;
+        2. wait (``DRAIN_TIMEOUT_SECONDS``) for the in-flight ones to finish,
+           aborting without touching the lane when they do not;
+        3. once drained, hand the terminal step to the confirmed executor — a
+           ``sleep_l1`` (level 1 keeps the weights resident for a fast wake),
+           or a ``stop`` when the host cannot afford a resident sleeper or the
+           lane's backend has no sleep mode at all. Routing it through the
+           executor is what keeps the manual path consistent with a planned
+           one: the executor syncs the desired-lane set (an additive remove,
+           or ``apply_lanes`` with the lane dropped when additive loads are
+           off), keeps the VRAM ledger current, and waits for the worker to
+           actually confirm the state — so this never reports ``slept`` or
+           ``unloaded`` on the strength of a command that was merely sent.
+           The lane is drained and cold-marked by step 2, so the executor's
+           own drain usually returns at once — it still runs, because a
+           request dispatched before the cold mark can land on the worker a
+           beat after step 2's zero check, and that second wait is what keeps
+           such a request from being killed by the sleep;
+        4. clear the cold mark on every exit, so a lane the drain could not
+           finish keeps serving exactly as before. The executor's reclaim
+           sleeps keep their mark until a wake clears it, but the manual wake
+           endpoint dispatches the command directly and never goes through
+           the executor — a mark left behind there would strand a manually
+           woken lane outside the rotation, so the manual paths always clear
+           it themselves.
+
+        The whole run holds the per-lane lock the executor's own stop/sleep
+        actions take, so a planned reclaim of this lane cannot interleave a
+        second terminal command under the drain. Without it, ``_drain_lane``
+        would read a lane the executor removed mid-drain as "already drained"
+        and dispatch a terminal command at a lane that is gone.
+
+        The terminal status is read from the lane itself, not from the
+        executor's flag: its host-RAM recheck can escalate a ``sleep_l1`` to a
+        ``stop`` a beat after step 3 decided, and a lane the drain ends with
+        gone is an ``unloaded``, not an error.
+
+        The whole run is budgeted by ``DRAIN_ENDPOINT_BUDGET_SECONDS``: the
+        clock starts before the lane lock, so even waiting for it (a planned
+        reclaim still working on this lane) spends the same budget, and the
+        strict wait takes only what is left of its ``DRAIN_TIMEOUT_SECONDS``.
+        The remainder is handed to the executor as a shared deadline (see
+        ``_step_budget``), so the terminal step's drain, command and
+        confirmation spend the time left on the call instead of stacking
+        their individual budgets on top of the first wait. That is what keeps
+        the answer within the webservice's read timeout on this call: when
+        the budget runs out, whatever step is running is the one that times
+        out — an exhausted budget at the strict wait reads as "not drained"
+        and the lane keeps serving, mid-terminal-drain the sleep is refused
+        before its command is sent, mid-confirmation the terminal-state
+        re-read below decides the answer — and a budget run-out is always an
+        actionable error (the operator retries), never a dropped request.
+
+        Returns a result dict; the endpoint maps it onto a status code.
+        """
+        # The budget starts before the lane lock: a planned reclaim holding
+        # it can wait out a large share of the endpoint's time, and that wait
+        # must count against the webservice's read timeout, not on top of it.
+        started = time.monotonic()
+        deadline = started + self.DRAIN_ENDPOINT_BUDGET_SECONDS
         async with self._lane_lock(provider_id, lane_id):
-            # Everything below is re-read under the lock: a load takes minutes,
-            # so the provider state this was admitted on is long stale by the
-            # time the lock is free.
-            if self._lane_exists_in_runtime(provider_id, lane_id):
-                logger.info(
-                    "Manual load of %s on worker=%s is a no-op: lane %s already exists",
-                    model_name,
-                    provider_id,
-                    lane_id,
+            self._mark_lane_cold(provider_id, lane_id)
+            try:
+                drained = await self._drain_lane(
+                    provider_id, lane_id, timeout_seconds=self._step_budget(deadline, self.DRAIN_TIMEOUT_SECONDS)
                 )
-                return False
+                if not drained:
+                    return {
+                        "status": "drain_timeout",
+                        "lane_id": lane_id,
+                        "error": (
+                            f"Lane {lane_id} did not drain within {int(self.DRAIN_TIMEOUT_SECONDS)}s; "
+                            "its requests keep running and the lane keeps serving."
+                        ),
+                    }
 
-            rejection = self.manual_load_rejection_reason(provider_id)
-            if rejection is not None:
-                logger.warning(
-                    "Refusing manual load of %s on worker=%s after waiting for the lane lock: %s",
-                    model_name,
-                    provider_id,
-                    rejection,
+                # Re-read the lane under the lock, right before the terminal
+                # decision: the snapshot the endpoint validated can be a beat
+                # stale, and both the sleep decision and the profile lookup
+                # need the current view.
+                snap = self._registry.peek_runtime_snapshot(provider_id)
+                if snap is None:
+                    # The worker dropped mid-drain. A missing snapshot is not
+                    # proof the lane is offline — do not claim it is.
+                    return {
+                        "status": "error",
+                        "lane_id": lane_id,
+                        "error": (
+                            f"The worker disconnected while the drain of lane {lane_id} was "
+                            "finishing; its final state is unknown."
+                        ),
+                    }
+                lane = self._peek_lane(snap, lane_id)
+                if lane is None:
+                    # A valid snapshot without the lane: a direct admin unload
+                    # (which bypasses this lock) removed it mid-drain, and the
+                    # operator's goal — the lane offline — is already met.
+                    return {
+                        "status": "unloaded",
+                        "lane_id": lane_id,
+                        "reason": "the lane was removed while the drain was in flight",
+                    }
+                sleep_state = str(lane.get("sleep_state") or "").strip().lower()
+                model = str(lane.get("model") or "")
+                profile = self._safe_get_profiles(provider_id).get(model) if model else None
+
+                sleep_supported = sleep_state != "unsupported"
+                host_ram_ok, eff_avail, required_mb = False, 0.0, 0.0
+                if sleep_supported:
+                    host_ram_ok, eff_avail, required_mb = self._check_host_ram_headroom_for_sleep(
+                        provider_id, 1, profile
+                    )
+
+                unload_reason: Optional[str] = None
+                if sleep_supported and host_ram_ok:
+                    terminal = CapacityPlanAction(
+                        action="sleep_l1",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=model,
+                        reason="manual drain: the operator took a busy lane offline",
+                    )
+                else:
+                    unload_reason = (
+                        "the lane's backend does not support sleep mode"
+                        if not sleep_supported
+                        else f"host RAM headroom too low ({eff_avail:.0f}MB available < {required_mb:.0f}MB required)"
+                    )
+                    logger.warning(
+                        "Manual drain of lane %s on worker=%s escalates to an unload: %s",
+                        lane_id,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        unload_reason,
+                    )
+                    terminal = CapacityPlanAction(
+                        action="stop",
+                        provider_id=provider_id,
+                        lane_id=lane_id,
+                        model_name=model,
+                        reason=f"manual drain unload: {unload_reason}",
+                        # A manual unload is an explicit operator action; the
+                        # load-cooldown gate exists to keep the planner from
+                        # reclaiming a lane it just placed, not to refuse an
+                        # operator taking a lane offline.
+                        bypass_load_cooldown=True,
+                    )
+
+                # The executor owns the desired-lane sync, the VRAM ledger, and
+                # the confirmation wait for this step (see the docstring). The
+                # deadline carries the endpoint budget in: the strict wait
+                # above already spent its share, so the executor's own drain,
+                # command and confirmation get only what is left.
+                await self._execute_action_with_confirmation(
+                    terminal,
+                    timeout_seconds=30.0,
+                    deadline=deadline,
                 )
-                return False
 
-            capacity = self._safe_get_capacity(provider_id)
-            if capacity is None:
-                logger.warning(
-                    "Refusing manual load of %s on worker=%s: capacity snapshot went away before dispatch",
-                    model_name,
-                    provider_id,
-                )
-                return False
-
-            profile = self._safe_get_profiles(provider_id).get(model_name)
-            action = CapacityPlanAction(
-                action="load",
-                provider_id=provider_id,
-                lane_id=lane_id,
-                model_name=model_name,
-                params=self._build_load_params(model_name, lane_id, profile, capacity, provider_id),
-                reason="Manual load requested by an operator",
-            )
-            return await self._execute_action_with_confirmation(
-                action, timeout_seconds=self.LANE_LOAD_COMMAND_TIMEOUT_S
-            )
+                # Read the terminal state from the lane itself: the executor's
+                # host-RAM recheck can escalate a sleep to a stop, in which
+                # case the lane is gone and that is an unload, not a failure.
+                snap_after = self._registry.peek_runtime_snapshot(provider_id)
+                if snap_after is None:
+                    # The worker dropped after the terminal command: the state
+                    # is unknown, so do not report a success.
+                    return {
+                        "status": "error",
+                        "lane_id": lane_id,
+                        "error": (
+                            f"The worker disconnected before the drain of lane {lane_id} could be "
+                            "confirmed; its final state is unknown."
+                        ),
+                    }
+                lane_after = self._peek_lane(snap_after, lane_id)
+                if lane_after is not None and str(lane_after.get("sleep_state") or "").strip().lower() == "sleeping":
+                    logger.info(
+                        "Manual drain of lane %s on worker=%s ended in a sleep",
+                        lane_id,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                    )
+                    return {"status": "slept", "lane_id": lane_id}
+                if lane_after is None:
+                    return {
+                        "status": "unloaded",
+                        "lane_id": lane_id,
+                        "reason": unload_reason
+                        or "the executor escalated the sleep to a full unload (host RAM headroom)",
+                    }
+                # Still awake: the terminal command did not take effect (worker
+                # refused, lost, or still settling). The finally below clears
+                # the mark, so the lane keeps serving exactly as before.
+                return {
+                    "status": "error",
+                    "lane_id": lane_id,
+                    "error": (
+                        f"The worker did not complete the drain's terminal step on lane {lane_id}; "
+                        "it is still awake and serving. See the orchestrator logs for the underlying error."
+                    ),
+                }
+            finally:
+                self._unmark_lane_cold(provider_id, lane_id)
 
     def _build_load_params(
         self,
@@ -5856,7 +7310,7 @@ class CapacityPlanner:
                 kv_mb, selected_max_model_len = min(viable_pairs, key=lambda p: p[0])
                 kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
             else:
-                kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb)
+                kv = self._compute_kv_cache_bytes(profile, available_for_kv_mb=available_for_kv_mb, tp=tp)
         else:
             kv = self._format_bytes_human(int(kv_mb * 1024 * 1024))
         if kv:
@@ -5904,7 +7358,7 @@ class CapacityPlanner:
         TP=1: inferring off the calibrated base_residency (the full awake
         footprint, often most of a GPU) would escalate it to a higher TP and
         overwrite the calibrated verdict with data measured at a different
-        parallelism (issue #616).
+        parallelism.
         """
         import math
 
@@ -5950,6 +7404,7 @@ class CapacityPlanner:
         self,
         profile: Optional[ModelProfile],
         available_for_kv_mb: Optional[float] = None,
+        tp: int = 1,
     ) -> Optional[str]:
         """Compute the --kv-cache-memory-bytes string to pass to vLLM on startup.
 
@@ -5962,14 +7417,16 @@ class CapacityPlanner:
         already passed a feasibility check.
 
         Falls back to ``_estimate_kv_mb`` for legacy profiles written before
-        the envelope existed. Returns None only when neither path produces a
-        positive value.
+        the envelope existed — ``tp`` (the selected tensor-parallel size)
+        must be passed through to it so a whole-model estimate is sharded
+        down to the per-rank budget this function's return value is spent
+        as. Returns None only when neither path produces a positive value.
         """
         if profile is None:
             return None
         kv_mb = self._select_kv_mb_from_envelope(profile, available_for_kv_mb)
         if kv_mb is None:
-            kv_mb = self._estimate_kv_mb(profile)
+            kv_mb = self._estimate_kv_mb(profile, tp)
         if kv_mb <= 0:
             return None
         return self._format_bytes_human(int(kv_mb * 1024 * 1024))
@@ -6267,13 +7724,27 @@ class CapacityPlanner:
         per_gpu_for_kv = per_gpu_total - per_gpu_base - headroom_per_gpu_mb
         return max(per_gpu_for_kv, 0.0)
 
-    def _estimate_kv_mb(self, profile: ModelProfile) -> float:
-        """KV cache allocation in MB, using the same priority chain as _compute_kv_cache_bytes.
+    def _estimate_kv_mb(self, profile: ModelProfile, tp: int = 1) -> float:
+        """KV cache allocation in MB — a PER-RANK budget (the same units
+        kv_cache_memory_bytes / kv_budget_mb are spent in, applied on each
+        of the ``tp`` GPUs a lane occupies) — using the same priority chain
+        as _compute_kv_cache_bytes.
 
-        1. Observed kv_budget_mb from a previous load on this provider (most accurate).
-        2. Architecture-exact: kv_per_token_bytes × context_cap × concurrency.
-        3. Last-resort fallback: base_residency × KV_CACHE_HEADROOM_RATIO (used only
-           when the HF model config has not been fetched yet).
+        1. Observed kv_budget_mb from a previous load on this provider —
+           already per-rank, it's the exact kv_cache_memory_bytes that lane
+           ran with.
+        2. Architecture-exact: kv_per_token_bytes × context_cap × concurrency
+           is the WHOLE-MODEL footprint (every KV head), sharded down to one
+           rank's share via the same rule vLLM/the worker's precheck use —
+           heads_per_rank = max(1, num_key_value_heads // tp). Skipping this
+           at tp=4 hands each of the 4 ranks ~4x the intended budget, since
+           the un-sharded figure gets applied on every rank. Left un-sharded
+           when num_key_value_heads is unknown (profile predates the field)
+           — no geometry to shard by.
+        3. Last-resort fallback: base_residency × KV_CACHE_HEADROOM_RATIO,
+           divided by tp — base_residency is a whole-lane total split evenly
+           across ranks here as a rough approximation (used only when the HF
+           model config has not been fetched yet).
         """
         if profile.kv_budget_mb and profile.kv_budget_mb > 0:
             return float(profile.kv_budget_mb)
@@ -6282,10 +7753,15 @@ class CapacityPlanner:
                 profile.max_context_length or self.DEFAULT_CONTEXT_CAP,
                 self.DEFAULT_CONTEXT_CAP,
             )
-            return (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+            whole_model_kv_mb = (profile.kv_per_token_bytes * ctx * self.DEFAULT_CONCURRENCY) / (1024 * 1024)
+            heads = profile.num_key_value_heads
+            if heads and heads > 0 and tp > 1:
+                heads_per_rank = max(1, heads // tp)
+                return whole_model_kv_mb * heads_per_rank / heads
+            return whole_model_kv_mb
         base = profile.estimate_base_residency_mb()
         if base and base > 0:
-            return base * self.KV_CACHE_HEADROOM_RATIO
+            return (base * self.KV_CACHE_HEADROOM_RATIO) / max(tp, 1)
         return 0.0
 
     def _estimate_model_loaded_vram(self, profile: ModelProfile) -> float:
@@ -6318,9 +7794,22 @@ class CapacityPlanner:
                 if observed > 0.0:
                     return min(base, observed) if base > 0.0 else observed
                 return base  # no live observation yet — fall back to calibrated value
-            kv = self._estimate_kv_mb(profile)
-            return (base + kv) * self.ESTIMATION_SLACK_RATIO
+            tp = self._profile_tp(profile)
+            # _estimate_kv_mb is per-rank; multiply by tp for the whole-lane
+            # total this function's callers compare against a node-wide
+            # available_vram_mb (see _passes_minimum_load_feasibility).
+            kv_total = self._estimate_kv_mb(profile, tp) * tp
+            return (base + kv_total) * self.ESTIMATION_SLACK_RATIO
         return profile.estimate_vram_mb()
+
+    @staticmethod
+    def _profile_tp(profile: Optional[ModelProfile]) -> int:
+        """The tensor-parallel size a profile's lane was calibrated/configured
+        at, or 1 when unknown — the per-rank KV estimate needs this to shard
+        a whole-model kv_per_token_bytes figure down correctly."""
+        if profile is not None and profile.tensor_parallel_size and int(profile.tensor_parallel_size) > 1:
+            return int(profile.tensor_parallel_size)
+        return 1
 
     def _estimate_action_vram(
         self,
@@ -6353,15 +7842,17 @@ class CapacityPlanner:
                 # and apply ESTIMATION_SLACK_RATIO for disk → memory spread.
                 params = action.params or {}
                 vllm_config = params.get("vllm_config") if isinstance(params.get("vllm_config"), dict) else {}
+                tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
+                if tp <= 0:
+                    tp = self._profile_tp(profile)
                 kv_str = vllm_config.get("kv_cache_memory_bytes", "")
                 kv_mb = self._parse_kv_cache_to_mb(kv_str) if kv_str else 0.0
                 if kv_mb <= 0:
-                    kv_mb = self._estimate_kv_mb(profile)
-                loaded_vram = (base_residency + kv_mb) * self.ESTIMATION_SLACK_RATIO
+                    kv_mb = self._estimate_kv_mb(profile, tp)
+                # kv_mb is per-rank; multiply by tp for the whole-lane total.
+                kv_total_mb = kv_mb * tp
+                loaded_vram = (base_residency + kv_total_mb) * self.ESTIMATION_SLACK_RATIO
 
-                tp = int(vllm_config.get("tensor_parallel_size", 0) or 0)
-                if tp <= 0 and profile.tensor_parallel_size:
-                    tp = int(profile.tensor_parallel_size)
                 if tp > 1:
                     loaded_vram *= 1.0 + self.TP_OVERHEAD_RATIO
 
@@ -6864,8 +8355,12 @@ class CapacityPlanner:
         Order of preference:
           1. The lane's last-measured host_ram_mb in the runtime snapshot
              (the worker reports PSS across the process tree).
-          2. The model profile estimate (host_ram_mb, then disk_size).
-          3. Zero — caller treats as "unknown" and skips the gate.
+          2. For cold loads: the high-water mark across live same-model lanes
+             on this provider (sticky EngineCore shm grows with uptime and
+             is not cleared by sleep→wake — a fresh replica of a heavy model
+             should be gated against that ceiling, not only disk size).
+          3. The model profile estimate (host_ram_mb, then disk_size).
+          4. Zero — caller treats as "unknown" and skips the gate.
 
         *runtime_state* is used only for cold-load paths where the lane does
         not yet exist; ignored otherwise.
@@ -6874,15 +8369,61 @@ class CapacityPlanner:
             measured = self._lane_host_ram_from_snapshot(provider_id, lane_id)
             if measured > 0:
                 return measured
-        if profile is None:
+
+        profile_estimate = 0.0
+        if profile is not None:
+            host_ram_mb = getattr(profile, "host_ram_mb", None)
+            if host_ram_mb and host_ram_mb > 0:
+                profile_estimate = float(host_ram_mb)
+            else:
+                disk_size = getattr(profile, "disk_size_bytes", None)
+                if disk_size and disk_size > 0:
+                    profile_estimate = float(disk_size) / (1024 * 1024)
+
+        if runtime_state == "cold":
+            live_ceiling = self._max_model_host_ram_from_snapshot(provider_id, model_name)
+            return max(profile_estimate, live_ceiling)
+
+        return profile_estimate
+
+    def _max_model_host_ram_from_snapshot(
+        self,
+        provider_id: int,
+        model_name: str,
+    ) -> float:
+        """Max awake host_ram_mb among lanes serving *model_name* on a provider.
+
+        Sticky awake growth means two replicas of the same calibrated profile
+        are not equal on the host axis; the heaviest awake sibling is the
+        planning ceiling for another cold load of that model. Sleeping lanes
+        are skipped: their PSS includes sleep_l1 weight backups that are not
+        the awake sticky-shm ceiling a new cold load is expected to grow into.
+        """
+        if self._registry is None or not model_name:
             return 0.0
-        host_ram_mb = getattr(profile, "host_ram_mb", None)
-        if host_ram_mb and host_ram_mb > 0:
-            return float(host_ram_mb)
-        disk_size = getattr(profile, "disk_size_bytes", None)
-        if disk_size and disk_size > 0:
-            return float(disk_size) / (1024 * 1024)
-        return 0.0
+        snap = self._registry.peek_runtime_snapshot(provider_id)
+        if snap is None:
+            return 0.0
+        lanes = (snap.get("runtime") or {}).get("lanes") or []
+        if not isinstance(lanes, list):
+            return 0.0
+        ceiling = 0.0
+        for lane in lanes:
+            if not isinstance(lane, dict):
+                continue
+            if str(lane.get("model") or "") != model_name:
+                continue
+            if str(lane.get("sleep_state") or "") == "sleeping":
+                continue
+            if str(lane.get("runtime_state") or "") == "sleeping":
+                continue
+            try:
+                measured = float(lane.get("host_ram_mb") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if measured > ceiling:
+                ceiling = measured
+        return ceiling
 
     def _lane_host_ram_from_snapshot(
         self,
@@ -7001,11 +8542,45 @@ class CapacityPlanner:
         return None
 
     async def _execute_action_with_confirmation(
-        self, action: CapacityPlanAction, timeout_seconds: float = 60.0
+        self,
+        action: CapacityPlanAction,
+        timeout_seconds: float = 60.0,
+        deadline: Optional[float] = None,
     ) -> bool:
         """Execute action and wait for worker status to confirm expected state.
 
         Returns True if confirmed, False if timeout.
+
+        ``deadline`` (an absolute monotonic clock reading) caps every step of
+        the run — the reclaim drain, the command, the confirmation — by the
+        time left until then, so a caller that already spent time on this
+        action (the manual drain spends its endpoint budget on the strict
+        wait first) cannot be outrun by the per-step budgets. Without one the
+        per-step budgets apply unchanged.
+
+        Every load outcome — a manual one, a planned one, a cold load —
+        passes through this point, so this is also where a manual outcome
+        riding on the lane (see _settle_manual_load_outcome) learns its
+        terminal state: a failure of a planner-owned load of the model must
+        reach the operator's poll as well.
+        """
+        confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds, deadline=deadline)
+        if action.action == "load":
+            self._settle_manual_load_outcome(action.provider_id, action.model_name, action.lane_id, confirmed)
+        return confirmed
+
+    async def _execute_action_core(
+        self,
+        action: CapacityPlanAction,
+        timeout_seconds: float = 60.0,
+        deadline: Optional[float] = None,
+    ) -> bool:
+        """The executor proper; see _execute_action_with_confirmation.
+
+        ``deadline`` is threaded to the steps that would otherwise stack a
+        full budget of their own (the reclaim drain, the worker command, the
+        confirmation poll); the manual drain carries its endpoint budget in
+        as one.
         """
         logger.info(
             "Executing capacity action: %s on lane %s (model=%s, worker=%s) — %s",
@@ -7118,6 +8693,7 @@ class CapacityPlanner:
                     action.provider_id,
                     _sleep_level,
                     _profile,
+                    lane_id=action.lane_id,
                 )
                 if not host_ram_ok:
                     logger.warning(
@@ -7143,7 +8719,9 @@ class CapacityPlanner:
                         # the case the safety valve exists to handle.
                         bypass_load_cooldown=True,
                     )
-                    return await self._execute_action_with_confirmation(stop_action, timeout_seconds)
+                    # The escalated stop keeps the caller's shared deadline:
+                    # it spends the same pot the sleep was spending.
+                    return await self._execute_action_with_confirmation(stop_action, timeout_seconds, deadline=deadline)
 
                 # For request-time reclaim sleeps, mark the lane cold and drain
                 # active requests BEFORE sending the sleep command.  Without this,
@@ -7160,10 +8738,14 @@ class CapacityPlanner:
                 _is_reclaim_sleep = action.action in ("sleep_l1", "sleep_l2")
                 if _is_reclaim_sleep:
                     self._mark_lane_cold(action.provider_id, action.lane_id)
+                    # A shared deadline (the manual drain carries its endpoint
+                    # budget in) caps this wait by the time left on the call;
+                    # an exhausted budget reads as "not drained" and aborts
+                    # the sleep before any command is sent.
                     drained = await self._drain_lane(
                         action.provider_id,
                         action.lane_id,
-                        timeout_seconds=60.0,
+                        timeout_seconds=self._step_budget(deadline, 60.0),
                     )
                     if not drained:
                         logger.warning(
@@ -7198,7 +8780,7 @@ class CapacityPlanner:
                         action.provider_id,
                         command_action,
                         command_params,
-                        timeout_seconds=int(min(timeout_seconds, 120)),
+                        timeout_seconds=int(min(timeout_seconds, 120.0, self._step_budget(deadline, timeout_seconds))),
                     )
                 except Exception as exc:
                     logger.error(
@@ -7275,6 +8857,40 @@ class CapacityPlanner:
                     return False
 
             elif action.action == "load":
+                # The provider-wide in-flight reservation: a concurrent load
+                # — a manual one, or a planned load of another model that
+                # derived the same id — may already hold this lane id. The
+                # worker keys lanes by id alone, so dispatching over it would
+                # overwrite the lane the other one is bringing up (the
+                # apply_lanes desired set is last-write-wins).
+                if not self._claim_load_lane_id(action.provider_id, action.lane_id, action.model_name):
+                    logger.warning(
+                        "Skipping load of %s on worker=%s: lane %s is claimed by an in-flight load",
+                        action.model_name,
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.lane_id,
+                    )
+                    self.record_lane_action_failure(
+                        action.provider_id, action.lane_id, "another load is already using this lane"
+                    )
+                    return False
+                if self._lane_exists_in_runtime(action.provider_id, action.lane_id):
+                    logger.warning(
+                        "Skipping load of %s on worker=%s: lane %s already exists in the runtime",
+                        action.model_name,
+                        self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                        action.lane_id,
+                    )
+                    self._release_load_lane_id(action.provider_id, action.lane_id)
+                    # A load skipped because its lane already exists is a load
+                    # that already happened: for a manual outcome riding on
+                    # this lane, the operator's goal is met — the same reading
+                    # the manual path's own lane-exists no-op applies.
+                    if (self._runtime_lane_model(action.provider_id, action.lane_id) or "").lower() == (
+                        action.model_name or ""
+                    ).lower():
+                        self._settle_manual_load_outcome(action.provider_id, action.model_name, action.lane_id, True)
+                    return False
                 # Estimate VRAM and atomically reserve
                 _estimated_load_vram = self._estimate_action_vram(action, _profile, _capacity) if _capacity else 0.0
                 if _reservation_id is None and _estimated_load_vram > 0 and _capacity is not None:
@@ -7289,14 +8905,58 @@ class CapacityPlanner:
                         per_gpu_free=_per_gpu_free,
                     )
                     if _reservation_id is None:
+                        # The aggregate check above passed but the per-GPU one
+                        # did not (or no per-GPU data exists) — say which GPUs
+                        # fell short, or this line reads as a bug: need <
+                        # avail, yet the reservation was denied.
+                        # Report the gate's effective numbers, not the raw
+                        # snapshot: at provider level the gate compares
+                        # needed against raw free minus what in-flight
+                        # operations already committed (raw free can look
+                        # sufficient while the reservation is correctly
+                        # denied). Per-GPU, _get_per_gpu_free already returns
+                        # the ledger-adjusted free the gate reads — use it
+                        # directly, subtracting commitments again would
+                        # under-report.
+                        _vram = self._vram_ledger
+                        effective_avail = _vram.get_effective_available_mb(action.provider_id, raw_avail)
+                        gpu_free_parts: list[str] = []
+                        if _per_gpu_free:
+                            gpu_free_parts = [f"GPU {dev}: {free:.0f}MB" for dev, free in sorted(_per_gpu_free.items())]
+                        tp_size = len(self._parse_gpu_device_ids(_lane_gpus)) if _lane_gpus else 0
+                        per_gpu_need = (
+                            _estimated_load_vram / tp_size * self.VRAM_SAFETY_MARGIN
+                            if tp_size
+                            else _estimated_load_vram * self.VRAM_SAFETY_MARGIN
+                        )
+                        reason = (
+                            f"not enough free VRAM for this model: it needs "
+                            f"~{_estimated_load_vram / 1024.0:.1f} GB in total"
+                        )
+                        if tp_size:
+                            reason += f" (~{per_gpu_need / 1024.0:.1f} GB on each of {tp_size} GPUs)"
+                        reason += f", but only {effective_avail / 1024.0:.1f} GB are effectively free on the worker"
+                        if gpu_free_parts:
+                            reason += " (" + ", ".join(gpu_free_parts) + ")"
+                        reason += "."
+                        self.record_lane_action_failure(action.provider_id, action.lane_id, reason)
+                        _per_gpu_free_str = ", ".join(gpu_free_parts) or "unknown"
+                        _per_gpu_detail = (
+                            f" need-per-GPU={per_gpu_need:.0f}MB per-GPU-effective=[{_per_gpu_free_str}]"
+                            if _per_gpu_free
+                            else ""
+                        )
                         logger.warning(
                             "VRAM reservation denied for load of %s: "
-                            "need=%.0fMB avail=%.0fMB committed=%.0fMB gpus=%s",
+                            "need=%.0fMB effective_avail=%.0fMB "
+                            "(raw=%.0fMB committed=%.0fMB) gpus=%s%s",
                             action.model_name,
                             _estimated_load_vram,
+                            effective_avail,
                             raw_avail,
                             self.get_pending_vram_mb(action.provider_id),
                             _lane_gpus or "unknown",
+                            _per_gpu_detail,
                         )
                         return False
                 elif _reservation_id is None and _estimated_load_vram > 0:
@@ -7339,6 +8999,9 @@ class CapacityPlanner:
                             action.lane_id,
                             details=str(exc),
                         )
+                        self.record_lane_action_failure(
+                            action.provider_id, action.lane_id, f"the worker rejected the load: {exc}"
+                        )
                         return False
                     except Exception as exc:
                         logger.error(
@@ -7347,6 +9010,9 @@ class CapacityPlanner:
                             action.model_name,
                             action.lane_id,
                             exc,
+                        )
+                        self.record_lane_action_failure(
+                            action.provider_id, action.lane_id, f"the load command could not be sent: {exc}"
                         )
                         return False
                 else:
@@ -7377,6 +9043,11 @@ class CapacityPlanner:
                                 self._facade.get_provider_name(action.provider_id) or action.provider_id,
                             )
                             self._clear_inflight_add(action.provider_id, action.lane_id)
+                            self.record_lane_action_failure(
+                                action.provider_id,
+                                action.lane_id,
+                                "the worker accepted the load but rolled the lane change back",
+                            )
                             return False
                         self._registry.update_desired_lanes(action.provider_id, desired)
                         # Inflight entry now committed to registry — clear it
@@ -7390,6 +9061,9 @@ class CapacityPlanner:
                             exc,
                         )
                         self._clear_inflight_add(action.provider_id, action.lane_id)
+                        self.record_lane_action_failure(
+                            action.provider_id, action.lane_id, f"the load command could not be sent: {exc}"
+                        )
                         return False
 
             elif action.action == "stop":
@@ -7425,11 +9099,15 @@ class CapacityPlanner:
                 # Phase 3a: Pre-mark lane as cold so scheduler stops routing to it
                 self._mark_lane_cold(action.provider_id, action.lane_id)
 
-                # Phase 3b: Drain active requests — abort if drain fails
+                # Phase 3b: Drain active requests — abort if drain fails.
+                # As in the sleep branch, a carried-in deadline caps this wait
+                # by the time left on the call, and an exhausted budget reads
+                # as "not drained" and aborts the stop before any command is
+                # sent.
                 drained = await self._drain_lane(
                     action.provider_id,
                     action.lane_id,
-                    timeout_seconds=60.0,
+                    timeout_seconds=self._step_budget(deadline, 60.0),
                 )
                 if not drained:
                     logger.warning(
@@ -7445,7 +9123,9 @@ class CapacityPlanner:
                             action.provider_id,
                             "delete_lane",
                             {"lane_id": action.lane_id},
-                            timeout_seconds=int(min(timeout_seconds, 30)),
+                            timeout_seconds=int(
+                                min(timeout_seconds, 30.0, self._step_budget(deadline, timeout_seconds))
+                            ),
                         )
                         self._registry.update_desired_lane_remove(
                             action.provider_id,
@@ -7474,7 +9154,9 @@ class CapacityPlanner:
                             action.provider_id,
                             "apply_lanes",
                             {"lanes": desired},
-                            timeout_seconds=int(min(timeout_seconds, 30)),
+                            timeout_seconds=int(
+                                min(timeout_seconds, 30.0, self._step_budget(deadline, timeout_seconds))
+                            ),
                         )
                         rolled_back = isinstance(result, dict) and result.get("rolled_back")
                         if rolled_back:
@@ -7503,9 +9185,15 @@ class CapacityPlanner:
                 logger.warning("Unknown capacity action: %s", action.action)
                 return False
 
-            # Poll for confirmation
-            confirmed = await self._poll_confirmation(action, timeout_seconds)
+            # Poll for confirmation — under the shared deadline, only with
+            # the time still left on the call.
+            confirmed = await self._poll_confirmation(action, self._step_budget(deadline, timeout_seconds))
         finally:
+            # Release the in-flight lane-id claim (load actions claim it at
+            # the top of their branch) — runs even on CancelledError/BaseException,
+            # so a cancelled dispatch never pins the id.
+            if action.action == "load":
+                self._release_load_lane_id(action.provider_id, action.lane_id)
             # Release VRAM reservation — runs even on CancelledError/BaseException.
             # The worker's actual VRAM usage is reflected in the next capacity snapshot.
             self._release_vram(_reservation_id)
@@ -7516,6 +9204,23 @@ class CapacityPlanner:
                     action.provider_id,
                     action.lane_id,
                     details="confirmation timeout",
+                )
+            elif action.action == "load":
+                # Symmetric with the wake case: the worker accepted the load
+                # but the lane never reached the loaded state. Without this
+                # mark the per-lane cooldown stays empty and the next cycle
+                # allocates a fresh suffix for a model this worker cannot
+                # load.
+                self._mark_load_failure(
+                    action.provider_id,
+                    action.lane_id,
+                    details="confirmation timeout",
+                )
+                self.record_lane_action_failure(
+                    action.provider_id,
+                    action.lane_id,
+                    f"the worker accepted the load but the lane did not reach the loaded state "
+                    f"within {int(timeout_seconds)} s",
                 )
             # Sleep confirmation timeout: the command was sent, so the lane
             # is likely sleeping even though we couldn't verify.  Clear the

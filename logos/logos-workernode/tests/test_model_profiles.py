@@ -1,5 +1,6 @@
 """Tests for ModelProfileRegistry — observation-only, no estimation."""
 
+import threading
 import time
 
 import pytest
@@ -9,6 +10,12 @@ from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileReg
 # ---------------------------------------------------------------------------
 # Basic record/retrieve
 # ---------------------------------------------------------------------------
+
+
+def _seed_disk_size(registry: ModelProfileRegistry, model_name: str, disk_size_bytes: int) -> None:
+    """Inject the legacy disk_size_bytes field the way _load_persisted does."""
+    registry._profiles[model_name] = ModelProfileRecord(disk_size_bytes=disk_size_bytes)
+    registry._persist()
 
 
 def test_record_loaded_vram_with_kv_derives_base_residency():
@@ -43,11 +50,11 @@ def test_record_loaded_vram_without_kv_leaves_base_residency_none():
 
 
 def test_record_loaded_vram_without_kv_updates_loaded_vram_only():
-    """For non-vllm engines or missing kv budget, only loaded_vram_mb is tracked."""
+    """Without a kv budget, only loaded_vram_mb is tracked."""
     registry = ModelProfileRegistry()
-    registry.record_loaded_vram("gemma:2b", 3000.0, engine="ollama")
+    registry.record_loaded_vram("gemma-2b", 3000.0, engine="vllm")
 
-    profile = registry.get_profile("gemma:2b")
+    profile = registry.get_profile("gemma-2b")
     assert profile.loaded_vram_mb == 3000.0
     assert profile.base_residency_mb is None
 
@@ -77,6 +84,22 @@ def test_record_loaded_vram_subsequent_uses_ema():
     assert profile.measurement_count == 2
 
 
+def test_record_loaded_vram_after_hf_precheck_uses_measurement_exactly():
+    """residency_source="hf" is a best-effort guess, not a prior real
+    measurement — the first live load must replace it exactly, not blend
+    through _ema() and keep 70% weight on a guess that could be badly off."""
+    registry = ModelProfileRegistry()
+    registry.apply_hf_precheck("org/model", disk_size_bytes=4_000_000_000, base_residency_mb=4200.0)
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "hf"
+
+    registry.record_loaded_vram("org/model", 9000.0, engine="vllm", kv_cache_sent_mb=2000.0)
+
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "measured"
+    assert profile.base_residency_mb == pytest.approx(9000.0 - 2000.0)
+
+
 def test_record_loaded_vram_ignores_zero():
     registry = ModelProfileRegistry()
     registry.record_loaded_vram("llama3:8b", 0.0)
@@ -104,10 +127,31 @@ def test_record_sleeping_vram_ema():
     assert abs(profile.sleeping_residual_mb - 530.0) < 1.0
 
 
-def test_record_disk_size_stores_metadata_only():
-    """record_disk_size stores the value but does NOT derive base_residency from it."""
+def test_record_host_ram_keeps_high_water_mark_across_lean_replica():
+    """Sticky EngineCore growth must not be averaged down by a fresh lean lane."""
     registry = ModelProfileRegistry()
-    registry.record_disk_size("llama3:8b", 4_000_000_000)
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 80_000.0, sleeping=False)
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 5_500.0, sleeping=False)
+
+    profile = registry.get_profile("Qwen/Qwen3.8-27B")
+    assert profile is not None
+    assert profile.host_ram_mb == 80_000.0
+
+
+def test_record_host_ram_sleeping_keeps_high_water_mark():
+    registry = ModelProfileRegistry()
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 70_000.0, sleeping=True)
+    registry.record_host_ram("Qwen/Qwen3.8-27B", 8_000.0, sleeping=True)
+
+    profile = registry.get_profile("Qwen/Qwen3.8-27B")
+    assert profile is not None
+    assert profile.host_ram_residual_mb == 70_000.0
+
+
+def test_disk_size_bytes_does_not_derive_base_residency():
+    """The legacy disk_size_bytes field is informational — no base_residency from it."""
+    registry = ModelProfileRegistry()
+    _seed_disk_size(registry, "llama3:8b", 4_000_000_000)
 
     profile = registry.get_profile("llama3:8b")
     assert profile is not None
@@ -163,7 +207,7 @@ def test_estimate_base_residency_returns_none_when_unknown():
 def test_get_all_profiles():
     registry = ModelProfileRegistry()
     registry.record_loaded_vram("llama3:8b", 8000.0)
-    registry.record_disk_size("qwen3:8b", 5_000_000_000)
+    _seed_disk_size(registry, "qwen3:8b", 5_000_000_000)
 
     profiles = registry.get_all_profiles()
     assert len(profiles) == 2
@@ -193,7 +237,7 @@ def test_persist_and_reload(tmp_path):
     )
     registry1.record_successful_load_util("llama3:8b", 0.72)
     registry1.record_sleeping_vram("llama3:8b", 512.0)
-    registry1.record_disk_size("qwen3:8b", 5_000_000_000)
+    _seed_disk_size(registry1, "qwen3:8b", 5_000_000_000)
 
     registry2 = ModelProfileRegistry(state_dir=state_dir)
     profiles = registry2.get_all_profiles()
@@ -336,7 +380,7 @@ def _write_calibrated_profile(tmp_path, tp: int) -> ModelProfileRegistry:
 
 def test_calibrated_tp_not_clobbered_by_mismatched_lane(tmp_path):
     """A serving lane that ran at a TP different from the calibrated TP must
-    not overwrite the profile (issue #616): the calibrated TP is the single
+    not overwrite the profile: the calibrated TP is the single
     source of truth, and the lane's measurements describe a different
     configuration. The whole profile — tp, residency, KV data — stays intact.
     """
@@ -494,6 +538,123 @@ def test_manual_override_base_residency():
     profile = registry.get_profile("org/model")
     assert profile.base_residency_mb == pytest.approx(7500.0)
     assert profile.residency_source == "override"
+
+
+# ---------------------------------------------------------------------------
+# HF compatibility precheck
+# ---------------------------------------------------------------------------
+
+
+def test_apply_hf_precheck_sets_fields_on_fresh_profile():
+    registry = ModelProfileRegistry()
+    changed = registry.apply_hf_precheck(
+        "org/model",
+        disk_size_bytes=4_000_000_000,
+        base_residency_mb=4200.0,
+        kv_per_token_bytes=1024,
+        max_context_length=8192,
+    )
+
+    assert changed is True
+    profile = registry.get_profile("org/model")
+    assert profile.disk_size_bytes == 4_000_000_000
+    assert profile.base_residency_mb == pytest.approx(4200.0)
+    assert profile.kv_per_token_bytes == 1024
+    assert profile.max_context_length == 8192
+    assert profile.residency_source == "hf"
+
+
+def test_apply_hf_precheck_does_not_downgrade_a_real_measurement():
+    """A calibrated/measured base_residency_mb must survive an HF precheck
+    run afterward (e.g. a later session re-checking an already-calibrated
+    model) — only kv_per_token_bytes/max_context_length/disk_size_bytes,
+    which calibration never measures, should still update."""
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model", 9000.0, engine="vllm", kv_cache_sent_mb=2000.0)
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "measured"
+
+    changed = registry.apply_hf_precheck(
+        "org/model",
+        disk_size_bytes=4_000_000_000,
+        base_residency_mb=1234.0,
+        kv_per_token_bytes=1024,
+        max_context_length=8192,
+    )
+
+    assert changed is True
+    profile = registry.get_profile("org/model")
+    assert profile.residency_source == "measured"
+    assert profile.base_residency_mb == pytest.approx(9000.0 - 2000.0)
+    assert profile.disk_size_bytes == 4_000_000_000
+    assert profile.kv_per_token_bytes == 1024
+    assert profile.max_context_length == 8192
+
+
+def test_apply_hf_precheck_respects_manual_override():
+    registry = ModelProfileRegistry(
+        model_profile_overrides={
+            "org/model": {"base_residency_mb": 7500.0},
+        }
+    )
+    registry.seed_capabilities(["org/model"])
+
+    registry.apply_hf_precheck("org/model", base_residency_mb=1234.0, kv_per_token_bytes=1024)
+
+    profile = registry.get_profile("org/model")
+    assert profile.base_residency_mb == pytest.approx(7500.0)
+    assert profile.residency_source == "override"
+    # kv_per_token_bytes has no override, so the HF value still lands.
+    assert profile.kv_per_token_bytes == 1024
+
+
+def test_apply_hf_precheck_does_not_overwrite_an_override_added_mid_call():
+    """Regression: the manual-overrides lookup must happen inside the
+    same lock add_overrides uses. Simulates the model's first override
+    landing in the window between an unlocked lookup and the lock —
+    whichever order the two calls serialize in, the override must win."""
+    registry = ModelProfileRegistry()
+    registry.seed_capabilities(["org/model"])
+    override_applied = threading.Event()
+
+    def _add_override_from_another_thread():
+        registry.add_overrides({"org/model": {"kv_per_token_bytes": 999}})
+        override_applied.set()
+
+    class _RacyOverrides(dict):
+        def get(self, key, default=None):
+            stale = dict.get(self, key, default)
+            if key == "org/model" and "org/model" not in self:
+                threading.Thread(target=_add_override_from_another_thread).start()
+                override_applied.wait(timeout=0.2)
+            return stale
+
+    registry._manual_overrides = _RacyOverrides(registry._manual_overrides)  # noqa: SLF001
+
+    registry.apply_hf_precheck("org/model", kv_per_token_bytes=1024)
+    override_applied.wait(timeout=1.0)
+
+    profile = registry.get_profile("org/model")
+    assert profile.kv_per_token_bytes == 999
+
+
+def test_apply_hf_precheck_persists_across_restart(tmp_path):
+    registry = ModelProfileRegistry(state_dir=tmp_path)
+    registry.apply_hf_precheck(
+        "org/model",
+        disk_size_bytes=4_000_000_000,
+        base_residency_mb=4200.0,
+        kv_per_token_bytes=1024,
+        max_context_length=8192,
+    )
+
+    reloaded = ModelProfileRegistry(state_dir=tmp_path)
+    profile = reloaded.get_profile("org/model")
+    assert profile is not None
+    assert profile.base_residency_mb == pytest.approx(4200.0)
+    assert profile.kv_per_token_bytes == 1024
+    assert profile.max_context_length == 8192
+    assert profile.residency_source == "hf"
 
 
 def test_kv_per_token_in_to_dict():
@@ -782,3 +943,118 @@ def test_add_overrides_before_record_creation_lands_on_seeded_record():
     profile = registry.get_profile("org/model-7b")
     assert profile is not None
     assert profile.min_context_fraction == 1.0
+
+
+def test_calibrated_timing_fields_reload_and_serialize(tmp_path):
+    """Cold-load / wake timings persist in model_profiles.yml and come back on reload."""
+    import yaml
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    profiles_path = state_dir / "model_profiles.yml"
+
+    calibrated_data = {
+        "model_profiles": {
+            "org/model": {
+                "base_residency_mb": 5000.0,
+                "engine": "vllm",
+                "residency_source": "calibrated",
+                "measurement_count": 1,
+                "last_measured_epoch": time.time(),
+                "cold_load_time_s": 91.5,
+                "wake_from_sleep_time_s": 12.25,
+            }
+        }
+    }
+    profiles_path.write_text(yaml.safe_dump(calibrated_data))
+
+    registry = ModelProfileRegistry(state_dir=state_dir)
+    profile = registry.get_profile("org/model")
+    assert profile is not None
+    assert profile.cold_load_time_s == pytest.approx(91.5)
+    assert profile.wake_from_sleep_time_s == pytest.approx(12.25)
+    # The runtime snapshot the server planner reads must carry them too.
+    dumped = registry.get_all_profiles()["org/model"]
+    assert dumped["cold_load_time_s"] == pytest.approx(91.5)
+    assert dumped["wake_from_sleep_time_s"] == pytest.approx(12.25)
+
+
+def test_timing_fields_default_to_none_on_legacy_records():
+    """Profiles written before the fields existed load with None, not 0.0."""
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model-7b", 8000.0, engine="vllm")
+
+    profile = registry.get_profile("org/model-7b")
+    assert profile is not None
+    assert profile.cold_load_time_s is None
+    assert profile.wake_from_sleep_time_s is None
+
+
+@pytest.mark.parametrize("tp,cache,expected", [(2, 4096, 15988), (1, 4096, 11892), (2, 8192, 24180), (1, 0, 15988)])
+def test_reconfigured_vram_replaces_only_known_per_rank_cache(tp, cache, expected):
+    from logos_worker_node.model_profiles import reconfigured_vram_mb
+
+    profile = ModelProfileRecord(residency_source="calibrated", tensor_parallel_size=2, kv_budget_mb=4096)
+    assert reconfigured_vram_mb(profile, 15988, tp, cache) == expected
+    profile.kv_budget_mb = None
+    assert reconfigured_vram_mb(profile, 15988, tp, cache) == 15988
+
+
+# ---------------------------------------------------------------------------
+# mark_capacity_floor
+# ---------------------------------------------------------------------------
+
+
+def test_mark_capacity_floor_sets_value_on_fresh_profile():
+    registry = ModelProfileRegistry()
+    changed = registry.mark_capacity_floor("org/model", 16_000.0)
+
+    assert changed is True
+    profile = registry.get_profile("org/model")
+    assert profile is not None
+    assert profile.metal_capacity_floor_mb == pytest.approx(16_000.0)
+
+
+def test_mark_capacity_floor_raises_but_never_lowers():
+    """A bigger node failing too is stronger evidence; a smaller failed
+    node reported after must not erase that stronger evidence."""
+    registry = ModelProfileRegistry()
+    registry.mark_capacity_floor("org/model", 16_000.0)
+
+    raised = registry.mark_capacity_floor("org/model", 32_000.0)
+    assert raised is True
+    assert registry.get_profile("org/model").metal_capacity_floor_mb == pytest.approx(32_000.0)
+
+    lowered = registry.mark_capacity_floor("org/model", 8_000.0)
+    assert lowered is False
+    assert registry.get_profile("org/model").metal_capacity_floor_mb == pytest.approx(32_000.0)
+
+
+def test_mark_capacity_floor_round_trips_in_to_dict():
+    registry = ModelProfileRegistry()
+    registry.mark_capacity_floor("org/model", 24_000.0)
+
+    dumped = registry.get_all_profiles()["org/model"]
+    assert dumped["metal_capacity_floor_mb"] == pytest.approx(24_000.0)
+
+
+def test_manual_override_clears_a_false_positive_capacity_floor():
+    """An operator undoes a mistaken capacity-failure verdict by setting
+    the override to null — the only way to lower/reset the stored value."""
+    registry = ModelProfileRegistry()
+    registry.mark_capacity_floor("org/model", 32_000.0)
+
+    registry.add_overrides({"org/model": {"metal_capacity_floor_mb": None}})
+
+    profile = registry.get_profile("org/model")
+    assert profile.metal_capacity_floor_mb is None
+
+
+def test_manual_override_pins_an_explicit_capacity_floor():
+    registry = ModelProfileRegistry(
+        model_profile_overrides={"org/model": {"metal_capacity_floor_mb": 12_000.0}},
+    )
+    registry.seed_capabilities(["org/model"])
+
+    profile = registry.get_profile("org/model")
+    assert profile.metal_capacity_floor_mb == pytest.approx(12_000.0)

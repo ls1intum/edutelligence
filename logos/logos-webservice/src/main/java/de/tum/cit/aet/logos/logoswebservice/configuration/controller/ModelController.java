@@ -1,6 +1,9 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -9,37 +12,55 @@ import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestClientResponseException;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
+import de.tum.cit.aet.logos.logoswebservice.common.IpRateLimiterService;
+import de.tum.cit.aet.logos.logoswebservice.common.RateLimitExceededException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCalibrationLogRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelCapabilitiesRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateModelWeightRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelPriceService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorCalibrationLogsClient;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 @RestController
 @RequestMapping("/logosdb")
 public class ModelController {
 
     private final ModelService modelService;
+    private final ModelPriceService modelPriceService;
     private final PriceUpdaterService priceUpdaterService;
     private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient;
+    private final ObjectMapper objectMapper;
+    private final IpRateLimiterService rateLimiter;
 
     public ModelController(ModelService modelService,
+                           ModelPriceService modelPriceService,
                            PriceUpdaterService priceUpdaterService,
                            ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
-                           OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient) {
+                           OrchestratorCalibrationLogsClient orchestratorCalibrationLogsClient,
+                           ObjectMapper objectMapper,
+                           IpRateLimiterService rateLimiter) {
         this.modelService = modelService;
+        this.modelPriceService = modelPriceService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.orchestratorCalibrationLogsClient = orchestratorCalibrationLogsClient;
+        this.objectMapper = objectMapper;
+        this.rateLimiter = rateLimiter;
     }
 
     @PostMapping("/get_models")
@@ -47,20 +68,83 @@ public class ModelController {
         return ResponseEntity.ok(modelService.getModels(auth));
     }
 
+    /**
+     * Model-level health for applications, authenticated with a Logos API key
+     * (logos_key / logos-key header or Authorization: Bearer) — not a JWT —
+     * because the callers are the applications that send inference traffic,
+     * which hold API keys. Only models the key may access are reported.
+     *
+     * <p>
+     * A 401 here is exactly what lets a caller test a leaked key for validity, so repeated 401s from one address
+     * are rate limited: {@link IpRateLimiterService#tryReserveAuthFailureSlot} atomically checks and reserves the
+     * budget before authentication runs, so a burst of concurrent requests cannot all slip through on the same
+     * free slot. The reservation is given back the moment the key is known valid (see
+     * {@link IpRateLimiterService#releaseAuthFailureSlot}) — deliberately before the orchestrator call below,
+     * which can be slow and does not need auth to succeed again: holding the reservation through it would let a
+     * burst of valid concurrent requests exhaust the failure budget among themselves while their calls are in
+     * flight, and would leave the slot stuck until it expired if that call ever threw.
+     */
+    @PostMapping("/get_model_health")
+    public ResponseEntity<?> getModelHealth(HttpServletRequest request) {
+        String clientIp = rateLimiter.clientIp(request);
+        if (!rateLimiter.tryReserveAuthFailureSlot(clientIp)) {
+            throw new RateLimitExceededException(60);
+        }
+
+        try {
+            String apiKey = extractApiKey(request);
+            Optional<Set<String>> accessibleModels = apiKey == null
+                ? Optional.empty()
+                : modelService.resolveAccessibleModelsForApiKey(apiKey);
+            if (accessibleModels.isEmpty()) {
+                if (!rateLimiter.recordAuthFailureSlot(clientIp)) {
+                    throw new RateLimitExceededException(60);
+                }
+                return ResponseEntity.status(401).body(Map.of("detail", "Invalid or missing API key"));
+            }
+
+            rateLimiter.releaseAuthFailureSlot(clientIp);
+            return ResponseEntity.ok(modelService.getModelHealthForAccessibleModels(accessibleModels.get()));
+        } catch (RuntimeException e) {
+            rateLimiter.releaseAuthFailureSlot(clientIp);
+            throw e;
+        }
+    }
+
+    static String extractApiKey(HttpServletRequest request) {
+        String key = request.getHeader("logos_key");
+        if (key == null || key.isBlank()) {
+            key = request.getHeader("logos-key");
+        }
+        if (key == null || key.isBlank()) {
+            String authorization = request.getHeader("Authorization");
+            if (authorization != null && authorization.toLowerCase(Locale.ROOT).startsWith("bearer ")) {
+                key = authorization.substring("bearer ".length());
+            }
+        }
+        if (key == null) return null;
+        key = key.strip();
+        return key.isEmpty() ? null : key;
+    }
+
     @PostMapping("/add_model")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> addModel(
             @RequestBody AddModelRequestDTO req) {
-        Map<String, Object> serviceResult = modelService.addModel(req);
-        Integer newModelId = (Integer) serviceResult.get("model_id");
-        if (newModelId != null && req.name() != null) {
-            priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
-            modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
-                newModelId,
-                req.name()
-            );
+        try {
+            Map<String, Object> serviceResult = modelService.addModel(req);
+            Integer newModelId = (Integer) serviceResult.get("model_id");
+            if (newModelId != null && req.name() != null) {
+                priceUpdaterService.updatePricesForModelAsync(newModelId, req.name());
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(
+                    newModelId,
+                    req.name()
+                );
+            }
+            return ResponseEntity.ok(serviceResult);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
-        return ResponseEntity.ok(serviceResult);
     }
 
     @PostMapping("/update_model_info")
@@ -75,7 +159,12 @@ public class ModelController {
             }
             return response;
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
+            // "Model not found: ..." is a lookup miss; alias validation
+            // failures are bad input.
+            int status = e.getMessage() != null && e.getMessage().startsWith("Model not found")
+                ? 404
+                : 400;
+            return ResponseEntity.status(status).body(Map.of("error", e.getMessage()));
         }
     }
 
@@ -101,6 +190,23 @@ public class ModelController {
             .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
     }
 
+    /**
+     * Current and historic catalogue prices for one model, grouped per
+     * linked provider. Backs the Prices tab of the model details page,
+     * which the UI hides for models served only by local (logosnode)
+     * providers — those simply carry no price rows.
+     */
+    @PostMapping("/get_model_prices")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getModelPrices(
+            @RequestBody GetModelRequestDTO req) {
+        if (req.id() == null) return ResponseEntity.badRequest().body(Map.of("error", "id is required"));
+        return modelPriceService.getModelPrices(req.id())
+            .map(ResponseEntity::ok)
+            .<ResponseEntity<?>>map(r -> r)
+            .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
+    }
+
     @PostMapping("/get_model_calibration_logs")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> getModelCalibrationLogs(
@@ -111,6 +217,44 @@ public class ModelController {
                 Map.of("logs", orchestratorCalibrationLogsClient.getLogs((String) model.get("name")))))
             .<ResponseEntity<?>>map(r -> r)
             .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
+    }
+
+    /**
+     * On-demand fetch of one node's full calibration log straight from the
+     * worker. Backs the Complete-Logs tab's Download-full-logs button for
+     * successful calibrations, whose log is no longer stored in the DB.
+     */
+    @PostMapping("/get_model_calibration_log_full")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getModelCalibrationLogFull(
+            @RequestBody GetModelCalibrationLogRequestDTO req) {
+        if (req.id() == null || req.providerId() == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "id and provider_id are required"));
+        }
+        return modelService.getModel(req.id())
+            .<ResponseEntity<?>>map(model -> {
+                try {
+                    return orchestratorCalibrationLogsClient.fetchFullLog(req.providerId(), (String) model.get("name"));
+                } catch (RestClientResponseException e) {
+                    return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+                } catch (Exception e) {
+                    return ResponseEntity.status(503).body(Map.of("error", errorMessage(e)));
+                }
+            })
+            .orElse(ResponseEntity.status(404).body(Map.of("error", "Model not found")));
+    }
+
+    /** Map.of rejects null values; some exceptions have a null message. */
+    private String errorMessage(Exception e) {
+        return e.getMessage() != null ? e.getMessage() : e.toString();
+    }
+
+    private Object parseOrWrap(String body) {
+        try {
+            return objectMapper.readValue(body, Map.class);
+        } catch (Exception e) {
+            return Map.of("error", body);
+        }
     }
 
     @PostMapping("/get_general_model_stats")

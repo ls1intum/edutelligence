@@ -22,9 +22,6 @@
               <span class="lane-id">{{ row.laneId }}</span>
               <span class="state-label" [style.color]="row.stateColor">{{ row.lane.runtime_state.toUpperCase() }}</span>
               <div class="lane-badges">
-                <span class="badge" [class.badge--vllm]="row.lane.vllm" [class.badge--ollama]="!row.lane.vllm">
-                  {{ row.lane.vllm ? 'vllm' : 'ollama' }}
-                </span>
                 @if (canUnload) {
                   <button
                     class="btn-unload"
@@ -39,14 +36,18 @@
                        idle check, and a slept lane with queued demand is woken
                        straight back up. -->
                   @switch (sleepAction(row.lane)) {
-                    <!-- The handlers take only one wake/sleep at a time and drop a
-                         second silently, so while one is in flight the buttons of
-                         the other lanes are disabled instead of looking clickable.
-                         The spinner stays on the lane that was actually clicked. -->
+                    <!-- All three handlers admit only one wake/sleep/drain at a
+                         time and drop a second silently, so while any one is in
+                         flight every lane-action button is disabled instead of
+                         looking clickable — gating on the per-action signal
+                         alone would leave the other two clickable, and a status
+                         refresh could swap a draining lane's button back to an
+                         enabled Sleep mid-drain. The spinner stays on the lane
+                         that was actually clicked. -->
                     @case ('wake') {
                       <button
                         class="btn-lane-action"
-                        [disabled]="wakingLaneId() !== null"
+                        [disabled]="anyLaneActionInFlight()"
                         (click)="handleWake(row.laneId)"
                         title="Wake this lane (weights stay resident, no cold load). The capacity planner decides on its own and may put it back to sleep once it goes idle."
                       >
@@ -56,11 +57,24 @@
                     @case ('sleep') {
                       <button
                         class="btn-lane-action"
-                        [disabled]="sleepingLaneId() !== null"
+                        [disabled]="anyLaneActionInFlight()"
                         (click)="handleSleep(row.laneId)"
                         title="Put this lane to sleep (weights stay resident, no cold load on wake). The capacity planner decides on its own and may wake it as soon as demand returns."
                       >
                         {{ sleepingLaneId() === row.laneId ? 'Sleeping…' : 'Sleep' }}
+                      </button>
+                    }
+                    @case ('drain') {
+                      <!-- The busy counterpart of Sleep: the lane keeps serving
+                           until the click, and the click then takes as long as
+                           the last in-flight request runs. -->
+                      <button
+                        class="btn-lane-action"
+                        [disabled]="anyLaneActionInFlight()"
+                        (click)="handleDrain(row.laneId)"
+                        title="Stop sending new requests to this lane, wait for the in-flight ones to finish, then put it to sleep — or unload it when the host cannot hold it. Takes as long as the last request runs."
+                      >
+                        {{ drainingLaneId() === row.laneId ? 'Draining…' : 'Drain' }}
                       </button>
                     }
                   }
@@ -84,46 +98,40 @@
               </div>
             }
 
-            @if (row.lane.vllm) {
-              <div class="lane-stats">
-                @if (row.lane.gpu_cache_usage_percent != null) {
-                  <div class="kv-section">
-                    <div class="kv-header">
-                      <span class="stat-label">KV cache</span>
-                      <span class="stat-value" [style.color]="row.kvColor">{{ row.lane.gpu_cache_usage_percent.toFixed(1) }}%</span>
-                    </div>
-                    <div class="bar-track">
-                      <div
-                        class="bar-fill"
-                        [style.width.%]="minKvPct(row.lane.gpu_cache_usage_percent)"
-                        [style.background]="row.kvColor"
-                      ></div>
-                    </div>
+            <div class="lane-stats">
+              @if (row.lane.gpu_cache_usage_percent != null) {
+                <div class="kv-section">
+                  <div class="kv-header">
+                    <span class="stat-label" title="Share of the GPU KV block pool held by in-flight requests. Idle prefix-cached blocks are not included in this gauge (vLLM does not expose a separate prefix-cache fill metric yet).">KV cache</span>
+                    <span class="stat-value" [style.color]="row.kvColor">{{ row.lane.gpu_cache_usage_percent.toFixed(1) }}%</span>
                   </div>
-                }
-                <div class="metrics-row">
-                  @if (row.ttftLabel != null) {
-                    <span class="stat-label">TTFT p95 <span class="stat-value" [style.color]="row.ttftColor">{{ row.ttftLabel }}</span></span>
-                  }
-                  @if (row.lane.prefix_cache_hit_rate != null) {
-                    <span class="stat-label">Prefix hit <span class="stat-value neutral">{{ (row.lane.prefix_cache_hit_rate * 100).toFixed(1) }}%</span></span>
-                  }
-                  @if (row.lane.mtp_acceptance_rate != null) {
-                    <span class="stat-label">MTP accept <span class="stat-value neutral">{{ (row.lane.mtp_acceptance_rate * 100).toFixed(1) }}%</span></span>
-                  }
-                  @if (row.lane.queue_waiting != null) {
-                    <span class="stat-label">Queue <span class="stat-value neutral">{{ row.lane.queue_waiting }}</span></span>
-                  }
-                  @if (row.runningLabel != null) {
-                    <span class="stat-label" [attr.title]="row.runningTooltip">Running <span class="stat-value neutral">{{ row.runningLabel }}</span></span>
-                  }
+                  <div class="bar-track">
+                    <div
+                      class="bar-fill"
+                      [style.width.%]="minKvPct(row.lane.gpu_cache_usage_percent)"
+                      [style.background]="row.kvColor"
+                    ></div>
+                  </div>
                 </div>
+              }
+              <div class="metrics-row">
+                @if (row.ttftLabel != null) {
+                  <span class="stat-label">TTFT p95 <span class="stat-value" [style.color]="row.ttftColor">{{ row.ttftLabel }}</span></span>
+                }
+                @if (row.lane.prefix_cache_hit_rate != null) {
+                  <span class="stat-label" title="Fraction of prompt tokens served from the automatic prefix cache over this lane's lifetime. This is a hit rate, not how full the cache is — vLLM has no prefix-cache occupancy gauge yet.">Prefix hit <span class="stat-value neutral">{{ (row.lane.prefix_cache_hit_rate * 100).toFixed(1) }}%</span></span>
+                }
+                @if (row.lane.mtp_acceptance_rate != null) {
+                  <span class="stat-label">MTP accept <span class="stat-value neutral">{{ (row.lane.mtp_acceptance_rate * 100).toFixed(1) }}%</span></span>
+                }
+                @if (row.lane.queue_waiting != null) {
+                  <span class="stat-label">Queue <span class="stat-value neutral">{{ row.lane.queue_waiting }}</span></span>
+                }
+                @if (row.runningLabel != null) {
+                  <span class="stat-label" [attr.title]="row.runningTooltip">Running <span class="stat-value neutral">{{ row.runningLabel }}</span></span>
+                }
               </div>
-            } @else {
-              <div class="lane-na">
-                Active <span class="neutral">{{ row.lane.active_requests }}</span> · KV/TTFT n/a
-              </div>
-            }
+            </div>
           </div>
         </div>
       </div>
@@ -149,7 +157,12 @@
               >
                 <option value="" disabled>Select a model…</option>
                 @for (m of loadableModels; track m.model_name) {
-                  <option [value]="m.model_name">{{ m.model_name }}</option>
+                  <option [value]="m.model_name">
+                    {{ m.model_name }}
+                    @if (laneCountLabel(m.model_name); as label) {
+                      {{ label }}
+                    }
+                  </option>
                 }
               </select>
               <button

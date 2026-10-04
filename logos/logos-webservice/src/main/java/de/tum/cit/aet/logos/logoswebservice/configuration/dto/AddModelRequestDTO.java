@@ -1,5 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.dto;
 
+import java.util.List;
+
 public record AddModelRequestDTO(
     String name,
     Integer worseLatencyId,
@@ -7,5 +9,6 @@ public record AddModelRequestDTO(
     Integer worseCostId,
     Integer worseQualityId,
     String tags,
-    String description
+    String description,
+    List<String> aliases
 ) {}

@@ -1,0 +1,7 @@
+INFO 08-01 10:12:44 [api_server.py:1000] vLLM API server version 0.11.0
+INFO 08-01 10:12:47 [utils.py:233] non-default args: {'load_format': 'sharded_state', 'tensor_parallel_size': 2}
+ERROR 08-01 10:13:02 [core.py:712] EngineCore failed to start.
+ERROR 08-01 10:13:02 [core.py:712]   File "/opt/venv/lib/python3.12/site-packages/vllm/model_executor/model_loader/sharded_state_loader.py", line 158, in load_model
+ERROR 08-01 10:13:02 [core.py:712]     param.data.copy_(tensor)
+ERROR 08-01 10:13:02 [core.py:712] RuntimeError: The size of tensor a (2048) must match the size of tensor b (4096) at non-singleton dimension 0
+Process EngineCore_DP0: exited with code 1

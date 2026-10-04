@@ -7,6 +7,8 @@ responses per the OpenAI error spec.
 
 from __future__ import annotations
 
+import asyncio
+import importlib
 import json
 from types import SimpleNamespace
 from typing import AsyncIterator
@@ -20,6 +22,25 @@ from logos import ExecutionResult
 from logos.errors import UpstreamStreamError
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _keepalive_testclient_safe(monkeypatch):
+    """Keep TestClient away from the real disconnect probe on streaming paths.
+
+    Starlette's TestClient shares one portal thread between the ASGI app and the
+    test. The keepalive wrapper's disconnect watcher calls
+    ``request.is_disconnected()``, which can block that portal while
+    ``client.post`` waits for the body — a deadlock. These tests do not assert
+    disconnect behaviour, so the watcher is a cancellable idle wait instead.
+    """
+    monkeypatch.setattr(main, "_KEEPALIVE_INTERVAL_S", 0.05)
+    monkeypatch.setattr(main, "_CLIENT_DISCONNECT_POLL_SECONDS", 0.001)
+
+    async def _idle_until_cancelled(_request):
+        await asyncio.Future()
+
+    monkeypatch.setattr(main, "_wait_for_client_disconnect", _idle_until_cancelled)
 
 
 @pytest.fixture(autouse=True)
@@ -40,19 +61,18 @@ def _stub_auth(monkeypatch):
         default_priority=5,
     )
 
-    def fake_authenticate(headers):
+    def fake_authenticate(headers, client_ip=None):
         return fake_auth
 
-    monkeypatch.setattr("logos.auth.authenticate_api_key", fake_authenticate)
+    # ``import logos`` is logos.main after package swap; attach the real auth
+    # submodule so string-based monkeypatches can traverse ``logos.auth``.
+    auth_mod = importlib.import_module("logos.auth")
+    main.auth = auth_mod
+    monkeypatch.setattr(auth_mod, "authenticate_api_key", fake_authenticate)
     monkeypatch.setattr(main, "authenticate_api_key", fake_authenticate, raising=False)
-
     monkeypatch.setattr(main, "authenticate_logos_key", lambda h: ("test-key", 1), raising=False)
 
-    with patch(
-        "logos.auth.authenticate_with_profile",
-        create=True,
-        side_effect=fake_authenticate,
-    ):
+    with patch.object(auth_mod, "authenticate_with_profile", create=True, side_effect=fake_authenticate):
         yield fake_auth
 
 
@@ -77,6 +97,12 @@ def _stub_db(monkeypatch):
             pass
 
         def set_response_payload(self, *a, **k):
+            pass
+
+        def finalize_billing_row(self, *a, **k):
+            pass
+
+        def store_response_payload(self, *a, **k):
             pass
 
         def get_team(self, team_id):
@@ -104,8 +130,16 @@ def _stub_db(monkeypatch):
         def get_models_info(self, api_key_id):
             return [(1, "test-model")]
 
+        def get_deployments_for_api_key(self, api_key_id):
+            return [{"model_id": 1, "provider_id": 1, "type": "openai", "model_name": "test-model"}]
+
         def get_model(self, model_id):
             return {"id": model_id, "name": "test-model"}
+
+        def resolve_proxy_model(self, api_key_id, requested_name):
+            if str(requested_name or "").strip() == "test-model":
+                return (1, "test-model")
+            return None
 
         def get_provider_deployment_info(self, mid, pid):
             return {
@@ -126,7 +160,7 @@ def _stub_request_setup(monkeypatch):
         main,
         "request_setup",
         lambda headers, api_key_id, db=None: (
-            [{"model_id": 1, "provider_id": 1, "type": "openai"}],
+            [{"model_id": 1, "provider_id": 1, "type": "openai", "model_name": "test-model"}],
             [1],
         ),
         raising=False,
@@ -134,7 +168,7 @@ def _stub_request_setup(monkeypatch):
     monkeypatch.setattr(
         main,
         "_filter_logosnode_deployments",
-        AsyncMock(return_value=[{"model_id": 1, "provider_id": 1, "type": "openai"}]),
+        AsyncMock(return_value=[{"model_id": 1, "provider_id": 1, "type": "openai", "model_name": "test-model"}]),
         raising=False,
     )
 
@@ -273,6 +307,8 @@ class TestUpstreamErrorForwarding:
             forward_url="http://fake/v1/chat/completions",
             provider_type="openai",
             lane_id=None,
+            anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -330,6 +366,8 @@ class TestUpstreamErrorForwarding:
             forward_url="http://fake/v1/chat/completions",
             provider_type="openai",
             lane_id=None,
+            anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -381,6 +419,8 @@ class TestUpstreamErrorForwarding:
             forward_url="http://fake/v1/chat/completions",
             provider_type="openai",
             lane_id=None,
+            anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -418,8 +458,13 @@ class TestUpstreamErrorForwarding:
 
 
 class TestStreamingErrors:
-    def test_upstream_4xx_pre_stream_returns_json_response(self, client, _stub_pipeline):
-        """Upstream 4xx before any SSE chunks → JSONResponse with correct status."""
+    def test_upstream_4xx_pre_stream_becomes_instream_error(self, client, _stub_pipeline):
+        """Upstream 4xx before any SSE chunks → carried in the committed stream.
+
+        A streaming request commits its keepalive response immediately, so a
+        pre-stream failure can no longer be an HTTP status — it rides in the
+        stream as an OpenAI error frame, the way a mid-stream failure does.
+        """
 
         async def error_streaming(*a, **k) -> AsyncIterator[bytes]:
             raise UpstreamStreamError(
@@ -440,6 +485,8 @@ class TestStreamingErrors:
             forward_url="http://fake/v1/chat/completions",
             provider_type="openai",
             lane_id=None,
+            anthropic_dialect=None,
+            messages_upstream=False,
         )
 
         async def fake_process(req):
@@ -462,12 +509,18 @@ class TestStreamingErrors:
 
         resp = client.post(
             "/v1/chat/completions",
-            json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
+            json={
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
             headers={"logos_key": "test-key"},
         )
 
-        # The response must NOT be HTTP 200 for a pre-stream 4xx
-        assert resp.status_code == 429
-        body = resp.json()
-        _assert_openai_error_shape(body)
-        assert body["error"]["type"] == "rate_limit_error"
+        # The committed keepalive response: 200, SSE content type.
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers.get("content-type", "")
+        # The failure rides in the stream as an OpenAI error frame.
+        assert "rate limit exceeded" in resp.text
+        assert "rate_limit_error" in resp.text
+        assert "data: [DONE]" in resp.text
