@@ -26,6 +26,35 @@ def test_enqueue_from_one_provider_dequeue_from_another():
     assert task.get_id() == 1
 
 
+def test_provider_affinity_prevents_cross_worker_dispatch():
+    """A benchmark entry for worker B must remain queued when worker A releases."""
+    mgr = PriorityQueueManager()
+    mgr.enqueue(
+        DummyTask("benchmark-on-b"),
+        model_id=5,
+        priority=Priority.HIGH,
+        provider_affinity=2,
+    )
+
+    assert mgr.dequeue(model_id=5, provider_id=1) is None
+    assert mgr.get_total_depth_by_model(5) == 1
+    assert mgr.dequeue(model_id=5, provider_id=2).get_id() == "benchmark-on-b"
+
+
+def test_provider_skips_ineligible_pinned_entry_without_blocking_normal_work():
+    mgr = PriorityQueueManager()
+    mgr.enqueue(
+        DummyTask("benchmark-on-b"),
+        model_id=5,
+        priority=Priority.HIGH,
+        provider_affinity=2,
+    )
+    mgr.enqueue(DummyTask("normal"), model_id=5, priority=Priority.NORMAL)
+
+    assert mgr.dequeue(model_id=5, provider_id=1).get_id() == "normal"
+    assert mgr.dequeue(model_id=5, provider_id=2).get_id() == "benchmark-on-b"
+
+
 def test_state_is_model_wide_regardless_of_provider_arg():
     mgr = PriorityQueueManager()
     mgr.enqueue(DummyTask(1), model_id=5, provider_id=10, priority=Priority.NORMAL)

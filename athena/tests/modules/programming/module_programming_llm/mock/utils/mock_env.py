@@ -3,7 +3,7 @@ import sys
 from unittest.mock import Mock
 from pydantic import ConfigDict, BaseModel, Field
 from typing import Dict, Any, Optional, Callable
-from langchain.base_language import BaseLanguageModel
+from langchain_core.language_models import BaseLanguageModel
 from modules.programming.module_programming_llm.mock.utils.mock_llm import (
     MockLanguageModel,
 )

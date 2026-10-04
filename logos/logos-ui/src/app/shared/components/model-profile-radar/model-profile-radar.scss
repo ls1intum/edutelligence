@@ -1,0 +1,30 @@
+.radar {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.radar__grid {
+  fill: none;
+  stroke: rgb(var(--nav-item-text) / var(--opacity-faint));
+  stroke-width: 1;
+}
+
+.radar__spoke {
+  stroke: rgb(var(--nav-item-text) / var(--opacity-faint));
+  stroke-width: 1;
+}
+
+.radar__fill {
+  fill: rgb(var(--color-primary-400) / 0.28);
+  stroke: rgb(var(--color-text-accent));
+  stroke-width: 1.5;
+}
+
+.radar__label {
+  fill: rgb(var(--color-typography-500));
+  font-size: 9px;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}

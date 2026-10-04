@@ -40,7 +40,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Link shared dependency
-        run: ln -s ../../shared logos/logos-orchestrator/shared
+        run: ln -sfn ../../shared logos/logos-orchestrator/shared
 
       - name: Install Dependencies
         # Install the master logos package plus pytest-timeout, which the
@@ -49,7 +49,7 @@ jobs:
           uv venv .venv
           source .venv/bin/activate
           uv pip install .
-          uv pip install "coverage[toml]" pytest-timeout
+          uv pip install "coverage[toml]==7.16.2" "pytest-timeout==2.4.0"
         working-directory: logos/logos-orchestrator
 
       - name: Clean old coverage data
@@ -103,7 +103,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: "25"
           distribution: "temurin"
@@ -124,12 +124,16 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version-file: logos/logos-ui/.nvmrc
           cache: "npm"
           cache-dependency-path: logos/logos-ui/package-lock.json
 
       - name: Install dependencies
         run: npm ci
+        working-directory: logos/logos-ui
+
+      - name: Run unit tests
+        run: npm test -- --watch=false
         working-directory: logos/logos-ui
 
       - name: Build static web export

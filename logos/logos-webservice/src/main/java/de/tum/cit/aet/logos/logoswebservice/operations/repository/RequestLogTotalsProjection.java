@@ -8,4 +8,6 @@ public interface RequestLogTotalsProjection {
     Long getWarmStarts();
     Double getAvgQueueSeconds();
     Double getAvgRunSeconds();
+    Long getTotalTokens();
+    Long getCloudCostMicroCents();
 }

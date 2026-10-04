@@ -10,19 +10,24 @@ logosnode + Azure (or two logosnode providers) produces separate scored candidat
 """
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
 import random
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
+from logos import perf_trace
+from logos.context_budget import estimate_prompt_tokens
+from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
 from logos.terminal_logging import style_model, style_provider
 from logos.timeouts import global_timeout_s
 
 from .base_scheduler import BaseScheduler
 from .ettft_estimator import (
+    CORRECTION_STRENGTH,
     DEFAULT_GENERATION_TIME_S,
     OVERHEAD_COLD_S,
     EttftEstimate,
@@ -33,9 +38,19 @@ from .ettft_estimator import (
     estimate_ettft_cloud,
     estimate_ettft_local,
 )
+from .latency_store import LatencyStore
+from .prefix_affinity import PrefixAffinityRouter
 from .scheduler_interface import QueueTimeoutError, SchedulingRequest, SchedulingResult
 
 logger = logging.getLogger(__name__)
+
+# How much a prefix-cache hit is worth, as a fraction of the maximum ETTFT
+# penalty (weight_span × CORRECTION_STRENGTH).  0.25 makes stickiness worth
+# roughly 15s of expected wait: the familiar worker keeps the stream unless
+# a peer is meaningfully faster, which is the "if cheaply possible" the
+# routing is supposed to honour.  A policy weight in the same family as
+# CORRECTION_STRENGTH, and treated the same way — a constant, not a knob.
+PREFIX_AFFINITY_BONUS_FRACTION = 0.25
 
 
 class ClassificationCorrectingScheduler(BaseScheduler):
@@ -56,6 +71,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         model_registry=None,
         ettft_enabled: bool = True,
         on_capacity_needed=None,
+        prefix_router: Optional[PrefixAffinityRouter] = None,
+        latency_store: Optional[LatencyStore] = None,
     ):
         super().__init__(
             queue_manager,
@@ -65,6 +82,8 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             on_capacity_needed,
         )
         self._ettft_enabled = ettft_enabled
+        self._prefix_router = prefix_router if prefix_router is not None else PrefixAffinityRouter()
+        self._latency_store = latency_store
 
         # Decision logging (JSON-lines): set ECCS_DECISION_LOG=/path/to/log.jsonl
         self._decision_log_path = os.environ.get("ECCS_DECISION_LOG")
@@ -92,7 +111,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         if not self._decision_log_path:
             return
 
-        cls_weights = {mid: w for mid, w, _, _ in original_candidates}
+        cls_weights = {mid: w for mid, w, _ in original_candidates}
         cls_top = max(original_candidates, key=lambda x: x[1])[0] if original_candidates else None
 
         candidates_log = []
@@ -145,16 +164,34 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         5. Azure candidates: accept if not UNAVAILABLE
         6. If none immediately available: queue on best logosnode candidate
         """
-        scored = self._compute_candidate_scores(
-            request.classified_models or [],
-            request.deployments,
-        )
+        with perf_trace.phase(request.request_id, "schedule.affinity"):
+            affinity = self._resolve_affinity(request)
+        deployments = request.deployments
+        if request.required_provider_id is not None:
+            deployments = [
+                deployment for deployment in deployments if deployment["provider_id"] == request.required_provider_id
+            ]
+
+        with perf_trace.phase(request.request_id, "schedule.tokens"):
+            input_tokens = estimate_prompt_tokens(request.payload)
+        with perf_trace.phase(request.request_id, "schedule.score"):
+            scored = self._compute_candidate_scores(
+                request.classified_models or [],
+                deployments,
+                affinity,
+                input_tokens=input_tokens,
+                request_id=request.request_id,
+            )
 
         # Try immediate selection
-        best = self._try_immediate_select(scored, request.request_id)
+        with perf_trace.phase(request.request_id, "schedule.reserve"):
+            best = self._try_immediate_select(scored, request.request_id)
         if best is not None:
             model_id, provider_id, provider_type, score, priority_int, ettft = best
+            self._record_affinity(request, model_id, provider_id, provider_type, affinity)
             self._log_decision(request.request_id, scored, request.classified_models or [], best, False)
+            with perf_trace.phase(request.request_id, "schedule.metrics"):
+                self._record_scheduling_metrics(model_id, provider_id, ettft)
             result = self._create_result(
                 model_id,
                 provider_id,
@@ -211,17 +248,84 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             logosnode_candidate,
             True,
         )
-        return await self._queue_and_wait(logosnode_candidate, request)
+        lc_model_id, lc_provider_id, _, _, _, lc_ettft = logosnode_candidate
+        self._record_scheduling_metrics(lc_model_id, lc_provider_id, lc_ettft)
+        result = await self._queue_and_wait(logosnode_candidate, request)
+        if result is not None:
+            self._record_affinity(request, result.model_id, result.provider_id, result.provider_type, affinity)
+        return result
+
+    # ------------------------------------------------------------------
+    # Prefix-cache-aware placement
+    # ------------------------------------------------------------------
+
+    def _resolve_affinity(self, request: SchedulingRequest) -> Dict[int, int]:
+        """Map each candidate model to the worker that last served this stream.
+
+        One lookup per candidate model, keyed on the request's prefix blocks.
+        An empty map means the request is either unrecognised or affinity is
+        disabled — scoring then behaves exactly as before.
+        """
+        keys = request.affinity_keys
+        if not keys or not self._prefix_router.enabled:
+            return {}
+
+        affinity: Dict[int, int] = {}
+        for model_id in {mid for mid, _w, _p in request.classified_models or []}:
+            provider_id = self._prefix_router.lookup(model_id, keys)
+            if provider_id is not None:
+                affinity[model_id] = provider_id
+
+        prom.PREFIX_AFFINITY_TOTAL.labels(result="hit" if affinity else "miss").inc()
+        return affinity
+
+    def _record_affinity(
+        self,
+        request: SchedulingRequest,
+        model_id: Optional[int],
+        provider_id: Optional[int],
+        provider_type: Optional[str],
+        affinity: Dict[int, int],
+    ) -> None:
+        """Remember where this stream was served so the next turn can follow.
+
+        Only logosnode placements are recorded: cloud upstreams do their own
+        routing, so pinning them buys nothing.
+        """
+        keys = request.affinity_keys
+        if not keys or provider_type != "logosnode" or model_id is None or provider_id is None:
+            return
+
+        previous = affinity.get(model_id)
+        if previous is not None:
+            prom.PREFIX_AFFINITY_TOTAL.labels(result="honored" if previous == provider_id else "diverted").inc()
+            if previous != provider_id:
+                logger.info(
+                    "Prefix affinity diverted for request %s: stream was on worker=%s, "
+                    "served by worker=%s (peer scored better even with the affinity bonus)",
+                    request.request_id,
+                    self._logosnode.get_provider_name(previous) or previous,
+                    self._logosnode.get_provider_name(provider_id) or provider_id,
+                )
+        self._prefix_router.record(model_id, keys, provider_id)
 
     def _compute_candidate_scores(
         self,
-        candidates: List[Tuple[int, float, int, int]],
+        candidates: List[Tuple[int, float, int]],
         deployments: list,
+        affinity: Optional[Dict[int, int]] = None,
+        input_tokens: int = 0,
+        request_id: Optional[str] = None,
     ) -> list:
         """Build scored list with ETTFT annotations.
 
         Expands each (model_id, weight) across ALL matching deployments,
         producing one scored entry per (model_id, provider_id) pair.
+
+        ``affinity`` maps model_id → the worker that last served this
+        request's prefix. A warm candidate on that worker gets a bounded
+        bonus so the stream stays put; the bonus is small enough that a
+        meaningfully faster peer still wins.
 
         Returns list of (model_id, provider_id, provider_type,
                          corrected_score, priority_int, ettft)
@@ -229,16 +333,18 @@ class ClassificationCorrectingScheduler(BaseScheduler):
         """
         scored = []
         unavailable_fallbacks = []
+        affinity = affinity or {}
 
         # Apply weight overrides for controlled ablation experiments
         if self._weight_overrides:
-            candidates = [(mid, self._weight_overrides.get(mid, w), pint, par) for mid, w, pint, par in candidates]
+            candidates = [(mid, self._weight_overrides.get(mid, w), pint) for mid, w, pint in candidates]
 
         # Compute weight span across all (possibly overridden) weights
-        all_weights = [weight for _, weight, _, _ in candidates]
+        all_weights = [weight for _, weight, _ in candidates]
         weight_span = compute_weight_span(all_weights)
+        affinity_bonus = weight_span * CORRECTION_STRENGTH * PREFIX_AFFINITY_BONUS_FRACTION
 
-        for model_id, weight, priority_int, parallel in candidates:
+        for model_id, weight, priority_int in candidates:
             # Multi-provider expansion: find ALL deployments for this model
             matching_deployments = [d for d in deployments if d["model_id"] == model_id]
             if not matching_deployments:
@@ -262,7 +368,9 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     )
                     continue
 
-                ettft = self._estimate_ettft(model_id, provider_id, provider_type)
+                ettft = self._estimate_ettft(
+                    model_id, provider_id, provider_type, input_tokens=input_tokens, request_id=request_id
+                )
 
                 if ettft.tier == ReadinessTier.UNAVAILABLE:
                     logger.debug(
@@ -271,6 +379,10 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                         self._logosnode.get_provider_name(provider_id) or provider_id,
                         ettft.reasoning,
                     )
+                    prom.SCHEDULING_UNAVAILABLE_TOTAL.labels(
+                        model=self._logosnode.get_model_name(model_id, provider_id) or str(model_id),
+                        provider=self._logosnode.get_provider_name(provider_id) or str(provider_id),
+                    ).inc()
                     # Only logosnode gets fallback queueing — model may be
                     # transitioning (sleep→wake) and will become available.
                     # Cloud unavailable means truly rate-limited → skip.
@@ -304,6 +416,19 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                     ettft.expected_wait_s if self._ettft_enabled else 0.0,
                     weight_span,
                 )
+
+                # Prefix-cache stickiness: only for a warm lane on the worker
+                # that already holds this stream's KV blocks. Restricting it
+                # to WARM keeps affinity from waking a sleeping worker or
+                # forcing a cold load just to stay on the familiar one.
+                if affinity.get(model_id) == provider_id and ettft.tier == ReadinessTier.WARM:
+                    corrected += affinity_bonus
+                    logger.debug(
+                        "Prefix affinity bonus %.2f for model=%s worker=%s",
+                        affinity_bonus,
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                    )
 
                 scored.append(
                     (
@@ -341,86 +466,240 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
         return scored
 
-    def _estimate_ettft(self, model_id: int, provider_id: int, provider_type: str) -> EttftEstimate:
+    def _record_scheduling_metrics(self, model_id: int, provider_id: int, ettft: "EttftEstimate") -> None:
+        """Record per-decision scheduling metrics for the selected candidate."""
+        model = self._logosnode.get_model_name(model_id, provider_id) or str(model_id)
+        provider = self._logosnode.get_provider_name(provider_id) or str(provider_id)
+        tier = ettft.tier.value
+        prom.SCHEDULING_TIER_TOTAL.labels(model=model, provider=provider, tier=tier).inc()
+        # learned_ttft is the residual after subtracting the four explicitly
+        # tracked components from the total estimate.
+        learned_ttft_s = max(
+            0.0,
+            ettft.expected_wait_s
+            - ettft.state_overhead_s
+            - ettft.queue_wait_s
+            - ettft.prefill_s
+            - ettft.reclaim_overhead_s,
+        )
+        prom.record_ettft_components(
+            model=model,
+            provider=provider,
+            tier=tier,
+            state_overhead_s=ettft.state_overhead_s,
+            queue_wait_s=ettft.queue_wait_s,
+            prefill_s=ettft.prefill_s,
+            learned_ttft_s=learned_ttft_s,
+            reclaim_overhead_s=ettft.reclaim_overhead_s,
+        )
+
+    def _estimate_ettft(
+        self,
+        model_id: int,
+        provider_id: int,
+        provider_type: str,
+        input_tokens: int = 0,
+        request_id: Optional[str] = None,
+    ) -> EttftEstimate:
         """Get ETTFT estimate for a model using the appropriate provider facade."""
         if provider_type == "logosnode":
-            try:
-                view = self._logosnode.get_model_scheduler_view(model_id, provider_id)
-            except KeyError:
-                view = None
-            except Exception:
-                logger.warning(
-                    "Unexpected error getting scheduler view for model=%s worker=%s",
-                    self._logosnode.get_model_name(model_id, provider_id) or model_id,
-                    self._logosnode.get_provider_name(provider_id) or provider_id,
-                    exc_info=True,
-                )
-                view = None
+            with perf_trace.phase(request_id, "schedule.view"):
+                try:
+                    view = self._logosnode.get_model_scheduler_view(model_id, provider_id)
+                except KeyError:
+                    view = None
+                except Exception:
+                    logger.warning(
+                        "Unexpected error getting scheduler view for model=%s worker=%s",
+                        self._logosnode.get_model_name(model_id, provider_id) or model_id,
+                        self._logosnode.get_provider_name(provider_id) or provider_id,
+                        exc_info=True,
+                    )
+                    view = None
 
             if view is None:
                 # No lanes visible — treat as COLD (capacity planner can
-                # cold-load during context resolution)
+                # cold-load during context resolution).  Consult the latency
+                # store so that the provider-specific learned cold overhead
+                # (or size-derived prior) is used instead of the static
+                # constant, which matters for cold-provider selection when a
+                # lane has been removed but history is still persisted.
+                cold_s = OVERHEAD_COLD_S
+                _nl_learned_ttft: Optional[float] = None
+                _nl_prefill_s: Optional[float] = None
+                if self._latency_store is not None:
+                    _no_lane_model_name = self._logosnode.get_model_name(model_id, provider_id)
+                    if _no_lane_model_name:
+                        _nl_vram_mb = 0.0
+                        _nl_tp_size = 1
+                        try:
+                            _profiles = self._logosnode.get_model_profiles(provider_id)
+                            if _no_lane_model_name in _profiles:
+                                _p = _profiles[_no_lane_model_name]
+                                _nl_vram_mb = _p.estimate_vram_mb()
+                                _nl_tp_size = int(_p.tensor_parallel_size or 1)
+                        except KeyError:
+                            pass
+                        except Exception:  # noqa: BLE001
+                            logger.warning(
+                                "Unexpected error reading model profile for no-lane estimate" " model=%s provider=%s",
+                                model_id,
+                                provider_id,
+                                exc_info=True,
+                            )
+                        cold_s = self._latency_store.get_overhead_s(
+                            _no_lane_model_name,
+                            provider_id,
+                            ReadinessTier.COLD,
+                            model_vram_mb=_nl_vram_mb,
+                            tp_size=_nl_tp_size,
+                        )
+                        _nl_learned_ttft = self._latency_store.get_ttft_s(_no_lane_model_name, provider_id)
+                        if input_tokens > 0:
+                            _nl_prefill_s = self._latency_store.get_prefill_s(
+                                _no_lane_model_name, provider_id, input_tokens
+                            )
+                _nl_added = (_nl_learned_ttft or 0.0) + (_nl_prefill_s or 0.0)
+                _nl_parts: list[str] = [f"cold {cold_s:.2f}s"]
+                if _nl_learned_ttft is not None:
+                    _nl_parts.append(f"TTFT {_nl_learned_ttft:.2f}s")
+                if _nl_prefill_s is not None:
+                    _nl_parts.append(f"prefill {_nl_prefill_s:.2f}s ({input_tokens} tok)")
                 return EttftEstimate(
-                    expected_wait_s=OVERHEAD_COLD_S,
+                    expected_wait_s=cold_s + _nl_added,
                     tier=ReadinessTier.COLD,
-                    reasoning=f"No lanes for logosnode model {model_id}, cold-load required",
-                    state_overhead_s=OVERHEAD_COLD_S,
+                    reasoning=f"No lanes for logosnode model {model_id}: {' + '.join(_nl_parts)}",
+                    state_overhead_s=cold_s,
+                    prefill_s=_nl_prefill_s or 0.0,
                     warmth_state=-1,
                 )
 
-            # Gather infrastructure data for VRAM-aware estimation
-            effective_parallel = 1
-            try:
-                effective_parallel, _ = self._logosnode.get_parallel_capacity(model_id, provider_id)
-            except (KeyError, Exception):
-                pass
+            with perf_trace.phase(request_id, "schedule.infra"):
+                # Gather infrastructure data for VRAM-aware estimation
+                with perf_trace.phase(request_id, "schedule.capacity"):
+                    effective_parallel = 1
+                    try:
+                        with perf_trace.phase(request_id, "schedule.capacity.par"):
+                            effective_parallel, _ = self._logosnode.get_parallel_capacity(model_id, provider_id)
+                    except (KeyError, Exception):
+                        pass
 
-            available_vram_mb = float("inf")
-            try:
-                cap = self._logosnode.get_capacity_info(provider_id)
-                available_vram_mb = float(cap.available_vram_mb)
-            except (KeyError, Exception):
-                pass
+                    available_vram_mb = float("inf")
+                    try:
+                        with perf_trace.phase(request_id, "schedule.capacity.info"):
+                            cap = self._logosnode.get_capacity_info(provider_id)
+                            available_vram_mb = float(cap.available_vram_mb)
+                    except (KeyError, Exception):
+                        pass
 
-            model_vram_mb = 0.0
-            kv_budget_mb = 0.0
-            try:
-                model_name = self._logosnode.get_model_name(model_id, provider_id)
-                if model_name:
-                    profiles = self._logosnode.get_model_profiles(provider_id)
-                    if model_name in profiles:
-                        profile = profiles[model_name]
-                        model_vram_mb = profile.estimate_vram_mb()
-                        kv_budget_mb = float(profile.kv_budget_mb or 0)
-            except (KeyError, Exception):
-                pass
+                with perf_trace.phase(request_id, "schedule.profiles"):
+                    model_vram_mb = 0.0
+                    kv_budget_mb = 0.0
+                    tp_size = 1
+                    try:
+                        with perf_trace.phase(request_id, "schedule.profiles.name"):
+                            model_name = self._logosnode.get_model_name(model_id, provider_id)
+                        if model_name:
+                            with perf_trace.phase(request_id, "schedule.profiles.fetch"):
+                                profiles = self._logosnode.get_model_profiles(provider_id)
+                            if model_name in profiles:
+                                profile = profiles[model_name]
+                                model_vram_mb = profile.estimate_vram_mb()
+                                kv_budget_mb = float(profile.kv_budget_mb or 0)
+                                tp_size = int(profile.tensor_parallel_size or 1)
+                    except (KeyError, Exception):
+                        pass
 
-            scheduler_queue_depth = self._queue_mgr.get_total_depth_by_deployment(
-                model_id,
-                provider_id,
-            )
+                with perf_trace.phase(request_id, "schedule.signals"):
+                    scheduler_queue_depth = self._queue_mgr.get_total_depth_by_deployment(
+                        model_id,
+                        provider_id,
+                    )
 
-            # Observed e2e latency p50 for queue wait estimation
-            observed_e2e_p50_s = view.warmest_e2e_latency_p50_seconds
+                    # Observed e2e latency p50 for queue wait estimation
+                    observed_e2e_p50_s = view.warmest_e2e_latency_p50_seconds
 
-            # All lanes on this provider for reclaim context
-            all_provider_lanes = None
-            try:
-                all_provider_lanes = self._logosnode.get_all_lane_signals(provider_id)
-            except (KeyError, Exception):
-                pass
+                    # All lanes on this provider for reclaim context
+                    all_provider_lanes = None
+                    try:
+                        all_provider_lanes = self._logosnode.get_all_provider_lane_signals(provider_id)
+                    except (KeyError, Exception):
+                        pass
 
-            return estimate_ettft_local(
-                view,
-                effective_parallel=effective_parallel,
-                generation_time_s=DEFAULT_GENERATION_TIME_S,
-                available_vram_mb=available_vram_mb,
-                model_vram_mb=model_vram_mb,
-                kv_budget_mb=kv_budget_mb,
-                scheduler_queue_depth=scheduler_queue_depth,
-                observed_e2e_p50_s=observed_e2e_p50_s,
-                all_provider_lanes=all_provider_lanes,
-            )
+            # Build per-tier overhead overrides from the latency store when
+            # available. COLD and SLEEPING always get an override (prior or
+            # learned). COLD_RECLAIM and SLEEPING_RECLAIM are only included
+            # when real observations exist: without learned data the estimator's
+            # context-aware _estimate_reclaim_overhead_s() is more accurate than
+            # a static prior.
+            overhead_overrides: dict[ReadinessTier, float] | None = None
+            learned_ttft: Optional[float] = None
+            estimated_prefill_s: Optional[float] = None
+            with perf_trace.phase(request_id, "schedule.latency"):
+                if self._latency_store is not None:
+                    model_name_for_store = view.model_name or ""
+                    _store_kwargs = dict(
+                        model_vram_mb=model_vram_mb,
+                        tp_size=tp_size,
+                    )
+                    overhead_overrides = {
+                        tier: self._latency_store.get_overhead_s(
+                            model_name_for_store, provider_id, tier, **_store_kwargs
+                        )
+                        for tier in (ReadinessTier.COLD, ReadinessTier.SLEEPING)
+                    }
+                    for tier in (ReadinessTier.COLD_RECLAIM, ReadinessTier.SLEEPING_RECLAIM):
+                        if self._latency_store.get_observation_count(model_name_for_store, provider_id, tier) > 0:
+                            overhead_overrides[tier] = self._latency_store.get_overhead_s(
+                                model_name_for_store, provider_id, tier, **_store_kwargs
+                            )
+                    # Replace the live e2e p50 with the learned value when the
+                    # store has sufficient history (learned value is more stable
+                    # across the session than a single-lane histogram p50).
+                    learned_e2e = self._latency_store.get_e2e_latency_s(model_name_for_store, provider_id)
+                    if learned_e2e is not None:
+                        observed_e2e_p50_s = learned_e2e
+                    # Learned TTFT (decode-only first-token time) for this provider —
+                    # added once for this request (queue_wait already embeds TTFT of
+                    # preceding requests via e2e_p50 as service time, no double-counting).
+                    learned_ttft = self._latency_store.get_ttft_s(model_name_for_store, provider_id)
+                    # Estimated prefill: context-length-dependent prompt-ingestion cost.
+                    # learned_ttft intentionally excludes prefill; this is the separate
+                    # component that scales with input_tokens.
+                    if input_tokens > 0:
+                        estimated_prefill_s = self._latency_store.get_prefill_s(
+                            model_name_for_store, provider_id, input_tokens
+                        )
+
+            with perf_trace.phase(request_id, "schedule.ettft"):
+                estimate = estimate_ettft_local(
+                    view,
+                    effective_parallel=effective_parallel,
+                    generation_time_s=DEFAULT_GENERATION_TIME_S,
+                    available_vram_mb=available_vram_mb,
+                    model_vram_mb=model_vram_mb,
+                    kv_budget_mb=kv_budget_mb,
+                    scheduler_queue_depth=scheduler_queue_depth,
+                    observed_e2e_p50_s=observed_e2e_p50_s,
+                    all_provider_lanes=all_provider_lanes,
+                    overhead_overrides=overhead_overrides,
+                )
+            if (learned_ttft is not None or estimated_prefill_s is not None) and (
+                estimate.tier != ReadinessTier.UNAVAILABLE
+            ):
+                added = (learned_ttft or 0.0) + (estimated_prefill_s or 0.0)
+                parts: list[str] = []
+                if learned_ttft is not None:
+                    parts.append(f"TTFT {learned_ttft:.2f}s")
+                if estimated_prefill_s is not None:
+                    parts.append(f"prefill {estimated_prefill_s:.2f}s ({input_tokens} tok)")
+                estimate = dataclasses.replace(
+                    estimate,
+                    expected_wait_s=estimate.expected_wait_s + added,
+                    prefill_s=estimated_prefill_s or 0.0,
+                    reasoning=f"{estimate.reasoning} + {' + '.join(parts)}",
+                )
+            return estimate
 
         if provider_type == "azure":
             try:
@@ -673,7 +952,14 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             provider_id,
             priority,
             is_cold_at_queue=is_cold_at_queue,
+            provider_affinity=request.required_provider_id,
+            raw_priority=priority_int,
+            role_rank=request.role_rank,
         )
+        # Start the hold timer immediately after enqueue so that logging,
+        # queue-depth reads, and the capacity-task setup are included in the
+        # reported duration — they are part of the request's queue residence.
+        _hold_start = time.monotonic()
         queue_depth = self._queue_mgr.get_total_depth_by_deployment(model_id, provider_id)
         logger.info(
             "Request %s queued for model=%s worker=%s " "(corrected_score=%.2f, tier=%s, depth=%s)",
@@ -702,6 +988,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 request.timeout_s if request.timeout_s else global_timeout_s(1200)
             )  # 20 min queue wait (or LOGOS_TIMEOUT_S)
             result = await asyncio.wait_for(future, timeout=timeout)
+            prom.ADMISSION_HOLD_DURATION_SECONDS.observe(time.monotonic() - _hold_start)
 
             # Attach ETTFT info to the dequeued result (decision-time values:
             # the estimate and warmth as seen when the request was enqueued)
@@ -726,13 +1013,12 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                             provider_id=dispatched_pid,
                             priority=priority.name.lower(),
                         )
-                    # slot_transferred=True means a completing request kept its
-                    # slot for us (release path) — don't double-count.
-                    # slot_transferred=False means fresh dispatch from
-                    # reevaluate_model_queues — must increment active count.
+                    # Every dispatch out of the queue is a fresh one now that
+                    # a completing request no longer hands its slot to a
+                    # specific waiter, so the active count always grows here.
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
-                        increment_active=not result.slot_transferred,
+                        increment_active=True,
                         provider_id=dispatched_pid,
                     )
                 except KeyError:

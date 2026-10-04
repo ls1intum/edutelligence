@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="017-provider-performance-index" author="logos">
+        <!-- Earlier PR deployments may already contain this index under a
+             legacy changeset number. Do not attempt to recreate it there. -->
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists tableName="log_entry" indexName="idx_log_entry_performance_window"/>
+            </not>
+        </preConditions>
+        <sql>
+            CREATE INDEX IF NOT EXISTS idx_log_entry_performance_window
+            ON log_entry (timestamp_request DESC, provider_id, model_id)
+            WHERE provider_id IS NOT NULL AND model_id IS NOT NULL;
+        </sql>
+        <rollback>
+            DROP INDEX IF EXISTS idx_log_entry_performance_window;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

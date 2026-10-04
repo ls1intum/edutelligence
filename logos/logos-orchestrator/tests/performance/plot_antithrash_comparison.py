@@ -8,6 +8,7 @@ anti-thrash run and the v2 fix run.
 Usage:
     python3 tests/performance/plot_antithrash_comparison.py
 """
+
 from __future__ import annotations
 
 import csv

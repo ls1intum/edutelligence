@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- ApiKeyRepository.findKeysForUser (My Workspace / OpenCode) joins usage_tokens
+         and token_prices to price this month's usage. Neither table had a supporting
+         index (Postgres does not auto-index foreign keys), so both joins ran as
+         sequential scans of the full tables on every request — cheap on a small dev
+         dataset, increasingly slow as log_entry/usage_tokens grow in production. -->
+    <changeSet id="007-usage-tokens-log-entry-id-index" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="usage_tokens" indexName="idx_usage_tokens_log_entry_id"/></not>
+        </preConditions>
+        <createIndex tableName="usage_tokens" indexName="idx_usage_tokens_log_entry_id">
+            <column name="log_entry_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="007-usage-tokens-type-id-index" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="usage_tokens" indexName="idx_usage_tokens_type_id"/></not>
+        </preConditions>
+        <createIndex tableName="usage_tokens" indexName="idx_usage_tokens_type_id">
+            <column name="type_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="007-token-prices-lookup-index" author="alexandra">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="token_prices" indexName="idx_token_prices_lookup"/></not>
+        </preConditions>
+        <createIndex tableName="token_prices" indexName="idx_token_prices_lookup">
+            <column name="type_id"/>
+            <column name="model_id"/>
+            <column name="provider_id"/>
+            <column name="valid_from"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

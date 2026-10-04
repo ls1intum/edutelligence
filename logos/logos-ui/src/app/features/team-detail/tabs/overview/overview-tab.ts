@@ -33,7 +33,7 @@ export class OverviewTabComponent {
   }
 
   get budgetBarColor(): string {
-    return this.budgetPct >= 90 ? '#ef4444' : 'rgb(var(--color-primary-500))';
+    return this.budgetPct >= 90 ? 'rgb(var(--color-error))' : 'rgb(var(--color-primary-500))';
   }
 
   formatDollars(mc: number | null): string {

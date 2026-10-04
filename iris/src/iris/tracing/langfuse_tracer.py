@@ -380,16 +380,17 @@ def observe(
             if not langfuse_mod or not _is_enabled():
                 return func(*args, **kwargs)
 
-            # Delegate to LangFuse's observe decorator
+            # Only fall back when tracing setup fails. Business exceptions from the
+            # observed call must propagate without executing the function twice.
             try:
                 langfuse_observe = langfuse_mod.observe
                 observed_func = langfuse_observe(name=name, as_type=as_type)(func)
-                return observed_func(*args, **kwargs)
             except Exception as e:
                 logger.debug(
                     "LangFuse observe failed, executing without tracing: %s", e
                 )
                 return func(*args, **kwargs)
+            return observed_func(*args, **kwargs)
 
         return wrapper  # type: ignore
 

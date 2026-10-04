@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Sequential lane benchmark: vLLM vs Ollama.
+Sequential lane benchmark for vLLM lanes.
 
-This script benchmarks the two backends one after the other (never in
-parallel VRAM residency):
-  1) apply vLLM lane, warm up, run concurrency sweep
-  2) replace with Ollama lane, warm up, run the same sweep
+This script benchmarks vLLM lanes one after the other (never in parallel
+VRAM residency): for each lane config, apply the lane, warm up, and run the
+same concurrency sweep.
 
 Outputs:
   - timestamped JSON summary
@@ -254,15 +253,10 @@ async def wait_backend_ready(
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             try:
-                if backend == "vllm":
-                    health = await client.get(f"{base_url}/health", timeout=10.0)
-                    models = await client.get(f"{base_url}/v1/models", timeout=10.0)
-                    if health.status_code == 200 and models.status_code == 200:
-                        return
-                else:
-                    version = await client.get(f"{base_url}/api/version", timeout=10.0)
-                    if version.status_code == 200:
-                        return
+                health = await client.get(f"{base_url}/health", timeout=10.0)
+                models = await client.get(f"{base_url}/v1/models", timeout=10.0)
+                if health.status_code == 200 and models.status_code == 200:
+                    return
             except httpx.HTTPError:
                 pass
             await asyncio.sleep(1.0)
@@ -615,14 +609,12 @@ async def benchmark_backend(
         "prompt_mode": prompt_mode,
         "payload_samples": payload_samples,
         "vllm_prefix_caching": lane_config.get("vllm", {}).get("enable_prefix_caching"),
-        "ollama_num_parallel": lane_config.get("num_parallel"),
         "results": rows,
     }
 
 
 def build_comparison(
     backend_results: list[dict[str, Any]],
-    reference_run: str | None = None,
 ) -> list[dict[str, Any]]:
     by_conc: dict[int, dict[str, dict[str, Any]]] = {}
     for result in backend_results:
@@ -631,25 +623,12 @@ def build_comparison(
         for row in rows:
             by_conc.setdefault(int(row["concurrency"]), {})[run_label] = row
 
-    labels = [result["run_label"] for result in backend_results]
-    chosen_reference = reference_run or next((label for label in labels if label.startswith("vllm_")), None)
-
     comparison: list[dict[str, Any]] = []
     for conc in sorted(by_conc):
         entry: dict[str, Any] = {"concurrency": conc}
         for run_label, row in by_conc[conc].items():
             entry[f"{run_label}_aggregate_tok_s"] = row.get("aggregate_tok_s")
             entry[f"{run_label}_avg_ttft_ms"] = row.get("avg_ttft_ms")
-
-        if chosen_reference and chosen_reference in by_conc[conc]:
-            ref_tps = float(by_conc[conc][chosen_reference].get("aggregate_tok_s", 0.0))
-            for run_label, row in by_conc[conc].items():
-                if run_label == chosen_reference or not run_label.startswith("ollama_"):
-                    continue
-                run_tps = float(row.get("aggregate_tok_s", 0.0))
-                entry[f"speedup_{chosen_reference}_over_{run_label}"] = (
-                    round(ref_tps / run_tps, 3) if run_tps > 0 else None
-                )
         comparison.append(entry)
     return comparison
 
@@ -664,7 +643,6 @@ def write_csv(path: Path, backend_results: list[dict[str, Any]]) -> None:
         "lane_port",
         "prompt_mode",
         "vllm_prefix_caching",
-        "ollama_num_parallel",
         "concurrency",
         "requests_ok",
         "errors",
@@ -698,7 +676,6 @@ def write_csv(path: Path, backend_results: list[dict[str, Any]]) -> None:
                         "lane_port": backend["lane_port"],
                         "prompt_mode": backend["prompt_mode"],
                         "vllm_prefix_caching": backend.get("vllm_prefix_caching"),
-                        "ollama_num_parallel": backend.get("ollama_num_parallel"),
                         "concurrency": row.get("concurrency"),
                         "requests_ok": row.get("requests_ok"),
                         "errors": row.get("errors"),
@@ -762,70 +739,37 @@ def print_summary(backend_results: list[dict[str, Any]], comparison: list[dict[s
         metrics = [row.get(f"{label}_aggregate_tok_s", "n/a") for label in label_order]
         print(f"{row['concurrency']:>4} " + " ".join(f"{metric:>16}" for metric in metrics))
 
-    speedup_keys = sorted({key for row in comparison for key in row if key.startswith("speedup_")})
-    if speedup_keys:
-        print("\nSpeedups")
-        print(f"{'N':>4} " + " ".join(f"{key.replace('speedup_', ''):>24}" for key in speedup_keys))
-        print("-" * (6 + 25 * len(speedup_keys)))
-        for row in comparison:
-            metrics = []
-            for key in speedup_keys:
-                val = row.get(key)
-                metrics.append(f"{val:.3f}x" if isinstance(val, float) else "n/a")
-            print(f"{row['concurrency']:>4} " + " ".join(f"{metric:>24}" for metric in metrics))
-
 
 def build_run_plan(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]:
     vllm_prefix_modes = parse_bool_modes(args.vllm_prefix_caching_modes)
-    ollama_parallel_values = parse_concurrency(args.ollama_num_parallel_values)
     vllm_quantization = normalize_vllm_quantization(args.vllm_quantization, args.vllm_model)
 
     runs: list[tuple[str, dict[str, Any]]] = []
-
-    if args.include_vllm:
-        for prefix_mode in vllm_prefix_modes:
-            label = f"vllm_prefix_{'on' if prefix_mode else 'off'}"
-            runs.append(
-                (
-                    label,
-                    {
-                        "model": args.vllm_model,
-                        "backend": "vllm",
-                        "context_length": args.max_model_len,
-                        "flash_attention": False,
-                        "gpu_devices": args.vllm_gpu_devices,
-                        "vllm": {
-                            "vllm_binary": args.vllm_binary,
-                            "tensor_parallel_size": args.tensor_parallel_size,
-                            "max_model_len": args.max_model_len,
-                            "dtype": args.vllm_dtype,
-                            "quantization": vllm_quantization,
-                            "gpu_memory_utilization": args.vllm_gpu_memory_utilization,
-                            "enforce_eager": args.vllm_enforce_eager,
-                            "enable_prefix_caching": prefix_mode,
-                            "extra_args": [],
-                        },
+    for prefix_mode in vllm_prefix_modes:
+        label = f"vllm_prefix_{'on' if prefix_mode else 'off'}"
+        runs.append(
+            (
+                label,
+                {
+                    "model": args.vllm_model,
+                    "backend": "vllm",
+                    "context_length": args.max_model_len,
+                    "flash_attention": False,
+                    "gpu_devices": args.vllm_gpu_devices,
+                    "vllm": {
+                        "vllm_binary": args.vllm_binary,
+                        "tensor_parallel_size": args.tensor_parallel_size,
+                        "max_model_len": args.max_model_len,
+                        "dtype": args.vllm_dtype,
+                        "quantization": vllm_quantization,
+                        "gpu_memory_utilization": args.vllm_gpu_memory_utilization,
+                        "enforce_eager": args.vllm_enforce_eager,
+                        "enable_prefix_caching": prefix_mode,
+                        "extra_args": [],
                     },
-                )
+                },
             )
-
-    if args.include_ollama:
-        for num_parallel in ollama_parallel_values:
-            runs.append(
-                (
-                    f"ollama_np{num_parallel}",
-                    {
-                        "model": args.ollama_model,
-                        "backend": "ollama",
-                        "num_parallel": num_parallel,
-                        "context_length": args.max_model_len,
-                        "keep_alive": args.ollama_keep_alive,
-                        "kv_cache_type": args.ollama_kv_cache_type,
-                        "flash_attention": args.ollama_flash_attention,
-                        "gpu_devices": args.ollama_gpu_devices,
-                    },
-                )
-            )
+        )
 
     return runs
 
@@ -833,8 +777,6 @@ def build_run_plan(args: argparse.Namespace) -> list[tuple[str, dict[str, Any]]]
 async def main_async(args: argparse.Namespace) -> int:
     concurrency_levels = parse_concurrency(args.concurrency)
     run_plan = build_run_plan(args)
-    if not run_plan:
-        raise ValueError("Run plan is empty. Enable at least one backend.")
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -879,7 +821,7 @@ async def main_async(args: argparse.Namespace) -> int:
                 except Exception as exc:  # noqa: BLE001
                     print(f"Warning: failed to clear lanes: {exc}")
 
-    comparison = build_comparison(backend_results=backend_results, reference_run=args.reference_run)
+    comparison = build_comparison(backend_results=backend_results)
     payload = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "controller_url": args.controller_url,
@@ -918,25 +860,11 @@ async def main_async(args: argparse.Namespace) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Sequential lane benchmark: vLLM and Ollama " "with optional prefix-caching and num_parallel sweeps."
-        )
+        description=("Sequential lane benchmark for vLLM lanes " "with an optional prefix-caching sweep.")
     )
     parser.add_argument("--controller-url", default="http://127.0.0.1:8444")
     parser.add_argument("--api-key", default=os.environ.get("API_KEY", "RANDOM_DEFAULT_KEY"))
     parser.add_argument("--output-dir", default="bench_results")
-    parser.add_argument(
-        "--include-vllm",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Include vLLM runs in the benchmark plan.",
-    )
-    parser.add_argument(
-        "--include-ollama",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Include Ollama runs in the benchmark plan.",
-    )
     parser.add_argument("--concurrency", default="1,4,8,16,32")
     parser.add_argument("--warmup", type=int, default=1)
     parser.add_argument("--max-tokens", type=int, default=200)
@@ -979,11 +907,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-model-len", type=int, default=4096)
     parser.add_argument("--keep-last-lane", action="store_true")
-    parser.add_argument(
-        "--reference-run",
-        default=None,
-        help="Optional run label used as speedup baseline (default: first vLLM run).",
-    )
 
     # vLLM lane defaults (explicit profile for Turing + 2x16GB setup)
     parser.add_argument("--vllm-model", default="Qwen/Qwen2.5-Coder-32B-Instruct-AWQ")
@@ -1006,22 +929,6 @@ def parse_args() -> argparse.Namespace:
         "--vllm-prefix-caching-modes",
         default="off,on",
         help="Comma-separated modes: on/off. Example: off,on",
-    )
-
-    # Ollama baseline lane defaults
-    parser.add_argument("--ollama-model", default="qwen2.5-coder:32b")
-    parser.add_argument("--ollama-gpu-devices", default="0,1")
-    parser.add_argument(
-        "--ollama-num-parallel-values",
-        default="2,4,8",
-        help="Comma-separated OLLAMA_NUM_PARALLEL sweep values.",
-    )
-    parser.add_argument("--ollama-keep-alive", default="10m")
-    parser.add_argument("--ollama-kv-cache-type", default="q8_0")
-    parser.add_argument(
-        "--ollama-flash-attention",
-        action=argparse.BooleanOptionalAction,
-        default=True,
     )
     return parser.parse_args()
 

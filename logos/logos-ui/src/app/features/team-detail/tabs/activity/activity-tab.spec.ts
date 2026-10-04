@@ -1,0 +1,1039 @@
+import { SimpleChange } from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { HttpHeaders, HttpResponse } from '@angular/common/http';
+
+import { RequestItem } from '../../../statistics/statistics.models';
+import { TeamActivityPayload } from './activity-tab.models';
+import { ActivityTabComponent } from './activity-tab';
+import { ActivityFilter, TeamActivityService } from './activity-tab.service';
+
+/**
+ * The team activity view for app administrators.
+ *
+ * The numbers it shows are load-bearing in both directions: the live tiles
+ * tell an owner whether the cluster is working for them right now, and the
+ * per-key table tells them where the tokens went. A drift in either reading —
+ * an in-flight count that double-counts, a token total that renders a
+ * nine-digit number without abbreviation, a filter that widens past the team —
+ * would make an owner misread what their team is doing.
+ */
+
+const makeRequest = (overrides: Partial<RequestItem> = {}): RequestItem => ({
+  request_id: 'req-1',
+  model_name: 'gpt-test',
+  provider_name: 'test-provider',
+  is_cloud: null,
+  status: 'success',
+  timestamp: '2026-08-26T12:00:00Z',
+  duration: null,
+  cold_start: null,
+  enqueue_ts: '2026-08-26T12:00:00Z',
+  scheduled_ts: null,
+  request_complete_ts: null,
+  queue_seconds: null,
+  total_seconds: null,
+  initial_priority: null,
+  priority_when_scheduled: null,
+  queue_depth_at_enqueue: null,
+  error_message: null,
+  team_name: null,
+  username: 'test.user',
+  full_name: 'Test User',
+  api_key_name: null,
+  api_key_type: null,
+  environment: null,
+  prompt_tokens: null,
+  completion_tokens: null,
+  total_tokens: null,
+  cost_microcents: null,
+  ...overrides,
+});
+
+const makePayload = (overrides: Partial<TeamActivityPayload> = {}): TeamActivityPayload => ({
+  team_id: 2001,
+  days: 7,
+  since: '2026-08-19T12:00:00Z',
+  full_logging_enabled: true,
+  live: { queued: 0, running: 0, finished: 0, failed: 0 },
+  keys: [],
+  total_tokens: 0,
+  total_requests: 0,
+  requesters: [],
+  most_asked_questions: [],
+  requests: [makeRequest()],
+  requests_total: 1,
+  requests_has_more: true,
+  requests_next_cursor: { ts: '2026-08-26T12:00:00Z', request_id: 'req-1' },
+  ...overrides,
+});
+
+describe('ActivityTabComponent', () => {
+  let fixture: ComponentFixture<ActivityTabComponent>;
+  let component: ActivityTabComponent;
+  const getActivity = vi.fn();
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getActivity.mockResolvedValue(makePayload());
+
+    await TestBed.configureTestingModule({
+      imports: [ActivityTabComponent],
+      providers: [{ provide: TeamActivityService, useValue: { getActivity } }],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(ActivityTabComponent);
+    component = fixture.componentInstance;
+  });
+
+  afterEach(() => {
+    // The tab polls on its own while mounted; drop the interval so no test
+    // keeps a timer alive past the one that started it.
+    component.ngOnDestroy();
+  });
+
+  /** Mount the tab for one team and wait for the first load to settle. */
+  const loadForTeam = async (): Promise<void> => {
+    component.teamId = 2001;
+    component.ngOnChanges({ teamId: new SimpleChange(0, 2001, true) });
+    await vi.waitFor(() => expect(getActivity).toHaveBeenCalledTimes(1));
+  };
+
+  // ── Reading the numbers ────────────────────────────────────────────────────
+
+  describe('formatTokens', () => {
+    it('shows nothing for a team that used nothing', () => {
+      // The payload says zero and the server also sends null for a key whose
+      // requests recorded no usage — both must read as "0", never blank. The
+      // same goes for a NaN the server should never send but the tile must
+      // not render.
+      expect(component.formatTokens(0)).toBe('0');
+      expect(component.formatTokens(null)).toBe('0');
+      expect(component.formatTokens(undefined)).toBe('0');
+      expect(component.formatTokens(Number.NaN)).toBe('0');
+    });
+
+    it('keeps exact counts while they fit on one screen', () => {
+      expect(component.formatTokens(999)).toBe('999');
+    });
+
+    it('abbreviates the totals that run past it', () => {
+      // A busy team clears nine figures over a quarter; the tile holds a
+      // figure plus a suffix, not ten digits. The scale, the space and the
+      // decimal notation are the shared token-count rules.
+      expect(component.formatTokens(1_500)).toBe('1.5 K');
+      expect(component.formatTokens(1_234_567)).toBe('1.2 M');
+      expect(component.formatTokens(2_500_000_000)).toBe('2.5 B');
+    });
+  });
+
+  describe('keyLabel', () => {
+    it('drops the environment placeholder the database carries', () => {
+      // Keys without an environment store "-", and "dev key · -" would read
+      // as a broken row to the owner.
+      expect(component.keyLabel('dev key', '-')).toBe('dev key');
+      expect(component.keyLabel('dev key', null)).toBe('dev key');
+    });
+
+    it('shows the environment when it is real', () => {
+      expect(component.keyLabel('dev key', 'prod')).toBe('dev key · prod');
+    });
+  });
+
+  describe('live figures', () => {
+    it('adds queued and running into the in-flight number', () => {
+      // The "Nothing of this team's is in the cluster" note keys on exactly
+      // this sum — finished belongs to the period, not to right now.
+      component.activity.set(
+        makePayload({ live: { queued: 2, running: 3, finished: 10, failed: 1 } }),
+      );
+      expect(component.inFlight()).toBe(5);
+    });
+
+    it('is zero before the first payload arrives', () => {
+      expect(component.inFlight()).toBe(0);
+    });
+
+    it('measures the failure rate against finished', () => {
+      // The rate answers "of what got through, how much broke" — dividing by
+      // the in-flight count would swing it with every request that starts.
+      component.activity.set(
+        makePayload({ live: { queued: 0, running: 0, finished: 100, failed: 25 } }),
+      );
+      expect(component.failureRate()).toBeCloseTo(25);
+    });
+
+    it('has no rate to show while nothing finished', () => {
+      // 1/0 is not a rate; the tile then shows the plain note instead.
+      component.activity.set(
+        makePayload({ live: { queued: 4, running: 1, finished: 0, failed: 0 } }),
+      );
+      expect(component.failureRate()).toBeNull();
+    });
+  });
+
+  describe('requester options', () => {
+    it('offers everyone first, then each requester with its count', () => {
+      // The count is what tells the owner which entry is worth opening; the
+      // empty entry is the way back out of a filter.
+      component.activity.set(
+        makePayload({ requesters: [{ id: 11, label: 'Test User', requestCount: 40 }] }),
+      );
+      expect(component.requesterOptions()).toEqual([
+        { value: '', label: 'Everyone in this team' },
+        { value: '11', label: 'Test User (40)' },
+      ]);
+    });
+  });
+
+  describe('Most Asked Questions', () => {
+    it('renders each question with its count', () => {
+      component.activity.set(
+        makePayload({
+          most_asked_questions: [
+            { question: 'What is the capital of France?', count: 2 },
+            { question: 'When is my package arriving?', count: 1 },
+          ],
+        }),
+      );
+      fixture.detectChanges();
+
+      const rows = fixture.nativeElement.querySelectorAll('.most-asked-questions li');
+      expect(rows.length).toBe(2);
+      expect(rows[0].querySelector('.most-asked-questions__text').textContent).toContain(
+        'What is the capital of France?',
+      );
+      expect(rows[0].querySelector('.most-asked-questions__count').textContent).toContain('2');
+      expect(rows[1].querySelector('.most-asked-questions__text').textContent).toContain(
+        'When is my package arriving?',
+      );
+    });
+
+    it('shows an empty-state message when the team asked nothing', () => {
+      component.activity.set(makePayload({ most_asked_questions: [] }));
+      fixture.detectChanges();
+
+      expect(fixture.nativeElement.querySelector('.most-asked-questions li')).toBeNull();
+      expect(fixture.nativeElement.querySelector('.most-asked-questions').textContent).toContain(
+        'No questions recorded for this team in the selected period.',
+      );
+    });
+
+    /** The section head the ranking lives under, out of the other heads. */
+    const mostAskedHead = (): string => {
+      const heads = Array.from(
+        fixture.nativeElement.querySelectorAll('.ac-section-head'),
+      ) as Element[];
+      return heads.find((el) => (el.textContent ?? '').includes('Most Asked Questions'))
+        ?.textContent ?? '';
+    };
+
+    it('labels the ranking with the sample limit the server names', () => {
+      // The ranking is cut off the newest full-logging rows, and the section
+      // must say so — a question the sample does not cover cannot read as one
+      // the team never asked.
+      component.activity.set(makePayload({ most_asked_sample_limit: 10000 }));
+      fixture.detectChanges();
+
+      expect(mostAskedHead()).toContain(
+        `newest ${(10000).toLocaleString()} requests with full logging`,
+      );
+    });
+
+    it('says nothing about a sample when the server names no limit', () => {
+      component.activity.set(makePayload());
+      fixture.detectChanges();
+
+      expect(mostAskedHead()).not.toContain('requests with full logging');
+    });
+  });
+
+  // ── Loading ────────────────────────────────────────────────────────────────
+
+  describe('loading', () => {
+    it('loads for the team it belongs to, on the default window', async () => {
+      await loadForTeam();
+      expect(getActivity).toHaveBeenCalledWith(2001, 7, { userId: null, cursor: null });
+      expect(component.loading()).toBe(false);
+    });
+
+    it('keeps the last good payload when a refresh fails', async () => {
+      // The refresh runs on a timer: blanking the tab over one failed poll
+      // would make a network blip look like an outage.
+      await loadForTeam();
+      const first = component.activity();
+
+      getActivity.mockRejectedValueOnce(new Error('poll failed'));
+      await component.setDays('30');
+
+      expect(component.activity()).toBe(first);
+      expect(component.error()).toBe('Could not refresh activity.');
+      expect(component.loading()).toBe(false);
+    });
+  });
+
+  // ── Window and filter ──────────────────────────────────────────────────────
+
+  describe('window', () => {
+    it('switches the window and starts the request pages over', async () => {
+      // A different window is a different set of requests, so the cursors of
+      // the old one no longer point anywhere — page 2 of 7 days is not page 2
+      // of 30 days.
+      await loadForTeam();
+      await component.nextPage();
+      expect(component.pageIndex()).toBe(1);
+
+      await component.setDays('30');
+
+      expect(getActivity).toHaveBeenLastCalledWith(2001, 30, { userId: null, cursor: null });
+      expect(component.pageIndex()).toBe(0);
+    });
+
+    it('ignores a window it cannot use', () => {
+      component.setDays('0');
+      component.setDays('abc');
+      component.setDays(null);
+      expect(component.days()).toBe(7);
+      expect(getActivity).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('requester filter', () => {
+    it('narrows the request list to one requester', async () => {
+      await loadForTeam();
+      await component.setRequester('11');
+      expect(getActivity).toHaveBeenLastCalledWith(2001, 7, { userId: 11, cursor: null });
+    });
+
+    it('treats the empty pick as no filter', async () => {
+      await loadForTeam();
+      await component.setRequester('11');
+      await component.setRequester('');
+      expect(getActivity).toHaveBeenLastCalledWith(2001, 7, { userId: null, cursor: null });
+    });
+
+    it('does not reload while the pick is unchanged', async () => {
+      await loadForTeam();
+      await component.setRequester('11');
+      expect(getActivity).toHaveBeenCalledTimes(2);
+      await component.setRequester('11');
+      expect(getActivity).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ── Request pages ──────────────────────────────────────────────────────────
+
+  describe('request pages', () => {
+    it('walks the cursor one page at a time and back', async () => {
+      await loadForTeam();
+
+      await component.nextPage();
+      expect(component.pageIndex()).toBe(1);
+      expect(getActivity).toHaveBeenLastCalledWith(2001, 7, {
+        userId: null,
+        cursor: { ts: '2026-08-26T12:00:00Z', request_id: 'req-1' },
+      });
+
+      await component.prevPage();
+      expect(component.pageIndex()).toBe(0);
+      expect(getActivity).toHaveBeenLastCalledWith(2001, 7, { userId: null, cursor: null });
+    });
+
+    it('does not step past the last page', async () => {
+      component.teamId = 2001;
+      component.activity.set(makePayload({ requests_has_more: false, requests_next_cursor: null }));
+
+      await component.nextPage();
+
+      expect(component.pageIndex()).toBe(0);
+      expect(getActivity).not.toHaveBeenCalled();
+    });
+
+    it('numbers the rows of the page it shows', () => {
+      component.pageIndex.set(1);
+      component.activity.set(
+        makePayload({
+          requests: Array.from({ length: 20 }, (_, i) =>
+            makeRequest({ request_id: `req-${i + 1}` }),
+          ),
+        }),
+      );
+      // The "21-40 of n" line: one-based, page 0 is the newest rows.
+      expect(component.firstRowNumber()).toBe(21);
+      expect(component.lastRowNumber()).toBe(40);
+    });
+  });
+
+  // ── Request rows ───────────────────────────────────────────────────────────
+
+  describe('request rows', () => {
+    it('shows prompt and completion tokens as up and down', () => {
+      expect(component.tokensOf(makeRequest({ prompt_tokens: 120, completion_tokens: 480 }))).toBe(
+        '↑120 ↓480',
+      );
+    });
+
+    it('shows nothing a request did not record', () => {
+      // Failed before the first chunk never carried usage — "—" is the honest
+      // cell, 0 would claim the model used no tokens.
+      expect(
+        component.tokensOf(makeRequest({ prompt_tokens: null, completion_tokens: null })),
+      ).toBe('—');
+    });
+
+    it('shows the wall-clock duration when it is known', () => {
+      expect(component.durationOf(makeRequest({ total_seconds: 3.14 }))).toBe('3.14s');
+      expect(component.durationOf(makeRequest({ total_seconds: null }))).toBe('—');
+    });
+
+    it('reads the stage off the timestamps, not a status flag', () => {
+      // The server sends no stage column; the timestamps are what separates
+      // queued from executing from complete.
+      expect(component.stageOf(makeRequest())).toBe('queued');
+      expect(component.stageOf(makeRequest({ scheduled_ts: '2026-08-26T12:00:05Z' }))).toBe(
+        'executing',
+      );
+      expect(
+        component.stageOf(
+          makeRequest({
+            scheduled_ts: '2026-08-26T12:00:05Z',
+            request_complete_ts: '2026-08-26T12:00:30Z',
+          }),
+        ),
+      ).toBe('complete');
+    });
+
+    it('shows the full name, falling back to the username', () => {
+      expect(component.requesterOf(makeRequest())).toBe('Test User');
+      expect(component.requesterOf(makeRequest({ full_name: '   ' }))).toBe('test.user');
+    });
+  });
+
+  describe('export hint', () => {
+    it('says so before the click while no key of the team has full logging', () => {
+      // The download would hold metadata without content; the hint is the
+      // difference between "nothing to export" and "no consent was given".
+      component.activity.set(makePayload({ full_logging_enabled: false }));
+      expect(component.fullLoggingHint()).toBe(
+        'Full logging is not activated for this team — the export will not contain request or response content.',
+      );
+    });
+
+    it('stays away once full logging is activated', () => {
+      component.activity.set(makePayload({ full_logging_enabled: true }));
+      expect(component.fullLoggingHint()).toBeNull();
+    });
+
+    it('has nothing to say before the first payload arrives', () => {
+      expect(component.fullLoggingHint()).toBeNull();
+    });
+  });
+});
+
+/** One unanswered service call, resolvable by the test in the order it wants. */
+type Pending = {
+  promise: Promise<TeamActivityPayload>;
+  resolve: (payload: TeamActivityPayload) => void;
+  answered: boolean;
+};
+
+function makePending(): Pending {
+  let resolve!: (payload: TeamActivityPayload) => void;
+  let answered = false;
+  const promise = new Promise<TeamActivityPayload>((r) => {
+    resolve = (payload: TeamActivityPayload) => {
+      answered = true;
+      r(payload);
+    };
+  });
+  return { promise, resolve, get answered() { return answered; } };
+}
+
+/**
+ * The Requests pager used to read its next cursor from whatever page answer
+ * was still on screen. Press next while a page is loading and every extra
+ * press advanced the index on that stale answer's strength — `has_more` and
+ * the cursor both pointed at the page behind — until the page walked past
+ * the last one.
+ *
+ * These tests hold the service's answers in flight and turn the pages faster
+ * than they land.
+ */
+describe('ActivityTabComponent pagination', () => {
+  const PAGE_SIZE = 20;
+  const TOTAL = 45; // two full pages and a short third, like the team in the report
+  const LAST_PAGE = Math.ceil(TOTAL / PAGE_SIZE) - 1;
+
+  let fixture: ComponentFixture<ActivityTabComponent>;
+  let component: ActivityTabComponent;
+  let service: { getActivity: ReturnType<typeof vi.fn> };
+  let calls: Array<{ days: number; filter: ActivityFilter }>;
+  let pending: Pending[];
+
+  function row(n: number): RequestItem {
+    return {
+      request_id: `req-${n}`,
+      model_name: 'gpt-5',
+      provider_name: 'azure',
+      is_cloud: true,
+      status: 'success',
+      timestamp: null,
+      duration: null,
+      cold_start: null,
+      enqueue_ts: null,
+      scheduled_ts: null,
+      request_complete_ts: null,
+      queue_seconds: null,
+      total_seconds: null,
+      initial_priority: null,
+      priority_when_scheduled: null,
+      queue_depth_at_enqueue: null,
+      error_message: null,
+      team_name: 'Logos',
+      username: 'tobias.wasner',
+      full_name: null,
+      api_key_name: null,
+      api_key_type: null,
+      environment: null,
+      prompt_tokens: null,
+      completion_tokens: null,
+      total_tokens: null,
+      cost_microcents: null,
+    };
+  }
+
+  function rowsFor(pageIndex: number): RequestItem[] {
+    const first = pageIndex * PAGE_SIZE + 1;
+    const count = Math.min(PAGE_SIZE, TOTAL - first + 1);
+    return Array.from({ length: count }, (_, i) => row(first + i));
+  }
+
+  function payload(rows: RequestItem[], hasNext: boolean): TeamActivityPayload {
+    return {
+      team_id: 28,
+      days: 7,
+      since: '2026-08-19T00:00:00Z',
+      full_logging_enabled: true,
+      live: { queued: 0, running: 0, finished: TOTAL, failed: 0 },
+      keys: [],
+      total_tokens: 0,
+      total_requests: TOTAL,
+      requesters: [],
+      most_asked_questions: [],
+      requests: rows,
+      requests_total: TOTAL,
+      requests_has_more: hasNext,
+      requests_next_cursor: hasNext
+        ? { ts: '2026-08-19T12:00:00Z', request_id: rows[rows.length - 1].request_id }
+        : null,
+    };
+  }
+
+  /** Page `pageIndex` of the unfiltered list of TOTAL rows. */
+  function pageFor(pageIndex: number): TeamActivityPayload {
+    return payload(rowsFor(pageIndex), pageIndex < LAST_PAGE);
+  }
+
+  /** Let the component's continuation of a just-answered load settle. */
+  function flush(): Promise<void> {
+    return new Promise((r) => setTimeout(r, 0));
+  }
+
+  beforeEach(async () => {
+    calls = [];
+    pending = [];
+    service = {
+      getActivity: vi.fn(
+        (_teamId: number, days: number, filter: ActivityFilter): Promise<TeamActivityPayload> => {
+          calls.push({ days, filter });
+          const call = makePending();
+          pending.push(call);
+          return call.promise;
+        },
+      ),
+    };
+
+    await TestBed.configureTestingModule({
+      imports: [ActivityTabComponent],
+      providers: [{ provide: TeamActivityService, useValue: service }],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(ActivityTabComponent);
+    component = fixture.componentInstance;
+    component.teamId = 28;
+    component.ngOnChanges({ teamId: new SimpleChange(0, 28, false) });
+    fixture.detectChanges();
+  });
+
+  afterEach(() => {
+    fixture.destroy();
+  });
+
+  it('walks the pages forward and back and stops at the last page', async () => {
+    const first = pageFor(0);
+    pending[0].resolve(first);
+    await flush();
+
+    expect(component.pageIndex()).toBe(0);
+    expect(component.hasNext()).toBe(true);
+    expect(component.pageLoadInFlight()).toBe(false);
+
+    component.nextPage();
+    // The second request goes out with the cursor the first page handed over.
+    expect(calls[1].filter.cursor).toEqual(first.requests_next_cursor);
+
+    pending[1].resolve(pageFor(1));
+    await flush();
+
+    expect(component.pageIndex()).toBe(1);
+    expect(component.activity()?.requests.map((r) => r.request_id)).toEqual(
+      rowsFor(1).map((r) => r.request_id),
+    );
+    expect(component.hasNext()).toBe(true);
+
+    component.nextPage();
+    pending[2].resolve(pageFor(2));
+    await flush();
+
+    expect(component.pageIndex()).toBe(LAST_PAGE);
+    expect(component.hasNext()).toBe(false);
+    expect(component.firstRowNumber()).toBe(LAST_PAGE * PAGE_SIZE + 1);
+    expect(component.lastRowNumber()).toBe(TOTAL);
+
+    // One more press on the last page changes nothing.
+    component.nextPage();
+    await flush();
+    expect(component.pageIndex()).toBe(LAST_PAGE);
+    expect(calls).toHaveLength(3);
+
+    // Coming back is a pop of the stored cursor, not a new query.
+    component.prevPage();
+    expect(calls[3].filter.cursor).toEqual(first.requests_next_cursor);
+    pending[3].resolve(pageFor(1));
+    await flush();
+    expect(component.pageIndex()).toBe(1);
+    expect(component.activity()?.requests.map((r) => r.request_id)).toEqual(
+      rowsFor(1).map((r) => r.request_id),
+    );
+  });
+
+  it('ignores extra presses while a page is still loading', async () => {
+    pending[0].resolve(pageFor(0));
+    await flush();
+
+    // Five rapid presses: every one after the first lands while the page is
+    // still loading, which is how the index used to run past the end.
+    for (let i = 0; i < 5; i++) {
+      component.nextPage();
+    }
+
+    // The index is exactly one page ahead — no further — and the extra
+    // presses did not queue extra requests.
+    expect(component.pageIndex()).toBe(1);
+    expect(component.pageLoadInFlight()).toBe(true);
+    expect(calls).toHaveLength(2);
+
+    pending[1].resolve(pageFor(1));
+    await flush();
+
+    expect(component.pageIndex()).toBe(1);
+    expect(component.hasNext()).toBe(true);
+    expect(component.pageLoadInFlight()).toBe(false);
+  });
+
+  it('lands on the last page and nowhere past it, however hard the presses come', async () => {
+    pending[0].resolve(pageFor(0));
+    await flush();
+
+    // Keep pressing: the presses do not stop when the pages run out, they
+    // just stop doing anything.
+    for (let i = 0; i < 10; i++) {
+      component.nextPage();
+      const unanswered = pending.find((p) => !p.answered);
+      if (!unanswered) break; // the pager stopped asking
+      unanswered.resolve(pageFor(component.pageIndex()));
+      await flush();
+    }
+
+    expect(component.pageIndex()).toBe(LAST_PAGE);
+    expect(component.hasNext()).toBe(false);
+    expect(component.firstRowNumber()).toBe(LAST_PAGE * PAGE_SIZE + 1);
+    expect(component.lastRowNumber()).toBe(TOTAL);
+    expect(calls).toHaveLength(LAST_PAGE + 1);
+  });
+
+  it('drops a stale page answer that lands after the list was refiltered', async () => {
+    pending[0].resolve(pageFor(0));
+    await flush();
+
+    // A page turn goes in flight...
+    component.nextPage();
+    const pageTurn = pending[1];
+
+    // ...and while it is out, the list narrows to one requester. The filter
+    // restarts at page 0 with its own load.
+    component.setRequester('42');
+    const refilter = pending[2];
+    expect(calls[2].filter.userId).toBe(42);
+    expect(calls[2].filter.cursor).toBeNull();
+
+    // The refiltered list is short: one page, and it is the last.
+    const refiltered = payload(rowsFor(0), false);
+    refilter.resolve(refiltered);
+    await flush();
+
+    // Now the old page turn arrives. Its rows and its has_more flag belong
+    // to the list we left; neither may land on the new one.
+    pageTurn.resolve(pageFor(1));
+    await flush();
+
+    expect(component.pageIndex()).toBe(0);
+    expect(component.filterUserId()).toBe(42);
+    expect(component.activity()).toBe(refiltered);
+    expect(component.hasNext()).toBe(false);
+    expect(component.pageLoadInFlight()).toBe(false);
+  });
+
+  it('lets the pager move as soon as the newest load settles, even if a stale one lingers', async () => {
+    pending[0].resolve(pageFor(0));
+    await flush();
+
+    // A page turn goes in flight, then a filter change supersedes it...
+    component.nextPage();
+    const pageTurn = pending[1];
+    component.setRequester('42');
+    const refilter = pending[2];
+
+    // ...and the newer answer lands first.
+    const refiltered = payload(rowsFor(0), false);
+    refilter.resolve(refiltered);
+    await flush();
+
+    // The stale page turn is still out — but its answer will be dropped, so
+    // it must not hold the pager shut over a page that is ready.
+    expect(component.activity()).toBe(refiltered);
+    expect(component.pageLoadInFlight()).toBe(false);
+
+    // The stale answer can still arrive; dropping it changes nothing.
+    pageTurn.resolve(pageFor(1));
+    await flush();
+    expect(component.pageIndex()).toBe(0);
+    expect(component.activity()).toBe(refiltered);
+    expect(component.pageLoadInFlight()).toBe(false);
+  });
+
+  it('disables the pager buttons while a page is loading', async () => {
+    pending[0].resolve(pageFor(0));
+    await flush();
+    fixture.detectChanges();
+
+    const [prevBtn, nextBtn] = fixture.nativeElement.querySelectorAll('.ac-pager__btn') as HTMLButtonElement[];
+    expect(prevBtn.disabled).toBe(true); // first page
+    expect(nextBtn.disabled).toBe(false);
+
+    component.nextPage();
+    fixture.detectChanges();
+    expect(nextBtn.disabled).toBe(true); // in flight
+
+    pending[1].resolve(pageFor(1));
+    await flush();
+    fixture.detectChanges();
+    expect(prevBtn.disabled).toBe(false); // middle page: both ways open again
+    expect(nextBtn.disabled).toBe(false);
+  });
+});
+
+// ── The component's export flow ──────────────────────────────────────────────
+// The file is cut on the application server: the view asks for it, saves the
+// answer under the name the server picked, and says what the file holds when
+// it is a slice rather than the whole window.
+
+describe('ActivityTabComponent trace export', () => {
+  let fixture: ComponentFixture<ActivityTabComponent>;
+  let component: ActivityTabComponent;
+  let activityService: {
+    getActivity: ReturnType<typeof vi.fn>;
+    getTraceExport: ReturnType<typeof vi.fn>;
+  };
+  let lastBlob: Blob | null;
+  let lastAnchor: HTMLAnchorElement | null;
+  let exportBody: string;
+  let exportHeaders: Record<string, string>;
+
+  /** The server's answer: a file body plus the headers that describe it. */
+  const makeExportResponse = (): HttpResponse<Blob> =>
+    new HttpResponse<Blob>({
+      body: new Blob([exportBody], { type: 'application/json' }),
+      status: 200,
+      headers: new HttpHeaders(exportHeaders),
+    });
+
+  /**
+   * The continuation token in the shape the server issues it: the window the
+   * walk started in, the row behind the slice, and the team and requester
+   * the walk was started for. Opaque to the view — it is held and sent back
+   * verbatim, never read.
+   */
+  const exportCursorToken =
+    '2026-09-23T12:00:00Z/2026-09-30T12:00:00Z/2026-08-26T12:00:00.000Z/9041//42';
+
+  beforeEach(async () => {
+    activityService = {
+      getActivity: vi.fn().mockResolvedValue(null),
+      getTraceExport: vi.fn(),
+    };
+    lastBlob = null;
+    lastAnchor = null;
+    exportBody = '{"team_id":42,"traces":[]}';
+    exportHeaders = {
+      'Content-Disposition': 'attachment; filename="logos-traces-team-42-7d.json"',
+      'X-Logos-Export-Total': '0',
+      'X-Logos-Export-Truncated': 'false',
+      'X-Logos-Export-Count': '0',
+    };
+    activityService.getTraceExport.mockImplementation(async () => makeExportResponse());
+
+    await TestBed.configureTestingModule({
+      imports: [ActivityTabComponent],
+      providers: [{ provide: TeamActivityService, useValue: activityService }],
+    }).compileComponents();
+
+    fixture = TestBed.createComponent(ActivityTabComponent);
+    component = fixture.componentInstance;
+    component.teamId = 42;
+    fixture.detectChanges();
+
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      lastBlob = blob as Blob;
+      return 'blob:test';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      lastAnchor = this;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('asks the server for the team, the period, the filter and the format', async () => {
+    component.filterUserId.set(7);
+    component.exportFormat.set('csv');
+
+    await component.exportTraces();
+
+    // No cursor yet: the first download starts at the newest row.
+    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, 7, 'csv', null);
+  });
+
+  it("saves the server's file under the name the server picked", async () => {
+    await component.exportTraces();
+
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
+    expect(lastBlob?.type).toBe('application/json');
+    expect(await lastBlob?.text()).toBe('{"team_id":42,"traces":[]}');
+  });
+
+  it('falls back to the constructed name when the headers lost the file name', async () => {
+    exportHeaders = { 'X-Logos-Export-Truncated': 'false' };
+
+    await component.exportTraces();
+
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
+  });
+
+  it('names the download after the team the export was started for', async () => {
+    // A slow export is the whole race: the tab may be pointed at another team
+    // by the time the answer lands, and the file must still say where its data
+    // came from.
+    let resolveExport: (value: HttpResponse<Blob>) => void = () => {};
+    activityService.getTraceExport.mockImplementation(
+      () =>
+        new Promise<HttpResponse<Blob>>((resolve) => {
+          resolveExport = resolve;
+        }),
+    );
+
+    const inFlight = component.exportTraces();
+    component.teamId = 99;
+    resolveExport(makeExportResponse());
+    await inFlight;
+
+    expect(activityService.getTraceExport).toHaveBeenCalledWith(42, 7, null, 'json', null);
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
+  });
+
+  it('hands the CSV straight through when the server cut it', async () => {
+    component.exportFormat.set('csv');
+    exportBody = 'request_id,timestamp_request';
+    exportHeaders['Content-Disposition'] = 'attachment; filename="logos-traces-team-42-7d.csv"';
+
+    await component.exportTraces();
+
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.csv');
+    expect(await lastBlob?.text()).toBe('request_id,timestamp_request');
+  });
+
+  it('says what the file holds when the window outran one export', async () => {
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+
+    await component.exportTraces();
+
+    // No continuation came back with the file, so the advice is the one the
+    // view can act on: narrow the scope. The number formatting is the same
+    // call the component makes, so the expectation stays right whichever
+    // locale the test runs in. A numeric literal needs parentheses before a
+    // member access (10000. would lex as the number 10000.0).
+    const count = (10000).toLocaleString();
+    const total = (12000).toLocaleString();
+    expect(component.exportNotice()).toBe(
+      `The export carries the ${count} newest requests of ${total} in the ` +
+        'selected period — narrow the period or the requester filter for the rest.',
+    );
+  });
+
+  it('hands the walk to the next, older slice when the file carries a cursor', async () => {
+    // The window outruns one file, and the server said where the file ended:
+    // the button keeps the token, and the next click sends it back verbatim
+    // so the download continues instead of starting over at the rows already
+    // held — the token also carries the window, so the continuation walks
+    // the same period the first slice was cut from.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBe(exportCursorToken);
+    expect(component.exportNotice()).toContain(
+      'press export again for the next, older slice',
+    );
+
+    await component.exportTraces();
+
+    expect(activityService.getTraceExport).toHaveBeenLastCalledWith(
+      42,
+      7,
+      null,
+      'json',
+      exportCursorToken,
+    );
+  });
+
+  it('ends the walk when a slice arrives uncapped', async () => {
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+    await component.exportTraces();
+    expect(component.exportCursor()).not.toBeNull();
+
+    // The last slice holds everything left: no truncation, no cursor — the
+    // button is the start of a fresh walk again.
+    exportHeaders['X-Logos-Export-Truncated'] = 'false';
+    delete exportHeaders['X-Logos-Export-Next-Cursor'];
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportNotice()).toBeNull();
+  });
+
+  it('falls back to narrowing advice when the file carries no continuation', async () => {
+    // A truncated file without a continuation must not promise a next slice
+    // the button cannot deliver. The token is opaque, so the view cannot
+    // reject a malformed one — the only absence it can see is a missing
+    // header, and that is the narrowing case. A token the server never
+    // issued is answered with an error on the next click, not with a
+    // duplicated first slice.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportNotice()).toContain('narrow the period');
+  });
+
+  it('keeps a late answer from resurfacing under the selection the tab moved on to', async () => {
+    // The whole race: the scope changes while the download is out. The file
+    // still gets saved under the name it was started with, but its notice and
+    // its cursor belong to the window that left the screen.
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+    let resolveExport: (value: HttpResponse<Blob>) => void = () => {};
+    activityService.getTraceExport.mockImplementation(
+      () =>
+        new Promise<HttpResponse<Blob>>((resolve) => {
+          resolveExport = resolve;
+        }),
+    );
+
+    const inFlight = component.exportTraces();
+    component.setDays('30');
+    resolveExport(makeExportResponse());
+    await inFlight;
+
+    expect(lastAnchor?.download).toBe('logos-traces-team-42-7d.json');
+    expect(component.exportNotice()).toBeNull();
+    expect(component.exportCursor()).toBeNull();
+  });
+
+  it('has no notice to say when the file is the whole answer', async () => {
+    await component.exportTraces();
+
+    expect(component.exportNotice()).toBeNull();
+  });
+
+  it('drops the notice when the scope the file was cut from changes', async () => {
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Count'] = '10000';
+    exportHeaders['X-Logos-Export-Total'] = '12000';
+    await component.exportTraces();
+    expect(component.exportNotice()).not.toBeNull();
+
+    component.setDays('30');
+
+    expect(component.exportNotice()).toBeNull();
+  });
+
+  it('accepts only json and csv as export formats', () => {
+    component.setExportFormat('yaml');
+    expect(component.exportFormat()).toBe('json');
+    component.setExportFormat('csv');
+    expect(component.exportFormat()).toBe('csv');
+  });
+
+  it('reports a failed export instead of downloading nothing', async () => {
+    activityService.getTraceExport.mockRejectedValue(new Error('boom'));
+
+    await component.exportTraces();
+
+    expect(component.exportError()).toBe('Could not export the traces.');
+    expect(component.exportNotice()).toBeNull();
+    expect(component.exporting()).toBe(false);
+    expect(lastAnchor).toBeNull();
+  });
+
+  it('clears an expired continuation cursor so the next click starts fresh', async () => {
+    exportHeaders['X-Logos-Export-Truncated'] = 'true';
+    exportHeaders['X-Logos-Export-Next-Cursor'] = exportCursorToken;
+    await component.exportTraces();
+    expect(component.exportCursor()).toBe(exportCursorToken);
+
+    activityService.getTraceExport.mockRejectedValue({ status: 400, message: 'Malformed export cursor' });
+
+    await component.exportTraces();
+
+    expect(component.exportCursor()).toBeNull();
+    expect(component.exportError()).toContain('fresh download');
+    expect(component.exportNotice()).toBeNull();
+  });
+});

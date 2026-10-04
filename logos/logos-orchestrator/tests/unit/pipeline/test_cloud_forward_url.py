@@ -70,14 +70,39 @@ def test_matching_operation_left_untouched():
 
 
 def test_non_swappable_operations_left_untouched():
-    # Embeddings (and audio/images) endpoints are never re-targeted, even for
-    # a mismatched inbound path — that is a client error for Azure to report.
+    # Embeddings/images and cross-family operations are never re-targeted.
     embeddings = (
         "https://ase-se01.openai.azure.com/openai/deployments/"
         "text-embedding-3-large/embeddings?api-version=2024-02-01"
     )
     assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/responses", embeddings) == embeddings
     assert ContextResolver._cloud_forward_url(AZURE_BASE, "v1/embeddings", AZURE_ENDPOINT) == AZURE_ENDPOINT
+
+
+def test_inbound_translation_path_retargets_azure_whisper_endpoint():
+    transcription_endpoint = (
+        "https://ase-se01.openai.azure.com/openai/deployments/"
+        "whisper/audio/transcriptions?api-version=2025-04-01-preview"
+    )
+    assert ContextResolver._cloud_forward_url(
+        AZURE_BASE,
+        "v1/audio/translations",
+        transcription_endpoint,
+    ) == (
+        "https://ase-se01.openai.azure.com/openai/deployments/"
+        "whisper/audio/translations?api-version=2025-04-01-preview"
+    )
+
+
+def test_inbound_transcription_path_does_not_retarget_unrelated_azure_endpoint():
+    assert (
+        ContextResolver._cloud_forward_url(
+            AZURE_BASE,
+            "v1/audio/transcriptions",
+            AZURE_ENDPOINT,
+        )
+        == AZURE_ENDPOINT
+    )
 
 
 def test_openai_shaped_upstream_forwards_responses_like_for_like():
@@ -102,6 +127,22 @@ def test_azure_responses_route_ignores_chat_completions():
     assert ContextResolver._azure_responses_route(AZURE_ENDPOINT) == (None, None)
 
 
+def test_azure_anthropic_route_collapses_and_extracts_deployment():
+    # Deployment-scoped Anthropic-Messages URL -> real /anthropic/v1/messages
+    # route + the deployment id the body "model" must be rewritten to.
+    url = "https://ase-se01.openai.azure.com/openai/deployments/claude-opus-5/anthropic/v1/messages"
+    real_url, deployment = ContextResolver._azure_anthropic_route(url)
+    assert real_url == "https://ase-se01.openai.azure.com/anthropic/v1/messages"
+    assert deployment == "claude-opus-5"
+
+
+def test_azure_anthropic_route_ignores_other_operations():
+    assert ContextResolver._azure_anthropic_route(AZURE_ENDPOINT) == (None, None)
+    assert ContextResolver._azure_responses_route(
+        "https://ase-se01.openai.azure.com/openai/deployments/claude-opus-5/anthropic/v1/messages"
+    ) == (None, None)
+
+
 def test_prepare_payload_rewrites_model_for_azure_responses():
     # The client addresses the served name (gpt-5.1); Azure /responses needs the
     # deployment id (gpt-4o) in the body to resolve the deployment.
@@ -114,7 +155,7 @@ def test_prepare_payload_rewrites_model_for_azure_responses():
         auth_header="api-key",
         auth_value="secret",
         model_name="gpt-5.1",
-        azure_responses_deployment="gpt-4o",
+        azure_body_deployment="gpt-4o",
     )
     _, payload = ContextResolver.prepare_headers_and_payload(context, {"model": "gpt-5.1", "input": "hi"})
     assert payload["model"] == "gpt-4o"

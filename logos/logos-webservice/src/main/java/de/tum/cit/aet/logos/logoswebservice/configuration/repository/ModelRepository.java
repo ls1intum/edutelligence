@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.repository;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -10,22 +11,129 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 
 public interface ModelRepository extends JpaRepository<Model, Integer> {
 
+    boolean existsByNameIgnoreCase(String name);
+
+    List<Model> findByNameIgnoreCase(String name);
+
+    /**
+     * Single-model twin of {@link #findAllWithPricing()} for the admin model
+     * access page — same price pick (most recently routed provider) and the
+     * same LIMIT 1 lateral instead of a per-model MAX, for the same reason.
+     */
     @Query(value = """
         SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
-               m.weight_quality, m.tags, m.parallel, m.description,
-               (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
+               m.weight_quality, m.tags, m.description,
+               m.profile_ratings::text AS profile_ratings_json,
+               (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                FROM model_aliases a
+                WHERE a.model_id = m.id
+               ) AS aliases,
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                  AND tt.name = 'prompt_tokens' AND tp.valid_from <= NOW()
-                ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
+                  AND tt.name = 'billed_input_uncached'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
                ) AS input_usd_per_million,
-               (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                  AND tt.name = 'completion_tokens' AND tp.valid_from <= NOW()
-                ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
-               ) AS output_usd_per_million
-        FROM models m ORDER BY m.id
+                  AND tt.name = 'billed_output_text'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
+               ) AS output_usd_per_million,
+               (SELECT MAX(le.timestamp_request)
+                FROM log_entry le
+                WHERE le.model_id = m.id
+               ) AS last_used_at
+        FROM models m
+        LEFT JOIN LATERAL (
+            SELECT le.provider_id
+            FROM log_entry le
+            WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
+            ORDER BY le.timestamp_request DESC, le.id DESC
+            LIMIT 1
+        ) dp ON true
+        WHERE m.id = :modelId
+        """, nativeQuery = true)
+    Optional<ModelWithPriceProjection> findWithPricingById(@Param("modelId") Integer modelId);
+
+    @Query(value = """
+        SELECT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
+               m.weight_quality, m.tags, m.description,
+               m.profile_ratings::text AS profile_ratings_json,
+               (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                FROM model_aliases a
+                WHERE a.model_id = m.id
+               ) AS aliases,
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
+                FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
+                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                  AND tt.name = 'billed_input_uncached'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
+               ) AS input_usd_per_million,
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
+                FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
+                WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
+                  AND tt.name = 'billed_output_text'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
+               ) AS output_usd_per_million,
+               (SELECT MAX(le.timestamp_request)
+                FROM log_entry le
+                WHERE le.model_id = m.id
+               ) AS last_used_at
+        FROM models m
+        -- A model can be served by several providers, each with its own catalog
+        -- price. Show the price for the provider the model was most recently
+        -- routed to; requests sharing the newest timestamp_request are broken
+        -- by log_entry.id, so the picked provider — and the price shown for it —
+        -- is deterministic; a never-used model falls through to a stable
+        -- provider_id tiebreak so the figure never flips between equal
+        -- valid_from rows.
+        --
+        -- idx_log_entry_model_provider_recent (migration 036) is what makes this
+        -- a seek. It has to carry provider_id, because the IS NOT NULL below is
+        -- part of the predicate: without that column the planner cannot answer
+        -- the lateral from a (model_id, timestamp_request) index and falls back
+        -- to one with model_id in third position, which is not seekable on
+        -- equality. That cost 195 ms per model on production - 9.5 s for one
+        -- page load - so do not drop the INCLUDE. The log_entry.id tiebreak
+        -- only applies within rows sharing one timestamp_request, so the index
+        -- still answers the lateral.
+        LEFT JOIN LATERAL (
+            SELECT le.provider_id
+            FROM log_entry le
+            WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
+            ORDER BY le.timestamp_request DESC, le.id DESC
+            LIMIT 1
+        ) dp ON true
+        ORDER BY m.id
         """, nativeQuery = true)
     List<ModelWithPriceProjection> findAllWithPricing();
 
@@ -46,22 +154,54 @@ public interface ModelRepository extends JpaRepository<Model, Integer> {
             JOIN api_key_provider_permissions akpp ON akpp.api_key_id = ak.id AND akpp.provider_id = mp.provider_id
             WHERE ak.user_id = :userId AND ak.is_active = true AND ak.use_custom_permissions = true
         )
+        -- last_used_at is deliberately not computed here: it is only exposed to
+        -- Logos admins (see ModelService), so the per-model MAX subselect would
+        -- be wasted work on every other model list request.
         SELECT DISTINCT m.id, m.name, m.weight_latency, m.weight_accuracy, m.weight_cost,
-               m.weight_quality, m.tags, m.parallel, m.description,
-               (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
+               m.weight_quality, m.tags, m.description,
+               m.profile_ratings::text AS profile_ratings_json,
+               (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                FROM model_aliases a
+                WHERE a.model_id = m.id
+               ) AS aliases,
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                  AND tt.name = 'prompt_tokens' AND tp.valid_from <= NOW()
-                ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
+                  AND tt.name = 'billed_input_uncached'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
                ) AS input_usd_per_million,
-               (SELECT ROUND(tp.price_per_k_token::NUMERIC / 100000, 4)
+               (SELECT ROUND(tp.price_per_k_unit::NUMERIC / 100000, 4)
                 FROM token_prices tp JOIN token_types tt ON tt.id = tp.type_id
                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                  AND tt.name = 'completion_tokens' AND tp.valid_from <= NOW()
-                ORDER BY (tp.model_id = m.id) DESC NULLS LAST, tp.valid_from DESC LIMIT 1
+                  AND tt.name = 'billed_output_text'
+                  AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
+                  AND tp.valid_from <= NOW()
+                ORDER BY (tp.model_id = m.id) DESC NULLS LAST,
+                         (tp.provider_id = dp.provider_id) DESC NULLS LAST,
+                         tp.provider_id ASC NULLS LAST,
+                         tp.valid_from DESC,
+                         tp.id DESC
+                LIMIT 1
                ) AS output_usd_per_million
         FROM models m
         JOIN effective_model_ids em ON m.id = em.id
+        -- Same most-recently-routed-provider pick as findAllWithPricing, for the
+        -- same reason. This is a LIMIT 1 index seek, not the per-model MAX the
+        -- comment above rules out.
+        LEFT JOIN LATERAL (
+            SELECT le.provider_id
+            FROM log_entry le
+            WHERE le.model_id = m.id AND le.provider_id IS NOT NULL
+            ORDER BY le.timestamp_request DESC, le.id DESC
+            LIMIT 1
+        ) dp ON true
         ORDER BY m.id
         """, nativeQuery = true)
     List<ModelWithPriceProjection> findAllWithPricingForUser(@Param("userId") Integer userId);

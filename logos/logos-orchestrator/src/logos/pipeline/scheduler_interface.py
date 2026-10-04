@@ -40,7 +40,7 @@ class SchedulingResult:
 
     model_id: int
     provider_id: int
-    provider_type: str  # 'ollama' | 'azure'
+    provider_type: str  # 'logosnode' | 'cloud'
     queue_entry_id: Optional[str]  # For local models with queue tracking
     was_queued: bool
     queue_depth_at_schedule: int
@@ -57,11 +57,6 @@ class SchedulingResult:
     # Warmth of the chosen deployment at decision time:
     # -1 = cold, 0 = warm but idle, 1+x = running with x queued (None = cloud)
     warmth_state: Optional[int] = None
-    # True when capacity slot was transferred from a completing request
-    # (release path with reuse_slot=True). False when dispatched fresh
-    # (reevaluate_model_queues after load/wake). Controls whether
-    # on_request_begin_processing should increment the active count.
-    slot_transferred: bool = True
 
     def __post_init__(self):
         if self.provider_metrics is None:
@@ -75,8 +70,19 @@ class SchedulingRequest:
     request_id: str
     payload: Dict[str, Any]
     deployments: list[Deployment]
-    classified_models: Optional[List[Tuple[int, float, int, int]]] = None  # (model_id, weight, priority, parallel)
+    classified_models: Optional[List[Tuple[int, float, int]]] = None  # (model_id, weight, priority)
     timeout_s: Optional[float] = None
+    # Queue tiebreak rank of the caller (pipeline.queue_role_rank):
+    # application keys dequeue before admin keys, which dequeue before
+    # developer traffic, within equal priority. 0 = unknown/lowest.
+    role_rank: int = 0
+    required_provider_id: Optional[int] = None
+    """Trusted internal affinity. When set, scheduling and queue dispatch
+    must never fall back to another provider."""
+    # Chained prefix-block hashes identifying the request's "stream"
+    # (api key + actual prompt prefix), deepest block first. Used for
+    # prefix-cache-aware placement; empty/None means "route as before".
+    affinity_keys: Optional[List[str]] = None
 
 
 class SchedulerInterface(ABC):

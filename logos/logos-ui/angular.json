@@ -33,7 +33,8 @@
             "styles": [
               "node_modules/primeicons/primeicons.css",
               "src/styles.scss",
-              "src/tailwind.css"
+              "src/tailwind.css",
+              "node_modules/@tumaet/ui-angular/styles.css"
             ],
             "stylePreprocessorOptions": {
               "includePaths": ["src"]
@@ -41,6 +42,13 @@
           },
           "configurations": {
             "production": {
+              "optimization": {
+                "scripts": true,
+                "styles": true,
+                "fonts": {
+                  "inline": false
+                }
+              },
               "budgets": [
                 {
                   "type": "initial",
@@ -79,7 +87,10 @@
           "defaultConfiguration": "development"
         },
         "test": {
-          "builder": "@angular/build:unit-test"
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "runnerConfig": true
+          }
         }
       }
     }

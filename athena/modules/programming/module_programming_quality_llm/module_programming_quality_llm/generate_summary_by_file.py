@@ -3,7 +3,7 @@ import os
 from typing import Optional, List, Dict
 
 from pydantic import ConfigDict, BaseModel, Field
-from langchain.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate
 
 from athena import emit_meta
 from athena.programming import Exercise, Submission

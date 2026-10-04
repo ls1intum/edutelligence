@@ -1,4 +1,13 @@
-import { Component, Input, inject, signal, computed, ChangeDetectionStrategy } from '@angular/core';
+import {
+  Component,
+  Input,
+  OnChanges,
+  SimpleChanges,
+  inject,
+  signal,
+  computed,
+  ChangeDetectionStrategy,
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { StatisticsService } from '../../services/statistics.service';
 import {
@@ -7,9 +16,16 @@ import {
   VramProviderMeta,
   VramV2Sample,
 } from '../../statistics.models';
+import { extractProviderHostRamMb, formatUptime } from '../../statistics.utils';
 import { EmptyState } from '../empty-state/empty-state';
 
 type CalibrateState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'success'; message: string }
+  | { kind: 'error'; message: string };
+
+type StopState =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'success'; message: string }
@@ -35,16 +51,53 @@ export function formatMb(mb: number): string {
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './worker-gpu-panel.scss',
 })
-export class WorkerGpuPanel {
+export class WorkerGpuPanel implements OnChanges {
   @Input() providerLatestSamples: Record<string, VramV2Sample | null> = {};
   @Input() providerDevices: Record<string, DeviceInfo[]> = {};
   @Input() providerMeta: Record<string, VramProviderMeta> = {};
   @Input() lanesByProvider: Record<string, Record<string, LaneSignalData>> = {};
   @Input() activeProvider: string | null = null;
+  @Input() nowMs = Date.now();
 
   private statisticsService = inject(StatisticsService);
 
   calibrateState = signal<CalibrateState>({ kind: 'idle' });
+  /** Worker the in-flight calibrate call was started on — its answer must not
+   *  land under a worker the operator has moved on to. */
+  private calibrateProvider: string | null = null;
+  /** The resolved worker the last input change settled on. */
+  private resolvedProvider: string | null = null;
+  /** Calibration attempt counter. Every start and every worker-change reset
+   *  advances it, so an answer only applies while its exact attempt is still
+   *  the current one — the worker name alone cannot tell two calibrations of
+   *  the same worker apart (A → B → A). */
+  private calibrateGeneration = 0;
+
+  stopState = signal<StopState>({ kind: 'idle' });
+  /** Same staleness guards as calibrateProvider/calibrateGeneration, kept
+   *  separate so a stop click and a calibrate click in flight at once don't
+   *  clobber each other's state. */
+  private stopProvider: string | null = null;
+  private stopGeneration = 0;
+
+  ngOnChanges(_changes: SimpleChanges): void {
+    const resolved = this.resolvedActiveProvider;
+    if (resolved === this.resolvedProvider) return;
+    // The state is the answer to an action on *one* worker: "Calibrating 2
+    // model(s): …" said on worker A means nothing under worker B's panel, so
+    // a worker change drops it instead of letting it hang around. Compared
+    // against the *resolved* worker, not the raw selection: with no explicit
+    // selection the panel falls back to the first provider, and that fallback
+    // can change on its own — a worker leaves the list or goes offline — even
+    // though activeProvider itself never changed.
+    this.calibrateState.set({ kind: 'idle' });
+    this.calibrateProvider = null;
+    this.calibrateGeneration += 1;
+    this.stopState.set({ kind: 'idle' });
+    this.stopProvider = null;
+    this.stopGeneration += 1;
+    this.resolvedProvider = resolved;
+  }
 
   // Sorted providers: online-first, then alphabetical
   get providers(): string[] {
@@ -75,6 +128,18 @@ export class WorkerGpuPanel {
     return !this.isOnline(active);
   }
 
+  get workerUptimeLabel(): string | null {
+    const active = this.resolvedActiveProvider;
+    if (!active) return null;
+    return formatUptime(this.providerMeta[active]?.worker_started_at, this.nowMs);
+  }
+
+  get wsUptimeLabel(): string | null {
+    const active = this.resolvedActiveProvider;
+    if (!active) return null;
+    return formatUptime(this.providerMeta[active]?.connected_at, this.nowMs);
+  }
+
   get latestSample(): VramV2Sample | null {
     const active = this.resolvedActiveProvider;
     return active ? (this.providerLatestSamples[active] ?? null) : null;
@@ -100,6 +165,16 @@ export class WorkerGpuPanel {
 
   get deviceMode(): string | null {
     return this.providerSignals?.device_mode ?? null;
+  }
+
+  /**
+   * Apple Silicon has one pool; the Unified memory pie already shows it.
+   * The device card's Memory bar would restate a wired-down budget (often
+   * ~75–80% of physical RAM) next to that pie and disagree with it — hide
+   * the bar so only one total is on screen.
+   */
+  get isUnifiedMemory(): boolean {
+    return this.deviceMode === 'metal';
   }
 
   get isDerived(): boolean {
@@ -131,6 +206,15 @@ export class WorkerGpuPanel {
     return this.activeProviderId != null && !this.isOffline;
   }
 
+  get isCalibrating(): boolean {
+    const active = this.resolvedActiveProvider;
+    return active != null && this.providerMeta[active]?.calibrating === true;
+  }
+
+  get canStop(): boolean {
+    return this.activeProviderId != null && this.isCalibrating && !this.isOffline;
+  }
+
   usedPct(device: DeviceInfo): number {
     if (device.memory_total_mb <= 0) return 0;
     return Math.min(100, (device.memory_used_mb / device.memory_total_mb) * 100);
@@ -154,6 +238,43 @@ export class WorkerGpuPanel {
     return Math.min(100, (this.syntheticUsedMb() / total) * 100);
   }
 
+  // ── Host RAM ────────────────────────────────────────────────────────────────
+  // The same resource axis the capacity planner schedules against as VRAM:
+  // sleeping lanes park their weights here and the tmpfs model cache draws
+  // from it. Shown as its own card because it is a machine-level pool, not a
+  // per-GPU one.
+
+  private hostRamSummary() {
+    return extractProviderHostRamMb(this.latestSample);
+  }
+
+  hostRamTotalMb(): number {
+    return this.hostRamSummary().totalMb;
+  }
+
+  hostRamUsedMb(): number {
+    return this.hostRamSummary().usedMb;
+  }
+
+  hostRamFreeMb(): number {
+    return this.hostRamSummary().freeMb;
+  }
+
+  hostRamPct(): number {
+    const summary = this.hostRamSummary();
+    if (summary.totalMb <= 0) return 0;
+    return Math.min(100, (summary.usedMb / summary.totalMb) * 100);
+  }
+
+  /**
+   * Whether this provider reports host RAM at all. Absent means "not
+   * reported" (an older worker, or a non-Linux host), which is a different
+   * thing from a host that measured 0 MB — the card simply stays out.
+   */
+  hasHostRam(): boolean {
+    return this.hostRamSummary().reported;
+  }
+
   deviceName(device: DeviceInfo): string {
     return device.name || device.device_id;
   }
@@ -163,11 +284,26 @@ export class WorkerGpuPanel {
 
   async handleCalibrateUncalibrated(): Promise<void> {
     const pid = this.activeProviderId;
-    if (pid == null) return;
+    const active = this.resolvedActiveProvider;
+    if (pid == null || active == null) return;
+    const generation = (this.calibrateGeneration += 1);
+    this.calibrateProvider = active;
     this.calibrateState.set({ kind: 'loading' });
 
     try {
       const body = await this.statisticsService.calibrateUncalibrated(pid);
+      // The operator can switch workers while the call is in flight — or the
+      // fallback worker can change under a null selection, or a newer
+      // calibration of the very same worker can supersede this one (A → B →
+      // A) — and the answer belongs to the attempt it was made for, so a
+      // stale one is dropped rather than shown under the panel the operator
+      // is looking at now.
+      if (
+        generation !== this.calibrateGeneration ||
+        this.calibrateProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
       const count = typeof body?.count === 'number' ? body.count : 0;
       const models = Array.isArray(body?.models) ? (body.models as string[]) : [];
       const message =
@@ -176,6 +312,12 @@ export class WorkerGpuPanel {
           : `Calibrating ${count} model(s): ${models.join(', ')}`;
       this.calibrateState.set({ kind: 'success', message });
     } catch (err: unknown) {
+      if (
+        generation !== this.calibrateGeneration ||
+        this.calibrateProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
       const e = err as { status?: number; error?: { error?: string } };
       if (e.status === 404 || e.status === 501 || e.status === 0) {
         this.calibrateState.set({
@@ -185,6 +327,48 @@ export class WorkerGpuPanel {
       } else {
         const detail = e.error?.error ?? `HTTP ${e.status}`;
         this.calibrateState.set({ kind: 'error', message: detail });
+      }
+    }
+  }
+
+  async handleStopCalibration(): Promise<void> {
+    const pid = this.activeProviderId;
+    const active = this.resolvedActiveProvider;
+    if (pid == null || active == null) return;
+    const generation = (this.stopGeneration += 1);
+    this.stopProvider = active;
+    this.stopState.set({ kind: 'loading' });
+
+    try {
+      const body = await this.statisticsService.stopCalibration(pid);
+      if (
+        generation !== this.stopGeneration ||
+        this.stopProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
+      const message = body?.was_active
+        ? body.current_model
+          ? `Calibration cancelled (was calibrating ${body.current_model}).`
+          : 'Calibration cancelled.'
+        : 'No calibration session was running.';
+      this.stopState.set({ kind: 'success', message });
+    } catch (err: unknown) {
+      if (
+        generation !== this.stopGeneration ||
+        this.stopProvider !== active ||
+        this.resolvedActiveProvider !== active
+      )
+        return;
+      const e = err as { status?: number; error?: { error?: string } };
+      if (e.status === 404 || e.status === 501 || e.status === 0) {
+        this.stopState.set({
+          kind: 'error',
+          message: 'Action not available on this server yet.',
+        });
+      } else {
+        const detail = e.error?.error ?? `HTTP ${e.status}`;
+        this.stopState.set({ kind: 'error', message: detail });
       }
     }
   }

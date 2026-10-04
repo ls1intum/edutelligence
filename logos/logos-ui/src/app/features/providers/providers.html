@@ -8,6 +8,14 @@
       placeholder="Search providers..."
       (valueChange)="search.set($event)"
     />
+    <button type="button" class="btn-secondary" (click)="refreshModels()" [disabled]="refreshing()">
+      @if (refreshing()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      } @else {
+        <i class="pi pi-refresh" aria-hidden="true"></i>
+      }
+      Refresh
+    </button>
     <button type="button" class="btn-primary" (click)="openAddDialog()">
       <i class="pi pi-plus" aria-hidden="true"></i> Add Provider
     </button>
@@ -15,6 +23,10 @@
 
   @if (loadError()) {
     <app-error-message variant="banner" message="Failed to load providers, please refresh." />
+  }
+
+  @if (refreshError()) {
+    <app-error-message variant="banner" message="Failed to refresh models, please try again." />
   }
 
   <app-data-table
@@ -75,12 +87,7 @@
         </div>
 
         <div class="col-type" role="cell" data-label="Type">
-          <span
-            class="type-badge"
-            [class.type-badge--local]="provider.provider_type === 'logosnode'"
-          >
-            {{ provider.provider_type }}
-          </span>
+          <span class="type-badge">{{ provider.provider_type }}</span>
         </div>
 
         <div class="col-privacy" role="cell" data-label="Privacy">
@@ -114,6 +121,7 @@
       @if (expandedId() === provider.id) {
         <div class="expanded-row" role="row">
           <div class="expanded-content">
+            <section class="connections-section" aria-label="Connected models">
             <div class="expanded-header">
               <span class="expanded-title">Connected Models</span>
               <button class="btn-primary" type="button" (click)="openConnectDialog(provider)">
@@ -155,6 +163,7 @@
                 }
               </div>
             }
+            </section>
           </div>
         </div>
       }
@@ -279,23 +288,25 @@
         (valueChange)="onAddProviderTypeChange($any($event))"
       />
     </div>
+    @if (addProviderType() === 'cloud') {
     <div class="form-field">
       <label class="field-label" for="add-cloud-type">Cloud Provider</label>
       <app-select
         [id]="'add-cloud-type'"
         [options]="addCloudProviderTypeOptions()"
         [value]="addCloudProviderType()"
-        [disabled]="addLoading() || addProviderType() === 'logosnode'"
+        [disabled]="addLoading()"
         (valueChange)="addCloudProviderType.set($any($event))"
       />
     </div>
+    }
     <div class="form-field">
       <label class="field-label" for="add-privacy">Privacy Level</label>
       <app-select
         [id]="'add-privacy'"
         [options]="addPrivacyLevelOptions()"
         [value]="addPrivacyLevel()"
-        [disabled]="addLoading() || addProviderType() === 'logosnode'"
+        [disabled]="addLoading()"
         (valueChange)="addPrivacyLevel.set($any($event))"
       />
     </div>
@@ -322,6 +333,47 @@
         <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
       }
       Add Provider
+    </button>
+  </div>
+</app-modal-form>
+
+<!-- ── Created Provider API Key Dialog ─────────────────────────────────────── -->
+<app-modal-form
+  [visible]="createdKeyOpen()"
+  (visibleChange)="$event || closeCreatedKeyDialog()"
+  title="Provider created"
+>
+  <div class="form-body">
+    <p class="created-key-intro">
+      <strong>{{ createdKeyName() }}</strong> is a Logos worker node. Authenticate it
+      with the shared key below — it is shown only now, so copy it to your worker
+      configuration.
+    </p>
+    <div class="form-field">
+      <label class="field-label" for="created-key">Shared API Key</label>
+      <div class="created-key-row">
+        <input
+          id="created-key"
+          class="field-input"
+          type="text"
+          readonly
+          [value]="createdKey()"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button class="btn-secondary" type="button" (click)="copyCreatedKey()">
+          @if (createdKeyCopied()) {
+            <i class="pi pi-check" aria-hidden="true"></i> Copied!
+          } @else {
+            <i class="pi pi-copy" aria-hidden="true"></i> Copy
+          }
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer" modal-footer>
+    <button class="btn-primary" type="button" (click)="closeCreatedKeyDialog()">
+      Done
     </button>
   </div>
 </app-modal-form>
@@ -411,23 +463,25 @@
         (valueChange)="onEditProviderTypeChange($any($event))"
       />
     </div>
+    @if (editProviderType() === 'cloud') {
     <div class="form-field">
       <label class="field-label" for="edit-cloud-type">Cloud Provider</label>
       <app-select
         [id]="'edit-cloud-type'"
         [options]="editCloudProviderTypeOptions()"
         [value]="editCloudProviderType()"
-        [disabled]="editLoading() || editProviderType() === 'logosnode'"
+        [disabled]="editLoading()"
         (valueChange)="editCloudProviderType.set($any($event))"
       />
     </div>
+    }
     <div class="form-field">
       <label class="field-label" for="edit-privacy">Privacy Level</label>
       <app-select
         [id]="'edit-privacy'"
         [options]="editPrivacyLevelOptions()"
         [value]="editPrivacyLevel()"
-        [disabled]="editLoading() || editProviderType() === 'logosnode'"
+        [disabled]="editLoading()"
         (valueChange)="editPrivacyLevel.set($any($event))"
       />
     </div>

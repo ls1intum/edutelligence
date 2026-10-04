@@ -45,10 +45,8 @@
   --color-primary-800: 76  29  149;
   --color-primary-900: 46  16  101;
 
-  // ── Neutrals: page gradient ──
-  --shell-gradient-start: 253 244 255; // #FDF4FF
-  --shell-gradient-mid:   237 233 254; // #EDE9FE
-  --shell-gradient-end:   224 231 255; // #E0E7FF
+  // ── Neutrals: page background (flat) ──
+  --shell-background: 250 245 255; // #FAF5FF
 
   // ── Neutrals: backgrounds ──
   --color-background-0:   253 244 255;
@@ -75,13 +73,10 @@
   --color-outline-200: 216 180 254;
   --color-outline-300: 196 181 253;
 
-  // ── Accent palette (identical in both themes) ──
-  --color-accent-cyan:   56  189 248;  // #38BDF8
-  --color-accent-green:  52  211 153;  // #34D399
-  --color-accent-orange: 251 146 60;   // #FB923C
-  --color-accent-pink:   244 114 180;  // #F472B4
-  --color-accent-yellow: 250 204 21;   // #FACC15
-  --color-accent-purple: 167 139 250;  // #A78BFA
+  // ── Accent palette: functional only (success/warning/info), identical in both themes ──
+  --color-accent-cyan:   56  189 248;  // #38BDF8 (info)
+  --color-accent-green:  52  211 153;  // #34D399 (success)
+  --color-accent-yellow: 250 204 21;   // #FACC15 (warning)
 
   // ── Status ──
   --color-error:   239 68 68;          // #EF4444 (dedicated red)
@@ -92,22 +87,14 @@
   // ── Accent text (violet text/badges; per-theme shade that passes AA) ──
   --color-text-accent: var(--color-primary-500);
 
-  // ── Roles ──
-  --color-role-logos-admin:   var(--color-accent-pink);
-  --color-role-app-admin:     var(--color-accent-orange);
-  --color-role-app-developer: var(--color-accent-purple);
+  // ── Roles (neutral; label text carries the distinction, not color) ──
+  --color-role-logos-admin:   var(--color-typography-500);
+  --color-role-app-admin:     var(--color-typography-500);
+  --color-role-app-developer: var(--color-typography-500);
 
   // ── Constants ──
-  --color-white:  255 255 255;         // text/icons on brand gradients & colored fills
+  --color-white:  255 255 255;         // text/icons on colored fills
   --shadow-color: 0 0 0;
-  --brand-blue:   99 102 241;          // #6366F1 (gradient blue stop)
-
-  // ── Brand gradients ──
-  --logo-gradient:  linear-gradient(45deg, rgb(var(--color-primary-500)), rgb(var(--brand-blue)));
-
-  // ── Decorative orbs ──
-  --orb-primary: 139 92 246;
-  --orb-accent:  139 92 246;
 
   // ── Opacities ──
   --opacity-faint:         0.06;
@@ -165,12 +152,10 @@
   --scrollbar-thumb-opacity:       var(--opacity-border);
   --scrollbar-thumb-hover-opacity: var(--opacity-strong);
 
-  // ── Orbs / shadow opacities ──
-  --orb-primary-opacity: 0.25; // bespoke decorative glow strength
-  --orb-accent-opacity:  0.14;
+  // ── Shadow ──
   --shadow-opacity:      var(--opacity-overlay);
 
-  // ── Logo wordmark (now a gradient; token kept as text-fill fallback) ──
+  // ── Logo wordmark ──
   --logo-name-color: 47 39 71; // #2F2747
 }
 
@@ -188,10 +173,8 @@
   --color-primary-800: 221 214 254;
   --color-primary-900: 237 233 254;
 
-  // ── Neutrals: page gradient ──
-  --shell-gradient-start: 13  3   31;
-  --shell-gradient-mid:   26  10  62;
-  --shell-gradient-end:   10  22  40;
+  // ── Neutrals: page background (flat) ──
+  --shell-background: 13 3 31;
 
   // ── Neutrals: backgrounds ──
   --color-background-0:   13  3   31;
@@ -224,16 +207,6 @@
 
   // ── Accent text: primary-500 is only 3.6:1 on dark glass; 600 passes AA ──
   --color-text-accent: var(--color-primary-600);
-
-  // ── Constants ──
-  --brand-blue: 129 140 248;   // #818CF8 (lighter blue for dark logo)
-
-  // ── Brand gradients: button unchanged, logo lighter ──
-  --logo-gradient:  linear-gradient(45deg, rgb(var(--color-primary-500)), rgb(var(--brand-blue))); 
-
-  // ── Decorative orbs ──
-  --orb-primary: 139 92 246;
-  --orb-accent:  99 102 241;
 
   // ── Opacities (dark values; kept above legibility floor: muted text and
   //    borders compound with the already-muted violet tones on dark) ──
@@ -285,9 +258,7 @@
   --scrollbar-thumb-opacity:       var(--opacity-border);
   --scrollbar-thumb-hover-opacity: var(--opacity-strong);
 
-  // ── Orbs / shadow ──
-  --orb-primary-opacity: 0.25; // bespoke decorative glow strength
-  --orb-accent-opacity:  0.18;
+  // ── Shadow ──
   --shadow-opacity:      var(--opacity-overlay);
 
   // ── Logo wordmark fallback ──

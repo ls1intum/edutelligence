@@ -1,3 +1,27 @@
+# Logos – CI – Image builds
+#
+# Every image is published twice:
+#   - the project's Harbor registry, which the deploy workflows pull from;
+#   - ghcr.io/ls1intum/edutelligence/<image>, public, which is what a
+#     self-hosted install pulls (logos/docker-compose.yaml defaults to it, so
+#     the installation guide needs no registry configuration at all).
+#
+# The GHCR mirror is fed by pushes to main only, so it carries exactly one
+# moving tag, `latest`. A pull request builds to Harbor alone, where the
+# cleanup workflow prunes its pr-<number> tag when the PR closes — nothing
+# prunes a public package, so PR builds must not land there. Release events
+# stay on Harbor too: the public mirror tracks main, and a version tag is
+# published to the deployment registry.
+#
+# The MLX worker is the exception on both counts: it is a distribution
+# artifact for Macs, never deployed, so GHCR is its only registry and it
+# keeps its own pr-<number> and version tags there.
+#
+# NOTE: check the visibility of a package the first time it appears — a new
+# image, or one whose package was deleted. A package that comes out private
+# serves a 403 to the self-hosted installs the guide tells to pull without a
+# login; Package settings → Change visibility → Public fixes it.
+
 name: Logos - Build
 
 on:
@@ -24,6 +48,115 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-workernode-build:
+    name: Check whether the vLLM worker must be built
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      build: ${{ steps.decision.outputs.build }}
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # A pull request keeps the same pr-<number> image tag for its lifetime.
+      # Use the commit of the last successful worker job as the baseline. This
+      # still reuses a worker that succeeded in an otherwise failed workflow,
+      # while a failed worker build is retried on the next run.
+      - name: Find previous successful worker build
+        if: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
+        id: previous-build
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: "logos_build-and-push-docker.yml",
+              branch: context.payload.pull_request.head.ref,
+              event: "pull_request",
+              per_page: 30,
+            });
+
+            const previousRuns = response.data.workflow_runs.filter(run =>
+              run.id !== context.runId &&
+              run.pull_requests?.some(pull => pull.number === pullNumber)
+            );
+
+            for (const run of previousRuns) {
+              const jobs = await github.paginate(
+                github.rest.actions.listJobsForWorkflowRun,
+                { owner, repo, run_id: run.id, filter: "latest", per_page: 100 },
+              );
+              const successfulWorker = jobs.some(job =>
+                job.name.startsWith("Build Logos Worker Node (vLLM) / build (") &&
+                job.conclusion === "success"
+              );
+
+              if (successfulWorker) {
+                core.setOutput("head-sha", run.head_sha);
+                return;
+              }
+            }
+
+            core.setOutput("head-sha", "");
+
+      - name: Decide whether to build the vLLM worker
+        id: decision
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          CURRENT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PREVIOUS_SUCCESSFUL_SHA: ${{ steps.previous-build.outputs.head-sha }}
+        run: |
+          set -euo pipefail
+
+          # Main and release images must always be refreshed. A newly opened or
+          # reopened PR must also build once because its pr-<number> tag may not
+          # exist (the close workflow removes it from Harbor).
+          if [ "$EVENT_NAME" != "pull_request" ] || [ "$EVENT_ACTION" != "synchronize" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building worker: initial PR, reopened PR, main push, or release."
+            exit 0
+          fi
+
+          # No successful worker job means there is no trustworthy PR image to reuse.
+          if [ -z "$PREVIOUS_SUCCESSFUL_SHA" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building worker: no previous successful worker build was found."
+            exit 0
+          fi
+
+          if ! git cat-file -e "${PREVIOUS_SUCCESSFUL_SHA}^{commit}" 2>/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building worker: previous worker commit is unavailable locally."
+            exit 0
+          fi
+
+          # Compare only inputs that can change the worker image. Documentation,
+          # tests, research results, Compose files, and host configuration are
+          # excluded because Dockerfile/.dockerignore keep them out of the image.
+          if git diff --quiet "$PREVIOUS_SUCCESSFUL_SHA" "$CURRENT_SHA" -- \
+            logos/logos-workernode/Dockerfile \
+            logos/logos-workernode/.dockerignore \
+            logos/logos-workernode/requirements.txt \
+            logos/logos-workernode/logos_worker_node \
+            logos/logos-workernode/tools \
+            ':(exclude,glob)logos/logos-workernode/tools/**/*.md' \
+            .github/workflows/logos_build-and-push-docker.yml; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping worker: build inputs are unchanged since $PREVIOUS_SUCCESSFUL_SHA."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            echo "Building worker: build inputs changed since $PREVIOUS_SUCCESSFUL_SHA."
+          fi
+
   build-server:
     name: Build Logos Server
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
@@ -31,6 +164,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -38,8 +172,28 @@ jobs:
       file: logos/logos-orchestrator/Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # GHA build cache. Without this the reusable workflow defaults to
+      # cache=false, so every build re-runs every layer on a fresh runner
+      # (apt toolchain, uv venv, full dependency install) even when only
+      # source files changed.
+      #
+      # The GHA cache isolates entries by branch: builds on main populate
+      # the cache, PR builds read it, but PR branches never share caches
+      # with each other and never write into main's — the first build
+      # after a merge is the one that refreshes it. The fixed scope keeps
+      # all of a branch's builds on the same key.
+      #
+      # cache-mode: max — the expensive layers (apt toolchain, uv venv,
+      # full dependency install) live in the non-final `builder` stage;
+      # the default min mode only exports the resulting image's layers
+      # and would leave the builder stage cold on every fresh runner.
+      cache: true
+      cache-scope: logos-orchestrator
+      cache-mode: max
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -51,6 +205,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-webservice:
     name: Build Logos Webservice
@@ -59,6 +216,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -66,8 +224,16 @@ jobs:
       file: Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # Same cold-runner problem: the expensive mvn build runs in the
+      # non-final `builder` stage, so max mode is needed to export those
+      # layers (default min would only cache the final JRE stage).
+      cache: true
+      cache-scope: logos-webservice
+      cache-mode: max
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-webservice
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-webservice
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-webservice' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -79,6 +245,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-ui:
     name: Build Logos UI
@@ -87,6 +256,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -94,8 +264,16 @@ jobs:
       file: Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # Same cold-runner problem: `npm ci` and `ng build` run in the
+      # non-final `build` stage, so max mode is needed to export those
+      # layers (default min would only cache the final nginx stage).
+      cache: true
+      cache-scope: logos-ui
+      cache-mode: max
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-ui
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-ui
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-ui' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -107,6 +285,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-db:
     name: Build Logos DB
@@ -115,6 +296,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -122,8 +304,14 @@ jobs:
       file: Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # min mode (the default) is sufficient: everything runs in the final
+      # stage, so the resulting image's layers are the whole cache.
+      cache: true
+      cache-scope: logos-db
       sign: false
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-db
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-db
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-db' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -135,14 +323,19 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-workernode-vllm:
     name: Build Logos Worker Node (vLLM)
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    needs: check-workernode-build
+    if: ${{ needs.check-workernode-build.outputs.build == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence') }}
     uses: docker/github-builder/.github/workflows/build.yml@v1
     permissions:
       contents: read
       id-token: write
+      packages: write
     with:
       output: image
       push: true
@@ -150,12 +343,19 @@ jobs:
       file: Dockerfile
       platforms: linux/amd64
       runner: ubuntu-latest
+      # min mode (the default) stays here: everything runs in the final
+      # stage, and this is by far the largest image — max mode would
+      # export every intermediate CUDA/vLLM layer and could consume the
+      # 10 GB per-repo GHA cache budget on its own, LRU-evicting the
+      # other caches.
+      cache: true
+      cache-scope: logos-workernode-vllm
       sign: false
       build-args: |
         BASE_IMAGE=ubuntu:24.04
-        INSTALL_VLLM=1
-        INSTALL_OLLAMA=0
-      meta-images: ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-workernode-vllm
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-workernode-vllm' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
@@ -167,3 +367,218 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Apple Silicon / MLX worker node ────────────────────────────────────────
+  # Pushed to ghcr.io, NOT Harbor, and deliberately so: this image is pulled by
+  # Mac workers during bootstrap, and requiring Harbor credentials on every Mac
+  # just to fetch a tarball of Python source is friction we do not need. A
+  # public GHCR package makes `bootstrap-macos.sh` work with no login at all.
+  #
+  # NOTE: a GHCR package is private on its first push. After the initial run,
+  # flip it once under Package settings → Change visibility → Public.
+  #
+  # The image is a distribution artifact, never a running container — Metal
+  # cannot be passed into one. See Dockerfile.mlx for the full reasoning.
+  build-workernode-mlx:
+    name: Build Logos Worker Node (MLX / Apple Silicon)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Publish target for the MLX distribution image, in the same GHCR
+          # namespace as every other Logos image. Written literally because it
+          # must stay identical to the default IMAGE ref in
+          # logos/logos-workernode/scripts/bootstrap-macos.sh — that script is
+          # the consumer, and nothing in CI catches a publish/consumer
+          # mismatch.
+          images: ghcr.io/ls1intum/edutelligence/logos-workernode-mlx
+          tags: |
+            type=ref,event=pr
+            type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+            type=semver,pattern={{version}}
+          flavor: |
+            latest=false
+
+      # linux/arm64 to match the Macs that consume it. The payload is pure
+      # Python and shell, so this only spares Docker Desktop from emulating a
+      # foreign image while copying files out of it.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./logos/logos-workernode
+          file: ./logos/logos-workernode/Dockerfile.mlx
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  build-agent:
+    name: Build Logos Agent Runner
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      output: image
+      push: true
+      # Built from the repository root: the Dockerfile copies paths under
+      # logos/logos-agent, matching how the orchestrator image is built.
+      context: .
+      file: logos/logos-agent/Dockerfile
+      platforms: linux/amd64
+      runner: ubuntu-latest
+      sign: false
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-agent' || '' }}
+      meta-tags: |
+        type=ref,event=pr
+        type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+        type=semver,pattern={{version}}
+      meta-flavor: |
+        latest=false
+    secrets:
+      registry-auths: |
+        - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+          username: ${{ vars.LOGOS_HARBOR_USER }}
+          password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  build-agent-gateway:
+    name: Build Logos Agent Gateway
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      output: image
+      push: true
+      # Built from the repository root like the other agent images: the
+      # `file` path is resolved relative to the context, so a context of the
+      # gateway's own directory would look for the Dockerfile inside itself.
+      context: .
+      file: logos/agent-gateway/Dockerfile
+      platforms: linux/amd64
+      runner: ubuntu-latest
+      sign: false
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-gateway
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-agent-gateway' || '' }}
+      meta-tags: |
+        type=ref,event=pr
+        type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+        type=semver,pattern={{version}}
+      meta-flavor: |
+        latest=false
+    secrets:
+      registry-auths: |
+        - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+          username: ${{ vars.LOGOS_HARBOR_USER }}
+          password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  build-rate-gateway:
+    name: Build Logos Rate Gateway
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      output: image
+      push: true
+      # Same root context as the agent gateway: the nginx configuration and
+      # entrypoint are COPYed from logos/rate-limit-gateway/ (and must be
+      # whitelisted in .dockerignore for that to work).
+      context: .
+      file: logos/rate-limit-gateway/Dockerfile
+      platforms: linux/amd64
+      runner: ubuntu-latest
+      sign: false
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-rate-gateway
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-rate-gateway' || '' }}
+      meta-tags: |
+        type=ref,event=pr
+        type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+        type=semver,pattern={{version}}
+      meta-flavor: |
+        latest=false
+    secrets:
+      registry-auths: |
+        - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+          username: ${{ vars.LOGOS_HARBOR_USER }}
+          password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  build-agent-workspace:
+    name: Build Logos Agent Workspace
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'ls1intum/edutelligence' }}
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      output: image
+      push: true
+      context: .
+      file: logos/logos-agent/workspace/Dockerfile
+      platforms: linux/amd64
+      runner: ubuntu-latest
+      sign: false
+      meta-images: |
+        ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-agent-workspace
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-agent-workspace' || '' }}
+      meta-tags: |
+        type=ref,event=pr
+        type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
+        type=semver,pattern={{version}}
+      meta-flavor: |
+        latest=false
+    secrets:
+      registry-auths: |
+        - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+          username: ${{ vars.LOGOS_HARBOR_USER }}
+          password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}

@@ -4,7 +4,14 @@
 
 ## Architecture documentation
 
+The published documentation — user, administrator, and developer guides, the
+subsystem and terminology reference, and per-role UI guides — lives at
+<https://ls1intum.github.io/edutelligence/logos/> (source: `logos/docs/`,
+built with Docusaurus by the `Build Logos Documentation` workflow).
+
 See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/README.md) for the classification, scheduling, context-resolution, LogosNode/HTTP forwarding, and completion boundaries.
+
+See the [agent runner](logos-agent/README.md) for how Logos runs coding agents in isolated containers on its own spare serving capacity, and the boundaries those sessions work within.
 
 # Setup
 
@@ -27,21 +34,25 @@ pip install uv
 
 #### Dependencies
 
-Create a virtual environment and install the dependencies:
+From the repository root (`edutelligence/`), link the common `shared` package
+once and install the orchestrator dependencies:
 
 ```bash
-uv venv .venv
-source .venv/bin/activate
-uv pip install .
+cd logos/logos-orchestrator
+ln -s ../../shared shared
+uv sync --locked --python 3.13
 ```
 
-If that does not work, try pinning to Python 3.13 explicitly:
+For later dependency syncs, run `uv sync --locked` in `logos/logos-orchestrator/`.
+The parent `logos/pyproject.toml` only configures formatting; it is not the
+orchestrator package. The warning about its missing `[project]` table is harmless.
 
-```bash
-uv venv .venv --python 3.13
-source .venv/bin/activate
-uv pip install .
-```
+In PyCharm, use `logos/logos-orchestrator/.venv/bin/python` as the interpreter.
+The **Package requirements are not satisfied** notification means that this
+interpreter is missing dependencies or has different versions than the project
+requires. **Sync project** installs them using uv. If it reports that the `shared`
+distribution cannot be found, check the symlink above before retrying. No separate
+`requirements.txt` is needed.
 
 ## Development
 
@@ -132,6 +143,7 @@ To deploy Logos locally:
    ng serve
    ```
 
+   > 💡 **Note for Linux users:** Should you encounter `EACCES` permissions errors during the setup, consult the [Official npm Documentation](https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally).
 3. Log In
 
    Once running, open the UI at:
@@ -326,6 +338,79 @@ Explore the API via Swagger (a `GET /v1` returns 404 by design — use `/docs`):
 https://logos-test.aet.cit.tum.de/docs
 ```
 
+### Audio transcription and translation
+
+Logos implements the OpenAI-compatible multipart audio APIs:
+
+- `POST /v1/audio/transcriptions` transcribes audio in its original language.
+- `POST /v1/audio/translations` transcribes and translates audio into English.
+
+The selected model must be available to the caller's Logos API key. Both cloud
+providers (including deployment-scoped Azure OpenAI Whisper endpoints) and
+compatible Logos worker-node backends receive the original multipart fields and
+file metadata. JSON, verbose JSON, plain text, SRT, and VTT responses are
+relayed with the upstream status and content type.
+
+```bash
+curl https://logos-test.aet.cit.tum.de/v1/audio/transcriptions \
+  -H "Authorization: Bearer $LOGOS_API_KEY" \
+  -F "file=@./speech.wav" \
+  -F "model=whisper-1" \
+  -F "response_format=verbose_json" \
+  -F "timestamp_granularities[]=word"
+```
+
+Audio file contents and credentials are excluded from Logos usage logs and
+durable async-job records; only filename, media type, and size metadata are
+recorded. A request accepts one audio file, defaulting to the upstream Whisper
+limit of 25 MiB. Set `LOGOS_MAX_AUDIO_UPLOAD_BYTES` to configure the file limit
+for another compatible backend. Text form fields default to 64 KiB each and can
+be configured with `LOGOS_MAX_AUDIO_FORM_FIELD_BYTES`. Logos also enforces a
+30 MiB total multipart request limit before Starlette spools the file; configure
+that independently with `LOGOS_MAX_AUDIO_REQUEST_BYTES`.
+
+When the provider reports duration-based usage, Logos stores millisecond
+precision and applies the provider's per-second catalogue price. This avoids
+discarding fractional audio duration while retaining the integer usage schema.
+
+### Batch processing
+
+Logos serves the OpenAI Batch API (`/v1/files` for the input and result files,
+`/v1/batches` for the job lifecycle) for workloads with many requests and
+nobody waiting.
+
+A batch runs in one of two places, decided when its input file is uploaded:
+
+- **At the provider**, when one the key may use has a Batch API that serves
+  every model the file names. That is where the provider's batch rate applies
+  (about half the standard price), so it is preferred.
+- **In Logos**, otherwise — a model served by a worker node has no upstream
+  Batch API, and a cloud model can be missing from its provider's batch
+  offering. Logos then schedules the file's requests itself at the lowest queue
+  priority: they fill whatever capacity interactive traffic leaves and finish as
+  fast as that allows. No discount (the requests are ordinary requests), but the
+  same API.
+
+Both paths answer the same routes, so a script can upload, poll every few
+minutes, and chain the next batch onto the last without knowing which one it
+got; `logos_execution` on the batch object says which it was. Send
+`X-Logos-Batch-Execution: logos` or `provider` to force one.
+
+Whatever a batch names in its request lines is checked against the key's model
+permissions line by line, the ids it hands back are owned by the key's team (a
+lifecycle call for another team's id is a 404), and its usage is booked into the
+same budget and statistics as everything else — at the provider's batch rate
+where one is configured. See
+[docs/batch-processing.md](docs/batch-processing.md) for the full route list,
+Azure's batch availability, and the limits.
+
+The **Batches** page in the UI does the same thing without a script: upload a
+`.jsonl`, watch the progress, download the results.
+
+For a single latency-tolerant request the async job API remains simpler:
+`POST /jobs/v1/chat/completions` returns `202` with a `Location` header, and
+`GET /jobs/{job_id}` polls for the result.
+
 ## Accessing the Database
 
 The PostgreSQL database is not directly reachable from outside the server. You need to tunnel through SSH, which most database clients (e.g. DBeaver) support natively.
@@ -336,7 +421,7 @@ In DBeaver, create a new PostgreSQL connection and configure the **SSH** tab as 
 
 | Field | Value |
 |-------|-------|
-| Host/IP | `aetvm45.cit.tum.de` |
+| Host/IP | `logos-test.aet.cit.tum.de` |
 | Port | `22` |
 | User Name | your TUM username (e.g. `ge69yun`) |
 | Authentication | Public Key |
@@ -361,3 +446,6 @@ ssh -L 5433:127.0.0.1:5432 <yourtumkuerzel>@logos-test.aet.cit.tum.de
 ```
 
 Then connect your database client to `localhost:5433` with the credentials above.
+
+# License and Attribution
+For license attribution and upstream provenance of the LiteLLM model catalog data, see [litellm-model-catalog.NOTICE](logos-webservice/src/main/resources/litellm-model-catalog.NOTICE).

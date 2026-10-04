@@ -8,6 +8,9 @@ from iris.domain.ingestion.ingestion_status_update_dto import (
     IngestionStatusUpdateDTO,
 )
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
+from iris.domain.status.global_search_status_update_dto import (
+    GlobalSearchStatusUpdateDTO,
+)
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.web.status.status_update import StatusCallback
 
@@ -34,6 +37,16 @@ def _ingestion_callback() -> StatusCallback:
         url="https://artemis.example/status",
         run_id="run-1",
         status=IngestionStatusUpdateDTO(run_state=RunStateEnum.RUNNING, id=7),
+    )
+
+
+def _global_search_callback() -> StatusCallback:
+    """A callback backed by the global-search status DTO, which carries the
+    transient ``stage``/``stage_sources`` pipeline-phase fields across updates."""
+    return StatusCallback(
+        url="https://artemis.example/status",
+        run_id="run-1",
+        status=GlobalSearchStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
     )
 
 
@@ -136,6 +149,36 @@ def test_failed_update_keeps_transient_result_for_retry():
         assert cb.update() is True
 
     assert post.call_args.kwargs["json"]["result"] == "checkpoint-1"
+
+
+def test_successful_update_clears_transient_stage_fields():
+    """Global search's stage/stage_sources are the same kind of single-update
+    transient field as the ingestion checkpoint's result -- cleared once delivered
+    so a later heartbeat does not re-send a now-stale stage name."""
+    cb = _global_search_callback()
+    with patch("requests.post", return_value=_Response()):
+        assert cb.update(stage="found", stage_sources=["Advanced Algorithms"]) is True
+
+    assert cb.status.stage is None
+    assert cb.status.stage_sources == []
+
+
+def test_finish_does_not_leak_the_last_stage_into_the_terminal_payload():
+    """The terminal finish() call is not given its own stage -- without clearing
+    it after the preceding RUNNING update, the FINISHED payload would still
+    serialize the last stage name (e.g. "generating"), contradicting the run
+    state it is actually sent with."""
+    cb = _global_search_callback()
+    with patch("requests.post", return_value=_Response()):
+        assert cb.update(stage="generating", stage_sources=[]) is True
+
+    with patch("requests.post", return_value=_Response()) as post:
+        assert cb.finish(answer="The answer.") is True
+
+    payload = post.call_args.kwargs["json"]
+    assert payload["runState"] == "FINISHED"
+    assert payload["stage"] is None
+    assert payload["stageSources"] == []
 
 
 def test_running_update_executor_creation_uses_lock():

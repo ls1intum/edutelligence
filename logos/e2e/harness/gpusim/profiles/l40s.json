@@ -1,0 +1,8 @@
+{
+  "name": "NVIDIA L40S",
+  "compute_cap": "8.9",
+  "memory_total_mb": 46068,
+  "idle_power_w": 33.0,
+  "idle_temp_c": 38.0,
+  "fan_speed": "[N/A]"
+}
