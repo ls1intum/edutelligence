@@ -320,12 +320,14 @@ def provide_find_similar_memories(state: State) -> Optional[Callable]:
 
 def provide_switch_chat_context(state: State) -> Optional[Callable]:
     def record_switch(suggested_context) -> None:
+        previous = state.pending_context_switch
         state.pending_context_switch = suggested_context
-        if suggested_context is not None:
-            # Lecture content stored so far belongs to the previous context. Left
-            # in place, the citation pipeline could cite it in the answer about
-            # the new context.
-            state.lecture_content_storage.pop("current_view", None)
+        if suggested_context != previous:
+            # Content retrieved so far belongs to the previous effective context,
+            # including a switch target that was cancelled again. Left in place, the
+            # citation pipeline could cite it in the answer about the new context.
+            # The current view needs no reset: citations skip it while a switch is
+            # pending and use it again once the switch is cancelled.
             state.lecture_content_storage.pop("content", None)
 
     return create_tool_switch_chat_context(state.dto, record_switch)

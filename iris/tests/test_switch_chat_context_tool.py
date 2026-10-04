@@ -1,5 +1,6 @@
 import logging
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,6 +20,7 @@ from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
+from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.shared.utils import generate_structured_tool_from_function
 from iris.tools.chat_tool_providers import (
@@ -468,13 +470,89 @@ def test_switch_clears_lecture_content_of_the_previous_context():
             lectures=_lectures(),
         )
     )
-    state.lecture_content_storage["current_view"] = object()
     state.lecture_content_storage["content"] = object()
 
     provide_switch_chat_context(state)("LECTURE_CHAT", 42)
 
-    assert "current_view" not in state.lecture_content_storage
     assert "content" not in state.lecture_content_storage
+
+
+def test_cancelling_a_switch_clears_the_content_of_the_cancelled_target():
+    """A to B to A: content retrieved for B must not be cited in the answer about A."""
+    state = _lecture_chat_state(
+        _dto(
+            chat_mode=IrisChatMode.LECTURE,
+            lecture=PyrisLectureDTO(id=41),
+            lectures=_lectures(),
+            lecture_unit_id=410,
+        )
+    )
+    switch = provide_switch_chat_context(state)
+    retrieval = provide_lecture_retrieval(state)
+
+    switch("LECTURE_CHAT", 42)
+    retrieval()
+    assert state.lecture_retriever.calls[-1]["lecture_id"] == 42
+    assert "content" in state.lecture_content_storage
+
+    assert "already active" in switch("LECTURE_CHAT", 41)
+
+    assert state.pending_context_switch is None
+    assert "content" not in state.lecture_content_storage
+    retrieval()
+    assert state.lecture_retriever.calls[-1]["lecture_id"] == 41
+
+
+def test_repeating_the_same_switch_keeps_the_content_of_its_target():
+    state = _lecture_chat_state(
+        _dto(
+            chat_mode=IrisChatMode.LECTURE,
+            lecture=PyrisLectureDTO(id=41),
+            lectures=_lectures(),
+        )
+    )
+    switch = provide_switch_chat_context(state)
+    switch("LECTURE_CHAT", 42)
+    content = object()
+    state.lecture_content_storage["content"] = content
+
+    switch("LECTURE_CHAT", 42)
+
+    assert state.lecture_content_storage["content"] is content
+
+
+def _citation_run(pending_context_switch):
+    pipeline = ChatPipeline.__new__(ChatPipeline)
+    pipeline.citation_pipeline = MagicMock(return_value="cited answer")
+    pipeline.citation_pipeline.tokens = []
+    current_view = LectureRetrievalDTO(
+        lecture_unit_segments=[],
+        lecture_transcriptions=[],
+        lecture_unit_page_chunks=[],
+    )
+    state = SimpleNamespace(
+        dto=SimpleNamespace(settings=None, user=SimpleNamespace(lang_key="en")),
+        variant=SimpleNamespace(id="default"),
+        faq_storage={},
+        lecture_content_storage={"current_view": current_view},
+        pending_context_switch=pending_context_switch,
+    )
+    pipeline._add_citations(state, "answer")  # pylint: disable=protected-access
+    return pipeline.citation_pipeline, current_view
+
+
+def test_citations_use_the_current_view_without_a_switch():
+    citation_pipeline, current_view = _citation_run(None)
+
+    assert citation_pipeline.call_args.args[0] is current_view
+
+
+def test_citations_skip_the_current_view_of_the_original_context_after_a_switch():
+    citation_pipeline, _ = _citation_run(
+        SuggestedContextDTO(mode=IrisChatMode.LECTURE, entity_id=42)
+    )
+
+    citation_pipeline.assert_not_called()
 
 
 def test_switch_to_the_active_context_keeps_its_lecture_content():
