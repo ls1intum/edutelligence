@@ -202,6 +202,11 @@ def _build_derived_device_summary(lanes) -> DeviceSummary:
 
 
 async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
+    """Assemble the runtime status the bridge reports to the orchestrator.
+
+    Covers the lanes, devices, capacity, host memory, node health and calibrated model profiles, plus the process
+    start time and the commit this build came from, which tell one run of a worker from another.
+    """
     cfg = app.state.config
     lane_manager = app.state.lane_manager
     gpu_collector = app.state.gpu_collector

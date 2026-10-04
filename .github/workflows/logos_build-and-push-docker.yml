@@ -353,7 +353,8 @@ jobs:
       sign: false
       # GIT_SHA is the commit the image is built from. On a pull request that is
       # the PR head: github.sha would be the temporary merge commit, which no
-      # one can look up.
+      # one can look up. The image itself is the PR merged into main as of the
+      # build, so there the version names the PR's commit, not the exact tree.
       build-args: |
         BASE_IMAGE=ubuntu:24.04
         GIT_SHA=${{ github.event.pull_request.head.sha || github.sha }}

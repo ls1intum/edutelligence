@@ -1378,6 +1378,10 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Raw-series updaters ───────────────────────────────────────────────────────
 
+  /**
+   * Replaces everything held per provider (samples, metadata, devices) with a
+   * full-day payload, as the websocket's init message delivers it.
+   */
   private replaceRawVramSeries(providers: any[]): void {
     const next: Record<string, VramV2Sample[]> = {};
     const nextMeta: Record<string, VramProviderMeta> = {};
@@ -1417,6 +1421,12 @@ export class Statistics implements OnInit, OnDestroy {
     this.devicesByProvider.set(nextDevices);
   }
 
+  /**
+   * Applies a delta payload: each provider's metadata and devices first, then
+   * its new samples merged into the series already held. A delta can carry no
+   * samples at all (a worker went offline, or reports another version), so the
+   * metadata is taken from it whether or not samples came with it.
+   */
   private appendRawVramSeries(providers: any[]): void {
     if (!providers || providers.length === 0) return;
 

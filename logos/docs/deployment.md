@@ -79,7 +79,9 @@ icon next to it, or tap it on a touch screen, for the full commit and a button
 to copy it). Comparing it across workers shows which ones have picked up an
 update. A worker built outside CI, or one that predates this, shows
 `version: unknown`; to give your own build a commit, pass
-`--build-arg GIT_SHA=$(git rev-parse HEAD)`.
+`--build-arg GIT_SHA=$(git rev-parse HEAD)`. For a pull-request build the
+version is the pull request's own commit, while the image is that pull request
+merged into `main` as of the build.
 
 ## Security & rate limiting
 

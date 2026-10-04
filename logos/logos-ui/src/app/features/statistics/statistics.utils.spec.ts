@@ -376,6 +376,35 @@ describe('describeWorkerVersion', () => {
     }
   });
 
+  it('says "unknown" for a version that is not a commit id', () => {
+    // The orchestrator passes on whatever string a worker sends, so the
+    // worker's own check cannot be assumed to have run.
+    const malformed = [
+      'not-a-commit',
+      'A3F9C21E', // uppercase
+      'a3f9c2', // 6 characters: shorter than any abbreviation
+      `${commit}0`, // 41 characters: longer than any commit id
+      `${commit}\n`, // a trailing newline does not pass either
+      ' a3f9c21e',
+      '<b>a3f9c21</b>',
+    ];
+    for (const value of malformed) {
+      expect(describeWorkerVersion(value, true), JSON.stringify(value)).toEqual({
+        label: 'version: unknown',
+        hint: 'Worker did not report a valid commit.',
+        commit: null,
+      });
+    }
+  });
+
+  it('accepts an abbreviated commit id', () => {
+    expect(describeWorkerVersion('a3f9c21', true)).toEqual({
+      label: 'version: a3f9c21',
+      hint: "Commit this worker's image was built from:",
+      commit: 'a3f9c21',
+    });
+  });
+
   it('shows nothing for an offline worker', () => {
     expect(describeWorkerVersion(commit, false)).toBeNull();
     expect(describeWorkerVersion(null, false)).toBeNull();

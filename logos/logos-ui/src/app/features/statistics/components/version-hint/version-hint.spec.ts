@@ -34,6 +34,7 @@ describe('VersionHint', () => {
   const isOpen = () => bubble().classList.contains('hint__bubble--open');
   const closeButton = () => host.querySelector<HTMLButtonElement>('.hint__close');
   const copyButton = () => host.querySelector<HTMLButtonElement>('.btn-copy');
+  /** Applies pending signal changes to the DOM. */
   const settle = () => fixture.detectChanges();
 
   function render(commit: string | null = COMMIT, hint: string = HINT): void {
@@ -44,6 +45,7 @@ describe('VersionHint', () => {
     fixture.detectChanges();
   }
 
+  /** Replaces the clipboard API with one whose writeText is the given function. */
   function stubClipboard(writeText: () => Promise<void>): void {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
   }

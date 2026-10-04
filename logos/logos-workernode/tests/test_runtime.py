@@ -278,10 +278,12 @@ def test_read_version_checksum(tmp_path, content, expected):
 
 
 def test_read_version_checksum_without_a_file(tmp_path):
+    """A run from a source checkout has no BUILD_COMMIT file, and the worker reports "unknown" for it."""
     assert _read_version_checksum(tmp_path / "BUILD_COMMIT") == "unknown"
 
 
 def test_read_version_checksum_with_unreadable_content(tmp_path):
+    """A BUILD_COMMIT file that is not valid UTF-8 counts as no commit instead of raising."""
     path = tmp_path / "BUILD_COMMIT"
     path.write_bytes(b"\xff\xfe\x00")
     assert _read_version_checksum(path) == "unknown"
@@ -289,6 +291,7 @@ def test_read_version_checksum_with_unreadable_content(tmp_path):
 
 @pytest.mark.asyncio
 async def test_runtime_reports_version_checksum(monkeypatch):
+    """The runtime status carries the commit that was read at startup."""
     monkeypatch.setattr("logos_worker_node.runtime._VERSION_CHECKSUM", _COMMIT)
 
     runtime = await build_runtime_status(_make_app([], _NvidiaCollector()))

@@ -43,7 +43,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
 
     // The vram window a session is looking at: the selected day (null =
-    // today), the cursor into it, the provider connection-state baseline, and
+    // today), the cursor into it, the provider-metadata baseline, and
     // whether the window's init — the full-day payload that establishes the
     // viewer's baseline — has gone out. One immutable reference so a
     // transition (init, set_vram_day) is a single atomic swap and the tick
@@ -438,7 +438,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // The fetch is cursor-scoped (new snapshots only) and the
                 // provider-status hop is cached for 3 s, so the per-tick cost
                 // stays small; the push itself is still skipped when nothing
-                // moved (no new samples, cursor, or connection state).
+                // moved (no new samples, cursor, or provider metadata).
                 if (state.wantsLocalProviders()) {
                     pushVramDelta(session, state);
                 }
@@ -530,9 +530,9 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // Providers are always present (connection metadata is
                 // attached even without new snapshots), so deltas are pushed
                 // only when new samples arrived, the cursor moved, or a
-                // provider's connection state flipped (e.g. a worker went
+                // provider's metadata changed (vramMetaSig): a worker went
                 // offline — exactly the moment no new snapshots arrive
-                // anymore).
+                // anymore — or came back reporting another version.
                 boolean hasNewSamples = hasSamples(payload);
                 String metaSig = vramMetaSig(payload);
                 boolean metaChanged = !metaSig.equals(window.metaSig());
@@ -569,6 +569,15 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         return false;
     }
 
+    /**
+     * Fingerprint of the provider metadata a viewer renders next to the
+     * samples: per provider its id, connection state, calibration state and the
+     * version its worker reports. A delta goes out when it changes even though
+     * no snapshot came with it, which is how a worker going offline, or coming
+     * back on another build, reaches the page. Fields that move constantly,
+     * such as the last heartbeat, stay out: they would turn every tick into a
+     * push.
+     */
     private static String vramMetaSig(Map<String, Object> payload) {
         if (!(payload.get("providers") instanceof java.util.List<?> providers)) return "";
         StringBuilder sb = new StringBuilder();
@@ -576,7 +585,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             if (!(p instanceof Map<?, ?> provider)) continue;
             sb.append(provider.get("provider_id")).append(':')
               .append(provider.get("connection_state")).append(':')
-              .append(provider.get("calibrating")).append(',');
+              .append(provider.get("calibrating")).append(':')
+              .append(provider.get("worker_version_checksum")).append(',');
         }
         return sb.toString();
     }
