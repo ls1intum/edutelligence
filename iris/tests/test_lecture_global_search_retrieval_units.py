@@ -31,6 +31,7 @@ from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 
 def _unit_props(unit_id: int, name: str = "Unit") -> dict:
     return {
+        "base_url": "http://a",
         LectureUnitSchema.LECTURE_UNIT_ID.value: unit_id,
         LectureUnitSchema.COURSE_NAME.value: "Course",
         LectureUnitSchema.LECTURE_NAME.value: "Lecture",
@@ -40,6 +41,7 @@ def _unit_props(unit_id: int, name: str = "Unit") -> dict:
 
 def _segment_props(unit_id: int = 1, page: int = 1, snippet: str | None = None) -> dict:
     return {
+        "base_url": "http://a",
         "course_id": 10,
         "lecture_id": 20,
         "lecture_unit_id": unit_id,
@@ -142,7 +144,10 @@ class TestSegmentToDto:
 
     def test_maps_valid_segment(self):
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
-            _segment_props(), {(None, 1): _unit_props(1)}, {}
+            _segment_props(),
+            {("http://a", 1): _unit_props(1)},
+            {},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         )
         assert reason is None
         assert dto is not None
@@ -153,7 +158,10 @@ class TestSegmentToDto:
         # unit ids made hits vanish without a trace. The mapper must return
         # an explicit drop reason so the loss is visible in logs.
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
-            _segment_props(unit_id=99), {(None, 1): _unit_props(1)}, {}
+            _segment_props(unit_id=99),
+            {("http://a", 1): _unit_props(1)},
+            {},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         )
         assert dto is None
         assert reason == "missing_unit_metadata"
@@ -167,15 +175,19 @@ class TestSegmentToDto:
         # those paths.
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
             _segment_props(snippet="There is no content on this slide."),
-            {(None, 1): _unit_props(1)},
+            {("http://a", 1): _unit_props(1)},
             {},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         )
         assert dto is None
         assert reason == "low_information"
 
     def test_negative_page_is_dropped_with_reason(self):
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
-            _segment_props(page=-1), {(None, 1): _unit_props(1)}, {}
+            _segment_props(page=-1),
+            {("http://a", 1): _unit_props(1)},
+            {},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         )
         assert dto is None
         assert reason == "bad_page_or_ids"
@@ -183,8 +195,9 @@ class TestSegmentToDto:
     def test_slide_with_transcription_becomes_slide_video(self):
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
             _segment_props(unit_id=1, page=4),
-            {(None, 1): _unit_props(1)},
-            {(None, 1, 4): 125.0},
+            {("http://a", 1): _unit_props(1)},
+            {("http://a", 1, 4): 125.0},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         )
         assert reason is None
         assert dto is not None
@@ -198,16 +211,19 @@ class TestSegmentToDto:
         # different Artemis instances sharing one Weaviate can have a lecture unit
         # with the same numeric id, and must not silently overwrite each other.
         units_by_id = {
-            ("http://instance-a", 411): _unit_props(411, name="Instance A's unit"),
+            ("http://a", 411): _unit_props(411, name="Instance A's unit"),
             ("http://instance-b", 411): _unit_props(
                 411, name="Instance B's unrelated unit"
             ),
         }
         props = _segment_props(unit_id=411)
-        props["base_url"] = "http://instance-a"
+        props["base_url"] = "http://a"
 
         dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
-            props, units_by_id, {}
+            props,
+            units_by_id,
+            {},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         )
 
         assert reason is None
@@ -228,12 +244,12 @@ class TestFetchLimitRegression:
             assert limit >= n_ids * 2, "limit must tolerate duplicate rows per id"
             assert limit >= 100, "small requests must still over-fetch"
 
-    def test_fetch_lecture_units_keeps_both_instances_rows_for_a_colliding_id(self):
+    def test_fetch_lecture_units_keeps_only_requested_instance_for_a_colliding_id(self):
         # Regression: two DIFFERENT Artemis instances sharing one Weaviate can each
         # have a lecture unit with the same numeric id (auto-increment ids restart
         # per database). Keying the result by the bare id let one instance's row
         # silently overwrite the other's, attaching the wrong instance's title/link
-        # to a search hit. Keying by (base_url, id) must keep both.
+        # to a search hit. Exact request scope must reject the other instance.
         retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
         instance_0_unit = SimpleNamespace(
             properties={
@@ -254,21 +270,16 @@ class TestFetchLimitRegression:
             objects=[instance_0_unit, instance_6_unit]
         )
 
-        result = retrieval._fetch_lecture_units([411])
+        result = retrieval._fetch_lecture_units([411], base_url="http://localhost:8080")
 
-        assert len(result) == 2
+        assert len(result) == 1
         assert (
             result[("http://localhost:8080", 411)][
                 LectureUnitSchema.LECTURE_UNIT_NAME.value
             ]
             == "instance 0's unit"
         )
-        assert (
-            result[("http://localhost:8086", 411)][
-                LectureUnitSchema.LECTURE_UNIT_NAME.value
-            ]
-            == "instance 6's unrelated unit"
-        )
+        assert ("http://localhost:8086", 411) not in result
 
     def test_fetch_lecture_units_sends_the_formula_limit_to_weaviate(self):
         # The formula test above only checks max(100, n_ids * 10) in isolation; a
@@ -283,7 +294,7 @@ class TestFetchLimitRegression:
         )
 
         unit_ids = list(range(92))
-        retrieval._fetch_lecture_units(unit_ids)
+        retrieval._fetch_lecture_units(unit_ids, base_url="http://a")
 
         sent_limit = (
             retrieval.lecture_unit_collection.query.fetch_objects.call_args.kwargs[
@@ -377,7 +388,7 @@ def test_expansion_fetches_siblings_by_join_not_by_ranking():
         )
 
     retrieval._fetch_unit_objects = Mock(
-        side_effect=lambda collection, schema, ids, extra_filter=None: [
+        side_effect=lambda collection, schema, ids, extra_filter=None, **_kwargs: [
             _props("http://a", "sibling"),
             _props("http://b", "wrong instance"),
         ]
@@ -393,7 +404,7 @@ def test_expansion_fetches_siblings_by_join_not_by_ranking():
     telemetry = _SearchTelemetry()
     anchors = [_candidate(0.5, "anchor", key)]
     out = retrieval._expand_by_unit(
-        anchors, telemetry, _VisibilityPolicy.from_context(None)
+        anchors, telemetry, _VisibilityPolicy.from_context(None, base_url="http://a")
     )
 
     snippets = [c.dto.snippet for c in out]
@@ -422,7 +433,7 @@ def test_expansion_restricts_the_transcription_lane_to_slide_less_segments():
     retrieval._expand_by_unit(
         [_candidate(0.5, "anchor", key)],
         _SearchTelemetry(),
-        _VisibilityPolicy.from_context(None),
+        _VisibilityPolicy.from_context(None, base_url="http://a"),
     )
 
     calls = {
@@ -487,6 +498,7 @@ class TestOnPhaseCallback:
             alpha=0.5,
             limit=5,
             on_phase=lambda phase: calls.append(f"on_phase:{phase}"),
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         )
 
         assert calls == ["search_lanes", "on_phase:ranking", "rerank_and_gate"]
@@ -497,7 +509,11 @@ class TestOnPhaseCallback:
         retrieval._rerank_and_gate = lambda *a, **k: []
 
         result = retrieval._run_hybrid_search(
-            query="test", vector=[], alpha=0.5, limit=5
+            query="test",
+            vector=[],
+            alpha=0.5,
+            limit=5,
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         )
 
         assert not result
@@ -508,7 +524,7 @@ class TestOnPhaseCallback:
         retrieval._run_hybrid_search = Mock(return_value=[])
         on_phase = Mock()
 
-        retrieval.search(query="q", limit=5, on_phase=on_phase)
+        retrieval.search(query="q", limit=5, on_phase=on_phase, base_url="http://a")
 
         assert retrieval._run_hybrid_search.call_args.kwargs["on_phase"] is on_phase
 
@@ -531,6 +547,7 @@ def test_empty_course_scope_still_returns_pre_authorized_entity_sources():
         limit=5,
         access_context=AccessContext(course_ids=[], unrestricted=False),
         entity_sources=entity_sources,
+        base_url="http://a",
     )
 
     assert result == ["entity result"]
@@ -555,6 +572,7 @@ def test_empty_course_scope_with_no_entity_sources_still_returns_nothing():
         limit=5,
         access_context=AccessContext(course_ids=[], unrestricted=False),
         entity_sources=None,
+        base_url="http://a",
     )
 
     assert result == []
@@ -571,8 +589,14 @@ def test_lane_expands_past_a_full_window_of_filtered_hits_to_reach_a_visible_one
 
     retrieval._search_lanes = Mock(
         side_effect=[
-            ([SimpleNamespace()] * 25, []),  # full window: maybe more exist
-            ([SimpleNamespace()] * 30, []),  # wider fetch: the visible hit
+            (
+                [SimpleNamespace(properties={"base_url": "http://a"})] * 25,
+                [],
+            ),  # full window: maybe more exist
+            (
+                [SimpleNamespace(properties={"base_url": "http://a"})] * 30,
+                [],
+            ),  # wider fetch: the visible hit
         ]
     )
     retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
@@ -586,7 +610,7 @@ def test_lane_expands_past_a_full_window_of_filtered_hits_to_reach_a_visible_one
         course_ids=None,
         exclude_course_ids=None,
         auto_cut=False,
-        policy=_VisibilityPolicy.from_context(None),
+        policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         telemetry=_SearchTelemetry(),
     )
 
@@ -609,8 +633,14 @@ def test_autocut_shortened_lane_retries_at_the_same_depth_without_autocut_first(
 
     retrieval._search_lanes = Mock(
         side_effect=[
-            ([SimpleNamespace()] * 3, []),  # autocut stopped early at a score cliff
-            ([SimpleNamespace()] * 25, []),  # same depth, no autocut: the full window
+            (
+                [SimpleNamespace(properties={"base_url": "http://a"})] * 3,
+                [],
+            ),  # autocut stopped early at a score cliff
+            (
+                [SimpleNamespace(properties={"base_url": "http://a"})] * 25,
+                [],
+            ),  # same depth, no autocut: the full window
         ]
     )
     retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
@@ -624,7 +654,7 @@ def test_autocut_shortened_lane_retries_at_the_same_depth_without_autocut_first(
         course_ids=None,
         exclude_course_ids=None,
         auto_cut=True,
-        policy=_VisibilityPolicy.from_context(None),
+        policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         telemetry=_SearchTelemetry(),
     )
 
@@ -661,12 +691,12 @@ def test_a_healthy_lane_does_not_mask_a_saturated_starved_sibling_lane():
     retrieval._search_lanes = Mock(
         side_effect=[
             (
-                [SimpleNamespace()] * 25,
-                [SimpleNamespace()] * 25,
+                [SimpleNamespace(properties={"base_url": "http://a"})] * 25,
+                [SimpleNamespace(properties={"base_url": "http://a"})] * 25,
             ),  # both lanes saturated
             (
-                [SimpleNamespace()] * 25,
-                [SimpleNamespace()] * 26,
+                [SimpleNamespace(properties={"base_url": "http://a"})] * 25,
+                [SimpleNamespace(properties={"base_url": "http://a"})] * 26,
             ),  # trans lane widened, exhausted
         ]
     )
@@ -686,7 +716,7 @@ def test_a_healthy_lane_does_not_mask_a_saturated_starved_sibling_lane():
         course_ids=None,
         exclude_course_ids=None,
         auto_cut=False,
-        policy=_VisibilityPolicy.from_context(None),
+        policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         telemetry=_SearchTelemetry(),
     )
 
@@ -698,7 +728,9 @@ def test_lane_stops_expanding_once_a_lane_is_exhausted():
     # Fewer hits than requested means Weaviate has nothing more to offer;
     # retrying further would just repeat the same (still-filtered) result.
     retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
-    retrieval._search_lanes = Mock(return_value=([SimpleNamespace()] * 3, []))
+    retrieval._search_lanes = Mock(
+        return_value=([SimpleNamespace(properties={"base_url": "http://a"})] * 3, [])
+    )
     retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
     retrieval._map_candidates = Mock(return_value=[])
 
@@ -710,7 +742,7 @@ def test_lane_stops_expanding_once_a_lane_is_exhausted():
         course_ids=None,
         exclude_course_ids=None,
         auto_cut=False,
-        policy=_VisibilityPolicy.from_context(None),
+        policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
         telemetry=_SearchTelemetry(),
     )
 
@@ -759,9 +791,12 @@ def test_search_segments_applies_the_exclusion_filter_with_no_course_ids():
         limit=25,
         course_ids=None,
         exclude_course_ids=[5],
+        base_url="http://a",
     )
 
     sent_filter = retrieval.collection.query.hybrid.call_args.kwargs["filters"]
     assert sent_filter is not None
-    assert sent_filter.operator.value == "ContainsNone"
-    assert sent_filter.value == [5]
+    assert sent_filter.operator.value == "And"
+    filters = {part.operator.value: part for part in sent_filter.filters}
+    assert filters["ContainsNone"].value == [5]
+    assert filters["Equal"].value == "http://a"
