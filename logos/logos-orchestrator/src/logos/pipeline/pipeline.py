@@ -4,14 +4,17 @@ Main request pipeline orchestrating classification → scheduling → execution.
 """
 
 import asyncio
+import datetime
 import logging
 import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from logos import perf_trace
 from logos.classification.classification_manager import ClassificationManager
 from logos.classification.proxy_policy import ProxyPolicy
+from logos.dbutils.dbmodules import ThresholdLevel
 from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
@@ -20,9 +23,102 @@ from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
+from .prefix_affinity import affinity_keys
 from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
+
+# Privacy levels in trust order (index 0 = strictest). Derived from the
+# ThresholdLevel declaration order — the single definition (dbutils/
+# dbmodules.py) that the Postgres enum threshold_enum and the webservice
+# Java enum mirror. A new level is therefore known to the router the moment
+# it is added to the enum, instead of requiring a second copy in here.
+PRIVACY_ORDER = tuple(level.value for level in ThresholdLevel)
+
+
+def _privacy_ok(threshold: str, level: str) -> bool:
+    """Whether a deployment with privacy ``level`` satisfies a request whose
+    policy demands ``threshold_privacy = threshold``.
+
+    The demand is met when the deployment is at least as trusted as required:
+    LOCAL deployments serve every threshold; a THIRD_PARTY_HARDWARE deployment
+    serves only requests that explicitly allow third-party hardware.
+
+    Fail closed, not open: an unrecognised threshold resolves to the
+    STRICTEST requirement (a policy typo then accepts only datacentre
+    deployments instead of every deployment), and an unrecognised level to the
+    LEAST trusted one (a deployment type the router has not been taught about
+    qualifies for nothing strict instead of everything). Before this, both
+    fallbacks failed open — a half-finished enum rollout silently made the
+    new tier eligible for the most confidential requests.
+    """
+    threshold_idx = PRIVACY_ORDER.index(threshold) if threshold in PRIVACY_ORDER else 0
+    level_idx = PRIVACY_ORDER.index(level) if level in PRIVACY_ORDER else len(PRIVACY_ORDER) - 1
+    return threshold_idx >= level_idx
+
+
+def resolve_queue_priority(
+    default_priority: Optional[int],
+    team_priority: Optional[int],
+    policy_priority: Optional[int],
+) -> int:
+    """
+    Resolve the effective queue priority for a request.
+
+    Precedence: the API key's ``default_priority`` (set per key, editable in
+    the admin UI) beats the team's admin-set ``priority``, which beats the
+    policy-level ``priority``. A key owner's explicit choice is always
+    honoured; a key without a priority set (0, the default for newly created
+    keys) falls back to the team's priority; a team without one (0, the
+    default) falls back to the policy, preserving the historical
+    policy-only behaviour for untouched teams.
+
+    All values use the same 1/5/10 scale consumed by ``Priority.from_int``
+    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL).
+
+    Args:
+        default_priority: The requesting API key's default_priority, or 0/None
+            when the key has none set.
+        team_priority: The Logos admin's priority for the key's team, or
+            0/None when unset.
+        policy_priority: The policy's ``priority`` value (may be 0/None).
+
+    Returns:
+        The effective integer priority for the request's queue entry. When
+        nothing is set this is ``Priority.NORMAL`` (5) — not 0 — so the
+        entry's ``raw_priority`` matches the bucket ``from_int`` already
+        chooses for it. A raw 0 would still land in the NORMAL bucket but
+        rank below explicit NORMAL (5) traffic in that bucket, and the
+        role-rank tiebreak would never apply between the two.
+    """
+    if default_priority:
+        return int(default_priority)
+    if team_priority:
+        return int(team_priority)
+    if policy_priority:
+        return int(policy_priority)
+    return int(Priority.NORMAL)
+
+
+def queue_role_rank(key_type: Optional[str], user_role: Optional[str]) -> int:
+    """
+    Queue tiebreak rank of a request's caller, within equal priority.
+
+    The default intra-team ordering is application > app admin > developer:
+    application keys (``key_type == 'application'``) rank highest, keys of
+    users holding an admin platform role rank in the middle, everything else
+    (developer keys, service keys, keys without a user) ranks lowest. Higher
+    rank dequeues first; equal ranks fall back to FIFO.
+
+    Unknown inputs deliberately rank 0 — internal or benchmark traffic that
+    does not carry a caller identity must never jump ahead of interactive
+    developer traffic.
+    """
+    if key_type == "application":
+        return 2
+    if user_role in ("app_admin", "logos_admin"):
+        return 1
+    return 0
 
 
 @dataclass
@@ -43,6 +139,23 @@ class PipelineRequest:
     # context resolver to build the forward URL for cloud upstream providers,
     # which serve the same OpenAI-shaped surface as our /v1 routes.
     request_path: Optional[str] = None
+    # Trusted internal benchmark affinity. Public callers cannot populate
+    # this directly; the HTTP boundary validates a signed, active job first.
+    required_provider_id: Optional[int] = None
+    # The requesting API key's default_priority (see auth.AuthContext). The key
+    # owner's queue-priority choice for their traffic. 0 means "not set": the
+    # team's, then the policy-level priority applies (see
+    # resolve_queue_priority).
+    default_priority: int = 0
+    # The Logos admin's queue priority for the key's team (see
+    # auth.AuthContext). 0 = not set.
+    team_priority: int = 0
+    # Precomputed queue tiebreak rank of the caller (see queue_role_rank):
+    # application=2, app admin/logos admin=1, everyone else=0.
+    role_rank: int = 0
+    # Calling API key. Seeds the prefix-affinity hash so two keys never share
+    # a stream identity, and so one key's parallel agent loops stay separate.
+    api_key_id: Optional[int] = None
 
 
 @dataclass
@@ -125,7 +238,8 @@ class RequestPipeline:
         # 1. Classification. PROXY mode still runs the policy + token stages
         # (so policy thresholds remain enforced) but skips Laura's heavy ML
         # ranking — the caller already named the model.
-        classification_result = self._classify(request)
+        with perf_trace.phase(request_id, "pipeline.classify"):
+            classification_result = self._classify(request)
         if not classification_result.candidates:
             self.record_completion(
                 request_id=request_id,
@@ -143,7 +257,7 @@ class RequestPipeline:
             )
 
         sorted_candidates = sorted(classification_result.candidates, key=lambda x: x[1], reverse=True)
-        target_model_id, _, priority_int, _ = sorted_candidates[0]
+        target_model_id, _, priority_int = sorted_candidates[0]
         target_deployment = next(
             (d for d in request.deployments if d["model_id"] == target_model_id),
             None,
@@ -167,6 +281,9 @@ class RequestPipeline:
             deployments=request.deployments,
             payload=request.payload,
             timeout_s=request.payload.get("timeout_s"),
+            required_provider_id=request.required_provider_id,
+            affinity_keys=affinity_keys(request.api_key_id, request.payload),
+            role_rank=request.role_rank,
         )
 
         # Record enqueue
@@ -179,8 +296,10 @@ class RequestPipeline:
             timeout_s=request.payload.get("timeout_s"),
         )
 
+        schedule_start_s = time.perf_counter()
         try:
-            scheduling_result = await self._scheduler.schedule(scheduling_request)
+            with perf_trace.phase(request_id, "pipeline.schedule"):
+                scheduling_result = await self._scheduler.schedule(scheduling_request)
         except QueueTimeoutError as exc:
             logger.warning("Request %s timed out waiting in queue", request_id)
             prom.SCHEDULING_DECISIONS_TOTAL.labels(result="timeout").inc()
@@ -225,6 +344,41 @@ class RequestPipeline:
                 error="All candidate models unavailable (rate-limited or no capacity)",
             )
 
+        if request.required_provider_id is not None and scheduling_result.provider_id != request.required_provider_id:
+            logger.error(
+                "Scheduler violated provider affinity for request %s: required=%s selected=%s",
+                request_id,
+                request.required_provider_id,
+                scheduling_result.provider_id,
+            )
+            try:
+                self._scheduler.release(
+                    scheduling_result.model_id,
+                    scheduling_result.provider_id,
+                    scheduling_result.provider_type,
+                    request_id,
+                )
+            except Exception:
+                logger.warning("Failed to release mismatched provider reservation", exc_info=True)
+            self.record_completion(
+                request_id=request_id,
+                result_status="error",
+                error_message="Required provider affinity could not be satisfied",
+            )
+            return PipelineResult(
+                success=False,
+                model_id=scheduling_result.model_id,
+                provider_id=scheduling_result.provider_id,
+                execution_context=None,
+                classification_stats=classification_result.stats,
+                scheduling_stats={
+                    "request_id": request_id,
+                    "required_provider_id": request.required_provider_id,
+                    "selected_provider_id": scheduling_result.provider_id,
+                },
+                error="Required provider affinity could not be satisfied",
+            )
+
         # Record scheduled
         self._monitoring.record_scheduled(
             request_id=request_id,
@@ -241,12 +395,15 @@ class RequestPipeline:
         # 3. Resolve execution context (with authorization check)
         #    For logosnode providers, the lane may be starting (not yet ready to
         #    accept requests). Retry with backoff instead of failing immediately.
-        ctx_result = await self._resolve_context_with_retry(
-            scheduling_result=scheduling_result,
-            classification_result=classification_result,
-            request_path=request.request_path,
-            request_id=request_id,
-        )
+        with perf_trace.phase(request_id, "pipeline.context"):
+            ctx_result = await self._resolve_context_with_retry(
+                scheduling_result=scheduling_result,
+                classification_result=classification_result,
+                request_path=request.request_path,
+                request_id=request_id,
+                schedule_start_s=schedule_start_s,
+                deployment_info=self._scheduled_deployment(request, scheduling_result),
+            )
         if not ctx_result.success:
             return ctx_result
 
@@ -283,12 +440,32 @@ class RequestPipeline:
     _CONTEXT_RESOLVE_TIMEOUT_S = global_timeout_s(600.0)
     _CONTEXT_RESOLVE_INTERVAL_S = 2.0
 
+    @staticmethod
+    def _scheduled_deployment(request: "PipelineRequest", scheduling_result) -> Optional[Dict[str, Any]]:
+        """The scheduled entry from the key's already-fetched deployment list.
+
+        The context resolver uses it to skip its database roundtrip for
+        logosnode targets ; callers without a deployment list (async
+        jobs) yield ``None`` and take the DB path.
+        """
+        return next(
+            (
+                d
+                for d in request.deployments
+                if d.get("model_id") == scheduling_result.model_id
+                and d.get("provider_id") == scheduling_result.provider_id
+            ),
+            None,
+        )
+
     async def _resolve_context_with_retry(
         self,
         scheduling_result,
         classification_result: "_ClassificationResult",
         request_id: str,
         request_path: Optional[str] = None,
+        schedule_start_s: Optional[float] = None,
+        deployment_info: Optional[Dict[str, Any]] = None,
     ) -> "PipelineResult":
         """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
         deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
@@ -300,6 +477,8 @@ class RequestPipeline:
                     model_id=scheduling_result.model_id,
                     provider_id=scheduling_result.provider_id,
                     request_path=request_path,
+                    request_id=request_id,
+                    deployment_info=deployment_info,
                 )
             except Exception as exc:  # noqa: BLE001
                 self._release_scheduler_safe(scheduling_result, request_id, "exception")
@@ -324,7 +503,7 @@ class RequestPipeline:
                     provider_id=scheduling_result.provider_id,
                     execution_context=exec_context,
                     classification_stats=classification_result.stats,
-                    scheduling_stats=self._scheduling_stats(scheduling_result, request_id),
+                    scheduling_stats=self._scheduling_stats(scheduling_result, request_id, schedule_start_s),
                 )
 
             # For cloud providers or after timeout, fail immediately
@@ -368,8 +547,13 @@ class RequestPipeline:
                 scheduling_result.provider_id,
             )
 
-    def _scheduling_stats(self, scheduling_result, request_id: str) -> dict:
-        return {
+    def _scheduling_stats(
+        self,
+        scheduling_result,
+        request_id: str,
+        schedule_start_s: Optional[float] = None,
+    ) -> dict:
+        stats = {
             "request_id": request_id,
             "model_id": scheduling_result.model_id,
             "provider_id": scheduling_result.provider_id,
@@ -382,6 +566,9 @@ class RequestPipeline:
             "ettft_tier": scheduling_result.ettft_tier,
             "warmth_state": scheduling_result.warmth_state,
         }
+        if schedule_start_s is not None:
+            stats["schedule_start_s"] = schedule_start_s
+        return stats
 
     def _context_failure(
         self,
@@ -405,22 +592,10 @@ class RequestPipeline:
         """Run classification to get candidate models."""
         policy = request.policy or ProxyPolicy()
 
-        PRIVACY_ORDER = [
-            "LOCAL",
-            "CLOUD_IN_EU_BY_EU_PROVIDER",
-            "CLOUD_IN_EU_BY_US_PROVIDER",
-            "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-        ]
-
         threshold = policy.get("threshold_privacy", "CLOUD_NOT_IN_EU_BY_US_PROVIDER")
-        threshold_idx = PRIVACY_ORDER.index(threshold) if threshold in PRIVACY_ORDER else len(PRIVACY_ORDER) - 1
-
-        def _privacy_ok(deployment: dict) -> bool:
-            level = deployment.get("privacy_level", "LOCAL")
-            level_idx = PRIVACY_ORDER.index(level) if level in PRIVACY_ORDER else 0
-            return threshold_idx >= level_idx
-
-        privacy_deployments = [d for d in request.deployments if _privacy_ok(d)]
+        privacy_deployments = [
+            d for d in request.deployments if _privacy_ok(threshold, d.get("privacy_level", "LOCAL"))
+        ]
         allowed = get_unique_models_from_deployments(privacy_deployments)
 
         # Extract prompts
@@ -436,6 +611,17 @@ class RequestPipeline:
             skip_laura=request.skip_laura,
         )
 
+        # The classifier bakes the policy's priority into every candidate, but
+        # the key owner's default_priority — then the team's admin-set
+        # priority — takes precedence: resolve the effective priority here so
+        # all downstream consumers (schedulers, queueing, monitoring, log
+        # stats) agree on it.
+        effective_priority = resolve_queue_priority(
+            request.default_priority, request.team_priority, policy.get("priority")
+        )
+        if candidates:
+            candidates = [(model_id, weight, effective_priority) for model_id, weight, _ in candidates]
+
         elapsed = time.time() - start
 
         prom.CLASSIFICATION_DURATION_SECONDS.observe(elapsed)
@@ -446,7 +632,7 @@ class RequestPipeline:
             "classification_time": elapsed,
             "candidate_count": len(candidates),
             "candidates": [
-                {"model_id": m, "weight": w, "priority": p} for m, w, p, _ in candidates[:5]  # Top 5 for logging
+                {"model_id": m, "weight": w, "priority": p} for m, w, p in candidates[:5]  # Top 5 for logging
             ],
         }
 
@@ -501,14 +687,79 @@ class RequestPipeline:
         result_status: str,
         error_message: Optional[str] = None,
         cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
     ):
-        """Record request completion."""
+        """Record request completion.
+
+        ``usage_tokens`` (the ``extract_token_usage`` dict) feeds the token
+        counters and the per-model context-window histogram when present.
+        """
         self._monitoring.record_complete(
             request_id=request_id,
             result_status=result_status,
             error_message=error_message,
             cold_start=cold_start,
+            usage_tokens=usage_tokens,
         )
+
+    def settle_completion(
+        self,
+        request_id: str,
+        result_status: str,
+        error_message: Optional[str] = None,
+        cold_start: Optional[bool] = None,
+        usage_tokens: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """Terminal accounting on this (event-loop) thread; returns the write's fields.
+
+        The request path calls this and hands the dict to ``write_completion``
+        on the write-behind queue thread — the recorder's shared state must
+        never be mutated off the event loop.
+        """
+        return self._monitoring.settle_and_take(
+            request_id=request_id,
+            result_status=result_status,
+            error_message=error_message,
+            cold_start=cold_start,
+            usage_tokens=usage_tokens,
+        )
+
+    def write_completion(self, request_id: str, fields: Dict[str, Any]) -> None:
+        """Terminal metrics write for a ``settle_completion`` result (any thread)."""
+        self._monitoring.write_completion(request_id, fields)
+
+    def discard_request(self, request_id: str, result_status: str) -> None:
+        """Close out a request whose terminal log row was written elsewhere."""
+        self._monitoring.discard(request_id, result_status)
+
+    def take_monitoring_buffer(self, request_id: str) -> Dict[str, Any]:
+        """Drain the lifecycle fields buffered for a request .
+
+        Failure paths that persist the log row themselves call this before
+        ``discard_request`` and merge the fields into their own metrics
+        UPDATE, keeping the row identical to the sequential-write era.
+        """
+        return self._monitoring.take_buffer(request_id)
+
+    def record_rate_limit_admission(self, request_id: str, admitted: bool) -> None:
+        """Persist the limiter's admission decision on the request's log row."""
+        self._monitoring.record_rate_limit_admission(request_id, admitted)
+
+    def record_provider_call(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the request is handed to the upstream provider.
+
+        ``at`` pins the observed dispatch instant (the executor paths pass the
+        instant captured after request preparation); omitted it stamps now.
+        """
+        self._monitoring.record_provider_call(request_id, at=at)
+
+    def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
+        """Stamp the instant the upstream provider's response has fully arrived.
+
+        ``at`` pins the observed arrival instant (the streaming paths pass the
+        last chunk's arrival time); omitted it stamps now.
+        """
+        self._monitoring.record_provider_response(request_id, at=at)
 
     def update_provider_stats(self, model_id: int, provider_id: int, headers: Dict[str, str]) -> None:
         """
@@ -556,5 +807,5 @@ class RequestPipeline:
 
 @dataclass
 class _ClassificationResult:
-    candidates: List[Tuple[int, float, int, int]]
+    candidates: List[Tuple[int, float, int]]  # (model_id, weight, priority)
     stats: Dict[str, Any]

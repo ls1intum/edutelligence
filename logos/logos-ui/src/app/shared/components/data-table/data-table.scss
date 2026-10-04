@@ -29,6 +29,28 @@
   }
 }
 
+// Sortable column header: the button resets to the inherited header look
+.th-sort {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+
+  &:hover {
+    color: rgb(var(--color-text-accent));
+  }
+
+  i {
+    font-size: var(--font-size-sm);
+  }
+}
+
 .table-row {
   min-height: 52px;
   height: auto;

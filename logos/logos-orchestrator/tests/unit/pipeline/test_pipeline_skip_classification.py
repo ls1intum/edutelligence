@@ -11,7 +11,7 @@ class _RecordingClassifier:
 
     def classify(self, user_prompt, policy, allowed=None, system=None, skip_laura=False):  # noqa: ARG002
         self.calls.append({"skip_laura": skip_laura, "allowed": list(allowed or [])})
-        return [(allowed[0], 1.0, 1, 1)] if allowed else []
+        return [(allowed[0], 1.0, 1)] if allowed else []
 
 
 class _FakeScheduler:
@@ -49,11 +49,15 @@ class _FakeContextResolver:
     def __init__(self):
         self.kwargs = None
 
-    async def resolve_context(self, model_id, provider_id, request_path=None):  # noqa: ARG002
+    async def resolve_context(  # noqa: ARG002
+        self, model_id, provider_id, request_path=None, request_id=None, deployment_info=None
+    ):
         self.kwargs = {
             "model_id": model_id,
             "provider_id": provider_id,
             "request_path": request_path,
+            "request_id": request_id,
+            "deployment_info": deployment_info,
         }
         return _StubExecutionContext(model_id, provider_id)
 
@@ -149,3 +153,6 @@ async def test_request_path_propagates_to_context_resolver():
 
     assert resolver.kwargs is not None
     assert resolver.kwargs["request_path"] == "v1/chat/completions"
+    # The scheduled entry of the request's deployment list rides along so the
+    # resolver can skip its database roundtrip for logosnode targets .
+    assert resolver.kwargs["deployment_info"] == {"model_id": 27, "provider_id": 12, "type": "cloud"}

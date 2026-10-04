@@ -1,0 +1,3 @@
+INFO 05-04 08:44:19 [api_server.py:1000] vLLM API server version 0.11.0
+ERROR 05-04 08:44:19 [launcher.py:71] Failed to start the API server.
+ERROR 05-04 08:44:19 [launcher.py:71] OSError: [Errno 98] error while attempting to bind on address ('0.0.0.0', 11436): address already in use

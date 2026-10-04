@@ -2,6 +2,8 @@ package de.tum.cit.aet.logos.logoswebservice.common;
 
 import java.util.Map;
 
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -27,5 +29,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<Map<String, String>> handleConflict(ConflictException ex) {
         return ResponseEntity.status(409).body(Map.of("detail", ex.getMessage()));
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<Map<String, String>> handleRateLimitExceeded(RateLimitExceededException ex) {
+        HttpHeaders headers = new HttpHeaders();
+        if (ex.getRetryAfterSeconds() > 0) {
+            headers.add("Retry-After", String.valueOf(ex.getRetryAfterSeconds()));
+        }
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).headers(headers).body(Map.of("detail", "Too Many Requests"));
     }
 }

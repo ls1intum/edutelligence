@@ -9,16 +9,35 @@ import {
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { TeamApiKey, TeamDetail, CreateApiKeyPayload } from '../../../../shared/models/team.model';
-import { AuthService } from '../../../../core/auth/services/auth.service';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { DataTableComponent } from '../../../../shared/components/data-table/data-table';
 import { ApiKeyModalComponent } from '../../api-key-modal/api-key-modal';
 import { ModalFormComponent } from '../../../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { FormsModule } from '@angular/forms';
+import {
+  CdkDrag,
+  CdkDragDrop,
+  CdkDragHandle,
+  CdkDropList,
+  moveItemInArray,
+} from '@angular/cdk/drag-drop';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
 import { buildKeyModelGroups, KeyModelGroup, ProviderInfo } from '../key-model-groups';
 import { isInteractiveClick } from '../../../../shared/utils/interactive-click';
+import {
+  KeySla,
+  SLA_OPTIONS,
+  SLA_PRIORITY,
+  DEFAULT_SLA,
+  INHERITED_SLA_HINT,
+  effectiveSla,
+  isUnsetPriority,
+  slaHint,
+  slaLabel,
+  slaRank,
+} from '../key-sla';
+import { loadKeyOrder, orderRank, saveKeyOrder } from './key-order';
 
 const MICRO = 100_000_000;
 
@@ -32,31 +51,187 @@ const MICRO = 100_000_000;
     ModalConfirmComponent,
     FormsModule,
     ErrorMessageComponent,
+    CdkDropList,
+    CdkDrag,
+    CdkDragHandle,
   ],
   templateUrl: './app-keys-tab.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './app-keys-tab.scss',
 })
 export class AppKeysTabComponent {
-  @Input() apiKeys: TeamApiKey[] = [];
-  @Input() teamId!: number;
+  private apiKeysSignal = signal<TeamApiKey[]>([]);
+
+  /** Signal-backed so `appKeys` — and the `orderedKeys` derived from it —
+   *  recompute when the parent replaces the list after a create or delete. */
+  @Input() set apiKeys(value: TeamApiKey[]) {
+    this.apiKeysSignal.set(value ?? []);
+  }
+
   @Input() canEdit = false;
   @Input() team: TeamDetail | null = null;
 
-  private auth = inject(AuthService);
+  private _teamId!: number;
+
+  @Input() set teamId(value: number) {
+    this._teamId = value;
+    this.manualOrder.set(loadKeyOrder(value));
+  }
+
+  get teamId(): number {
+    return this._teamId;
+  }
+
   private svc = inject(TeamManagementService);
 
-  isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
-  appKeys = computed(() => this.apiKeys.filter((k) => k.key_type !== 'developer'));
+  appKeys = computed(() => this.apiKeysSignal().filter((k) => k.key_type !== 'developer'));
 
   @Output() refresh = new EventEmitter<void>();
+
+  // ── SLA tier & manual order ────────────────────────────────────────────────
+  /**
+   * Column track sizes for the key table. Held here rather than inline in the
+   * template because it is needed twice: `app-data-table` publishes it as
+   * `--data-table-grid` on its own host element, and each draggable row
+   * repeats it, since CDK lifts the drag preview out to `<body>` where that
+   * host is no longer an ancestor and the variable would not inherit.
+   */
+  readonly gridCols = '34px 40px 1fr 100px 165px 160px 90px 90px 90px 90px 72px';
+
+  readonly slaOptions = SLA_OPTIONS;
+  readonly slaLabel = slaLabel;
+  readonly slaHint = slaHint;
+  readonly inheritedSlaHint = INHERITED_SLA_HINT;
+
+  /** Key ids in the drag-and-drop order, most recently persisted for this team. */
+  manualOrder = signal<number[]>([]);
+  /** Optimistic tiers for keys whose SLA change is in flight or already saved. */
+  private slaOverrides = signal<Map<number, KeySla>>(new Map());
+  slaSaving = signal<Set<number>>(new Set());
+  slaError = signal('');
+
+  /**
+   * Application keys sorted by SLA first, then by the manual drag order.
+   * The SLA is the only part the orchestrator sees, so it always outranks the
+   * manual order rather than the other way round.
+   */
+  orderedKeys = computed(() => {
+    const order = this.manualOrder();
+    const keys = this.appKeys();
+    const rankOf = new Map(keys.map((k, i) => [k.id, orderRank(order, k.id, i)]));
+    return [...keys].sort((a, b) => {
+      const tier = slaRank(this.slaOf(a)) - slaRank(this.slaOf(b));
+      return tier !== 0 ? tier : (rankOf.get(a.id) ?? 0) - (rankOf.get(b.id) ?? 0);
+    });
+  });
+
+  /**
+   * Effective tier for display and sort. An unset key follows the team's
+   * priority (matching the orchestrator); an in-flight override wins.
+   */
+  slaOf(key: TeamApiKey): KeySla {
+    return (
+      this.slaOverrides().get(key.id) ??
+      effectiveSla(key.default_priority, this.team?.priority)
+    );
+  }
+
+  /** True when the key still inherits team/policy priority (no explicit pick). */
+  isInherited(key: TeamApiKey): boolean {
+    return !this.slaOverrides().has(key.id) && isUnsetPriority(key.default_priority);
+  }
+
+  /** True for the first row of an SLA tier, which draws the tier separator. */
+  startsTier(index: number): boolean {
+    const keys = this.orderedKeys();
+    return index === 0 || this.slaOf(keys[index - 1]) !== this.slaOf(keys[index]);
+  }
+
+  /**
+   * Persist an SLA the person picked.
+   *
+   * An unset key shows as inherited, so any of the three tiers — including
+   * the one that matches the effective inherited tier — is a real write that
+   * pins the key. The guard therefore compares the stored value, not just
+   * the displayed tier.
+   */
+  async changeSla(key: TeamApiKey, sla: KeySla): Promise<void> {
+    if (!this.canEdit || this.slaSaving().has(key.id)) return;
+    if (!(sla in SLA_PRIORITY)) return;
+    if (!isUnsetPriority(key.default_priority) && key.default_priority === SLA_PRIORITY[sla]) {
+      return;
+    }
+    const previous = this.slaOverrides().get(key.id);
+    this.slaError.set('');
+    this.slaOverrides.update((m) => new Map(m).set(key.id, sla));
+    this.slaSaving.update((s) => new Set(s).add(key.id));
+    try {
+      await this.svc.updateApiKey(key.id, { default_priority: SLA_PRIORITY[sla] });
+      // Write through so a modal opened from the cached list shows the new
+      // priority without waiting for the parent's refetch.
+      key.default_priority = SLA_PRIORITY[sla];
+    } catch {
+      this.slaOverrides.update((m) => {
+        const next = new Map(m);
+        previous === undefined ? next.delete(key.id) : next.set(key.id, previous);
+        return next;
+      });
+      this.slaError.set(`Failed to update the SLA of '${key.name}'.`);
+    } finally {
+      this.slaSaving.update((s) => {
+        const next = new Set(s);
+        next.delete(key.id);
+        return next;
+      });
+    }
+  }
+
+  onDrop(event: CdkDragDrop<TeamApiKey[]>): Promise<void> {
+    return this.moveTo(event.previousIndex, event.currentIndex);
+  }
+
+  /**
+   * Keyboard equivalent of a drag, so the order (and with it the SLA a row
+   * crosses into) is reachable without a pointer.
+   */
+  onHandleKeydown(event: KeyboardEvent, index: number): void {
+    const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+    if (delta === 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void this.moveTo(index, index + delta);
+  }
+
+  private async moveTo(from: number, to: number): Promise<void> {
+    const list = [...this.orderedKeys()];
+    if (!this.canEdit || from === to || to < 0 || to >= list.length) return;
+
+    // The tier of the row being displaced, read before the move: a key takes
+    // over the position it was dropped on, so that row's tier is the one the
+    // person aimed at. Reading the moved key's neighbours afterwards instead
+    // would raise a key to the tier above whenever it is dropped directly
+    // below a stricter tier, even when both rows share a tier.
+    const moved = list[from];
+    // A second drag while the first SLA update is still in flight would save
+    // the new order but `changeSla` would discard the tier change — leave
+    // order and SLA alone until the pending write finishes.
+    if (this.slaSaving().has(moved.id)) return;
+    const target = this.slaOf(list[to]);
+
+    moveItemInArray(list, from, to);
+    const ids = list.map((k) => k.id);
+    this.manualOrder.set(ids);
+    saveKeyOrder(this.teamId, ids);
+
+    if (target !== this.slaOf(moved)) await this.changeSla(moved, target);
+  }
 
   // ── Create dialog ──────────────────────────────────────────────────────────
   createOpen = signal(false);
   createLoading = signal(false);
   createError = signal('');
   cEnv = signal('prod');
-  cPriority = signal('0');
+  cSla = signal<KeySla>(DEFAULT_SLA);
   cBudget = signal('');
   cCloudRpm = signal('');
   cCloudTpm = signal('');
@@ -90,7 +265,7 @@ export class AppKeysTabComponent {
 
   resetCreate(): void {
     this.cEnv.set('prod');
-    this.cPriority.set('0');
+    this.cSla.set(DEFAULT_SLA);
     this.cBudget.set('');
     this.cCloudRpm.set('');
     this.cCloudTpm.set('');
@@ -109,7 +284,7 @@ export class AppKeysTabComponent {
       name: `${this.team?.name ?? 'team'}-${env}`,
       key_type: 'application',
       environment: env,
-      default_priority: parseInt(this.cPriority(), 10) || 0,
+      default_priority: SLA_PRIORITY[this.cSla()],
       log: 'BILLING',
       settings: {
         budget_limit_micro_cents: this.parseMc(this.cBudget()),

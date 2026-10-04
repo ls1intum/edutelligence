@@ -21,21 +21,18 @@ import {
 } from '../../shared/utils/time-range';
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
 import { isInteractiveClick } from '../../shared/utils/interactive-click';
+import { MICRO_CENTS_PER_UNIT as MICRO_CENTS_PER_DOLLAR } from '../../shared/utils/currency';
 
-const MICRO_CENTS_PER_DOLLAR = 100_000_000;
-
-// Plotly palette + colour assignment ported from the React budget-history-chart:
-// each team is hashed by name onto a fixed 8-colour palette so a given team keeps
-// the same colour regardless of sort order.
+// Each team is hashed by name onto the active theme's own primary ramp
+// (light to dark) so a given team keeps the same colour regardless of sort
+// order, and the chart follows whichever styles/_tokens-*.scss is active.
 const PALETTE = [
-  '#F29C6E',
-  '#3BE9DE',
-  '#9D4EDD',
-  '#06FFA5',
-  '#EC4899',
-  '#6366F1',
-  '#F59E0B',
-  '#14B8A6',
+  'rgb(var(--color-primary-300))',
+  'rgb(var(--color-primary-400))',
+  'rgb(var(--color-primary-500))',
+  'rgb(var(--color-primary-600))',
+  'rgb(var(--color-primary-700))',
+  'rgb(var(--color-primary-800))',
 ] as const;
 
 function paletteColorForName(name: string): string {
@@ -98,6 +95,7 @@ function formatBucketLabel(iso: string, preset: TimePreset): string {
       return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
     case 'week':
     case 'month':
+    case '30d':
     case '6m':
       return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     case 'year':
@@ -186,6 +184,7 @@ export class Billing {
       case 'week':
         return 7;
       case 'month':
+      case '30d':
         return Math.round((currEnd.getTime() - currStart.getTime()) / 86_400_000);
       case '6m':
         return 6;

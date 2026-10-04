@@ -1,0 +1,264 @@
+from datetime import datetime, timezone
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from iris.domain.pipeline_execution_settings_dto import PipelineExecutionSettingsDTO
+
+
+class AccessContext(BaseModel):
+    """Course IDs grouped by the user's role, resolved by Artemis before the request is sent.
+
+    Pyris treats this as an opaque filter.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    course_ids: list[int] = Field(default_factory=list, alias="courseIds")
+    editor_course_ids: list[int] = Field(default_factory=list, alias="editorCourseIds")
+    ta_course_ids: list[int] = Field(default_factory=list, alias="taCourseIds")
+    student_course_ids: list[int] = Field(
+        default_factory=list, alias="studentCourseIds"
+    )
+    staff_course_ids: list[int] = Field(default_factory=list, alias="staffCourseIds")
+    now: datetime | None = Field(default=None, alias="now")
+    unrestricted: bool = Field(default=False, alias="unrestricted")
+
+    def effective_now_dt(self) -> datetime:
+        ts = self.now or datetime.now(timezone.utc)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.astimezone(timezone.utc)
+
+    def effective_now(self) -> str:
+        return self.effective_now_dt().isoformat()
+
+    def is_empty(self) -> bool:
+        return len(self.course_ids) == 0
+
+
+class LectureSearchRequestDTO(BaseModel):
+    """Request DTO for the synchronous lecture search endpoint."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    query: str = Field(min_length=1)
+    artemis_base_url: str = Field(alias="artemisBaseUrl", min_length=1)
+    limit: int = Field(default=10, ge=1, le=20)
+    course_ids: list[int] | None = Field(default=None, alias="courseIds")
+    # Only needed for a caller with no course_ids ceiling to narrow itself (unrestricted
+    # access); every other caller already has exclusions baked into course_ids.
+    exclude_course_ids: list[int] = Field(
+        default_factory=list, alias="excludeCourseIds"
+    )
+    access_context: AccessContext | None = Field(default=None, alias="accessContext")
+
+    @field_validator("artemis_base_url")
+    @classmethod
+    def validate_artemis_base_url(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("artemisBaseUrl must not be blank")
+        return value
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must not be blank")
+        return value
+
+
+class CourseInfo(BaseModel):
+    id: int
+    name: str
+
+
+class LectureInfo(BaseModel):
+    id: int
+    name: str
+
+
+class LectureUnitInfo(BaseModel):
+    """Metadata for a lecture unit returned in search results."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: int
+    name: str
+    link: str
+    page_number: int = Field(alias="pageNumber")
+    source_type: str = Field(alias="sourceType")
+    query_params: dict[str, str | int | float] = Field(
+        default_factory=dict, alias="queryParams"
+    )
+    display_meta: str | None = Field(default=None, alias="displayMeta")
+
+
+class LectureSearchResultDTO(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    course: CourseInfo
+    lecture: LectureInfo
+    lecture_unit: LectureUnitInfo = Field(alias="lectureUnit")
+    snippet: str
+
+
+class EntityCandidateDTO(BaseModel):
+    """A pre-fetched SearchableEntities row, forwarded by Artemis.
+
+    Artemis owns entity visibility (channel membership, exam assignment,
+    role-dependent release rules live in its database), so it runs the
+    filtered entity search and forwards the surviving candidates. Pyris only
+    renders, reranks and gates them — it never queries the entity collection
+    itself.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    entity_type: str = Field(alias="entityType")
+    entity_id: int | None = Field(default=None, alias="entityId")
+    course_id: int | None = Field(default=None, alias="courseId")
+    course_name: str | None = Field(default=None, alias="courseName")
+    title: str | None = None
+    description: str | None = None
+    short_name: str | None = Field(default=None, alias="shortName")
+    link: str | None = None
+    release_date: datetime | None = Field(default=None, alias="releaseDate")
+    start_date: datetime | None = Field(default=None, alias="startDate")
+    due_date: datetime | None = Field(default=None, alias="dueDate")
+    end_date: datetime | None = Field(default=None, alias="endDate")
+    visible_date: datetime | None = Field(default=None, alias="visibleDate")
+    exam_visible_date: datetime | None = Field(default=None, alias="examVisibleDate")
+    exam_start_date: datetime | None = Field(default=None, alias="examStartDate")
+    exam_end_date: datetime | None = Field(default=None, alias="examEndDate")
+    max_points: float | None = Field(default=None, alias="maxPoints")
+    quiz_duration_seconds: int | None = Field(default=None, alias="quizDurationSeconds")
+    programming_language: str | None = Field(default=None, alias="programmingLanguage")
+    exercise_type: str | None = Field(default=None, alias="exerciseType")
+    unit_type: str | None = Field(default=None, alias="unitType")
+    faq_state: str | None = Field(default=None, alias="faqState")
+    channel_is_public: bool | None = Field(default=None, alias="channelIsPublic")
+
+    @field_validator(
+        "release_date",
+        "start_date",
+        "due_date",
+        "end_date",
+        "visible_date",
+        "exam_visible_date",
+        "exam_start_date",
+        "exam_end_date",
+    )
+    @classmethod
+    def _normalize_to_utc(cls, value: datetime | None) -> datetime | None:
+        """Guarantee UTC regardless of what the wire carried.
+
+        Artemis already normalizes these through WeaviateDateUtil before sending
+        them, but this is a service boundary: a naive datetime is assumed UTC
+        (never the interpreting server's local zone, which .astimezone() would
+        otherwise assume) and an offset-aware one is converted to UTC, so a
+        downstream comparison or display never depends on which offset happened
+        to arrive.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+
+class EntitySourceDTO(BaseModel):
+    """An entity source in the answer response.
+
+    ``snippet`` carries the rendered entity card and is never empty — the
+    renderer always produces at least the head line, and the rerank stage
+    relies on that.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    entity_type: str = Field(alias="entityType")
+    entity_id: int | None = Field(default=None, alias="entityId")
+    course: CourseInfo | None = None
+    title: str = ""
+    snippet: str = ""
+    link: str | None = None
+    # Lets the client render the same per-exercise-type icon as the palette.
+    exercise_type: str | None = Field(default=None, alias="exerciseType")
+    # Internal: True when retrieval admitted this card from the calibrated
+    # band BELOW the rerank floor because nothing cleared it — the "no content
+    # answers this, but this material seems related" state. The pipeline
+    # phrases that as navigation. Never serialized.
+    via_pointer_tier: bool = Field(default=False, exclude=True)
+    # Internal: the instance's own calendar anchor (start/release date), used
+    # to prefer the current semester instance among title-identical twins of
+    # a repeated course. Never serialized.
+    reference_date: datetime | None = Field(default=None, exclude=True)
+
+
+class GlobalSearchRequestDTO(BaseModel):
+    """Request DTO for the asynchronous global search answer pipeline."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    query: str = Field(min_length=1)
+    limit: int = Field(default=5, ge=1, le=10)
+    settings: PipelineExecutionSettingsDTO
+    access_context: AccessContext | None = Field(default=None, alias="accessContext")
+    entity_candidates: list[EntityCandidateDTO] = Field(
+        default_factory=list, alias="entityCandidates"
+    )
+    # Optional course scope from the search UI's active course filter; the
+    # retrieval intersects it with the access context.
+    course_ids: list[int] | None = Field(default=None, alias="courseIds")
+    # Courses to hide from the search regardless of course_ids/access context.
+    # Only needed when Artemis cannot subtract the exclusion itself (an
+    # unrestricted caller with no course ceiling to narrow) — every other
+    # caller already has exclusions baked into course_ids.
+    exclude_course_ids: list[int] = Field(
+        default_factory=list, alias="excludeCourseIds"
+    )
+    # True when Artemis already resolved the course scope to nothing (every requested
+    # course was excluded). Distinct from course_ids=None (unscoped): Artemis's own
+    # NON_EMPTY JSON policy drops an empty courseIds list from the wire, which would
+    # otherwise be indistinguishable from "no scope requested" on this side.
+    searches_nothing: bool = Field(default=False, alias="searchesNothing")
+
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _normalize_empty_course_scope(self) -> "GlobalSearchRequestDTO":
+        if not self.settings.artemis_base_url.strip():
+            raise ValueError("settings.artemisBaseUrl must not be blank")
+        if self.searches_nothing:
+            self.course_ids = []
+        return self
+
+
+class GlobalSearchResponseDTO(BaseModel):
+    """Terminal result of the asynchronous global search answer pipeline."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    answer: str | None
+    sources: list[LectureSearchResultDTO]
+    entity_sources: list[EntitySourceDTO] = Field(
+        default_factory=list, alias="entitySources"
+    )
+    # Citation numbers in `answer` are assigned in the TRUE order each source is first
+    # cited, regardless of type — but `sources`/`entitySources` still have to ship as two
+    # separate arrays (their own items are internally ordered to match their subsequence
+    # of that citation order). This tells the client, for marker 1..N in order, which of
+    # the two arrays that marker resolves into: a client walking this list with one
+    # running counter per type can recover "sources[i]" or "entitySources[j]" for any
+    # marker number, something the two arrays' lengths alone cannot reconstruct whenever
+    # citations interleave between types (observed live: an entity cited before any
+    # lecture source, but the client's own resolution always reads every lecture marker
+    # before any entity marker, so the entity's real "[1]" rendered as "[5]" instead).
+    citation_source_types: list[str] = Field(
+        default_factory=list, alias="citationSourceTypes"
+    )

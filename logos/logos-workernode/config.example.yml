@@ -10,7 +10,6 @@
 # Model identifiers must be HuggingFace Hub IDs (org/name), e.g.
 #   Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
 #   meta-llama/Llama-3.1-8B-Instruct
-# Ollama tags (llama3.1:8b) are only valid in Ollama lanes (vllm: false).
 # =============================================================================
 
 
@@ -58,15 +57,28 @@ worker:
   # container at this path so a host-side watchdog can detect it.
   reboot_sentinel_path: /host/reboot-requested
 
+  # Persistent model store directory (the deployment's model volume). Holds
+  # the HuggingFace model store that vLLM lanes load from. Also the default
+  # root for the worker's caches when cache_path below is empty.
+  # Backward compatibility: a legacy config left on the old container path
+  # is auto-translated to this path
+  # at load time (with a warning) — no manual edit required, but prefer
+  # updating the config file itself.
+  models_path: /usr/share/logos/models
+
+  # Worker-wide default GPU placement: "all" | "none" | "0,1" (comma-separated
+  # GPU indices). A lane's own gpu_devices overrides this when set.
+  gpu_devices: all
+
   # Persistent root directory for HF model weights and the worker's
   # compilation/JIT caches:
   #   <cache_path>/.hf_cache/             — HuggingFace model weights (HF_HOME)
   #   <cache_path>/.cache/vllm/           — vLLM compilation artifacts
   #   <cache_path>/.cache/torch_inductor/ — torch.compile / FX graph cache
   #   <cache_path>/.cache/flashinfer/…    — FlashInfer JIT kernels
-  # Empty (default) → fall back to engines.ollama.models_path so existing
-  # ollama-aware deployments keep working unchanged. Set this to any
-  # persistent path mounted as a Docker volume for non-ollama deployments.
+  # Empty (default) → fall back to worker.models_path, the persistent volume
+  # in the standard docker-compose. Set this to any other persistent path
+  # mounted as a Docker volume when your storage layout differs.
   # The env var LOGOS_WORKER_CACHE_ROOT, when set, overrides this field.
   cache_path: ""
 
@@ -103,6 +115,22 @@ logos:
   #   base_residency_mb: int       — manual VRAM weight footprint (MB), excluding
   #     KV cache. Only set this if auto-calibration fails or gives wrong values.
   #     Normal workflow: leave this unset and let calibration measure it.
+  #
+  #   min_context_fraction: float  — smallest share of this model's own context
+  #     length a lane here may serve, 0.0-1.0. The server refuses to place the
+  #     model on this node unless a calibrated KV point reaches that window.
+  #
+  #     Why it exists: a lane's context window comes from whatever KV cache fits
+  #     at load time, so the same model can serve its full context on an idle
+  #     node and a fraction of it on a busy one. The API can only promise the
+  #     smallest window across the cluster, so one narrow lane is what every
+  #     client is told the model can do. Set this for models where a fraction of
+  #     the window is not worth serving — coding assistants especially.
+  #
+  #     1.0 = full context or nothing. Unset (or 0) = place at any width, which
+  #     is the behaviour from before this field existed. Watch the server log
+  #     for "no calibrated KV point serves the required minimum" if a model
+  #     stops being placed here after setting it.
 
   capabilities_models:
     # Minimal form — no placement overrides needed (KV budget set by server or default)
@@ -124,6 +152,11 @@ logos:
       kv_cache_memory_bytes: 12G
       base_residency_mb: 42000
 
+    # Coding-assistant model: only worth serving at its full context, so the
+    # server places it here or not at all rather than at whatever fits.
+    - model: Qwen/Qwen3.8-27B
+      min_context_fraction: 1.0
+
   # How often (seconds) the worker sends a status heartbeat to Logos.
   # Lower = server sees fresher lane state; higher = less network chatter.
   heartbeat_interval_seconds: 5
@@ -135,47 +168,7 @@ logos:
 # ── Engine defaults ───────────────────────────────────────────────────────────
 engines:
 
-  # ── Ollama (CPU / non-vLLM lanes) ──────────────────────────────────────────
-  ollama:
-    # Path to the ollama binary inside the container. Rarely needs changing.
-    ollama_binary: /usr/local/bin/ollama
-
-    # Which GPUs Ollama may use. "all" | "none" | "0,1" comma-separated indices.
-    gpu_devices: all
-
-    # Maximum number of queued inference requests per lane.
-    max_queue: 512
-
-    # Spread load across multiple GPUs rather than filling one at a time.
-    sched_spread: false
-
-    # Enable Ollama's multi-user KV-cache sharing (experimental).
-    multiuser_cache: false
-
-    # Headroom (bytes) subtracted from GPU VRAM before Ollama's own allocation.
-    # Use this if Ollama under-counts VRAM used by other processes.
-    gpu_overhead_bytes: 0
-
-    # Timeout for loading a model into memory (e.g. "2m", "90s"). Empty = Ollama default.
-    load_timeout: ""
-
-    # Allowed CORS origins for Ollama's HTTP API. Usually not needed inside Docker.
-    origins: []
-
-    # Disable Ollama's automatic model pruning.
-    noprune: false
-
-    # Override Ollama's GGML backend library path. Empty = auto.
-    llm_library: ""
-
-    # Directory where Ollama model blobs are stored.
-    models_path: /usr/share/ollama/.ollama/models
-
-    # Arbitrary environment variable overrides passed to the Ollama process.
-    env_overrides: {}
-
-
-  # ── vLLM (GPU lanes) ───────────────────────────────────────────────────────
+  # ── vLLM (all lanes) ───────────────────────────────────────────────────────
   vllm:
     # Prometheus metrics endpoint exposed by each vLLM lane.
     metrics_path: /metrics
@@ -220,16 +213,19 @@ engines:
     #   dtype: str                 — compute dtype: "auto" | "float16" | "bfloat16".
     #     "auto" picks bfloat16 on Ampere+ and float16 on older cards.
     #
-    #   gpu_memory_utilization: float  — fraction of GPU VRAM vLLM may use for
-    #     its own KV cache (0.1–1.0). Only relevant when kv_cache_memory_bytes
-    #     is NOT set. Default when kv_cache_memory_bytes is set: 0.1 (passthrough).
+    #   gpu_memory_utilization: float  — fraction of per-GPU VRAM vLLM may use
+    #     (0.1–1.0). vLLM enforces it as a startup gate — free_per_gpu >=
+    #     gmu * total_per_gpu or the engine refuses to start — and uses it to
+    #     size the KV cache unless kv_cache_memory_bytes is set.
     #
     #   kv_cache_memory_bytes: str — exact KV-cache allocation passed to vLLM at
     #     launch (e.g. "4G", "2048M"). This is a vLLM invocation flag — it controls
     #     how much GPU memory vLLM actually reserves for KV cache at runtime.
     #     If you also set base_residency_mb manually in capabilities_models, set
     #     this to the same value so the scheduler's VRAM estimate matches reality.
-    #     When set, gpu_memory_utilization is ignored by vLLM (overridden to 0.1).
+    #     When set, the KV cache is sized from this value instead of
+    #     gpu_memory_utilization, but the startup gate above still applies, so
+    #     keep gpu_memory_utilization at a value the node's GPUs can satisfy.
     #     Preferred over gpu_memory_utilization for predictable, reproducible budgets.
     #
     #   disable_custom_all_reduce: bool  — disable vLLM's custom all-reduce kernel.
@@ -267,6 +263,17 @@ engines:
     #     Set to "none" to suppress the flag even when inference would match.
     #     Set explicitly to force a specific parser.
     #
+    #   chat_template: str         — custom Jinja chat template replacing the one
+    #     bundled with the model's tokenizer. Passed to vLLM as --chat-template.
+    #     The value is a file name (subdirectories allowed) resolved against the
+    #     worker's persistent template directory /opt/logos-workernode/chat-templates,
+    #     which docker-compose bind-mounts read-only from the host at the same path
+    #     (override the directory with LOGOS_CHAT_TEMPLATE_DIR when running outside
+    #     Docker). Absolute paths are accepted only inside that directory; ".." is
+    #     rejected. A missing file fails the lane spawn with an explicit error
+    #     instead of silently falling back to the model's built-in template.
+    #     Example: "qwen3-tools.jinja"
+    #
     #   chat_template_kwargs: dict — default kwargs merged into the chat template.
     #     Logos first infers a family-level default (e.g. Gemma 4 gets
     #     {enable_thinking: true} automatically). Keys in this field are then
@@ -278,6 +285,11 @@ engines:
     #   extra_args: list           — arbitrary extra CLI flags passed verbatim to
     #     "vllm serve". Use for features not yet exposed as first-class fields.
 
+    # Profile-level keys (min_context_fraction, base_residency_mb, kv_budget_mb,
+    # ...) do NOT belong in model_overrides: they are not vLLM engine settings.
+    # If one slips in here it is auto-routed to the model profile registry with
+    # a warning; the documented home is an inline entry under
+    # logos.capabilities_models (see above).
     model_overrides:
       Qwen/Qwen2.5-Coder-7B-Instruct-AWQ:
         quantization: awq
@@ -310,6 +322,12 @@ engines:
         chat_template_kwargs:
           enable_thinking: false          # disable chain-of-thought
 
+      # Custom chat template: the file must exist in the persistent template
+      # directory (/opt/logos-workernode/chat-templates on the host, mounted at
+      # the same path in the container) or the lane refuses to start.
+      some-org/some-model-with-custom-prompting:
+        chat_template: some-model-tools.jinja
+
 
 # ── Static lane configuration (optional) ─────────────────────────────────────
 # Normally the Logos server creates and destroys lanes dynamically.
@@ -318,23 +336,17 @@ engines:
 #
 # Lane fields:
 #
-#   model: str (required)        — HuggingFace Hub ID for vLLM lanes;
-#                                  Ollama tag (name:tag) for Ollama lanes.
-#   vllm: bool                   — true = vLLM lane, false = Ollama lane.
+#   model: str (required)        — HuggingFace Hub ID.
+#   vllm: bool                   — always true; kept for compatibility with
+#                                  existing configs. Explicitly setting it to
+#                                  false is rejected (the legacy engine was
+#                                  removed).
 #   lane_id: str                 — stable identifier for this lane. Defaults to
 #                                  the model name. Set explicitly when running
 #                                  multiple lanes of the same model.
 #   gpu_devices: "all"|"0,1"    — GPUs this lane may use. Default: all.
 #
-#   ── Ollama-lane fields (vllm: false) ────────────────────────────────────
-#   num_parallel: int            — concurrent requests Ollama handles per lane.
-#   context_length: int          — maximum context window in tokens.
-#   keep_alive: str              — how long Ollama keeps the model warm after
-#                                  the last request ("5m", "1h", "-1" = forever).
-#   kv_cache_type: str           — KV cache quantization: "f16" | "q8_0" | "q4_0".
-#   flash_attention: bool        — enable Flash Attention in Ollama.
-#
-#   ── vLLM-lane fields (vllm: true) ───────────────────────────────────────
+#   ── vLLM-lane fields ─────────────────────────────────────────────────────
 #   vllm_config:                 — vLLM-specific settings for this lane.
 #     tensor_parallel_size: int  — number of GPUs for tensor parallelism.
 #     max_model_len: int         — context length cap.
@@ -343,29 +355,26 @@ engines:
 #     quantization: str          — "awq" | "gptq" | "fp8" | etc.
 #     enforce_eager: bool        — disable CUDA graph capture.
 #     enable_prefix_caching: bool
+#     enable_prompt_tokens_details: bool — report usage.prompt_tokens_details
+#                                          (cached_tokens); on by default.
 #     disable_custom_all_reduce: bool
 #     disable_nccl_p2p: bool
 #     attention_backend: str
 #     cpu_offload_gb: float
 #     tool_call_parser: str       — empty = infer from model name.
 #     reasoning_parser: str       — empty = infer; "none" = suppress flag.
+#     chat_template: str          — template file name under
+#                                   /opt/logos-workernode/chat-templates.
 #     chat_template_kwargs: dict  — merged on top of inferred family defaults.
 #     extra_args: list[str]
 
 lanes: []
 # lanes:
 #   - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
-#     vllm: true
 #     vllm_config:
 #       tensor_parallel_size: 1
 #       kv_cache_memory_bytes: 4G
 #       quantization: awq
-#
-#   - model: qwen2.5-coder:7b
-#     vllm: false
-#     num_parallel: 4
-#     context_length: 8192
-#     keep_alive: 10m
 
 
 # ── Static lanes (pinned, never removed by the capacity planner) ─────────────
@@ -381,7 +390,6 @@ lanes: []
 static_lanes: []
 # static_lanes:
 #   - model: Qwen/Qwen2.5-Coder-7B-Instruct-AWQ
-#     vllm: true
 #     gpu_devices: "0"
 #     vllm_config:
 #       tensor_parallel_size: 1
@@ -389,7 +397,6 @@ static_lanes: []
 #       quantization: awq
 #
 #   - model: meta-llama/Llama-3.1-8B-Instruct
-#     vllm: true
 #     gpu_devices: "1"
 #     vllm_config:
 #       tensor_parallel_size: 1
@@ -410,7 +417,7 @@ static_lanes: []
 #   sleeping_residual_mb: int  — VRAM retained while the model is asleep
 #                                (vLLM sleep mode, step 5/5 of calibration).
 #
-#   engine: str                — "vllm" or "ollama".
+#   engine: str                — "vllm".
 #   tensor_parallel_size: int  — TP degree this profile applies to.
 #
 #   kv_per_token_bytes: int    — bytes of KV cache per token per layer.

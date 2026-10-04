@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
@@ -15,15 +16,25 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.CalibrateUncalibratedRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.ConnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DrainLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LaneLoadStatusRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.StopCalibrationRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdminClient;
 
 @RestController
@@ -31,12 +42,20 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdmin
 public class ProviderController {
 
     private final ProviderService providerService;
+    private final PriceUpdaterService priceUpdaterService;
+    private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
+    private final ModelRepository modelRepository;
     private final OrchestratorWorkerAdminClient workerAdminClient;
+    private final OrchestratorModelSyncClient modelSyncClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, OrchestratorWorkerAdminClient workerAdminClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService, ModelRepository modelRepository, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper) {
         this.providerService = providerService;
+        this.priceUpdaterService = priceUpdaterService;
+        this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
+        this.modelRepository = modelRepository;
         this.workerAdminClient = workerAdminClient;
+        this.modelSyncClient = modelSyncClient;
         this.objectMapper = objectMapper;
     }
 
@@ -83,7 +102,17 @@ public class ProviderController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> connectModelProvider(
             @RequestBody ConnectModelProviderRequestDTO req) {
-        return ResponseEntity.ok(providerService.connectModelProvider(req));
+        ResponseEntity<?> response = ResponseEntity.ok(providerService.connectModelProvider(req));
+        // A model only becomes priceable once it is linked to a cloud provider:
+        // before the link, updatePricesForModelAsync finds no cloud pair and
+        // skips. Without this trigger prices stayed absent until the next daily
+        // refresh, so freshly connected cloud models reported a cost of zero.
+        if (req.modelId() != null) {
+            priceUpdaterService.updatePricesForModelAsync(req.modelId());
+            modelRepository.findById(req.modelId()).ifPresent(model ->
+                modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(req.modelId(), model.getName()));
+        }
+        return response;
     }
 
     @PostMapping("/disconnect_model_provider")
@@ -95,6 +124,28 @@ public class ProviderController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         }
+    }
+
+    @PostMapping("/refresh_models")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> refreshModels() {
+        try {
+            return ResponseEntity.ok(providerService.refreshModels());
+        } catch (IllegalStateException e) {
+            // The sync was never handed to the orchestrator — reporting 200
+            // would leave the UI polling a status that can never arrive.
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/model_sync_status")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> modelSyncStatus() {
+        // null means "could not be read" and keeps the UI polling; Map.of
+        // rejects null values.
+        Map<String, Object> body = new HashMap<>();
+        body.put("running", modelSyncClient.isSyncRunning());
+        return ResponseEntity.ok(body);
     }
 
     @PostMapping("/get_provider_models")
@@ -122,6 +173,47 @@ public class ProviderController {
         }
     }
 
+    @PostMapping("/providers/logosnode/stop_calibration")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> stopCalibration(@RequestBody StopCalibrationRequestDTO req) {
+        if (req.providerId() == null) return ResponseEntity.badRequest().body(Map.of("error", "provider_id is required"));
+        try {
+            return workerAdminClient.stopCalibration(req.providerId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/add")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> addLane(@RequestBody AddLaneRequestDTO req) {
+        if (req.providerId() == null || req.lane() == null || req.lane().isEmpty())
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane are required"));
+        try {
+            return workerAdminClient.addLane(req.providerId(), req.lane());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/load_status")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> laneLoadStatus(@RequestBody LaneLoadStatusRequestDTO req) {
+        if (req.providerId() == null || req.model() == null || req.model().isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and model are required"));
+        try {
+            return workerAdminClient.getLaneLoadStatus(req.providerId(), req.model());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
     @PostMapping("/providers/logosnode/lanes/delete")
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> deleteLane(@RequestBody DeleteLaneRequestDTO req) {
@@ -134,6 +226,53 @@ public class ProviderController {
         } catch (Exception e) {
             return ResponseEntity.status(503).body(Map.of("error", e.getMessage()));
         }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/sleep")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> sleepLane(@RequestBody SleepLaneRequestDTO req) {
+        if (req.providerId() == null || req.laneId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        try {
+            return workerAdminClient.sleepLane(req.providerId(), req.laneId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/drain")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> drainLane(@RequestBody DrainLaneRequestDTO req) {
+        if (req.providerId() == null || req.laneId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        try {
+            return workerAdminClient.drainLane(req.providerId(), req.laneId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
+    @PostMapping("/providers/logosnode/lanes/wake")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> wakeLane(@RequestBody WakeLaneRequestDTO req) {
+        if (req.providerId() == null || req.laneId() == null)
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        try {
+            return workerAdminClient.wakeLane(req.providerId(), req.laneId());
+        } catch (RestClientResponseException e) {
+            return ResponseEntity.status(e.getStatusCode()).body(parseOrWrap(e.getResponseBodyAsString()));
+        } catch (Exception e) {
+            return ResponseEntity.status(503).body(errorBody(e));
+        }
+    }
+
+    /** e.getMessage() is null for some exceptions, and Map.of rejects null values. */
+    private Object errorBody(Exception e) {
+        return Map.of("error", e.getMessage() != null ? e.getMessage() : e.toString());
     }
 
     private Object parseOrWrap(String body) {

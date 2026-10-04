@@ -10,94 +10,284 @@
       placeholder="Search models..."
       (valueChange)="search.set($event)"
     />
-    <button type="button" class="btn-primary" (click)="openAddDialog()">
-      <i class="pi pi-plus" aria-hidden="true"></i> Add Model
-    </button>
+    @if (role() === 'logos_admin') {
+      <button type="button" class="btn-primary" (click)="openAddDialog()">
+        <i class="pi pi-plus" aria-hidden="true"></i> Add Model
+      </button>
+    }
   </div>
 
   @if (loadError()) {
     <app-error-message variant="banner" message="Failed to load models, please refresh." />
   }
 
-  <!-- ── Table ──────────────────────────────────────────────────────────── -->
-  <app-data-table
-    [columns]="['MODEL NAME', 'DESCRIPTION', 'TAGS', 'WEIGHTS', '']"
-    gridCols="220fr 260fr 160fr 180fr 72px"
-    [loading]="loading()"
-    [empty]="filteredModels().length === 0"
-    emptyMessage="No models match your search."
-  >
-    @for (model of filteredModels(); track model.id) {
-      <div class="table-row" role="row">
-        <div class="col-name name-cell" role="cell">
+<!-- ── Table ──────────────────────────────────────────────────────────── -->
+<app-data-table
+  [columns]="[
+    'MODEL NAME',
+    'DESCRIPTION',
+    ...(role() === 'logos_admin' ? ['TAGS', 'ALIASES'] : []),
+    'CAPABILITIES',
+    'PROFILE',
+    ...(role() === 'logos_admin' ? ['LAST USED', 'WEIGHTS', ''] : [])
+  ]"
+  [gridCols]="
+    role() === 'logos_admin'
+      ? '180fr 180fr 110fr 120fr 100fr 110fr 120fr 150fr 72px'
+      : '200fr 240fr 180fr 140fr'
+  "
+  [loading]="loading()"
+  [empty]="filteredModels().length === 0"
+  [sortableColumn]="role() === 'logos_admin' ? 6 : -1"
+  [sortDirection]="lastUsedSortDirection"
+  (sortToggle)="toggleLastUsedSort()"
+  emptyMessage="No models match your search."
+>
+  @for (model of filteredModels(); track model.id) {
+    <div class="table-row">
+
+      <!-- Model Name -->
+      <div class="col-name name-cell" role="cell">
+        @if (role() === 'logos_admin') {
+          <button
+            type="button"
+            class="model-name"
+            (click)="openModel(model)"
+          >
+            {{ model.name }}
+          </button>
+        } @else {
           <span class="model-name">{{ model.name }}</span>
+        }
+
+        @if (role() === 'logos_admin') {
           <div class="name-mobile-actions">
             <button
               class="btn-icon"
               type="button"
               [attr.aria-label]="'Edit model ' + model.name"
-              (click)="openEditDialog(model)"
+              (click)="openEditDialog(model); $event.stopPropagation()"
             >
               <i class="pi pi-pencil" aria-hidden="true"></i>
             </button>
+
             <button
               class="btn-icon btn-icon--danger"
               type="button"
               [attr.aria-label]="'Delete model ' + model.name"
-              (click)="openDeleteDialog(model)"
+              (click)="openDeleteDialog(model); $event.stopPropagation()"
             >
               <i class="pi pi-trash" aria-hidden="true"></i>
             </button>
           </div>
-        </div>
+        }
+      </div>
 
-        <div class="col-desc desc-cell" role="cell" data-label="Description">
-          <span class="desc-text">{{ model.description || '-' }}</span>
-        </div>
+      <!-- Description -->
+      <div
+        class="col-desc desc-cell"
+        role="cell"
+        data-label="Description"
+      >
+        <span class="desc-text">
+          {{ model.description || '-' }}
+        </span>
+      </div>
 
-        <div class="col-tags tags-cell" role="cell" data-label="Tags">
-          <span class="tags-text">{{ model.tags || '-' }}</span>
+      <!-- Tags: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-tags tags-cell"
+          role="cell"
+          data-label="Tags"
+        >
+          <span class="tags-text">
+            {{ model.tags || '-' }}
+          </span>
         </div>
+      }
 
-        <div class="col-weights weights-cell" role="cell" data-label="Weights">
+      <!-- Aliases: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-aliases tags-cell"
+          role="cell"
+          data-label="Aliases"
+        >
+          <span class="tags-text">
+            {{ model.aliases || '-' }}
+          </span>
+        </div>
+      }
+
+      <!-- Capabilities -->
+      <div
+        class="col-capabilities capabilities-cell"
+        role="cell"
+        data-label="Capabilities"
+      >
+        @if (getCapabilities(model.id); as capabilities) {
+          <div class="capability-chips">
+
+            @if (capabilities.supports_function_calling) {
+              <span
+                class="capability-chip capability-chip--supported"
+                role="img"
+                aria-label="Supports function calling"
+                title="Function Calling"
+              >
+                <i class="pi pi-code" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (capabilities.supports_vision) {
+              <span
+                class="capability-chip capability-chip--supported"
+                role="img"
+                aria-label="Supports vision"
+                title="Vision"
+              >
+                <i class="pi pi-eye" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (capabilities.supports_reasoning) {
+              <span
+                class="capability-chip capability-chip--supported"
+                role="img"
+                aria-label="Supports reasoning"
+                title="Reasoning"
+              >
+                <i class="pi pi-lightbulb" aria-hidden="true"></i>
+              </span>
+            }
+
+            @if (
+              !capabilities.supports_function_calling &&
+              !capabilities.supports_vision &&
+              !capabilities.supports_reasoning
+            ) {
+              <span>-</span>
+            }
+
+          </div>
+        } @else {
+          <span>-</span>
+        }
+      </div>
+
+      <!-- Profile spider -->
+      <div class="col-profile profile-cell" role="cell" data-label="Profile">
+        @if (hasProfileRatings(model)) {
+          <app-model-profile-radar [ratings]="model.profile_ratings!" [size]="88" />
+        } @else {
+          <span>-</span>
+        }
+      </div>
+
+      <!-- Last used: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-last-used last-used-cell"
+          role="cell"
+          data-label="Last used"
+        >
+          @if (formatLastUsed(model.last_used_at); as lastUsed) {
+            <span
+              class="last-used"
+              [class.last-used--stale]="isStaleModel(model.last_used_at)"
+              [attr.title]="lastUsedTooltip(model.last_used_at)"
+            >
+              <span class="last-used__primary">{{ lastUsed.primary }}</span>
+              @if (lastUsed.age) {
+                <span class="last-used__age">{{ lastUsed.age }}</span>
+              }
+            </span>
+          }
+        </div>
+      }
+
+      <!-- Weights: logos_admin only -->
+      @if (role() === 'logos_admin') {
+        <div
+          class="col-weights weights-cell"
+          role="cell"
+          data-label="Weights"
+        >
           <div class="weights-chips">
-            <span class="wchip wchip--latency" [class.wchip--null]="model.weight_latency == null" title="Latency"
-              >L <span class="wchip-val">{{ model.weight_latency ?? '-' }}</span></span
+
+            <span
+              class="wchip wchip--latency"
+              [class.wchip--null]="model.weight_latency == null"
+              title="Latency"
             >
-            <span class="wchip wchip--accuracy" [class.wchip--null]="model.weight_accuracy == null" title="Accuracy"
-              >A <span class="wchip-val">{{ model.weight_accuracy ?? '-' }}</span></span
+              L
+              <span class="wchip-val">
+                {{ model.weight_latency ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--accuracy"
+              [class.wchip--null]="model.weight_accuracy == null"
+              title="Accuracy"
             >
-            <span class="wchip wchip--cost" [class.wchip--null]="model.weight_cost == null" title="Cost"
-              >C <span class="wchip-val">{{ model.weight_cost ?? '-' }}</span></span
+              A
+              <span class="wchip-val">
+                {{ model.weight_accuracy ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--cost"
+              [class.wchip--null]="model.weight_cost == null"
+              title="Cost"
             >
-            <span class="wchip wchip--quality" [class.wchip--null]="model.weight_quality == null" title="Quality"
-              >Q <span class="wchip-val">{{ model.weight_quality ?? '-' }}</span></span
+              C
+              <span class="wchip-val">
+                {{ model.weight_cost ?? '-' }}
+              </span>
+            </span>
+
+            <span
+              class="wchip wchip--quality"
+              [class.wchip--null]="model.weight_quality == null"
+              title="Quality"
             >
+              Q
+              <span class="wchip-val">
+                {{ model.weight_quality ?? '-' }}
+              </span>
+            </span>
+
           </div>
         </div>
 
+        <!-- Actions: logos_admin only -->
         <div class="col-actions actions-cell" role="cell">
           <button
             class="btn-icon"
             type="button"
             [attr.aria-label]="'Edit model ' + model.name"
-            (click)="openEditDialog(model)"
+            (click)="openEditDialog(model); $event.stopPropagation()"
           >
             <i class="pi pi-pencil" aria-hidden="true"></i>
           </button>
+
           <button
             class="btn-icon btn-icon--danger"
             type="button"
             [attr.aria-label]="'Delete model ' + model.name"
-            (click)="openDeleteDialog(model)"
+            (click)="openDeleteDialog(model); $event.stopPropagation()"
           >
             <i class="pi pi-trash" aria-hidden="true"></i>
           </button>
         </div>
-      </div>
-    }
-  </app-data-table>
-</div>
+      }
+
+    </div>
+  }
+</app-data-table>
 
 <!-- ── Delete Dialog ──────────────────────────────────────────────────────── -->
 <app-modal-confirm
@@ -160,18 +350,17 @@
         autocomplete="off"
       />
     </div>
-
-    <p class="form-section-label form-section-label--mt">Routing</p>
     <div class="form-field">
-      <label class="field-label" for="add-parallel">Parallelism</label>
+      <label class="field-label" for="add-aliases">Aliases</label>
       <input
-        id="add-parallel"
-        class="field-input field-input--short"
-        type="number"
-        min="1"
-        [value]="addParallel()"
-        (input)="addParallel.set($any($event.target).value)"
+        id="add-aliases"
+        class="field-input"
+        type="text"
+        placeholder="local-most-powerful"
+        [value]="addAliases()"
+        (input)="addAliases.set($any($event.target).value)"
         [disabled]="addLoading()"
+        autocomplete="off"
       />
     </div>
 
@@ -227,6 +416,30 @@
           [disabled]="addLoading()"
         />
       </div>
+    </div>
+
+    <p class="form-section-label form-section-label--mt">Profile (Likert 1–5)</p>
+    <p class="form-hint">Spider-chart axes for latency, quality, and price. Leave blank to omit.</p>
+    <div class="profile-editor">
+      <div class="form-row">
+        @for (axis of profileAxes; track axis) {
+          <div class="form-field">
+            <label class="field-label" [attr.for]="'add-profile-' + axis">{{ axis | titlecase }}</label>
+            <input
+              [id]="'add-profile-' + axis"
+              class="field-input field-input--short"
+              type="number"
+              min="1"
+              max="5"
+              step="1"
+              [value]="profileValue(addProfile(), axis)"
+              (input)="setProfileAxis('add', axis, $any($event.target).value)"
+              [disabled]="addLoading()"
+            />
+          </div>
+        }
+      </div>
+      <app-model-profile-radar [ratings]="addProfile()" [size]="120" />
     </div>
 
     @if (addError()) {
@@ -300,18 +513,17 @@
         autocomplete="off"
       />
     </div>
-
-    <p class="form-section-label form-section-label--mt">Routing</p>
     <div class="form-field">
-      <label class="field-label" for="edit-parallel">Parallelism</label>
+      <label class="field-label" for="edit-aliases">Aliases</label>
       <input
-        id="edit-parallel"
-        class="field-input field-input--short"
-        type="number"
-        min="1"
-        [value]="editParallel()"
-        (input)="editParallel.set($any($event.target).value)"
+        id="edit-aliases"
+        class="field-input"
+        type="text"
+        placeholder="local-most-powerful"
+        [value]="editAliases()"
+        (input)="editAliases.set($any($event.target).value)"
         [disabled]="editLoading()"
+        autocomplete="off"
       />
     </div>
 
@@ -367,6 +579,30 @@
           [disabled]="editLoading()"
         />
       </div>
+    </div>
+
+    <p class="form-section-label form-section-label--mt">Profile (Likert 1–5)</p>
+    <p class="form-hint">Spider-chart axes for latency, quality, and price.</p>
+    <div class="profile-editor">
+      <div class="form-row">
+        @for (axis of profileAxes; track axis) {
+          <div class="form-field">
+            <label class="field-label" [attr.for]="'edit-profile-' + axis">{{ axis | titlecase }}</label>
+            <input
+              [id]="'edit-profile-' + axis"
+              class="field-input field-input--short"
+              type="number"
+              min="1"
+              max="5"
+              step="1"
+              [value]="profileValue(editProfile(), axis)"
+              (input)="setProfileAxis('edit', axis, $any($event.target).value)"
+              [disabled]="editLoading()"
+            />
+          </div>
+        }
+      </div>
+      <app-model-profile-radar [ratings]="editProfile()" [size]="120" />
     </div>
 
     @if (editError()) {

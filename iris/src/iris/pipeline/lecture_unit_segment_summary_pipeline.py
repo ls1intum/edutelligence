@@ -1,3 +1,4 @@
+from threading import Event
 from typing import Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
@@ -6,8 +7,10 @@ from langchain_core.runnables import Runnable
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
 
+from iris.common.cancellation import raise_if_cancelled
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
+from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import (
     CompletionArguments,
     LlmRequestHandler,
@@ -19,6 +22,7 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
 )
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
+from iris.vector_database.database import batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -52,11 +56,13 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         lecture_unit_dto: LectureUnitDTO,
         local: bool = False,
         callback: Optional[StatusCallback] = None,
+        cancel_event: Optional[Event] = None,
     ) -> None:
         super().__init__(implementation_id="lecture_unit_segment_summary_pipeline")
         self.weaviate_client = client
         self.lecture_unit_dto = lecture_unit_dto
         self.callback = callback
+        self.cancel_event = cancel_event
 
         self.lecture_unit_segment_collection = init_lecture_unit_segment_schema(client)
         self.lecture_transcription_collection = init_lecture_transcription_schema(
@@ -84,10 +90,16 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
     @observe(name="Lecture Unit Segment Summary Pipeline")
     def __call__(self) -> [str]:
+        cancel_event = self.cancel_event
         slide_number_start, slide_number_end = self._get_slide_range()
 
         summaries = []
         for slide_index in range(slide_number_start, slide_number_end + 1):
+            raise_if_cancelled(
+                cancel_event,
+                self.lecture_unit_dto.lecture_unit_id,
+                "lecture unit segment summary",
+            )
             if self.callback is not None:
                 self.callback.update()
             transcriptions = self._get_transcriptions(slide_index)
@@ -239,6 +251,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         display_page_number: int,
         hidden_until=None,
     ):
+        job_handler = getattr(self, "job_handler", ingestion_job_handler)
         lecture_filter = Filter.by_property(
             LectureUnitSegmentSchema.COURSE_ID.value
         ).equal(self.lecture_unit_dto.course_id)
@@ -256,65 +269,46 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                 LectureUnitSegmentSchema.BASE_URL.value
             ).equal(self.lecture_unit_dto.base_url)
 
-        lectures = self.lecture_unit_segment_collection.query.fetch_objects(
-            filters=lecture_filter, limit=1
-        ).objects
+        embedding = self.llm_embedding.embed(summary)
+        with batch_update_lock:
+            with job_handler.current_job_guard(
+                self.lecture_unit_dto.base_url,
+                self.lecture_unit_dto.course_id,
+                self.lecture_unit_dto.lecture_id,
+                self.lecture_unit_dto.lecture_unit_id,
+                self.cancel_event,
+                "lecture unit segment write",
+            ):
+                lectures = self.lecture_unit_segment_collection.query.fetch_objects(
+                    filters=lecture_filter, limit=1
+                ).objects
 
-        # transcriptions = self._get_transcriptions(slide_number)
-        # slides = self._get_slides(slide_number)
+                if len(lectures) == 0:
+                    self.lecture_unit_segment_collection.data.insert(
+                        properties={
+                            LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
+                            LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
+                            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
+                            LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
+                            LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
+                            LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
+                            LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
+                            LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
+                        },
+                        vector=embedding,
+                    )
+                    return
 
-        if len(lectures) == 0:
-            # Insert new lecture
-            self.lecture_unit_segment_collection.data.insert(
-                properties={
-                    LectureUnitSegmentSchema.COURSE_ID.value: self.lecture_unit_dto.course_id,
-                    LectureUnitSegmentSchema.LECTURE_ID.value: self.lecture_unit_dto.lecture_id,
-                    LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: self.lecture_unit_dto.lecture_unit_id,
-                    LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
-                    LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
-                    LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
-                    LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
-                    LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
-                },
-                vector=self.llm_embedding.embed(summary),
-            )
-            # lecture = self.lecture_unit_segment_collection.query
-            # .fetch_objects(filters=lecture_filter, limit=1).objects[0]
-            # transcription_references = []
-            # for transcription in transcriptions.objects:
-            #     transcription_reference = DataReference(
-            #         from_uuid=lecture.objects[0].uuid.int,
-            #         from_property=LectureUnitSegmentSchema.value,
-            #         to_uuid=transcription.uuid.int
-            #     )
-            #     transcription_references.append(transcription_reference)
-            # slide_references = []
-            # for slide in slides.objects:
-            #     slide_reference = DataReference(
-            #         from_uuid=lecture.objects[0].uuid.int,
-            #         from_property=LectureUnitSegmentSchema.SLIDES.value,
-            #         to_uuid=slide.uuid.int
-            #     )
-            #     slide_references.append(slide_reference)
-            #
-            # self.lecture_unit_segment_collection.data.reference_add_many(transcription_references)
-            # self.lecture_unit_segment_collection.data.reference_add_many(slide_references)
-            return
-
-        # Update existing lecture
-        # transcription_uuids = [t.uuid for t in transcriptions]
-        # slide_uuids = [s.uuid for s in slides]
-        lecture_uuid = lectures[0].uuid
-
-        self.lecture_unit_segment_collection.data.update(
-            uuid=lecture_uuid,
-            properties={
-                LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
-                LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
-                LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
-            },
-            vector=self.llm_embedding.embed(summary),
-        )
+                lecture_uuid = lectures[0].uuid
+                self.lecture_unit_segment_collection.data.update(
+                    uuid=lecture_uuid,
+                    properties={
+                        LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: summary,
+                        LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
+                        LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
+                    },
+                    vector=embedding,
+                )
 
         # self.lecture_unit_segment_collection.data.reference_replace(
         #     from_uuid=lecture_uuid,

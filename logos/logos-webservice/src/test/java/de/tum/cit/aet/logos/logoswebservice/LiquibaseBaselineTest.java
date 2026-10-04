@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -48,12 +49,104 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration045_teamRepositoriesExist() {
+        assertThat(tableExists("team_repositories")).isTrue();
+        assertThat(columnExists("team_repositories", "repo_url")).isTrue();
+        assertThat(columnExists("team_repositories", "repo_slug")).isTrue();
+        assertThat(columnExists("team_repositories", "branch")).isTrue();
+        assertThat(columnExists("team_repositories", "paths")).isTrue();
+        Integer uniqueIndex = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "uq_team_repositories_team_slug");
+        assertThat(uniqueIndex).isEqualTo(1);
+    }
+
+    @Test
     void migration001_keycloakColumnsExist() {
         assertThat(columnExists("users", "keycloak_id")).isTrue();
         assertThat(columnExists("users", "last_synced_at")).isTrue();
         assertThat(columnExists("users", "is_active")).isTrue();
         assertThat(columnExists("teams", "keycloak_group")).isTrue();
         assertThat(columnExists("team_members", "source")).isTrue();
+    }
+
+    @Test
+    void providerPerformanceIndexExists() {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_performance_window");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void migration027_rateLimitAdmittedColumnAndForwardingIndexExist() {
+        // The /me/keys usage window filters log_entry on both of these:
+        // rejected requests are excluded via the column, and the
+        // (api_key_id, timestamp_forwarding) range needs its index.
+        assertThat(columnExists("log_entry", "rate_limit_admitted")).isTrue();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_api_key_timestamp_forwarding");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void migration028_rateLimitCompletionResponseIndexExists() {
+        // The completion half of the /me/keys usage window filters log_entry
+        // on timestamp_response per key; it needs its own
+        // (api_key_id, timestamp_response) index, since the 027 forwarding
+        // index cannot satisfy the `timestamp_response >= :since` OR disjunct.
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+            Integer.class, "idx_log_entry_api_key_timestamp_response");
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void migration042_modelNameColumnsAndOrphanGrainIndexExist() {
+        // Deleting a model captures its name on the usage rows so the per-model
+        // statistics survive; the rollup grain must tell orphans apart by that
+        // name, so the unique grain index carries the column.
+        assertThat(columnExists("log_entry", "model_name")).isTrue();
+        assertThat(columnExists("log_entry_hourly_stats", "model_name")).isTrue();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes"
+            + " WHERE schemaname='public' AND indexname='ux_log_entry_hourly_stats_grain'"
+            + " AND indexdef LIKE '%model_name%'",
+            Integer.class);
+        assertThat(count).isEqualTo(1);
+        // A delete can outlive the rollup pass's write lag, in which case the
+        // updated_at stamp alone is never re-scanned; the delete's queue of
+        // affected hours is what the pass falls back on.
+        assertThat(tableType("log_entry_rollup_dirty_hours")).isEqualTo("BASE TABLE");
+    }
+
+    @Test
+    void migration029_providerSnapshotsTableRenamed() {
+        // The physical table carries the engine-neutral name now...
+        assertThat(tableType("provider_snapshots")).isEqualTo("BASE TABLE");
+        // ...while the pre-rename name survives exactly one release as a
+        // pass-through view, so an orchestrator rolled back to the previous
+        // release can still write it (see migration 029's compatibility view).
+        assertThat(tableType("ollama_provider_snapshots")).isEqualTo("VIEW");
+    }
+
+    @Test
+    void migration029_compatibilityViewMirrorsTheRenamedTable() {
+        // The view is a plain SELECT * over the renamed table, so it must
+        // expose every column the previous release wrote: the identifier, the
+        // base metrics, and the richer runtime/scheduler payloads added later.
+        // A rolled-back orchestrator INSERTs through this view.
+        assertThat(columns("ollama_provider_snapshots"))
+                .contains("id", "provider_id", "snapshot_ts", "loaded_models", "runtime_payload", "scheduler_signals");
+    }
+
+    @Test
+    void migration030_allowsStartWithoutOllamaTypedProviders() {
+        // The 030 gate must be a no-op on a clean schema (the provider_type
+        // enum makes legacy local-provider rows impossible) — reaching this test already
+        // proves the changelog ran to the end.
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM providers", Integer.class)).isZero();
     }
 
     @Test
@@ -80,6 +173,9 @@ class LiquibaseBaselineTest {
         assertThat(key.get("name")).isEqualTo("Ada Lovelace-Team Alpha-key");
         assertThat(key.get("is_active")).isEqualTo(true);
         assertThat(key.get("environment")).isEqualTo("-");
+        // The 002 backfill SQL writes the legacy default 1, which is preserved
+        // as-is (changeset 039 deliberately does not rewrite existing rows;
+        // 1 keeps acting as an explicit LOW override until an admin resets it).
         assertThat(((Number) key.get("default_priority")).intValue()).isEqualTo(1);
         assertThat(key.get("use_custom_permissions")).isEqualTo(false);
     }
@@ -117,6 +213,49 @@ class LiquibaseBaselineTest {
         assertThat(developerKeyCount(inactiveUser, teamId)).isEqualTo(0);
     }
 
+    @Test
+    void migration039_preservesExistingPrioritiesAndUnsetsFutureDefaults() {
+        // A stored 1 on a developer key is ambiguous: legacy factory/backfill
+        // default or a deliberately pinned LOW override. There is no reliable
+        // provenance, so 039 must leave every existing row untouched (a bulk
+        // reset would silently lift pinned-LOW keys to team/policy priority
+        // without owner intent) and only re-point the column default so
+        // future raw inserts use the "unset" marker 0.
+        Integer userId = jdbc.queryForObject(
+            "INSERT INTO users (username, role, is_active) VALUES ('key-reset', 'app_developer', true) RETURNING id",
+            Integer.class);
+        Integer teamId = jdbc.queryForObject(
+            "INSERT INTO teams (name) VALUES ('Reset') RETURNING id", Integer.class);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-pinned-low-dev', 'pinned low dev', 'developer', ?, ?, 1, true)", teamId, userId);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-explicit-dev', 'explicit dev', 'developer', ?, ?, 5, true)", teamId, userId);
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, default_priority, is_active) "
+            + "VALUES ('lg-app-key', 'app key', 'application', ?, ?, 1, true)", teamId, userId);
+
+        runMigration039();
+
+        // Existing values survive, including a developer key pinned to LOW.
+        assertThat(keyPriority("lg-pinned-low-dev")).isEqualTo(1);
+        assertThat(keyPriority("lg-explicit-dev")).isEqualTo(5);
+        assertThat(keyPriority("lg-app-key")).isEqualTo(1);
+
+        // A new row that omits default_priority gets the new default 0.
+        jdbc.update("INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, is_active) "
+            + "VALUES ('lg-default-dev', 'default dev', 'developer', ?, ?, true)", teamId, userId);
+        assertThat(keyPriority("lg-default-dev")).isEqualTo(0);
+    }
+
+    private int keyPriority(String keyValue) {
+        Number priority = jdbc.queryForObject(
+            "SELECT default_priority FROM api_keys WHERE key_value=?", Number.class, keyValue);
+        return priority.intValue();
+    }
+
+    private void runMigration039() {
+        jdbc.update("ALTER TABLE api_keys ALTER COLUMN default_priority SET DEFAULT 0");
+    }
+
     private int developerKeyCount(Integer userId, Integer teamId) {
         Integer count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM api_keys WHERE user_id=? AND team_id=? AND key_type='developer'",
@@ -151,5 +290,20 @@ class LiquibaseBaselineTest {
             "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='public' AND table_name=? AND column_name=?",
             Integer.class, tableName, columnName);
         return Integer.valueOf(1).equals(count);
+    }
+
+    private String tableType(String tableName) {
+        // Distinguishes a base table from a view: information_schema.tables
+        // lists both, tagged by table_type ('BASE TABLE' vs 'VIEW').
+        return jdbc.queryForObject(
+            "SELECT table_type FROM information_schema.tables WHERE table_schema='public' AND table_name=?",
+            String.class, tableName);
+    }
+
+    private List<String> columns(String tableName) {
+        return jdbc.queryForList(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=? "
+                + "ORDER BY ordinal_position",
+            String.class, tableName);
     }
 }

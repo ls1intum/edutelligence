@@ -16,6 +16,17 @@ import { TeamApiKey, TeamDetail, ApiKeyUpdatePayload } from '../../../shared/mod
 import { TeamManagementService } from '../../../core/services/team-management.service';
 import { SearchInputComponent } from '../../../shared/components/search-input/search-input';
 import { ErrorMessageComponent } from '../../../shared/components/error-message/error-message';
+import {
+  KeySla,
+  SLA_OPTIONS,
+  SLA_PRIORITY,
+  INHERITED_SLA_HINT,
+  effectiveSla,
+  isUnsetPriority,
+  slaHint,
+  slaLabel,
+  slaOfPriority,
+} from '../tabs/key-sla';
 
 const MICRO = 100_000_000;
 
@@ -47,7 +58,6 @@ export class ApiKeyModalComponent implements OnChanges {
   @Input() key: TeamApiKey | null = null;
   @Input() teamId!: number;
   @Input() canEdit = false;
-  @Input() isLogosAdmin = false;
   @Input() team: TeamDetail | null = null;
 
   @Output() closed = new EventEmitter<void>();
@@ -62,7 +72,18 @@ export class ApiKeyModalComponent implements OnChanges {
   fLocalRpm = signal('');
   fLocalTpm = signal('');
   fEnv = signal('');
-  fPriority = signal('0');
+  /**
+   * Selected SLA, or `''` when the key still inherits team/policy priority.
+   * Keeping inherited as a distinct empty value means picking any of the three
+   * real tiers — including the one that matches the effective inherited tier —
+   * is a real change that can pin the key.
+   */
+  fSla = signal<KeySla | ''>('');
+  /** The selection when the dialog opened. Unset stays `''` so a budget-only
+   *  save does not convert an inherited priority into an explicit one. */
+  private initialSla: KeySla | '' = '';
+  /** Effective inherited tier for the placeholder label (team → default). */
+  inheritedEffectiveSla = signal<KeySla>(slaOfPriority(0));
   fLog = signal<'BILLING' | 'FULL'>('BILLING');
   fCustom = signal(false);
 
@@ -97,10 +118,17 @@ export class ApiKeyModalComponent implements OnChanges {
     );
   });
 
-  // ── save / copy ───────────────────────────────────────────────────────────
+  // ── save / copy / rotate ─────────────────────────────────────────────────
   saveLoading = signal(false);
   saveError = signal('');
   copied = signal(false);
+  rotateConfirm = signal(false);
+  rotateLoading = signal(false);
+  rotateError = signal('');
+
+  effectiveKeyValue(): string | null {
+    return this.key?.key_value ?? null;
+  }
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['visible']?.currentValue && this.key) {
@@ -117,11 +145,20 @@ export class ApiKeyModalComponent implements OnChanges {
     this.fLocalRpm.set(s.local_rpm_limit && s.local_rpm_limit > 0 ? String(s.local_rpm_limit) : '');
     this.fLocalTpm.set(s.local_tpm_limit && s.local_tpm_limit > 0 ? String(s.local_tpm_limit) : '');
     this.fEnv.set(key.environment ?? '');
-    this.fPriority.set(String(key.default_priority ?? 0));
+    this.inheritedEffectiveSla.set(effectiveSla(0, this.team?.priority));
+    if (isUnsetPriority(key.default_priority)) {
+      this.initialSla = '';
+      this.fSla.set('');
+    } else {
+      this.initialSla = slaOfPriority(key.default_priority);
+      this.fSla.set(this.initialSla);
+    }
     this.fLog.set(key.log ?? 'BILLING');
     this.fCustom.set(!!key.use_custom_permissions);
     this.saveError.set('');
     this.copied.set(false);
+    this.rotateConfirm.set(false);
+    this.rotateError.set('');
   }
 
   private async loadPermissions(keyId: number): Promise<void> {
@@ -194,7 +231,7 @@ export class ApiKeyModalComponent implements OnChanges {
   }
 
   async copyKey(): Promise<void> {
-    const v = this.key?.key_value;
+    const v = this.effectiveKeyValue();
     if (!v) return;
     await navigator.clipboard.writeText(v);
     this.copied.set(true);
@@ -202,9 +239,40 @@ export class ApiKeyModalComponent implements OnChanges {
   }
 
   maskedKey(): string {
-    const v = this.key?.key_value;
+    const v = this.effectiveKeyValue();
     if (!v) return '••••••••••••••••••••';
     return `${v.substring(0, 14)}••••••••••••••`;
+  }
+
+  requestRotate(): void {
+    this.rotateError.set('');
+    this.rotateConfirm.set(true);
+  }
+
+  cancelRotate(): void {
+    this.rotateConfirm.set(false);
+    this.rotateError.set('');
+  }
+
+  async confirmRotate(): Promise<void> {
+    const key = this.key;
+    if (!key || this.rotateLoading()) return;
+    this.rotateLoading.set(true);
+    this.rotateError.set('');
+    try {
+      const res = await this.svc.rotateApiKey(key.id);
+      // Update the shared key object in place so a reopened modal shows the
+      // rotated value instead of the pre-rotation one from the parent's
+      // cached list. The object is the same reference held by the team-detail
+      // apiKeys signal and the tab that opened this modal (no refetch happens
+      // in between), so both keep displaying the new key.
+      key.key_value = res.api_key;
+      this.rotateConfirm.set(false);
+    } catch {
+      this.rotateError.set('Failed to rotate key, please try again.');
+    } finally {
+      this.rotateLoading.set(false);
+    }
   }
 
   formatDollars(mc: number | null | undefined): string {
@@ -228,6 +296,30 @@ export class ApiKeyModalComponent implements OnChanges {
     );
   }
 
+  readonly slaOptions = SLA_OPTIONS;
+  readonly slaLabel = slaLabel;
+  readonly inheritedSlaHint = INHERITED_SLA_HINT;
+
+  slaFieldHint(): string {
+    const sla = this.fSla();
+    return sla === '' ? INHERITED_SLA_HINT : slaHint(sla);
+  }
+
+  /**
+   * Developer keys historically used priority `0` for team/policy inheritance
+   * (and changelog `039` left many of them at legacy `1`). The SLA select only
+   * offers the three tiers, so owners need a separate action to write `0` again
+   * after pinning — application keys keep an explicit SLA once chosen.
+   */
+  canResetDeveloperSla(): boolean {
+    return this.key?.key_type === 'developer' && this.fSla() !== '';
+  }
+
+  resetDeveloperSlaToInherited(): void {
+    if (!this.canResetDeveloperSla() || this.saveLoading()) return;
+    this.fSla.set('');
+  }
+
   dollarsToMc = dollarsToMc;
 
   get dialogHeader(): string {
@@ -248,7 +340,6 @@ export class ApiKeyModalComponent implements OnChanges {
 
     const payload: ApiKeyUpdatePayload = {
       environment: key.key_type === 'developer' ? '' : this.fEnv().trim(),
-      default_priority: parseInt(this.fPriority(), 10) || 0,
       log: this.fLog(),
       use_custom_permissions: this.fCustom(),
       budget_limit_micro_cents: this.fBudget().trim() ? (dollarsToMc(this.fBudget()) ?? -1) : -1,
@@ -258,12 +349,21 @@ export class ApiKeyModalComponent implements OnChanges {
       local_tpm_limit: intOrMinus1(this.fLocalTpm()),
     };
 
+    const selectedSla = this.fSla();
+    if (selectedSla !== this.initialSla) {
+      if (selectedSla === '') {
+        // Developer-key reset-to-inherited (see canResetDeveloperSla). Application
+        // keys cannot reach '' from an explicit tier through the UI.
+        payload.default_priority = 0;
+      } else {
+        payload.default_priority = SLA_PRIORITY[selectedSla];
+      }
+    }
+
     const ops: Promise<unknown>[] = [this.svc.updateApiKey(key.id, payload)];
 
     if (this.fCustom()) {
-      if (this.isLogosAdmin) {
-        ops.push(this.svc.setApiKeyProviderPermissions(key.id, [...this.selectedProviderIds()]));
-      }
+      ops.push(this.svc.setApiKeyProviderPermissions(key.id, [...this.selectedProviderIds()]));
       ops.push(this.svc.setApiKeyModelPermissions(key.id, [...this.selectedModelIds()]));
     }
 

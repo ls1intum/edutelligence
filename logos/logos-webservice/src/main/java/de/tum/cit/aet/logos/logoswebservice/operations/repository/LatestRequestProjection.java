@@ -18,4 +18,15 @@ public interface LatestRequestProjection {
     Double getRunSeconds();
     Double getQueueSeconds();
     Double getTotalSeconds();
+    String getProviderType();
+    String getTeamName();
+    String getUsername();
+    String getFullName();
+    String getApiKeyName();
+    String getApiKeyType();
+    String getEnvironment();
+    Long getPromptTokens();
+    Long getCompletionTokens();
+    Long getTotalTokens();
+    Long getCostMicroCents();
 }

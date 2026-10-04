@@ -52,7 +52,7 @@
         </div>
 
         <div class="col-user" role="cell">
-          <app-icon-tile [label]="avatarLetter(m.username)" [seed]="m.username" [size]="28" />
+          <app-icon-tile [label]="avatarLetter(m.username)" [size]="28" />
           <span class="user-name">{{ m.username }}</span>
           @if (devKeyForUser(m.id)?.use_custom_permissions) {
             <span class="badge-custom">custom</span>
@@ -277,7 +277,7 @@
         </div>
 
         <div class="col-user" role="cell">
-          <app-icon-tile [label]="avatarLetter(m.username)" [seed]="m.username" [size]="28" />
+          <app-icon-tile [label]="avatarLetter(m.username)" [size]="28" />
           <span class="user-name">{{ m.username }}</span>
           @if (devKeyForUser(m.id)?.use_custom_permissions) {
             <span class="badge-custom">custom</span>
@@ -476,7 +476,7 @@
             [disabled]="addOwnerLoading()"
             (click)="pickAsOwner(u.id)"
           >
-            <app-icon-tile [label]="avatarLetter(displayName(u))" [seed]="u.username" [size]="24" />
+            <app-icon-tile [label]="avatarLetter(displayName(u))" [size]="24" />
             <span class="pick-name">{{ displayName(u) }}</span>
             @if (isExistingMember(u.id)) {
               <span class="pick-tag">member › owner</span>
@@ -522,7 +522,7 @@
             [disabled]="addMemberLoading()"
             (click)="addMember(u.id, 'member')"
           >
-            <app-icon-tile [label]="avatarLetter(displayName(u))" [seed]="u.username" [size]="24" />
+            <app-icon-tile [label]="avatarLetter(displayName(u))" [size]="24" />
             <span class="pick-name">{{ displayName(u) }}</span>
             @if (addMemberLoading()) {
               <i class="pi pi-spin pi-spinner pick-spinner" aria-hidden="true"></i>
@@ -568,7 +568,6 @@
   [teamId]="teamId"
   [canEdit]="canEdit"
   [team]="team"
-  [isLogosAdmin]="isLogosAdminSignal()"
   (closed)="keyModalOpen.set(false); selectedKey.set(null)"
   (saved)="keyModalOpen.set(false); selectedKey.set(null); refresh.emit()"
 />

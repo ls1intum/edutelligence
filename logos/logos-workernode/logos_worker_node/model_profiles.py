@@ -1,15 +1,19 @@
-"""Model VRAM profiles — observation-only, no estimation.
+"""Model VRAM profiles.
 
 Sources of truth, in priority order:
   1. "calibrated"  — pre-measured by tools/calibrate_vram_profiles.py
   2. "measured"    — derived from live observations (loaded_vram - kv_cache_sent)
   3. "override"    — operator-provided values in config.yml
-  4. "cached"      — any of the above, reloaded from model_profiles.yml on restart
+  4. "hf"          — best-effort estimate from the model's Hugging Face
+                     config.json + safetensors sizes, applied by the
+                     calibration compatibility pre-check (hf_model_info.py)
+                     before a probe has ever run. Below "measured"/"calibrated"
+                     in authority — a real measurement always overwrites it.
+  5. "cached"      — any of the above, reloaded from model_profiles.yml on restart
 
-There is no HF API fetch and no name-based heuristic. If base_residency_mb is
-unknown, placement returns 0 (no estimate) and the lane manager skips auto-
-placement rather than guessing. The calibration script must be run once before
-the worker is expected to make placement decisions for uncalibrated models.
+If base_residency_mb is unknown (no override, no HF estimate, never
+calibrated), placement returns 0 (no estimate) and the lane manager skips
+auto-placement rather than guessing.
 
 Persists in the state directory as model_profiles.yml.
 """
@@ -17,6 +21,8 @@ Persists in the state directory as model_profiles.yml.
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -33,6 +39,78 @@ logger = logging.getLogger(__name__)
 _EMA_ALPHA = 0.3  # weight for new measurement vs historical average
 
 
+def atomic_write_yaml(path: Path, payload: dict[str, Any]) -> None:
+    """Write *payload* to *path* as YAML, atomically and race-free.
+
+    Two unrelated writers keep model_profiles.yml: this module's registry and
+    calibration's ``save_profiles``. A fixed ``<name>.tmp`` sidecar makes them
+    collide — both truncate the same scratch file, so one publishes the
+    other's half-written YAML, and the loser's cleanup can delete the winner's
+    temp file out from under its rename. That reintroduces exactly the torn
+    store the atomic write is here to prevent, so the temp name is unique per
+    call. The rename itself is what makes readers safe: they see the old file
+    or the new one, never a truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        prior_mode: int | None = path.stat().st_mode & 0o777
+    except OSError:
+        prior_mode = None
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w") as f:
+            yaml.safe_dump(payload, f, default_flow_style=False)
+            f.flush()
+            os.fsync(f.fileno())
+        # mkstemp creates 0600. Carry the store's own mode across the replace
+        # so writing it never quietly narrows who can read it; a store being
+        # created for the first time gets the usual umask default instead.
+        if prior_mode is not None:
+            os.chmod(tmp_path, prior_mode)
+        else:
+            os.chmod(tmp_path, 0o666 & ~_current_umask())
+        os.replace(tmp_path, path)
+    finally:
+        # A successful replace already moved it; this only catches the
+        # failure paths, and must never remove the file we just published.
+        tmp_path.unlink(missing_ok=True)
+
+
+def _current_umask() -> int:
+    """Read the process umask without leaving it changed.
+
+    os.umask both sets and returns, so reading it means setting it twice. The
+    window is tiny but real, which is why this is only used for a store that
+    does not exist yet — every later write copies the mode already on disk.
+    """
+    mask = os.umask(0o022)
+    os.umask(mask)
+    return mask
+
+
+def reconfigured_vram_mb(profile: Any, measured_mb: float, gpu_count: int, cache_per_gpu_mb: float) -> float:
+    """Adjust a calibrated total for a different number/size of per-rank KV caches.
+
+    Keep measured weights and overhead; replace only the known KV allocation.
+    Unknown or inconsistent metadata retains the conservative measured total.
+    """
+    old_count = getattr(profile, "tensor_parallel_size", None)
+    old_cache = getattr(profile, "kv_budget_mb", None)
+    if (
+        getattr(profile, "residency_source", None) != "calibrated"
+        or not old_count
+        or old_count <= 0
+        or not old_cache
+        or old_cache <= 0
+        or cache_per_gpu_mb <= 0
+        or gpu_count <= 0
+        or measured_mb <= old_count * old_cache
+    ):
+        return measured_mb
+    return measured_mb - old_count * old_cache + gpu_count * cache_per_gpu_mb
+
+
 def _ema(previous: float | None, current: float) -> float:
     if previous is None:
         return current
@@ -43,7 +121,7 @@ def _ema(previous: float | None, current: float) -> float:
 class ModelProfileRecord:
     loaded_vram_mb: float | None = None
     sleeping_residual_mb: float | None = None
-    disk_size_bytes: int | None = None  # informational; from Ollama /api/tags
+    disk_size_bytes: int | None = None  # informational; legacy field — still read from persisted profiles
     base_residency_mb: float | None = None  # full awake footprint; semantics depend on residency_source (see below)
     kv_budget_mb: float | None = None  # last observed kv_cache_sent (informational)
     # KV cache envelope discovered by calibration on this hardware. The planner
@@ -58,8 +136,25 @@ class ModelProfileRecord:
     observed_gpu_memory_utilization: float | None = None
     min_gpu_memory_utilization_to_load: float | None = None
     tensor_parallel_size: int | None = None
-    kv_per_token_bytes: int | None = None  # manual override only
-    max_context_length: int | None = None  # manual override only
+    kv_per_token_bytes: int | None = None  # manual override or HF precheck
+    # KV heads in the whole model (config's own dtype geometry) — kv_per_token_bytes
+    # above is the WHOLE-MODEL footprint (every head), but vLLM's TP shards KV heads
+    # across ranks (max(1, heads // tp)), so a per-rank budget needs this to scale
+    # kv_per_token_bytes down for the selected tp. None on legacy profiles that
+    # predate this field, or when HF config.json didn't expose enough to derive it.
+    num_key_value_heads: int | None = None
+    max_context_length: int | None = None  # manual override or HF precheck
+    # Smallest share of this model's own context length a lane here may serve,
+    # as a fraction in [0, 1]. Operator-set per model under
+    # logos.capabilities_models; the master's capacity planner refuses to place
+    # a lane below it.
+    #
+    # It exists because a lane's context window comes from whatever KV cache
+    # fits at load time, while the API can only promise the smallest window
+    # across the cluster — so one narrow lane defines what every client is told
+    # the model can do. 1.0 means "full context or nothing", 0 (or unset) means
+    # place it at any width. Manual override only; calibration never sets it.
+    min_context_fraction: float | None = None
     measurement_count: int = 0
     last_measured_epoch: float = 0.0
     # Where base_residency_mb came from — also determines its semantics:
@@ -70,6 +165,10 @@ class ModelProfileRecord:
     #   "measured"   — derived from live observation: loaded_vram − kv_cache_sent.
     #                  Value is weights-only; callers DO add KV separately.
     #   "override"   — operator-provided value in config.yml.
+    #   "hf"         — best-effort estimate from HF config.json +
+    #                  safetensors sizes (pre-calibration precheck).
+    #                  Weights-only, same semantics as "measured";
+    #                  a real calibration always replaces it.
     #   "cached"     — any of the above, loaded from persisted yml on restart.
     residency_source: str | None = None
     # Provenance: what enforce_eager mode the calibration ran under.
@@ -80,12 +179,17 @@ class ModelProfileRecord:
     # Host-RAM footprint of the lane process tree once loaded. The master's
     # capacity planner uses this to reason about host RAM as a resource axis
     # parallel to VRAM — necessary because vLLM sleep_l1/sleep_l2 free VRAM
-    # but retain weights in host RAM. EMA-updated from worker telemetry.
+    # but retain weights in host RAM. Updated as a high-water mark from
+    # worker telemetry: long-lived EngineCores accumulate sticky host
+    # shared-memory that sleep→wake does not clear, so averaging fresh lean
+    # replicas with heavy ones would understate lasting pressure.
     host_ram_mb: float | None = None
     # Host-RAM still held when the lane is sleeping (level 1). Approximately
     # equal to host_ram_mb in practice — sleep_l1 moves weights from VRAM to
     # host RAM rather than freeing them — but tracked separately so the
     # planner can use the right value depending on the candidate's state.
+    # Also a high-water mark: sticky shm that survives sleep/wake is part of
+    # the lasting residency the host must afford.
     host_ram_residual_mb: float | None = None
     # Peak transient host-RAM allocation observed during the calibrated
     # sleep call (level 1 / level 2). Distinct from host_ram_residual_mb,
@@ -95,6 +199,19 @@ class ModelProfileRecord:
     # EngineCore. None on profiles calibrated before this field existed.
     sleep_l1_transient_host_ram_mb: float | None = None
     sleep_l2_transient_host_ram_mb: float | None = None
+    # Wall-clock seconds the calibration measured from the final probe spawn
+    # to the first request it served (the warmup 1-token completion) — the
+    # cold start a client pays when a lane has to load for its request (vLLM
+    # startup + weight load + first-request CUDA-graph/JIT overhead). None
+    # when the calibrating run's warmup did not serve, or on profiles that
+    # predate the field.
+    cold_load_time_s: float | None = None
+    # Wall-clock seconds from the calibrated /wake_up trigger to the
+    # post-wake test request being served — the wait a request queued on a
+    # sleeping lane pays for the wake. None when the sleep phases were
+    # skipped, the post-wake request did not serve, or the profile predates
+    # the field.
+    wake_from_sleep_time_s: float | None = None
     # True when this worker's effective config forbids sleep mode for this
     # model (engines.vllm.disable_sleep_mode worker kill switch, or a
     # per-model enable_sleep_mode=false override under engines.vllm or
@@ -107,7 +224,7 @@ class ModelProfileRecord:
     # True when calibration has classified this model as permanently
     # unsupported on this worker — bad repo id, gated repo without token,
     # vLLM architecture mismatch, etc. (see FatalLoadErrorPattern in
-    # calibration.py). The master's calibration orchestrator skips models
+    # vllm_compat.py). The master's calibration orchestrator skips models
     # flagged this way so it doesn't burn a maintenance window each night
     # watching the same identity-level error reproduce. Cleared by an
     # operator (delete the entry from calibration_unsupported_models.txt
@@ -117,16 +234,22 @@ class ModelProfileRecord:
     # Reason code matching FatalLoadErrorPattern.reason_code, for diagnostics.
     # Surfaced to ops in master logs alongside `calibration_unsupported=True`.
     calibration_unsupported_reason: str | None = None
+    # Metal only: this node's working-set budget (MB) when this model last
+    # failed calibration with a capacity-like error. The orchestrator
+    # compares this across nodes to skip retrying on any node no bigger.
+    # Clear a false positive: set this key to null under
+    # capabilities_overrides.<model> in config.yml.
+    metal_capacity_floor_mb: float | None = None
     # --max-model-len that calibration auto-injected because the operator's
     # pinned kv_cache_memory_bytes couldn't hold one request at the model's
-    # default max_seq_len (see calibration.py's _extract_vllm_max_model_len_suggestion).
+    # default max_seq_len (see vllm_compat.py's _extract_vllm_max_model_len_suggestion).
     # None = the model fit at default and no flag was passed during calibration.
     # The lane spawner reuses this so production matches the configuration that
     # actually passed the binary search.
     calibration_max_model_len: int | None = None
     # --max-num-seqs that calibration auto-injected for a hybrid Mamba/SSM
     # model whose state-cache block pool was smaller than vLLM's default 1024
-    # (see calibration.py's _extract_vllm_max_num_seqs_suggestion). None = no
+    # (see vllm_compat.py's _extract_vllm_max_num_seqs_suggestion). None = no
     # cap was needed. The lane spawner reuses this so production runs with the
     # same ceiling that passed calibration — otherwise the lane reverts to
     # 1024 and aborts CUDA-graph capture at startup.
@@ -177,7 +300,9 @@ class ModelProfileRecord:
             "min_gpu_memory_utilization_to_load": self.min_gpu_memory_utilization_to_load,
             "tensor_parallel_size": self.tensor_parallel_size,
             "kv_per_token_bytes": self.kv_per_token_bytes,
+            "num_key_value_heads": self.num_key_value_heads,
             "max_context_length": self.max_context_length,
+            "min_context_fraction": self.min_context_fraction,
             "measurement_count": self.measurement_count,
             "last_measured_epoch": self.last_measured_epoch,
             "residency_source": self.residency_source,
@@ -186,9 +311,12 @@ class ModelProfileRecord:
             "host_ram_residual_mb": self.host_ram_residual_mb,
             "sleep_l1_transient_host_ram_mb": self.sleep_l1_transient_host_ram_mb,
             "sleep_l2_transient_host_ram_mb": self.sleep_l2_transient_host_ram_mb,
+            "cold_load_time_s": self.cold_load_time_s,
+            "wake_from_sleep_time_s": self.wake_from_sleep_time_s,
             "sleep_mode_disabled": self.sleep_mode_disabled,
             "calibration_unsupported": self.calibration_unsupported,
             "calibration_unsupported_reason": self.calibration_unsupported_reason,
+            "metal_capacity_floor_mb": self.metal_capacity_floor_mb,
             "calibration_max_model_len": self.calibration_max_model_len,
             "calibration_max_num_seqs": self.calibration_max_num_seqs,
             "kv_cache_to_max_model_len_pairs": self.kv_cache_to_max_model_len_pairs,
@@ -232,6 +360,10 @@ class ModelProfileRegistry:
         self._profiles: dict[str, ModelProfileRecord] = {}
         self._state_dir = state_dir
         self._lock = threading.Lock()
+        # True once a load of model_profiles.yml has failed. Blocks _persist,
+        # which rewrites the whole file from memory and would otherwise
+        # overwrite profiles it never managed to read.
+        self._load_failed = False
         self._manual_overrides: dict[str, dict[str, Any]] = {}
         if model_profile_overrides:
             for model_name, ov in model_profile_overrides.items():
@@ -244,6 +376,26 @@ class ModelProfileRegistry:
                     ", ".join(sorted(self._manual_overrides)),
                 )
         self._load_persisted()
+
+    @staticmethod
+    def _calibrated_tp_conflicts(profile: ModelProfileRecord, tensor_parallel_size: int | None) -> bool:
+        """True when a runtime lane ran at a TP the calibrated profile did not record.
+
+        A calibrated profile's tensor_parallel_size is the single source of
+        truth: its base_residency, KV envelope, and max_model_len pairs were
+        all measured under that TP. A lane that ran at a different TP
+        (re-inferred at spawn time, a stale value from upstream) produces
+        measurements that describe a different configuration — recording
+        them, or letting the runtime TP overwrite the calibrated one, would
+        leave a split-brain profile.
+        """
+        return (
+            tensor_parallel_size is not None
+            and tensor_parallel_size > 0
+            and profile.residency_source == "calibrated"
+            and profile.tensor_parallel_size is not None
+            and profile.tensor_parallel_size != tensor_parallel_size
+        )
 
     def _update_metadata(
         self,
@@ -266,21 +418,35 @@ class ModelProfileRegistry:
         return tp_changed
 
     def add_overrides(self, overrides: dict[str, dict[str, Any]]) -> None:
-        """Merge additional manual overrides (e.g. from capabilities_overrides)."""
-        for model_name, ov in overrides.items():
-            if not isinstance(ov, dict) or not ov:
-                continue
-            existing = self._manual_overrides.get(model_name)
-            if existing is not None:
-                existing.update(ov)
-            else:
-                self._manual_overrides[model_name] = dict(ov)
-        if overrides:
-            logger.info(
-                "Added inline profile overrides for %d model(s): %s",
-                len(overrides),
-                ", ".join(sorted(overrides)),
-            )
+        """Merge additional manual overrides (e.g. from capabilities_overrides).
+
+        Re-applies the merged overrides to profile records that already exist:
+        records loaded from the persisted model_profiles.yml are otherwise
+        never revisited after startup, so an override that arrives late — this
+        method is also called from the lane-spawn path for profile-level keys
+        routed out of engines.vllm.model_overrides — would be missing from the
+        live record and from the runtime snapshot the server planner reads.
+        """
+        if not overrides:
+            return
+        with self._lock:
+            for model_name, ov in overrides.items():
+                if not isinstance(ov, dict) or not ov:
+                    continue
+                existing = self._manual_overrides.get(model_name)
+                if existing is not None:
+                    existing.update(ov)
+                else:
+                    self._manual_overrides[model_name] = dict(ov)
+            for model_name in overrides:
+                profile = self._profiles.get(model_name)
+                if profile is not None:
+                    self._apply_manual_overrides(model_name, profile)
+        logger.info(
+            "Added inline profile overrides for %d model(s): %s",
+            len(overrides),
+            ", ".join(sorted(overrides)),
+        )
 
     def _apply_manual_overrides(self, model_name: str, profile: ModelProfileRecord) -> bool:
         """Apply operator-provided overrides from config.yml."""
@@ -349,6 +515,18 @@ class ModelProfileRegistry:
                 applied.append(
                     "kv_cache_to_max_model_len_pairs=" f"{len(profile.kv_cache_to_max_model_len_pairs or [])}"
                 )
+        if "min_context_fraction" in overrides:
+            try:
+                fraction = float(overrides["min_context_fraction"])
+            except (TypeError, ValueError):
+                logger.warning(
+                    "%s: min_context_fraction=%r is not a number — ignoring it",
+                    model_name,
+                    overrides["min_context_fraction"],
+                )
+            else:
+                profile.min_context_fraction = max(0.0, min(1.0, fraction))
+                applied.append(f"min_context_fraction={profile.min_context_fraction:.2f}")
         if "engine" in overrides:
             profile.engine = str(overrides["engine"])
             applied.append(f"engine={profile.engine}")
@@ -361,6 +539,17 @@ class ModelProfileRegistry:
         if "host_ram_residual_mb" in overrides:
             profile.host_ram_residual_mb = float(overrides["host_ram_residual_mb"])
             applied.append(f"host_ram_residual={profile.host_ram_residual_mb:.0f}MB")
+        if "metal_capacity_floor_mb" in overrides:
+            # null clears a floor a false-positive capacity failure set
+            # (see mark_capacity_floor) — the only way to undo it, since
+            # that method only ever raises the stored value.
+            value = overrides["metal_capacity_floor_mb"]
+            if value is None:
+                profile.metal_capacity_floor_mb = None
+                applied.append("metal_capacity_floor=cleared")
+            else:
+                profile.metal_capacity_floor_mb = float(value)
+                applied.append(f"metal_capacity_floor={profile.metal_capacity_floor_mb:.0f}MB")
 
         if applied:
             logger.info("Applied manual overrides for %s: %s", model_name, ", ".join(applied))
@@ -443,12 +632,26 @@ class ModelProfileRegistry:
 
         Without kv_cache_sent_mb, only loaded_vram_mb is updated.
         base_residency_mb is never touched if it already has a calibrated/override value.
+        A lane that ran at a TP different from the calibrated profile's TP
+        records nothing: the calibrated TP is authoritative, and the
+        measurement would describe a different configuration.
         """
         if effective_vram_mb <= 0:
             return
 
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            if self._calibrated_tp_conflicts(profile, tensor_parallel_size):
+                logger.warning(
+                    "Model profile [%s] %s — discarding loaded-VRAM measurement: "
+                    "lane ran at tensor_parallel_size=%d but the calibrated profile says %d. "
+                    "The calibrated TP is the source of truth; the profile is left untouched.",
+                    (profile.residency_source or "unknown").upper(),
+                    model_name,
+                    tensor_parallel_size,
+                    profile.tensor_parallel_size,
+                )
+                return
             tp_changed = self._update_metadata(
                 profile,
                 engine=engine,
@@ -475,7 +678,10 @@ class ModelProfileRegistry:
                     # multiple models share GPU memory.
                     if profile.residency_source == "calibrated":
                         pass  # keep calibrated value
-                    elif tp_changed or profile.base_residency_mb is None:
+                    elif tp_changed or profile.base_residency_mb is None or profile.residency_source == "hf":
+                        # "hf" is a best-effort guess, not a prior real
+                        # measurement — the first live one replaces it
+                        # exactly instead of blending through it via EMA.
                         profile.base_residency_mb = measured_base
                         profile.residency_source = "measured"
                     else:
@@ -528,12 +734,29 @@ class ModelProfileRegistry:
         observed_gpu_memory_utilization: float | None = None,
         tensor_parallel_size: int | None = None,
     ) -> None:
-        """Called after successful sleep with the lane's measured residual VRAM."""
+        """Called after successful sleep with the lane's measured residual VRAM.
+
+        Like record_loaded_vram, a lane that ran at a TP different from the
+        calibrated profile's TP records nothing — the calibrated TP is
+        authoritative and the measurement would describe a different
+        configuration.
+        """
         if residual_vram_mb < 0:
             return
 
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            if self._calibrated_tp_conflicts(profile, tensor_parallel_size):
+                logger.warning(
+                    "Model profile [%s] %s — discarding sleeping-VRAM measurement: "
+                    "lane ran at tensor_parallel_size=%d but the calibrated profile says %d. "
+                    "The calibrated TP is the source of truth; the profile is left untouched.",
+                    (profile.residency_source or "unknown").upper(),
+                    model_name,
+                    tensor_parallel_size,
+                    profile.tensor_parallel_size,
+                )
+                return
             tp_changed = self._update_metadata(
                 profile,
                 engine=engine,
@@ -566,33 +789,24 @@ class ModelProfileRegistry:
 
         *sleeping* selects which field is updated: when False, host_ram_mb
         (awake footprint); when True, host_ram_residual_mb (level-1 sleep).
-        EMA-blended with prior measurements.
+
+        Both fields are high-water marks, not EMA averages. Long-lived
+        EngineCores accumulate sticky host shared-memory that sleep→wake does
+        not clear; blending a heavy observation with a fresh lean replica
+        would understate the lasting ceiling the planner needs for cold-load
+        and sleep-vs-stop gates.
         """
         if host_ram_mb <= 0:
             return
         with self._lock:
             profile = self._profiles.setdefault(model_name, ModelProfileRecord())
             if sleeping:
-                profile.host_ram_residual_mb = (
-                    host_ram_mb
-                    if profile.host_ram_residual_mb is None
-                    else _ema(profile.host_ram_residual_mb, host_ram_mb)
-                )
+                prior = profile.host_ram_residual_mb
+                profile.host_ram_residual_mb = host_ram_mb if prior is None else max(prior, host_ram_mb)
             else:
-                profile.host_ram_mb = (
-                    host_ram_mb if profile.host_ram_mb is None else _ema(profile.host_ram_mb, host_ram_mb)
-                )
+                prior = profile.host_ram_mb
+                profile.host_ram_mb = host_ram_mb if prior is None else max(prior, host_ram_mb)
             profile.last_measured_epoch = time.time()
-        self._persist()
-
-    def record_disk_size(self, model_name: str, disk_size_bytes: int) -> None:
-        """Store disk size reported by Ollama /api/tags. Informational only."""
-        if disk_size_bytes <= 0:
-            return
-
-        with self._lock:
-            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
-            profile.disk_size_bytes = disk_size_bytes
         self._persist()
 
     def mark_sleep_mode_disabled(self, model_name: str, disabled: bool) -> bool:
@@ -646,6 +860,94 @@ class ModelProfileRegistry:
         self._persist()
         return True
 
+    def mark_capacity_floor(self, model_name: str, floor_mb: float) -> bool:
+        """Record that this model failed to fit under *floor_mb* on this node.
+
+        Only ever raises the stored value — see the config.yml override in
+        _apply_manual_overrides to undo a false positive instead.
+        """
+        with self._lock:
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            current = profile.metal_capacity_floor_mb
+            new_floor = floor_mb if current is None else max(current, floor_mb)
+            if new_floor == current:
+                return False
+            profile.metal_capacity_floor_mb = new_floor
+        self._persist()
+        return True
+
+    def apply_hf_precheck(
+        self,
+        model_name: str,
+        *,
+        disk_size_bytes: int | None = None,
+        base_residency_mb: float | None = None,
+        kv_per_token_bytes: int | None = None,
+        num_key_value_heads: int | None = None,
+        max_context_length: int | None = None,
+    ) -> bool:
+        """Persist HF-derived compatibility-precheck estimates.
+
+        Returns True when the stored value changed. Never overwrites an
+        operator-provided config.yml override for the same field. Only sets
+        base_residency_mb + residency_source="hf" when the profile has no
+        higher-priority source yet (None, "hf", or "cached") — a real
+        "measured"/"calibrated"/"override" value always wins.
+        kv_per_token_bytes/max_context_length/disk_size_bytes have no
+        higher-priority writer to conflict with, so they're set unconditionally
+        (subject only to the manual-override check).
+
+        ``num_key_value_heads`` has no manual-override key of its own — it is
+        pure geometry, not a tunable — so it is set unconditionally whenever
+        HF provides it. The master's capacity planner needs it alongside
+        kv_per_token_bytes to derive a per-rank KV budget for the selected
+        tp; kv_per_token_bytes alone is the whole-model (every-head) figure.
+        """
+        with self._lock:
+            # Read under the lock too — add_overrides also runs under it, and
+            # reading this beforehand risks a stale empty dict racing a
+            # just-added override, letting the HF value overwrite it below.
+            overrides = self._manual_overrides.get(model_name) or {}
+            profile = self._profiles.setdefault(model_name, ModelProfileRecord())
+            changed = False
+
+            if "disk_size_bytes" not in overrides and disk_size_bytes and profile.disk_size_bytes != disk_size_bytes:
+                profile.disk_size_bytes = disk_size_bytes
+                changed = True
+            if (
+                "kv_per_token_bytes" not in overrides
+                and kv_per_token_bytes
+                and profile.kv_per_token_bytes != kv_per_token_bytes
+            ):
+                profile.kv_per_token_bytes = kv_per_token_bytes
+                changed = True
+            if num_key_value_heads and profile.num_key_value_heads != num_key_value_heads:
+                profile.num_key_value_heads = num_key_value_heads
+                changed = True
+            if (
+                "max_context_length" not in overrides
+                and max_context_length
+                and profile.max_context_length != max_context_length
+            ):
+                profile.max_context_length = max_context_length
+                changed = True
+            if (
+                "base_residency_mb" not in overrides
+                and base_residency_mb
+                and base_residency_mb > 0
+                and profile.residency_source in (None, "hf", "cached")
+            ):
+                if profile.base_residency_mb != base_residency_mb:
+                    profile.base_residency_mb = base_residency_mb
+                    changed = True
+                if profile.residency_source != "hf":
+                    profile.residency_source = "hf"
+                    changed = True
+
+        if changed:
+            self._persist()
+        return changed
+
     def get_profile(self, model_name: str) -> ModelProfileRecord | None:
         with self._lock:
             return self._profiles.get(model_name)
@@ -656,21 +958,37 @@ class ModelProfileRegistry:
             return {name: profile.to_dict() for name, profile in self._profiles.items()}
 
     def _persist(self) -> None:
-        """Save model profiles to state directory as YAML."""
+        """Save model profiles to state directory as YAML.
+
+        Written atomically, and refused outright while the last load failed:
+        this rewrites the whole file from memory, so persisting on top of a
+        store we could not read replaces measured profiles with whatever
+        placeholder state the process built instead — the freshly seeded
+        capability stubs, carrying only the operator's config overrides.
+        """
         if self._state_dir is None or yaml is None:
             return
+        if self._load_failed:
+            logger.error(
+                "Refusing to persist model profiles: %s could not be read, so what "
+                "is in memory is not a complete picture of it. Fix or move the file "
+                "to let the worker rebuild it.",
+                self._state_dir / "model_profiles.yml",
+            )
+            return
         try:
+            # Snapshot and write under one lock. Releasing it between the two
+            # lets a second writer's older snapshot land after this one — the
+            # rename is atomic per call, but two calls still race for which
+            # version ends up on disk.
             with self._lock:
                 data = {name: profile.to_dict() for name, profile in self._profiles.items()}
-            if not data:
-                return
-
-            self._state_dir.mkdir(parents=True, exist_ok=True)
-            state_path = self._state_dir / "model_profiles.yml"
-            with state_path.open("w") as f:
-                yaml.safe_dump({"model_profiles": data}, f, default_flow_style=False)
+                if not data:
+                    return
+                self._state_dir.mkdir(parents=True, exist_ok=True)
+                atomic_write_yaml(self._state_dir / "model_profiles.yml", {"model_profiles": data})
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to persist model profiles", exc_info=True)
+            logger.exception("Failed to persist model profiles")
 
     def _load_persisted(self) -> None:
         """Read persisted model profiles from state file on startup."""
@@ -678,14 +996,18 @@ class ModelProfileRegistry:
             return
         state_path = self._state_dir / "model_profiles.yml"
         if not state_path.exists():
+            self._load_failed = False
             return
         try:
             with state_path.open() as f:
                 data = yaml.safe_load(f) or {}
 
             profiles = data.get("model_profiles")
-            if not isinstance(profiles, dict):
+            if profiles is None:
+                self._load_failed = False
                 return
+            if not isinstance(profiles, dict):
+                raise ValueError(f"model_profiles is {type(profiles).__name__}, not a mapping")
             for model_name, profile_data in profiles.items():
                 if not isinstance(profile_data, dict):
                     continue
@@ -709,7 +1031,9 @@ class ModelProfileRegistry:
                     min_gpu_memory_utilization_to_load=profile_data.get("min_gpu_memory_utilization_to_load"),
                     tensor_parallel_size=profile_data.get("tensor_parallel_size"),
                     kv_per_token_bytes=profile_data.get("kv_per_token_bytes"),
+                    num_key_value_heads=profile_data.get("num_key_value_heads"),
                     max_context_length=profile_data.get("max_context_length"),
+                    min_context_fraction=profile_data.get("min_context_fraction"),
                     measurement_count=int(profile_data.get("measurement_count", 0) or 0),
                     last_measured_epoch=float(profile_data.get("last_measured_epoch", 0.0) or 0.0),
                     residency_source=persisted_source or "cached",
@@ -718,9 +1042,12 @@ class ModelProfileRegistry:
                     host_ram_residual_mb=profile_data.get("host_ram_residual_mb"),
                     sleep_l1_transient_host_ram_mb=profile_data.get("sleep_l1_transient_host_ram_mb"),
                     sleep_l2_transient_host_ram_mb=profile_data.get("sleep_l2_transient_host_ram_mb"),
+                    cold_load_time_s=profile_data.get("cold_load_time_s"),
+                    wake_from_sleep_time_s=profile_data.get("wake_from_sleep_time_s"),
                     sleep_mode_disabled=profile_data.get("sleep_mode_disabled"),
                     calibration_unsupported=profile_data.get("calibration_unsupported"),
                     calibration_unsupported_reason=profile_data.get("calibration_unsupported_reason"),
+                    metal_capacity_floor_mb=profile_data.get("metal_capacity_floor_mb"),
                     calibration_max_model_len=(
                         int(profile_data["calibration_max_model_len"])
                         if profile_data.get("calibration_max_model_len")
@@ -752,5 +1079,14 @@ class ModelProfileRegistry:
                     prof.sleeping_residual_mb or 0,
                     prof.measurement_count,
                 )
+            self._load_failed = False
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to load persisted model profiles", exc_info=True)
+            # Loud, and latched: every calibrated profile on this node is in
+            # that file and nowhere else, and _persist would otherwise write
+            # the empty/partial in-memory state straight over it.
+            self._load_failed = True
+            logger.exception(
+                "Failed to load persisted model profiles from %s — profile "
+                "persistence is disabled until this is resolved",
+                state_path,
+            )

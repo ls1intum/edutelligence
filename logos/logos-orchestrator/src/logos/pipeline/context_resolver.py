@@ -8,15 +8,41 @@ Separates the "what to execute" (context resolution) from "how to execute" (exec
 import asyncio
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode
 
+from logos import perf_trace
+from logos.anthropic_compat import (
+    MESSAGES_PATH,
+    UpstreamDialect,
+    dialect_for,
+    forward_path_for,
+    is_chat_completions_path,
+    is_messages_path,
+    serves_only_messages,
+    strip_billing_header_from_payload,
+    to_messages,
+    translate_request,
+)
+from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
+from logos.pipeline.effort_normalization import normalize_reasoning_effort
+from logos.request_content import is_multipart_payload, set_payload_field
 from logos.sdi.azure_deployment_sync import AZURE_OPERATION_API_VERSIONS
 
 logger = logging.getLogger(__name__)
+
+# The provider_type spellings the worker registration flow stores; everything
+# else passes through as a plain type string.
+_LOGOSNODE_PROVIDER_TYPES = {"logosnode", "node", "node_controller", "logos_worker_node"}
+
+
+def _normalize_provider_type(provider_type: Optional[str]) -> str:
+    raw = (provider_type or "").lower()
+    return "logosnode" if raw in _LOGOSNODE_PROVIDER_TYPES else raw
 
 
 @dataclass
@@ -32,10 +58,27 @@ class ExecutionContext:
     auth_value: str
     model_name: str
     lane_id: Optional[str] = None
-    # Set for Azure Responses-API routes: the deployment id the request body's
-    # "model" field must be rewritten to (Azure /responses resolves the
-    # deployment from the body, not the URL). See ``_azure_responses_route``.
-    azure_responses_deployment: Optional[str] = None
+    # Set for Azure routes that resolve the deployment from the request body
+    # rather than the URL (the Responses API and the Anthropic Messages
+    # route): the deployment id the body's "model" field must be rewritten to.
+    # See ``_azure_responses_route`` / ``_azure_anthropic_route``.
+    azure_body_deployment: Optional[str] = None
+    # Set only for inbound ``POST /v1/messages``: which surface this upstream
+    # actually serves, and therefore whether the request and its response have
+    # to be translated out of and back into the Anthropic Messages shape.
+    # ``None`` for every other route; ``NATIVE`` for upstreams that serve the
+    # Messages API themselves and are forwarded verbatim.
+    anthropic_dialect: Optional[UpstreamDialect] = None
+    # The mirror case: set only for inbound ``POST /v1/chat/completions``
+    # against an upstream that serves nothing but the Anthropic Messages API
+    # (a Claude deployment on Azure Foundry). The request goes out as a
+    # Messages call and its answer comes back translated into a
+    # chat/completions body. False for every other route.
+    messages_upstream: bool = False
+    # Headers the upstream's protocol requires on every request, beyond auth
+    # and content type — Anthropic's mandatory ``anthropic-version``. Empty for
+    # every other provider.
+    protocol_headers: Dict[str, str] = field(default_factory=dict)
 
 
 class ContextResolver:
@@ -64,6 +107,8 @@ class ContextResolver:
         model_id: int,
         provider_id: int,
         request_path: Optional[str] = None,
+        request_id: Optional[str] = None,
+        deployment_info: Optional[Dict[str, Any]] = None,
     ) -> Optional[ExecutionContext]:
         """
         Resolve all DB information needed to execute a request with authorization verification.
@@ -79,45 +124,94 @@ class ContextResolver:
             provider_id: The ID of the provider (currently unused, for future extension)
             logos_key: User's logos key (for authorization check)
             profile_id: Profile ID (for authorization check)
+            deployment_info: The key's already-fetched deployment entry for this
+                model/provider pair (``get_deployments_for_api_key``). For a
+                logosnode deployment it carries everything this resolution
+                needs — the lane lookup runs on the provider/model names and
+                endpoint/base URL/auth stay unused on that branch — so the
+                database roundtrip is skipped outright . Callers without
+                a deployment list (async jobs) omit it and take the DB path.
 
         Returns:
             `ExecutionContext` with all details, or `None` if resolution fails (e.g. missing key, unauthorized).
         """
-        with DBManager() as db:
-            auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
-            if not auth_info:
-                logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
-                return None
+        deployment = (
+            deployment_info
+            if deployment_info is not None
+            and (deployment_info.get("model_name") or "").strip()
+            and (deployment_info.get("provider_name") or "").strip()
+            and _normalize_provider_type(deployment_info.get("type")) == "logosnode"
+            else None
+        )
 
-            provider_type_raw = (auth_info.get("provider_type") or "").lower()
-            provider_type = (
-                "logosnode"
-                if provider_type_raw
-                in {
-                    "logosnode",
-                    "node",
-                    "node_controller",
-                    "ollama",
-                    "logos_worker_node",
-                }
-                else provider_type_raw
-            )
-            auth_name = (auth_info.get("auth_name") or "").strip()
-            auth_format = auth_info.get("auth_format") or ""
-            api_key = auth_info.get("api_key")
+        if deployment is not None:
+            # Fast path: no DB access. Logosnode lanes receive no credentials
+            # (worker registration stores empty auth fields), so the empty
+            # values reproduce what the DB path below produced.
+            provider_type = "logosnode"
+            provider_name = deployment["provider_name"]
+            model_name = deployment["model_name"]
+            cloud_type = None
+            auth_name = ""
+            auth_value = ""
+        else:
+            with perf_trace.phase(request_id, "context.resolve_db"):
+                with DBManager() as db:
+                    auth_info = db.get_auth_info_to_deployment(model_id, provider_id)
+                    if not auth_info:
+                        logger.error(f"No deployment auth info for model={model_id}, provider={provider_id}")
+                        return None
 
-            if provider_type != "logosnode" and not api_key and (auth_name or auth_format):
-                logger.error(
-                    f"No API key for model {model_id} / provider {auth_info.get('provider_name', provider_id)}"
-                )
-                return None
+                    provider_type_raw = (auth_info.get("provider_type") or "").lower()
+                    provider_type = (
+                        "logosnode"
+                        if provider_type_raw
+                        in {
+                            "logosnode",
+                            "node",
+                            "node_controller",
+                            "logos_worker_node",
+                        }
+                        else provider_type_raw
+                    )
+                    cloud_type = str(auth_info.get("cloud_provider_type") or "").lower() or None
+                    auth_name = (auth_info.get("auth_name") or "").strip()
+                    auth_format = auth_info.get("auth_format") or ""
+                    api_key = auth_info.get("api_key")
+                    endpoint = auth_info.get("endpoint") or ""
+                    # Azure Foundry's Anthropic route authenticates Anthropic-style:
+                    # it reads x-api-key, not the api-key header an Azure deployment
+                    # conventionally carries. Detected on the stored endpoint so the
+                    # auth header below is already the right one.
+                    azure_anthropic = endpoint.split("?", 1)[0].rstrip("/").endswith("/anthropic/v1/messages")
 
-        provider_name = auth_info["provider_name"]
-        model_name = auth_info["model_name"]
-        endpoint = auth_info["endpoint"]
-        base_url = auth_info["base_url"]
+                    # Cloud credentials get the convention the provider form
+                    # advertises filled in — see ``cloud_auth_header``, which the
+                    # model sync uses against the same providers. A provider that
+                    # configured a header but has no key cannot authenticate at all,
+                    # which is an error rather than an unauthenticated request.
+                    auth_value = auth_format.format(api_key or "")
+                    if provider_type != "logosnode":
+                        if azure_anthropic:
+                            header = ("x-api-key", api_key) if api_key else None
+                        else:
+                            header = cloud_auth_header(auth_name, auth_format, api_key, cloud_type)
+                        if header is None:
+                            if auth_name or auth_format:
+                                logger.error(
+                                    f"No API key for model {model_id} / "
+                                    f"provider {auth_info.get('provider_name', provider_id)}"
+                                )
+                                return None
+                        else:
+                            auth_name, auth_value = header
+
+            provider_name = auth_info["provider_name"]
+            model_name = auth_info["model_name"]
+            endpoint = auth_info["endpoint"]
+            base_url = auth_info["base_url"]
         lane_id: Optional[str] = None
-        azure_responses_deployment: Optional[str] = None
+        azure_body_deployment: Optional[str] = None
 
         if provider_type == "logosnode":
             prepared_lane: Optional[Dict[str, Any]] = None
@@ -135,28 +229,30 @@ class ContextResolver:
                         exc,
                     )
             if self._logosnode_registry is not None:
-                lane = prepared_lane
-                if lane is None:
-                    lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
-                # Retry loop: lane may be transitioning (loading/waking) after
-                # reevaluate_model_queues dispatched us.
-                if lane is None:
-                    # Retry up to ~120s — must survive worst-case multi-lane
-                    # drain (busy vLLM lanes with continuous batching can have
-                    # 10-20 active requests that must finish before sleep) plus
-                    # sleep/wake cycle (~5s).  First 10 retries are 1s apart
-                    # (fast path); remaining retries back off to 2s.
-                    for attempt in range(65):
-                        await asyncio.sleep(1.0 if attempt < 10 else 2.0)
+                with perf_trace.phase(request_id, "context.select_lane"):
+                    lane = prepared_lane
+                    if lane is None:
                         lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
-                        if lane is not None:
-                            logger.info(
-                                "Lane became available after %ds for provider=%s model=%s",
-                                attempt + 1,
-                                provider_name,
-                                model_name,
-                            )
-                            break
+                    # Retry loop: lane may be transitioning (loading/waking)
+                    # after reevaluate_model_queues dispatched us.
+                    if lane is None:
+                        # Retry up to ~120s — must survive worst-case
+                        # multi-lane drain (busy vLLM lanes with continuous
+                        # batching can have 10-20 active requests that must
+                        # finish before sleep) plus sleep/wake cycle (~5s).
+                        # First 10 retries are 1s apart (fast path); remaining
+                        # retries back off to 2s.
+                        for attempt in range(65):
+                            await asyncio.sleep(1.0 if attempt < 10 else 2.0)
+                            lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                            if lane is not None:
+                                logger.info(
+                                    "Lane became available after %ds for provider=%s model=%s",
+                                    attempt + 1,
+                                    provider_name,
+                                    model_name,
+                                )
+                                break
                 if lane is not None:
                     lane_id = str(lane.get("lane_id", "")).strip()
                     if lane_id:
@@ -186,7 +282,7 @@ class ContextResolver:
             # (and /v2) routes, so forward like-for-like on the inbound path.
             # Auth comes from the DB (auth_name / auth_format / api_key) like
             # every other non-logosnode provider.
-            forward_url = self._cloud_forward_url(base_url, request_path, endpoint)
+            forward_url = self._cloud_forward_url(base_url, request_path, endpoint, cloud_provider_type=cloud_type)
             # Azure Responses deployments are stored deployment-scoped
             # (.../deployments/<id>/responses) so the id survives into here;
             # collapse to Azure's real /openai/responses route and remember the
@@ -194,9 +290,56 @@ class ContextResolver:
             responses_url, responses_deployment = self._azure_responses_route(forward_url)
             if responses_url is not None:
                 forward_url = responses_url
-                azure_responses_deployment = responses_deployment
+                azure_body_deployment = responses_deployment
+            # Claude deployments are stored the same way
+            # (.../deployments/<id>/anthropic/v1/messages); Azure's real route
+            # has no deployment segment and names the deployment by the
+            # body's "model" field.
+            anthropic_url, anthropic_deployment = self._azure_anthropic_route(forward_url)
+            if anthropic_url is not None:
+                forward_url = anthropic_url
+                azure_body_deployment = anthropic_deployment
         else:
             forward_url = self._merge_url(base_url, endpoint)
+
+        # A key must never go out in the clear. Checked on the resolved URL
+        # rather than base_url, because a per-model endpoint can point
+        # somewhere else entirely — and only when a credential would actually
+        # be attached, so an upstream that serves unauthenticated is
+        # unaffected. Same rule Logos already applies to these credentials on
+        # the benchmark path: HTTPS, or plain HTTP on loopback only.
+        if (
+            provider_type != "logosnode"
+            and auth_name
+            and auth_value
+            and not credential_transport_is_secure(forward_url)
+        ):
+            logger.error(
+                "Refusing to send the credentials of provider %s (%s) over an insecure transport (%s): "
+                "use HTTPS, or plain HTTP only on loopback",
+                provider_id,
+                provider_name,
+                forward_url.split("?", 1)[0],
+            )
+            return None
+
+        anthropic_dialect = (
+            dialect_for(
+                provider_type=provider_type,
+                cloud_provider_type=cloud_type,
+                forward_url=forward_url,
+            )
+            if is_messages_path(request_path)
+            else None
+        )
+        # Both questions are asked against the resolved URL, so the answer
+        # follows the surface the request is actually posted to rather than
+        # how the provider was typed.
+        messages_upstream = is_chat_completions_path(request_path) and serves_only_messages(
+            provider_type=provider_type,
+            cloud_provider_type=cloud_type,
+            forward_url=forward_url,
+        )
 
         return ExecutionContext(
             model_id=model_id,
@@ -205,10 +348,17 @@ class ContextResolver:
             provider_type=provider_type,
             forward_url=forward_url,
             auth_header=auth_name,
-            auth_value=auth_format.format(api_key or ""),
+            auth_value=auth_value,
             model_name=model_name,
             lane_id=lane_id,
-            azure_responses_deployment=azure_responses_deployment,
+            azure_body_deployment=azure_body_deployment,
+            anthropic_dialect=anthropic_dialect,
+            messages_upstream=messages_upstream,
+            protocol_headers=(
+                cloud_protocol_headers("anthropic" if azure_anthropic else cloud_type)
+                if provider_type == "cloud"
+                else {}
+            ),
         )
 
     @staticmethod
@@ -225,26 +375,62 @@ class ContextResolver:
         Returns:
             Tuple of (headers, modified_payload)
         """
-        headers = {"Content-Type": "application/json"}
+        # httpx must generate the multipart boundary for file-upload requests;
+        # setting Content-Type manually would omit that required boundary.
+        headers = {} if is_multipart_payload(payload) else {"Content-Type": "application/json"}
+        headers.update(getattr(context, "protocol_headers", None) or {})
         if context.auth_header and context.auth_value:
             headers[context.auth_header] = context.auth_value
 
+        # Claude Code's billing/telemetry marker on the system prompt varies
+        # by CLI version, subagent and cron run, fragmenting an upstream's
+        # prefix cache on every value change — done here, before dialect
+        # translation, so it also reaches the NATIVE/verbatim forward (a
+        # vLLM lane, another Logos instance), which never runs the
+        # translation below. See strip_billing_header_from_payload.
+        payload = strip_billing_header_from_payload(payload)
+
+        # An inbound Anthropic Messages request bound for an upstream without a
+        # Messages route becomes a chat/completions or Responses request here.
+        # Done before everything below so the rewrites that follow (model
+        # injection, effort normalization) act on the body that is actually
+        # sent.
+        if context.anthropic_dialect is not None:
+            payload = translate_request(payload, context.anthropic_dialect, model_name=context.model_name)
+        # ... and a chat/completions request bound for a Messages-only upstream
+        # becomes a Messages call, for the same reason and at the same point.
+        elif context.messages_upstream:
+            payload = to_messages(payload, model_name=context.model_name)
+
         # OpenWebUI requires model name injection
         if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
-            payload = {**payload, "model": context.model_name}
+            payload = set_payload_field(payload, "model", context.model_name)
 
-        # Azure Responses API resolves the deployment from the body's "model"
-        # field (the URL carries no deployment segment). Clients address models
-        # by the catalogued (served) name, which can differ from the Azure
-        # deployment id — rewrite it so Azure can resolve the deployment.
-        if context.azure_responses_deployment:
-            payload = {**payload, "model": context.azure_responses_deployment}
+        # The Qwen3.8 chat template only accepts xhigh/medium/low as reasoning
+        # effort, but clients such as Claude Code send the Anthropic value
+        # "high" in every request. vLLM forwards the value to the template,
+        # which rejects it with an error surfaced as HTTP 500 — map the wider
+        # client scale onto the accepted one before forwarding.
+        payload = normalize_reasoning_effort(payload, context.model_name)
+
+        # Azure routes that resolve the deployment from the body's "model"
+        # field (Responses API, Anthropic Messages) carry no deployment
+        # segment in the URL. Clients address models by the catalogued
+        # (served) name, which can differ from the Azure deployment id —
+        # rewrite it so Azure can resolve the deployment.
+        if context.azure_body_deployment:
+            payload = set_payload_field(payload, "model", context.azure_body_deployment)
 
         return headers, payload
 
     # .../openai/deployments/<deployment-id>/responses[?query]
     _AZURE_RESPONSES_RE = re.compile(
         r"^(?P<host>https?://[^/]+)/openai/deployments/(?P<deployment>[^/?]+)/responses(?P<query>\?.*)?$"
+    )
+
+    # .../openai/deployments/<deployment-id>/anthropic/v1/messages[?query]
+    _AZURE_ANTHROPIC_RE = re.compile(
+        r"^(?P<host>https?://[^/]+)/openai/deployments/(?P<deployment>[^/?]+)/anthropic/v1/messages(?P<query>\?.*)?$"
     )
 
     # .../openai/deployments/<deployment-id>/<operation>[?query]
@@ -256,9 +442,10 @@ class ContextResolver:
     # exactly one endpoint (the sync classifies gpt-5.x to "responses",
     # everything chat-shaped to "chat/completions"), but most chat deployments
     # serve both APIs — so the client's chosen surface wins over the stored
-    # default. Other operations (embeddings, audio, images) are never
-    # re-targeted.
+    # default. Whisper deployments are stored as audio/transcriptions but also
+    # serve audio/translations, so those two operations are swappable as well.
     _SWAPPABLE_AZURE_OPS = {"chat/completions", "responses"}
+    _SWAPPABLE_AZURE_AUDIO_OPS = {"audio/transcriptions", "audio/translations"}
 
     @staticmethod
     def _requested_operation(request_path: Optional[str]) -> Optional[str]:
@@ -275,7 +462,8 @@ class ContextResolver:
             if path.startswith(prefix):
                 path = path[len(prefix) :]
                 break
-        return path if path in ContextResolver._SWAPPABLE_AZURE_OPS else None
+        swappable = ContextResolver._SWAPPABLE_AZURE_OPS | ContextResolver._SWAPPABLE_AZURE_AUDIO_OPS
+        return path if path in swappable else None
 
     @staticmethod
     def _align_azure_operation(endpoint: str, request_path: Optional[str]) -> str:
@@ -298,7 +486,13 @@ class ContextResolver:
         if not match:
             return endpoint
         current = match.group("operation")
-        if current == requested or current not in ContextResolver._SWAPPABLE_AZURE_OPS:
+        same_family = (
+            current in ContextResolver._SWAPPABLE_AZURE_OPS and requested in ContextResolver._SWAPPABLE_AZURE_OPS
+        ) or (
+            current in ContextResolver._SWAPPABLE_AZURE_AUDIO_OPS
+            and requested in ContextResolver._SWAPPABLE_AZURE_AUDIO_OPS
+        )
+        if current == requested or not same_family:
             return endpoint
         params = dict(parse_qsl(match.group("query") or ""))
         api_version = AZURE_OPERATION_API_VERSIONS.get(requested)
@@ -332,6 +526,54 @@ class ContextResolver:
         return f"{host}/openai/responses{query}", deployment
 
     @staticmethod
+    def _azure_anthropic_route(forward_url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Collapse a deployment-scoped Azure Anthropic-Messages URL to its real form.
+
+        The auto-sync stores Claude deployments as
+        ``.../openai/deployments/<id>/anthropic/v1/messages`` so the
+        deployment id is recoverable (the scheduler reads it for capacity
+        tracking, and we need it here to name the deployment in the body).
+        Azure's actual route is ``.../anthropic/v1/messages`` with no
+        deployment segment — it resolves the deployment from the request
+        body's ``model`` field.
+
+        Returns ``(real_url, deployment_id)`` for such URLs so the caller can
+        forward to the collapsed URL and rewrite the body ``model``; returns
+        ``(None, None)`` for any other URL.
+        """
+        match = ContextResolver._AZURE_ANTHROPIC_RE.match(forward_url or "")
+        if not match:
+            return None, None
+        host = match.group("host")
+        deployment = match.group("deployment")
+        query = match.group("query") or ""
+        return f"{host}/anthropic/v1/messages{query}", deployment
+
+    @staticmethod
+    def _upstream_path(request_path: str, cloud_provider_type: Optional[str]) -> str:
+        """The path an OpenAI-shaped cloud upstream is addressed under.
+
+        The inbound path unchanged, except where the upstream does not serve
+        it. ``POST /v1/messages`` against an upstream without a Messages route
+        is re-pointed at ``chat/completions``, and ``POST
+        /v1/chat/completions`` against an Anthropic resource — which has no
+        OpenAI route — at ``v1/messages``. Each is the surface the matching
+        translation targets, so the URL and the body always agree.
+
+        Only the ``base_url`` branch reaches here. A provider whose per-model
+        endpoint is a full URL keeps the operation that endpoint names, and
+        both classifications read it back off the resolved URL.
+        """
+        if is_messages_path(request_path):
+            dialect = dialect_for(provider_type="cloud", cloud_provider_type=cloud_provider_type)
+            return request_path if dialect is UpstreamDialect.NATIVE else forward_path_for(dialect)
+        if is_chat_completions_path(request_path) and serves_only_messages(
+            provider_type="cloud", cloud_provider_type=cloud_provider_type
+        ):
+            return MESSAGES_PATH
+        return request_path
+
+    @staticmethod
     def _merge_url(base_url: str, endpoint: str) -> str:
         """Merge base URL and endpoint path."""
         if endpoint.startswith("http"):
@@ -345,6 +587,8 @@ class ContextResolver:
         base_url: str,
         request_path: Optional[str],
         endpoint_fallback: Optional[str],
+        *,
+        cloud_provider_type: Optional[str] = None,
     ) -> str:
         """Build forward URL for a cloud upstream provider.
 
@@ -369,13 +613,20 @@ class ContextResolver:
         like-for-like ``request_path`` rewrite below only applies to
         OpenAI-shaped upstreams whose ``base_url`` is a plain ``/v1`` host and
         whose per-model endpoint is relative or empty.
+
+        ``POST /v1/messages`` is the one path that is not forwarded
+        like-for-like: an upstream without a Messages route is addressed on
+        ``chat/completions`` instead, which is the surface the Anthropic
+        translation targets. This only affects the ``base_url`` branch —
+        an Azure deployment keeps the operation its stored endpoint names, and
+        the dialect follows from that instead.
         """
         if endpoint_fallback and endpoint_fallback.startswith("http"):
             return ContextResolver._align_azure_operation(endpoint_fallback, request_path)
         base = (base_url or "").rstrip("/")
         if not request_path:
             return ContextResolver._merge_url(base_url, endpoint_fallback or "")
-        path = request_path.lstrip("/")
+        path = ContextResolver._upstream_path(request_path, cloud_provider_type).lstrip("/")
         for prefix in ("v1/", "v2/"):
             if base.endswith("/" + prefix.rstrip("/")) and path.startswith(prefix):
                 path = path[len(prefix) :]

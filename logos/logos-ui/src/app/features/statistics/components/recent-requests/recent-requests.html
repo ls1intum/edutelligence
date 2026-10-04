@@ -1,25 +1,60 @@
 <div class="rr-host">
 
-  <!-- Error banner -->
-  @if (fetchError()) {
-    <div class="rr-error">
-      <span class="rr-error__msg">{{ fetchError() }}</span>
-      <button class="rr-error__retry" (click)="load(page())">Retry</button>
+  <!-- ── Toolbar ──────────────────────────────────────────────────────────────
+       Above the list on purpose: request cards differ in height, so a control
+       under them shifts between clicks and the cursor loses it. Up here Next
+       stays put however tall the page turns out. -->
+  <div class="rr-toolbar">
+
+    <div class="rr-pager">
+      @if (displayItems().length > 0) {
+        <span class="rr-pager__count">
+          <strong>{{ formatCount(firstRowNumber()) }}-{{ formatCount(lastRowNumber()) }}</strong>
+          of <strong>{{ totalInRangeLabel() }}</strong>
+        </span>
+      }
+      <!-- Left of the buttons on purpose: the badge and the spinner appear
+           and disappear, and the buttons must stay anchored at the right
+           edge whatever happens to their left. -->
+      @if (loading()) {
+        <i class="pi pi-spin pi-spinner rr-pager__spinner" aria-hidden="true"></i>
+      } @else if (onLivePage()) {
+        <span class="rr-pager__live" title="Page 1 updates as requests arrive">live</span>
+      }
+      <button
+        class="rr-pager__btn"
+        type="button"
+        [disabled]="!hasPrev() || loading()"
+        (click)="prevPage()"
+        aria-label="Newer requests"
+      >
+        <i class="pi pi-angle-left" aria-hidden="true"></i>
+      </button>
+      <button
+        class="rr-pager__btn"
+        type="button"
+        [disabled]="!hasNext() || loading()"
+        (click)="nextPage()"
+        aria-label="Older requests"
+      >
+        <i class="pi pi-angle-right" aria-hidden="true"></i>
+      </button>
     </div>
+
+  </div>
+
+  @if (error()) {
+    <div class="rr-error">{{ error() }}</div>
   }
 
-  <!-- Skeleton while first load is in flight -->
-  @if (loading() && !pageData()) {
+  <!-- ── List ─────────────────────────────────────────────────────────────────
+       `pending` is about the websocket feed, so it only speaks for page 1: a
+       fetched page is already the range the operator asked for. -->
+  @if (pending && onLivePage()) {
     <app-stats-skeleton variant="rows" />
-  }
-
-  <!-- Empty state -->
-  @if (!loading() && displayItems().length === 0 && pageData()) {
-    <div class="rr-empty">No requests yet.</div>
-  }
-
-  <!-- Request rows -->
-  @if (displayItems().length > 0) {
+  } @else if (displayItems().length === 0) {
+    <div class="rr-empty">{{ emptyMessage() }}</div>
+  } @else {
     <div class="rr-list">
       @for (item of displayItems(); track trackById($index, item)) {
         <div
@@ -34,7 +69,7 @@
               <span class="rr-card__age">{{ timeAgoOf(item) }}</span>
             </div>
             <div class="rr-card__bottom-row">
-              <span class="rr-card__provider">{{ item.provider_name }}</span>
+              <span class="rr-card__provider">{{ providerLabelOf(item) }}</span>
               <span
                 class="rr-badge"
                 [class.rr-badge--cloud]="item.is_cloud"
@@ -45,23 +80,39 @@
                   <i class="pi pi-users" aria-hidden="true"></i>{{ item.team_name }}
                 </span>
               }
-              @if (item.username) {
+              @if (showRequester(item)) {
                 <span class="rr-card__requester" title="Requesting user">
-                  <i class="pi pi-user" aria-hidden="true"></i>{{ item.username }}
+                  <i class="pi pi-user" aria-hidden="true"></i>{{ requesterOf(item) }}
                 </span>
-              } @else if (item.environment) {
-                <span class="rr-card__requester" title="Application environment">
-                  <i class="pi pi-tag" aria-hidden="true"></i>{{ item.environment }}
+              }
+              @if (keyChipOf(item)) {
+                <span class="rr-card__key" title="API key environment">
+                  <i class="pi pi-key" aria-hidden="true"></i>{{ keyChipOf(item) }}
                 </span>
               }
             </div>
-            @if (stageOf(item) === 'complete' && item.status === 'error' && item.error_message) {
-              <div class="rr-card__error-snippet">{{ errorSnippet(item.error_message) }}</div>
+            @if (item.is_cloud && costLabelOf(item)) {
+              <div class="rr-card__meta rr-card__cost">
+                <i class="pi pi-dollar" aria-hidden="true"></i> {{ costLabelOf(item) }}
+              </div>
+            }
+            @if (tokensLabelOf(item)) {
+              <div class="rr-card__meta rr-card__tokens" [class.rr-card__tokens--live]="item.streaming">
+                {{ tokensLabelOf(item) }} tokens
+                @if (rateLabelOf(item)) {
+                  <span class="rr-card__rate">{{ rateLabelOf(item) }}</span>
+                }
+              </div>
             }
           </div>
 
           <!-- Right column -->
           <div class="rr-card__right">
+            <button class="rr-content-button" type="button"
+              [attr.aria-expanded]="expandedRequestId() === item.request_id"
+              (click)="togglePayloads(item)">
+              {{ expandedRequestId() === item.request_id ? 'Hide content' : 'View content' }}
+            </button>
             @if (stageOf(item) === 'queued') {
               <span class="rr-badge rr-badge--queued">Queued</span>
             }
@@ -89,32 +140,57 @@
               }
             }
           </div>
+          @if (stageOf(item) === 'complete' && item.status === 'error' && item.error_message) {
+            <details class="rr-card__error">
+              <summary class="rr-card__error-summary" aria-label="Error details" [title]="item.error_message">
+                <i class="pi pi-chevron-right" aria-hidden="true"></i>
+                <span class="rr-card__error-snippet" aria-hidden="true">{{ item.error_message }}</span>
+                <span class="rr-card__error-action" aria-hidden="true">Error details</span>
+              </summary>
+              <div class="rr-card__error-message">{{ item.error_message }}</div>
+            </details>
+          }
+          @if (expandedRequestId() === item.request_id) {
+            <section class="rr-payload" aria-label="Request content">
+              <div class="rr-payload__toolbar">
+                <div role="tablist" aria-label="Request and response">
+                  <button type="button" role="tab" class="rr-content-button"
+                    id="rr-request-tab" aria-controls="rr-payload-panel"
+                    [attr.aria-selected]="payloadTab() === 'request'"
+                    (click)="payloadTab.set('request')"
+                    (keydown.arrowright)="payloadTab.set('response'); responseTab.focus()"
+                    #requestTab>Request</button>
+                  <button type="button" role="tab" class="rr-content-button"
+                    id="rr-response-tab" aria-controls="rr-payload-panel"
+                    [attr.aria-selected]="payloadTab() === 'response'"
+                    (click)="payloadTab.set('response')"
+                    (keydown.arrowleft)="payloadTab.set('request'); requestTab.focus()"
+                    #responseTab>Response</button>
+                </div>
+              </div>
+              <div role="tabpanel" id="rr-payload-panel" tabindex="0"
+                [attr.aria-labelledby]="payloadTab() === 'request' ? 'rr-request-tab' : 'rr-response-tab'"
+                [attr.aria-busy]="payloadLoading()">
+                @if (payloadLoading()) {
+                  <p role="status">Loading content…</p>
+                } @else if (payloadError()) {
+                  <p role="alert">{{ payloadError() }}</p>
+                } @else if (payloadText() !== null) {
+                  <pre>{{ payloadText() }}</pre>
+                } @else {
+                  <p>No {{ payloadTab() }} content stored.
+                    @if (payloadTab() === 'response' && stageOf(item) !== 'complete') {
+                      The response will load automatically when the request finishes.
+                    } @else {
+                      Content is only available when payload logging was enabled.
+                    }
+                  </p>
+                }
+              </div>
+            </section>
+          }
         </div>
       }
-    </div>
-  }
-
-  <!-- Pagination footer -->
-  @if (totalPages() > 1) {
-    <div class="rr-pagination">
-      <button
-        class="rr-page-btn"
-        [disabled]="page() <= 1 || loading()"
-        (click)="load(page() - 1)"
-      ><i class="pi pi-chevron-left" aria-hidden="true"></i> Prev</button>
-
-      <span class="rr-page-label">
-        Page {{ page() }} of {{ totalPages() }}
-        @if (loading()) {
-          <i class="pi pi-spin pi-spinner"></i>
-        }
-      </span>
-
-      <button
-        class="rr-page-btn"
-        [disabled]="page() >= totalPages() || loading()"
-        (click)="load(page() + 1)"
-      >Next <i class="pi pi-chevron-right" aria-hidden="true"></i></button>
     </div>
   }
 

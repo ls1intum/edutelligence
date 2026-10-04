@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- A Logos instance used as an upstream by another Logos instance. It
+         serves every surface this one does — including the Anthropic Messages
+         API — so requests to it are forwarded verbatim rather than translated,
+         and its /v1/models listing carries the context windows the downstream
+         instance re-publishes. Every other cloud_provider_type is an
+         OpenAI-shaped resource without a Messages route.
+
+         ALTER TYPE ... ADD VALUE cannot run inside a transaction block before
+         PostgreSQL 12 and Liquibase wraps changeSets in one, so the value is
+         added with runInTransaction="false". IF NOT EXISTS makes the statement
+         idempotent, which the preConditions below cannot fully guarantee on a
+         concurrently-migrated database. -->
+    <changeSet id="025-cloud-provider-type-logos" author="wasnertobias" runInTransaction="false">
+        <sql>
+            ALTER TYPE cloud_provider_type_enum ADD VALUE IF NOT EXISTS 'logos';
+        </sql>
+    </changeSet>
+
+    <!-- What a cloud upstream reports about the models it serves.
+         model_profiles is the same idea for workernodes, but every column on
+         it describes a vLLM lane (KV budget, residency, tensor parallel size)
+         that a cloud resource has no equivalent for; the one thing a cloud
+         upstream does report is how much context it will accept.
+
+         Until now that was reported by nobody: /v1/models derives its context
+         numbers from the live workernode snapshots, so a model reachable only
+         through a cloud provider was published with no window at all. A
+         downstream Logos instance therefore hid the very number its upstream
+         had measured, and clients that size their session from it — Claude
+         Code via claude-logos — fell back to a guess far below the real
+         window.
+
+         All three columns are nullable: an upstream that reports no window
+         (most OpenAI-shaped resources do not) still gets a row, so the
+         catalogue records that it was scraped and found nothing. -->
+    <changeSet id="025-cloud-model-context" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="cloud_model_context"/></not>
+        </preConditions>
+        <createTable tableName="cloud_model_context">
+            <column name="provider_id" type="INTEGER">
+                <constraints nullable="false"
+                             primaryKey="true"
+                             primaryKeyName="pk_cloud_model_context"
+                             foreignKeyName="fk_cloud_model_context_provider"
+                             references="providers(id)"
+                             deleteCascade="true"/>
+            </column>
+            <column name="model_name" type="TEXT">
+                <constraints nullable="false" primaryKey="true" primaryKeyName="pk_cloud_model_context"/>
+            </column>
+            <!-- The smallest window the upstream serves right now: the only
+                 one that holds whichever deployment a request lands on. -->
+            <column name="context_current_min" type="INTEGER"/>
+            <!-- The largest window currently reachable there. -->
+            <column name="context_current_max" type="INTEGER"/>
+            <!-- The widest the model is ever served with, independent of what
+                 is loaded at the moment. -->
+            <column name="context_overall" type="INTEGER"/>
+            <column name="updated_at" type="TIMESTAMP WITH TIME ZONE" defaultValueComputed="CURRENT_TIMESTAMP">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <rollback>
+            <dropTable tableName="cloud_model_context"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

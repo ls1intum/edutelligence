@@ -192,7 +192,112 @@ Request → Classification Layer → ECCS Scheduler → Provider
 
 4. **Queue Manager** (`priority_queue.py`): Per-(model_id, provider_id) priority queues with starvation prevention (priority aging: LOW→NORMAL after 10s, NORMAL→HIGH after 30s).
 
-## 10. Configuration
+## 10. Orchestrator-Level Admission Control
+
+Scoring decides *where* a request should go; admission decides *whether it should leave the orchestrator at all*. The two are separate on purpose.
+
+A request that has been forwarded to a worker is committed. It sits in the engine's own queue, where the orchestrator can no longer:
+
+1. **hand it back** — a worker asked to drain for a restart must first finish everything already forwarded, so wait-mode takes longer the deeper the engine queue is;
+2. **reorder it** — a high-priority request arriving later cannot jump ahead of what is already inside the engine;
+3. **re-route it** — a peer worker that frees a slot first cannot take over;
+4. **place it well** — the prefix-affinity decision below is fixed at forward time and cannot be revisited.
+
+None of that is lost while the request waits in the orchestrator queue. So the orchestrator forwards only what a worker can *start*, and keeps the rest.
+
+### Signals
+
+Admission reads the live lane signals the worker reports (the same ones §4 uses for tier estimation):
+
+**Nothing outside the engine can predict whether vLLM will start a given request or park it.** That depends on whether the new sequence's KV blocks fit against what the running sequences currently occupy — neither exposed nor derivable from the outside. The engine reports the answer only afterwards, as `num_requests_waiting`. Admission is therefore retrospective by necessity: forward while nothing is observed waiting, stop at the first observed waiter.
+
+**What that buys, measured rather than assumed.** On logos-dev, 60 concurrent requests against a lane serving ~0.5 req/s:
+
+| | engine backlog (avg) | peak | share of samples at zero |
+|---|---|---|---|
+| before this gate | 0.35 | 4 | — |
+| with the gate | 0.53 | 5 | 71% |
+
+The gate does **not** drive the engine-side queue to zero, and the earlier claim in this document that it holds it "at about one request" was wrong. The reason is structural: the step granted per worker report (`batch_limit`) is not tied to the rate at which the lane drains. At 4 per report and roughly one report per second, admission runs at ~4/s against a service rate of ~0.5/s, so whenever the signal reads clear — 71% of samples — the queue grows again until the next report shows it. Holding it near zero would need the engine's true admission capacity, which is exactly what vLLM does not expose.
+
+What the gate does deliver is bounded exposure and gated decisions: a 60-wide burst is no longer committed wholesale (56 of 60 held), every dispatch consults the live signals, and the backlog stays small — peak 5 against 22 in flight.
+
+| Signal | Source | Gate |
+|--------|--------|------|
+| `queue_waiting` | vLLM `num_requests_waiting` | The engine is already parking work → hold (`BACKEND_QUEUE_PRESSURE_THRESHOLD`, a constant — see §12) |
+| forwarded since the last report | orchestrator-local | Step used up → hold as `awaiting_signal` until the worker reports back |
+| `gpu_cache_usage_percent` | vLLM `gpu_cache_usage_perc` | ≥ 90% → hold: vLLM is about to preempt and recompute, which also evicts the prefix-cache blocks §11 depends on |
+
+**`num_parallel` is deliberately not used as a ceiling.** It is the concurrency vLLM guarantees *at full context* — the "Maximum concurrency for N tokens per request" line from its startup log, which the lane-health panel shows as `(min. c)`. Real requests use a fraction of their context, so the engine runs far past it: a production lane serves 8 concurrent requests with `num_parallel = 1` at 78% KV. Read as a ceiling, that lane would be throttled eightfold. It is a *lower bound on capacity*, which makes it sound as a step size and wrong as a limit.
+
+**The signals are sampled, so the gate also counts its own sends.** Every request arriving inside one sampling window reads the same `queue_waiting`, so a simultaneous burst passes untouched — measured on logos-dev, 60 concurrent requests produced zero holds before this, and 56 after. The orchestrator therefore tracks what it has forwarded since the current worker report and spends `batch_limit` down by it, holding with reason `awaiting_signal` once the step is used up. The next report supersedes the estimate with a measurement and restores the budget, which is why a worker status also re-evaluates the queues (`on_worker_report`) — otherwise a held request would wait for the next completion, and on a ramp from idle nothing has completed yet. Measured feedback latency on dev: **0.21–1.11s, median ~0.9s**, because the worker marks its status dirty when a lane's in-flight count changes rather than waiting for its refresh interval.
+
+The unit of the decision is `AdmissionDecision(can_admit, batch_limit, reason)`. `batch_limit` is how many queued requests one dispatch pass may release — `num_parallel` scaled by the free KV fraction (the same floating figure the panel shows), at least 1 — summed over the model's admissible lanes; a backlogged lane never masks an idle sibling. When a worker reports nothing usable (older worker, lane still starting), `batch_limit` is `None` and the decision falls back to the parallel-capacity gate alone — admission is never stricter than the signals justify.
+
+Two call sites use it:
+
+- **`try_reserve_capacity`** — the arrival path. A refusal sends the request to the orchestrator queue instead of the worker.
+- **`reevaluate_model_queues`** — the batch dispatcher that runs after a lane loads or wakes. Its batch size is `min(parallel_capacity − active, batch_limit)`, so a wake event cannot drain the whole queue onto one worker in a single pass.
+
+> **Operator note.** `providers.parallel_capacity` short-circuits the live path entirely: `get_parallel_capacity` returns the configured value whenever it differs from the `200` default, so the worker-reported `num_parallel` is never consulted. Every production provider currently has `parallel_capacity = 20`, which means the per-worker ceiling is a flat 20 and the live-signal capacity introduced in #781 is dormant. The gate described here reads the lane signals directly and is unaffected, but anyone reasoning about the ceiling should know which of the two is actually in force.
+
+A completion goes through the gate as well. It used to hand the freed slot straight to the next waiter, which treats requests as interchangeable units — a 200-token request finishing frees a sliver of KV cache, which says nothing about whether an 8000-token request queued behind it will fit. Worse, the handover bypassed admission entirely, so under load the engine's own queue was built there rather than by the gate: measured on dev, average engine backlog was 0.12 during the arrival ramp and 0.78 while completions were recycling slots. Capacity is now simply released and the queue re-evaluated, in the same call so nothing waits for the next worker report to make progress.
+
+### Cancelling what was already forwarded
+
+Holding requests back shrinks the window but does not close it: a request that *was* forwarded and whose client then goes away still occupies a lane. On the HTTP path that resolves itself — closing the httpx context closes the connection and vLLM aborts the sequence. Worker requests have no such connection: every request to a worker is multiplexed over one WebSocket, so dropping the local queue only stops the orchestrator from reading. The lane kept generating a response nobody would read, for the full length of the generation.
+
+The bridge therefore carries a `cancel_command` action:
+
+```text
+orchestrator                              worker
+     │  infer_stream (cmd_id=X)              │
+     │─────────────────────────────────────▶ │  relay task X ──▶ lane (httpx stream)
+     │  ◀──── stream_chunk … ─────────────── │
+     ▽  client disconnects                   │
+     │  cancel_command (target_cmd_id=X)     │
+     │─────────────────────────────────────▶ │  task X cancelled
+     │                                       │    └─ httpx stream closed ──▶ vLLM aborts,
+     │  ◀──── command_result {cancelled}──── │       KV blocks freed, in-flight count released
+```
+
+Cancelling the relay task is what closes the stream to the lane, and that closed connection is what makes vLLM abort. Details that matter:
+
+- **Both paths.** `infer` (non-streaming) is cancelled the same way; worker command tasks are keyed by `cmd_id` so one request can be targeted without touching its neighbours.
+- **Feature-gated.** Only workers that list `cancel_command` in their hello are sent one; an older worker keeps the previous behaviour rather than answering "Unsupported bridge command".
+- **Fire-and-forget.** The cancellation is dispatched while a cancelled caller unwinds, so it must not block on the worker answering. The reply only reports whether anything was still running — a cancel racing a completing stream is normal.
+- **Deterministic close.** The response generator wraps the worker stream in `contextlib.aclosing`; a bare `async for` would defer the cleanup that sends the cancellation to the async-generator GC hook.
+
+This also keeps the admission signals honest: a ghost generation inflates `requests_running` and KV usage, so without it the gate above would throttle traffic on load that no longer exists.
+
+## 11. Prefix-Cache-Aware Placement
+
+With the same model deployed on several workers, two warm workers tie on corrected score and the tie-break is random. For a coding agent that is the worst possible placement: every turn re-sends a prompt the *previous* worker already has in its KV cache, and a random landing throws that cache away.
+
+### Stream identity
+
+A stream is neither a user nor an API key — one key can drive many agent loops at once. Identity is `(api_key_id, actual request prefix)`, hashed into a chain of fixed-size blocks the way an engine hashes its own prefix-cache blocks:
+
+```text
+block₁ = H(api_key_id ‖ text[0:B])
+blockᵢ = H(blockᵢ₋₁  ‖ text[(i−1)B : iB])
+```
+
+The prompt is serialized append-only (preamble fields, then one record per message), so turn *n+1* extends turn *n*'s string rather than rewriting it and the leading block hashes survive. Only whole blocks are hashed — the trailing partial block is dropped, exactly as an engine drops its own. Lookup walks the blocks deepest-first, so the longest shared prefix wins: two conversations under one key that share only a system prompt match on the early blocks and separate as soon as their first user turns differ.
+
+The map (`PrefixAffinityRouter`) is soft state — an in-memory TTL/LRU table. Losing it costs one round of cache misses.
+
+### Scoring
+
+A hit does not pin the request. It adds a bounded bonus to the corrected score:
+
+```text
+bonus = weight_span × CORRECTION_STRENGTH × PREFIX_AFFINITY_BONUS_FRACTION
+```
+
+At the default `0.25` that is worth roughly 15s of expected wait (penalty saturates at 60s). The stream stays on the familiar worker unless a peer is *meaningfully* faster — the "if cheaply possible" the routing is meant to honour. The bonus applies only to `WARM` candidates, so affinity never wakes a sleeping worker or triggers a cold load just to stay put, and only logosnode placements are recorded: cloud upstreams route internally.
+
+## 12. Configuration
 
 | Parameter | Default | Location | Effect |
 |-----------|---------|----------|--------|
@@ -202,4 +307,22 @@ Request → Classification Layer → ECCS Scheduler → Provider
 | `OVERHEAD_COLD_S` | `45.0` | `ettft_estimator.py` | Cold load time estimate |
 | `OVERHEAD_SLEEPING_S` | `2.5` | `ettft_estimator.py` | Sleep→wake transition estimate |
 | `OVERHEAD_RECLAIM_S` | `8.0` | `ettft_estimator.py` | VRAM eviction overhead |
+| `LOGOS_PREFIX_AFFINITY_ENABLED` | `true` | env | Master switch; off restores random tie-break placement |
+| `BACKEND_QUEUE_PRESSURE_THRESHOLD` | `0` | `logosnode_provider.py` | Engine-side `queue_waiting` tolerated before holding. Derived, not tuned: any value above zero re-introduces the engine-side queueing the gate removes |
+| `KV_CACHE_PRESSURE_PERCENT` | `90` | `logosnode_provider.py` | KV utilisation at which a lane stops being a forwarding target |
+| `PREFIX_AFFINITY_BONUS_FRACTION` | `0.25` | `correcting_scheduler.py` | Affinity bonus as a fraction of the maximum ETTFT penalty (~15s of expected wait) |
+| `AFFINITY_TTL_S` / `AFFINITY_BLOCK_CHARS` / `AFFINITY_MAX_BLOCKS` / `AFFINITY_MAX_ENTRIES` | `900` / `1024` / `32` / `20000` | `prefix_affinity.py` | Stream-identity granularity and table bounds |
+
+### Metrics
+
+| Metric | Labels | Meaning |
+|--------|--------|---------|
+| `logos_admission_holds_total` | `reason` = `worker_capacity` \| `backend_queue` \| `kv_cache_pressure` \| `engine_at_capacity` | Requests kept at orchestrator level instead of forwarded |
+| `logos_prefix_affinity_total` | `result` = `hit` \| `miss` \| `honored` \| `diverted` | Affinity lookups and whether the scheduler followed them |
+| `logos_worker_cancellations_total` | `result` = `aborted` \| `already_done` \| `unsupported` \| `failed` | Cancellations sent for abandoned requests. `unsupported` counts nodes that still leak ghost generations — the number to watch during a rolling worker upgrade |
+
+Two reporting defects in the existing metrics are fixed alongside:
+
+- **`logos_requests_in_flight` only ever rose.** The gauge was hand-maintained with paired `inc()`/`dec()` calls and the pairing did not hold in either direction: terminal paths that write their own log row (client disconnect, rate-limit and budget rejects) never told the recorder the request had ended — production leaked ~470 of them a day — while a request rejected at classification completed without ever having been enqueued and decremented a count it had never added. The gauge is now *derived* from the map of tracked requests, so neither is expressible, and the failure paths release their request through `_record_log_failure`. A sweep drops anything tracked for more than two hours, so a future missed path degrades into a bounded inaccuracy instead of a number that never comes down.
+- **Latency percentiles were pinned to two minutes.** `histogram_quantile` cannot report above the highest *finite* bucket, and `logos_request_duration_seconds` topped out at `120.0`. With 5% of production requests over 120s, p95 sat exactly on that edge and p99 (really ~300s, tail past 1600s) was clamped to 120s outright — which read as a dashboard fault. The upper buckets now run to 3600s, covering the 1200s queue-wait bound plus cold load and generation.
 | `DEFAULT_GENERATION_TIME_S` | `3.0` | `ettft_estimator.py` | Per-request generation time for queue wait estimation |

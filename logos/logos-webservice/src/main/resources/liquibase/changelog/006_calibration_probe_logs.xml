@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Most recent calibration probe log per (provider, model), same
+         one-row-per-node-per-model pattern as model_profiles
+         (000_initial_schema.xml). -->
+    <changeSet id="008-calibration-probe-logs" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="calibration_probe_logs"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE calibration_probe_logs (
+                id SERIAL PRIMARY KEY,
+                provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+                model_name TEXT NOT NULL,
+
+                -- Probe outcome
+                success BOOLEAN NOT NULL,
+                probe_command TEXT,                -- exact vLLM command line of the last probe attempt
+                error TEXT,
+
+                -- Skip/degradation reasons
+                unsupported_reason TEXT,           -- model is permanently unsupported on this node
+                node_unhealthy_reason TEXT,        -- node itself is degraded (storage EIO, etc.)
+
+                summary JSONB NOT NULL DEFAULT '{}'::jsonb,  -- full structured probe payload
+
+                recorded_at TIMESTAMPTZ,           -- when the worker emitted the event
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                UNIQUE(provider_id, model_name)
+            );
+
+            -- Fast lookups by provider
+            CREATE INDEX idx_calibration_probe_logs_provider
+                ON calibration_probe_logs(provider_id);
+
+            -- Find the latest probe log for a specific model across providers
+            CREATE INDEX idx_calibration_probe_logs_model_name
+                ON calibration_probe_logs(model_name);
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS calibration_probe_logs CASCADE;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

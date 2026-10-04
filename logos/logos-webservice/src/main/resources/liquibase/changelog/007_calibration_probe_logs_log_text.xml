@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The worker now sends the full raw calibration log text alongside
+         the structured summary, so the Model Error Report UI's "Complete
+         Logs" tab can show real per-node output instead of mocked fixtures. -->
+    <changeSet id="009-calibration-probe-logs-log-text" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="calibration_probe_logs" columnName="log_text"/></not>
+        </preConditions>
+        <addColumn tableName="calibration_probe_logs">
+            <column name="log_text" type="text"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="calibration_probe_logs" columnName="log_text"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

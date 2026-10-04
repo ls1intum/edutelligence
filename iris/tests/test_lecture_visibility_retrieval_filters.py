@@ -8,10 +8,14 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from iris.domain.search.global_search_dto import AccessContext
 from iris.pipeline.chat import mcq_chat_mixin
 from iris.pipeline.chat.mcq_chat_mixin import retrieve_lecture_content_for_mcq
 from iris.retrieval.lecture.lecture_global_search_retrieval import (
+    _LANE_DEPTH,
     LectureGlobalSearchRetrieval,
+    _Candidate,
+    _VisibilityPolicy,
 )
 from iris.retrieval.lecture.lecture_page_chunk_retrieval import (
     LecturePageChunkRetrieval,
@@ -101,19 +105,21 @@ def test_global_search_filters_hidden_slide_aggregate():
         ),
     }
 
-    assert (
-        LectureGlobalSearchRetrieval._segment_to_dto(
-            props,
-            {("https://artemis.example", 10): lecture_unit()},
-            {},
-        )
-        is None
+    dto, drop_reason = LectureGlobalSearchRetrieval._segment_to_dto(
+        props,
+        {("https://artemis.example", 10): lecture_unit()},
+        {},
+        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
+    assert dto is None
+    assert drop_reason == "segment_hidden"
 
 
 def test_global_search_filters_unreleased_transcription_but_not_released_one():
     props = {
-        LectureTranscriptionSchema.SEGMENT_TEXT.value: "Transcript",
+        LectureTranscriptionSchema.SEGMENT_TEXT.value: (
+            "A real transcript excerpt long enough to clear the low-information filter."
+        ),
         LectureTranscriptionSchema.LECTURE_UNIT_ID.value: 10,
         LectureTranscriptionSchema.BASE_URL.value: "https://artemis.example",
         LectureTranscriptionSchema.COURSE_ID.value: 30,
@@ -123,20 +129,21 @@ def test_global_search_filters_unreleased_transcription_but_not_released_one():
     }
     future = datetime(2099, 1, 1, tzinfo=timezone.utc)
 
-    assert (
-        LectureGlobalSearchRetrieval._transcription_to_dto(
-            props,
-            {("https://artemis.example", 10): lecture_unit(future)},
-        )
-        is None
+    hidden_dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
+        props,
+        {("https://artemis.example", 10): lecture_unit(future)},
+        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
-    assert (
-        LectureGlobalSearchRetrieval._transcription_to_dto(
-            props,
-            {("https://artemis.example", 10): lecture_unit()},
-        )
-        is not None
+    assert hidden_dto is None
+    assert drop_reason == "transcription_hidden"
+
+    visible_dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
+        props,
+        {("https://artemis.example", 10): lecture_unit()},
+        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
+    assert visible_dto is not None
+    assert drop_reason is None
 
 
 def test_hidden_slide_transcription_is_filtered_across_retrieval_paths():
@@ -165,14 +172,14 @@ def test_hidden_slide_transcription_is_filtered_across_retrieval_paths():
     associated_slides = [associated_hidden_slide, associated_visible_overlay]
 
     assert not is_transcription_visible(props, unit, associated_slides)
-    assert (
-        LectureGlobalSearchRetrieval._transcription_to_dto(
-            props,
-            {("https://artemis.example", 10): unit},
-            {("https://artemis.example", 10, 8): associated_slides},
-        )
-        is None
+    dto, drop_reason = LectureGlobalSearchRetrieval._transcription_to_dto(
+        props,
+        {("https://artemis.example", 10): unit},
+        {("https://artemis.example", 10, 8): associated_slides},
+        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
+    assert dto is None
+    assert drop_reason == "transcription_hidden"
 
     retrieval = LectureTranscriptionRetrieval.__new__(LectureTranscriptionRetrieval)
     retrieval._lecture_unit_cache = {(30, 20, 10, "https://artemis.example"): unit}
@@ -598,59 +605,209 @@ def test_segment_search_accumulates_scope_filters_and_stops_at_candidate_ceiling
     }
 
 
-def test_global_search_expands_candidates_until_visible_result_is_found():
-    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
-    hidden = SimpleNamespace()
-    visible = SimpleNamespace()
-    retrieval._search_segments = Mock(side_effect=[[hidden], [hidden, visible]])
-    retrieval._search_video_transcriptions = Mock(side_effect=[[], []])
-    visible_dto = SimpleNamespace(
-        lecture_unit=SimpleNamespace(source_type="lecture_unit_slide")
-    )
-    retrieval._map_search_objects = Mock(side_effect=[[], [(1.0, visible_dto)]])
-
-    result = retrieval._run_hybrid_search(
-        query="query", vector=[0.1], alpha=0.5, limit=1
+def _search_result_dto(snippet: str, source_type: str):
+    """Minimal stand-in carrying only the fields the search path reads."""
+    return SimpleNamespace(
+        snippet=snippet,
+        course=SimpleNamespace(name="Course"),
+        lecture_unit=SimpleNamespace(
+            source_type=source_type, name="Unit", page_number=1
+        ),
     )
 
-    assert result == [visible_dto]
-    candidate_limits = [
-        call.args[3] for call in retrieval._search_segments.call_args_list
-    ]
-    assert candidate_limits == [1, 2]
 
+def test_global_search_fetches_lane_depth_candidates_regardless_of_limit():
+    """Hidden hits must not starve the result list.
 
-def test_global_search_expands_each_saturated_source_before_merging_scores():
+    The pipeline no longer re-queries with a growing limit; instead both
+    lanes always fetch _LANE_DEPTH candidates, so hidden hits in the leading
+    positions still leave visible ones in the pool.
+    """
     retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
-    segment_hit = SimpleNamespace()
-    hidden_transcription = SimpleNamespace()
-    visible_transcription = SimpleNamespace()
-    retrieval._search_segments = Mock(side_effect=[[segment_hit], [segment_hit]])
-    retrieval._search_video_transcriptions = Mock(
-        side_effect=[
-            [hidden_transcription],
-            [hidden_transcription, visible_transcription],
+    retrieval._search_segments = Mock(return_value=[])
+    retrieval._search_video_transcriptions = Mock(return_value=[])
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    retrieval._map_candidates = Mock(return_value=[])
+    retrieval._safe_rerank = Mock(return_value=None)
+
+    retrieval._run_hybrid_search(
+        query="query",
+        vector=[0.1],
+        alpha=0.5,
+        limit=1,
+        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
+    )
+
+    assert retrieval._search_segments.call_args.args[3] == _LANE_DEPTH
+    assert retrieval._search_video_transcriptions.call_args.args[3] == _LANE_DEPTH
+
+
+def test_global_search_merges_both_lanes_into_one_ranked_pool():
+    """A high-scoring transcription must outrank a low-scoring segment.
+
+    Both lanes feed a single candidate pool, so the better hit wins even when
+    the other lane returned a result first.
+    """
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    segment_hit = SimpleNamespace(properties={"base_url": "https://artemis.example"})
+    transcription_hit = SimpleNamespace(
+        properties={"base_url": "https://artemis.example"}
+    )
+    retrieval._search_segments = Mock(return_value=[segment_hit])
+    retrieval._search_video_transcriptions = Mock(return_value=[transcription_hit])
+    retrieval._fetch_metadata = Mock(return_value=({}, {}, {}))
+    low_score_segment = _search_result_dto("slide text", "lecture_unit_slide")
+    high_score_transcription = _search_result_dto("video text", "lecture_unit_video")
+    retrieval._map_candidates = Mock(
+        return_value=[
+            _Candidate(0.9, high_score_transcription, ("http://a", 1, 10)),
+            _Candidate(0.2, low_score_segment, ("http://a", 1, 10)),
         ]
     )
-    low_score_segment = SimpleNamespace(
-        lecture_unit=SimpleNamespace(source_type="lecture_unit_slide")
-    )
-    high_score_transcription = SimpleNamespace(
-        lecture_unit=SimpleNamespace(source_type="lecture_unit_video")
-    )
-    retrieval._map_search_objects = Mock(
-        side_effect=[
-            [(0.2, low_score_segment)],
-            [(0.2, low_score_segment), (0.9, high_score_transcription)],
-        ]
-    )
+    retrieval._safe_rerank = Mock(return_value=None)
 
     result = retrieval._run_hybrid_search(
-        query="query", vector=[0.1], alpha=0.5, limit=1
+        query="query",
+        vector=[0.1],
+        alpha=0.5,
+        limit=1,
+        policy=_VisibilityPolicy.from_context(None, base_url="https://artemis.example"),
     )
 
     assert result == [high_score_transcription]
-    transcription_candidate_limits = [
-        call.args[3] for call in retrieval._search_video_transcriptions.call_args_list
-    ]
-    assert transcription_candidate_limits == [1, 2]
+    seg_objects, trans_objects = retrieval._map_candidates.call_args.args[:2]
+    assert seg_objects == [segment_hit]
+    assert trans_objects == [transcription_hit]
+
+
+# --------------------------------------------------------------------------- #
+# Access-context release bypass (Artemis parity): admins and staff of a course #
+# see unreleased units; everyone else is gated on release_date vs the Artemis   #
+# request time. Per-slide hidden_until is never bypassed. Driven through the     #
+# public search() API against a mocked Weaviate so the whole path is exercised.  #
+# --------------------------------------------------------------------------- #
+
+RELEASED_IN_FUTURE = datetime(2099, 1, 1, tzinfo=timezone.utc)
+
+
+def _segment_object(course_id=30, hidden_until=None):
+    props = {
+        LectureUnitSegmentSchema.SEGMENT_SUMMARY.value: (
+            "A real segment summary long enough to clear the low-information filter."
+        ),
+        LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: 10,
+        LectureUnitSegmentSchema.BASE_URL.value: "https://artemis.example",
+        LectureUnitSegmentSchema.COURSE_ID.value: course_id,
+        LectureUnitSegmentSchema.LECTURE_ID.value: 20,
+        LectureUnitSegmentSchema.PAGE_NUMBER.value: 1,
+    }
+    if hidden_until is not None:
+        props[LectureUnitSegmentSchema.HIDDEN_UNTIL.value] = hidden_until
+    return SimpleNamespace(properties=props, metadata=SimpleNamespace(score=0.9))
+
+
+def _retriever_returning(unit, segment=None):
+    """Retriever whose single Weaviate hit is a segment of ``unit`` (I/O mocked)."""
+    retrieval = LectureGlobalSearchRetrieval.__new__(LectureGlobalSearchRetrieval)
+    retrieval.llm_embedding = Mock()
+    retrieval.llm_embedding.embed.return_value = [0.1]
+    retrieval._search_segments = Mock(return_value=[segment or _segment_object()])
+    retrieval._search_video_transcriptions = Mock(return_value=[])
+    retrieval._fetch_lecture_units = Mock(
+        return_value={("https://artemis.example", 10): unit}
+    )
+    retrieval._fetch_transcription_start_times = Mock(return_value={})
+    retrieval._fetch_slides_by_display_page = Mock(return_value={})
+    retrieval._safe_rerank = Mock(return_value=None)
+    return retrieval
+
+
+def _found_unit_ids(unit, access_context):
+    results = _retriever_returning(unit).search(
+        "query",
+        limit=5,
+        access_context=access_context,
+        base_url="https://artemis.example",
+    )
+    return [dto.lecture_unit.id for dto in results]
+
+
+def test_student_sees_released_unit():
+    # Baseline happy path: the filter is not simply hiding everything.
+    assert _found_unit_ids(
+        lecture_unit(), AccessContext(course_ids=[30], student_course_ids=[30])
+    ) == [10]
+
+
+def test_student_does_not_see_unreleased_unit():
+    assert (
+        _found_unit_ids(
+            lecture_unit(RELEASED_IN_FUTURE),
+            AccessContext(course_ids=[30], student_course_ids=[30]),
+        )
+        == []
+    )
+
+
+def test_staff_of_course_see_unreleased_unit():
+    assert _found_unit_ids(
+        lecture_unit(RELEASED_IN_FUTURE),
+        AccessContext(course_ids=[30], staff_course_ids=[30]),
+    ) == [10]
+
+
+def test_admin_sees_unreleased_unit():
+    assert _found_unit_ids(
+        lecture_unit(RELEASED_IN_FUTURE), AccessContext(unrestricted=True)
+    ) == [10]
+
+
+def test_staff_of_a_different_course_do_not_see_unreleased_unit():
+    # Student in course 30, staff only in course 40 -> no bypass for course 30.
+    assert (
+        _found_unit_ids(
+            lecture_unit(RELEASED_IN_FUTURE),
+            AccessContext(course_ids=[30, 40], staff_course_ids=[40]),
+        )
+        == []
+    )
+
+
+def test_missing_access_context_hides_unreleased_unit():
+    # Safe default: no context -> unreleased content stays hidden.
+    results = _retriever_returning(lecture_unit(RELEASED_IN_FUTURE)).search(
+        "query", limit=5, base_url="https://artemis.example"
+    )
+    assert results == []
+
+
+def test_staff_bypass_does_not_expose_a_hidden_slide():
+    # Unit unreleased AND its slide hidden: staff waive the release gate, never the
+    # per-slide hidden_until gate (mirrors Artemis, where hidden slides are hidden
+    # from everyone).
+    results = _retriever_returning(
+        lecture_unit(RELEASED_IN_FUTURE),
+        segment=_segment_object(hidden_until=RELEASED_IN_FUTURE),
+    ).search(
+        "query",
+        limit=5,
+        access_context=AccessContext(course_ids=[30], staff_course_ids=[30]),
+        base_url="https://artemis.example",
+    )
+    assert results == []
+
+
+def test_release_boundary_uses_artemis_request_time_not_server_clock():
+    release = datetime(2026, 7, 3, tzinfo=timezone.utc)
+    before_release = AccessContext(
+        course_ids=[30],
+        student_course_ids=[30],
+        now=datetime(2026, 7, 2, tzinfo=timezone.utc),
+    )
+    after_release = AccessContext(
+        course_ids=[30],
+        student_course_ids=[30],
+        now=datetime(2026, 7, 4, tzinfo=timezone.utc),
+    )
+    assert _found_unit_ids(lecture_unit(release), before_release) == []
+    assert _found_unit_ids(lecture_unit(release), after_release) == [10]

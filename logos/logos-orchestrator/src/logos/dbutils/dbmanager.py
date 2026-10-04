@@ -54,12 +54,17 @@ DEFAULT_LOCAL_TPM_LIMIT = 10000
 DEFAULT_MONTHLY_BUDGET_MICRO_CENTS = 100000000
 TEAM_MONTHLY_BUDGET_MICRO_CENTS = 500000000
 
-VALID_PRIVACY_LEVELS = {
-    "LOCAL",
-    "CLOUD_IN_EU_BY_EU_PROVIDER",
-    "CLOUD_IN_EU_BY_US_PROVIDER",
-    "CLOUD_NOT_IN_EU_BY_US_PROVIDER",
-}
+# How long a learned "this provider does not batch this model" fact is trusted
+# before the model is offered to the provider again. Generous, because the
+# change it guards against (the provider adding the model to Batch) is rare —
+# and the cost of a stale row is one more failed batch, from which the row is
+# re-learned only if the refusal repeats.
+BATCH_MODEL_ELIGIBILITY_TTL_DAYS = int(os.getenv("LOGOS_BATCH_MODEL_ELIGIBILITY_TTL_DAYS", "90"))
+
+# Derived from the ThresholdLevel declaration order (the single definition —
+# see that class for the trust ordering and the copies this mirrors): a new
+# level added to the enum is accepted by provider registration automatically.
+VALID_PRIVACY_LEVELS = frozenset(level.value for level in ThresholdLevel)
 
 
 def _choose_bucket_seconds(span_seconds: int) -> int:
@@ -134,6 +139,153 @@ def generate_logos_api_key(label: str) -> str:
     :return: A logos API-key for a given user.
     """
     return "lg-" + label + "-" + secrets.token_urlsafe(96)
+
+
+def _stringify_error_message(value: Any) -> str:
+    """Render a non-string error into a value the text column can store.
+
+    Upstream failures arrive as OpenAI-shaped dicts (``{"message": ..., "type":
+    ...}``). psycopg2 cannot adapt a dict, so passing one through turned every
+    failed cloud request into an unhandled 500 that masked the real status —
+    an authentication error upstream surfaced to the client as a Logos crash.
+    """
+    if isinstance(value, dict):
+        message = value.get("message")
+        if isinstance(message, str) and message:
+            return message
+        return json.dumps(value, separators=(",", ":"), default=str)
+    if isinstance(value, (list, tuple)):
+        return json.dumps(value, separators=(",", ":"), default=str)
+    return str(value)
+
+
+def _strip_nul(value: Any) -> Any:
+    """Drop NUL characters from every string nested inside ``value``.
+
+    Stripping has to happen on the object, not on serialised JSON: after
+    ``json.dumps`` the escape for a NUL also occurs as a substring of an escaped
+    backslash, so replacing it in the text would leave a dangling backslash
+    behind and corrupt the document.
+
+    Keys that differ only in NULs collapse into one, and the last one wins —
+    a JSON object cannot hold both. That only arises for deliberately crafted
+    payloads, and these values feed audit logs rather than behaviour, so losing
+    one member of such a pair beats rejecting the request.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {_strip_nul(key): _strip_nul(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_strip_nul(item) for item in value]
+    return value
+
+
+def _json_for_jsonb(value: Any) -> str:
+    """Serialise ``value`` for a ``jsonb`` column or cast.
+
+    ``json.dumps`` renders a NUL as the one escape sequence Postgres refuses
+    inside ``jsonb`` — *unsupported Unicode escape sequence ... cannot be
+    converted to text*. A single such byte anywhere in a request body therefore
+    turned the logging insert into an unhandled 500, raised from
+    ``auth_parse_log`` before the request ever reached a worker: a client
+    replaying a conversation that had captured raw binary output got an instant
+    server error on every retry, and nothing was logged either.
+    """
+    return json.dumps(_strip_nul(value))
+
+
+def _positive_or_none(value: Any) -> Optional[int]:
+    """An int when the value is a positive number, else ``None``.
+
+    Context windows are stored nullable so "not reported" stays distinguishable
+    from "reported as zero", and every upstream that answers with 0 or a
+    non-numeric placeholder means the former.
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def derived_reported_context_length(profile: Any) -> int:
+    """Widest context window a worker profile dict has reported, in tokens.
+
+    A profile can carry the model's context in up to three places, and any of
+    them may be the only one set:
+
+    * ``max_context_length`` — the model's own architectural limit, when the
+      operator pinned it (manual override).
+    * ``calibration_max_model_len`` — the ``--max-model-len`` calibration
+      settled on when the model's default did not fit the pinned KV budget.
+    * ``kv_cache_to_max_model_len_pairs`` — the per-KV sweep calibration ran,
+      whose largest point is the widest window the node proved reachable.
+
+    The maximum across all of them is "the largest context this model has ever
+    been reported to run at" — the number the orchestrator falls back to when
+    no live lane says otherwise. 0 when the profile is not a dict or none of
+    the fields is a positive length.
+    """
+    if not isinstance(profile, dict):
+        return 0
+
+    def _as_len(value: Any) -> int:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return value if value > 0 else 0
+
+    native = _as_len(profile.get("max_context_length"))
+    native = max(native, _as_len(profile.get("calibration_max_model_len")))
+    pairs = profile.get("kv_cache_to_max_model_len_pairs")
+    if isinstance(pairs, list):
+        for item in pairs:
+            if isinstance(item, dict):
+                native = max(native, _as_len(item.get("max_model_len")))
+    return native
+
+
+# Snapshot the settled cost of a finalised request into log_entry so a later
+# catalogue refresh cannot rewrite completed budget history. Deliberately carries
+# no ``settled_cost_micro_cents IS NULL`` guard: finalisation is retryable, and a
+# retry that corrects the persisted usage rows must be able to correct the stored
+# cost. It is recomputed from the current usage_tokens on every finalisation and
+# is idempotent for a request whose usage no longer changes.
+_SETTLED_COST_SNAPSHOT_SQL = """
+    UPDATE log_entry le
+    SET settled_cost_micro_cents = logos_price_usage(
+        le.model_id, le.provider_id,
+        COALESCE(le.timestamp_response, le.timestamp_request),
+        le.service_tier,
+        CASE WHEN le.result_status IN ('error', 'timeout') THEN
+            (SELECT jsonb_object_agg(tt.name, ut.token_count)
+             FROM usage_tokens ut
+             JOIN token_types tt ON tt.id = ut.type_id
+             WHERE ut.log_entry_id = le.id) - ARRAY[
+                'billed_requests',
+                'billed_input_characters',
+                'billed_input_pixels',
+                'billed_input_images',
+                'billed_input_video_milliseconds',
+                'billed_input_video_milliseconds_above_8s',
+                'billed_input_video_milliseconds_above_15s',
+                'billed_output_images',
+                'billed_output_pixels',
+                'billed_output_milliseconds',
+                'billed_output_milliseconds_1080p',
+                'billed_output_milliseconds_4k'
+            ]
+        ELSE
+            (SELECT jsonb_object_agg(tt.name, ut.token_count)
+             FROM usage_tokens ut
+             JOIN token_types tt ON tt.id = ut.type_id
+             WHERE ut.log_entry_id = le.id)
+        END),
+        cost_finalized = TRUE
+    WHERE {where_clause}
+"""
 
 
 # noinspection PyUnresolvedReferences
@@ -245,7 +397,10 @@ class DBManager:
             "queue_depth_at_schedule",
             "timeout_s",
             "scheduled_ts",
+            "timestamp_provider_call",
+            "timestamp_provider_response",
             "request_complete_ts",
+            "rate_limit_admitted",
             "available_vram_mb",
             "azure_rate_remaining_requests",
             "azure_rate_remaining_tokens",
@@ -277,6 +432,8 @@ class DBManager:
             db_col = field_map.get(key, key)
             if key == "result_status" and isinstance(value, ResultStatus):
                 value = value.value
+            if key == "error_message" and not isinstance(value, str):
+                value = _stringify_error_message(value)
             update_data[db_col] = value
 
         if "scheduled_ts" in payload and "queue_wait_ms" not in payload:
@@ -308,6 +465,36 @@ class DBManager:
         self.session.execute(sql, params)
         self.session.commit()
 
+        if update_data.get("result_status") in {"success", "error", "timeout"}:
+            self._settle_cost_snapshot(log_id=log_id, request_id=request_id, params=params)
+
+    def _settle_cost_snapshot(self, *, log_id=None, request_id=None, params=None) -> None:
+        """Persist the settled cost snapshot, after the status write is durable.
+
+        Pricing is the riskier half of finalisation (a function bug, a lock, a
+        statement timeout). It runs only after the status write is durably
+        committed and its failure never surfaces, so a request cannot be left
+        stuck at result_status NULL because the snapshot blew up.
+
+        ``params`` carries the where-clause binding — the
+        update_log_entry_metrics path reuses the params dict it already built
+        (the snapshot SQL only binds the where clause, the rest is inert);
+        callers that only have the id let the helper build it.
+        """
+        if params is None:
+            params = {"log_id": log_id} if log_id is not None else {"lookup_request_id": request_id}
+        where_clause = "le.id = :log_id" if log_id is not None else "le.request_id = :lookup_request_id"
+        try:
+            self.session.execute(text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause=where_clause)), params)
+            self.session.commit()
+        except Exception as exc:  # noqa: BLE001 - snapshot must not break finalisation
+            self.session.rollback()
+            logger.warning(
+                "settled-cost snapshot failed for %s: %s",
+                log_id if log_id is not None else request_id,
+                exc,
+            )
+
     def update_request_log_metrics(
         self,
         *,
@@ -319,6 +506,33 @@ class DBManager:
         Clearer alias for request lifecycle/performance updates on `log_entry`.
         """
         self.update_log_entry_metrics(log_id=log_id, request_id=request_id, **fields)
+
+    def close_orphaned_request_logs(self, error_message: str) -> int:
+        """Finalise log rows left open by a previous orchestrator process.
+
+        A request is written on arrival and completed in-process. If the
+        orchestrator is restarted (deploy, crash) while requests are in
+        flight, nobody ever writes their terminal state: the rows keep a NULL
+        `result_status` and no `timestamp_response`, and every "running
+        requests" view derived from them shows them forever.
+
+        Only rows that predate this process can be orphans, so this must run
+        at startup before the first request is accepted — after that a NULL
+        status is a request that is genuinely still running.
+
+        Returns the number of rows closed.
+        """
+        sql = text("""
+            UPDATE log_entry
+               SET result_status = 'error',
+                   timestamp_response = NOW(),
+                   error_message = COALESCE(error_message, :error_message)
+             WHERE result_status IS NULL
+               AND timestamp_response IS NULL
+            """)
+        result = self.session.execute(sql, {"error_message": error_message})
+        self.session.commit()
+        return int(result.rowcount or 0)
 
     def update(self, table_name: str, record_id: int, data: Dict[str, Any]) -> None:
         table = Table(table_name, self.metadata, autoload_with=self.engine)
@@ -340,7 +554,7 @@ class DBManager:
     def create_job_record(
         self,
         payload: dict,
-        api_key_id: int,
+        api_key_id: Optional[int],
         team_id: Optional[int],
         user_id: Optional[int],
         environment: Optional[str],
@@ -353,15 +567,13 @@ class DBManager:
             Job ID
         """
         row = self.session.execute(
-            text(
-                """
+            text("""
                  INSERT INTO jobs (status, request_payload, api_key_id, team_id, user_id, environment)
-                 VALUES (:status, :payload::jsonb, :aki, :tid, :uid, :env) RETURNING id
-                 """
-            ),
+                 VALUES (:status, CAST(:payload AS jsonb), :aki, :tid, :uid, :env) RETURNING id
+                 """),
             {
                 "status": status,
-                "payload": json.dumps(payload),
+                "payload": _json_for_jsonb(payload),
                 "aki": api_key_id,
                 "tid": team_id,
                 "uid": user_id,
@@ -370,6 +582,142 @@ class DBManager:
         ).fetchone()
         self.session.commit()
         return row.id
+
+    def get_model_provider_benchmark_target(self, model_provider_id: int) -> Optional[Dict[str, Any]]:
+        """Resolve the endpoint and credential for one exact provider-model pair."""
+        row = (
+            self.session.execute(
+                text("""
+                SELECT mp.id AS model_provider_id,
+                       m.id AS model_id,
+                       m.name AS model_name,
+                       p.id AS provider_id,
+                       p.name AS provider_name,
+                       p.provider_type AS provider_type,
+                       p.privacy_level AS privacy_level,
+                       p.cloud_provider_type AS cloud_provider_type,
+                       p.base_url AS base_url,
+                       COALESCE(NULLIF(mp.endpoint, ''), NULLIF(p.base_url, '')) AS target,
+                       COALESCE(NULLIF(mp.api_key, ''), NULLIF(p.api_key, '')) AS api_key
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE mp.id = :model_provider_id
+                """),
+                {"model_provider_id": int(model_provider_id)},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def find_active_model_benchmark_job(
+        self,
+        provider_id: int,
+        stale_after_seconds: int = 60,
+    ) -> Optional[Dict[str, Any]]:
+        """Expire stale benchmark rows, then return the newest active job."""
+        stale_after_seconds = max(1, int(stale_after_seconds))
+        stale_error = f"Benchmark stopped updating for {stale_after_seconds} seconds"
+        expired = self.session.execute(
+            text("""
+                UPDATE jobs
+                SET status = 'failed',
+                    error_message = :stale_error,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                  AND (request_payload ->> 'provider_id')::integer = :provider_id
+                  AND COALESCE(updated_at, created_at)
+                      < CURRENT_TIMESTAMP - CAST(:stale_after_seconds AS integer) * INTERVAL '1 second'
+                """),
+            {
+                "provider_id": int(provider_id),
+                "stale_after_seconds": stale_after_seconds,
+                "stale_error": stale_error,
+            },
+        )
+        if expired.rowcount:
+            logger.warning("Expired %d stale benchmark job(s) for provider %d", expired.rowcount, provider_id)
+
+        row = (
+            self.session.execute(
+                text("""
+                SELECT id, status, request_payload, created_at, updated_at
+                FROM jobs
+                WHERE environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                  AND (request_payload ->> 'provider_id')::integer = :provider_id
+                ORDER BY created_at DESC
+                LIMIT 1
+                """),
+                {"provider_id": int(provider_id)},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def touch_model_benchmark_job(self, job_id: int) -> bool:
+        """Renew one active benchmark lease."""
+        updated = self.session.execute(
+            text("""
+                UPDATE jobs SET updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                """),
+            {"job_id": int(job_id)},
+        )
+        self.session.commit()
+        return bool(updated.rowcount)
+
+    def cancel_model_benchmark_job(self, job_id: int, reason: str) -> bool:
+        """Fail one active benchmark job and release its logical lease."""
+        updated = self.session.execute(
+            text("""
+                UPDATE jobs
+                SET status = 'failed', error_message = :reason, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND environment = 'model-provider-benchmark'
+                  AND status IN ('pending', 'running')
+                """),
+            {"job_id": int(job_id), "reason": reason[:1000]},
+        )
+        self.session.commit()
+        return bool(updated.rowcount)
+
+    def insert_model_provider_benchmark(
+        self,
+        *,
+        model_provider_id: int,
+        configuration: Dict[str, Any],
+        dataset: str,
+        sample_size: int,
+        metrics: Dict[str, Any],
+        recorded_at: datetime.datetime,
+    ) -> int:
+        """Persist one complete benchmark summary and return its id."""
+        row = self.session.execute(
+            text("""
+                INSERT INTO model_provider_benchmarks
+                    (model_provider_id, configuration, dataset, sample_size, metrics, recorded_at)
+                VALUES
+                    (:model_provider_id, CAST(:configuration AS jsonb), :dataset, :sample_size,
+                     CAST(:metrics AS jsonb), :recorded_at)
+                RETURNING id
+                """),
+            {
+                "model_provider_id": int(model_provider_id),
+                "configuration": _json_for_jsonb(configuration),
+                "dataset": dataset,
+                "sample_size": int(sample_size),
+                "metrics": _json_for_jsonb(metrics),
+                "recorded_at": recorded_at,
+            },
+        ).fetchone()
+        self.session.commit()
+        return int(row.id)
 
     def update_job_status(
         self,
@@ -386,10 +734,40 @@ class DBManager:
             "updated_at": datetime.datetime.now(datetime.timezone.utc),
         }
         if result_payload is not None:
-            update_data["result_payload"] = result_payload
+            # jobs.result_payload is jsonb and the reflected update binds this
+            # dict directly, so SQLAlchemy serialises it — _json_for_jsonb would
+            # store its string as a JSON scalar instead of an object. A NUL in a
+            # model's answer would otherwise fail the write and leave the job
+            # without its result.
+            update_data["result_payload"] = _strip_nul(result_payload)
         if error_message is not None:
-            update_data["error_message"] = error_message
+            update_data["error_message"] = (
+                error_message if isinstance(error_message, str) else _stringify_error_message(error_message)
+            )
         self.update("jobs", job_id, update_data)
+
+    def record_benchmark_request_started(self, job_id: int) -> None:
+        """Atomically advance an active benchmark's visible sample progress."""
+        self.session.execute(
+            text("""
+                UPDATE jobs
+                SET result_payload = jsonb_set(
+                        COALESCE(result_payload, '{}'::jsonb),
+                        '{started_samples}',
+                        to_jsonb(LEAST(
+                            COALESCE((result_payload->>'started_samples')::integer, 0) + 1,
+                            COALESCE((result_payload->>'total_samples')::integer, 0)
+                        )),
+                        true
+                    ),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND status = 'running'
+                  AND result_payload->>'stage' = 'benchmarking'
+                """),
+            {"job_id": int(job_id)},
+        )
+        self.session.commit()
 
     def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -415,10 +793,22 @@ class DBManager:
 
         original_provider_type = provider_type or ""
 
-        provider_type = normalize_provider_type(original_provider_type)
+        # The legacy local-provider type is no longer supported — every worker
+        # lane runs the current engine.
+        # Refuse it explicitly instead of letting it through as an unknown
+        # type the DB enum would reject with a raw constraint error.
+        if original_provider_type.strip().lower() == "ollama":
+            return (
+                {
+                    "error": (
+                        "provider_type 'ollama' is no longer supported: every worker lane runs vLLM. "
+                        "Use 'logosnode' for worker-backed providers."
+                    )
+                },
+                400,
+            )
 
-        if provider_type in {"node", "node_controller", "ollama", "logos_worker_node"}:
-            provider_type = "logosnode"
+        provider_type = normalize_provider_type(original_provider_type)
 
         if not provider_type:
             return {"error": "provider_type is required"}, 400
@@ -446,8 +836,7 @@ class DBManager:
         return {"result": "Created Provider.", "provider-id": pk}, 200
 
     def get_policy(self, logos_key: str, policy_id: int):
-        sql = text(
-            """
+        sql = text("""
                    SELECT p.*
                    FROM policies p
                             JOIN api_keys ak ON (
@@ -456,8 +845,7 @@ class DBManager:
                        )
                    WHERE ak.key_value = :logos_key
                      AND p.id = :policy_id LIMIT 1
-                   """
-        )
+                   """)
         result = self.session.execute(sql, {"logos_key": logos_key, "policy_id": int(policy_id)}).mappings().first()
         if result is None:
             if self.check_authorization(logos_key):
@@ -478,13 +866,11 @@ class DBManager:
         return {"result": "Created Token Type.", "token-type-id": pk}, 200
 
     def get_token_name(self, name):
-        sql = text(
-            """
+        sql = text("""
                    SELECT *
                    FROM token_types
                    WHERE name = :name
-                   """
-        )
+                   """)
         entity = self.session.execute(sql, {"name": name}).fetchone()
         if entity is not None:
             return entity.id
@@ -501,8 +887,7 @@ class DBManager:
         if not self.check_authorization(logos_key):
             return {"error": "Database changes only allowed for root user."}, 500
 
-        upsert_sql = text(
-            """
+        upsert_sql = text("""
             INSERT INTO model_provider (provider_id, model_id, api_key, endpoint)
             VALUES (:pid, :mid, :api_key, :endpoint) ON CONFLICT (model_id, provider_id)
             DO
@@ -510,8 +895,7 @@ class DBManager:
                api_key = EXCLUDED.api_key,
                endpoint = EXCLUDED.endpoint
             RETURNING id
-            """
-        )
+            """)
         result = self.session.execute(
             upsert_sql,
             {
@@ -549,27 +933,23 @@ class DBManager:
 
         # Ensure logosnode_provider_keys entry exists for this provider
         self.session.execute(
-            text(
-                """
+            text("""
                 INSERT INTO logosnode_provider_keys (provider_id)
                 VALUES (:pid)
                 ON CONFLICT (provider_id) DO NOTHING
-            """
-            ),
+            """),
             {"pid": pid},
         )
 
         # Get current model_provider links for this logosnode provider
         existing_rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT mp.model_id, m.name
                 FROM model_provider mp
                 JOIN models m ON m.id = mp.model_id
                 JOIN providers p ON p.id = mp.provider_id
                 WHERE mp.provider_id = :pid AND p.provider_type = 'logosnode'
-            """
-            ),
+            """),
             {"pid": pid},
         ).fetchall()
         existing_by_name: dict[str, int] = {row.name: row.model_id for row in existing_rows}
@@ -598,14 +978,12 @@ class DBManager:
             else:
                 mid = (
                     self.session.execute(
-                        text(
-                            """
+                        text("""
                         INSERT INTO models (name, weight_latency, weight_accuracy,
-                                            weight_cost, weight_quality, tags, parallel, description)
-                        VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                            weight_cost, weight_quality, tags, description)
+                        VALUES (:name, 0, 0, 0, 0, '', '')
                         RETURNING id
-                    """
-                        ),
+                    """),
                         {"name": model_name},
                     )
                     .fetchone()
@@ -615,13 +993,11 @@ class DBManager:
 
             # Upsert model_provider link
             self.session.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO model_provider (provider_id, model_id)
                     VALUES (:pid, :mid)
                     ON CONFLICT DO NOTHING
-                """
-                ),
+                """),
                 {"pid": pid, "mid": mid},
             )
 
@@ -634,15 +1010,11 @@ class DBManager:
         Used by the Azure deployment auto-sync to discover which resources to
         poll. ``api_key`` is the provider-level resource key.
         """
-        rows = self.session.execute(
-            text(
-                """
+        rows = self.session.execute(text("""
                 SELECT id, name, base_url, api_key
                 FROM providers
                 WHERE provider_type = 'cloud' AND cloud_provider_type = 'azure'
-                """
-            )
-        ).fetchall()
+                """)).fetchall()
         return [{"id": r.id, "name": r.name, "base_url": r.base_url, "api_key": r.api_key} for r in rows]
 
     def sync_azure_deployments(self, provider_id: int, deployments: list[Dict[str, str]]) -> Dict[str, Any]:
@@ -664,24 +1036,25 @@ class DBManager:
         permissions are NOT granted automatically — an admin assigns access per
         team via the models tab.
 
-        Returns ``{"new_models": [names of newly inserted model rows],
+        Returns ``{"new_models": [names], "new_model_ids": [ids],
         "changed": bool}``. ``changed`` is True when anything that affects
         routing changed (a link was inserted, an endpoint updated, or a stale
         link pruned) so the caller can refresh runtime state; ``new_models``
-        drives the (more expensive) classifier rebuild.
+        drives the (more expensive) classifier rebuild. ``new_model_ids``
+        covers every model that got a link to this provider in this pass —
+        including model rows that already existed globally, because their
+        per-provider price rows are created only on first link.
         """
         pid = int(provider_id)
         desired = {d["model_name"]: d["endpoint"] for d in deployments}
 
         existing_rows = self.session.execute(
-            text(
-                """
+            text("""
                 SELECT mp.model_id, m.name, mp.endpoint
                 FROM model_provider mp
                 JOIN models m ON m.id = mp.model_id
                 WHERE mp.provider_id = :pid
-                """
-            ),
+                """),
             {"pid": pid},
         ).fetchall()
         existing_by_name = {row.name: row.model_id for row in existing_rows}
@@ -698,6 +1071,7 @@ class DBManager:
             changed = True
 
         newly_inserted: list[str] = []
+        newly_linked_ids: list[int] = []
         for model_name, endpoint in desired.items():
             row = self.session.execute(
                 text("SELECT id FROM models WHERE name = :name"),
@@ -708,14 +1082,12 @@ class DBManager:
             else:
                 mid = (
                     self.session.execute(
-                        text(
-                            """
+                        text("""
                             INSERT INTO models (name, weight_latency, weight_accuracy,
-                                                weight_cost, weight_quality, tags, parallel, description)
-                            VALUES (:name, 0, 0, 0, 0, '', 1, '')
+                                                weight_cost, weight_quality, tags, description)
+                            VALUES (:name, 0, 0, 0, 0, '', '')
                             RETURNING id
-                            """
-                        ),
+                            """),
                         {"name": model_name},
                     )
                     .fetchone()
@@ -724,25 +1096,347 @@ class DBManager:
                 newly_inserted.append(model_name)
 
             # A new link for this provider, or an endpoint that drifted, changes
-            # routing and must be reflected in the runtime registry.
-            if model_name not in existing_by_name or existing_endpoint.get(model_name) != endpoint:
+            # routing and must be reflected in the runtime registry. The link
+            # is what gates the per-provider price rows, so every freshly
+            # linked model — even one whose row already existed globally —
+            # needs a price/capability refresh on the webservice side.
+            new_link = model_name not in existing_by_name
+            if new_link or existing_endpoint.get(model_name) != endpoint:
                 changed = True
+            if new_link:
+                newly_linked_ids.append(mid)
 
             # Upsert the link and refresh the endpoint; preserve any api_key override.
             self.session.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO model_provider (provider_id, model_id, endpoint)
                     VALUES (:pid, :mid, :endpoint)
                     ON CONFLICT (model_id, provider_id)
                     DO UPDATE SET endpoint = EXCLUDED.endpoint
-                    """
-                ),
+                    """),
                 {"pid": pid, "mid": mid, "endpoint": endpoint},
             )
 
+        self._queue_discovery_notifications(newly_linked_ids)
         self.session.commit()
-        return {"new_models": newly_inserted, "changed": changed or bool(newly_inserted)}
+        return {
+            "new_models": newly_inserted,
+            "new_model_ids": newly_linked_ids,
+            "changed": changed or bool(newly_inserted),
+        }
+
+    def get_cloud_sync_providers(self) -> list[Dict[str, Any]]:
+        """Cloud providers whose model catalogue is discovered over ``/v1/models``.
+
+        Every cloud provider except Azure, which has its own discovery path:
+        its deployments are listed by a control-plane call that also yields the
+        deployment id and api-version an endpoint URL needs, none of which
+        ``/v1/models`` reports (see :meth:`get_azure_providers`).
+
+        A provider with no ``base_url`` cannot be queried at all and is left
+        out; a provider with no key is returned, because an upstream that
+        serves its model list unauthenticated is legitimate.
+        """
+        rows = self.session.execute(text("""
+                SELECT id, name, base_url, api_key, auth_name, auth_format,
+                       cloud_provider_type
+                FROM providers
+                WHERE provider_type = 'cloud'
+                  AND (cloud_provider_type IS NULL OR cloud_provider_type <> 'azure')
+                  AND COALESCE(base_url, '') <> ''
+                ORDER BY id
+                """)).fetchall()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "base_url": r.base_url,
+                "api_key": r.api_key,
+                "auth_name": r.auth_name,
+                "auth_format": r.auth_format,
+                "cloud_provider_type": r.cloud_provider_type,
+            }
+            for r in rows
+        ]
+
+    def set_cloud_provider_type(self, provider_id: int, cloud_provider_type: str) -> None:
+        """Set a cloud provider's type, but only while it is still unset.
+
+        Guarded in SQL rather than by the caller so a concurrently-running
+        operator edit wins: discovery fills in a blank, it never overrules a
+        choice someone made.
+        """
+        self.session.execute(
+            text("""
+                UPDATE providers
+                SET cloud_provider_type = CAST(:value AS cloud_provider_type_enum),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :pid AND cloud_provider_type IS NULL
+                """),
+            {"pid": int(provider_id), "value": str(cloud_provider_type)},
+        )
+        self.session.commit()
+
+    def sync_cloud_models(self, provider_id: int, model_names: list[str]) -> Dict[str, Any]:
+        """Mirror a cloud upstream's model list into ``models`` + ``model_provider``.
+
+        The generic counterpart to :meth:`sync_azure_deployments`. The
+        difference is the endpoint: an Azure deployment needs a fully-qualified
+        URL, while an OpenAI-shaped upstream is addressed by forwarding the
+        inbound path against the provider's ``base_url``, which is what a NULL
+        ``endpoint`` already means to ``ContextResolver``. Existing links keep
+        whatever endpoint an operator set by hand.
+
+        Links for models the upstream no longer lists are pruned, so the
+        catalogue mirrors the upstream. Team permissions are NOT granted
+        automatically — an admin assigns access per team via the models tab, so
+        a discovered model stays invisible to users until then.
+
+        Returns ``{"new_models": [...], "new_model_ids": [...], "changed": bool}`` with the same
+        meaning as :meth:`sync_azure_deployments`.
+        """
+        pid = int(provider_id)
+        desired = {name for name in model_names if name}
+
+        existing_rows = self.session.execute(
+            text("""
+                SELECT mp.model_id, m.name
+                FROM model_provider mp
+                JOIN models m ON m.id = mp.model_id
+                WHERE mp.provider_id = :pid
+                """),
+            {"pid": pid},
+        ).fetchall()
+        existing_by_name = {row.name: row.model_id for row in existing_rows}
+
+        changed = False
+        for stale_name in set(existing_by_name) - desired:
+            self.session.execute(
+                text("DELETE FROM model_provider WHERE provider_id = :pid AND model_id = :mid"),
+                {"pid": pid, "mid": existing_by_name[stale_name]},
+            )
+            changed = True
+
+        newly_inserted: list[str] = []
+        # Every model below receives a new link for this provider (existing
+        # links were skipped above), so each one needs a refresh — even when
+        # the models row already existed globally.
+        newly_linked_ids: list[int] = []
+        for model_name in sorted(desired):
+            if model_name in existing_by_name:
+                continue
+            row = self.session.execute(
+                text("SELECT id FROM models WHERE name = :name"),
+                {"name": model_name},
+            ).fetchone()
+            if row is not None:
+                mid = row.id
+            else:
+                mid = (
+                    self.session.execute(
+                        text("""
+                            INSERT INTO models (name, weight_latency, weight_accuracy,
+                                                weight_cost, weight_quality, tags, description)
+                            VALUES (:name, 0, 0, 0, 0, '', '')
+                            RETURNING id
+                            """),
+                        {"name": model_name},
+                    )
+                    .fetchone()
+                    .id
+                )
+                newly_inserted.append(model_name)
+            newly_linked_ids.append(mid)
+
+            self.session.execute(
+                text("""
+                    INSERT INTO model_provider (provider_id, model_id)
+                    VALUES (:pid, :mid)
+                    ON CONFLICT (model_id, provider_id) DO NOTHING
+                    """),
+                {"pid": pid, "mid": mid},
+            )
+            changed = True
+
+        self._queue_discovery_notifications(newly_linked_ids)
+        self.session.commit()
+        return {"new_models": newly_inserted, "new_model_ids": newly_linked_ids, "changed": changed}
+
+    def _queue_discovery_notifications(self, model_ids: list[int]) -> None:
+        """Queue freshly linked models for a webservice refresh notification.
+
+        Runs in the caller's open transaction, so a queue row commits
+        atomically with the model_provider link that created the need for
+        it: a crash can never leave a freshly linked model whose price/
+        capability refresh was never queued and thus never retried.
+        """
+        for model_id in model_ids:
+            self.session.execute(
+                text("""
+                    INSERT INTO model_discovery_notifications (model_id)
+                    VALUES (:id)
+                    ON CONFLICT (model_id) DO NOTHING
+                    """),
+                {"id": model_id},
+            )
+
+    def get_pending_discovery_model_ids(self) -> list[int]:
+        """Model IDs still waiting for a webservice discovery notification.
+
+        The discovery syncs queue every newly linked model here (see
+        :meth:`_queue_discovery_notifications`); the notifier delivers the
+        whole queue on each pass and clears it only on acknowledgment, so a
+        webservice outage delays the refresh to the next pass instead of
+        losing it until the daily full refresh.
+        """
+        rows = self.session.execute(
+            text("SELECT model_id FROM model_discovery_notifications ORDER BY model_id")
+        ).fetchall()
+        return [row.model_id for row in rows]
+
+    def mark_discovery_notified(self, model_ids: list[int]) -> None:
+        """Drop queue entries the webservice has acknowledged.
+
+        The webservice refresh is idempotent, so if an ID is queued again
+        while the delivery is in flight (a re-link in a concurrent pass),
+        this only delays that refresh to the following pass.
+        """
+        if not model_ids:
+            return
+        self.session.execute(
+            text("DELETE FROM model_discovery_notifications WHERE model_id = ANY(:ids)"),
+            {"ids": list(model_ids)},
+        )
+        self.session.commit()
+
+    def replace_cloud_model_context(self, provider_id: int, contexts: Dict[str, Dict[str, int]]) -> bool:
+        """Store the context windows a cloud upstream reports for its models.
+
+        ``contexts`` maps a model name to any of ``current_min``,
+        ``current_max`` and ``overall`` (all optional, all in tokens). Rows for
+        models the upstream no longer lists are removed, so a shrinking
+        catalogue cannot leave a stale window behind — unlike the workernode
+        high-water mark in ``model_profiles``, this is a report of what an
+        upstream serves right now, not a measurement worth remembering.
+
+        Returns True when anything changed.
+        """
+        pid = int(provider_id)
+        previous = {
+            row.model_name: (row.context_current_min, row.context_current_max, row.context_overall)
+            for row in self.session.execute(
+                text("""
+                    SELECT model_name, context_current_min, context_current_max, context_overall
+                    FROM cloud_model_context WHERE provider_id = :pid
+                    """),
+                {"pid": pid},
+            ).fetchall()
+        }
+
+        self.session.execute(
+            text("DELETE FROM cloud_model_context WHERE provider_id = :pid"),
+            {"pid": pid},
+        )
+        current: Dict[str, tuple] = {}
+        for model_name, entry in contexts.items():
+            values = (
+                _positive_or_none(entry.get("current_min")),
+                _positive_or_none(entry.get("current_max")),
+                _positive_or_none(entry.get("overall")),
+            )
+            current[str(model_name)] = values
+            self.session.execute(
+                text("""
+                    INSERT INTO cloud_model_context (
+                        provider_id, model_name,
+                        context_current_min, context_current_max, context_overall, updated_at
+                    ) VALUES (:pid, :name, :cmin, :cmax, :overall, CURRENT_TIMESTAMP)
+                    """),
+                {
+                    "pid": pid,
+                    "name": str(model_name),
+                    "cmin": values[0],
+                    "cmax": values[1],
+                    "overall": values[2],
+                },
+            )
+        self.session.commit()
+        return previous != current
+
+    def get_cloud_context_by_model(self) -> Dict[str, Dict[str, int]]:
+        """Model name -> the context windows cloud upstreams report for it.
+
+        Reduced across providers the same way the workernode view is reduced
+        across lanes: ``current_min`` is the smallest window any provider
+        serving this model will accept — a request may be routed to any of
+        them — while ``current_max`` and ``overall`` are the largest.
+
+        Only positive values are returned, so a model whose upstream reports no
+        window is absent and callers treat it as unknown rather than zero.
+        """
+        rows = self.session.execute(text("""
+                SELECT model_name, context_current_min, context_current_max, context_overall
+                FROM cloud_model_context
+                """)).fetchall()
+
+        stats: Dict[str, Dict[str, int]] = {}
+        for row in rows:
+            entry = stats.setdefault(str(row.model_name), {})
+            for field, value, keep_smallest in (
+                ("current_min", row.context_current_min, True),
+                ("current_max", row.context_current_max, False),
+                ("overall", row.context_overall, False),
+            ):
+                value = _positive_or_none(value)
+                if value is None:
+                    continue
+                if field not in entry:
+                    entry[field] = value
+                elif keep_smallest:
+                    entry[field] = min(entry[field], value)
+                else:
+                    entry[field] = max(entry[field], value)
+        return {model: entry for model, entry in stats.items() if entry}
+
+    def get_catalog_context_by_model(self) -> Dict[str, int]:
+        """Model name -> the input context window the model catalog publishes for it.
+
+        The webservice refreshes ``model_capabilities`` from the upstream
+        registry, and its ``max_input_tokens`` is the only size known for a
+        cloud model whose upstream publishes no window of its own — the Azure
+        family first among them. Reduced like every other source of this: the
+        smallest published window wins, because a request may land on any
+        deployment of the model and only the narrowest holds unconditionally.
+
+        Scoped to models with a cloud ``model_provider`` association, because
+        the value stands in for what a provider *serves*: a cloud upstream
+        serves a catalog model at its published size, but a local model's
+        window is a property of the calibrated lane, and a local-only model
+        with no lane up has nothing being served — advertising the registry's
+        figure for it would report a window no deployment holds.
+
+        Only positive values are returned, so a model the catalog does not
+        know (or that it lists without a window) is absent and callers treat
+        it as unknown rather than zero.
+        """
+        rows = self.session.execute(text("""
+                SELECT DISTINCT m.name, c.max_input_tokens
+                FROM model_capabilities c
+                JOIN models m ON m.id = c.model_id
+                JOIN model_provider mp ON mp.model_id = m.id
+                JOIN providers p ON p.id = mp.provider_id
+                WHERE p.provider_type = 'cloud'
+                  AND c.max_input_tokens IS NOT NULL AND c.max_input_tokens > 0
+                """)).fetchall()
+
+        contexts: Dict[str, int] = {}
+        for row in rows:
+            value = _positive_or_none(row.max_input_tokens)
+            if value is None:
+                continue
+            name = str(row.name)
+            contexts[name] = min(contexts[name], value) if name in contexts else value
+        return contexts
 
     def get_provider_config(self, provider_id: int) -> Optional[Dict[str, Any]]:
         """
@@ -754,14 +1448,12 @@ class DBManager:
         Returns:
             Dictionary with configuration fields if found, None otherwise
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT id, ollama_admin_url, total_vram_mb, parallel_capacity,
                    keep_alive_seconds, max_loaded_models, updated_at
             FROM providers
             WHERE id = :provider_id
-        """
-        )
+        """)
 
         result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()
 
@@ -784,16 +1476,14 @@ class DBManager:
         Returns:
             Dict with auth_name, auth_format, api_key (may be None) or None if provider not found.
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT id,
                    auth_name,
                    auth_format,
                    api_key
             FROM providers
             WHERE id = :provider_id
-        """
-        )
+        """)
 
         result = self.session.execute(sql, {"provider_id": provider_id}).fetchone()
         if not result:
@@ -822,7 +1512,8 @@ class DBManager:
         Args:
             logos_key: Authorization key (root user only)
             provider_id: Provider ID to configure
-            ollama_admin_url: Internal admin endpoint for Ollama (e.g., http://gpu-vm-1:11434)
+            ollama_admin_url: Internal admin endpoint of the worker (e.g., http://gpu-vm-1:5000).
+                Legacy column name — the value is the worker's base URL.
             total_vram_mb: Total VRAM capacity in MB (e.g., 49152 for 48GB)
             parallel_capacity: Max concurrent requests per model
             keep_alive_seconds: How long models stay loaded when idle
@@ -860,14 +1551,12 @@ class DBManager:
         updates.append("updated_at = CURRENT_TIMESTAMP")
         update_clause = ", ".join(updates)
 
-        sql = text(
-            f"""
+        sql = text(f"""
             UPDATE providers
             SET {update_clause}
             WHERE id = :provider_id
             RETURNING id
-        """
-        )
+        """)
 
         result = self.session.execute(sql, params)
         self.session.commit()
@@ -897,7 +1586,7 @@ class DBManager:
         error_message: Optional[str] = None,
     ) -> int:
         """
-        Insert Ollama provider snapshot into monitoring table.
+        Insert provider snapshot into the monitoring table.
 
         Args:
             provider_id: Provider ID (FK to providers.id)
@@ -911,9 +1600,8 @@ class DBManager:
             poll_success: Whether the poll was successful
             error_message: Error message if poll failed
         """
-        sql = text(
-            """
-            INSERT INTO ollama_provider_snapshots (
+        sql = text("""
+            INSERT INTO provider_snapshots (
                 provider_id,
                 snapshot_ts,
                 total_models_loaded,
@@ -941,8 +1629,7 @@ class DBManager:
                 :error_message
             )
             RETURNING id
-        """
-        )
+        """)
 
         result = self.session.execute(
             sql,
@@ -953,10 +1640,10 @@ class DBManager:
                 "total_vram_used_bytes": total_vram_used_bytes,
                 "total_memory_bytes": (int(total_memory_bytes) if total_memory_bytes is not None else None),
                 "free_memory_bytes": (int(free_memory_bytes) if free_memory_bytes is not None else None),
-                "loaded_models": json.dumps(loaded_models),
+                "loaded_models": _json_for_jsonb(loaded_models),
                 "snapshot_source": snapshot_source or "unknown",
-                "runtime_payload": json.dumps(runtime_payload or {}),
-                "scheduler_signals": json.dumps(scheduler_signals or {}),
+                "runtime_payload": _json_for_jsonb(runtime_payload or {}),
+                "scheduler_signals": _json_for_jsonb(scheduler_signals or {}),
                 "poll_success": poll_success,
                 "error_message": error_message,
             },
@@ -971,6 +1658,17 @@ class DBManager:
     ) -> int:
         """Upsert model profiles from worker runtime into the model_profiles table.
 
+        ``max_reported_context_length`` is maintained as the historic maximum:
+        the ON CONFLICT clause keeps the larger of the stored value and the
+        freshly derived one, so a later calibration that reports a narrower
+        window (e.g. on a node with less VRAM) cannot shrink the widest window
+        this model has ever been reported at. That high-water mark is what the
+        orchestrator falls back to for a model's context when every workernode
+        is offline. Rows created before the column existed hold NULL, and
+        GREATEST with a NULL argument returns NULL in Postgres — hence the
+        COALESCE, so one upsert after the migration settles the mark instead
+        of leaving it NULL forever.
+
         Args:
             provider_id: Provider ID (FK to providers.id)
             profiles: Dict of model_name -> profile dict (from runtime_payload.model_profiles)
@@ -981,13 +1679,13 @@ class DBManager:
         if not profiles:
             return 0
 
-        sql = text(
-            """
+        sql = text("""
             INSERT INTO model_profiles (
                 provider_id, model_name,
                 base_residency_mb, loaded_vram_mb, sleeping_residual_mb,
                 kv_budget_mb, disk_size_bytes, engine,
                 tensor_parallel_size, kv_per_token_bytes, max_context_length,
+                max_reported_context_length,
                 residency_source, measurement_count, last_measured_at,
                 observed_gpu_memory_utilization, min_gpu_memory_utilization_to_load,
                 updated_at
@@ -996,6 +1694,7 @@ class DBManager:
                 :base_residency_mb, :loaded_vram_mb, :sleeping_residual_mb,
                 :kv_budget_mb, :disk_size_bytes, :engine,
                 :tensor_parallel_size, :kv_per_token_bytes, :max_context_length,
+                :max_reported_context_length,
                 :residency_source, :measurement_count, :last_measured_at,
                 :observed_gpu_memory_utilization, :min_gpu_memory_utilization_to_load,
                 CURRENT_TIMESTAMP
@@ -1010,14 +1709,17 @@ class DBManager:
                 tensor_parallel_size = EXCLUDED.tensor_parallel_size,
                 kv_per_token_bytes = EXCLUDED.kv_per_token_bytes,
                 max_context_length = EXCLUDED.max_context_length,
+                max_reported_context_length = GREATEST(
+                    COALESCE(model_profiles.max_reported_context_length, 0),
+                    EXCLUDED.max_reported_context_length
+                ),
                 residency_source = EXCLUDED.residency_source,
                 measurement_count = EXCLUDED.measurement_count,
                 last_measured_at = EXCLUDED.last_measured_at,
                 observed_gpu_memory_utilization = EXCLUDED.observed_gpu_memory_utilization,
                 min_gpu_memory_utilization_to_load = EXCLUDED.min_gpu_memory_utilization_to_load,
                 updated_at = CURRENT_TIMESTAMP
-        """
-        )
+        """)
 
         count = 0
         for model_name, data in profiles.items():
@@ -1041,6 +1743,7 @@ class DBManager:
                     "tensor_parallel_size": data.get("tensor_parallel_size"),
                     "kv_per_token_bytes": data.get("kv_per_token_bytes"),
                     "max_context_length": data.get("max_context_length"),
+                    "max_reported_context_length": derived_reported_context_length(data),
                     "residency_source": data.get("residency_source"),
                     "measurement_count": int(data.get("measurement_count", 0) or 0),
                     "last_measured_at": last_measured_at,
@@ -1052,7 +1755,134 @@ class DBManager:
         self.session.commit()
         return count
 
-    def get_ollama_vram_stats(
+    def get_historic_max_context_by_model(self) -> Dict[str, int]:
+        """Model name -> widest context ever reported for it, across providers.
+
+        Reads the ``max_reported_context_length`` high-water mark
+        :meth:`upsert_model_profiles` maintains and reduces each model to the
+        maximum over every provider that has ever reported it. Only models with
+        a positive (i.e. actually reported) window are returned; a model that
+        was never calibrated to a known context is absent, so callers treat a
+        missing entry as "unknown" rather than zero.
+
+        This is the orchestrator's durable view of a model's context: it
+        survives every workernode going offline and an orchestrator restart,
+        which is exactly when a live runtime snapshot would say nothing.
+        """
+        sql = text("""
+            SELECT model_name, MAX(max_reported_context_length) AS max_context
+            FROM model_profiles
+            WHERE max_reported_context_length > 0
+            GROUP BY model_name
+        """)
+        result = self.session.execute(sql)
+        historic: Dict[str, int] = {}
+        for model_name, max_context in result:
+            value = int(max_context or 0)
+            if value > 0:
+                historic[str(model_name)] = value
+        return historic
+
+    def upsert_calibration_probe_log(
+        self,
+        provider_id: int,
+        model_name: str,
+        recorded_at: Optional[datetime.datetime],
+        payload: Dict[str, Any],
+        log_text: Optional[str] = None,
+    ) -> None:
+        """Upsert a calibration probe log from a worker's calibration_probe_log event.
+
+        Keeps only the most recent row per (provider_id, model_name) — same
+        ON CONFLICT DO UPDATE pattern as upsert_model_profiles above.
+
+        Args:
+            provider_id: Provider ID (FK to providers.id) — the worker node.
+            model_name: The model the probe attempted to load.
+            recorded_at: Timestamp the worker emitted the event, if known.
+            payload: Structured probe summary (see LogosBridgeClient.
+                _record_calibration_probe_log on the worker side for the
+                exact shape) — must NOT contain "log_text" (caller pops it
+                before calling, so it isn't duplicated into the summary
+                JSONB column below).
+            log_text: Full raw calibration log for this (provider, model),
+                stored separately so it doesn't bloat/duplicate `summary`.
+        """
+        sql = text("""
+            INSERT INTO calibration_probe_logs (
+                provider_id, model_name,
+                success, probe_command, error,
+                unsupported_reason, node_unhealthy_reason, observed_reason,
+                summary, log_text, recorded_at, updated_at
+            ) VALUES (
+                :provider_id, :model_name,
+                :success, :probe_command, :error,
+                :unsupported_reason, :node_unhealthy_reason, :observed_reason,
+                :summary, :log_text, :recorded_at, CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (provider_id, model_name) DO UPDATE SET
+                success = EXCLUDED.success,
+                probe_command = EXCLUDED.probe_command,
+                error = EXCLUDED.error,
+                unsupported_reason = EXCLUDED.unsupported_reason,
+                node_unhealthy_reason = EXCLUDED.node_unhealthy_reason,
+                observed_reason = EXCLUDED.observed_reason,
+                summary = EXCLUDED.summary,
+                log_text = EXCLUDED.log_text,
+                recorded_at = EXCLUDED.recorded_at,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE calibration_probe_logs.recorded_at IS NULL
+               OR EXCLUDED.recorded_at IS NULL
+               OR EXCLUDED.recorded_at > calibration_probe_logs.recorded_at
+        """)
+        self.session.execute(
+            sql,
+            {
+                "provider_id": provider_id,
+                "model_name": model_name,
+                "success": bool(payload.get("success", False)),
+                "probe_command": payload.get("probe_command") or None,
+                "error": payload.get("error") or None,
+                "unsupported_reason": payload.get("unsupported_reason"),
+                "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
+                "observed_reason": payload.get("observed_reason"),
+                "summary": _json_for_jsonb(payload),
+                "log_text": log_text or None,
+                "recorded_at": recorded_at,
+            },
+        )
+        self.session.commit()
+
+    def get_calibration_probe_logs_by_model(self, model_name: str) -> list[Dict[str, Any]]:
+        """Every node's most recent calibration probe log for one model.
+
+        Used by the webservice's model-error-report page to show real
+        per-node log text instead of mocked fixtures. ``summary`` backs
+        the "Complete Logs" tab for successful calibrations, which no
+        longer carry a ``log_text`` (see upsert_calibration_probe_log).
+        """
+        sql = text("""
+            SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
+                   cpl.probe_command, cpl.error, cpl.summary, cpl.log_text,
+                   cpl.unsupported_reason, cpl.node_unhealthy_reason,
+                   cpl.observed_reason, cpl.summary->'stages' AS stages,
+                   cpl.recorded_at, cpl.updated_at
+            FROM calibration_probe_logs cpl
+            JOIN providers p ON p.id = cpl.provider_id
+            WHERE cpl.model_name = :model_name
+            ORDER BY cpl.provider_id
+        """)
+        rows = self.session.execute(sql, {"model_name": model_name}).fetchall()
+        results = []
+        for row in rows:
+            entry = dict(row._mapping)
+            for field in ("summary", "stages"):
+                value = entry.get(field)
+                entry[field] = json.loads(value) if isinstance(value, str) else value
+            results.append(entry)
+        return results
+
+    def get_provider_vram_stats(
         self,
         logos_key: str,
         day: str,
@@ -1091,8 +1921,7 @@ class DBManager:
             "end_ts": end_dt,
         }
 
-        sql = text(
-            """
+        sql = text("""
             SELECT
                 s.id,
                 s.provider_id,
@@ -1107,15 +1936,14 @@ class DBManager:
                 p.total_vram_mb,
                 MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                     OVER (PARTITION BY s.provider_id) AS capacity_bytes
-            FROM ollama_provider_snapshots s
+            FROM provider_snapshots s
             LEFT JOIN providers p
               ON p.id = s.provider_id
             WHERE s.poll_success = TRUE
               AND s.snapshot_ts >= :start_ts
               AND s.snapshot_ts < :end_ts
             ORDER BY s.provider_id, s.snapshot_ts
-        """
-        )
+        """)
 
         try:
             rows = self.session.execute(sql, params).fetchall()
@@ -1175,10 +2003,10 @@ class DBManager:
             return {"providers": providers_list}, 200
 
         except Exception as e:
-            logger.error(f"Failed to query ollama_vram_stats: {e}")
+            logger.error(f"Failed to query provider_vram_stats: {e}")
             return {"error": str(e)}, 500
 
-    def get_ollama_vram_deltas(
+    def get_provider_vram_deltas(
         self,
         logos_key: str,
         day: str,
@@ -1232,8 +2060,7 @@ class DBManager:
             since_clause = " AND s.snapshot_ts >= :since_ts"
 
         if full_history:
-            sql = text(
-                f"""
+            sql = text(f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -1248,20 +2075,18 @@ class DBManager:
                     p.total_vram_mb,
                     MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                         OVER (PARTITION BY s.provider_id) AS capacity_bytes
-                FROM ollama_provider_snapshots s
+                FROM provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
                 WHERE s.poll_success = TRUE
                   AND s.id > :after_snapshot_id
                   {since_clause}
                 ORDER BY s.id
-            """
-            )
+            """)
         else:
             params["start_ts"] = start_dt
             params["end_ts"] = end_dt
-            sql = text(
-                f"""
+            sql = text(f"""
                 SELECT
                     s.id,
                     s.provider_id,
@@ -1276,7 +2101,7 @@ class DBManager:
                     p.total_vram_mb,
                     MAX(COALESCE(s.total_memory_bytes, s.total_vram_used_bytes))
                         OVER (PARTITION BY s.provider_id) AS capacity_bytes
-                FROM ollama_provider_snapshots s
+                FROM provider_snapshots s
                 LEFT JOIN providers p
                   ON p.id = s.provider_id
                 WHERE s.poll_success = TRUE
@@ -1285,8 +2110,7 @@ class DBManager:
                   AND s.id > :after_snapshot_id
                   {since_clause}
                 ORDER BY s.id
-            """
-            )
+            """)
 
         try:
             rows = self.session.execute(sql, params).fetchall()
@@ -1360,7 +2184,7 @@ class DBManager:
             }, 200
 
         except Exception as e:
-            logger.error(f"Failed to query ollama_vram_deltas: {e}")
+            logger.error(f"Failed to query provider_vram_deltas: {e}")
             return {"error": str(e)}, 500
 
     def get_auth_info_to_deployment(
@@ -1399,14 +2223,14 @@ class DBManager:
             """
             params["api_key_id"] = int(api_key_id)
 
-        sql = text(
-            f"""
+        sql = text(f"""
             SELECT m.id          AS model_id,
                    m.name        AS model_name,
                    mp.endpoint   AS endpoint,
                    p.id          AS provider_id,
                    p.name        AS provider_name,
                    p.provider_type AS provider_type,
+                   p.cloud_provider_type AS cloud_provider_type,
                    p.base_url    AS base_url,
                    p.auth_name   AS auth_name,
                    p.auth_format AS auth_format,
@@ -1417,20 +2241,17 @@ class DBManager:
             {permission_join}
             {filters}
             LIMIT 1
-        """
-        )
+        """)
 
         row = self.session.execute(sql, params).mappings().first()
         return dict(row) if row else None
 
     def get_endpoint_for_deployment(self, model_id: int, provider_id: int) -> Optional[str]:
         """Get the endpoint for a specific model-provider deployment from model_provider."""
-        sql = text(
-            """
+        sql = text("""
             SELECT endpoint FROM model_provider
             WHERE model_id = :model_id AND provider_id = :provider_id
-        """
-        )
+        """)
         row = self.session.execute(sql, {"model_id": int(model_id), "provider_id": int(provider_id)}).fetchone()
         return row.endpoint if row else None
 
@@ -1438,8 +2259,7 @@ class DBManager:
         """
         Get a list of all authorized model deployments for an api key.
         """
-        sql = text(
-            """
+        sql = text("""
                    WITH key_info AS (
                             SELECT ak.id AS aki,
                                    ak.team_id AS tid,
@@ -1471,17 +2291,1100 @@ class DBManager:
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
                           p.provider_type    as type,
-                          p.privacy_level as privacy_level
+                          p.privacy_level    as privacy_level,
+                          p.cloud_provider_type as cloud_provider_type,
+                          p.base_url         as base_url,
+                          m.name             as model_name,
+                          p.name             as provider_name,
+                          (
+                              SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                              FROM model_aliases a
+                              WHERE a.model_id = m.id
+                          ) AS aliases
                    FROM models m
                         JOIN model_provider mp ON m.id = mp.model_id
                         JOIN providers p ON mp.provider_id = p.id
                         JOIN effective_models em ON m.id = em.model_id
                         JOIN effective_providers ep ON p.id = ep.provider_id
                    ORDER BY model_id, provider_id
-                   """
-        )
+                   """)
         rows = self.session.execute(sql, {"api_key_id": api_key_id}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
+
+    def get_batch_provider_candidates(self, api_key_id: int) -> list[Dict[str, Any]]:
+        """Cloud providers the api key may use, as Batch API forward targets.
+
+        Provider-level rather than model-level: a batch-creation body carries
+        no ``model``, so model links are not part of its routing — the
+        effective-provider resolution (per-key permissions when the key opts
+        into custom permissions, the team's otherwise) is the whole of it.
+        ``logosnode`` providers are excluded: worker nodes serve no Batch API.
+
+        ``api_key`` mirrors the inference forward's credential resolution
+        (``get_auth_info_to_deployment``): a provider-level key, or the key of
+        one of its model links when only those are filled in. ``supports_batch``
+        is the cached probe result — NULL when the provider was never probed,
+        which the resolver treats as "ask the upstream now".
+        """
+        sql = text("""
+                   WITH key_info AS (
+                            SELECT ak.id AS aki,
+                                   ak.team_id AS tid,
+                                   ak.use_custom_permissions AS custom
+                            FROM api_keys ak
+                            WHERE ak.id = :api_key_id
+                                AND ak.is_active = true
+                        ),
+                        effective_providers AS (
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        )
+                   SELECT p.id,
+                          p.name,
+                          p.base_url,
+                          p.cloud_provider_type,
+                          p.auth_name,
+                          p.auth_format,
+                          COALESCE(
+                              NULLIF(p.api_key, ''),
+                              (SELECT NULLIF(mp.api_key, '')
+                               FROM model_provider mp
+                               WHERE mp.provider_id = p.id AND NULLIF(mp.api_key, '') IS NOT NULL
+                               ORDER BY mp.id
+                               LIMIT 1)
+                          ) AS api_key,
+                          pbc.supports_batch,
+                          pbc.checked_at AS capability_checked_at
+                   FROM providers p
+                        JOIN effective_providers ep ON p.id = ep.provider_id
+                        LEFT JOIN provider_batch_capability pbc ON pbc.provider_id = p.id
+                   WHERE p.provider_type = 'cloud'
+                     AND COALESCE(NULLIF(TRIM(p.base_url), ''), NULL) IS NOT NULL
+                   ORDER BY p.id
+                   """)
+        rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
+        return [dict(row) for row in rows]
+
+    def get_batch_provider(self, provider_id: int) -> Optional[Dict[str, Any]]:
+        """One provider's Batch API forward inputs, outside any key's scope.
+
+        The settlement path runs long after the request that created the batch,
+        so it addresses the provider by id rather than through the caller's
+        permissions.
+        """
+        row = (
+            self.session.execute(
+                text("""
+                SELECT p.id,
+                       p.name,
+                       p.base_url,
+                       p.cloud_provider_type,
+                       p.auth_name,
+                       p.auth_format,
+                       COALESCE(
+                           NULLIF(p.api_key, ''),
+                           (SELECT NULLIF(mp.api_key, '')
+                            FROM model_provider mp
+                            WHERE mp.provider_id = p.id AND NULLIF(mp.api_key, '') IS NOT NULL
+                            ORDER BY mp.id
+                            LIMIT 1)
+                       ) AS api_key
+                FROM providers p
+                WHERE p.id = :provider_id
+                """),
+                {"provider_id": int(provider_id)},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def record_provider_batch_capability(self, provider_id: int, supports_batch: bool, detail: str = "") -> None:
+        """Cache what a Batch API probe found for one provider."""
+        self.session.execute(
+            text("""
+                INSERT INTO provider_batch_capability (provider_id, supports_batch, detail, checked_at)
+                VALUES (:pid, :supports, :detail, :now)
+                ON CONFLICT (provider_id)
+                DO UPDATE SET supports_batch = EXCLUDED.supports_batch,
+                              detail = EXCLUDED.detail,
+                              checked_at = EXCLUDED.checked_at
+                """),
+            {
+                "pid": int(provider_id),
+                "supports": bool(supports_batch),
+                "detail": (detail or "")[:500],
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def get_batch_model_ineligibility(self, provider_id: int) -> set:
+        """The model ids this provider is known not to batch, right now.
+
+        Feeds the choice of where a batch runs: a model on this list counts as
+        not hosted for Batch, so a file naming it runs in Logos instead of
+        being forwarded to a provider that would refuse it. Rows expire after
+        the eligibility TTL — a model the provider adds to Batch later is
+        picked up automatically.
+        """
+        rows = self.session.execute(
+            text("""
+                SELECT model_id FROM provider_model_batch_eligibility
+                WHERE provider_id = :pid AND eligible = false
+                  AND checked_at > :now - make_interval(days => :ttl)
+                """),
+            {
+                "pid": int(provider_id),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+                "ttl": int(BATCH_MODEL_ELIGIBILITY_TTL_DAYS),
+            },
+        ).fetchall()
+        return {int(row[0]) for row in rows}
+
+    def record_model_batch_ineligibility(self, provider_id: int, model_id: int, detail: str = "") -> None:
+        """Remember that the provider refused to batch one of its models.
+
+        Learned from the provider's own refusal — a batch creation refused for
+        the model, or a batch that finished failed with its SKU error — rather
+        than configured, because which models a resource offers for batch is a
+        fact about the upstream that changes on the provider's schedule.
+        """
+        self.session.execute(
+            text("""
+                INSERT INTO provider_model_batch_eligibility (provider_id, model_id, eligible, detail, checked_at)
+                VALUES (:pid, :mid, false, :detail, :now)
+                ON CONFLICT (provider_id, model_id)
+                DO UPDATE SET eligible = false,
+                              detail = EXCLUDED.detail,
+                              checked_at = EXCLUDED.checked_at
+                """),
+            {
+                "pid": int(provider_id),
+                "mid": int(model_id),
+                "detail": (detail or "")[:500],
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def get_batch_model_deployments(self, api_key_id: int, provider_id: Optional[int] = None) -> list[Dict[str, Any]]:
+        """The models this key may run, with the provider that serves each.
+
+        A batch input file names a model per line, so the uploader needs both
+        halves of the answer: which models the key may run at all (to refuse
+        the rest) and where each of them can run (to decide whether the whole
+        file can go to one provider's Batch API, or has to be executed here).
+        On Azure the request body names the *deployment*, which the endpoint
+        carries.
+
+        Passing ``provider_id`` narrows the answer to one provider.
+        """
+        scope = "WHERE mp.provider_id = :provider_id" if provider_id is not None else ""
+        sql = text(f"""
+                   WITH key_info AS (
+                            SELECT ak.id AS aki,
+                                   ak.team_id AS tid,
+                                   ak.use_custom_permissions AS custom
+                            FROM api_keys ak
+                            WHERE ak.id = :api_key_id AND ak.is_active = true
+                        ),
+                        effective_models AS (
+                            SELECT akmp.model_id
+                            FROM api_key_model_permissions akmp, key_info ki
+                            WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tmp.model_id
+                            FROM team_model_permissions tmp, key_info ki
+                            WHERE tmp.team_id = ki.tid AND ki.custom = false
+                        ),
+                        effective_providers AS (
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        )
+                   SELECT m.id AS model_id,
+                          m.name AS model_name,
+                          mp.endpoint AS endpoint,
+                          p.id AS provider_id,
+                          p.provider_type AS provider_type,
+                          p.cloud_provider_type AS cloud_provider_type
+                   FROM models m
+                        JOIN model_provider mp ON mp.model_id = m.id
+                        JOIN providers p ON p.id = mp.provider_id
+                        JOIN effective_models em ON em.model_id = m.id
+                        JOIN effective_providers ep ON ep.provider_id = p.id
+                   {scope}
+                   ORDER BY m.name, p.id
+                   """)
+        params: Dict[str, Any] = {"api_key_id": int(api_key_id)}
+        if provider_id is not None:
+            params["provider_id"] = int(provider_id)
+        return [dict(row) for row in self.session.execute(sql, params).mappings().all()]
+
+    def get_provider_model_deployments(self, provider_id: int) -> list[Dict[str, Any]]:
+        """Every model link of a provider, permissions aside.
+
+        The settlement path needs the reverse of the upload's translation: an
+        output row names the deployment the provider ran, which has to map back
+        to the Logos model whose prices apply. It runs after the fact, outside
+        any key's permission scope, so it reads the full link table.
+        """
+        rows = self.session.execute(
+            text("""
+                SELECT m.id AS model_id, m.name AS model_name, mp.endpoint AS endpoint
+                FROM model_provider mp
+                     JOIN models m ON m.id = mp.model_id
+                WHERE mp.provider_id = :provider_id
+                ORDER BY m.name
+                """),
+            {"provider_id": int(provider_id)},
+        ).mappings()
+        return [dict(row) for row in rows.all()]
+
+    def register_batch_object(
+        self,
+        *,
+        kind: str,
+        upstream_id: str,
+        provider_id: int,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+        input_file_id: Optional[str] = None,
+        status: Optional[str] = None,
+        models: Optional[List[str]] = None,
+        provider_object_id: Optional[str] = None,
+    ) -> None:
+        """Record who owns an object the provider just minted.
+
+        ``models`` is the input file's Logos model names, kept on file rows:
+        when the provider later shows it cannot batch one of them, the batch
+        that named them is the evidence, and this list is what still says which
+        models the file asked for.
+
+        ``provider_object_id`` is the object's own id at the provider, when
+        ``upstream_id`` is a Logos-facing name instead: result files are
+        exposed under Logos's ids, and the download forward resolves back to
+        the provider's through this column.
+
+        An id is globally unique — a client supplies the id without the
+        provider that minted it, so one id may not name two objects. A row
+        another provider already holds therefore makes the upsert a no-op,
+        which this reports as an error; the caller then removes the provider
+        object again instead of letting the collision stand.
+        """
+        result = self.session.execute(
+            text("""
+                INSERT INTO batch_objects
+                    (kind, upstream_id, provider_id, api_key_id, team_id, user_id,
+                     input_file_id, status, models, provider_object_id, created_at, updated_at)
+                VALUES (:kind, :upstream_id, :provider_id, :api_key_id, :team_id, :user_id,
+                        :input_file_id, :status, CAST(:models AS JSONB), :provider_object_id, :now, :now)
+                -- The upsert only takes the row of the provider that minted
+                -- the id: when another provider already holds it the DO
+                -- UPDATE matches nothing (rowcount 0), and the caller turns
+                -- that into the unrecorded-ownership error.
+                ON CONFLICT (kind, upstream_id)
+                DO UPDATE SET status = COALESCE(EXCLUDED.status, batch_objects.status),
+                              input_file_id = COALESCE(EXCLUDED.input_file_id, batch_objects.input_file_id),
+                              models = COALESCE(EXCLUDED.models, batch_objects.models),
+                              provider_object_id = COALESCE(EXCLUDED.provider_object_id,
+                                                            batch_objects.provider_object_id),
+                              updated_at = EXCLUDED.updated_at
+                WHERE COALESCE(batch_objects.provider_id, 0) = COALESCE(EXCLUDED.provider_id, 0)
+                """),
+            {
+                "kind": kind,
+                "upstream_id": upstream_id,
+                "provider_id": int(provider_id),
+                "api_key_id": api_key_id,
+                "team_id": team_id,
+                "user_id": user_id,
+                "input_file_id": input_file_id,
+                "status": status,
+                "models": _json_for_jsonb(models) if models else None,
+                "provider_object_id": provider_object_id,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        if result.rowcount == 0:
+            raise RuntimeError(f"batch object id {upstream_id!r} is already held by another provider")
+        self.session.commit()
+
+    def get_batch_object(self, kind: str, upstream_id: str) -> Optional[Dict[str, Any]]:
+        """The ownership row for one id, or None when Logos never minted it.
+
+        The id is globally unique (one row per kind, across providers and
+        Logos itself), so the lookup is unambiguous: a caller supplies an id,
+        not a provider, and this row is what says where the object lives — or
+        that Logos runs it itself.
+        """
+        row = (
+            self.session.execute(
+                text("SELECT * FROM batch_objects WHERE kind = :kind AND upstream_id = :upstream_id"),
+                {"kind": kind, "upstream_id": upstream_id},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def list_batch_objects_for_principal(
+        self,
+        kind: str,
+        team_id: Optional[int],
+        user_id: Optional[int],
+        api_key_id: int,
+        limit: int = 100,
+    ) -> list[Dict[str, Any]]:
+        """The caller's own batch objects of one kind, newest first.
+
+        Listings are answered from here rather than by forwarding to the
+        provider: the shared upstream credential sees every team's objects, and
+        Logos minted all of its own, so its own record is both the safe answer
+        and the complete one — it covers batches it ran itself, which no
+        provider knows about.
+
+        The scope is the same principal predicate a lifecycle check uses: a
+        team sees the team's objects, and a team-less key sees only what its
+        own user created (falling back to the key itself when even that is
+        absent). Scoping team-less keys by "team_id IS NULL" alone would let
+        every personal key on the instance list — and reach — every other
+        personal key's objects.
+        """
+        if team_id is not None:
+            where = "kind = :kind AND team_id = :team_id"
+            params: Dict[str, Any] = {"kind": kind, "team_id": int(team_id), "limit": int(limit)}
+        elif user_id is not None:
+            where = "kind = :kind AND team_id IS NULL AND user_id = :user_id"
+            params = {"kind": kind, "user_id": int(user_id), "limit": int(limit)}
+        else:
+            where = "kind = :kind AND api_key_id = :api_key_id"
+            params = {"kind": kind, "api_key_id": int(api_key_id), "limit": int(limit)}
+        row_set = self.session.execute(
+            text(f"""
+                SELECT * FROM batch_objects
+                WHERE {where}
+                ORDER BY created_at DESC
+                LIMIT :limit
+                """),
+            params,
+        ).mappings()
+        return [dict(row) for row in row_set.all()]
+
+    def update_batch_object_status(self, upstream_id: str, status: Optional[str]) -> None:
+        """Store the status a poll just reported for a batch.
+
+        A missing status only stamps the check (``updated_at``): the
+        unsettled-batches window leads with the least recently checked, and a
+        check that could not run must rotate its batch to the back of it.
+        """
+        self.session.execute(
+            text("""
+                UPDATE batch_objects
+                SET status = COALESCE(:status, status), updated_at = :now
+                WHERE kind = 'batch' AND upstream_id = :upstream_id
+                """),
+            {
+                "upstream_id": upstream_id,
+                "status": status,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def record_batch_provider_state(self, upstream_id: str, body: Dict[str, Any]) -> None:
+        """Sync the state a provider answer reports for one of Logos' batches.
+
+        The listing is served from this record, not from the provider, so the
+        fields it cannot render — the result file a terminal answer names and
+        the running request counts — must be stored with the status. The
+        counts travel under the nested ``request_counts`` object the provider
+        reports progress in (the older flat fields are accepted as a
+        fallback). ``COALESCE`` keeps what an earlier poll stored when a
+        later answer omits a field.
+        """
+        if not isinstance(body, dict):
+            return
+
+        def _text(field: str) -> Optional[str]:
+            value = body.get(field)
+            return value if isinstance(value, str) and value else None
+
+        def _count(source: Dict[str, Any], field: str) -> Optional[int]:
+            value = source.get(field)
+            if isinstance(value, bool) or not isinstance(value, int):
+                return None
+            return max(value, 0)
+
+        counts = body.get("request_counts")
+        if not isinstance(counts, dict):
+            # The older Batch API shape reports the same three numbers flat.
+            counts = {
+                "total": body.get("total_requests"),
+                "completed": body.get("completed_requests"),
+                "failed": body.get("failed_requests"),
+            }
+
+        status = body.get("status")
+        if not isinstance(status, str):
+            status = None
+        self.session.execute(
+            text("""
+                UPDATE batch_objects
+                SET status = COALESCE(:status, status),
+                    output_file_id = COALESCE(:output_file_id, output_file_id),
+                    error_file_id = COALESCE(:error_file_id, error_file_id),
+                    total_requests = COALESCE(:total_requests, total_requests),
+                    completed_requests = COALESCE(:completed_requests, completed_requests),
+                    failed_requests = COALESCE(:failed_requests, failed_requests),
+                    updated_at = :now
+                WHERE kind = 'batch' AND upstream_id = :upstream_id
+                """),
+            {
+                "upstream_id": upstream_id,
+                "status": status,
+                "output_file_id": _text("output_file_id"),
+                "error_file_id": _text("error_file_id"),
+                "total_requests": _count(counts, "total"),
+                "completed_requests": _count(counts, "completed"),
+                "failed_requests": _count(counts, "failed"),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+
+    def claim_batch_for_settlement(self, batch_object_id: int, lease_seconds: int = 1800) -> bool:
+        """Take the settlement lease on a finished batch; False when held.
+
+        The client's own poll and the reconciler can reach a finished batch at
+        the same time. The conditional update makes the winner exclusive, so
+        the output file is billed exactly once.
+
+        The claim is a *lease*, not the ``settled_at`` stamp: the stamp only
+        goes on once the usage rows are durably written. A settlement that
+        dies between the two (the process exits, the task is cancelled) must
+        stay retryable — stamping first would put the batch out of the
+        reconciler's reach forever and its cost with it. The lease expires on
+        its own, which is the recovery; the usage write itself is idempotent,
+        so a lease that lapses mid-settlement cannot double-bill.
+        """
+        result = self.session.execute(
+            text("""
+                UPDATE batch_objects
+                SET settlement_lease_expires_at = :now + make_interval(secs => :lease), updated_at = :now
+                WHERE id = :id AND settled_at IS NULL
+                  AND (settlement_lease_expires_at IS NULL OR settlement_lease_expires_at <= :now)
+                """),
+            {
+                "id": int(batch_object_id),
+                "lease": int(lease_seconds),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+        return bool(result.rowcount)
+
+    def release_batch_settlement(self, batch_object_id: int) -> None:
+        """Give up a settlement lease whose metering failed, so it is retried now."""
+        self.session.execute(
+            text("UPDATE batch_objects SET settlement_lease_expires_at = NULL WHERE id = :id AND settled_at IS NULL"),
+            {"id": int(batch_object_id)},
+        )
+        self.session.commit()
+
+    def mark_batch_settled(self, batch_object_id: int) -> None:
+        """Stamp a batch settled, once its usage rows are durably written.
+
+        Only from here on does the reconciler leave the batch alone; whatever
+        was written before this point is either idempotent or already skipped.
+        """
+        self.session.execute(
+            text("""
+                UPDATE batch_objects
+                SET settled_at = :now, settlement_lease_expires_at = NULL, updated_at = :now
+                WHERE id = :id
+                """),
+            {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
+        )
+        self.session.commit()
+
+    def get_unsettled_batches(self, limit: int = 50) -> list[Dict[str, Any]]:
+        """Batches whose usage has not been booked yet, least recently checked first.
+
+        The least recently checked lead the window, not the oldest created:
+        the reconciler stamps every batch it has looked at, so one that is
+        still moving at the provider rotates to the back and a queue of fifty
+        that never finish cannot starve the batches behind them.
+        """
+        rows = self.session.execute(
+            text("""
+                SELECT id, upstream_id, provider_id, api_key_id, team_id, user_id, status
+                FROM batch_objects
+                WHERE kind = 'batch' AND settled_at IS NULL AND execution = 'provider'
+                ORDER BY updated_at
+                LIMIT :limit
+                """),
+            {"limit": int(limit)},
+        ).mappings()
+        return [dict(row) for row in rows.all()]
+
+    # ---- Batches Logos runs itself -------------------------------------
+
+    def store_local_batch_file(
+        self,
+        *,
+        upstream_id: str,
+        content: bytes,
+        filename: str,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+        purpose: str = "batch",
+    ) -> int:
+        """Keep a file Logos runs a batch from (or wrote results to).
+
+        A forwarded batch leaves its files at the provider; a Logos-run one has
+        nowhere else to put them, and the UI has to hand the results back to a
+        browser.
+        """
+        row = self.session.execute(
+            text("""
+                INSERT INTO batch_objects
+                    (kind, upstream_id, execution, api_key_id, team_id, user_id,
+                     filename, size_bytes, status, created_at, updated_at)
+                VALUES ('file', :upstream_id, 'logos', :api_key_id, :team_id, :user_id,
+                        :filename, :size_bytes, :purpose, :now, :now)
+                RETURNING id
+                """),
+            {
+                "upstream_id": upstream_id,
+                "api_key_id": api_key_id,
+                "team_id": team_id,
+                "user_id": user_id,
+                "filename": filename,
+                "size_bytes": len(content),
+                "purpose": purpose,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        ).fetchone()
+        object_id = int(row[0])
+        self.session.execute(
+            text("INSERT INTO batch_file_contents (batch_object_id, content) VALUES (:id, :content)"),
+            {"id": object_id, "content": content},
+        )
+        self.session.commit()
+        return object_id
+
+    def get_local_batch_file_content(self, batch_object_id: int) -> Optional[bytes]:
+        """The stored bytes of a Logos-held file."""
+        row = self.session.execute(
+            text("SELECT content FROM batch_file_contents WHERE batch_object_id = :id"),
+            {"id": int(batch_object_id)},
+        ).fetchone()
+        if row is None:
+            return None
+        content = row[0]
+        return bytes(content) if content is not None else None
+
+    def create_local_batch(
+        self,
+        *,
+        upstream_id: str,
+        input_file_id: str,
+        endpoint: str,
+        completion_window: Optional[str],
+        metadata: Optional[Dict[str, Any]],
+        total_requests: int,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+    ) -> int:
+        """Record a batch Logos will execute itself, ready for the runner."""
+        row = self.session.execute(
+            text("""
+                INSERT INTO batch_objects
+                    (kind, upstream_id, execution, api_key_id, team_id, user_id,
+                     input_file_id, endpoint, completion_window, request_metadata,
+                     total_requests, status, created_at, updated_at)
+                VALUES ('batch', :upstream_id, 'logos', :api_key_id, :team_id, :user_id,
+                        :input_file_id, :endpoint, :completion_window, CAST(:metadata AS JSONB),
+                        :total, 'validating', :now, :now)
+                RETURNING id
+                """),
+            {
+                "upstream_id": upstream_id,
+                "api_key_id": api_key_id,
+                "team_id": team_id,
+                "user_id": user_id,
+                "input_file_id": input_file_id,
+                "endpoint": endpoint,
+                "completion_window": completion_window,
+                "metadata": _json_for_jsonb(metadata) if metadata else None,
+                "total": int(total_requests),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        ).fetchone()
+        self.session.commit()
+        return int(row[0])
+
+    def get_local_batch(self, upstream_id: str) -> Optional[Dict[str, Any]]:
+        """One Logos-run batch by the id its client holds."""
+        row = (
+            self.session.execute(
+                text("""
+                SELECT * FROM batch_objects
+                WHERE kind = 'batch' AND execution = 'logos' AND upstream_id = :upstream_id
+                """),
+                {"upstream_id": upstream_id},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def get_local_object_by_upstream_id(self, kind: str, upstream_id: str) -> Optional[Dict[str, Any]]:
+        """One Logos-held file or batch, whatever its state."""
+        row = (
+            self.session.execute(
+                text("""
+                SELECT * FROM batch_objects
+                WHERE kind = :kind AND execution = 'logos' AND upstream_id = :upstream_id
+                """),
+                {"kind": kind, "upstream_id": upstream_id},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def claim_local_batch(self, batch_object_id: int, runner_id: str, lease_seconds: int) -> bool:
+        """Take the lease on a Logos-run batch; False when another runner holds it.
+
+        Queued batches (``validating``) and batches left behind by a dead
+        runner (``in_progress`` with an expired lease) are claimed the same
+        way: the conditional update stamps ``runner_id`` and a lease deadline,
+        and only lets a caller through when no *live* lease exists. That is
+        what separates "the process is gone, recover the batch" from "another
+        replica is running it right now, stay out" — without the lease the
+        recovery path that re-offers in_progress rows would run an active
+        batch a second time.
+        """
+        result = self.session.execute(
+            text("""
+                UPDATE batch_objects
+                SET status = CASE WHEN status = 'validating' THEN 'in_progress' ELSE status END,
+                    started_at = COALESCE(started_at, :now),
+                    runner_id = :runner,
+                    lease_expires_at = :now + make_interval(secs => :lease),
+                    updated_at = :now
+                WHERE id = :id AND kind = 'batch' AND execution = 'logos'
+                  AND status IN ('validating', 'in_progress', 'cancelling')
+                  AND (runner_id IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= :now)
+                """),
+            {
+                "id": int(batch_object_id),
+                "runner": str(runner_id),
+                "lease": int(lease_seconds),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+        return bool(result.rowcount)
+
+    def get_runnable_local_batches(self, limit: int = 20) -> list[Dict[str, Any]]:
+        """Queued Logos-run batches, oldest first.
+
+        ``in_progress`` rows are included so a batch whose runner died with the
+        process is picked up again after a restart instead of hanging forever.
+        """
+        rows = self.session.execute(
+            text("""
+                SELECT id, upstream_id, input_file_id, endpoint, api_key_id, team_id, user_id, status
+                FROM batch_objects
+                WHERE kind = 'batch' AND execution = 'logos'
+                  AND status IN ('validating', 'in_progress', 'cancelling')
+                ORDER BY created_at
+                LIMIT :limit
+                """),
+            {"limit": int(limit)},
+        ).mappings()
+        return [dict(row) for row in rows.all()]
+
+    def update_local_batch_progress(
+        self, batch_object_id: int, runner_id: str, completed: int, failed: int, lease_seconds: int
+    ) -> Optional[bool]:
+        """Publish how far the runner has got, refreshing the lease on the way.
+
+        The progress row doubles as the heartbeat: while the runner makes
+        progress the lease stays alive, and a runner that stops writing stops
+        holding the batch. Conditional on the lease: when another runner took
+        the batch over after an expired lease, this caller must stop touching
+        the row instead of clobbering the new holder's counters and lease.
+
+        Returns whether a cancel is pending, or ``None`` when this runner no
+        longer holds the batch.
+        """
+        row = self.session.execute(
+            text("""
+                UPDATE batch_objects
+                SET completed_requests = :completed, failed_requests = :failed,
+                    lease_expires_at = :now + make_interval(secs => :lease),
+                    updated_at = :now
+                WHERE id = :id AND runner_id = :runner
+                RETURNING cancel_requested
+                """),
+            {
+                "id": int(batch_object_id),
+                "runner": str(runner_id),
+                "completed": int(completed),
+                "failed": int(failed),
+                "lease": int(lease_seconds),
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        ).fetchone()
+        self.session.commit()
+        return bool(row[0]) if row else None
+
+    def finish_local_batch(
+        self,
+        batch_object_id: int,
+        runner_id: str,
+        *,
+        status: str,
+        output_file_id: Optional[str] = None,
+        error_file_id: Optional[str] = None,
+        completed: Optional[int] = None,
+        failed: Optional[int] = None,
+    ) -> bool:
+        """Close out a Logos-run batch.
+
+        ``settled_at`` is stamped here: its requests went through the ordinary
+        pipeline and were metered one by one as they ran, so there is nothing
+        left for the settlement pass to book.
+
+        Conditional on the lease like every other runner write: a runner whose
+        lease lapsed must not finalize a batch another runner is running, or
+        the new holder's in-flight lines would end in a batch that reports
+        "completed" without them.
+        """
+        result = self.session.execute(
+            text("""
+                UPDATE batch_objects
+                SET status = :status,
+                    output_file_id = COALESCE(:output_file_id, output_file_id),
+                    error_file_id = COALESCE(:error_file_id, error_file_id),
+                    completed_requests = COALESCE(:completed, completed_requests),
+                    failed_requests = COALESCE(:failed, failed_requests),
+                    runner_id = NULL,
+                    lease_expires_at = NULL,
+                    finished_at = :now,
+                    settled_at = :now,
+                    updated_at = :now
+                WHERE id = :id AND runner_id = :runner
+                """),
+            {
+                "id": int(batch_object_id),
+                "runner": str(runner_id),
+                "status": status,
+                "output_file_id": output_file_id,
+                "error_file_id": error_file_id,
+                "completed": completed,
+                "failed": failed,
+                "now": datetime.datetime.now(datetime.timezone.utc),
+            },
+        )
+        self.session.commit()
+        return bool(result.rowcount)
+
+    def delete_batch_object(self, batch_object_id: int) -> None:
+        """Drop a Logos-held object and its bytes."""
+        self.session.execute(text("DELETE FROM batch_objects WHERE id = :id"), {"id": int(batch_object_id)})
+        self.session.commit()
+
+    def count_nonterminal_batches_for_input_file(self, input_file_id: str) -> int:
+        """How many Logos-run batches not yet finished still read this file.
+
+        The runner loads the input's bytes when it starts, not when the batch
+        is created, so deleting the file a validating or in-progress batch
+        references would strand that batch: it would find no content and fail
+        one it was accepted to run.
+        """
+        row = self.session.execute(
+            text("""
+                SELECT count(*) FROM batch_objects
+                WHERE kind = 'batch' AND execution = 'logos' AND input_file_id = :file_id
+                  AND status IN ('validating', 'in_progress', 'cancelling')
+                """),
+            {"file_id": str(input_file_id)},
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def request_local_batch_cancel(self, batch_object_id: int) -> None:
+        """Ask the runner to stop before its next request line."""
+        self.session.execute(
+            text("""
+                UPDATE batch_objects
+                SET cancel_requested = true,
+                    status = CASE WHEN status IN ('validating', 'in_progress') THEN 'cancelling' ELSE status END,
+                    updated_at = :now
+                WHERE id = :id
+                """),
+            {"id": int(batch_object_id), "now": datetime.datetime.now(datetime.timezone.utc)},
+        )
+        self.session.commit()
+
+    def save_local_batch_lines(self, batch_object_id: int, runner_id: str, rows: List[Dict[str, Any]]) -> None:
+        """Persist finished request lines of a Logos-run batch as its checkpoint.
+
+        One durable write per finished line, keyed by its custom_id, so a
+        resumed batch knows exactly which lines are done and can skip them —
+        including the result row the output file will carry for them.
+
+        The update half is conditional on the batch still naming ``runner_id``
+        as its holder: a runner whose lease lapsed and who is deposed must not
+        overwrite the result row the new holder wrote for the same line. A new
+        line's insert is left unconditional on purpose — that line ran and was
+        billed, and the new holder should resume past it, not replay it.
+        """
+        if not rows:
+            return
+        params: Dict[str, Any] = {"runner": str(runner_id)}
+        for index, row in enumerate(rows):
+            params[f"id_{index}"] = int(batch_object_id)
+            params[f"cid_{index}"] = row["custom_id"]
+            params[f"row_{index}"] = _json_for_jsonb(row["row"])
+            params[f"now_{index}"] = datetime.datetime.now(datetime.timezone.utc)
+        self.session.execute(
+            text(
+                """
+                INSERT INTO batch_line_results (batch_object_id, custom_id, row, finished_at)
+                VALUES
+                """
+                + ", ".join(f"(:id_{i}, :cid_{i}, CAST(:row_{i} AS JSONB), :now_{i})" for i in range(len(rows)))
+                + """
+                ON CONFLICT (batch_object_id, custom_id)
+                DO UPDATE SET row = EXCLUDED.row, finished_at = EXCLUDED.finished_at
+                WHERE (SELECT runner_id FROM batch_objects
+                       WHERE id = batch_line_results.batch_object_id) = :runner
+                """
+            ),
+            params,
+        )
+        self.session.commit()
+
+    def get_local_batch_lines(self, batch_object_id: int) -> Dict[str, Dict[str, Any]]:
+        """The batch's checkpoint: custom_id → the result row already written.
+
+        A resumed batch runs only the lines missing here.
+        """
+        rows = self.session.execute(
+            text("""
+                SELECT custom_id, row FROM batch_line_results
+                WHERE batch_object_id = :id
+                """),
+            {"id": int(batch_object_id)},
+        ).mappings()
+        return {row["custom_id"]: row["row"] for row in rows.all()}
+
+    def get_api_key_by_id(self, api_key_id: int) -> Optional[Dict[str, Any]]:
+        """One active api key by id, in the shape ``authenticate_api_key`` uses.
+
+        The local batch runner acts for the key that submitted the batch long
+        after its request is gone, so it rebuilds the auth context from here.
+        """
+        row = (
+            self.session.execute(
+                text("""
+                SELECT ak.id, ak.key_value, ak.name, ak.key_type, ak.team_id, ak.user_id,
+                       ak.environment, ak.log, ak.settings, ak.default_priority,
+                       u.role,
+                       t.priority AS team_priority
+                FROM api_keys ak
+                         LEFT JOIN users u ON u.id = ak.user_id
+                         LEFT JOIN teams t ON t.id = ak.team_id
+                WHERE ak.id = :api_key_id AND ak.is_active = true
+                """),
+                {"api_key_id": int(api_key_id)},
+            )
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
+
+    def get_api_key_logging_context(self, api_key_id: int) -> Dict[str, Any]:
+        """The environment and privacy level a key's log rows are written with.
+
+        The batch settlement runs long after the request that created the
+        batch, so it cannot take these off an AuthContext and reads them back
+        from the key instead.
+        """
+        row = (
+            self.session.execute(
+                text("SELECT environment, log FROM api_keys WHERE id = :api_key_id"),
+                {"api_key_id": int(api_key_id)},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            return {"environment": None, "log_level": "BILLING"}
+        log_level = row["log"]
+        if hasattr(log_level, "value"):
+            log_level = log_level.value
+        return {"environment": row["environment"], "log_level": log_level or "BILLING"}
+
+    def record_batch_usage(self, rows: list[Dict[str, Any]], chunk_size: int = 500) -> int:
+        """Book one finished batch request per row into the usage ledger.
+
+        A batch result file holds what would otherwise have been thousands of
+        individual proxied requests, so each row becomes an ordinary
+        ``log_entry`` with its own usage — that is what makes batch spend show
+        up in the same budget, statistics and export surfaces as everything
+        else. Rows are written in chunks (one multi-row INSERT each) because a
+        single batch can carry tens of thousands of them.
+
+        ``service_tier='batch'`` is what makes the price lookup pick the
+        provider's discounted batch rate; it falls back to the standard price
+        when no batch rate is configured for the model, so an unpriced batch is
+        over- rather than under-charged.
+
+        Idempotent per row: each row's ``request_id`` is scoped to its batch
+        and unique in ``log_entry``, so a settlement that is retried after a
+        partial commit (a chunk committed before the process died) skips the
+        rows the earlier attempt already booked instead of colliding with the
+        unique index and stalling the batch forever.
+
+        Returns the number of rows written by this call.
+        """
+        if not rows:
+            return 0
+
+        type_ids: Dict[str, int] = {}
+        written = 0
+        for start in range(0, len(rows), max(1, chunk_size)):
+            chunk = rows[start : start + max(1, chunk_size)]
+            values_sql = []
+            params: Dict[str, Any] = {}
+            for index, row in enumerate(chunk):
+                values_sql.append(
+                    f"(:ts_{index}, :ts_{index}, :aki_{index}, :tid_{index}, :uid_{index}, :env_{index}, "
+                    f"CAST(:privacy_{index} AS logging_enum), :pid_{index}, :mid_{index}, :rid_{index}, "
+                    f":tier_{index}, CAST(:status_{index} AS result_status_enum), :err_{index})"
+                )
+                params.update(
+                    {
+                        f"ts_{index}": row["timestamp"],
+                        f"aki_{index}": row.get("api_key_id"),
+                        f"tid_{index}": row.get("team_id"),
+                        f"uid_{index}": row.get("user_id"),
+                        f"env_{index}": row.get("environment"),
+                        f"privacy_{index}": row.get("privacy_level") or "BILLING",
+                        f"pid_{index}": row.get("provider_id"),
+                        f"mid_{index}": row.get("model_id"),
+                        f"rid_{index}": row.get("request_id"),
+                        f"tier_{index}": row.get("service_tier") or "batch",
+                        f"status_{index}": row.get("result_status") or "success",
+                        f"err_{index}": row.get("error_message"),
+                    }
+                )
+
+            inserted = self.session.execute(
+                text(
+                    """
+                    INSERT INTO log_entry
+                        (timestamp_request, timestamp_response, api_key_id, team_id, user_id,
+                         environment, privacy_level, provider_id, model_id, request_id,
+                         service_tier, result_status, error_message)
+                    VALUES """
+                    + ", ".join(values_sql)
+                    + """
+                    -- A row whose request_id the ledger already holds was
+                    -- committed by an earlier attempt of this same settlement
+                    -- (the chunks commit before the batch is marked settled);
+                    -- it is skipped, not an error.
+                    ON CONFLICT (request_id) DO NOTHING RETURNING id, request_id"""
+                ),
+                params,
+            ).fetchall()
+            # The rows come back keyed by the request_id they were inserted
+            # with, not by position: a multi-row INSERT ... RETURNING does not
+            # guarantee that the returned order matches the VALUES order, and
+            # a positional zip could attach one line's usage tokens to another
+            # line's log row — settling the cost against the wrong request.
+            # A row an earlier attempt of this settlement already committed is
+            # not among the returned ids at all — and is not a failure.
+            log_ids_by_request: Dict[str, int] = {}
+            orphaned_ids: List[int] = []
+            for log_id, request_id in ((int(record[0]), record[1]) for record in inserted):
+                if request_id is None:
+                    orphaned_ids.append(log_id)
+                else:
+                    log_ids_by_request[str(request_id)] = log_id
+            log_ids = list(log_ids_by_request.values()) + orphaned_ids
+
+            usage_values = []
+            usage_params: Dict[str, Any] = {}
+            for index, row in enumerate(chunk):
+                request_id = row.get("request_id")
+                if request_id is not None:
+                    log_id = log_ids_by_request.get(str(request_id))
+                    if log_id is None:
+                        # Already booked by an earlier attempt of this
+                        # settlement: its tokens went in with the row.
+                        continue
+                else:
+                    # A row without a request id has no identity to match on;
+                    # it takes the next id the insert returned without one.
+                    log_id = orphaned_ids.pop(0) if orphaned_ids else log_ids[index]
+                for token_type, token_count in (row.get("usage") or {}).items():
+                    if not isinstance(token_count, int) or isinstance(token_count, bool) or token_count <= 0:
+                        continue
+                    if token_type not in type_ids:
+                        result, _ = self.add_token_type(token_type, "")
+                        if "error" in result:
+                            continue
+                        type_ids[token_type] = result["token-type-id"]
+                    slot = len(usage_values)
+                    usage_values.append(f"(:log_{slot}, :type_{slot}, :count_{slot})")
+                    usage_params[f"log_{slot}"] = log_id
+                    usage_params[f"type_{slot}"] = type_ids[token_type]
+                    usage_params[f"count_{slot}"] = token_count
+
+            if usage_values:
+                self.session.execute(
+                    text(
+                        "INSERT INTO usage_tokens (log_entry_id, type_id, token_count) VALUES "
+                        + ", ".join(usage_values)
+                        + " ON CONFLICT (log_entry_id, type_id) DO UPDATE SET token_count = EXCLUDED.token_count"
+                    ),
+                    usage_params,
+                )
+            self.session.commit()
+
+            # Same pricing path as an ordinary finalisation, so a batch row is
+            # priced by the one function that prices everything else.
+            try:
+                self.session.execute(
+                    text(_SETTLED_COST_SNAPSHOT_SQL.format(where_clause="le.id = ANY(:log_ids)")),
+                    {"log_ids": log_ids},
+                )
+                self.session.commit()
+            except Exception as exc:  # noqa: BLE001 - snapshot must not lose the usage rows
+                self.session.rollback()
+                logger.warning("settled-cost snapshot failed for %d batch rows: %s", len(log_ids), exc)
+            written += len(log_ids)
+        return written
 
     # ADMIN ONLY
     def get_all_deployments(self) -> list[Deployment]:
@@ -1496,8 +3399,7 @@ class DBManager:
             - provider_id
             - type
         """
-        sql = text(
-            """
+        sql = text("""
                    SELECT m.id               as model_id,
                           p.id               as provider_id,
                           p.provider_type    as type,
@@ -1517,10 +3419,44 @@ class DBManager:
                             JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
                    WHERE p.provider_type = 'logosnode'
                    ORDER BY model_id, provider_id
-                   """
-        )
+                   """)
         rows = self.session.execute(sql, {}).mappings().all()
         return [cast(Deployment, dict(row)) for row in rows]
+
+    def get_all_deployments_with_names(self) -> list[Dict[str, Any]]:
+        """
+        Get all model deployments with model and provider names.
+
+        Same deployment set as get_all_deployments() — cloud/azure providers
+        need model_provider + model_api_keys, logosnode providers need
+        model_provider + logosnode_provider_keys — plus the display names the
+        model-level health check reports per deployment.
+        """
+        sql = text("""
+                   SELECT m.id               as model_id,
+                          m.name             as model_name,
+                          p.id               as provider_id,
+                          p.name             as provider_name,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                   WHERE p.provider_type != 'logosnode'
+                   UNION
+                   SELECT m.id               as model_id,
+                          m.name             as model_name,
+                          p.id               as provider_id,
+                          p.name             as provider_name,
+                          p.provider_type    as type
+                   FROM models m
+                            JOIN model_provider mp ON m.id = mp.model_id
+                            JOIN providers p ON mp.provider_id = p.id
+                            JOIN logosnode_provider_keys lpk ON p.id = lpk.provider_id
+                   WHERE p.provider_type = 'logosnode'
+                   ORDER BY model_id, provider_id
+                   """)
+        rows = self.session.execute(sql, {}).mappings().all()
+        return [dict(row) for row in rows]
 
     def get_models_for_api_key(self, api_key_id: int) -> list[Dict[str, Any]]:
         """
@@ -1529,8 +3465,7 @@ class DBManager:
         Returns:
             List of dicts with model id, name, and description.
         """
-        sql = text(
-            """
+        sql = text("""
            WITH key_info AS (
                 SELECT ak.id AS aki,
                        ak.team_id AS tid,
@@ -1559,16 +3494,31 @@ class DBManager:
                 FROM team_model_permissions tmp, key_info ki
                 WHERE tmp.team_id = ki.tid AND ki.custom = false
             )
-           SELECT DISTINCT m.id, m.name, m.description
+           SELECT DISTINCT m.id, m.name, m.description,
+           (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+            FROM model_aliases a
+            WHERE a.model_id = m.id
+           ) AS aliases
            FROM models m
            JOIN effective_models em ON m.id = em.model_id
            JOIN model_provider mp ON m.id = mp.model_id
            JOIN effective_providers ep ON mp.provider_id = ep.provider_id
            ORDER BY m.id
-       """
-        )
+       """)
         rows = self.session.execute(sql, {"api_key_id": int(api_key_id)}).mappings().all()
-        return [dict(row) for row in rows]
+        models = []
+        for row in rows:
+            model = dict(row)
+            model["aliases"] = self._split_alias_list(model.get("aliases"))
+            models.append(model)
+        return models
+
+    @staticmethod
+    def _split_alias_list(raw: Optional[str]) -> list[str]:
+        """Turn the comma-joined aliases column of a model row into a list."""
+        if not raw:
+            return []
+        return [alias.strip() for alias in str(raw).split(",") if alias.strip()]
 
     def get_model_for_api_key(self, api_key_id: int, model_name: str) -> Optional[Dict[str, Any]]:
         """
@@ -1577,8 +3527,7 @@ class DBManager:
         Returns:
             Dict with model id, name, and description, or None if not found.
         """
-        sql = text(
-            """
+        sql = text("""
            WITH key_info AS (
                 SELECT ak.id AS aki,
                        ak.team_id AS tid,
@@ -1614,8 +3563,7 @@ class DBManager:
             JOIN effective_providers ep ON mp.provider_id = ep.provider_id
             WHERE m.name = :name
             ORDER BY m.id LIMIT 1
-        """
-        )
+        """)
         row = self.session.execute(sql, {"api_key_id": int(api_key_id), "name": model_name}).mappings().first()
         return dict(row) if row else None
 
@@ -1676,12 +3624,10 @@ class DBManager:
         """
         Get a list of all models. ONLY FOR INTERNAL USE.
         """
-        sql = text(
-            """
+        sql = text("""
             SELECT models.id
             FROM models
-        """
-        )
+        """)
         result = self.session.execute(sql).fetchall()
         return [i.id for i in result]
 
@@ -1693,21 +3639,18 @@ class DBManager:
 
         if not is_admin:
             role_row = self.session.execute(
-                text(
-                    """
+                text("""
                     SELECT u.role FROM api_keys ak
                     JOIN users u ON ak.user_id = u.id
                     WHERE ak.key_value = :logos_key AND ak.is_active = true
-                """
-                ),
+                """),
                 {"logos_key": logos_key},
             ).fetchone()
             if role_row is not None and role_row.role == "app_admin":
                 is_admin = True
 
         if is_admin:
-            sql = text(
-                """
+            sql = text("""
                        SELECT m.id,
                               m.name,
                               m.weight_latency,
@@ -1715,14 +3658,20 @@ class DBManager:
                               m.weight_cost,
                               m.weight_quality,
                               m.tags,
-                              m.parallel,
+                              (
+                                  SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                                  FROM model_aliases a
+                                  WHERE a.model_id = m.id
+                              ) AS aliases,
                               m.description,
                               (
-                                  SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                  SELECT ROUND(price_per_k_unit::NUMERIC / 100000, 4)
                                   FROM token_prices tp
                                   JOIN token_types tt ON tt.id = tp.type_id
                                   WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                    AND tt.name = 'prompt_tokens'
+                                    AND tt.name = 'billed_input_uncached'
+                                    AND tp.unit = 'token' AND tp.service_tier = 'default'
+                                    AND tp.min_context_tokens = 0
                                     AND valid_from <= NOW()
                                   ORDER BY
                                       (tp.model_id = m.id) DESC NULLS LAST,
@@ -1730,11 +3679,13 @@ class DBManager:
                                   LIMIT 1
                               ) AS input_usd_per_million,
                             (
-                                SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                SELECT ROUND(price_per_k_unit::NUMERIC / 100000, 4)
                                 FROM token_prices tp
                                 JOIN token_types tt ON tt.id = tp.type_id
                                 WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                    AND tt.name = 'completion_tokens'
+                                    AND tt.name = 'billed_output_text'
+                                    AND tp.unit = 'token' AND tp.service_tier = 'default'
+                                    AND tp.min_context_tokens = 0
                                     AND valid_from <= NOW()
                                 ORDER BY
                                     (tp.model_id = m.id) DESC NULLS LAST,
@@ -1743,12 +3694,10 @@ class DBManager:
                             ) AS output_usd_per_million
                        FROM models m
                        ORDER BY m.id
-                       """
-            )
+                       """)
             params = {}
         else:
-            sql = text(
-                """
+            sql = text("""
                 WITH key_info AS (
                     SELECT ak.id AS aki,
                            ak.team_id AS tid,
@@ -1782,14 +3731,20 @@ class DBManager:
                                 m.weight_cost,
                                 m.weight_quality,
                                 m.tags,
-                                m.parallel,
+                                (
+                                    SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                                    FROM model_aliases a
+                                    WHERE a.model_id = m.id
+                                ) AS aliases,
                                 m.description,
                                 (
-                                    SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                                    SELECT ROUND(price_per_k_unit::NUMERIC / 100000, 4)
                                     FROM token_prices tp
                                              JOIN token_types tt ON tt.id = tp.type_id
                                     WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                      AND tt.name = 'prompt_tokens'
+                                      AND tt.name = 'billed_input_uncached'
+                                    AND tp.unit = 'token' AND tp.service_tier = 'default'
+                                    AND tp.min_context_tokens = 0
                                       AND valid_from <= NOW()
                                     ORDER BY
                                         (tp.model_id = m.id) DESC NULLS LAST,
@@ -1797,11 +3752,13 @@ class DBManager:
                                     LIMIT 1
                                 ) AS input_usd_per_million,
                        (
-                            SELECT ROUND(price_per_k_token::NUMERIC / 100000, 4)
+                            SELECT ROUND(price_per_k_unit::NUMERIC / 100000, 4)
                             FROM token_prices tp
                                 JOIN token_types tt ON tt.id = tp.type_id
                             WHERE (tp.model_id = m.id OR tp.model_id IS NULL)
-                                AND tt.name = 'completion_tokens'
+                                AND tt.name = 'billed_output_text'
+                                    AND tp.unit = 'token' AND tp.service_tier = 'default'
+                                    AND tp.min_context_tokens = 0
                                 AND valid_from <= NOW()
                             ORDER BY
                                 (tp.model_id = m.id) DESC NULLS LAST,
@@ -1813,8 +3770,7 @@ class DBManager:
                 JOIN model_provider mp ON m.id = mp.model_id
                 JOIN effective_providers ep ON mp.provider_id = ep.provider_id
                 ORDER BY m.id
-            """
-            )
+            """)
             params = {"logos_key": logos_key}
 
         result = self.session.execute(sql, params).fetchall()
@@ -1827,7 +3783,7 @@ class DBManager:
                 "weight_cost": r.weight_cost,
                 "weight_quality": r.weight_quality,
                 "tags": r.tags,
-                "parallel": r.parallel,
+                "aliases": self._split_alias_list(r.aliases),
                 "description": r.description,
                 "input_usd_per_million": r.input_usd_per_million,
                 "output_usd_per_million": r.output_usd_per_million,
@@ -1835,14 +3791,100 @@ class DBManager:
             for r in result
         ]
 
+    def resolve_proxy_model(
+        self,
+        api_key_id: int,
+        requested_name: str,
+    ) -> Optional[tuple[int, str]]:
+        """
+        Resolve a user-supplied model name to (model_id, canonical name) using
+        only the models this key may address.
+
+        Single query, same access semantics as get_models_info: logos_admin /
+        app_admin keys see every model, all other keys see the intersection of
+        their effective model and provider permissions (per-key permissions
+        when the key opts into custom permissions, the team's otherwise). The
+        name matching is delegated to the shared resolver so proxy mode and
+        the user-facing endpoints cannot drift apart.
+        """
+        # Imported here: logosnode_snapshot imports dbmanager at module scope,
+        # so a top-level import would be circular.
+        from logos.logosnode_snapshot import _resolve_requested_model_name
+
+        sql = text("""
+                   WITH key_info AS (
+                            SELECT ak.id AS aki,
+                                   ak.team_id AS tid,
+                                   COALESCE(u.role, '') AS user_role,
+                                   ak.use_custom_permissions AS custom
+                            FROM api_keys ak
+                                LEFT JOIN users u ON ak.user_id = u.id
+                            WHERE ak.id = :api_key_id
+                                AND ak.is_active = true
+                        ),
+                        effective_providers AS (
+                            SELECT akpp.provider_id
+                            FROM api_key_provider_permissions akpp, key_info ki
+                            WHERE akpp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tpp.provider_id
+                            FROM team_provider_permissions tpp, key_info ki
+                            WHERE tpp.team_id = ki.tid AND ki.custom = false
+                        ),
+                        effective_models AS (
+                            SELECT akmp.model_id
+                            FROM api_key_model_permissions akmp, key_info ki
+                            WHERE akmp.api_key_id = ki.aki AND ki.custom = true
+                            UNION
+                            SELECT tmp.model_id
+                            FROM team_model_permissions tmp, key_info ki
+                            WHERE tmp.team_id = ki.tid AND ki.custom = false
+                        )
+                   SELECT m.id,
+                          m.name,
+                          (
+                              SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                              FROM model_aliases a
+                              WHERE a.model_id = m.id
+                          ) AS aliases
+                   FROM models m
+                   WHERE EXISTS (SELECT 1 FROM key_info ki WHERE ki.user_role IN ('logos_admin', 'app_admin'))
+                      OR (
+                          m.id IN (SELECT model_id FROM effective_models)
+                          AND EXISTS (
+                              SELECT 1
+                              FROM model_provider mp
+                                   JOIN effective_providers ep ON ep.provider_id = mp.provider_id
+                              WHERE mp.model_id = m.id
+                          )
+                      )
+                   ORDER BY m.id
+                   """)
+        rows = self.session.execute(sql, {"api_key_id": api_key_id}).fetchall()
+        models = [
+            {
+                "id": r.id,
+                # Same fallback as get_models_info, so the resolver sees the
+                # same names in both paths.
+                "name": r.name or f"Model {r.id}",
+                "aliases": self._split_alias_list(r.aliases),
+            }
+            for r in rows
+        ]
+        model_name = _resolve_requested_model_name(requested_name, models)
+        if model_name is None:
+            return None
+        for model in models:
+            if model["name"] == model_name:
+                return model["id"], model["name"]
+        return None
+
     def get_model(self, model_id: int):
-        sql = text(
-            """
+        sql = text("""
             SELECT *
             FROM models
             WHERE id = :model_id
-        """
-        )
+        """)
         result = self.session.execute(sql, {"model_id": int(model_id)}).fetchone()
         if result is None:
             return None
@@ -1854,18 +3896,15 @@ class DBManager:
             "weight_cost": result.weight_cost,
             "weight_quality": result.weight_quality,
             "tags": result.tags,
-            "parallel": result.parallel,
             "description": result.description,
         }
 
     def get_provider(self, provider_id: int):
-        sql = text(
-            """
+        sql = text("""
             SELECT *
             FROM providers
             WHERE id = :provider_id
-        """
-        )
+        """)
         result = self.session.execute(sql, {"provider_id": int(provider_id)}).fetchone()
         if result is None:
             return None
@@ -1883,14 +3922,12 @@ class DBManager:
 
     def get_logosnode_provider_by_api_key(self, api_key: str):
         """Look up a logosnode provider by its shared API key."""
-        sql = text(
-            """
+        sql = text("""
             SELECT *
             FROM providers
             WHERE api_key = :api_key
               AND provider_type = 'logosnode'
-        """
-        )
+        """)
         result = self.session.execute(sql, {"api_key": api_key}).fetchone()
         if result is None:
             return None
@@ -1919,8 +3956,7 @@ class DBManager:
     def list_local_providers(self) -> list[dict]:
         """Unauthenticated variant of get_local_provider_inventory for internal
         (secret-gated) endpoints that have no user logos_key."""
-        sql = text(
-            """
+        sql = text("""
             SELECT
                 id,
                 name,
@@ -1932,14 +3968,12 @@ class DBManager:
             FROM providers
             WHERE LOWER(provider_type::text) IN (
                 'logosnode',
-                'ollama',
                 'node',
                 'node_controller',
                 'logos_worker_node'
             )
             ORDER BY LOWER(name), id
-        """
-        )
+        """)
 
         rows = self.session.execute(sql).fetchall()
         return [
@@ -1955,22 +3989,46 @@ class DBManager:
             for row in rows
         ]
 
+    def find_ollama_typed_providers(self) -> list[dict]:
+        """Provider rows still typed 'ollama' — the engine Logos dropped.
+
+        Used as a startup gate: such rows point at servers the deployment no
+        longer runs, so they must be fixed by hand rather than silently left
+        unservable.
+        """
+        sql = text("""
+            SELECT id, name, provider_type
+            FROM providers
+            WHERE LOWER(provider_type::text) = 'ollama'
+            ORDER BY id
+        """)
+        rows = self.session.execute(sql).fetchall()
+        return [{"id": row.id, "name": row.name, "provider_type": row.provider_type} for row in rows]
+
     def log(self, api_key_id: int):
-        sql = text(
-            """
+        sql = text("""
                    SELECT log
                    FROM api_keys
                    WHERE id = :api_key_id
-                   """
-        )
+                   """)
         result = self.session.execute(sql, {"api_key_id": int(api_key_id)}).fetchone()
         if result is None:
             return False
         return result.log
 
+    def get_log_id_by_request_id(self, request_id: str) -> Optional[int]:
+        """The log_entry id for a request_id, or None when no row exists yet."""
+        if not request_id:
+            return None
+        row = self.session.execute(
+            text("SELECT id FROM log_entry WHERE request_id = :rid"),
+            {"rid": request_id},
+        ).first()
+        return int(row.id) if row is not None else None
+
     def log_usage(
         self,
-        api_key_id: int,
+        api_key_id: Optional[int],
         team_id: Optional[int],
         user_id: Optional[int],
         environment: Optional[str],
@@ -1979,21 +4037,21 @@ class DBManager:
         input_payload=None,
         headers=None,
         request_id: Optional[str] = None,
+        timeout_s: Optional[float] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        payload_str = json.dumps(input_payload) if log_level == "FULL" and input_payload else None
-        headers_str = json.dumps(dict(headers)) if log_level == "FULL" and headers else None
+        payload_str = _json_for_jsonb(input_payload) if log_level == "FULL" and input_payload else None
+        headers_str = _json_for_jsonb(dict(headers)) if log_level == "FULL" and headers else None
 
         row = self.session.execute(
-            text(
-                """
+            text("""
                  INSERT INTO log_entry (timestamp_request, api_key_id, team_id, user_id,
                                         environment, client_ip,
-                                        input_payload, headers, privacy_level, request_id)
+                                        input_payload, headers, privacy_level, request_id, timeout_s)
                  VALUES (:ts, :aki, :tid, :uid, :env,
-                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid) RETURNING id
-                 """
-            ),
+                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid, :timeout_s)
+                 RETURNING id
+                 """),
             {
                 "ts": timestamp,
                 "aki": api_key_id,
@@ -2005,19 +4063,66 @@ class DBManager:
                 "headers": headers_str,
                 "privacy": log_level,
                 "rid": request_id,
+                "timeout_s": timeout_s,
             },
         ).fetchone()
         self.session.commit()
         return {"result": "Created log entry.", "log-id": row.id}, 200
 
+    def ensure_log_usage(
+        self,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+        environment: Optional[str],
+        log_level: str,
+        client_ip: Optional[str] = None,
+        input_payload=None,
+        headers=None,
+        request_id: Optional[str] = None,
+        timeout_s: Optional[float] = None,
+    ) -> Optional[int]:
+        """Insert a log row, or return the id of an existing one for ``request_id``.
+
+        The live-feed path may insert a deferred PendingLog ahead of
+        completion so queued stats rows already exist; the terminal
+        materialize must then find that row rather than colliding on the
+        unique ``request_id`` index.
+        """
+        if request_id:
+            existing = self.get_log_id_by_request_id(request_id)
+            if existing is not None:
+                return existing
+        try:
+            result, status = self.log_usage(
+                api_key_id=api_key_id,
+                team_id=team_id,
+                user_id=user_id,
+                environment=environment,
+                log_level=log_level,
+                client_ip=client_ip,
+                input_payload=input_payload,
+                headers=headers,
+                request_id=request_id,
+                timeout_s=timeout_s,
+            )
+            return int(result["log-id"]) if status == 200 else None
+        except sqlalchemy.exc.IntegrityError as exc:
+            # Only the unique request_id race is recoverable here. FK failures
+            # (stale team/user after a concurrent delete) must surface so the
+            # caller does not treat a failed insert as a successful duplicate.
+            self.session.rollback()
+            constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if request_id and constraint_name == "idx_log_entry_request_id_unique":
+                return self.get_log_id_by_request_id(request_id)
+            raise
+
     def set_time_at_first_token(self, log_id: int):
-        sql = text(
-            """
+        sql = text("""
                    UPDATE log_entry
                    SET time_at_first_token = :timestamp
                    WHERE id = :log_id
-                   """
-        )
+                   """)
         self.session.execute(
             sql,
             {
@@ -2028,6 +4133,222 @@ class DBManager:
         self.session.commit()
         return {"result": "time_at_first_token set"}, 200
 
+    def _upsert_usage_tokens(self, log_id: int, usage) -> None:
+        """Token-type bookkeeping for one log row , no commit — the
+        caller owns the transaction.
+
+        Two roundtrips instead of a SELECT + (INSERT + commit) per token
+        type: one lookup for every name, one multi-row upsert for the
+        missing ones (auto-creation is preserved, e.g. Whisper's
+        audio_milliseconds), then one multi-row upsert for the positive
+        usage rows. token_types.name is UNIQUE, so the upsert is race-safe:
+        a concurrent creator wins, this side sees the row on the refetch
+        below.
+
+        Only strictly positive integer counts are billable — the same
+        invariant the batch settlement path enforces (billing.quantities):
+        `extract_token_usage` preserves negative integers, and a bare
+        truthiness check would upsert them as usage.
+        """
+        positive = {
+            name: count
+            for name, count in (usage or {}).items()
+            if isinstance(count, int) and not isinstance(count, bool) and count > 0
+        }
+        if not usage:
+            return
+        # Every reported name registers its type (a metered response can
+        # report a quantity as 0 without the type being new); only strictly
+        # positive counts upsert a usage row.
+        type_ids = dict()
+        names = list(usage)
+        type_ids.update(
+            {
+                row.name: row.id
+                for row in self.session.execute(
+                    text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                    {"names": names},
+                ).fetchall()
+            }
+        )
+        missing = [name for name in names if name not in type_ids]
+        if missing:
+            type_ids.update(
+                {
+                    row.name: row.id
+                    for row in self.session.execute(
+                        text("""
+                        INSERT INTO token_types (name, description)
+                        SELECT v.name, v.description
+                        FROM unnest(:names, :descriptions) AS v(name, description)
+                        ON CONFLICT (name) DO NOTHING
+                        RETURNING id, name
+                        """),
+                        {"names": missing, "descriptions": ["" for _ in missing]},
+                    ).fetchall()
+                }
+            )
+            still_missing = [name for name in missing if name not in type_ids]
+            if still_missing:
+                type_ids.update(
+                    {
+                        row.name: row.id
+                        for row in self.session.execute(
+                            text("SELECT id, name FROM token_types WHERE name = ANY(:names)"),
+                            {"names": still_missing},
+                        ).fetchall()
+                    }
+                )
+        if not positive:
+            return
+
+        value_clauses = ", ".join(
+            f"(:log_entry_id, :type_id_{index}, :token_count_{index})" for index in range(len(positive))
+        )
+        usage_params = {"log_entry_id": log_id}
+        for index, (name, count) in enumerate(positive.items()):
+            usage_params[f"type_id_{index}"] = type_ids[name]
+            usage_params[f"token_count_{index}"] = count
+        self.session.execute(
+            text(f"""
+                INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
+                VALUES {value_clauses}
+                ON CONFLICT (log_entry_id, type_id)
+                DO UPDATE SET token_count = EXCLUDED.token_count
+                """),
+            usage_params,
+        )
+
+    def finalize_billing_row(
+        self,
+        log_id: int,
+        usage,
+        *,
+        model_id=None,
+        provider_id=None,
+        service_tier=None,
+        set_first_token: bool = False,
+        request_id=None,
+        result_status=None,
+        error_message=None,
+    ):
+        """Synchronous billing half of the terminal response write : the usage_tokens rows plus exactly the row
+        columns the settled cost snapshot reads (model_id, provider_id,
+        service_tier, timestamp_response, time_at_first_token) — and, when
+        passed, the terminal result_status/error_message. This must be
+        committed BEFORE the client gets its response — a crash in between
+        must not be able to undercount the ledger. The non-billing half
+        (`store_response_payload`) may run later on the write-behind queue.
+
+        The status write rides the same UPDATE and the same commit as the
+        billing columns (one fewer round-trip than a separate
+        update_log_entry_metrics call — ). The settled cost snapshot is
+        deliberately NOT part of this write : it is a derived
+        value — ``logos_price_usage`` over the rows committed here — so it
+        settles in the queued `store_response_payload(settle_cost=True)`
+        instead of taking a second synchronous commit off the response
+        path. A crash in that small window leaves the ledger complete and
+        the snapshot unset (a slight billing deviation the overhead goal
+        explicitly accepts); the failure paths that persist the row
+        themselves still settle synchronously via
+        `update_log_entry_metrics`.
+        """
+        if not isinstance(log_id, int):
+            return
+        self._upsert_usage_tokens(log_id, usage)
+        status_value = result_status.value if isinstance(result_status, ResultStatus) else result_status
+        assignments = [
+            "model_id            = COALESCE(:model_id, model_id)",
+            "provider_id         = COALESCE(:provider_id, provider_id)",
+            "service_tier        = COALESCE(:service_tier, service_tier)",
+            "timestamp_response  = :timestamp",
+            "request_id          = COALESCE(:request_id, request_id)",
+            "time_at_first_token = COALESCE(:first_token, time_at_first_token)",
+        ]
+        params = {
+            "model_id": model_id,
+            "provider_id": provider_id,
+            "service_tier": service_tier,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc),
+            "log_id": log_id,
+            "request_id": request_id,
+            "first_token": datetime.datetime.now(datetime.timezone.utc) if set_first_token else None,
+        }
+        if status_value is not None:
+            assignments.append("result_status     = :result_status")
+            params["result_status"] = status_value
+        if error_message is not None:
+            assignments.append("error_message     = :error_message")
+            params["error_message"] = _stringify_error_message(error_message)
+        self.session.execute(
+            text(f"UPDATE log_entry SET {', '.join(assignments)} WHERE id = :log_id"),
+            params,
+        )
+        self.session.commit()
+
+    def store_response_payload(
+        self,
+        log_id: int,
+        payload: dict,
+        *,
+        policy_id=-1,
+        classified=None,
+        queue_depth_at_arrival=None,
+        utilization_at_arrival=None,
+        settle_cost: bool = False,
+    ):
+        """Non-billing half of the terminal response write :
+        the response payload JSONB (privacy-gated) plus the classification /
+        policy / queue-metric side columns. Safe to run off the event loop
+        after `finalize_billing_row` has committed — neither the ledger nor
+        the settled cost snapshot reads these columns.
+
+        ``settle_cost=True`` prices the row in this write : the
+        settled cost snapshot is a *derived* value — ``logos_price_usage``
+        over the usage rows and billing columns `finalize_billing_row`
+        already committed — so it rides the queue instead of taking a second
+        synchronous commit off the response path. It settles after the
+        payload commit in its own commit, so a pricing failure can never
+        roll the payload (or the billing row) back. The same treatment the
+        streaming path already gets via the request-id-keyed monitoring
+        flush.
+        """
+        if not isinstance(log_id, int):
+            return
+        if classified is None:
+            classified = dict()
+        result = self.session.execute(
+            text("SELECT privacy_level FROM log_entry WHERE id = :log_id"),
+            {"log_id": log_id},
+        ).fetchone()
+        if result is None:
+            return
+        if result[0] != "FULL":
+            payload = None
+        sql = text("""
+                   UPDATE log_entry
+                   SET response_payload          = :payload,
+                       policy_id                 = COALESCE(:policy_id, policy_id),
+                       classification_statistics = :classification_statistics,
+                       queue_depth_at_arrival    = COALESCE(:queue_depth, queue_depth_at_arrival),
+                       utilization_at_arrival    = COALESCE(:utilization, utilization_at_arrival)
+                   WHERE id = :log_id
+                   """)
+        self.session.execute(
+            sql,
+            {
+                "payload": _json_for_jsonb(payload) if payload else None,
+                "log_id": log_id,
+                "policy_id": policy_id if policy_id != -1 else None,
+                "classification_statistics": _json_for_jsonb(classified),
+                "queue_depth": queue_depth_at_arrival,
+                "utilization": utilization_at_arrival,
+            },
+        )
+        self.session.commit()
+        if settle_cost:
+            self._settle_cost_snapshot(log_id=log_id)
+
     def set_response_payload(
         self,
         log_id: int,
@@ -2037,6 +4358,8 @@ class DBManager:
         usage=None,
         policy_id=-1,
         classified=None,
+        service_tier=None,
+        set_first_token: bool = False,
         **kwargs,
     ):
         # Hole Privacy-Level
@@ -2057,26 +4380,9 @@ class DBManager:
         if result[0] != "FULL":
             payload = None
 
-        type_ids = dict()
-        for token_type, token_count in usage.items() if usage is not None else dict().items():
-            r, c = self.add_token_type(token_type, "")
-            if "error" in r:
-                return r, c
-            type_ids[token_type] = r["token-type-id"]
+        self._upsert_usage_tokens(log_id, usage)
 
-        for token_type in type_ids:
-            if usage[token_type]:
-                _ = self.insert(
-                    "usage_tokens",
-                    {
-                        "log_entry_id": log_id,
-                        "type_id": type_ids[token_type],
-                        "token_count": usage[token_type],
-                    },
-                )
-
-        sql = text(
-            """
+        sql = text("""
                    UPDATE log_entry
                    SET response_payload = :payload,
                        provider_id      = COALESCE(:provider_id, provider_id),
@@ -2086,56 +4392,102 @@ class DBManager:
                        classification_statistics = :classification_statistics,
                        request_id = COALESCE(:request_id, request_id),
                        queue_depth_at_arrival = COALESCE(:queue_depth, queue_depth_at_arrival),
-                       utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival)
+                       utilization_at_arrival = COALESCE(:utilization, utilization_at_arrival),
+                       service_tier = COALESCE(:service_tier, service_tier),
+                       time_at_first_token = COALESCE(:first_token, time_at_first_token)
                    WHERE id = :log_id
-                   """
-        )
+                   """)
         self.session.execute(
             sql,
             {
-                "payload": json.dumps(payload) if payload else None,
+                "payload": _json_for_jsonb(payload) if payload else None,
                 "provider_id": provider_id,
                 "model_id": model_id,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc),
                 "log_id": log_id,
                 "policy_id": policy_id if policy_id != -1 else None,
-                "classification_statistics": json.dumps(classified),
+                "classification_statistics": _json_for_jsonb(classified),
                 "request_id": kwargs.get("request_id"),
                 "queue_depth": kwargs.get("queue_depth_at_arrival"),
                 "utilization": kwargs.get("utilization_at_arrival"),
+                "service_tier": service_tier,
+                "first_token": datetime.datetime.now(datetime.timezone.utc) if set_first_token else None,
             },
         )
         self.session.commit()
         return {"result": "response_payload set"}, 200
 
+    def get_usage_cost_micro_cents(
+        self,
+        model_id: int,
+        provider_id: int,
+        usage: Dict[str, int],
+        response_at: datetime.datetime,
+        service_tier: Optional[str] = None,
+    ) -> Optional[int]:
+        """Return the configured cloud cost for one response in micro-cents.
+
+        Delegates to the ``logos_price_usage`` SQL function, the single source of
+        truth also used by the ``log_entry_cost`` / ``budget_usage`` views:
+        usage is decomposed into non-overlapping billable quantities and each is
+        priced through a fallback chain, honouring context-length and service
+        tiers. ``None`` means Logos has no pricing knowledge for the response (a
+        local provider, or a cloud model with no catalogue price) — the caller
+        omits the cost line rather than asserting a confident zero.
+        """
+        billable_usage = {
+            token_type: token_count
+            for token_type, token_count in usage.items()
+            if isinstance(token_type, str)
+            and isinstance(token_count, int)
+            and not isinstance(token_count, bool)
+            and token_count >= 0
+        }
+        if not billable_usage:
+            return None
+
+        row = self.session.execute(
+            text("""
+                SELECT logos_price_usage(
+                    :model_id, :provider_id, :response_at, :service_tier,
+                    CAST(:usage AS JSONB)
+                ) AS cost_micro_cents
+                """),
+            {
+                "model_id": int(model_id),
+                "provider_id": int(provider_id),
+                "response_at": response_at,
+                "service_tier": service_tier,
+                "usage": _json_for_jsonb(billable_usage),
+            },
+        ).fetchone()
+        if row is None or row.cost_micro_cents is None:
+            return None
+        return int(row.cost_micro_cents)
+
     def check_authorization(self, logos_key: str):
-        sql = text(
-            """
+        sql = text("""
                                 SELECT *
                                 FROM api_keys ak
                                     JOIN users u ON ak.user_id = u.id
                                 WHERE ak.key_value = :logos_key
                                     AND u.role = 'logos_admin'
                                     AND ak.is_active = true
-                            """
-        )
+                            """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def user_authorization(self, logos_key: str):
-        sql = text(
-            """
+        sql = text("""
                                 SELECT *
                                 FROM api_keys
                                 WHERE key_value = :logos_key
                                   AND is_active = true
-                            """
-        )
+                            """)
         return self.session.execute(sql, {"logos_key": logos_key}).fetchone() is not None
 
     def get_team(self, team_id: int) -> dict | None:
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT id, name,
                         default_cloud_rpm_limit, default_cloud_tpm_limit,
                         default_local_rpm_limit, default_local_tpm_limit,
@@ -2143,8 +4495,7 @@ class DBManager:
                         team_monthly_budget_micro_cents
                  FROM teams
                  WHERE id = :team_id
-                 """
-            ),
+                 """),
             {"team_id": team_id},
         ).fetchone()
         if row is None:
@@ -2153,23 +4504,20 @@ class DBManager:
 
     def is_team_owner(self, team_id: int, user_id: int) -> bool:
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT *
                  FROM team_members
                  WHERE team_id = :team_id
                    AND user_id = :user_id
                    AND is_owner = true
-                 """
-            ),
+                 """),
             {"team_id": team_id, "user_id": user_id},
         ).fetchone()
         return row is not None
 
     def get_api_key_by_value(self, key_value: str) -> Optional[Dict[str, Any]]:
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT ak.id,
                         ak.key_value,
                         ak.name,
@@ -2182,13 +4530,14 @@ class DBManager:
                         ak.default_priority,
                         ak.is_active,
                         ak.use_custom_permissions,
-                        u.role
+                        u.role,
+                        t.priority AS team_priority
                  FROM api_keys ak
                           LEFT JOIN users u ON u.id = ak.user_id
+                          LEFT JOIN teams t ON t.id = ak.team_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
-                 """
-            ),
+                 """),
             {"kv": key_value},
         ).fetchone()
 
@@ -2196,25 +4545,25 @@ class DBManager:
             return None
 
         data = dict(row._mapping)
-        # Admin keys are no longer special-cased: a logos_admin's key resolves
-        # its rate limits and budget from its team / key settings like any other
-        # key. Drop the joined role column so callers see a plain api_key row.
-        data.pop("role", None)
-
+        # The joined columns (u.role, t.team_priority) are part of the auth
+        # context now: queue ordering needs the caller's role as a tiebreak
+        # and the team's admin-set priority as its queue level. Callers that
+        # only want key data ignore the extra keys.
+        # The role is also used to distinguish the admin proxy-mode resolver
+        # from the permission-scoped in-memory resolver.
         return data
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(
-            text(
-                """
-                 SELECT COALESCE(SUM(bu.cost_micro_cents), 0) AS total
-                 FROM budget_usage bu
-                          JOIN api_keys ak ON ak.id = bu.api_key_id
-                 WHERE ak.team_id = :tid
-                   AND ak.key_type = 'developer'
-                   AND bu.month = :month
-                 """
-            ),
+            text("""
+                 SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
+                 FROM log_entry_cost lec
+                 WHERE lec.api_key_id = ANY(
+                         ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                       )
+                   AND lec.timestamp_request >= CAST(:month AS DATE)
+                   AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                 """),
             {"tid": team_id, "month": month_start},
         ).fetchone()
         return int(row._mapping["total"] or 0) if row else 0
@@ -2265,8 +4614,7 @@ class DBManager:
         key_value = generate_logos_api_key(label)
 
         row = self.session.execute(
-            text(
-                """
+            text("""
                  INSERT INTO api_keys
                  (key_value, name, key_type, team_id, user_id,
                   environment, log, settings, default_priority, is_active, use_custom_permissions)
@@ -2281,8 +4629,7 @@ class DBManager:
                          :dprio,
                          true,
                          :custom) RETURNING id, key_value
-                 """
-            ),
+                 """),
             {
                 "kv": key_value,
                 "name": name,
@@ -2291,7 +4638,7 @@ class DBManager:
                 "uid": user_id,
                 "env": environment,
                 "log": log,
-                "settings": json.dumps(settings) if settings else None,
+                "settings": _json_for_jsonb(settings) if settings else None,
                 "dprio": default_priority,
                 "custom": use_custom_permissions,
             },
@@ -2301,8 +4648,7 @@ class DBManager:
 
     def get_user_by_api_key(self, key_value: str):
         row = self.session.execute(
-            text(
-                """
+            text("""
                  SELECT u.id,
                         u.username,
                         u.prename,
@@ -2314,8 +4660,7 @@ class DBManager:
                           LEFT JOIN users u ON u.id = ak.user_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
-                 """
-            ),
+                 """),
             {"kv": key_value},
         ).fetchone()
         if row is None:
@@ -2323,15 +4668,13 @@ class DBManager:
         return dict(row._mapping)
 
     def get_api_key_budget_limit(self, api_key_id: int) -> Optional[int]:
-        sql = text(
-            """
+        sql = text("""
                    SELECT CAST(ak.settings ->>'budget_limit_micro_cents' AS BIGINT) AS specific_limit,
                           t.default_monthly_budget_micro_cents                      AS default_limit
                    FROM api_keys ak
                             LEFT JOIN teams t ON t.id = ak.team_id
                    WHERE ak.id = :aki
-                   """
-        )
+                   """)
         row = self.session.execute(sql, {"aki": api_key_id}).fetchone()
 
         if not row:
@@ -2343,16 +4686,55 @@ class DBManager:
 
     def get_api_key_budget_usage(self, api_key_id: int, month_start: str) -> int:
         row = self.session.execute(
-            text(
-                """
-                 SELECT cost_micro_cents
-                 FROM budget_usage
-                 WHERE api_key_id = :aki AND month = :month
-                 """
-            ),
+            text("""
+                 SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
+                 FROM log_entry_cost lec
+                 WHERE lec.api_key_id = :aki
+                   AND lec.timestamp_request >= CAST(:month AS DATE)
+                   AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                 """),
             {"aki": api_key_id, "month": month_start},
         ).fetchone()
         return int(row[0]) if row else 0
+
+    # ------------------------------------------------------------------
+    # LatencyStore persistence
+    # ------------------------------------------------------------------
+
+    def upsert_latency_observation(
+        self,
+        model_name: str,
+        provider_id: int,
+        tier: str,
+        ewma_value: float,
+        n: int,
+    ) -> None:
+        """Insert or update a LatencyStore EWMA row."""
+        self.session.execute(
+            text("""
+                INSERT INTO latency_observations (model_name, provider_id, tier, ewma_value, n, updated_at)
+                VALUES (:model_name, :provider_id, :tier, :ewma_value, :n, NOW())
+                ON CONFLICT (model_name, provider_id, tier)
+                DO UPDATE SET ewma_value = EXCLUDED.ewma_value,
+                              n          = EXCLUDED.n,
+                              updated_at = NOW()
+                """),
+            {
+                "model_name": model_name,
+                "provider_id": int(provider_id),
+                "tier": tier,
+                "ewma_value": float(ewma_value),
+                "n": int(n),
+            },
+        )
+        self.session.commit()
+
+    def get_all_latency_observations(self) -> list[tuple[str, int, str, float, int]]:
+        """Return all persisted EWMA rows as (model_name, provider_id, tier, ewma_value, n)."""
+        rows = self.session.execute(
+            text("SELECT model_name, provider_id, tier, ewma_value, n FROM latency_observations")
+        ).fetchall()
+        return [(str(r[0]), int(r[1]), str(r[2]), float(r[3]), int(r[4])) for r in rows]
 
     def __enter__(self):
         self.engine = _init_engine()

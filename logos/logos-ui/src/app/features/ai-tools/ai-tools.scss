@@ -1,0 +1,779 @@
+@use 'styles/glass' as *;
+
+.ai-tools {
+  padding: 36px 32px 48px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ai-tools .page-subtitle {
+  margin-bottom: 16px;
+}
+
+// ── Stepper ───────────────────────────────────────────────────────────────
+.stepper {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.stepper-item {
+  display: flex;
+  align-items: center;
+
+  // Connector between steps, so the row reads as a sequence rather than tabs.
+  &:not(.stepper-item--last)::after {
+    content: '';
+    width: 18px;
+    height: 1px;
+    background: rgb(var(--color-outline-200) / var(--opacity-strong));
+  }
+}
+
+.stepper-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: rgb(var(--color-typography-500));
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-primary-400) / var(--opacity-faint));
+    color: rgb(var(--color-text-accent));
+  }
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: var(--opacity-muted);
+  }
+
+  &--current {
+    background: rgb(var(--nav-active-fill) / var(--nav-active-fill-opacity));
+    border-color: rgb(var(--nav-active-stroke) / var(--nav-active-stroke-opacity));
+    color: rgb(var(--color-text-accent));
+    font-weight: var(--font-weight-semibold);
+  }
+
+  &--done {
+    color: rgb(var(--color-typography-300));
+
+    .stepper-num {
+      background: rgb(var(--color-accent-green) / var(--opacity-soft));
+      color: rgb(var(--color-accent-green));
+    }
+  }
+}
+
+.stepper-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+
+  i { font-size: var(--font-size-sm); }
+}
+
+.stepper-title { white-space: nowrap; }
+
+// ── Section cards ─────────────────────────────────────────────────────────
+.config-section {
+  @include glass-surface;
+  margin-top: 16px;
+  padding: 20px 24px 24px;
+
+  // A collapsed step is one summary row; drop the card padding so the sequence
+  // of completed steps stays compact above the one being worked on.
+  &--collapsed {
+    padding: 0;
+  }
+
+  // A step that cannot be opened yet has nothing to show, so the card should
+  // not be there at all.
+  &--collapsed:empty {
+    display: none;
+  }
+}
+
+.step-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 24px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / var(--opacity-faint));
+  }
+
+  > i {
+    margin-left: auto;
+    flex-shrink: 0;
+    font-size: var(--font-size-sm);
+    color: rgb(var(--color-typography-700));
+  }
+}
+
+.step-summary-label {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-widest);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700));
+}
+
+.step-summary-value {
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+  overflow-wrap: anywhere;
+}
+
+// ── Step navigation ───────────────────────────────────────────────────────
+.step-nav {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+}
+
+// ── Step 1: tool comparison ───────────────────────────────────────────────
+// A single grid holding every cell as a direct child, so the dimension label
+// and both values share one grid row. That is what makes the two tools
+// comparable: the rows cannot drift apart when one side's text wraps to two
+// lines and the other's does not, which is exactly what happens on a narrow
+// window or with a longer translation.
+.compare {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.55fr) repeat(2, minmax(0, 1fr));
+  // 1px gaps with the container's own background showing through: grid lines
+  // without a border on every cell, so the eye can follow a row across.
+  gap: 1px;
+  margin: 16px 0 10px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgb(var(--color-outline-200) / var(--opacity-border));
+}
+
+// The rows exist for the table semantics only; display:contents hands their
+// cells straight to the .compare grid, so a row cannot drift out of alignment.
+.compare-row {
+  display: contents;
+}
+
+.compare-col {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 16px 16px 14px;
+  background: rgb(var(--color-background-50));
+  text-align: left;
+  transition: background 0.15s;
+
+  &--active { background: rgb(var(--color-primary-500) / var(--opacity-soft)); }
+}
+
+.compare-col-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+
+  i {
+    font-size: var(--font-size-lg);
+    color: rgb(var(--color-text-accent));
+  }
+}
+
+.compare-col-name {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+}
+
+.compare-col-headline {
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-300));
+  line-height: var(--line-height-normal);
+}
+
+.compare-col-caveat {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  line-height: var(--line-height-normal);
+
+  i {
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: rgb(var(--color-warning));
+  }
+}
+
+.compare-corner {
+  background: rgb(var(--color-background-50));
+}
+
+.compare-dim {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px;
+  background: rgb(var(--color-surface-0));
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700));
+}
+
+.compare-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  background: rgb(var(--color-surface-0));
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+  line-height: var(--line-height-normal);
+
+  &--active { background: rgb(var(--color-primary-500) / var(--opacity-faint)); }
+
+  &--plus { color: rgb(var(--color-typography-100)); }
+}
+
+.compare-icon {
+  flex-shrink: 0;
+  margin-top: 3px;
+  font-size: var(--font-size-sm);
+
+  &--plus { color: rgb(var(--color-accent-green)); }
+  &--even,
+  &--minus { color: rgb(var(--color-typography-700)); }
+}
+
+// The action lives in a real <button> inside the cell rather than on the cell
+// itself: a cell with role="cell" that is also a button reports only one of the
+// two to assistive technology, and "you can click this" is the half that matters.
+.compare-cta-cell {
+  display: flex;
+  background: rgb(var(--color-background-50));
+}
+
+.compare-cta {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-text-accent));
+  font-family: inherit;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+
+  &:hover { background: rgb(var(--color-primary-400) / var(--opacity-faint)); }
+
+  &--active {
+    background: rgb(var(--color-primary-500));
+    color: rgb(var(--color-white));
+
+    &:hover { background: rgb(var(--color-primary-500)); }
+  }
+}
+
+.tool-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+// ── Context window grid ───────────────────────────────────────────────────
+.context-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 16px 0 12px;
+}
+
+.context-cell {
+  @include glass-card;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  background: rgb(var(--color-background-50));
+
+  &--accent {
+    border-color: rgb(var(--color-primary-400) / var(--opacity-strong));
+  }
+}
+
+.context-cell-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-wide);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700));
+}
+
+.context-cell-value {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-typography-100));
+}
+
+.context-cell-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  line-height: var(--line-height-normal);
+}
+
+.step-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-widest);
+  text-transform: uppercase;
+  color: rgb(var(--color-typography-700));
+  margin-bottom: 14px;
+}
+
+// ── OS tabs ───────────────────────────────────────────────────────────────
+.os-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.os-tab {
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  font-size: var(--font-size-md);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / var(--opacity-faint));
+    color: rgb(var(--color-text-accent));
+  }
+
+  &--active {
+    background: rgb(var(--nav-active-fill) / var(--nav-active-fill-opacity));
+    border-color: rgb(var(--nav-active-stroke) / var(--nav-active-stroke-opacity));
+    color: rgb(var(--color-text-accent));
+    font-weight: var(--font-weight-semibold);
+  }
+}
+
+// ── Terminal blocks ───────────────────────────────────────────────────────
+.terminal-block {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgb(var(--color-background-200));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  font-family: monospace;
+  margin-bottom: 10px;
+}
+
+.terminal-prefix {
+  color: rgb(var(--color-accent-green));
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-md);
+  margin-right: 10px;
+  user-select: none;
+}
+
+.terminal-cmd {
+  flex: 1 1 auto;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-100));
+  word-break: break-all;
+}
+
+.btn-copy-cmd {
+  flex-shrink: 0;
+  margin-left: 12px;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-700));
+  cursor: pointer;
+  border-radius: 8px;
+  transition: color 0.15s, background 0.15s;
+
+  i { font-size: var(--font-size-base); }
+
+  &:hover {
+    color: rgb(var(--color-text-accent));
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+  }
+
+  &--done { color: rgb(var(--color-accent-green)); }
+}
+
+.tab-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+  margin-top: 2px;
+}
+
+.section-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-700));
+  line-height: var(--line-height-normal);
+}
+
+// ── Config code block ─────────────────────────────────────────────────────
+.code-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+
+  .step-label { margin-bottom: 0; flex: 1 1 auto; }
+}
+
+.file-tab {
+  font-size: var(--font-size-sm);
+  font-family: monospace;
+  color: rgb(var(--color-typography-300));
+  padding: 2px 10px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-500) / var(--opacity-soft));
+}
+
+.btn-copy-config {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--color-outline-200));
+  background: transparent;
+  color: rgb(var(--color-typography-300));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+
+  &:hover {
+    background: rgb(var(--color-primary-400) / var(--opacity-soft));
+    color: rgb(var(--color-text-accent));
+    border-color: rgb(var(--color-primary-400) / var(--opacity-border));
+  }
+}
+
+.code-block {
+  display: flex;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  border-radius: 8px;
+  margin-bottom: 14px;
+  background: rgb(var(--color-background-50));
+  overflow: hidden;
+}
+
+.line-numbers {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 0 16px 16px;
+  min-width: 36px;
+  text-align: right;
+  user-select: none;
+
+  span {
+    font-size: var(--font-size-md);
+    font-family: monospace;
+    color: rgb(var(--color-typography-300));
+    line-height: var(--line-height-loose);
+  }
+}
+
+.code-content {
+  flex: 1 1 auto;
+  padding: 16px 24px 20px 16px;
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-family: monospace;
+  color: rgb(var(--color-typography-100));
+  line-height: var(--line-height-loose);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+// ── Apply config ──────────────────────────────────────────────────────────
+.apply-hint {
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-300));
+  margin-bottom: 12px;
+}
+
+.install-hint {
+  font-size: var(--font-size-base);
+  color: rgb(var(--color-typography-300));
+  margin-bottom: 8px;
+}
+
+.ext-link {
+  color: rgb(var(--color-text-accent));
+  text-decoration: none;
+
+  &:hover { text-decoration: underline; }
+}
+
+// ── Callouts ──────────────────────────────────────────────────────────────
+// Two flavours of one shape: .privacy-callout warns about something to know
+// before continuing, .callout--good confirms something the reader might
+// otherwise worry about (here: that their own setup is left alone).
+.privacy-callout,
+.callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-radius: 8px;
+
+  i {
+    flex-shrink: 0;
+    margin-top: 2px;
+    font-size: var(--font-size-base);
+  }
+
+  p {
+    margin: 0;
+    font-size: var(--font-size-sm);
+    color: rgb(var(--color-typography-300));
+    line-height: var(--line-height-normal);
+
+    strong { color: rgb(var(--color-typography-100)); }
+  }
+}
+
+.privacy-callout {
+  background: rgb(var(--color-warning) / var(--opacity-faint));
+  border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
+
+  i { color: rgb(var(--color-warning)); }
+}
+
+.callout--good {
+  background: rgb(var(--color-accent-green) / var(--opacity-faint));
+  border: 1px solid rgb(var(--color-accent-green) / var(--opacity-border));
+
+  i { color: rgb(var(--color-accent-green)); }
+}
+
+// ── Connect sub-steps ─────────────────────────────────────────────────────
+.substep-label {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-100));
+  margin: 18px 0 8px;
+
+  &:first-of-type { margin-top: 4px; }
+}
+
+// ── Context note (Claude Code) ────────────────────────────────────────────
+.context-note {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  margin-top: 8px;
+  line-height: var(--line-height-normal);
+}
+
+// ── Model select ─────────────────────────────────────────────────────────
+.model-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-500));
+}
+
+.model-error { font-size: var(--font-size-md); color: rgb(var(--color-error)); }
+.model-empty { font-size: var(--font-size-md); color: rgb(var(--color-typography-500)); }
+
+// ── Shared inline code ────────────────────────────────────────────────────
+.inline-code {
+  font-family: monospace;
+  font-size: var(--font-size-md);
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgb(var(--color-primary-500) / var(--opacity-soft));
+  color: rgb(var(--color-primary-600));
+}
+
+// ── Mobile ────────────────────────────────────────────────────────────────
+@media (max-width: 900px) {
+  .context-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  // Three columns stop fitting, but the two values still have to sit side by
+  // side or it is no longer a comparison. So the dimension label moves onto its
+  // own full-width row above the pair it labels.
+  .compare {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .compare-dim {
+    grid-column: 1 / -1;
+    padding-bottom: 2px;
+    background: rgb(var(--color-background-50));
+  }
+
+  .compare-corner {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .ai-tools {
+    padding: 24px 16px 32px;
+  }
+
+  .config-section {
+    padding: 16px 16px 20px;
+
+    &--collapsed { padding: 0; }
+  }
+
+  .step-summary {
+    flex-wrap: wrap;
+    row-gap: 2px;
+    padding: 12px 16px;
+  }
+
+  .code-header {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .os-tabs {
+    flex-wrap: wrap;
+  }
+
+  .stepper-item:not(.stepper-item--last)::after {
+    width: 8px;
+  }
+
+  .stepper-title {
+    // Numbers alone stay legible on a narrow screen; the open step's own
+    // heading says which step it is.
+    display: none;
+  }
+
+  .stepper-btn--current .stepper-title {
+    display: inline;
+  }
+
+  .step-nav {
+    flex-direction: column-reverse;
+
+    .btn-primary,
+    .btn-secondary {
+      width: 100%;
+      justify-content: center;
+    }
+  }
+
+  .terminal-block {
+    align-items: flex-start;
+  }
+}
+
+// ── Finishing confetti ────────────────────────────────────────────────────
+// A short burst when the last step opens. Fixed to the viewport and
+// pointer-events: none, so it cannot intercept a click on the step below it.
+// The per-piece values (position, drift, spin, timing) come from the template
+// as inline styles and custom properties.
+.confetti {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 60;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -24px;
+  border-radius: 1px;
+  opacity: 0;
+  animation-name: confetti-fall;
+  animation-timing-function: cubic-bezier(0.25, 0.55, 0.45, 1);
+  animation-fill-mode: forwards;
+}
+
+@keyframes confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  // Fade in over the first slice rather than appearing at full opacity, so the
+  // burst reads as a flourish and not as a flash.
+  12% {
+    opacity: 0.85;
+  }
+  75% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform:
+      translate3d(var(--confetti-drift, 0), 100vh, 0)
+      rotate(var(--confetti-spin, 180deg));
+  }
+}
+
+// Belt and braces: celebrate() already returns early for a reduced-motion
+// preference, so nothing renders. If that ever regresses, the pieces stay put
+// instead of flying across the screen.
+@media (prefers-reduced-motion: reduce) {
+  .confetti { display: none; }
+}
+
+// The line naming the team/model whose step was skipped.
+.used-choices {
+  margin-bottom: 12px;
+}

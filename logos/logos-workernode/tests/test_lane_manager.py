@@ -3,21 +3,25 @@ from __future__ import annotations
 import asyncio
 import socket
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from logos_worker_node.lane_manager import LaneManager, PortAllocator
+from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import (
     DeviceInfo,
     DeviceSummary,
     LaneConfig,
     LaneStatus,
-    OllamaConfig,
     ProcessState,
     ProcessStatus,
     VllmConfig,
+    VllmEngineConfig,
+    WorkerConfig,
 )
 
 
@@ -91,7 +95,7 @@ def test_resolve_owner_pid_returns_none_when_unrelated(monkeypatch) -> None:
 async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
     lane_id = "deepseek-ai_DeepSeek-R1-0528-Qwen3-8B"
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15000,
     )
@@ -125,7 +129,7 @@ async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
     def _fake_create_handle(
         lid: str,
         port: int,
-        _global_config: OllamaConfig,
+        _global_config: WorkerConfig,
         _vllm_engine_config,
         _lane_config: LaneConfig,
         **_kwargs,
@@ -148,7 +152,7 @@ async def test_add_lane_releases_port_when_spawn_fails(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_apply_lanes_rejects_vllm_without_nvidia_smi() -> None:
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15000,
         lane_port_end=15010,
         nvidia_smi_available=lambda: False,
@@ -167,9 +171,9 @@ async def test_apply_lanes_rejects_vllm_without_nvidia_smi() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconfigure_lane_rejects_switch_to_vllm_without_nvidia_smi() -> None:
+async def test_reconfigure_lane_rejects_change_without_nvidia_smi() -> None:
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15010,
         lane_port_end=15020,
         nvidia_smi_available=lambda: False,
@@ -177,24 +181,21 @@ async def test_reconfigure_lane_rejects_switch_to_vllm_without_nvidia_smi() -> N
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
 
-    class FakeOllamaHandle:
+    class FakeHandle:
         def __init__(self) -> None:
             self.lane_id = lane_id
             self.port = 15010
             self.lane_config = lane
 
-    manager._handles[lane_id] = FakeOllamaHandle()  # noqa: SLF001
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
 
     with pytest.raises(RuntimeError, match="nvidia-smi"):
-        await manager.reconfigure_lane(
-            lane_id,
-            {"vllm": True, "vllm_config": VllmConfig().model_dump()},
-        )
+        await manager.reconfigure_lane(lane_id, {"context_length": 8192})
 
 
 @pytest.mark.asyncio
 async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
-    manager = LaneManager(OllamaConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -244,12 +245,12 @@ async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
 
 @pytest.mark.asyncio
 async def test_build_lane_status_reports_stopped_runtime_state() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15011, lane_port_end=15020)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15011, lane_port_end=15020)
     lane = LaneConfig(
         model="qwen2.5-coder:32b",
     )
 
-    class FakeOllamaHandle:
+    class FakeHandle:
         def __init__(self) -> None:
             self.lane_id = "qwen2.5-coder_32b"
             self.port = 15011
@@ -258,14 +259,14 @@ async def test_build_lane_status_reports_stopped_runtime_state() -> None:
         def status(self) -> ProcessStatus:
             return ProcessStatus(state=ProcessState.STOPPED, pid=4321, return_code=1)
 
-    status = await manager._build_lane_status(FakeOllamaHandle(), pid_vram_map={})  # noqa: SLF001
+    status = await manager._build_lane_status(FakeHandle(), pid_vram_map={})  # noqa: SLF001
     assert status.runtime_state == "stopped"
     assert status.sleep_state == "unsupported"
 
 
 @pytest.mark.asyncio
 async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15020, lane_port_end=15030)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15020, lane_port_end=15030)
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -305,8 +306,232 @@ async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sleep_lane_invokes_the_on_lane_slept_hook(monkeypatch) -> None:
+    """The moment a lane's weights land in host RAM, the wired hook (the RAM
+    cache re-plan) must run before sleep_lane returns — so several lanes
+    sleeping in quick succession do not face a cache that keeps its old size
+    for up to a 60 s tick. A failing hook must never fail the sleep itself."""
+    calls = []
+
+    async def _hook() -> None:
+        calls.append(1)
+
+    manager = LaneManager(
+        WorkerConfig(),
+        lane_port_start=15071,
+        lane_port_end=15080,
+        on_lane_slept=_hook,
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_id = "deepseek-ai_DeepSeek-R1-0528-Qwen3-8B"
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15071
+            self.lane_config = lane
+            self.sleep_called = 0
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            self.sleep_called += 1
+            return {"ok": True}
+
+    fake = FakeVllmHandle()
+    manager._handles[lane_id] = fake  # noqa: SLF001
+    sentinel = object()
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    out = await manager.sleep_lane(lane_id, level=1, mode="wait")
+
+    assert out is sentinel
+    assert fake.sleep_called == 1
+    assert calls == [1]
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated re-plan failure")
+
+    manager._on_lane_slept = _boom  # noqa: SLF001
+    out2 = await manager.sleep_lane(lane_id, level=1, mode="wait")
+
+    assert out2 is sentinel  # the sleep still succeeds
+    assert fake.sleep_called == 2
+
+
+@pytest.mark.asyncio
+async def test_add_lane_invokes_the_on_lane_added_hook(monkeypatch) -> None:
+    """The moment a lane is added — a startup static lane, a restored dynamic
+    lane, or a new dynamic lane — the wired hook (the RAM-cache re-plan) must
+    run so the sleep reserve is in place BEFORE the lane's first sleep: the
+    post-sleep hook only fires after the sleep has already happened, and the
+    periodic loop waits its initial 60 s. A failing hook must never fail the
+    lane add itself."""
+    calls = []
+
+    async def _hook() -> None:
+        calls.append(1)
+
+    manager = LaneManager(
+        WorkerConfig(),
+        lane_port_start=15071,
+        lane_port_end=15080,
+        nvidia_smi_available=lambda: True,
+        on_lane_added=_hook,
+    )
+    sentinel = object()
+    monkeypatch.setattr(manager, "_add_lane_unlocked", AsyncMock())
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    out = await manager.add_lane(
+        LaneConfig(
+            model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+            vllm=True,
+            vllm_config=VllmConfig(enable_sleep_mode=True),
+        )
+    )
+
+    assert out is sentinel
+    assert calls == [1]
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated re-plan failure")
+
+    manager._on_lane_added = _boom  # noqa: SLF001
+    out2 = await manager.add_lane(
+        LaneConfig(
+            model="org/other-model",
+            vllm=True,
+            lane_id="org_other-model",
+            vllm_config=VllmConfig(enable_sleep_mode=True),
+        )
+    )
+
+    assert out2 is sentinel  # the add still succeeds
+
+
+@pytest.mark.asyncio
+async def test_wake_lane_invokes_the_on_lane_woken_hook(monkeypatch) -> None:
+    """The moment a lane wakes — its NEXT sleep must hold host RAM again — the
+    wired hook (the RAM cache re-plan) must run before wake_lane returns,
+    restoring the lane's sleeping footprint to the floor instead of waiting
+    for the next 60 s tick. A failing hook must never fail the wake itself,
+    and a failed wake must not fire the hook."""
+    calls = []
+
+    async def _hook() -> None:
+        calls.append(1)
+
+    manager = LaneManager(
+        WorkerConfig(),
+        lane_port_start=15091,
+        lane_port_end=15100,
+        on_lane_woken=_hook,
+    )
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_id = "deepseek-ai_DeepSeek-R1-0528-Qwen3-8B"
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15091
+            self.lane_config = lane
+            self.wake_called = 0
+
+        async def wake_up(self) -> dict[str, Any]:
+            self.wake_called += 1
+            return {"ok": True}
+
+    fake = FakeVllmHandle()
+    manager._handles[lane_id] = fake  # noqa: SLF001
+    sentinel = object()
+    monkeypatch.setattr(manager, "_get_status_unlocked", AsyncMock(return_value=sentinel))
+
+    out = await manager.wake_lane(lane_id)
+
+    assert out is sentinel
+    assert fake.wake_called == 1
+    assert calls == [1]
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated re-plan failure")
+
+    manager._on_lane_woken = _boom  # noqa: SLF001
+    out2 = await manager.wake_lane(lane_id)
+
+    assert out2 is sentinel  # the wake still succeeds
+    assert fake.wake_called == 2
+
+    # A failed (non-CUDA-OOM) wake propagates and must not fire the hook.
+    async def _fail_wake() -> dict[str, Any]:
+        raise RuntimeError("simulated engine failure")
+
+    manager._on_lane_woken = _hook  # noqa: SLF001
+    fake.wake_up = _fail_wake  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="simulated engine failure"):
+        await manager.wake_lane(lane_id)
+    assert calls == [1]  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_replans_after_each_registration_before_staggered_sleep(monkeypatch) -> None:
+    """A batch add of sleep-capable lanes must re-plan after each registration
+    and BEFORE that lane's staggered sleep — otherwise the lane's sleeping
+    footprint is not reserved until the post-sleep hook (which fires only AFTER
+    the weights are already in host RAM) or the periodic loop's 60 s tick.
+    apply_lanes fires the re-plan per registration, so the cache has shrunk to
+    make room before the staggered sleep of each lane lands."""
+    events: list[str] = []
+
+    async def _hook() -> None:
+        events.append("replan")
+
+    manager = LaneManager(WorkerConfig(), nvidia_smi_available=lambda: True, on_lane_added=_hook)
+    lanes = [
+        LaneConfig(model="org/a", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True)),
+        LaneConfig(model="org/b", vllm=True, lane_id="org_b", vllm_config=VllmConfig(enable_sleep_mode=True)),
+    ]
+
+    async def _fake_add(lid: str, lc: LaneConfig) -> None:
+        events.append(f"add:{lid}")
+        manager._handles[lid] = SimpleNamespace(  # noqa: SLF001
+            lane_id=lid,
+            lane_config=lc,
+            status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+        )
+
+    async def _fake_sleep(handle: Any, level: int, mode: str) -> None:
+        events.append(f"sleep:{handle.lane_id}")
+
+    monkeypatch.setattr(manager, "_add_lane_unlocked", _fake_add)
+    monkeypatch.setattr(manager, "_sleep_handle_and_replan", _fake_sleep)
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    await manager.apply_lanes(lanes)
+
+    # Both lanes are added; exactly one (the non-last) is stagger-slept. Each
+    # registration fires the re-plan, plus the batch backstop fires once more.
+    assert sum(e.startswith("add:") for e in events) == 2
+    assert sum(e.startswith("sleep:") for e in events) == 1
+    assert events.count("replan") == 3
+    # The whole point of the fix: for the stagger-slept lane, the re-plan fires
+    # AFTER its registration and BEFORE its sleep, so the reserve is in place
+    # before the weights move to host RAM.
+    slept = next(e for e in events if e.startswith("sleep:"))
+    lid = slept.split(":", 1)[1]
+    i_add, i_sleep = events.index(f"add:{lid}"), events.index(slept)
+    assert any(e == "replan" for e in events[i_add:i_sleep])
+
+
+@pytest.mark.asyncio
 async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15031, lane_port_end=15040)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15031, lane_port_end=15040)
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
@@ -350,45 +575,44 @@ async def test_wake_lane_oom_removes_lane_for_cleanup() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sleep_lane_rejects_non_vllm_lane() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15040, lane_port_end=15050)
+async def test_status_revision_no_longer_advances_on_active_request_change() -> None:
+    """W3: counting a request is not a lifecycle change. Bumping the
+    STATUS revision per request woke the bridge refresh loop into a full-node
+    status build (all lanes, all probes) next to the relay — the worker's
+    biggest per-request cost. Count changes bump the separate COUNT revision
+    instead: the loop reacts with an in-memory patch of the last payload (no
+    probes), so the orchestrator still gets a per-request status push to
+    reset its per-snapshot forward budget."""
+    manager = LaneManager(WorkerConfig(), lane_port_start=15060, lane_port_end=15070)
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
 
-    class FakeOllamaHandle:
-        def __init__(self) -> None:
-            self.lane_id = lane_id
-            self.port = 15040
-            self.lane_config = lane
-
-    manager._handles[lane_id] = FakeOllamaHandle()  # noqa: SLF001
-
-    with pytest.raises(ValueError, match="not a vLLM lane"):
-        await manager.sleep_lane(lane_id)
-
-
-@pytest.mark.asyncio
-async def test_status_revision_advances_on_active_request_change() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15060, lane_port_end=15070)
-    lane = LaneConfig(model="qwen2.5-coder:32b")
-    lane_id = "qwen2.5-coder_32b"
-
-    class FakeOllamaHandle:
+    class FakeHandle:
         def __init__(self) -> None:
             self.lane_id = lane_id
             self.port = 15060
             self.lane_config = lane
 
-    manager._handles[lane_id] = FakeOllamaHandle()  # noqa: SLF001
+    manager._handles[lane_id] = FakeHandle()  # noqa: SLF001
 
     initial = manager.status_revision
+    initial_count = manager.count_revision
     await manager.increment_active_requests(lane_id)
-    after_inc = await manager.wait_for_status_revision(initial, timeout=0.01)
-    assert after_inc > initial
+    # The status revision is untouched: no full rebuild on the request path.
+    assert await manager.wait_for_status_revision(initial, timeout=0.01) == initial
+    # ...but the count revision advances and wakes the combined wait
+    # immediately (not on the next ~1s tick).
+    assert manager.count_revision == initial_count + 1
+    assert await manager.wait_for_status_or_count_revision(initial, initial_count, timeout=0.01) == (
+        initial,
+        initial_count + 1,
+    )
+    assert await manager.total_active_requests() == 1
 
     await manager.decrement_active_requests(lane_id)
-    after_dec = await manager.wait_for_status_revision(after_inc, timeout=0.01)
-    assert after_dec > after_inc
+    assert await manager.wait_for_status_revision(initial, timeout=0.01) == initial
+    assert manager.count_revision == initial_count + 2
+    assert await manager.total_active_requests() == 0
 
 
 def test_auto_tp_keeps_tp1_when_model_fits() -> None:
@@ -402,7 +626,7 @@ def test_auto_tp_keeps_tp1_when_model_fits() -> None:
         engine="vllm",
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -429,7 +653,7 @@ def test_auto_tp_escalates_when_model_does_not_fit() -> None:
         engine="vllm",
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -450,7 +674,7 @@ def test_auto_tp_escalates_when_model_does_not_fit() -> None:
 def test_auto_tp_respects_explicit_tp() -> None:
     """Explicit TP>1 should be respected."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -467,7 +691,7 @@ def test_auto_tp_respects_explicit_tp() -> None:
 def test_auto_tp_noop_for_single_gpu() -> None:
     """With 1 GPU, auto-TP should be a no-op regardless of config."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 1,
@@ -481,17 +705,18 @@ def test_auto_tp_noop_for_single_gpu() -> None:
     assert result.vllm_config.tensor_parallel_size == 1
 
 
-def test_auto_tp_noop_for_non_vllm() -> None:
-    """Ollama lanes should never have TP modified."""
+def test_auto_tp_noop_for_unmeasured_model() -> None:
+    """Without a measured profile there is no evidence the model exceeds one
+    GPU, so the default TP=1 config passes the auto-tuner unchanged."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
     )
     lane = LaneConfig(model="qwen2.5-coder:32b")
     result = manager._auto_tensor_parallel(lane)
-    assert result.vllm_config is None
+    assert result.vllm_config.tensor_parallel_size == 1
 
 
 def test_auto_tp_prefers_calibrated_tp() -> None:
@@ -510,7 +735,7 @@ def test_auto_tp_prefers_calibrated_tp() -> None:
         tensor_parallel_size=2,
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -537,7 +762,7 @@ def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
         tensor_parallel_size=8,
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -553,18 +778,23 @@ def test_auto_tp_caps_calibrated_tp_at_gpu_count() -> None:
     assert result.vllm_config.tensor_parallel_size == 4
 
 
-def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
-    """Calibrated tp=1 means the model fit on one GPU during calibration — no escalation."""
+def test_auto_tp_non_calibrated_tp1_falls_through_to_heuristic() -> None:
+    """A tp known only from runtime (no calibration) still defers to the heuristic.
+
+    The calibrated-TP guard must not block escalation for profiles that were
+    never calibrated: here the recorded tp=1 is the vLLM default, and the
+    large base residency still escalates.
+    """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
-    profiles._profiles["small/8B"] = ModelProfileRecord(
-        base_residency_mb=10_000.0,
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0,
         engine="vllm",
         tensor_parallel_size=1,
     )
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -572,7 +802,42 @@ def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
         model_profiles=profiles,
     )
     lane = LaneConfig(
-        model="small/8B",
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size >= 2
+
+
+def test_auto_tp_calibrated_tp1_authoritative_despite_full_footprint_base() -> None:
+    """a calibrated tp=1 must not be escalated by the size heuristic.
+
+    The calibrated base_residency is the FULL awake footprint (weights + KV),
+    which on a 2-GPU Ada node is most of a single card — the heuristic would
+    misread that as "does not fit one GPU" and escalate to tp=2. But the
+    calibrator probed this hardware and proved the model loads fine at tp=1,
+    so the lane must stay at tp=1.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["ms/Phi-4-reasoning"] = ModelProfileRecord(
+        base_residency_mb=46_000.0,  # full footprint vs ~50 GB per GPU
+        engine="vllm",
+        tensor_parallel_size=1,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        WorkerConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 2,
+        per_gpu_vram_mb=lambda: 50_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="ms/Phi-4-reasoning",
         vllm=True,
         vllm_config=VllmConfig(tensor_parallel_size=1),
     )
@@ -580,10 +845,71 @@ def test_auto_tp_calibrated_tp1_falls_through_to_heuristic() -> None:
     assert result.vllm_config.tensor_parallel_size == 1
 
 
+def test_auto_tp_calibrated_tp1_overrides_incoming_tp() -> None:
+    """the calibrated TP wins over a stale/re-inferred TP from upstream.
+
+    The orchestrator's size-vs-VRAM inference sent tp=2 for a model the
+    calibrator decided fits at tp=1 — the worker must not serve it at tp=2
+    (and thus re-persist tp=2 over the calibrated profile).
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["ms/Phi-4-reasoning"] = ModelProfileRecord(
+        base_residency_mb=46_000.0,
+        engine="vllm",
+        tensor_parallel_size=1,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        WorkerConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 2,
+        per_gpu_vram_mb=lambda: 50_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="ms/Phi-4-reasoning",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 1
+
+
+def test_auto_tp_calibrated_tp2_applies_over_incoming_tp1() -> None:
+    """A calibrated tp>1 is applied even when the incoming config says tp=1."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["big-model/70B"] = ModelProfileRecord(
+        base_residency_mb=42_000.0,
+        engine="vllm",
+        tensor_parallel_size=2,
+        residency_source="calibrated",
+    )
+    manager = LaneManager(
+        WorkerConfig(),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        gpu_device_count=lambda: 4,
+        per_gpu_vram_mb=lambda: 24_000.0,
+        model_profiles=profiles,
+    )
+    lane = LaneConfig(
+        model="big-model/70B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+    result = manager._auto_tensor_parallel(lane)
+    assert result.vllm_config.tensor_parallel_size == 2
+
+
 def test_auto_tp_keeps_tp1_without_gpu_info() -> None:
     """If per-GPU VRAM is unknown, keep TP=1 (safe default)."""
     manager = LaneManager(
-        OllamaConfig(),
+        WorkerConfig(),
         lane_port_start=15100,
         lane_port_end=15110,
         gpu_device_count=lambda: 4,
@@ -647,7 +973,7 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -668,11 +994,12 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
 async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> None:
     """A kv-pinned lane must NOT be gated by the 0.5 GMU floor.
 
-    Same GPUs as the floor test: GPU 2 (7.6 GB free) was eliminated by the
-    12.3 GB floor. But when the lane pins kv_cache_memory_bytes, vLLM ignores
-    gpu_memory_utilization and only grabs weights + KV (~6 GB), so GPU 2 becomes
-    feasible — and best-fit (smallest leftover) now selects it. This is the fix
-    that lets small models (e.g. gemma-3-4b) place into tight free VRAM.
+    All three GPUs fall below the 0.5 × 24576 = 12288 MB floor vLLM would
+    attempt, so with the floor applied placement raises. With the lane pinning
+    kv_cache_memory_bytes, vLLM ignores gpu_memory_utilization and only grabs
+    weights + KV (~6 GB), so every GPU becomes feasible and the emptiest one
+    (GPU 0) is selected. This is the fix that lets small models (e.g.
+    gemma-3-4b) place into tight free VRAM.
     """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
@@ -692,7 +1019,7 @@ async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> No
                     device_id="gpu0",
                     kind="nvidia",
                     memory_total_mb=24576.0,
-                    memory_free_mb=16000.0,
+                    memory_free_mb=12000.0,
                     extra={"index": 0},
                 ),
                 DeviceInfo(
@@ -711,11 +1038,11 @@ async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> No
                 ),
             ],
             total_memory_mb=3 * 24576.0,
-            free_memory_mb=35600.0,
+            free_memory_mb=31600.0,
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -728,9 +1055,285 @@ async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> No
     )
 
     placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
-    # Floor skipped → threshold ≈ footprint (~6 GB); GPU 2 (7600) fits and is the
-    # tightest best-fit, so it is chosen rather than being eliminated.
-    assert placed.gpu_devices == "2"
+    # Floor skipped → threshold ≈ footprint (~6 GB) instead of 12288 MB, so the
+    # GPU-0/1 pair (12000 free each) is feasible and the emptiest one wins.
+    assert placed.gpu_devices == "0"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_accounts_for_explicit_gmu_reservation() -> None:
+    """Reproduces the deioma scenario (3× ~96 GiB): DeepSeek-OCR-2 sits on
+    GPU 0, a tp=2 gemma-3-27b lane with an explicit
+    gpu_memory_utilization=0.95 must land on the two empty GPUs (1,2). GPU 0
+    has ~81 GB free — above the 0.5 auto-derivation floor (48.9 GB) but below
+    the 0.95 × 97.9 GB ≈ 93 GB vLLM actually reserves, so it must be treated
+    as infeasible, not merely undesirable.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["deepseek-ai/DeepSeek-OCR-2"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=16_000.0, engine="vllm"
+    )
+    profiles._profiles["google/gemma-3-27b-it"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=94_000.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: awake DeepSeek-OCR-2 lane, ~16 GB used.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=81_500.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: empty (~2 GB unknown usage).
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=96_000.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: empty (~1 GB unknown usage).
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=97_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=81_500.0 + 96_000.0 + 97_000.0,
+        )
+
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-deepseek-ai_DeepSeek-OCR-2"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-deepseek-ai_DeepSeek-OCR-2",
+        LaneConfig(model="deepseek-ai/DeepSeek-OCR-2", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="google/gemma-3-27b-it",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2, gpu_memory_utilization=0.95),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-google_gemma-3-27b-it", lane)  # noqa: SLF001
+    # 0.95 × 97887 ≈ 92993 MB per GPU: GPU 0 (81500 free) fails it, so the
+    # only feasible pair is (1,2).
+    assert placed.gpu_devices == "1,2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_rejects_when_no_gpu_meets_explicit_gmu() -> None:
+    """Same node as the deioma scenario, but only one GPU has enough free
+    VRAM for the explicit 0.95 reservation: placement must fail fast with a
+    clear error instead of picking a pair that passes the 0.5 floor yet
+    crashes vLLM startup with "free memory < desired gpu_memory_utilization".
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["deepseek-ai/DeepSeek-OCR-2"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=16_000.0, engine="vllm"
+    )
+    profiles._profiles["google/gemma-3-27b-it"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=94_000.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: awake DeepSeek-OCR-2 lane.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=81_500.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: 37 GB unknown usage — above the 0.5 floor, below 0.95.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=60_000.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: the only GPU meeting the 0.95 reservation.
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=97_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=81_500.0 + 60_000.0 + 97_000.0,
+        )
+
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-deepseek-ai_DeepSeek-OCR-2"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-deepseek-ai_DeepSeek-OCR-2",
+        LaneConfig(model="deepseek-ai/DeepSeek-OCR-2", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="google/gemma-3-27b-it",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2, gpu_memory_utilization=0.95),
+    )
+
+    # With the 0.5 floor the (0,1)/(0,2)/(1,2) pairs all "fit" and the lane
+    # would be spawned to crash; the 0.95 reservation leaves no tp=2 pair.
+    with pytest.raises(RuntimeError, match="no feasible GPU subset"):
+        await manager._auto_place_gpu_devices("planner-google_gemma-3-27b-it", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_explicit_gmu_below_floor_uses_operator_value() -> None:
+    """An explicit gpu_memory_utilization below the 0.5 auto-derivation floor
+    is honoured as-is (vLLM receives it unclamped), so placement must not
+    inflate it to the floor: a small model with GMU 0.25 fits into 7 GB free
+    on a 24 GB GPU even though the floor would demand 12.3 GB.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=4000.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: 7 GB free — above 0.25 × 24576 = 6144 MB, below the
+                # 0.5 floor of 12288 MB.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=7000.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: below the 0.25 reservation too.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=5000.0,
+                    extra={"index": 1},
+                ),
+            ],
+            total_memory_mb=2 * 24576.0,
+            free_memory_mb=12_000.0,
+        )
+
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, gpu_memory_utilization=0.25),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    # Threshold = max(~4020 MB footprint, 6144 MB reservation) — only GPU 0
+    # clears it.
+    assert placed.gpu_devices == "0"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_gates_mixed_size_gpus_on_own_card_total() -> None:
+    """vLLM's startup gate is per card (free >= gmu × that card's total), so on
+    a mixed-size node the GMU bound must use each card's own total rather than
+    the smallest one: with explicit GMU 0.9 the 48 GB card needs 44.2 GB free
+    even though the 24 GB neighbour only needs 22.1 GB.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: 24 GB card, 23 GB free — above 0.9 × 24576 = 22118 MB.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=23000.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: 48 GB card, 25 GB free — below 0.9 × 49152 = 44237 MB,
+                # even though a global-min threshold (22118 MB) would pass it.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=49152.0,
+                    memory_free_mb=25600.0,
+                    extra={"index": 1},
+                ),
+            ],
+            total_memory_mb=24576.0 + 49152.0,
+            free_memory_mb=23000.0 + 25600.0,
+        )
+
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, gpu_memory_utilization=0.9),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    # Per-card gating: GPU 1 (48 GB total) needs 0.9 × 49152 ≈ 44237 MB free
+    # and fails with 25600 MB; only the 24 GB card is feasible.
+    assert placed.gpu_devices == "0"
 
 
 @pytest.mark.asyncio
@@ -781,7 +1384,7 @@ async def test_auto_place_gpu_devices_avoids_collocating_with_tp2_lane() -> None
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -856,7 +1459,7 @@ async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> N
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -891,7 +1494,9 @@ async def test_auto_place_gpu_devices_keeps_sticky_gpu_when_it_still_fits() -> N
 
 
 @pytest.mark.asyncio
-async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> None:
+async def test_auto_place_gpu_devices_picks_emptiest_feasible_tp_subset() -> None:
+    """A TP=2 lane takes the feasible GPU pair with the most free VRAM
+    (spread), so the emptiest GPUs stay intact for larger models."""
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
@@ -942,7 +1547,7 @@ async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> Non
         )
 
     manager = LaneManager(
-        OllamaConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices="all"),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
@@ -955,12 +1560,342 @@ async def test_auto_place_gpu_devices_picks_smallest_feasible_tp_subset() -> Non
     )
 
     placed = await manager._auto_place_gpu_devices("planner-big-model_70B", lane)  # noqa: SLF001
-    assert placed.gpu_devices == "1,2"
+    # Feasible pairs (GMU floor 12288 MB): (0,1)=39000, (0,2)=40000, (0,3)=64000,
+    # (1,2)=31000, (1,3)=55000, (2,3)=56000. Spread picks the emptiest pair.
+    assert placed.gpu_devices == "0,3"
+
+
+class _OccupyingLaneStub:
+    """Minimal ProcessHandle stand-in for placement-occupancy tests."""
+
+    def __init__(
+        self,
+        lane_id: str,
+        lane_config: LaneConfig,
+        *,
+        sleeping: bool = False,
+        state: ProcessState = ProcessState.RUNNING,
+    ) -> None:
+        self.lane_id = lane_id
+        self.port = 15100
+        self.lane_config = lane_config
+        self._sleeping = sleeping
+        self._state = state
+
+    def status(self) -> ProcessStatus:
+        return ProcessStatus(state=self._state)
+
+    async def is_sleeping(self) -> bool | None:
+        return self._sleeping
+
+
+@pytest.mark.asyncio
+async def test_auto_place_prefers_empty_gpu_over_sleeping_lane_residue() -> None:
+    """Reproduces the deioma incident (2026-08-25): the 27B lane on GPU 0 is
+    in sleep_l1 (weights in host RAM, ~3 GB VRAM residue), gpt-oss-120b fills
+    GPU 1, and GPU 2 is fully free. The new 22 GB embedding lane must go to
+    the truly empty GPU 2, not be stacked next to the sleeping lane's
+    residue on GPU 0.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen3.8-27B"] = ModelProfileRecord(loaded_vram_mb=64_000.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["openai/gpt-oss-120b"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=82_000.0, engine="vllm"
+    )
+    profiles._profiles["Qwen/Qwen3-Embedding-8B"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=22_545.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: sleeping 27B residue + worker CUDA context (~3.2 GB used).
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=94_687.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: gpt-oss-120b.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=15_565.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: fully free.
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=97_883.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=94_687.0 + 15_565.0 + 97_883.0,
+        )
+
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-Qwen_Qwen3.8-27B"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-Qwen_Qwen3.8-27B",
+        LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=True,
+    )
+    manager._handles["planner-openai_gpt-oss-120b"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-openai_gpt-oss-120b",
+        LaneConfig(model="openai/gpt-oss-120b", vllm=True, gpu_devices="1", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="6G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen3-Embedding-8B", lane)  # noqa: SLF001
+    # GPU 1 is infeasible (15.5 GB < 22.7 GB threshold). GPU 0 and GPU 2 both
+    # hold no awake lane — the sleeping 27B must not count — so the tie breaks
+    # toward the more free GPU 2.
+    assert placed.gpu_devices == "2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_treats_sleeping_lane_gpu_as_empty() -> None:
+    """Inverse of the deioma case: when the GPU next to a sleeping lane has
+    MORE free VRAM than the alternative, it must win. Had the sleeping lane
+    counted as an awake occupant, the lane-free (but more filled) GPU would
+    have won instead — so this pins the sleep exclusion itself.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen3.8-27B"] = ModelProfileRecord(loaded_vram_mb=64_000.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["Qwen/Qwen3-Embedding-8B"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=22_545.0, engine="vllm"
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: sleeping 27B residue only.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=94_687.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: infeasible filler.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=15_565.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: no lane, but 7.9 GB of unknown usage.
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=90_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=94_687.0 + 15_565.0 + 90_000.0,
+        )
+
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-Qwen_Qwen3.8-27B"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-Qwen_Qwen3.8-27B",
+        LaneConfig(model="Qwen/Qwen3.8-27B", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=True,
+    )
+    lane = LaneConfig(
+        model="Qwen/Qwen3-Embedding-8B",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="6G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen3-Embedding-8B", lane)  # noqa: SLF001
+    # GPU 0 is "empty" of awake lanes and has more free VRAM than GPU 2.
+    assert placed.gpu_devices == "0"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_spreads_new_lane_away_from_awake_lane() -> None:
+    """A new lane must avoid a GPU that already holds an awake lane, even when
+    that GPU still has more free VRAM than the alternative — one active model
+    per GPU is the primary goal of the scoring.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["small/embed"] = ModelProfileRecord(loaded_vram_mb=22_500.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["small/rerank"] = ModelProfileRecord(loaded_vram_mb=10_000.0, engine="vllm")  # noqa: SLF001
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: one awake 22.5 GB lane, 70 GB free.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=70_000.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: infeasible filler.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=9_000.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: empty, 60 GB free (37.9 GB unknown usage).
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=60_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=70_000.0 + 9_000.0 + 60_000.0,
+        )
+
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-small_embed"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-small_embed",
+        LaneConfig(model="small/embed", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="small/rerank",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="1G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-small_rerank", lane)  # noqa: SLF001
+    # GPU 0 has more free VRAM but one awake lane; GPU 2 is empty. The awake
+    # lane count (1 vs 0) must outweigh the free-VRAM tiebreak.
+    assert placed.gpu_devices == "2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_breaks_awake_ties_by_least_awake_vram() -> None:
+    """When two GPUs each hold exactly one awake lane, the one with the
+    smaller awake footprint wins — it leaves the most room for the new lane.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["small/embed"] = ModelProfileRecord(loaded_vram_mb=20_000.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["small/big"] = ModelProfileRecord(loaded_vram_mb=35_000.0, engine="vllm")  # noqa: SLF001
+    profiles._profiles["small/rerank"] = ModelProfileRecord(loaded_vram_mb=10_000.0, engine="vllm")  # noqa: SLF001
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                # GPU 0: one awake 20 GB lane, 80 GB free.
+                DeviceInfo(
+                    device_id="gpu0",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=80_000.0,
+                    extra={"index": 0},
+                ),
+                # GPU 1: infeasible filler.
+                DeviceInfo(
+                    device_id="gpu1",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=9_000.0,
+                    extra={"index": 1},
+                ),
+                # GPU 2: one awake 35 GB lane, 60 GB free.
+                DeviceInfo(
+                    device_id="gpu2",
+                    kind="nvidia",
+                    memory_total_mb=97_887.0,
+                    memory_free_mb=60_000.0,
+                    extra={"index": 2},
+                ),
+            ],
+            total_memory_mb=3 * 97_887.0,
+            free_memory_mb=80_000.0 + 9_000.0 + 60_000.0,
+        )
+
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+    manager._handles["planner-small_embed"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-small_embed",
+        LaneConfig(model="small/embed", vllm=True, gpu_devices="0", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    manager._handles["planner-small_big"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-small_big",
+        LaneConfig(model="small/big", vllm=True, gpu_devices="2", vllm_config=VllmConfig()),
+        sleeping=False,
+    )
+    lane = LaneConfig(
+        model="small/rerank",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1, kv_cache_memory_bytes="1G"),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-small_rerank", lane)  # noqa: SLF001
+    # Both GPUs hold one awake lane; the smaller footprint (20 GB) wins over
+    # the larger one (35 GB) despite its lower free VRAM.
+    assert placed.gpu_devices == "0"
 
 
 @pytest.mark.asyncio
 async def test_remove_lane_releases_bookkeeping_on_destroy_timeout() -> None:
-    manager = LaneManager(OllamaConfig(), lane_port_start=15080, lane_port_end=15090)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15080, lane_port_end=15090)
     lane = LaneConfig(model="qwen2.5-coder:32b")
     lane_id = "qwen2.5-coder_32b"
 
@@ -1049,7 +1984,7 @@ async def test_stuck_lane_is_automatically_restarted(monkeypatch) -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     call_log: list[str] = []
 
     class FakeStuckHandle:
@@ -1146,7 +2081,7 @@ async def test_stuck_lane_no_restart_when_auto_restart_false(monkeypatch) -> Non
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     stopped = False
 
     class FakeStuckHandle:
@@ -1189,7 +2124,7 @@ async def test_stuck_restart_failure_does_not_crash(monkeypatch) -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class FakeStuckHandle:
         def __init__(self) -> None:
@@ -1263,7 +2198,7 @@ async def test_recover_dead_lanes_restarts_stopped_lane(monkeypatch) -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     call_log: list[str] = []
 
     class DeadHandle:
@@ -1332,7 +2267,7 @@ async def test_stuck_detection_resets_after_token_progress() -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class FakeHandle:
         def __init__(self) -> None:
@@ -1389,7 +2324,7 @@ async def test_stuck_detection_skips_when_only_gen_tokens_frozen() -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class FakeHandle:
         def __init__(self) -> None:
@@ -1440,7 +2375,7 @@ async def test_stuck_detection_does_not_trip_during_request_burst() -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class FakeHandle:
         def __init__(self) -> None:
@@ -1504,7 +2439,7 @@ async def test_proxy_stuck_detection_kills_lane_when_engine_never_admits() -> No
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     stopped = False
 
     class FakeHandle:
@@ -1551,7 +2486,7 @@ async def test_proxy_stuck_does_not_fire_without_parked_requests() -> None:
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     stopped = False
 
     class FakeHandle:
@@ -1601,12 +2536,12 @@ async def test_liveness_stuck_detection_kills_lane_when_engine_rpc_wedges() -> N
         vllm=True,
         vllm_config=VllmConfig(),
     )
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     # Real VllmProcessHandle so isinstance() in production code matches.
     # We swap in a fake stop() to avoid touching subprocesses, and prime
     # consecutive_liveness_failures to the wedge signature.
-    handle = VllmProcessHandle(lane_id, 15000, OllamaConfig())
+    handle = VllmProcessHandle(lane_id, 15000, WorkerConfig())
     handle._lane_config = lane_config  # noqa: SLF001
     handle._consecutive_liveness_failures = 4  # noqa: SLF001 — 4 > _LIVENESS_FAILURE_THRESHOLD (3)
     stop_called = False
@@ -1645,7 +2580,7 @@ async def test_circuit_breaker_stops_restart_after_max_retries(monkeypatch) -> N
 
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     # No handle in _handles — simulates the state after a failed spawn removed the handle.
     # _recover_dead_lanes increments the counter each poll even without a handle in memory.
@@ -1683,7 +2618,7 @@ async def test_stuck_vram_skips_restart(monkeypatch) -> None:
     """When has_stuck_vram is True, _recover_dead_lanes must skip the restart attempt."""
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     restart_calls: list[str] = []
 
     class StuckVramHandle:
@@ -1732,7 +2667,7 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
     """When has_fatal_cuda_errors is True, _recover_dead_lanes must skip the restart."""
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
     restart_calls: list[str] = []
 
     class FatalCudaHandle:
@@ -1777,11 +2712,67 @@ async def test_fatal_cuda_errors_skip_restart(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_metal_allocation_failure_skips_restart(monkeypatch) -> None:
+    """When has_metal_allocation_failure is True, _recover_dead_lanes must skip the restart.
+
+    The model does not fit the machine's Metal budget; restarting it
+    unchanged fails identically, so the flag must feed the same fatal path
+    as has_fatal_cuda_errors — otherwise a lane that died on an allocation
+    failure burns its whole crash-restart budget on guaranteed failures.
+    """
+    lane_id = "test-lane"
+    lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
+    restart_calls: list[str] = []
+
+    class MetalAllocFailureHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15000
+            self.lane_config = lane_config
+            self.has_stuck_vram = False
+            self.has_fatal_cuda_errors = False
+            self.has_metal_allocation_failure = True
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=1, return_code=1)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> Any:
+        restart_calls.append("spawn")
+        raise AssertionError("should not be called")
+
+    manager._handles[lane_id] = MetalAllocFailureHandle()  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15000  # noqa: SLF001
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    status = LaneStatus(
+        lane_id=lane_id,
+        lane_uid=f"vllm:{lane_id}",
+        model=lane_config.model,
+        port=15000,
+        vllm=True,
+        process=ProcessStatus(state=ProcessState.STOPPED, pid=1, return_code=1),
+        runtime_state="stopped",
+        lane_config=lane_config,
+    )
+    manager._last_crash_restart_attempt_at[lane_id] = 0.0  # bypass cooldown  # noqa: SLF001
+    await manager._recover_dead_lanes([status])  # noqa: SLF001
+
+    assert not restart_calls, "Restart must be suppressed when the crash was a Metal allocation failure"
+
+
+@pytest.mark.asyncio
 async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     """Crash-restart counter resets to 0 after a successful restart."""
     lane_id = "test-lane"
     lane_config = LaneConfig(lane_id=lane_id, model="some-model", vllm=True, vllm_config=VllmConfig())
-    manager = LaneManager(OllamaConfig(), lane_port_start=15000, lane_port_end=15010)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15000, lane_port_end=15010)
 
     class DeadHandle:
         def __init__(self) -> None:
@@ -1840,3 +2831,1027 @@ async def test_crash_restart_count_resets_on_success(monkeypatch) -> None:
     assert (
         manager._crash_restart_counts.get(lane_id, -1) == 0
     ), "Counter must reset to 0 after a successful restart"  # noqa: SLF001
+
+
+def test_model_overrides_can_set_chat_template() -> None:
+    """config.yml model_overrides is the primary way an operator pins a template."""
+    manager = LaneManager(
+        WorkerConfig(),
+        VllmEngineConfig(model_overrides={"Qwen/Qwen3-8B": {"chat_template": "qwen3-tools.jinja"}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="Qwen/Qwen3-8B", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+    assert merged.vllm_config.chat_template == "qwen3-tools.jinja"
+
+
+def test_model_overrides_profile_keys_are_routed_to_registry() -> None:
+    """A profile-level key in model_overrides must not fail lane creation.
+
+    Production incident: an operator placed min_context_fraction under
+    engines.vllm.model_overrides; the extra="forbid" VllmConfig validation
+    aborted the whole add_lane. The key must instead be routed to the model
+    profile registry, where the server planner reads it from the runtime
+    snapshot — even when the profile record already exists (calibrated model).
+    """
+    registry = ModelProfileRegistry()
+    registry.record_loaded_vram("org/model-27b", 50000.0, engine="vllm", kv_cache_sent_mb=8000.0)
+    manager = LaneManager(
+        WorkerConfig(),
+        VllmEngineConfig(
+            model_overrides={
+                "org/model-27b": {
+                    "min_context_fraction": 1.0,
+                    "enable_sleep_mode": False,
+                }
+            }
+        ),
+        lane_port_start=15000,
+        lane_port_end=15010,
+        model_profiles=registry,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+    assert merged.vllm_config.enable_sleep_mode is False
+    profile = registry.get_profile("org/model-27b")
+    assert profile is not None
+    assert profile.min_context_fraction == 1.0
+
+
+def test_model_overrides_invalid_engine_value_still_fails() -> None:
+    """A genuinely type-invalid engine value must keep failing loudly."""
+    manager = LaneManager(
+        WorkerConfig(),
+        VllmEngineConfig(model_overrides={"org/model-27b": {"max_num_seqs": "abc"}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    with pytest.raises(ValidationError):
+        manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+
+def test_model_overrides_unknown_key_does_not_fail_lane_creation() -> None:
+    """An unrecognized key must not abort lane creation either."""
+    manager = LaneManager(
+        WorkerConfig(),
+        VllmEngineConfig(model_overrides={"org/model-27b": {"totally_bogus_key": 1}}),
+        lane_port_start=15000,
+        lane_port_end=15010,
+    )
+    lane = LaneConfig(model="org/model-27b", vllm=True, vllm_config=VllmConfig())
+
+    merged = manager._apply_model_vllm_overrides(lane)  # noqa: SLF001
+
+    assert merged.vllm_config is not None
+
+
+# ---------------------------------------------------------------------------
+# Calibration GPU-slice guard
+# ---------------------------------------------------------------------------
+
+
+def test_begin_end_calibration_session_holds_power_of_two_slice() -> None:
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 3)
+    assert manager.calibration_gpu_subset is None
+
+    held = manager.begin_calibration_session()
+    assert held == frozenset({0, 1})  # 3 GPUs → largest power-of-two slice
+    assert manager.calibration_gpu_subset == frozenset({0, 1})
+
+    manager.end_calibration_session()
+    assert manager.calibration_gpu_subset is None
+
+
+def test_calibration_session_slice_on_power_of_two_node_holds_all_gpus() -> None:
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 4)
+    assert manager.begin_calibration_session() == frozenset({0, 1, 2, 3})
+
+
+def test_begin_calibration_session_prefers_idle_gpus_over_busy_ones() -> None:
+    """3 GPUs, a lane already running on GPU 0: hold the idle [1, 2] slice
+    instead of the naive [0, 1] — GPU 0 keeps serving, nothing on it is
+    killed for calibration when an idle slice of the same size exists."""
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 3, lane_port_start=15211, lane_port_end=15220)
+    manager._handles["a"] = _StubHandle(LaneConfig(model="m", vllm=True, gpu_devices="0"))  # noqa: SLF001
+
+    assert manager.begin_calibration_session() == frozenset({1, 2})
+
+
+def test_begin_calibration_session_falls_back_when_idle_gpus_insufficient() -> None:
+    """3 GPUs, lanes on GPU 0 AND 1: only GPU 2 is idle — not enough for a
+    2-GPU slice on its own, so the idle GPU is kept and only the missing
+    slot comes from the busy set ([2, 0]), instead of the naive [0, 1]
+    slice that would kill both lanes when sparing one was possible."""
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 3, lane_port_start=15221, lane_port_end=15230)
+    manager._handles["a"] = _StubHandle(LaneConfig(model="m1", vllm=True, gpu_devices="0"))  # noqa: SLF001
+    manager._handles["b"] = _StubHandle(LaneConfig(model="m2", vllm=True, gpu_devices="1"))  # noqa: SLF001
+
+    assert manager.begin_calibration_session() == frozenset({0, 2})
+
+
+def test_lane_gpu_set_parses_selectors() -> None:
+    assert LaneManager._lane_gpu_set("all") is None
+    assert LaneManager._lane_gpu_set("") is None
+    assert LaneManager._lane_gpu_set(None) is None
+    assert LaneManager._lane_gpu_set("none") == frozenset()
+    assert LaneManager._lane_gpu_set("0,1") == frozenset({0, 1})
+    assert LaneManager._lane_gpu_set(" 2 ") == frozenset({2})
+
+
+def test_lane_touches_gpus_intersection() -> None:
+    manager = LaneManager(WorkerConfig())
+    # "all"/blank spans every GPU → intersects any non-empty slice.
+    assert manager._lane_touches_gpus("all", {2}) is True
+    assert manager._lane_touches_gpus("", {2}) is True
+    assert manager._lane_touches_gpus("0,1", {0, 1}) is True
+    assert manager._lane_touches_gpus("2", {0, 1}) is False
+    assert manager._lane_touches_gpus("none", {0, 1}) is False
+
+
+class _StubHandle:
+    def __init__(self, lane_config: LaneConfig) -> None:
+        self.lane_config = lane_config
+        self.destroyed = False
+        self.closed = False
+
+    async def destroy(self) -> None:
+        self.destroyed = True
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _manager_with_handles(handles: dict) -> LaneManager:
+    manager = LaneManager(WorkerConfig(), lane_port_start=15200, lane_port_end=15210)
+    manager._handles.update(handles)  # noqa: SLF001
+    return manager
+
+
+@pytest.mark.asyncio
+async def test_destroy_lanes_on_gpus_stops_only_slice_vllm_lanes() -> None:
+    slice_lane = _StubHandle(LaneConfig(model="m-slice", vllm=True, gpu_devices="0,1"))
+    leftover_lane = _StubHandle(LaneConfig(model="m-left", vllm=True, gpu_devices="2"))
+
+    manager = _manager_with_handles({"a": slice_lane, "b": leftover_lane})
+    stopped = await manager.destroy_lanes_on_gpus({0, 1})
+
+    assert stopped == 1
+    assert slice_lane.destroyed is True
+    assert "a" not in manager._handles  # noqa: SLF001
+    # Leftover lanes are untouched and keep serving.
+    assert leftover_lane.destroyed is False
+    assert "b" in manager._handles  # noqa: SLF001
+
+
+def _snapshot_3gpu(free: dict) -> DeviceSummary:
+    return DeviceSummary(
+        timestamp=datetime.now(timezone.utc),
+        mode="nvidia",
+        nvidia_smi_available=True,
+        devices=[
+            DeviceInfo(
+                device_id=f"gpu{i}",
+                kind="nvidia",
+                memory_total_mb=24576.0,
+                memory_free_mb=free[i],
+                extra={"index": i},
+            )
+            for i in range(3)
+        ],
+        total_memory_mb=3 * 24576.0,
+        free_memory_mb=sum(free.values()),
+    )
+
+
+def _placement_manager(snapshot, n_gpus: int) -> LaneManager:
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0,
+        engine="vllm",
+    )
+    return LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15200,
+        lane_port_end=15210,
+        model_profiles=profiles,
+        gpu_device_count=lambda: n_gpus,
+        gpu_snapshot=snapshot,
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_place_excludes_calibrating_slice() -> None:
+    """GPUs 0,1 are the emptiest but held by a calibration — a tp=1 lane must
+    land on the leftover GPU 2 instead."""
+
+    async def _snapshot() -> DeviceSummary:
+        return _snapshot_3gpu({0: 20000.0, 1: 19000.0, 2: 13000.0})
+
+    manager = _placement_manager(_snapshot, 3)
+    manager.begin_calibration_session()  # holds {0, 1}
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+    assert placed.gpu_devices == "2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_raises_when_calibration_holds_all_gpus() -> None:
+    """On a 2-GPU node the slice is the whole node — no leftover, so a new lane
+    cannot be placed rather than silently defaulting to a held GPU."""
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id=f"gpu{i}",
+                    kind="nvidia",
+                    memory_total_mb=24576.0,
+                    memory_free_mb=20000.0,
+                    extra={"index": i},
+                )
+                for i in range(2)
+            ],
+            total_memory_mb=2 * 24576.0,
+            free_memory_mb=40000.0,
+        )
+
+    manager = _placement_manager(_snapshot, 2)
+    manager.begin_calibration_session()  # holds {0, 1} = the whole node
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    with pytest.raises(RuntimeError, match="calibration session"):
+        await manager._auto_place_gpu_devices("planner-Qwen_Qwen2.5-0.5B-Instruct", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_add_lane_refuses_explicit_slice_gpu(monkeypatch) -> None:
+    """An operator-pinned gpu_devices that lands on the held slice is refused."""
+    manager = LaneManager(WorkerConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
+    manager.begin_calibration_session()  # holds {0, 1}
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    lane = LaneConfig(
+        model="org/slice-model",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=2),
+        gpu_devices="0,1",
+    )
+
+    with pytest.raises(ValueError, match="calibration session"):
+        await manager._add_lane_unlocked("org_slice-model", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_add_lane_allows_leftover_gpu(monkeypatch) -> None:
+    """The same explicit pin on a leftover GPU is allowed to proceed."""
+
+    class _RunningHandle(_StubHandle):
+        async def init(self) -> None:
+            return None
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.RUNNING)
+
+    manager = LaneManager(WorkerConfig(), lane_port_start=15300, lane_port_end=15310, gpu_device_count=lambda: 3)
+    manager.begin_calibration_session()  # holds {0, 1}, leftover = {2}
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *a, **k: _RunningHandle(a[4]))
+    lane = LaneConfig(
+        model="org/left-model",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+        gpu_devices="2",
+    )
+
+    await manager._add_lane_unlocked("org_left-model", lane)  # noqa: SLF001
+    assert "org_left-model" in manager._handles  # noqa: SLF001
+    manager.end_calibration_session()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("busy_lane", ["benchmark-lane", "other-lane"])
+async def test_benchmark_reconfigure_only_protects_requests_on_restarted_lane(busy_lane) -> None:
+    manager = LaneManager(WorkerConfig(), lane_port_start=15100, lane_port_end=15110, gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=1))
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._active_requests[busy_lane] = 1
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    updates = {"vllm_config": {**current.vllm_config.model_dump(), "tensor_parallel_size": 2}}
+    if busy_lane == "benchmark-lane":
+        with pytest.raises(RuntimeError, match="still has 1 active request"):
+            await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+        manager._restart_lane_unlocked.assert_not_awaited()
+    else:
+        await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+        manager._restart_lane_unlocked.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_benchmark_reconfigure_unchanged_settings_allow_active_requests() -> None:
+    manager = LaneManager(WorkerConfig(), lane_port_start=15100, lane_port_end=15110)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._active_requests["benchmark-lane"] = 1
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    await manager.reconfigure_lane("benchmark-lane", {"model": current.model}, require_idle=True)
+    manager._restart_lane_unlocked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_manual_tp1_survives_calibrated_tp2_and_config_roundtrip() -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        engine="vllm", residency_source="calibrated", tensor_parallel_size=2, base_residency_mb=10000
+    )
+    manager = LaneManager(WorkerConfig(), model_profiles=profiles, gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True, vllm_config=VllmConfig(tensor_parallel_size=2))
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    updates = {"vllm_config": {**current.vllm_config.model_dump(), "tensor_parallel_size": 1}}
+    await manager.reconfigure_lane("benchmark-lane", updates, require_idle=True)
+    requested = manager._restart_lane_unlocked.await_args.args[1]
+    # Restarts and serialization must not reintroduce the calibrated TP=2.
+    persisted = LaneConfig.model_validate(requested.model_dump())
+    assert persisted.auto_tensor_parallel is False
+    assert manager._auto_tensor_parallel(persisted).vllm_config.tensor_parallel_size == 1
+    # Automatic lanes keep the existing calibrated-profile behavior.
+    automatic = persisted.model_copy(update={"auto_tensor_parallel": True})
+    assert manager._auto_tensor_parallel(automatic).vllm_config.tensor_parallel_size == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override", [{"gpu_memory_utilization": 0.7}, {"kv_cache_memory_bytes": "2G"}, {"enable_prefix_caching": False}]
+)
+async def test_benchmark_restarts_for_spawn_time_vllm_settings(override) -> None:
+    manager = LaneManager(WorkerConfig())
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["benchmark-lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    await manager.reconfigure_lane(
+        "benchmark-lane", {"vllm_config": {**current.vllm_config.model_dump(), **override}}, require_idle=True
+    )
+    manager._restart_lane_unlocked.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("static", [False, True])
+async def test_manual_parallel_change_replaces_only_automatic_gpu_pins(static) -> None:
+    manager = LaneManager(WorkerConfig(), gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True, gpu_devices="0")
+    manager._handles["lane"] = _StubHandle(current)
+    if static:
+        manager._static_lane_ids.add("lane")
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    updates = {"vllm_config": {**current.vllm_config.model_dump(), "tensor_parallel_size": 2}}
+    if static:
+        with pytest.raises(ValueError, match="explicit gpu_devices"):
+            await manager.reconfigure_lane("lane", updates, require_idle=True)
+        manager._restart_lane_unlocked.assert_not_awaited()
+    else:
+        await manager.reconfigure_lane("lane", updates, require_idle=True)
+        requested = manager._restart_lane_unlocked.await_args.args[1]
+        assert requested.gpu_devices == ""
+        assert requested.vllm_config.parallel_gpu_count == 2
+        assert requested.auto_tensor_parallel is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tp,pp,pool", [(38, 1, "all"), (2, 2, "all"), (2, 1, "0")])
+async def test_impossible_parallelism_rejected_before_restart(tp, pp, pool) -> None:
+    manager = LaneManager(WorkerConfig(gpu_devices=pool), gpu_device_count=lambda: 2)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    updates = {
+        "vllm_config": {
+            **current.vllm_config.model_dump(),
+            "tensor_parallel_size": tp,
+            "extra_args": ["--pipeline-parallel-size", str(pp)],
+        }
+    }
+    with pytest.raises(ValueError, match="requires .* GPUs"):
+        await manager.reconfigure_lane("lane", updates, require_idle=True)
+    manager._restart_lane_unlocked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_tp_restart_refreshes_released_vram_and_resizes_per_rank_cache(monkeypatch) -> None:
+    from logos_worker_node.model_profiles import ModelProfileRecord
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["org/model"] = ModelProfileRecord(
+        residency_source="calibrated",
+        tensor_parallel_size=2,
+        loaded_vram_mb=15988,
+        base_residency_mb=15988,
+        kv_budget_mb=4096,
+    )
+    current = LaneConfig(
+        model="org/model",
+        vllm=True,
+        gpu_devices="0,1",
+        vllm_config=VllmConfig(tensor_parallel_size=2, kv_cache_memory_bytes="4G"),
+    )
+    old = _StubHandle(current)
+    free = 8000
+
+    async def refresh():
+        nonlocal free
+        assert old.destroyed
+        free = 13000
+
+    async def snapshot():
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id=f"gpu{i}", kind="nvidia", memory_total_mb=16384, memory_free_mb=free, extra={"index": i}
+                )
+                for i in range(2)
+            ],
+        )
+
+    manager = LaneManager(
+        WorkerConfig(),
+        model_profiles=profiles,
+        gpu_device_count=lambda: 2,
+        gpu_snapshot=snapshot,
+        gpu_force_poll=refresh,
+    )
+    manager._handles["lane"] = old
+    manager._port_alloc._used["lane"] = 15000
+    new = MagicMock(init=AsyncMock(), spawn=AsyncMock(), destroy=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: new)
+    requested = current.model_copy(
+        update={
+            "gpu_devices": "",
+            "auto_tensor_parallel": False,
+            "vllm_config": current.vllm_config.model_copy(update={"tensor_parallel_size": 1}),
+        }
+    )
+    await manager._restart_lane_unlocked("lane", requested)
+    placed = new.spawn.await_args.args[0]
+    assert placed.vllm_config.tensor_parallel_size == 1
+    assert placed.gpu_devices in {"0", "1"}
+    assert manager._estimate_lane_vram_mb(placed) == 11892
+    assert manager._handles["lane"] is new
+
+
+@pytest.mark.asyncio
+async def test_failed_restart_placement_removes_dead_lane_bookkeeping() -> None:
+    lane = LaneConfig(model="org/model", vllm=True)
+    old = _StubHandle(lane)
+    manager = _manager_with_handles({"lane": old})
+    manager._port_alloc._used["lane"] = 15000
+    manager._active_requests["lane"] = 0
+    manager._starting_deadlines["lane"] = 123
+    manager._auto_place_gpu_devices = AsyncMock(side_effect=RuntimeError("No GPU fits"))
+    with pytest.raises(RuntimeError, match="No GPU fits"):
+        await manager._restart_lane_unlocked("lane", lane)
+    assert old.destroyed and old.closed
+    assert "lane" not in manager._handles
+    assert manager._port_alloc.get_port("lane") is None
+    assert "lane" not in manager._active_requests
+    assert "lane" not in manager._starting_deadlines
+    assert not manager.starting_models()
+
+
+class TestValidateCapabilities:
+    """Startup validation must check the cache the lanes actually read from.
+
+    The caller passes the resolved layout; re-deriving it here from the
+    ollama models path would check a directory that does not exist on a Mac
+    and where neither the prefetch nor the lanes ever download.
+    """
+
+    @staticmethod
+    def _manager(models_path: str) -> LaneManager:
+        return LaneManager(WorkerConfig(models_path=models_path), lane_port_start=15200, lane_port_end=15210)
+
+    def test_finds_weights_in_the_resolved_hf_cache(self, tmp_path) -> None:
+        hf_home = tmp_path / "cache" / ".hf_cache"
+        (hf_home / "hub" / "models--org--model").mkdir(parents=True)
+        missing = self._manager(str(tmp_path / "ollama")).validate_capabilities(
+            ["org/model"], str(hf_home), str(tmp_path / "cache")
+        )
+        assert missing == []
+
+    def test_reports_a_model_that_is_not_downloaded(self, tmp_path) -> None:
+        hf_home = tmp_path / "cache" / ".hf_cache"
+        hf_home.mkdir(parents=True)
+        missing = self._manager(str(tmp_path / "ollama")).validate_capabilities(["org/model"], str(hf_home))
+        assert missing == ["org/model"]
+
+    def test_counts_a_model_dir_placed_under_the_cache_root(self, tmp_path) -> None:
+        (tmp_path / "cache" / "local-model").mkdir(parents=True)
+        missing = self._manager(str(tmp_path / "ollama")).validate_capabilities(
+            ["local-model"], str(tmp_path / "elsewhere"), str(tmp_path / "cache")
+        )
+        assert missing == []
+
+    def test_still_finds_a_model_in_the_ollama_models_path(self, tmp_path) -> None:
+        """The CUDA/ollama layout must keep working unchanged."""
+        models_path = tmp_path / "ollama"
+        (models_path / "org-model").mkdir(parents=True)
+        missing = self._manager(str(models_path)).validate_capabilities(["org-model"], str(tmp_path / "elsewhere-hf"))
+        assert missing == []
+
+
+# ── reactive re-plan hook on every staggered sleep ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_stagger_sleeps_run_the_hook_between_sleeps(monkeypatch) -> None:
+    """apply_lanes sleeps several lanes in one staggered pass (existing lanes
+    before a spawn, fresh lanes between spawns). Each successful sleep must
+    run the on_lane_slept hook before the next lane is slept, so the RAM-cache
+    re-plan keeps up with weights landing in host RAM instead of waiting for
+    the next 60 s tick after the whole pass."""
+    hook_calls = []
+    events: list[str] = []
+
+    async def _hook() -> None:
+        hook_calls.append(1)
+        events.append("hook")
+
+    existing = LaneConfig(
+        lane_id="org_existing",
+        model="org/existing",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_a = LaneConfig(
+        lane_id="org_new-a",
+        model="org/new-a",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_b = LaneConfig(
+        lane_id="org_new-b",
+        model="org/new-b",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    manager = LaneManager(
+        WorkerConfig(),
+        lane_port_start=15400,
+        lane_port_end=15410,
+        on_lane_slept=_hook,
+    )
+
+    class ExistingHandle:
+        def __init__(self) -> None:
+            self.lane_id = "org_existing"
+            self.port = 15400
+            self.lane_config = existing
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            events.append("sleep:existing")
+            return {"ok": True}
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            events.append(f"spawn:{self.lane_id}")
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            events.append(f"sleep:{self.lane_id}")
+            return {"ok": True}
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles["org_existing"] = ExistingHandle()  # noqa: SLF001
+    manager._port_alloc._used["org_existing"] = 15400  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    await manager.apply_lanes([existing, lane_a, lane_b])
+
+    assert hook_calls == [1, 1]
+    spawns = [e for e in events if e.startswith("spawn:")]
+    assert len(spawns) == 2
+    first_spawn, second_spawn = spawns[0], spawns[1]
+    i1 = events.index(first_spawn)
+    i2 = events.index(second_spawn)
+    # Staggered existing-lane sleep first, hook immediately after — then the
+    # spawns, each (except the last, which stays awake) followed by its own
+    # sleep and hook before the next spawn.
+    assert events[: i1 + 1] == ["sleep:existing", "hook", first_spawn]
+    assert events[i1 + 1 : i2] == [f"sleep:{first_spawn.removeprefix('spawn:')}", "hook"]
+    assert events[i2:] == [second_spawn]
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_stagger_sleep_failure_does_not_run_hook(monkeypatch) -> None:
+    """A staggered sleep that raises must not run the hook — the lane's
+    weights never landed in host RAM, so there is nothing to reclaim. The
+    apply itself continues without the stagger for that lane."""
+    hook_calls = []
+
+    async def _hook() -> None:
+        hook_calls.append(1)
+
+    existing = LaneConfig(
+        lane_id="org_existing",
+        model="org/existing",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_a = LaneConfig(
+        lane_id="org_new-a",
+        model="org/new-a",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    manager = LaneManager(
+        WorkerConfig(),
+        lane_port_start=15420,
+        lane_port_end=15430,
+        on_lane_slept=_hook,
+    )
+
+    class ExistingHandle:
+        def __init__(self) -> None:
+            self.lane_id = "org_existing"
+            self.port = 15420
+            self.lane_config = existing
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            raise RuntimeError("simulated sleep failure")
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            return {"ok": True}
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles["org_existing"] = ExistingHandle()  # noqa: SLF001
+    manager._port_alloc._used["org_existing"] = 15420  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+    monkeypatch.setattr(PortAllocator, "_is_port_available", staticmethod(lambda _port: True))
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    result = await manager.apply_lanes([existing, lane_a])
+
+    assert result.success is True
+    assert hook_calls == []
+    assert manager.get_handle("org_new-a") is not None
+
+
+# ── startup/restart model reservation for the lock-free re-plan ─────────────
+
+
+@pytest.mark.asyncio
+async def test_add_lane_reserves_model_for_the_startup_window(monkeypatch) -> None:
+    """The model must be reserved before its HF_HOME is selected and only
+    released once the handle is registered — during the spawn the re-plan
+    (which does not take the lane-manager lock) must see it as protected even
+    though the lane is not in _handles yet."""
+    seen: dict[str, frozenset[str]] = {}
+
+    class ReservingHandle(_StubHandle):
+        def __init__(self, lane_config: LaneConfig) -> None:
+            super().__init__(lane_config)
+            self.lane_id = "org_new"
+            self.port = 15440
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            # The spawn is reading the (possibly tmpfs) model directory —
+            # the reservation must be live while the lane is unregistered.
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            assert "org/new" not in manager.lane_ids  # noqa: F821
+            return ProcessStatus(state=ProcessState.RUNNING)
+
+    manager = LaneManager(WorkerConfig(), lane_port_start=15440, lane_port_end=15450)
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle",
+        lambda *a, **k: ReservingHandle(a[4]),
+    )
+    lane = LaneConfig(lane_id="org_new", model="org/new", vllm=True)
+
+    await manager._add_lane_unlocked("org_new", lane)  # noqa: SLF001
+
+    assert seen["during_spawn"] == frozenset({"org/new"})
+    # Registration settled the model's fate — the reservation is gone.
+    assert manager.starting_models() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_add_lane_releases_startup_reservation_when_spawn_fails(monkeypatch) -> None:
+    seen: dict[str, frozenset[str]] = {}
+
+    class FailingReservingHandle(_StubHandle):
+        def __init__(self, lane_config: LaneConfig) -> None:
+            super().__init__(lane_config)
+            self.lane_id = "org_new"
+            self.port = 15460
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            raise RuntimeError("spawn boom")
+
+    manager = LaneManager(WorkerConfig(), lane_port_start=15460, lane_port_end=15470)
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr(
+        "logos_worker_node.lane_manager._create_handle",
+        lambda *a, **k: FailingReservingHandle(a[4]),
+    )
+    lane = LaneConfig(lane_id="org_new", model="org/new", vllm=True)
+
+    with pytest.raises(RuntimeError, match="spawn boom"):
+        await manager._add_lane_unlocked("org_new", lane)  # noqa: SLF001
+
+    assert seen["during_spawn"] == frozenset({"org/new"})
+    # Failed startup cleaned up — no dangling reservation.
+    assert manager.starting_models() == frozenset()
+    assert "org_new" not in manager._handles  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_restart_lane_reserves_model_during_stop_spawn_window(monkeypatch) -> None:
+    """The old handle's process is dead (no RUNNING state left to protect the
+    model) while the new spawn runs — the reservation must cover that whole
+    window and clear once the new handle is registered."""
+    lane_id = "org_swap"
+    model = "org/swap"
+    lane_config = LaneConfig(lane_id=lane_id, model=model, vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(WorkerConfig(), lane_port_start=15480, lane_port_end=15490)
+
+    class DeadHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15480
+            self.lane_config = lane_config
+            self.destroyed = False
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=1)
+
+        async def destroy(self) -> None:
+            self.destroyed = True
+
+        async def close(self) -> None:
+            pass
+
+    seen: dict[str, frozenset[str]] = {}
+
+    class NewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, lc: LaneConfig) -> ProcessStatus:
+            self.lane_config = lc
+            # Old process already destroyed, new handle not registered yet.
+            seen["during_spawn"] = manager.starting_models()  # noqa: F821
+            return ProcessStatus(state=ProcessState.RUNNING, pid=99999)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    old = DeadHandle()
+    manager._handles[lane_id] = old  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15480  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> NewHandle:
+        return NewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    await manager._restart_lane_unlocked(lane_id, LaneConfig(lane_id=lane_id, model=model, vllm=True))  # noqa: SLF001
+
+    assert old.destroyed is True
+    assert seen["during_spawn"] == frozenset({model})
+    assert manager.get_handle(lane_id) is not None
+    assert manager.starting_models() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_restart_lane_releases_startup_reservation_on_spawn_failure(monkeypatch) -> None:
+    lane_id = "org_swap"
+    model = "org/swap"
+    lane_config = LaneConfig(lane_id=lane_id, model=model, vllm=True, vllm_config=VllmConfig())
+    manager = LaneManager(WorkerConfig(), lane_port_start=15500, lane_port_end=15510)
+
+    class DeadHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15500
+            self.lane_config = lane_config
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.STOPPED, pid=12345, return_code=1)
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    class FailingNewHandle:
+        def __init__(self, lid: str, port: int) -> None:
+            self.lane_id = lid
+            self.port = port
+            self.lane_config = None
+
+        async def init(self) -> None:
+            pass
+
+        async def spawn(self, _lc: LaneConfig) -> ProcessStatus:
+            assert model in manager.starting_models()  # noqa: F821
+            raise RuntimeError("GPU out of memory")
+
+        async def destroy(self) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+    manager._handles[lane_id] = DeadHandle()  # noqa: SLF001
+    manager._port_alloc._used[lane_id] = 15500  # noqa: SLF001
+
+    def _fake_create_handle(lid: str, port: int, _gc, _vec, _lc, **_kwargs) -> FailingNewHandle:
+        return FailingNewHandle(lid, port)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", _fake_create_handle)
+
+    with pytest.raises(RuntimeError, match="GPU out of memory"):
+        await manager._restart_lane_unlocked(
+            lane_id, LaneConfig(lane_id=lane_id, model=model, vllm=True)
+        )  # noqa: SLF001
+
+    assert lane_id not in manager._handles  # noqa: SLF001
+    assert manager.starting_models() == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_apply_lanes_replans_after_rollback_restores_the_original_floor(monkeypatch) -> None:
+    """A successful Phase-2 restart re-plans for the replacement model. If a
+    LATER add in the same apply then aborts, _rollback_unlocked restores the
+    original handles — but the final re-plan was suppressed because rolled_back
+    was true, so the host-RAM floor stayed sized to the PARTIALLY applied
+    desired state. The re-plan must run after the completed rollback, against
+    the restored lane set: the restored model's sleeping footprint (here, a
+    LARGER one) is what must become the final floor, before its first sleep and
+    well before the 60 s tick.
+
+    The hook records, at each re-plan, which model the lane currently runs —
+    that is the footprint the floor is computed from. Pre-fix the sequence is
+    ["org/small"] only (the restart re-plan); post-fix it is
+    ["org/small", "org/big"] (the post-rollback re-plan sees the restored
+    model).
+    """
+    big = LaneConfig(model="org/big", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True))
+    small = LaneConfig(model="org/small", vllm=True, lane_id="org_a", vllm_config=VllmConfig(enable_sleep_mode=True))
+    to_add = LaneConfig(model="org/add", vllm=True, lane_id="org_b", vllm_config=VllmConfig(enable_sleep_mode=True))
+
+    manager = LaneManager(WorkerConfig(), nvidia_smi_available=lambda: True)
+    # Existing lane A runs the BIG model (the one the rollback must restore).
+    manager._handles["org_a"] = SimpleNamespace(  # noqa: SLF001
+        lane_id="org_a",
+        lane_config=big,
+        status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+    )
+    manager._port_alloc._used["org_a"] = 15071  # noqa: SLF001
+
+    replan_models: list[str] = []
+
+    async def _hook() -> None:
+        h = manager._handles.get("org_a")  # noqa: SLF001
+        replan_models.append(h.lane_config.model if h is not None and h.lane_config else "")
+
+    manager._on_lane_added = _hook  # noqa: SLF001
+
+    async def _fake_restart(lid: str, new_lc: LaneConfig) -> None:
+        # A successful Phase-2 restart: swap in the replacement model and
+        # re-plan for it (as _restart_lane_unlocked does at its tail).
+        manager._handles[lid] = SimpleNamespace(  # noqa: SLF001
+            lane_id=lid,
+            lane_config=new_lc,
+            status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+        )
+        await manager._notify_lane_added()
+
+    async def _fake_add(_lid: str, _lc: LaneConfig) -> None:
+        # The later add fails, forcing the rollback.
+        raise RuntimeError("simulated add failure")
+
+    async def _fake_sleep(*_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    async def _fake_rollback(_removed, _added_ids, restarted_ids, snapshot) -> None:
+        # Restore restarted lanes from the original snapshot (the big model).
+        for lid in restarted_ids:
+            orig = snapshot.get(lid)
+            if orig is not None:
+                _, orig_lc, _port = orig
+                if orig_lc is not None:
+                    manager._handles[lid] = SimpleNamespace(  # noqa: SLF001
+                        lane_id=lid,
+                        lane_config=orig_lc,
+                        status=lambda: SimpleNamespace(state=ProcessState.RUNNING, pid=None),
+                    )
+
+    monkeypatch.setattr(manager, "_restart_lane_unlocked", _fake_restart)
+    monkeypatch.setattr(manager, "_add_lane_unlocked", _fake_add)
+    monkeypatch.setattr(manager, "_sleep_handle_and_replan", _fake_sleep)
+    monkeypatch.setattr(manager, "_rollback_unlocked", _fake_rollback)
+    monkeypatch.setattr(manager, "_collect_statuses_unlocked", AsyncMock(return_value=[]))
+
+    result = await manager.apply_lanes([small, to_add])
+
+    assert result.success is False
+    assert result.rolled_back is True
+    # The rollback restored the original (big) model.
+    assert manager._handles["org_a"].lane_config.model == "org/big"  # noqa: SLF001
+    # The restart re-planned for the replacement model, and the post-rollback
+    # re-plan saw the RESTORED model — its footprint is the final floor.
+    assert replan_models == ["org/small", "org/big"]

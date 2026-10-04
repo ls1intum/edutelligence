@@ -1,0 +1,158 @@
+# Logos – CI – Cleanup of PR builds from Harbor
+#
+# Deletes the PR's build images from Harbor when the PR is merged (or closed).
+#
+# What it deletes, per repository:
+#   1. The artifact tagged `pr-<number>`. If that tag is the artifact's ONLY tag
+#      the whole artifact goes; if it carries other tags too (an identical
+#      rebuild on main shares the digest with `latest`) only the tag is removed,
+#      so deleting a PR build can never take a live tag down with it.
+#   2. Untagged "by-digest" artifacts older than 24 h. Every build pushes its
+#      image by digest (untagged) and only tags it later, so orphaned by-digest
+#      artifacts pile up. Two guards keep this safe:
+#        - the 24 h age margin — an in-flight build's artifact is minutes old,
+#          never hours, so a running build is never hit;
+#        - the reference guard — child manifests belonging to a still-tagged
+#          index are skipped. Sweeping those is what breaks a live tag such as
+#          `latest`, whose index children are themselves untagged artifacts.
+#
+# Auth: vars.LOGOS_HARBOR_USER / secrets.LOGOS_HARBOR_PASSWORD (HTTP basic auth),
+# the same robot the build workflow pushes with. Needs only Artifact: List +
+# Artifact: Delete (plus Tag: Delete for the shared-digest case).
+# The Harbor retention policy remains the backstop for everything else.
+
+name: Logos - Cleanup PR builds from Harbor
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: Delete PR builds from Harbor
+    if: ${{ github.event.action == 'closed' }}
+    runs-on: ubuntu-latest
+    env:
+      HARBOR_REGISTRY: ${{ vars.LOGOS_HARBOR_REGISTRY }}
+      HARBOR_USER: ${{ vars.LOGOS_HARBOR_USER }}
+      HARBOR_PASSWORD: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+      PROJECT: logos
+      TAG: pr-${{ github.event.pull_request.number }}
+      # Safety margin for the untagged sweep: never touch an untagged artifact
+      # younger than this. An in-flight build's by-digest manifest is minutes
+      # old, never hours, so 24 h is a comfortable "definitely not mid-build".
+      UNTAGGED_AGE_MARGIN_SECONDS: 86400
+    steps:
+      - name: Delete PR builds from Harbor
+        run: |
+          set -euo pipefail
+
+          API_BASE="https://${HARBOR_REGISTRY%/}/api/v2.0"
+          AUTH="${HARBOR_USER}:${HARBOR_PASSWORD}"
+
+          # Harbor reports push_time as an RFC3339 string, and ISO-8601 UTC
+          # strings sort chronologically, so the cutoff is compared as a string.
+          CUTOFF_ISO="$(date -u -d "@$(( $(date -u +%s) - UNTAGGED_AGE_MARGIN_SECONDS ))" +%Y-%m-%dT%H:%M:%SZ)"
+
+          # Repositories inside the project (images are ${HARBOR_REGISTRY}/${PROJECT}/<name>).
+          # The API path is project-relative, so these carry no "logos/" prefix.
+          REPOS=("logos" "logos-webservice" "logos-ui" "logos-db" "logos-workernode-vllm")
+
+          # GET <url>: prints the body on 200, nothing on 404 (repository not
+          # created yet), and aborts the run on anything else — a 401/403 must
+          # never masquerade as "nothing to clean up".
+          api_get() {
+            local url="$1" body code
+            body="$(curl -sS -u "${AUTH}" -w '%{http_code}' "${url}")"
+            code="${body: -3}"
+            case "${code}" in
+              200) printf '%s' "${body%???}" ;;
+              404) : ;;
+              *)   echo "ERROR: HTTP ${code} on GET ${url}" >&2; return 1 ;;
+            esac
+          }
+
+          # DELETE <url> <label>: never fatal, so one stuck artifact cannot leave
+          # the rest of the cleanup undone.
+          api_delete() {
+            local url="$1" label="$2" code
+            code="$(curl -sS -u "${AUTH}" -o /dev/null -w '%{http_code}' -X DELETE "${url}")"
+            case "${code}" in
+              200|202|204) echo "Deleted ${label}" ;;
+              404)         echo "Already gone: ${label}" ;;
+              *)           echo "WARN: HTTP ${code} deleting ${label}; skipping" >&2 ;;
+            esac
+          }
+
+          # Probe the credentials through a listing, the one permission this job
+          # cannot work without anyway.
+          probe_code="$(curl -sS -o /dev/null -w '%{http_code}' -u "${AUTH}" \
+            "${API_BASE}/projects/${PROJECT}/repositories/${REPOS[0]}/artifacts?page=1&page_size=1")"
+          case "${probe_code}" in
+            200|404) echo "Authenticated to ${HARBOR_REGISTRY} as ${HARBOR_USER}" ;;
+            *)       echo "ERROR: credential probe returned HTTP ${probe_code}" >&2; exit 1 ;;
+          esac
+
+          for repo in "${REPOS[@]}"; do
+            echo "::group::${repo}"
+            BASE="${API_BASE}/projects/${PROJECT}/repositories/${repo}/artifacts"
+
+            # Snapshot the repository as one JSON object per line. page_size is
+            # capped at 100 by the API, so this paginates. Taking a snapshot up
+            # front means the tag deletions below cannot race the sweep.
+            snapshot="$(mktemp)"
+            page=1
+            while :; do
+              resp="$(api_get "${BASE}?page=${page}&page_size=100")"
+              [ -z "${resp}" ] && break
+              n="$(printf '%s' "${resp}" | jq 'length')"
+              [ "${n}" -eq 0 ] && break
+              printf '%s' "${resp}" | jq -c '.[]' >> "${snapshot}"
+              [ "${n}" -lt 100 ] && break
+              page=$(( page + 1 ))
+              if [ "${page}" -gt 100 ]; then
+                echo "WARN: ${repo}: more than 10000 artifacts, stopping pagination" >&2
+                break
+              fi
+            done
+
+            # Child manifests of a tagged index. These are untagged artifacts in
+            # their own right, so without this guard the sweep below would delete
+            # the layers behind a live tag like `latest`.
+            protected="$(jq -r 'select(((.tags // []) | length) > 0)
+              | .references[]?.child_digest // empty' "${snapshot}" | sort -u)"
+
+            # 1) This PR's tag. Drop the artifact only when `pr-N` is its sole
+            #    tag, otherwise remove just the tag and keep the artifact.
+            while IFS="$(printf '\t')" read -r digest tagcount; do
+              [ -z "${digest}" ] && continue
+              if [ "${tagcount:-0}" -le 1 ]; then
+                api_delete "${BASE}/${digest}" "${repo}@${digest} (tagged ${TAG})"
+              else
+                api_delete "${BASE}/${digest}/tags/${TAG}" \
+                  "tag ${repo}:${TAG} (artifact kept, carries ${tagcount} tags)"
+              fi
+            done < <(jq -r --arg t "${TAG}" \
+              'select((.tags // []) | map(.name) | index($t))
+               | [.digest, ((.tags // []) | length)] | @tsv' "${snapshot}")
+
+            # 2) Untagged by-digest leftovers older than the safety margin.
+            while IFS= read -r digest; do
+              [ -z "${digest}" ] && continue
+              if [ -n "${protected}" ] && printf '%s\n' "${protected}" | grep -qxF "${digest}"; then
+                echo "Keep ${repo}@${digest} (child of a tagged index)"
+                continue
+              fi
+              api_delete "${BASE}/${digest}" "${repo}@${digest} (untagged, pushed before ${CUTOFF_ISO})"
+            done < <(jq -r --arg c "${CUTOFF_ISO}" \
+              'select(((.tags // []) | length) == 0 and .push_time != null and .push_time < $c)
+               | .digest' "${snapshot}")
+
+            rm -f "${snapshot}"
+            echo "::endgroup::"
+          done
+
+          echo "Cleanup done for PR tag ${TAG}"

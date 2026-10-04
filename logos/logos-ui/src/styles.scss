@@ -4,3 +4,7 @@
 @use 'styles/buttons';
 @use 'styles/modal';
 @use 'styles/glass';
+
+@use 'styles/benchmark-controls';
+
+@import '@angular/cdk/overlay-prebuilt.css';

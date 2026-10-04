@@ -1,7 +1,9 @@
 """Pure-function tests for Azure deployment auto-sync planning."""
 
+from logos.anthropic_compat import UpstreamDialect, dialect_for
 from logos.pipeline.ettft_estimator import ReadinessTier, estimate_ettft_azure
 from logos.sdi.azure_deployment_sync import (
+    _warn_if_not_an_azure_endpoint,
     azure_host_from_base_url,
     build_azure_endpoint,
     classify_azure_operation,
@@ -18,6 +20,12 @@ def test_host_from_base_url():
 
 def test_classify_chat_default():
     assert classify_azure_operation("gpt-4.1-mini").suffix == "chat/completions"
+
+
+def test_classify_claude_as_native_anthropic_messages():
+    op = classify_azure_operation("claude-opus-5")
+    assert op.suffix == "anthropic/v1/messages"
+    assert op.api_version == ""
 
 
 def test_classify_responses_for_gpt5_reasoning():
@@ -48,6 +56,62 @@ def test_build_endpoint_responses_is_deployment_scoped():
     assert build_azure_endpoint(HOST, "gpt-51", op) == (
         f"{HOST}/openai/deployments/gpt-51/responses?api-version={op.api_version}"
     )
+
+
+def test_build_endpoint_claude_is_deployment_scoped():
+    # Stored deployment-scoped (not the bare /anthropic/v1/messages) so the id
+    # is recoverable; ContextResolver collapses it to the real route at forward
+    # time. Dropping the segment here made the deployment unrecoverable for the
+    # scheduler and for the body "model" rewrite.
+    op = classify_azure_operation("claude-opus-5")
+    assert build_azure_endpoint(HOST, "claude-opus-5", op) == (
+        f"{HOST}/openai/deployments/claude-opus-5/anthropic/v1/messages"
+    )
+
+
+def test_plan_claude_is_deployment_scoped():
+    planned = plan_sync(HOST, [{"id": "claude-opus-5", "model": "claude-opus-5", "status": "succeeded"}])
+    assert planned == [
+        {
+            "model_name": "claude-opus-5",
+            "endpoint": f"{HOST}/openai/deployments/claude-opus-5/anthropic/v1/messages",
+        }
+    ]
+
+
+def test_plan_claude_keeps_renamed_deployment_id():
+    # Deployment 'claude-prod' serves model 'claude-opus-5': the id must
+    # survive in the endpoint so the forward layer can name it in the body.
+    planned = plan_sync(HOST, [{"id": "claude-prod", "model": "claude-opus-5", "status": "succeeded"}])
+    assert planned[0]["model_name"] == "claude-opus-5"
+    assert planned[0]["endpoint"] == f"{HOST}/openai/deployments/claude-prod/anthropic/v1/messages"
+
+
+def test_claude_endpoint_is_native_messages_dialect():
+    assert (
+        dialect_for(
+            provider_type="cloud",
+            cloud_provider_type="azure",
+            forward_url=f"{HOST}/openai/deployments/claude-opus-5/anthropic/v1/messages",
+        )
+        is UpstreamDialect.NATIVE
+    )
+
+
+def test_synced_claude_model_is_schedulable():
+    # Regression for the registration path: a synced Claude deployment must
+    # still register with the Azure facade (deployment name extractable), not
+    # be filtered out while the registry keeps labelling it azure.
+    planned = plan_sync(HOST, [{"id": "claude-prod", "model": "claude-opus-5", "status": "succeeded"}])
+    endpoint = planned[0]["endpoint"]
+
+    deployment_name = extract_azure_deployment_name(endpoint)
+    assert deployment_name == "claude-prod"  # registration would NOT filter this out
+
+    provider = AzureDataProvider(name="azure", provider_id=1)
+    provider.register_model(model_id=43, model_name="claude-opus-5", deployment_name=deployment_name)
+    capacity = provider.get_capacity_info(deployment_name)
+    assert estimate_ettft_azure(capacity).tier == ReadinessTier.WARM
 
 
 def test_plan_prefers_matching_deployment_id():
@@ -106,3 +170,42 @@ def test_synced_responses_model_is_schedulable():
     provider.register_model(model_id=42, model_name="gpt-5.1", deployment_name=deployment_name)
     capacity = provider.get_capacity_info(deployment_name)
     assert estimate_ettft_azure(capacity).tier == ReadinessTier.WARM
+
+
+# ── mislabelled provider diagnostics ────────────────────────────────────────
+#
+# A cloud provider typed 'azure' that is not one is discovered by nobody: this
+# sync queries a data-plane route it does not serve, and the generic
+# /v1/models sync skips everything typed 'azure' by design. The warning is the
+# only thing connecting the empty catalogue to its cause, so it must survive
+# every base_url an operator can type — it runs before any provider is synced
+# and outside the per-provider guard, and start() awaits the first pass inline.
+
+
+def test_an_azure_host_draws_no_warning(caplog):
+    _warn_if_not_an_azure_endpoint({"id": 1, "name": "prod", "base_url": HOST})
+    assert not caplog.records
+
+
+def test_a_subdomain_of_azure_is_still_azure(caplog):
+    # Azure OpenAI also answers on cognitiveservices.azure.com.
+    _warn_if_not_an_azure_endpoint(
+        {"id": 1, "name": "prod", "base_url": "https://x.cognitiveservices.azure.com/openai"}
+    )
+    assert not caplog.records
+
+
+def test_a_foreign_host_is_named(caplog):
+    _warn_if_not_an_azure_endpoint({"id": 25, "name": "Hetzner", "base_url": "https://inference.hetzner.com/api/v1"})
+    assert "25" in caplog.text and "Hetzner" in caplog.text
+
+
+def test_an_unparseable_base_url_warns_instead_of_raising(caplog):
+    """urlsplit().hostname raises on a bracketed authority that is not IPv6."""
+    _warn_if_not_an_azure_endpoint({"id": 3, "name": "typo", "base_url": "https://[not-an-ipv6"})
+    assert "unparseable" in caplog.text
+
+
+def test_a_missing_base_url_warns_instead_of_raising(caplog):
+    _warn_if_not_an_azure_endpoint({"id": 4, "name": "blank", "base_url": None})
+    assert caplog.records

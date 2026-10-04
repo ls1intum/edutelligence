@@ -19,20 +19,23 @@ memiris:
       - mxbai-embed-large
       - nomic-embed-text
     learning_extractor:
-      local: gemma3
+      local: qwen3.8-27b
       cloud: gemma3
     learning_deduplicator:
-      local: gemma3
+      local: qwen3.8-27b
       cloud: gemma3
     memory_creator:
-      local: gpt-oss
+      local: qwen3.8-27b
       cloud: gpt-oss
     sleep_tool_llm:
-      local: gpt-oss
+      local: qwen3.8-27b
       cloud: gpt-oss
     sleep_json_llm:
-      local: gemma3
+      local: qwen3.8-27b
       cloud: gemma3
+  # Concurrent memory groups during sleep; each issues its own LLM requests.
+  # Keep it below the parallel capacity of the local model's serving lanes.
+  sleep_max_threads: 4
 
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 
@@ -64,111 +67,117 @@ llm_configuration:
   chat_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       # Guard detection quality requires medium reasoning effort (eval-backed).
       guide:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
     advanced:
       chat:
-        local: oai-gpt-52
+        local: qwen3.8-27b
         cloud: oai-gpt-5.5
       # Guard detection quality requires medium reasoning effort (eval-backed).
       guide:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
 
   autonomous_tutor_pipeline:
     default:
       chat:
-        local: gpt-oss
+        local: qwen3.8-27b
+        cloud: oai-gpt-5-mini
+
+  struggle_intervention_pipeline:
+    default:
+      chat:
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
 
   tutor_suggestion_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
     advanced:
       chat:
-        local: oai-gpt-52
+        local: qwen3.8-27b
         cloud: oai-gpt-52
 
   competency_extraction_pipeline:
     default:
       chat:
-        local: oai-gpt-52
+        local: qwen3.8-27b
         cloud: oai-gpt-52
 
   inconsistency_check_pipeline:
     default:
       solver:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       prettify:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
 
   rewriting_pipeline:
     faq:
       rewriting:
-        local: oai-gpt-52
+        local: qwen3.8-27b
         cloud: oai-gpt-52
       consistency:
-        local: oai-gpt-52
+        local: qwen3.8-27b
         cloud: oai-gpt-52
     problem_statement:
       rewriting:
-        local: oai-gpt-52
+        local: qwen3.8-27b
         cloud: oai-gpt-52
       consistency:
-        local: oai-gpt-52
+        local: qwen3.8-27b
         cloud: oai-gpt-52
 
   lecture_unit_page_ingestion_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
     advanced:
       chat:
-        local: oai-gpt-52
+        local: qwen3.8-27b
         cloud: oai-gpt-52
       embedding: azure-embedding-large
 
   faq_ingestion_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
 
   transcription_ingestion_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       # Vision-capable model used by the light transcription pipeline to
       # detect slide-number changes from video frames. Must be a chat model
       # that accepts image inputs (e.g. gpt-4.1-mini, gpt-5-mini).
       vision_chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
 
   lecture_unit_segment_summary_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
 
   lecture_unit_summary_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
 
   lecture_unit_pipeline:
@@ -178,7 +187,7 @@ llm_configuration:
   lecture_retrieval_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
       reranker: cohere
@@ -186,7 +195,7 @@ llm_configuration:
   lecture_unit_segment_retrieval_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
       reranker: cohere
@@ -194,7 +203,7 @@ llm_configuration:
   lecture_transcriptions_retrieval_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
       reranker: cohere
@@ -202,63 +211,60 @@ llm_configuration:
   faq_retrieval_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
 
   citation_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini-minimal
       keyword_summary:
-        local: oai-gpt-5-nano
+        local: qwen3.8-27b
         cloud: oai-gpt-5-nano-minimal
     advanced:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini-minimal
 
   interaction_suggestion_pipeline:
     course:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-nano-minimal
     exercise:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-nano-minimal
 
   session_title_generation_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-nano-minimal
 
   code_feedback_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini
 
   summary_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b
         cloud: oai-gpt-5-nano
 
   global_search_pipeline:
     default:
-      hyde:
-        local: gpt-oss
-        cloud: oai-gpt-5-nano-minimal
       answer:
-        local: gpt-oss
+        local: qwen3.8-27b
         cloud: oai-gpt-5-mini-minimal
       embedding: oai-embedding-small
 
   mcq_generation_pipeline:
     default:
       chat:
-        local: gpt-oss
+        local: qwen3.8-27b
         cloud: oai-gpt-5-nano-low

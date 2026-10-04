@@ -31,8 +31,8 @@
   }
 
   &--info {
-    background: rgb(var(--color-accent-cyan)  / var(--opacity-soft));
-    color: rgb(var(--color-accent-cyan));
+    background: rgb(var(--color-outline-200)  / var(--opacity-soft));
+    color: rgb(var(--color-typography-300));
   }
 }
 
@@ -50,6 +50,28 @@
 
   &:hover:not(:disabled) {
     background: rgb(var(--glass-fill)  / var(--opacity-soft));
+  }
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+.btn-stop {
+  margin-left: 8px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-warning));
+  background: transparent;
+  border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
+  border-radius: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover:not(:disabled) {
+    background: rgb(var(--color-warning) / var(--opacity-soft));
   }
 
   &:disabled {
@@ -196,6 +218,12 @@
 
   &--util {
     background: rgb(var(--color-success));
+  }
+
+  // Host RAM is the machine-level pool — brand violet keeps it distinct
+  // from the per-GPU cyan (VRAM) and green (utilization) bars.
+  &--ram {
+    background: rgb(var(--color-primary-500));
   }
 }
 

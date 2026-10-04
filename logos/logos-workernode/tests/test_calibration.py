@@ -11,6 +11,8 @@ Covers:
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -20,6 +22,8 @@ import yaml
 
 import logos_worker_node.main as worker_main
 from logos_worker_node.calibration import (
+    _CALIBRATION_DOMAINS,
+    _DOMAIN_KV_CACHE_FIT,
     _FATAL_LOAD_ERROR_PATTERNS,
     _KV_CACHE_MIN_STEP_MB,
     _NODE_LEVEL_TRANSIENT_PATTERNS,
@@ -33,22 +37,46 @@ from logos_worker_node.calibration import (
     _extract_vllm_max_model_len_suggestion,
     _extract_vllm_max_num_seqs_suggestion,
     _format_kv_mb,
+    _is_cuda_oom_log,
     _load_unsupported_models,
     _max_tp_for_plan,
     _parse_kv_to_mb,
+    _plan_needs_gpu_pin,
     _record_unsupported_model,
-    _remove_unsupported_model,
     auto_calibrate_models,
     calibrate_model,
+    calibrate_with_tp_escalation,
+    calibration_gpu_slice,
+    extract_revision_arg,
     is_model_unsupported,
     load_existing_profiles,
+    merge_profile,
     parse_gpu_indices,
+    pin_plan_gpu_devices,
     plans_from_config,
+    probe_classification,
+    probe_generative,
+    probe_pooling,
+    probe_reranking,
+    probe_transcription,
     result_to_profile_dict,
+    sample_vram_mb,
     save_profiles,
+    select_calibration_gpus,
+    warmup_inference,
 )
 from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 from logos_worker_node.models import AppConfig
+
+
+@pytest.fixture(autouse=True)
+def _pin_backend_to_cuda(monkeypatch):
+    """calibration.py is the CUDA measurement path (nvidia-smi,
+    /proc/meminfo). These tests exercise it directly, so the backend must be
+    pinned: on a developer's Mac is_metal_backend() auto-detects darwin and
+    the startup path now skips calibration by construction."""
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
+
 
 # ── helpers ────────────────────────────────────────────────────────────
 
@@ -319,6 +347,30 @@ def test_parse_gpu_indices_all():
 
 def test_parse_gpu_indices_empty():
     assert parse_gpu_indices("") is None
+
+
+def test_extract_revision_arg_space_separated():
+    assert extract_revision_arg(["--dtype", "auto", "--revision", "abc123"]) == "abc123"
+
+
+def test_extract_revision_arg_equals_form():
+    assert extract_revision_arg(["--revision=abc123"]) == "abc123"
+
+
+def test_extract_revision_arg_last_occurrence_wins():
+    # Matches argparse: a repeated store-action flag keeps the last value.
+    assert extract_revision_arg(["--revision", "old", "--revision=new"]) == "new"
+
+
+def test_extract_revision_arg_absent():
+    assert extract_revision_arg(["--dtype", "auto"]) is None
+    assert extract_revision_arg([]) is None
+    assert extract_revision_arg(None) is None
+
+
+def test_extract_revision_arg_dangling_flag_ignored():
+    # No value follows --revision — nothing to extract, not a crash.
+    assert extract_revision_arg(["--revision"]) is None
 
 
 def test_result_to_profile_dict_sets_calibrated_source():
@@ -661,6 +713,54 @@ def test_auto_calibrate_no_escalation_when_already_max_tp(tmp_path):
     assert not results["big-model"].success
 
 
+def test_escalation_pins_plan_to_gpu_slice_on_heterogeneous_node(tmp_path):
+    """On a 3-GPU host the probe is pinned to the power-of-two slice "0,1", so
+    GPU 2 stays free for production and the baseline never sums it. The
+    TP escalation itself is unchanged: max-first from tp=2, then down to tp=1.
+    """
+    config_path = _write_config(tmp_path, ["big-model"])
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        if tp == 1:
+            return _fail_result("big-model", error="OOM on tp=1")
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(3)),
+    ):
+        mock_cm.side_effect = side_effect
+        results = auto_calibrate_models(["big-model"], config_path, state_dir)
+
+    assert results["big-model"].success
+    assert results["big-model"].tensor_parallel_size == 2
+    # Every probe attempt is pinned to the slice, not "all" / every GPU.
+    for call in mock_cm.call_args_list:
+        passed_plan = call[0][0]
+        assert passed_plan["gpu_devices"] == "0,1"
+
+
+def test_escalation_respects_an_explicit_plan_pin(tmp_path):
+    """An operator-pinned gpu_devices is passed through to the probe untouched."""
+    cfg = {"logos": {"capabilities_models": [{"model": "big-model", "gpu_devices": "1,2"}]}}
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(yaml.safe_dump(cfg))
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+
+    with (
+        patch("logos_worker_node.calibration.calibrate_model") as mock_cm,
+        patch("logos_worker_node.calibration.query_gpu_vram", return_value=_mock_gpu_snap(3)),
+    ):
+        mock_cm.return_value = _success_result("big-model", tensor_parallel_size=2)
+        auto_calibrate_models(["big-model"], config_path, state_dir)
+
+    assert mock_cm.call_args[0][0]["gpu_devices"] == "1,2"
+
+
 def test_max_tp_for_plan():
     # Power-of-2 rounding: 4 GPUs → tp=4, 3 GPUs → tp=2, 5 → 4, 7 → 4
     assert _max_tp_for_plan({"model": "x"}, available_gpus=4) == 4
@@ -675,6 +775,456 @@ def test_max_tp_for_plan():
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=4) == 4
     assert _max_tp_for_plan({"model": "x", "gpu_devices": "all"}, available_gpus=3) == 2
     assert _max_tp_for_plan({"model": "x", "gpu_devices": ""}, available_gpus=4) == 4
+
+
+def test_calibration_gpu_slice_power_of_two_prefix():
+    assert calibration_gpu_slice(3) == [0, 1]
+    assert calibration_gpu_slice(5) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(6) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(7) == [0, 1, 2, 3]
+    assert calibration_gpu_slice(8) == [0, 1, 2, 3, 4, 5, 6, 7]
+    assert calibration_gpu_slice(1) == [0]
+
+
+def test_calibration_gpu_slice_no_gpus_is_empty():
+    assert calibration_gpu_slice(0) == []
+    assert calibration_gpu_slice(None) == []
+    assert calibration_gpu_slice(-2) == []
+
+
+def test_select_calibration_gpus_prefers_fully_idle_slice():
+    """3 GPUs, model loaded only on GPU 0: pick idle [1, 2], not [0, 1]."""
+    assert select_calibration_gpus(3, busy_gpus=[0]) == [1, 2]
+    assert select_calibration_gpus(3, busy_gpus=[1]) == [0, 2]
+    assert select_calibration_gpus(3, busy_gpus=[]) == [0, 1]
+
+
+def test_select_calibration_gpus_falls_back_when_not_enough_idle():
+    """Only one GPU idle but the slice needs two: keep the idle one and
+    fill the remaining slot from the busy GPUs, instead of discarding it
+    for the naive 0..slice-1 prefix (some lane is still killed, but only
+    one instead of two)."""
+    assert select_calibration_gpus(3, busy_gpus=[0, 1]) == [2, 0]
+    assert select_calibration_gpus(3, busy_gpus=[0, 1, 2]) == [0, 1]
+
+
+def test_select_calibration_gpus_partial_idle_uses_every_idle_gpu_first():
+    """5 GPUs, slice needs 4, only 2 idle: both idle GPUs are kept and
+    only the missing 2 slots come from the busy set — never a fallback
+    that discards an idle GPU the naive 0..slice-1 prefix ignores."""
+    assert select_calibration_gpus(5, busy_gpus=[0, 1, 2]) == [3, 4, 0, 1]
+
+
+def test_select_calibration_gpus_power_of_two_node_ignores_busy():
+    """On a power-of-two node the slice IS the whole node — idle preference
+    can't help, so the naive slice is always returned."""
+    assert select_calibration_gpus(4, busy_gpus=[0]) == [0, 1, 2, 3]
+    assert select_calibration_gpus(8, busy_gpus=[0, 1, 2]) == [0, 1, 2, 3, 4, 5, 6, 7]
+
+
+def test_select_calibration_gpus_no_gpus_is_empty():
+    assert select_calibration_gpus(0, busy_gpus=[0]) == []
+    assert select_calibration_gpus(None, busy_gpus=[]) == []
+
+
+def test_pin_plan_uses_slice_only_when_gpu_devices_blank_or_all():
+    assert pin_plan_gpu_devices({"model": "x"}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "all"}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": ""}, 3)["gpu_devices"] == "0,1"
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "none"}, 3) == {"model": "x", "gpu_devices": "none"}
+
+
+def test_pin_plan_keeps_operator_specific_gpu_set():
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "1,2"}, 3) == {
+        "model": "x",
+        "gpu_devices": "1,2",
+    }
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "  2  "}, 3) == {
+        "model": "x",
+        "gpu_devices": "  2  ",
+    }
+
+
+def test_pin_plan_no_gpus_leaves_blank_plan_alone():
+    assert pin_plan_gpu_devices({"model": "x"}, 0) == {"model": "x"}
+    assert pin_plan_gpu_devices({"model": "x", "gpu_devices": "all"}, None) == {
+        "model": "x",
+        "gpu_devices": "all",
+    }
+
+
+def test_pin_needs_gpu_pin_only_for_blank_and_all():
+    assert _plan_needs_gpu_pin("")
+    assert _plan_needs_gpu_pin("all")
+    assert _plan_needs_gpu_pin("  ALL  ")
+    assert _plan_needs_gpu_pin(None)
+    assert not _plan_needs_gpu_pin("1,2")
+    assert not _plan_needs_gpu_pin("none")
+
+
+def test_calibration_baseline_ignores_leftover_gpu_lane(monkeypatch):
+    """Pinned slice [0,1] on a 3-GPU host: a leftover lane on GPU 2 must not
+    inflate the calibration baseline — only the slice's own GPUs are summed."""
+    snap = {
+        0: {"total_mb": 24000.0, "used_mb": 100.0, "free_mb": 23900.0},
+        1: {"total_mb": 24000.0, "used_mb": 200.0, "free_mb": 23800.0},
+        2: {"total_mb": 24000.0, "used_mb": 9999.0, "free_mb": 14001.0},
+    }
+
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda gpu_indices=None: {k: v for k, v in snap.items() if gpu_indices is None or k in gpu_indices},
+    )
+    monkeypatch.setattr("logos_worker_node.calibration._VRAM_SAMPLE_COUNT", 1)
+    monkeypatch.setattr("logos_worker_node.calibration.time.sleep", lambda _s: None)
+
+    plan = pin_plan_gpu_devices({"model": "x"}, 3)
+    gpu_indices = parse_gpu_indices(plan["gpu_devices"])
+    assert gpu_indices == [0, 1]
+    assert sample_vram_mb(gpu_indices) == 300.0  # 100 + 200, never the 9999 on GPU 2
+
+
+def test_max_tp_for_plan_with_weight_derived_ceiling():
+    # A tighter HF-derived ceiling wins over the hardware max.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=8, weight_derived_max_tp=2) == 2
+    # A looser HF-derived ceiling never raises above the hardware max.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=16) == 4
+    # No ceiling supplied — unchanged from before this kwarg existed.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=None) == 4
+    # Ceiling below 1 is clamped up to 1, never returns 0.
+    assert _max_tp_for_plan({"model": "x"}, available_gpus=4, weight_derived_max_tp=0) == 4
+
+
+def test_calibrate_with_tp_escalation_honors_hf_max_tp_ceiling(tmp_path):
+    """_hf_max_tp_ceiling bounds where the max-first escalation starts — it
+    must not probe at hardware-max tp when the HF precheck already knows a
+    lower tp is sufficient, but a ceiling below the operator's pinned tp
+    must be ignored (never search below what was explicitly pinned)."""
+
+    def _seen_tps(plan_overrides: dict) -> list[int]:
+        seen: list[int] = []
+
+        def side_effect(plan, **kw):
+            tp = plan.get("tensor_parallel_size", 1)
+            seen.append(tp)
+            return _success_result("big-model", tensor_parallel_size=tp)
+
+        with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+            result = calibrate_with_tp_escalation(
+                {"model": "big-model", **plan_overrides},
+                vllm_binary="vllm",
+                port=11499,
+                log_dir=tmp_path,
+                sleep_level=0,
+                ready_timeout_s=60.0,
+                available_gpus=8,
+            )
+        assert result.success
+        return seen
+
+    seen_tps = _seen_tps({"_hf_max_tp_ceiling": 2})
+    assert seen_tps[0] == 2  # HF ceiling, not hardware max (8)
+    assert 8 not in seen_tps
+
+    seen_tps = _seen_tps({"tensor_parallel_size": 4, "_hf_max_tp_ceiling": 1})
+    assert seen_tps[0] == 4  # ceiling below the pinned tp is ignored
+
+
+def test_calibrate_with_tp_escalation_widens_to_hardware_max_on_ceiling_failure(tmp_path):
+    """A weight-derived ceiling is an optimization, not a guarantee — if
+    the real load fails at that tp, escalation must still try the true
+    hardware max before giving up, instead of treating the ceiling as a
+    hard cap that forecloses every wider tp that could have worked."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    assert seen_tps[0] == 2  # started at the HF ceiling, not hardware max
+    assert 8 in seen_tps  # widened to hardware max once the ceiling failed
+    assert result.success
+    assert result.tensor_parallel_size == 8
+
+
+def test_calibrate_with_tp_escalation_retries_remote_code_after_widening(tmp_path):
+    """The trust_remote_code requirement can be invisible at a low tp (OOM
+    hits before vLLM ever reaches the custom-code check) and only surface
+    once a wider tp gets far enough — must be re-checked after the
+    hardware-max widen attempt too, not just the very first probe."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        has_flag = "--trust-remote-code" in (plan.get("extra_args") or [])
+        seen.append((tp, has_flag))
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        if not has_flag:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="The repository for big-model contains custom code which must be executed.",
+            )
+        return _success_result("big-model", tensor_parallel_size=tp)
+
+    seen: list[tuple[int, bool]] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    # 2 (ceiling, OOM) -> 8 (widened, needs remote-code) -> 8 (retried,
+    # succeeds) -> 4 (binary-search probe, still OOM below 8 either way).
+    assert seen == [(2, False), (8, False), (8, True), (4, True)]
+    assert result.success
+    assert result.tensor_parallel_size == 8
+
+
+def test_calibrate_with_tp_escalation_stops_on_fatal_error_surfaced_after_widening(tmp_path):
+    """A fatal error (unsupported architecture) can be invisible at the
+    HF-derived ceiling (OOM hits first) and only surface once the widened
+    hardware-max probe gets far enough to reach vLLM's model-loading code.
+    Once that happens, escalation must stop immediately instead of wasting
+    another spawn on the configured tp fallback — re-checking fatal-ness
+    only against the very first probe let a later, real fatal failure slip
+    through the "not _fatal" guard."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp < 8:
+            return CalibrationResult(
+                model="big-model",
+                tensor_parallel_size=tp,
+                gpu_devices="",
+                kv_cache_sent_mb=0.0,
+                success=False,
+                error="CUDA out of memory",
+            )
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error=(
+                "unsupported model (unsupported-architecture): The installed vLLM build "
+                "does not implement this model's architecture."
+            ),
+            unsupported_reason="unsupported-architecture",
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "_hf_max_tp_ceiling": 2, "tensor_parallel_size": 1},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=8,
+        )
+
+    # 2 (ceiling, OOM — not yet fatal) -> 8 (widened, genuinely fatal).
+    # Must NOT also try tp=1 (the configured/original tp fallback).
+    assert seen_tps == [2, 8]
+    assert not result.success
+    assert result.tensor_parallel_size == 8
+
+
+def test_calibrate_with_tp_escalation_skips_original_tp_fallback_on_capacity_exhaustion(tmp_path):
+    """A genuine VRAM shortfall at max tp (weights/kv don't fit anywhere in
+    the kv search range) must not fall back to a merely-defaulted original
+    tp — a lower tp needs *more* VRAM per GPU, not less, so the fallback
+    can only repeat the same failure."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error="No working KV cache size found between 1024 MB and 40960 "
+            "MB on tp=2. Model weights likely exceed available GPU VRAM.",
+            capacity_oom=True,
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model"},  # no tensor_parallel_size — original_tp defaults to 1
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=2,
+        )
+
+    assert seen_tps == [2]  # tp=1 fallback skipped — not operator-pinned
+    assert not result.success
+
+
+def test_calibrate_with_tp_escalation_does_not_skip_fallback_on_non_capacity_no_working_kv(tmp_path):
+    """Regression: the generic "no working kv" message also fires when
+    every probe fails for a reason unrelated to capacity (e.g. this tp's
+    attention-head count isn't divisible) — _capacity_oom_box never
+    latches, so capacity_oom stays False. The lower-tp fallback (which
+    could recover from exactly that config/arch quirk) must still run."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp == 1:
+            return _success_result("big-model", tensor_parallel_size=1)
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error="No working KV cache size found between 1024 MB and 40960 "
+            "MB on tp=2. Model weights likely exceed available GPU VRAM.",
+            capacity_oom=False,
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model"},  # no tensor_parallel_size — original_tp defaults to 1
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=2,
+        )
+
+    assert seen_tps == [2, 1]  # fallback NOT skipped — this wasn't a real OOM
+    assert result.success
+    assert result.tensor_parallel_size == 1
+
+
+def test_calibrate_with_tp_escalation_honors_explicit_tp_despite_capacity_exhaustion(tmp_path):
+    """The same VRAM-shortfall skip must not apply when the orchestrator
+    explicitly pinned the lower tp itself — an explicit pin is honored
+    regardless of what failed above it."""
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        if tp == 1:
+            return _success_result("big-model", tensor_parallel_size=1)
+        return CalibrationResult(
+            model="big-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error="No working KV cache size found between 1024 MB and 40960 "
+            "MB on tp=2. Model weights likely exceed available GPU VRAM.",
+            capacity_oom=True,
+        )
+
+    seen_tps: list[int] = []
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "big-model", "tensor_parallel_size": 1},  # explicit pin
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=2,
+        )
+
+    assert seen_tps == [2, 1]  # fallback attempted despite the shortfall
+    assert result.success
+    assert result.tensor_parallel_size == 1
+
+
+def test_calibrate_with_tp_escalation_stops_on_normalized_fatal_error(tmp_path):
+    """Regression: calibrate_model normalizes a fatal model-level error into
+    "unsupported model (<code>): <description>" and sets
+    result.unsupported_reason — the raw vLLM needle is gone from result.error.
+    The fatal check must key off unsupported_reason, not the needle, or a
+    permanently unloadable model gets re-probed at every lower tp."""
+    seen_tps: list[int] = []
+
+    def side_effect(plan, **kw):
+        tp = plan.get("tensor_parallel_size", 1)
+        seen_tps.append(tp)
+        return CalibrationResult(
+            model="gated-model",
+            tensor_parallel_size=tp,
+            gpu_devices="",
+            kv_cache_sent_mb=0.0,
+            success=False,
+            error=(
+                "unsupported model (gated-repo-no-token): Hugging Face flags this "
+                "repository as gated. The worker has no HF token (or the token "
+                "lacks access)."
+            ),
+            unsupported_reason="gated-repo-no-token",
+        )
+
+    with patch("logos_worker_node.calibration.calibrate_model", side_effect=side_effect):
+        result = calibrate_with_tp_escalation(
+            {"model": "gated-model", "tensor_parallel_size": 1},
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=4,
+        )
+
+    # Fatal on the very first (max-tp) probe: no fallback to the configured
+    # tp — exactly one spawn.
+    assert seen_tps == [4]
+    assert not result.success
+    assert result.unsupported_reason == "gated-repo-no-token"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -780,7 +1330,7 @@ def _patch_calibration_infra(
     return patches
 
 
-def _run_calibrate(patches, plan=None):
+def _run_calibrate(patches, plan=None, sleep_level=1):
     """Enter all patches and call calibrate_model. Returns (result, mocks_dict)."""
     plan = plan or _make_plan()
     log_dir = Path("/tmp/test-calibration-logs")
@@ -792,7 +1342,7 @@ def _run_calibrate(patches, plan=None):
             vllm_binary="vllm",
             port=11499,
             log_dir=log_dir,
-            sleep_level=1,
+            sleep_level=sleep_level,
             ready_timeout_s=60.0,
         )
     finally:
@@ -829,6 +1379,44 @@ def test_first_attempt_succeeds():
     assert result.success
     assert result.kv_cache_sent_mb == pytest.approx(4096.0)  # 4G default
     assert mocks["spawn"].call_count == 1
+
+
+def test_baseline_vram_retry_uses_short_first_delay():
+    """A single transient nvidia-smi failure at Phase 1 must retry after
+    the short 2s delay, not the old flat 15s — the common, quick-blip
+    case no longer pays the full wait just to check again."""
+    patches = _patch_calibration_infra(
+        sample_vram_sequence=[RuntimeError("nvidia-smi busy"), 500.0, 7500.0, 600.0],
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert result.success
+    sleep_calls = [c.args[0] for c in mocks["sleep"].call_args_list if c.args]
+    assert 2.0 in sleep_calls
+
+
+def test_baseline_vram_last_retry_keeps_original_safety_margin():
+    """Three straight nvidia-smi failures still give up cleanly, having
+    used the short first delay (2s) and the ORIGINAL 15s on the last
+    retry — that margin is deliberately not shortened (see calibration.py
+    _BASELINE_VRAM_RETRY_DELAYS_S)."""
+    patches = _patch_calibration_infra(
+        sample_vram_sequence=[
+            RuntimeError("nvidia-smi busy"),
+            RuntimeError("nvidia-smi busy"),
+            RuntimeError("nvidia-smi busy"),
+        ],
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert not result.success
+    assert "nvidia-smi baseline failed" in result.error
+    assert mocks["sample"].call_count == 3
+    sleep_calls = [c.args[0] for c in mocks["sleep"].call_args_list if c.args]
+    assert 2.0 in sleep_calls
+    assert 15.0 in sleep_calls
 
 
 def test_explicit_kv_ignores_stale_blacklist_and_spawns():
@@ -898,8 +1486,8 @@ def test_explicit_kv_auto_retries_with_max_model_len_from_vllm_suggestion():
             None,  # auto-retry with --max-model-len succeeds
         ],
     )
-    patches["read_log_tail"] = patch(
-        "logos_worker_node.calibration._read_log_tail",
+    patches["read_log_since"] = patch(
+        "logos_worker_node.calibration._read_log_since",
         return_value=suggestion_tail,
     )
 
@@ -921,8 +1509,8 @@ def test_explicit_kv_does_not_loop_when_suggestion_does_not_shrink():
     patches = _patch_calibration_infra(
         wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")],
     )
-    patches["read_log_tail"] = patch(
-        "logos_worker_node.calibration._read_log_tail",
+    patches["read_log_since"] = patch(
+        "logos_worker_node.calibration._read_log_since",
         return_value=suggestion_tail,
     )
 
@@ -956,8 +1544,8 @@ def test_kv_probe_auto_retries_with_max_num_seqs_for_mamba_model():
             None,  # auto-retry with --max-num-seqs succeeds
         ],
     )
-    patches["read_log_tail"] = patch(
-        "logos_worker_node.calibration._read_log_tail",
+    patches["read_log_since"] = patch(
+        "logos_worker_node.calibration._read_log_since",
         return_value=suggestion_tail,
     )
 
@@ -977,8 +1565,8 @@ def test_max_num_seqs_retry_does_not_loop_when_suggestion_does_not_shrink():
     patches = _patch_calibration_infra(
         wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")],
     )
-    patches["read_log_tail"] = patch(
-        "logos_worker_node.calibration._read_log_tail",
+    patches["read_log_since"] = patch(
+        "logos_worker_node.calibration._read_log_since",
         return_value=suggestion_tail,
     )
 
@@ -1105,6 +1693,120 @@ def test_vram_cap_uses_per_gpu_times_tp():
 
     assert result.success
     # The important thing: it didn't try to use 48000*0.8=38400 as cap
+
+
+def test_hf_weight_bytes_narrows_kv_cache_ceiling(caplog):
+    """_hf_weight_bytes narrows the KV search ceiling by the weights'
+    footprint at this tp. When the HF estimate alone would already exceed
+    the existing cap, max_kv_mb is left as-is instead of going negative —
+    the precheck's hard-skip already ruled out "no tp works at all"."""
+    import logging
+
+    def _narrowing_logs(hf_weight_bytes: int) -> list[str]:
+        patches = _patch_calibration_infra(wait_ready_side_effect=[None])
+        plan = _make_plan(_hf_weight_bytes=hf_weight_bytes)
+        with caplog.at_level(logging.INFO):
+            result, _ = _run_calibrate(patches, plan=plan)
+        assert result.success
+        return [r.message for r in caplog.records if "narrowing KV search ceiling" in r.message]
+
+    # Single GPU, 24000 MB total → cap = 24000 * 0.8 = 19200 MB before HF
+    # narrowing. 10 GB of HF-reported weights at tp=1 → 10240 MB/GPU →
+    # ceiling narrows to 8960 MB.
+    logs = _narrowing_logs(10 * 1024 * 1024 * 1024)
+    assert len(logs) == 1
+    assert "19200" in logs[0] and "8960" in logs[0]
+    caplog.clear()
+
+    # 30 GB of weights at tp=1 → 30720 MB/GPU, past the 19200 MB cap —
+    # no narrowing.
+    assert _narrowing_logs(30 * 1024 * 1024 * 1024) == []
+
+
+def test_hf_weight_bytes_narrowing_clamps_to_min_kv_step(caplog):
+    """A raw ceiling below _KV_CACHE_MIN_STEP_MB (1024) must be clamped up
+    to it, not passed through — the sweep's floor(.../1024)*1024 rounding
+    would otherwise collapse a small positive ceiling to a 0 MB search,
+    disabling the KV sweep instead of running the required 1 GiB probe."""
+    import logging
+
+    from logos_worker_node.calibration import _KV_CACHE_MIN_STEP_MB
+
+    patches = _patch_calibration_infra(wait_ready_side_effect=[None])
+    # Single GPU, 24000 MB total → cap = 19200 MB. 19100 MB/GPU of
+    # HF-reported weights at tp=1 leaves a raw ceiling of only 100 MB.
+    plan = _make_plan(_hf_weight_bytes=19100 * 1024 * 1024)
+    with caplog.at_level(logging.INFO):
+        result, _ = _run_calibrate(patches, plan=plan)
+    assert result.success
+
+    logs = [r.message for r in caplog.records if "narrowing KV search ceiling" in r.message]
+    assert len(logs) == 1
+    assert logs[0].endswith(f"{_KV_CACHE_MIN_STEP_MB:.0f} MB")
+
+
+def test_query_vllm_quantization_methods_reads_baked_file(tmp_path):
+    """The build-time-baked file (see the Dockerfile's 'Bake vLLM's
+    quantization-method registry' step) is the only source — no
+    subprocess, no torch/transformers import at runtime."""
+    from logos_worker_node.calibration import query_vllm_quantization_methods
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "vllm_quantization_methods.json").write_text(json.dumps(["awq", "gptq"]))
+
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
+
+    assert result == ["awq", "gptq"]
+
+
+def test_query_vllm_quantization_methods_resolves_bare_command_via_path(tmp_path, monkeypatch):
+    """_DEFAULT_VLLM in production is bare "vllm", not a full path —
+    resolving it against the CWD instead of a real PATH search would
+    silently break the baked-file lookup."""
+    from logos_worker_node.calibration import query_vllm_quantization_methods
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    vllm_exe = bin_dir / "vllm"
+    vllm_exe.write_text("#!/bin/sh\n")
+    vllm_exe.chmod(0o755)
+    (bin_dir / "vllm_quantization_methods.json").write_text(json.dumps(["awq"]))
+
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.chdir(tmp_path.parent)  # a CWD that must NOT be where it looks
+
+    result = query_vllm_quantization_methods("vllm")
+
+    assert result == ["awq"]
+
+
+def test_query_vllm_quantization_methods_returns_empty_without_baked_file(tmp_path):
+    """No baked file (e.g. a dev environment outside the Docker GPU
+    image) — nothing to compare against, so it stays silent rather
+    than raising; the check is informational-only anyway."""
+    from logos_worker_node.calibration import query_vllm_quantization_methods
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
+
+    assert result == []
+
+
+def test_query_vllm_quantization_methods_returns_empty_on_corrupt_baked_file(tmp_path):
+    """A corrupted baked file (shouldn't normally happen — build-time-only,
+    no concurrent writers) must not crash the precheck."""
+    from logos_worker_node.calibration import query_vllm_quantization_methods
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "vllm_quantization_methods.json").write_text("not valid json")
+
+    result = query_vllm_quantization_methods(str(bin_dir / "vllm"))
+
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -1587,7 +2289,7 @@ def test_fatal_classifier_registry_has_expected_codes():
 
 
 def test_unsupported_file_roundtrip(tmp_path: Path):
-    """Record → load → remove preserves contents and round-trips cleanly."""
+    """Record → load preserves contents and round-trips cleanly."""
     path = tmp_path / _UNSUPPORTED_MODELS_FILE
     entry = UnsupportedModelEntry(
         model="Qwen/Bogus-Model",
@@ -1600,10 +2302,6 @@ def test_unsupported_file_roundtrip(tmp_path: Path):
     assert "Qwen/Bogus-Model" in loaded
     assert loaded["Qwen/Bogus-Model"].reason_code == "invalid-repo-id"
     assert loaded["Qwen/Bogus-Model"].recorded_at == "2026-06-04T19:46:51Z"
-
-    removed = _remove_unsupported_model(path, "Qwen/Bogus-Model")
-    assert removed == 1
-    assert _load_unsupported_models(path) == {}
 
 
 def test_unsupported_file_ignores_comments_and_blank_lines(tmp_path: Path):
@@ -1703,13 +2401,56 @@ def test_calibrate_model_skips_when_on_unsupported_list(tmp_path: Path):
     assert managers["spawn"].call_count == 0
 
 
+def test_trust_remote_code_pattern_ignores_the_engine_config_line():
+    """vLLM prints trust_remote_code=True in its engine config on every run
+    started with the flag, so only the transformers error may match."""
+    config_line = (
+        "INFO 09-28 20:02:30 [core.py:93] Initializing a V1 LLM engine (v0.30.0) with config: "
+        "model='org/custom', tokenizer='org/custom', trust_remote_code=True, dtype=torch.bfloat16"
+    )
+    assert _classify_fatal_load_error(config_line) is None
+
+    error = (
+        "ValueError: The repository for org/custom contains custom code which must be executed to "
+        "correctly load the model. Please pass the argument `trust_remote_code=True`."
+    )
+    pattern = _classify_fatal_load_error(error)
+    assert pattern is not None
+    assert pattern.reason_code == "requires-trust-remote-code"
+
+
+def test_cuda_error_out_of_memory_is_classified_as_cuda_oom():
+    """cudaErrorMemoryAllocation is worded "CUDA error: out of memory" and
+    must not fall through to the generic cuda-runtime-error reason."""
+    from logos_worker_node.calibration import _classify_observed_transient_error
+
+    oom = _classify_observed_transient_error("RuntimeError: CUDA error: out of memory")
+    assert oom is not None and oom.reason_code == "cuda-oom"
+    other = _classify_observed_transient_error("RuntimeError: CUDA error: unspecified launch failure")
+    assert other is not None and other.reason_code == "cuda-runtime-error"
+
+
+def test_kv_cache_fit_domain_matches_real_vllm_log_line():
+    """Lines from a real calibration log (vLLM v0.30.0, kv_cache_memory_bytes set)."""
+    domain = next(d for d in _CALIBRATION_DOMAINS if d.id == _DOMAIN_KV_CACHE_FIT)
+    (pattern,) = domain.completion_patterns
+    assert pattern.search(
+        "(EngineCore pid=123838) INFO 09-28 20:02:56 [kv_cache_utils.py:2395] GPU KV cache size: "
+        "87,376 tokens, Maximum concurrency for 32,768 tokens per request: 2.67x"
+    )
+    assert not pattern.search(
+        "(EngineCore pid=123838) INFO 09-28 20:02:56 [gpu_worker.py:559] Initial free memory 15.3 GiB, "
+        "reserved 1.0 GiB memory for KV Cache as specified by kv_cache_memory_bytes config"
+    )
+
+
 def test_node_transient_classifier_matches_eio():
     """The classifier picks up the kernel/python EIO signature from the
     deioma 2026-06-04 storage outage."""
     tail = (
         "(APIServer pid=611559) FileNotFoundError: [Errno 2] No such file ...\n"
         "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
-        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--zai-org--GLM-Image'"
+        "'/usr/share/logos/models/.hf_cache/hub/models--zai-org--GLM-Image'"
     )
     pat = _classify_node_transient_error(tail)
     assert pat is not None
@@ -1737,6 +2478,26 @@ def test_node_transient_classifier_registry_has_expected_codes():
     assert {"filesystem-eio", "filesystem-readonly"} <= codes
 
 
+def _spawn_writing_log(log_path: Path, text: str):
+    """Patch spawn_vllm so it APPENDS *text* to the probe log, like the real one.
+
+    Calibration reads a probe's log slice starting at the byte offset taken
+    just before the spawn, so simulated vLLM output has to be written by the
+    spawn itself — text present beforehand belongs to an earlier probe.
+    """
+
+    def _side_effect(plan, vllm_binary, host, port, path, kv_cache_memory_bytes, **kwargs):
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(text)
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    return patch("logos_worker_node.calibration.spawn_vllm", side_effect=_side_effect)
+
+
 def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     """The critical guarantee: when a probe fails because the node's storage
     is broken (EIO), calibrate_model must NOT pollute either the per-command
@@ -1746,16 +2507,18 @@ def test_try_start_with_node_eio_writes_no_blacklist_artifacts(tmp_path: Path):
     """
     log_dir = tmp_path / "calibration_logs"
     log_dir.mkdir()
-    # Pre-seed the per-model log file with an EIO tail.
     log_path = log_dir / "Qwen__SomeModel.log"
-    log_path.write_text(
-        "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
-        "'/usr/share/ollama/.ollama/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
-        encoding="utf-8",
-    )
 
     patches = _patch_calibration_infra(
         wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+    )
+    # Emit the EIO tail from inside the spawn, like the real spawn_vllm does.
+    # Text written BEFORE the spawn belongs to an earlier probe and is
+    # deliberately out of view (see _read_log_since).
+    patches["spawn"] = _spawn_writing_log(
+        log_path,
+        "(APIServer pid=611559) OSError: [Errno 5] Input/output error: "
+        "'/usr/share/logos/models/.hf_cache/hub/models--Qwen--SomeModel'\n",
     )
     # Make sure _record_failed_command and _record_unsupported_model are real
     # (not pre-patched out) so we can detect any accidental writes.
@@ -1803,18 +2566,17 @@ def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search
     """
     log_dir = tmp_path / "calibration_logs"
     log_dir.mkdir()
-    # Pre-seed the per-model log file with a fatal-pattern tail so the
-    # classifier matches when _try_start reads the log after the simulated
-    # spawn failure.
     log_path = log_dir / "Qwen__Bogus.log"
-    log_path.write_text(
-        "(APIServer pid=572249)   Value error, " "Invalid repository ID or local directory specified: 'Qwen/Bogus'.\n",
-        encoding="utf-8",
-    )
 
     # Patch the kv search to fail on every probe (RuntimeError = vLLM exited).
     patches = _patch_calibration_infra(
         wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+    )
+    # The fatal tail must come from the probe's own output, so write it during
+    # the spawn rather than pre-seeding the shared log file.
+    patches["spawn"] = _spawn_writing_log(
+        log_path,
+        "(APIServer pid=572249)   Value error, " "Invalid repository ID or local directory specified: 'Qwen/Bogus'.\n",
     )
 
     plan = _make_plan(model="Qwen/Bogus")
@@ -1840,6 +2602,203 @@ def test_try_start_failure_with_fatal_tail_records_unsupported_and_aborts_search
     # The file on disk now lists the model — restart-safe.
     loaded = _load_unsupported_models(log_dir / _UNSUPPORTED_MODELS_FILE)
     assert loaded["Qwen/Bogus"].reason_code == "invalid-repo-id"
+
+
+def test_is_cuda_oom_log_distinguishes_capacity_from_validation_errors():
+    """A real allocator OOM must be detected; the KV-too-small and
+    max-num-seqs validation rejections (which name their own fix) must not
+    be mistaken for one."""
+    assert _is_cuda_oom_log("torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB")
+    assert _is_cuda_oom_log("RuntimeError: CUDA error: out of memory")
+    assert not _is_cuda_oom_log("estimated maximum model length is 4096")
+    assert not _is_cuda_oom_log("lower max_num_seqs to at most 160")
+    assert not _is_cuda_oom_log("")
+    assert not _is_cuda_oom_log(None)  # type: ignore[arg-type]
+
+
+def test_kv_search_stops_climbing_on_genuine_cuda_oom(tmp_path: Path):
+    """A real CUDA OOM at the kv floor must abort the upward scan instead
+    of climbing toward the ceiling — a larger kv only needs more memory,
+    never less, so every further probe would repeat the same OOM."""
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    log_path = log_dir / "org__huge-model.log"
+
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+        gpu_vram_total_mb=24000.0,  # ceiling would be 18432 MB — 17+ steps if not short-circuited
+    )
+    patches["spawn"] = _spawn_writing_log(
+        log_path,
+        "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 2.00 GiB "
+        "(GPU 0; 24.00 GiB total capacity; 23.50 GiB already allocated)\n",
+    )
+
+    plan = {"model": "org/huge-model"}  # no kv_cache_memory_bytes — triggers the search
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert not result.success
+    assert "exceed available GPU VRAM" in result.error
+    # The explicit signal _is_capacity_exhausted reads — not just the
+    # shared error text (see test_calibrate_with_tp_escalation_does_not_
+    # skip_fallback_on_non_capacity_no_working_kv for the case where this
+    # text fires WITHOUT a real OOM).
+    assert result.capacity_oom is True
+    # Exactly one spawn — the floor probe latched the OOM box; the scan
+    # stopped instead of climbing toward the 18432 MB ceiling.
+    assert managers["spawn"].call_count == 1
+
+
+# ── Real-log regression fixtures ──────────────────────────────────────
+# Trimmed excerpts from real calibration runs across different worker
+# nodes, kept only to protect the OOM/Mamba classifiers against real
+# vLLM wording — not sourced from any path that belongs in this repo.
+
+# openai/gpt-oss-120b: MoE model, gpt_oss_mxfp4 quantization. OOM during
+# KV-cache allocation at engine init. Exercises the cumem allocator's
+# capitalized "CUDA Error: out of memory" alongside torch's own message.
+_REAL_OOM_LOG_MOE_MXFP4 = (
+    "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:163\n"
+    "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:163\n"
+    "[rank1]:[W910 10:05:43.303605224 CUDACachingAllocator.cpp:3933] memory "
+    "allocation failed with OOM on device 1 while trying to allocate "
+    "21474836480 bytes (free: 12385452032, total: 50865307648).\n"
+    "(Worker_TP0 pid=1500571) ERROR 09-10 10:05:43 [multiproc_executor.py:1055] "
+    "WorkerProc hit an exception.\n"
+    "(Worker_TP0 pid=1500571) ERROR 09-10 10:05:43 [multiproc_executor.py:1055] "
+    "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 20.00 GiB. "
+    "GPU 0 has a total capacity of 47.37 GiB of which 11.34 GiB is free. "
+    "Process 1366462 has 496.00 MiB memory in use. Including non-PyTorch "
+    "memory, this process has 35.54 GiB memory in use. Of the allocated "
+    "memory 36.64 GiB is allocated by PyTorch, with 1.90 GiB allocated in "
+    "private pools (e.g., CUDA Graphs), and 21.56 MiB is reserved by PyTorch "
+    "but unallocated.\n"
+)
+
+# microsoft/Phi-4-reasoning: dense model, no quantization. Same OOM shape,
+# different GPU/allocation sizes — confirms the classifier isn't keyed to
+# one model's exact numbers.
+_REAL_OOM_LOG_DENSE = (
+    "CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:163\n"
+    "[rank0]:[W820 23:42:35.933877218 CUDACachingAllocator.cpp:3933] memory "
+    "allocation failed with OOM on device 0 while trying to allocate "
+    "914358272 bytes (free: 507904000, total: 50865307648).\n"
+    "(Worker_TP0 pid=1293421) ERROR 08-20 23:42:35 [multiproc_executor.py:1018] "
+    "WorkerProc hit an exception.\n"
+    "(Worker_TP0 pid=1293421) ERROR 08-20 23:42:35 [multiproc_executor.py:1018] "
+    "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 872.00 MiB. "
+    "GPU 0 has a total capacity of 47.37 GiB of which 788.38 MiB is free. "
+    "Process 1200636 has 496.00 MiB memory in use. Including non-PyTorch "
+    "memory, this process has 46.10 GiB memory in use.\n"
+)
+
+# RedHatAI/Llama-3.3-70B-Instruct-quantized.w4a16: dense 70B, INT4 weights
+# via compressed-tensors. OOM surfaces later than the others — during
+# warmup/sampling (flashinfer), not KV-cache init — so this also checks
+# the classifier doesn't depend on which phase the traceback comes from.
+_REAL_OOM_LOG_INT4_QUANTIZED_70B = (
+    "(Worker_TP1 pid=2019503) ERROR 08-27 01:05:46 [multiproc_executor.py:1047] "
+    '    File "/opt/venv/lib/python3.12/site-packages/flashinfer/sampling.py", '
+    "line 1548, in top_k_top_p_sampling_from_logits\n"
+    "(Worker_TP1 pid=2019503) ERROR 08-27 01:05:46 [multiproc_executor.py:1047] "
+    "    probs = torch.softmax(masked_logits, dim=-1)\n"
+    "(Worker_TP1 pid=2019503) ERROR 08-27 01:05:46 [multiproc_executor.py:1047] "
+    "torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 502.00 MiB. "
+    "GPU 1 has a total capacity of 94.97 GiB of which 184.25 MiB is free. "
+    "Including non-PyTorch memory, this process has 94.78 GiB memory in use.\n"
+)
+
+# Qwen/Qwen3.6-35B-A3B: MoE + Mamba hybrid (Qwen3_5MoeForConditionalGeneration).
+# NOT an OOM — vLLM's own recoverable "lower max_num_seqs" rejection, which
+# must stay distinguishable from a genuine capacity shortfall.
+_REAL_MAMBA_MAX_NUM_SEQS_LOG = (
+    "(Worker_TP1 pid=1205145) ERROR 08-20 21:41:53 [multiproc_executor.py:1018] "
+    "ValueError: max_num_seqs (256) exceeds available Mamba cache blocks (99). "
+    "Each decode sequence requires one Mamba cache block, so CUDA graph "
+    "capture cannot proceed. Please lower max_num_seqs to at most 99 or "
+    "increase gpu_memory_utilization.\n"
+)
+
+
+def test_is_cuda_oom_log_matches_cumem_allocator_line_alone():
+    """vLLM's cumem allocator (used for --enable-sleep-mode) prints its own
+    "CUDA Error: out of memory" (capital E) ahead of torch's. Must be
+    caught on its own, not just when torch's differently-cased message
+    happens to also be present in the same window."""
+    assert _is_cuda_oom_log("CUDA Error: out of memory at /workspace/csrc/cumem_allocator.cpp:163")
+
+
+def test_is_cuda_oom_log_matches_real_traces_across_architectures():
+    """The classifier must catch real OOM wording from three different
+    shapes: a quantized MoE model, a dense model, and a quantized 70B
+    dense model whose OOM surfaces during warmup rather than kv-cache
+    init — not just the synthetic text used above."""
+    assert _is_cuda_oom_log(_REAL_OOM_LOG_MOE_MXFP4)
+    assert _is_cuda_oom_log(_REAL_OOM_LOG_DENSE)
+    assert _is_cuda_oom_log(_REAL_OOM_LOG_INT4_QUANTIZED_70B)
+
+
+def test_is_cuda_oom_log_does_not_match_real_mamba_max_num_seqs_error():
+    """A real Mamba/MoE hybrid's max_num_seqs rejection must not be
+    mistaken for a capacity OOM (it's fixed by a flag, not more VRAM),
+    and its suggested ceiling must still parse correctly from real text."""
+    assert not _is_cuda_oom_log(_REAL_MAMBA_MAX_NUM_SEQS_LOG)
+    assert _extract_vllm_max_num_seqs_suggestion(_REAL_MAMBA_MAX_NUM_SEQS_LOG) == 99
+
+
+def test_real_oom_trace_is_not_misclassified_as_fatal_or_node_transient():
+    """A real capacity OOM must not also trip the fatal (unsupported
+    architecture/repo) or node-transient (storage/EIO) classifiers —
+    those gate permanent or node-wide effects the OOM path doesn't."""
+    for log in (_REAL_OOM_LOG_MOE_MXFP4, _REAL_OOM_LOG_DENSE, _REAL_OOM_LOG_INT4_QUANTIZED_70B):
+        assert _classify_fatal_load_error(log) is None
+        assert _classify_node_transient_error(log) is None
+
+
+def test_kv_search_stops_climbing_on_real_cuda_oom_trace(tmp_path: Path):
+    """End-to-end version of the synthetic short-circuit test above, using
+    a real MoE/quantized model's OOM trace verbatim — confirms the fix
+    holds against actual vLLM wording, not just a hand-written stand-in."""
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    log_path = log_dir / "openai__gpt-oss-120b.log"
+
+    patches = _patch_calibration_infra(
+        wait_ready_side_effect=RuntimeError("vLLM exited (code=1)"),
+        gpu_vram_total_mb=48000.0,
+    )
+    patches["spawn"] = _spawn_writing_log(log_path, _REAL_OOM_LOG_MOE_MXFP4)
+
+    plan = {"model": "openai/gpt-oss-120b"}
+    managers = {k: p.__enter__() for k, p in patches.items()}
+    try:
+        result = calibrate_model(
+            plan,
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert not result.success
+    assert "exceed available GPU VRAM" in result.error
+    assert managers["spawn"].call_count == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2000,3 +2959,1120 @@ def test_build_vllm_cmd_enables_prefix_caching_to_match_serving():
     plan_off = {**plan, "enable_prefix_caching": False}
     cmd_off = _build_vllm_cmd(plan_off, "vllm", "127.0.0.1", 11499, "1G")
     assert "--enable-prefix-caching" not in cmd_off
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Regression: KV-starved floor probe must not flatten the whole curve
+# (Qwen/Qwen3.8-27B on deipapa/deimama, 2026-08-18)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Verbatim vLLM output from the deimama calibration of Qwen/Qwen3.8-27B.
+# The floor probe is rejected and names the model's real limits; the retry
+# with the suggested --max-model-len then starts at that shrunken context.
+_QWEN38_FLOOR_REJECT = (
+    "(EngineCore pid=105718) ERROR 08-18 08:05:08 [core.py:1349] ValueError: To serve at least one "
+    "request with the model's max seq len (262144), (8.16 GiB KV cache is needed, which is larger "
+    "than the available KV cache memory (1.0 GiB). Based on the available memory, the estimated "
+    "maximum model length is 27440. Try increasing `gpu_memory_utilization` (which also controls "
+    "CPU memory on the CPU backend) or decreasing `max_model_len` when initializing the engine.\n"
+)
+_QWEN38_FLOOR_OK = (
+    "(EngineCore pid=107776) INFO 08-18 08:08:22 [kv_cache_utils.py:2236] Maximum concurrency for "
+    "27,440 tokens per request: 1.00x\n"
+    # The config echo of OUR injected --max-model-len. Mistaking this for the
+    # model default is what pinned the whole sweep to 27440.
+    "(EngineCore pid=107776) INFO 08-18 08:08:22 [core.py:100] init engine, max_model_len=27440\n"
+)
+
+
+# vLLM prints its init summary BEFORE capturing CUDA graphs, then emits
+# hundreds of warmup lines. Measured on the deimama log: the concurrency line
+# sits 137-241 lines from the end of its probe segment. Any tail window applied
+# to parser input therefore loses it.
+_QWEN38_WARMUP_LINE_COUNT = 200
+
+
+def _qwen38_warmup_noise(lines: int = _QWEN38_WARMUP_LINE_COUNT) -> str:
+    """Post-init CUDA-graph warmup chatter, as it follows every real start."""
+    return "".join(
+        f"(EngineCore pid=112949) INFO 08-18 08:13:3{i % 10} [backends.py:634] "
+        f"Capturing CUDA graphs (decode, PIECEWISE): batch {i}\n"
+        for i in range(lines)
+    )
+
+
+def _qwen38_full_context_ok(kv_mb: float, conc: float) -> str:
+    """A probe that starts unshrunken and serves the model's full context."""
+    return (
+        f"(EngineCore pid=112949) INFO 08-18 08:13:33 [kv_cache_utils.py:2236] Maximum concurrency "
+        f"for 262,144 tokens per request: {conc:.2f}x\n"
+        f"(EngineCore pid=112949) INFO 08-18 08:13:33 [core.py:100] init engine, max_model_len=262144\n"
+    ) + _qwen38_warmup_noise()
+
+
+def test_kv_starved_floor_probe_does_not_flatten_curve(tmp_path: Path):
+    """A floor probe that had to shrink --max-model-len must not cap the curve.
+
+    Real failure (Qwen3.8-27B, deipapa/deimama 2026-08-18): at kv=1G vLLM
+    refused the model's 262144 default and suggested 27440, so calibration
+    injected --max-model-len=27440 and the probe started. Every LARGER KV probe
+    then started unshrunken and vLLM reported "Maximum concurrency for 262,144
+    tokens per request", yet the persisted curve read a flat 27440 from 1G to
+    18G. The planner therefore spawned the lane at min_kv=1024 — cheapest KV
+    for what looked like the same context — and served 27440 tokens at 1.00x
+    concurrency instead of 262144 at >2x.
+    """
+    log_dir = tmp_path / "calibration_logs"
+    log_dir.mkdir()
+    log_path = log_dir / "Qwen__Qwen3.8-27B.log"
+
+    # (kv_mb, had_pinned_max_model_len) per spawn, newest last.
+    kv_calls: list[tuple[float, bool]] = []
+    # Concurrency rises with KV, exactly as measured on deimama.
+    conc_by_kv = {10240.0: 1.22, 15360.0: 1.84, 17408.0: 2.08, 18432.0: 2.21, 19456.0: 2.33, 20480.0: 2.45}
+
+    def spawn_side_effect(plan, vllm_binary, host, port, path, kv_cache_memory_bytes, **kwargs):
+        kv_mb = _parse_kv_to_mb(kv_cache_memory_bytes)
+        pinned = bool(plan.get("max_model_len"))
+        kv_calls.append((kv_mb, pinned))
+        if kv_mb <= 1024.0:
+            # Floor: reject unshrunken, succeed once --max-model-len is pinned.
+            log_path.open("a", encoding="utf-8").write(
+                (_QWEN38_FLOOR_OK + _qwen38_warmup_noise()) if pinned else _QWEN38_FLOOR_REJECT
+            )
+        else:
+            log_path.open("a", encoding="utf-8").write(_qwen38_full_context_ok(kv_mb, conc_by_kv.get(kv_mb, 1.50)))
+        mock_proc = MagicMock()
+        mock_proc.pid = 12345
+        mock_proc.poll.return_value = None
+        return (mock_proc, ["vllm", "serve"])
+
+    def ready(*args, **kwargs):
+        kv_mb, pinned = kv_calls[-1]
+        # The floor only starts once --max-model-len is pinned; >20G is OOM.
+        if kv_mb <= 1024.0 and not pinned:
+            raise RuntimeError("vLLM exited before becoming ready (code=1)")
+        if kv_mb > 20480.0:
+            raise RuntimeError("OOM")
+        return None
+
+    patches = _patch_search_infra(wait_ready_side_effect=ready, gpu_vram_total_mb=49140.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=ready)
+
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_model(
+            _make_search_plan(model="Qwen/Qwen3.8-27B", tensor_parallel_size=2),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=log_dir,
+            sleep_level=1,
+            ready_timeout_s=60.0,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success, result.error
+    pairs = dict((round(kv), mml) for kv, mml in (result.kv_max_model_len_pairs or []))
+    assert pairs, "sweep recorded no curve"
+
+    # The floor stays honest about its own limit ...
+    assert pairs[1024] == 27440
+    # ... and every probe that served the full context is recorded as such.
+    assert result.max_model_len == 262144, f"curve capped at {result.max_model_len}"
+    big = {kv: mml for kv, mml in pairs.items() if kv >= 10240}
+    assert big, "no large-KV points recorded"
+    assert all(mml == 262144 for mml in big.values()), f"large-KV points not at full context: {big}"
+    # The curve must RISE — a flat curve is what made the planner pick min_kv.
+    assert pairs[1024] < max(pairs.values())
+
+    # Concurrency must survive the warmup chatter that follows vLLM's init
+    # summary, otherwise the planner cannot tell 10G/1.22x from 17G/>2x and
+    # settles for the cheapest full-context point.
+    triples = result.kv_max_model_len_parallelity_pairs or []
+    par_by_kv = {round(kv): par for kv, _, par in triples}
+    assert par_by_kv.get(1024) == pytest.approx(1.00), par_by_kv
+    for kv_mb, expected in conc_by_kv.items():
+        if round(kv_mb) in par_by_kv:
+            assert par_by_kv[round(kv_mb)] == pytest.approx(
+                expected
+            ), f"kv={kv_mb} lost its concurrency annotation: {par_by_kv}"
+    assert any(p is not None and p > 2.0 for p in par_by_kv.values()), par_by_kv
+
+
+def test_build_vllm_cmd_uses_auto_max_model_len_by_default() -> None:
+    """A probe with no pinned length asks vLLM to size the window itself.
+
+    Probing without the flag starts at the model default, which a small KV
+    budget cannot hold — the probe then fails on purpose just so the suggested
+    length can be read out of the error and the probe restarted. "auto" returns
+    the same number from the first start, and matches what the serving lane
+    passes, so the curve is measured under the configuration that runs.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m"}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "auto"
+
+
+def test_build_vllm_cmd_keeps_pinned_max_model_len() -> None:
+    """An injected retry value (or operator pin) still wins over "auto"."""
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    cmd = _build_vllm_cmd({"model": "m", "max_model_len": 27440}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--max-model-len")
+    assert cmd[idx + 1] == "27440"
+
+
+def test_sweep_derives_rate_from_anchors_when_auto_never_fails():
+    """With --max-model-len auto no probe fails, so the sweep has no vLLM error
+    to read the KV->context rate from: the "needs X GiB for max seq len (M)"
+    line only appears in a KV-too-small rejection. The rate then has to come
+    from a probed anchor still below the plateau, or the curve degrades to the
+    handful of probed points and the planner loses every value in between.
+
+    Mirrors the deipapa profile for Qwen3.8-27B: 1 GiB serves 27440 tokens
+    (26.8 tokens/MiB), which puts the full 262144 window at ~9.8 GiB.
+    """
+    M = 262144
+    per_token = (1024.0 * 1024.0 * 1024.0) / 27440.0  # bytes/token: 1 GiB serves 27440
+    kv_calls: list = []
+
+    def spawn_side_effect(plan, vllm_binary, host, port, log_path, kv_cache_memory_bytes, **kwargs):
+        kv_calls.append(_parse_kv_to_mb(kv_cache_memory_bytes))
+        mp = MagicMock()
+        mp.pid = 1
+        mp.poll.return_value = None
+        return (mp, ["vllm", "serve"])
+
+    def wait_ready_side_effect(*a, **k):
+        if kv_calls[-1] >= 21504.0:  # OOM above ~20G, same as the sibling test
+            raise RuntimeError("OOM")
+        return None  # "auto" always resolves — no probe is ever rejected
+
+    def served_side_effect(log_tail):
+        # What the engine reports it actually loaded, capped at the model window.
+        return min(M, int(kv_calls[-1] * 1024.0 * 1024.0 / per_token))
+
+    patches = _patch_search_infra(wait_ready_side_effect=wait_ready_side_effect, gpu_vram_total_mb=48000.0)
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=spawn_side_effect)
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # Nothing failed, so none of the failure-derived signals are available.
+    patches["maxseq"] = patch("logos_worker_node.calibration._extract_vllm_max_seq_len", return_value=None)
+    patches["kvneeded"] = patch("logos_worker_node.calibration._extract_vllm_kv_gib_needed_for_full", return_value=None)
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion", return_value=None
+    )
+    patches["served"] = patch(
+        "logos_worker_node.calibration._extract_vllm_served_context", side_effect=served_side_effect
+    )
+
+    result, _ = _run_search_calibrate(patches, plan=_make_search_plan())
+
+    assert result.success
+    pairs = sorted(result.kv_max_model_len_pairs)
+    assert pairs
+    # The curve is filled across the whole startable window, not just at the
+    # few probed anchors — that is what the derived rate buys.
+    assert len(pairs) >= 10, f"curve collapsed to probed anchors only: {pairs}"
+    # It rises, then holds the model's full window once the budget can hold it.
+    assert pairs[0][1] < pairs[-1][1]
+    assert pairs[-1][1] == M
+    # The plateau starts where the rate predicts it (~9.8 GiB), not at the floor
+    # and not only at the ceiling.
+    first_full_kv = min(kv for kv, mml in pairs if mml >= M)
+    assert 9216.0 <= first_full_kv <= 11264.0, f"plateau at {first_full_kv} MB"
+    # No point may claim more than the model's window.
+    assert all(0 < mml <= M for _, mml in pairs)
+
+
+def test_plans_from_config_forwards_speculative_config(tmp_path: Path) -> None:
+    """A draft model must reach the calibration plan.
+
+    engines.vllm.model_overrides is filtered to the keys that change what the
+    engine allocates. speculative_config does — it loads a second model — so
+    leaving it out makes calibration measure a lane that never runs, and the
+    planner then sizes the KV budget against a residency that is too low.
+    """
+    from logos_worker_node.calibration import plans_from_config
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: Qwen/Qwen3.8-27B\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      Qwen/Qwen3.8-27B:\n"
+        '        speculative_config: \'{"method":"qwen3_5_mtp","num_speculative_tokens":3}\'\n'
+        "        enforce_eager: false\n"
+        '        env_overrides: {"IGNORED": "1"}\n'
+    )
+    plan = next(p for p in plans_from_config(cfg) if p["model"] == "Qwen/Qwen3.8-27B")
+    assert plan["speculative_config"] == '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    assert plan["enforce_eager"] is False
+
+
+def test_build_vllm_cmd_passes_speculative_config_from_plan() -> None:
+    from logos_worker_node.calibration import _build_vllm_cmd
+
+    spec = '{"method":"qwen3_5_mtp","num_speculative_tokens":3}'
+    cmd = _build_vllm_cmd({"model": "m", "speculative_config": spec}, "vllm", "127.0.0.1", 9000, "4G")
+    idx = cmd.index("--speculative-config")
+    assert cmd[idx + 1] == spec
+
+
+def test_plans_from_config_forwards_extra_args(tmp_path: Path) -> None:
+    """--hf-overrides has to reach calibration, or it measures another model.
+
+    hochbruegge pins a YaRN rope_scaling for Qwen2.5-Coder (quadrupling the
+    context window) and deioma pins an architecture swap for Qwen3-Reranker,
+    both through extra_args. Calibrating without them profiles a model that is
+    not the one being served.
+    """
+    from logos_worker_node.calibration import _build_vllm_cmd, plans_from_config
+
+    hf = '--hf-overrides={"rope_scaling":{"rope_type":"yarn","factor":4.0}}'
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: Qwen/Qwen2.5-Coder-14B-Instruct-AWQ\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      Qwen/Qwen2.5-Coder-14B-Instruct-AWQ:\n"
+        "        attention_backend: TRITON_ATTN\n"
+        f"        extra_args: ['{hf}']\n"
+    )
+    plan = next(p for p in plans_from_config(cfg) if "Coder" in p["model"])
+    assert plan["extra_args"] == [hf]
+    assert hf in _build_vllm_cmd(plan, "vllm", "127.0.0.1", 9000, "4G")
+
+
+def test_plans_from_config_never_takes_internal_bookkeeping(tmp_path: Path) -> None:
+    """The retry counters steer the sweep and must not be settable from config."""
+    from logos_worker_node.calibration import plans_from_config
+
+    cfg = tmp_path / "config.yml"
+    cfg.write_text(
+        "logos:\n"
+        "  capabilities_models:\n"
+        "    - model: m\n"
+        "engines:\n"
+        "  vllm:\n"
+        "    model_overrides:\n"
+        "      m:\n"
+        "        _max_model_len_retry_count: 99\n"
+        "        dtype: bfloat16\n"
+    )
+    plan = next(p for p in plans_from_config(cfg) if p["model"] == "m")
+    assert "_max_model_len_retry_count" not in plan
+    assert plan["dtype"] == "bfloat16"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Group 10 — Wake verification (Phase 5.5)
+#
+# The calibration sequence is: test request 1 (Phase 2.5 warmup) → sleep
+# (Phase 4) → sleeping measurement (Phase 5) → wake (Phase 5.5) → test
+# request 2 (Phase 5.5) → shutdown. A model that cannot sleep or wake
+# safely does not fail the run — it gets a successful result with
+# sleep_mode_disabled=True and null sleeping measurements, so the profile
+# (and the master's sleep_na view) records "serve awake, never sleep"
+# instead of the model vanishing from the worker's capabilities.
+# ═══════════════════════════════════════════════════════════════════════
+
+_CALIB_BASE_URL = "http://127.0.0.1:11499"
+
+
+def _capturing_post(**routing):
+    """Build a _post side effect that records URLs and routes by suffix.
+
+    ``routing`` maps a URL suffix to a (status, payload) return value;
+    everything else answers (200, {}).
+    """
+    urls: list[str] = []
+
+    def post_side_effect(url, body=None, timeout_s=30.0):
+        """Record *url*, then return its routed response or the default 200."""
+        urls.append(url)
+        for suffix, response in routing.items():
+            if url.endswith(suffix):
+                if callable(response):
+                    return response()
+                return response
+        return (200, {})
+
+    return post_side_effect, urls
+
+
+def test_calibrate_wakes_model_and_serves_second_request():
+    """Happy path: sleep, then wake, then a second test request — in that order."""
+    post, urls = _capturing_post()
+    wait_sleep_calls: list[bool] = []
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+    patches["wait_sleep"] = patch(
+        "logos_worker_node.calibration.wait_sleep_state",
+        side_effect=lambda base_url, target, timeout_s: wait_sleep_calls.append(target),
+    )
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    sleep_idx = urls.index(f"{_CALIB_BASE_URL}/sleep?level=1")
+    wake_idx = urls.index(f"{_CALIB_BASE_URL}/wake_up")
+    completions = [i for i, u in enumerate(urls) if u.endswith("/v1/completions")]
+    # Two test requests: the Phase 2.5 warmup and the post-wake verification.
+    assert len(completions) == 2
+    # Test request 1 → sleep → wake → test request 2.
+    assert completions[0] < sleep_idx < wake_idx < completions[1]
+    # /is_sleeping polled for asleep after /sleep, for awake after /wake_up.
+    assert wait_sleep_calls == [True, False]
+    # The sleep/wake cycle verified — the profile may record the model as sleepable.
+    assert result.sleep_mode_disabled is False
+    assert result.sleeping_residual_mb is not None
+
+
+def test_calibrate_records_sleep_disabled_when_wake_up_returns_error():
+    """A failed /wake_up must not fail the run — it records sleep_mode_disabled=True.
+
+    The model still gets its profile (base_residency measured) so it is
+    served awake, while the master's sleep_na view keeps it out of sleep.
+    """
+    post, urls = _capturing_post(**{"/wake_up": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    # No residual for a sleep that cannot be reversed.
+    assert result.sleeping_residual_mb is None
+    # No test request 2 after a failed wake.
+    assert sum(1 for u in urls if u.endswith("/v1/completions")) == 1
+
+
+def test_calibrate_records_sleep_disabled_when_model_stays_asleep_after_wake():
+    """A wake that never reaches the awake state records sleep_mode_disabled=True."""
+    patches = _patch_calibration_infra()
+
+    def wait_sleep_side_effect(base_url, target, timeout_s):
+        """Simulate a wake that never reaches the awake state."""
+        if target is False:
+            raise TimeoutError(f"/is_sleeping did not reach {target} within {timeout_s:.0f}s")
+
+    patches["wait_sleep"] = patch(
+        "logos_worker_node.calibration.wait_sleep_state",
+        side_effect=wait_sleep_side_effect,
+    )
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.sleeping_residual_mb is None
+
+
+def test_calibrate_records_sleep_disabled_when_post_wake_request_fails():
+    """A model that served before sleep but not after records sleep_mode_disabled=True."""
+
+    def completions_response():
+        """200 for the Phase 2.5 warmup, 500 for the post-wake request."""
+        # post_side_effect appends the URL before routing, so the count
+        # includes the current call: 1 = Phase 2.5 warmup, 2 = post-wake.
+        completions_so_far = sum(1 for u in urls if u.endswith("/v1/completions"))
+        return (200, {}) if completions_so_far == 1 else (500, {})
+
+    post, urls = _capturing_post(**{"/v1/completions": completions_response})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.sleeping_residual_mb is None
+    # /wake_up itself succeeded — it is the follow-up request that failed.
+    assert f"{_CALIB_BASE_URL}/wake_up" in urls
+
+
+def test_calibrate_embedding_model_with_unsupported_request_type():
+    """A model that never serves completions (embedding lane) is not a false positive.
+
+    The Phase 2.5 warmup already fails for such a model (request type
+    unsupported, not a serving failure), so a failed post-wake request must
+    not be read as a wake failure — the wake is verified by /is_sleeping.
+    """
+    post, urls = _capturing_post(**{"/v1/completions": (405, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is False
+    # The sleep itself worked — the residual is measured and kept.
+    assert result.sleeping_residual_mb is not None
+    # Both test requests went out and both got 405.
+    assert sum(1 for u in urls if u.endswith("/v1/completions")) == 2
+
+
+def test_calibrate_records_sleep_disabled_when_sleep_call_fails():
+    """A failed /sleep records sleep_mode_disabled=True without a wake attempt."""
+    post, urls = _capturing_post(**{"/sleep?level=1": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.sleeping_residual_mb is None
+    # Nothing was slept, so nothing was woken either.
+    assert not any(u.endswith("/wake_up") for u in urls)
+
+
+def test_calibrate_sleep_level_zero_skips_wake():
+    """Sleep disabled for the model: no sleep, no wake, one test request only."""
+    post, urls = _capturing_post()
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, sleep_level=0)
+
+    assert result.success, result.error
+    # Substring, not endswith: the sleep URL carries a query string
+    # (/sleep?level=1), which an endswith("/sleep") check would miss.
+    assert not any("/sleep" in u or "/wake_up" in u for u in urls)
+    assert sum(1 for u in urls if u.endswith("/v1/completions")) == 1
+    assert result.sleeping_residual_mb is None
+    # The probe has no verdict when it skips the sleep phases — the stored
+    # value (e.g. the operator gate's) must stand.
+    assert result.sleep_mode_disabled is None
+
+
+def test_result_to_profile_dict_maps_sleep_mode_disabled() -> None:
+    """The measured verdict maps 1:1 into the profile dict (None = no verdict)."""
+    assert result_to_profile_dict(_success_result("m"))["sleep_mode_disabled"] is None
+    assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=True))["sleep_mode_disabled"] is True
+    assert result_to_profile_dict(_success_result("m", sleep_mode_disabled=False))["sleep_mode_disabled"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Group 11 — functional probe routing by model class
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_probe_generative_hits_completions_endpoint():
+    with patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post:
+        assert probe_generative(_CALIB_BASE_URL, "org/model", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/v1/completions"
+
+
+def test_probe_pooling_hits_embeddings_endpoint():
+    with patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post:
+        assert probe_pooling(_CALIB_BASE_URL, "org/model", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/v1/embeddings"
+
+
+def test_probe_classification_hits_classify_endpoint():
+    with patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post:
+        assert probe_classification(_CALIB_BASE_URL, "org/model", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/classify"
+
+
+def test_probe_reranking_hits_rerank_endpoint_with_query_and_documents():
+    with patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post:
+        assert probe_reranking(_CALIB_BASE_URL, "org/model", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/rerank"
+    body = mock_post.call_args.kwargs["body"]
+    assert body["query"]
+    assert body["documents"]
+
+
+def test_probe_transcription_hits_audio_endpoint_with_wav_fixture():
+    with patch("logos_worker_node.calibration._post_multipart", return_value=(200, {})) as mock_post:
+        assert probe_transcription(_CALIB_BASE_URL, "openai/whisper-large-v3", 10.0) is True
+    assert mock_post.call_args[0][0] == f"{_CALIB_BASE_URL}/v1/audio/transcriptions"
+    assert mock_post.call_args.kwargs["file_field"] == "file"
+    assert len(mock_post.call_args.kwargs["file_bytes"]) > 0
+
+
+def test_probe_transcription_false_when_fixture_missing(monkeypatch):
+    monkeypatch.setattr("logos_worker_node.calibration._PROBE_AUDIO_PATH", Path("/nonexistent/probe.wav"))
+    assert probe_transcription(_CALIB_BASE_URL, "openai/whisper-large-v3", 10.0) is False
+
+
+def test_warmup_inference_dispatches_by_model_kind():
+    with (
+        patch("logos_worker_node.calibration._post", return_value=(200, {})) as mock_post,
+        patch("logos_worker_node.calibration._post_multipart", return_value=(200, {})) as mock_multipart,
+    ):
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="generative")
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="pooling")
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="classification")
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="reranking")
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="transcription")
+        # An unrecognized kind must never silently drop the warmup — falls
+        # back to the generative probe.
+        warmup_inference(_CALIB_BASE_URL, "m", model_kind="something-new")
+
+    post_urls = [c.args[0] for c in mock_post.call_args_list]
+    # generative, pooling, classification, reranking, and the unknown-kind
+    # fallback (generative again) all go through _post; only transcription
+    # uses _post_multipart.
+    assert post_urls == [
+        f"{_CALIB_BASE_URL}/v1/completions",
+        f"{_CALIB_BASE_URL}/v1/embeddings",
+        f"{_CALIB_BASE_URL}/classify",
+        f"{_CALIB_BASE_URL}/rerank",
+        f"{_CALIB_BASE_URL}/v1/completions",
+    ]
+    assert mock_multipart.call_count == 1
+
+
+def test_calibrate_pooling_model_fails_fast_when_embeddings_probe_fails():
+    """A pooling model that can't answer one /v1/embeddings request must
+    fail calibration outright, never reach [CALIBRATED]."""
+    post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="pooling"), sleep_level=0)
+
+    assert result.success is False
+    assert "pooling" in result.error
+    assert any(u.endswith("/v1/embeddings") for u in urls)
+    # Never reached Phase 3 — no /v1/completions was ever sent for it.
+    assert not any(u.endswith("/v1/completions") for u in urls)
+    assert result.observed_reason == "functional-probe-failed"
+
+    # vLLM's own log never raises this — appended so the Model Error
+    # Report has a real line to show and highlight instead of nothing.
+    log_text = Path("/tmp/test-calibration-logs/org__test-model.log").read_text()
+    assert "did not answer one request on its own serving endpoint" in log_text
+
+
+def test_calibrate_pooling_model_succeeds_via_the_right_endpoint():
+    """Proves routing, not just gating: /v1/completions is broken for this
+    model (real embedding-lane behavior) but /v1/embeddings works fine."""
+    post, urls = _capturing_post(**{"/v1/completions": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="pooling"), sleep_level=0)
+
+    assert result.success, result.error
+    assert any(u.endswith("/v1/embeddings") for u in urls)
+
+
+def test_calibrate_classification_model_fails_fast_when_classify_probe_fails():
+    """A sequence-classification model that can't answer one /classify
+    request must fail calibration outright, never reach [CALIBRATED]."""
+    post, urls = _capturing_post(**{"/classify": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="classification"), sleep_level=0)
+
+    assert result.success is False
+    assert "classification" in result.error
+    assert any(u.endswith("/classify") for u in urls)
+    # Never reached Phase 3 — no /v1/completions was ever sent for it.
+    assert not any(u.endswith("/v1/completions") for u in urls)
+
+
+def test_calibrate_classification_model_succeeds_via_the_right_endpoint():
+    """Proves routing, not just gating: /v1/embeddings is broken for this
+    model (it's a classifier, not an embedder) but /classify works fine."""
+    post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="classification"), sleep_level=0)
+
+    assert result.success, result.error
+    assert any(u.endswith("/classify") for u in urls)
+
+
+def test_calibrate_reranking_model_fails_fast_when_rerank_probe_fails():
+    """A reranker that can't answer one /rerank request must fail
+    calibration outright, never reach [CALIBRATED]."""
+    post, urls = _capturing_post(**{"/rerank": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="reranking"), sleep_level=0)
+
+    assert result.success is False
+    assert "reranking" in result.error
+    assert any(u.endswith("/rerank") for u in urls)
+    assert not any(u.endswith("/v1/completions") for u in urls)
+
+
+def test_calibrate_reranking_model_succeeds_via_the_right_endpoint():
+    """Proves routing, not just gating: /v1/embeddings is broken for this
+    model (it's a reranker, not an embedder) but /rerank works fine."""
+    post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="reranking"), sleep_level=0)
+
+    assert result.success, result.error
+    assert any(u.endswith("/rerank") for u in urls)
+
+
+def test_endpoint_registered_true_when_path_in_openapi_paths():
+    from logos_worker_node.calibration import _endpoint_registered
+
+    openapi = {"paths": {"/rerank": {}, "/v1/completions": {}}}
+    with patch("logos_worker_node.calibration._get", return_value=(200, openapi)):
+        assert _endpoint_registered(_CALIB_BASE_URL, "/rerank", 5.0) is True
+
+
+def test_endpoint_registered_false_when_path_missing_from_openapi_paths():
+    """The Qwen3-Reranker case: vLLM is up and answers /openapi.json fine,
+    it just never registered /rerank for this checkpoint (Supported tasks:
+    ['generate'])."""
+    from logos_worker_node.calibration import _endpoint_registered
+
+    openapi = {"paths": {"/v1/completions": {}, "/v1/chat/completions": {}}}
+    with patch("logos_worker_node.calibration._get", return_value=(200, openapi)):
+        assert _endpoint_registered(_CALIB_BASE_URL, "/rerank", 5.0) is False
+
+
+def test_endpoint_registered_none_when_check_is_inconclusive():
+    """A non-200/unparseable /openapi.json must read as "unknown", never
+    as "confirmed missing" — an inconclusive check must not silently
+    downgrade a genuinely broken lane's fatal probe."""
+    from logos_worker_node.calibration import _endpoint_registered
+
+    with patch("logos_worker_node.calibration._get", return_value=(500, {})):
+        assert _endpoint_registered(_CALIB_BASE_URL, "/rerank", 5.0) is None
+    with patch("logos_worker_node.calibration._get", return_value=(200, {"paths": "not-a-dict"})):
+        assert _endpoint_registered(_CALIB_BASE_URL, "/rerank", 5.0) is None
+
+
+def test_resolve_probed_model_kind_falls_back_to_generative_when_endpoint_missing():
+    from logos_worker_node.calibration import _resolve_probed_model_kind
+
+    with patch("logos_worker_node.calibration._endpoint_registered", return_value=False):
+        assert _resolve_probed_model_kind(_CALIB_BASE_URL, "org/model", "reranking") == "generative"
+
+
+def test_resolve_probed_model_kind_keeps_kind_when_endpoint_exists():
+    from logos_worker_node.calibration import _resolve_probed_model_kind
+
+    with patch("logos_worker_node.calibration._endpoint_registered", return_value=True):
+        assert _resolve_probed_model_kind(_CALIB_BASE_URL, "org/model", "reranking") == "reranking"
+
+
+def test_resolve_probed_model_kind_keeps_kind_when_check_inconclusive():
+    """An inconclusive registration check must never mask a real serving
+    bug — same fatal path as before this existed."""
+    from logos_worker_node.calibration import _resolve_probed_model_kind
+
+    with patch("logos_worker_node.calibration._endpoint_registered", return_value=None):
+        assert _resolve_probed_model_kind(_CALIB_BASE_URL, "org/model", "reranking") == "reranking"
+
+
+def test_resolve_probed_model_kind_never_checks_non_fatal_kinds():
+    """ "generative" has no _ENDPOINT_BY_MODEL_KIND entry and must never
+    trigger an /openapi.json round trip — it was already lenient."""
+    from logos_worker_node.calibration import _resolve_probed_model_kind
+
+    with patch("logos_worker_node.calibration._get") as mock_get:
+        assert _resolve_probed_model_kind(_CALIB_BASE_URL, "org/model", "generative") == "generative"
+    mock_get.assert_not_called()
+
+
+def test_calibrate_reranking_model_falls_back_to_generative_when_rerank_route_missing():
+    """The Qwen3-Reranker case end-to-end: HF classifies it "reranking",
+    but vLLM only ever registered the generative routes. Must not fail
+    calibration outright — falls back to the generative probe, which this
+    model answers fine."""
+    openapi = {"paths": {"/v1/completions": {}}}
+    post, urls = _capturing_post(**{"/rerank": (404, {}), "/v1/completions": (200, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+    patches["get"] = patch("logos_worker_node.calibration._get", return_value=(200, openapi))
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="reranking"), sleep_level=0)
+
+    assert result.success, result.error
+    assert any(u.endswith("/v1/completions") for u in urls)
+    # /rerank was never even attempted once the registration check ruled it out.
+    assert not any(u.endswith("/rerank") for u in urls)
+
+
+def test_calibrate_transcription_model_fails_fast_when_audio_probe_fails():
+    """The openai/whisper-large-v3 production incident — a lane-killing
+    flag combination must surface here, not first in prod."""
+    patches = _patch_calibration_infra()
+    patches["multipart"] = patch("logos_worker_node.calibration._post_multipart", return_value=(500, {}))
+
+    result, _ = _run_calibrate(
+        patches, plan=_make_plan(model="openai/whisper-large-v3", model_kind="transcription"), sleep_level=0
+    )
+
+    assert result.success is False
+    assert "transcription" in result.error
+
+
+def test_calibrate_generative_model_probe_failure_stays_non_fatal():
+    """Explicit model_kind="generative": a failed warmup only warns, the
+    run still completes — this class deliberately keeps the lenient
+    behavior (out-of-scope boundary for the fatal-probe gating)."""
+    post, _ = _capturing_post(**{"/v1/completions": (405, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches, plan=_make_plan(model_kind="generative"), sleep_level=0)
+
+    assert result.success, result.error
+
+
+def test_calibrate_operator_model_kind_override_wins_over_detected_kind():
+    """An operator's engines.vllm.model_overrides.<model>.model_kind (plan
+    key "model_kind") must win over the HF-precheck auto-classification
+    (plan key "_detected_model_kind")."""
+    post, urls = _capturing_post(**{"/v1/embeddings": (404, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(
+        patches,
+        plan=_make_plan(model_kind="pooling", _detected_model_kind="generative"),
+        sleep_level=0,
+    )
+
+    assert result.success is False
+    assert any(u.endswith("/v1/embeddings") for u in urls)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Cold-load & wake-from-sleep timing
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def test_cold_load_time_measured_from_spawn_to_first_served_request():
+    """The warmup IS the first request served, so spawn → warmup completion is recorded."""
+    patches = _patch_calibration_infra()  # _post answers 200 → warmup request "serves"
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.cold_load_time_s is not None
+    assert result.cold_load_time_s >= 0.0
+    # Everything external is mocked — the interval is only the (tiny)
+    # in-process walk through calibrate_model, so it must stay small.
+    assert result.cold_load_time_s < 10.0
+
+
+def test_cold_load_anchor_excludes_failed_retry_attempts():
+    """The anchor is the successful attempt's spawn, not the moment before
+    the first attempt: _try_start's internal retries (max_model_len /
+    max_num_seqs) typically fail only AFTER loading the weights, and those
+    near-full loads must not be billed to cold_load_time_s."""
+    patches = _patch_calibration_infra()
+
+    def wait_ready_side_effect(*args, **kwargs):
+        if not wait_ready_side_effect.attempts:
+            wait_ready_side_effect.attempts.append(time.perf_counter())
+            # The rejected attempt loads the weights and is only refused at
+            # the very end — simulate that cost before raising.
+            deadline = time.perf_counter() + 0.2
+            while time.perf_counter() < deadline:
+                pass
+            raise RuntimeError("vLLM exited (code=1)")
+        return None
+
+    wait_ready_side_effect.attempts = []
+    patches["ready"] = patch("logos_worker_node.calibration.wait_ready", side_effect=wait_ready_side_effect)
+    # The one failure's log parses to a --max-model-len suggestion, which
+    # drives the retry recursion; nothing else in this run parses to one.
+    suggested = {"done": False}
+
+    def suggest_side_effect(log_tail):
+        if suggested["done"]:
+            return None
+        suggested["done"] = True
+        return 65536
+
+    patches["suggest"] = patch(
+        "logos_worker_node.calibration._extract_vllm_max_model_len_suggestion",
+        side_effect=suggest_side_effect,
+    )
+
+    result, mocks = _run_calibrate(patches)
+
+    assert result.success, result.error
+    # One rejected attempt, one successful retry.
+    assert mocks["spawn"].call_count == 2
+    assert result.cold_load_time_s is not None
+    # The rejected attempt's ~0.2s weight load is NOT in the measured
+    # interval — only the successful attempt (startup → warmup) is.
+    assert result.cold_load_time_s < 0.1
+
+
+def test_cold_load_time_none_when_first_request_does_not_serve():
+    """A value that never actually served a request must not pose as one."""
+    post, _ = _capturing_post(**{"/v1/completions": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.cold_load_time_s is None
+
+
+def test_wake_from_sleep_time_measured_from_wake_to_first_served_request():
+    """/wake_up trigger → post-wake test request served is recorded as the wake time."""
+    post, urls = _capturing_post()
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert any(u.endswith("/wake_up") for u in urls)
+    assert result.wake_from_sleep_time_s is not None
+    assert result.wake_from_sleep_time_s >= 0.0
+    assert result.wake_from_sleep_time_s < 10.0
+
+
+def test_wake_from_sleep_time_none_when_sleep_phases_skipped():
+    """No sleep in the run → no wake to measure."""
+    result, _ = _run_calibrate(_patch_calibration_infra(), sleep_level=0)
+
+    assert result.success, result.error
+    assert result.wake_from_sleep_time_s is None
+
+
+def test_wake_from_sleep_time_none_when_wake_fails():
+    """A wake that cannot be verified safe carries no timing (same rule as the residual)."""
+    post, _ = _capturing_post(**{"/wake_up": (500, {})})
+    patches = _patch_calibration_infra()
+    patches["post"] = patch("logos_worker_node.calibration._post", side_effect=post)
+
+    result, _ = _run_calibrate(patches)
+
+    assert result.success, result.error
+    assert result.sleep_mode_disabled is True
+    assert result.wake_from_sleep_time_s is None
+
+
+def test_result_to_profile_dict_maps_timing_fields():
+    """Measured timings map 1:1 into the profile dict; unmeasured ones stay None."""
+    assert result_to_profile_dict(_success_result("m"))["cold_load_time_s"] is None
+    assert result_to_profile_dict(_success_result("m"))["wake_from_sleep_time_s"] is None
+
+    d = result_to_profile_dict(_success_result("m", cold_load_time_s=123.45, wake_from_sleep_time_s=12.34))
+    assert d["cold_load_time_s"] == 123.5  # rounded to 0.1s like the MB fields
+    assert d["wake_from_sleep_time_s"] == 12.3
+
+
+def test_merge_profile_keeps_prior_timing_when_new_run_unmeasured():
+    """A None timing in a fresh result must not erase an earlier measurement."""
+    prior = {"base_residency_mb": 5000.0, "cold_load_time_s": 90.0, "wake_from_sleep_time_s": 12.0}
+    merged = merge_profile(prior, result_to_profile_dict(_success_result("m")))
+    assert merged["cold_load_time_s"] == 90.0
+    assert merged["wake_from_sleep_time_s"] == 12.0
+
+    # A fresh measurement replaces the stored value.
+    merged2 = merge_profile(merged, result_to_profile_dict(_success_result("m", cold_load_time_s=42.0)))
+    assert merged2["cold_load_time_s"] == 42.0
+    assert merged2["wake_from_sleep_time_s"] == 12.0
+
+
+def test_timing_fields_survive_profile_store_roundtrip(tmp_path):
+    result = _success_result("org/m", cold_load_time_s=123.4, wake_from_sleep_time_s=12.3)
+    profiles_path = tmp_path / "model_profiles.yml"
+    save_profiles(profiles_path, {"org/m": merge_profile(None, result_to_profile_dict(result))})
+
+    loaded = load_existing_profiles(profiles_path)
+    assert loaded["org/m"]["cold_load_time_s"] == 123.4
+    assert loaded["org/m"]["wake_from_sleep_time_s"] == 12.3
+
+
+# ── RAM-cache entry reservation during calibration ──────────────────────────
+
+
+class _FakeCalibrationCache:
+    """Just enough of ModelRamCache for the calibration reservation tests.
+
+    ``select`` is the HF_HOME ``ensure_cached_sync`` returns: "tmpfs" (the
+    cache root's parent — the probe loads the model from the RAM cache) or
+    "source" (the entry is below the raised floor and the probe loads from
+    disk instead). Reservations are refcounted like ModelRamCache's.
+    """
+
+    def __init__(self, root: Path, select: str) -> None:
+        self.enabled = True
+        self._cache_hub = root / "hub"
+        self._source = root / "source"
+        self._select = select
+        self._refs: dict[str, int] = {}
+
+    def ensure_cached_sync(self, model: str) -> str:
+        # Mirror ModelRamCache: the tmpfs parent when the entry is (still)
+        # admitted, the source path when the floor rejects it.
+        if self._select == "tmpfs":
+            return str(self._cache_hub.parent)
+        return str(self._source)
+
+    def reserve_cache_use(self, model: str) -> None:
+        self._refs[model] = self._refs.get(model, 0) + 1
+
+    def release_cache_use(self, model: str) -> None:
+        refs = self._refs.get(model, 0)
+        if refs <= 1:
+            self._refs.pop(model, None)
+        else:
+            self._refs[model] = refs - 1
+
+    def cache_use_reservations(self) -> set[str]:
+        return set(self._refs)
+
+
+def _patch_probe_with_reservation_capture(cache: _FakeCalibrationCache):
+    """Patches for a failing single-probe run, with a spawn spy that records
+    the outstanding cache-use reservations at the moment vLLM is spawned —
+    i.e. while the probe is about to read the model from the HF_HOME that
+    ensure_cached_sync just chose."""
+    patches = _patch_calibration_infra(wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")])
+    seen_at_spawn: list[set[str]] = []
+
+    def _spying_spawn(*_args, **_kwargs):
+        seen_at_spawn.append(cache.cache_use_reservations())
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.poll.return_value = None
+        return proc, ["vllm", "serve"]
+
+    patches["spawn"] = patch("logos_worker_node.calibration.spawn_vllm", side_effect=_spying_spawn)
+    return patches, seen_at_spawn
+
+
+def test_calibration_pins_the_tmpfs_entry_only_while_the_probe_reads_it(tmp_path) -> None:
+    """Regression [high]: the probe that reads the model from the tmpfs entry
+    must run while that entry is reserved against the re-plan: the reservation
+    is taken when ensure_cached_sync selects the tmpfs HF_HOME (only then does
+    the probe read the entry) and released when the run ends, on every exit."""
+    cache = _FakeCalibrationCache(tmp_path, "tmpfs")
+    patches, seen_at_spawn = _patch_probe_with_reservation_capture(cache)
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_model(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # While the probe spawns vLLM — i.e. while it reads the tmpfs entry —
+    # the entry is reserved ...
+    assert seen_at_spawn == [{"org/test-model"}]
+    # ... and the run releases it on the way out.
+    assert cache.cache_use_reservations() == set()
+
+
+def test_calibration_source_fallback_takes_no_cache_use_reservation(tmp_path) -> None:
+    """Regression [high]: when the entry is now below the raised floor,
+    ensure_cached_sync deliberately returns the source path — the probe reads
+    no tmpfs bytes at all. The run must not reserve the unused entry: while
+    host RAM is below its floor, the reference would protect the copy for the
+    whole calibration and block the re-plan from reclaiming exactly those
+    bytes."""
+    cache = _FakeCalibrationCache(tmp_path, "source")
+    patches, seen_at_spawn = _patch_probe_with_reservation_capture(cache)
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_with_tp_escalation(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            available_gpus=1,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # The probe spawned from the source path: no tmpfs bytes were read, so
+    # nothing was reserved ...
+    assert seen_at_spawn == [set()]
+    # ... and the run left the reservation table empty.
+    assert cache.cache_use_reservations() == set()
+
+
+class _SelectionSpyCache(_FakeCalibrationCache):
+    """Records the outstanding reservations the moment ensure_cached_sync
+    returns the selected path — the exact instant a re-plan tick on the
+    event loop can observe the (already cached) entry."""
+
+    def __init__(self, root: Path, select: str) -> None:
+        super().__init__(root, select)
+        self.reserved_at_selection: list[set[str]] = []
+
+    def ensure_cached_sync(self, model: str) -> str:
+        path = super().ensure_cached_sync(model)
+        self.reserved_at_selection.append(self.cache_use_reservations())
+        return path
+
+
+def test_calibration_reserves_the_entry_before_the_selection_returns(tmp_path) -> None:
+    """Regression [high]: reserving only AFTER ensure_cached_sync returned
+    the tmpfs path left a gap in which the periodic re-plan (event loop,
+    while the probe runs in an executor) saw no cache-use reservation and
+    could reclaim the just-selected entry — spawn_vllm would then read a
+    deleted HF_HOME. The reservation must be live the moment the selection
+    returns, i.e. taken before ensure_cached_sync is called; a source
+    fallback still releases it immediately (see the sibling test)."""
+    cache = _SelectionSpyCache(tmp_path, "tmpfs")
+    patches = _patch_calibration_infra(wait_ready_side_effect=[RuntimeError("vLLM exited (code=1)")])
+    for p in patches.values():
+        p.__enter__()
+    try:
+        result = calibrate_model(
+            _make_plan(),
+            vllm_binary="vllm",
+            port=11499,
+            log_dir=tmp_path,
+            sleep_level=0,
+            ready_timeout_s=60.0,
+            model_cache=cache,
+        )
+    finally:
+        for p in patches.values():
+            p.__exit__(None, None, None)
+
+    assert result.success is False
+    # By the time the selection returned the tmpfs path, the entry was
+    # already reserved — no tick between selection and spawn can reclaim it.
+    assert cache.reserved_at_selection == [{"org/test-model"}]
+    # And the run still releases it on the way out.
+    assert cache.cache_use_reservations() == set()
