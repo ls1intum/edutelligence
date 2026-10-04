@@ -365,6 +365,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         del state
         return self.chat_mode is not IrisChatMode.EXERCISE
 
+    def should_stream_agent_delta(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> bool:
+        # After a switch into a programming exercise the answer has to pass the
+        # guide first, exactly like in an exercise chat, so the raw draft must not
+        # reach the client. The guide-approved answer arrives with the final result.
+        return _effective_chat_mode(state, self.chat_mode) is not IrisChatMode.EXERCISE
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -1000,9 +1008,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 return state.result
 
             guide_stream_handler = None
-            # Only an exercise chat holds back the agent's answer for the guide. After
-            # a switch into an exercise the answer was already streamed, so the guide
-            # result reaches the client with the final result instead.
+            # Only an exercise chat streams the guide output. After a switch into an
+            # exercise the run already streamed (and then held back) the agent's
+            # answer, so the guide result reaches the client with the final result.
             if self.chat_mode is IrisChatMode.EXERCISE:
                 sender = self._create_partial_result_sender(state)
             if sender is not None:

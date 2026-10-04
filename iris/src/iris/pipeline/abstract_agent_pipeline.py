@@ -271,6 +271,18 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         _ = state
         return True
 
+    def should_stream_agent_delta(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> bool:
+        """Return True while text deltas of a streamed agent response may reach the client.
+
+        Checked for every delta, so a pipeline can hold back the rest of the answer
+        when the run changes course midway. Resets always pass, so the client can
+        still clear a draft it already shows.
+        """
+        _ = state
+        return True
+
     def get_recent_history_from_dto(
         self,
         state: AgentPipelineExecutionState[DTO, VARIANT],
@@ -503,7 +515,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return None
 
         sender.start()
-        state.llm.completion_args.stream_handler = sender.on_delta
+
+        def stream_handler(delta: Optional[str]) -> None:
+            if delta is None or self.should_stream_agent_delta(state):
+                sender.on_delta(delta)
+
+        state.llm.completion_args.stream_handler = stream_handler
         return sender
 
     def _collect_recent_messages(
