@@ -3,6 +3,10 @@ import logging
 from typing import Dict
 from dataclasses import dataclass
 
+from modules.programming.module_programming_llm.mock.utils.mock_module_config import (
+    mock_module_config as mock_module_config,
+)
+
 logger = logging.getLogger(__name__)
 
 @dataclass

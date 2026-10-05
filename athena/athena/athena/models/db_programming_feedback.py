@@ -1,6 +1,6 @@
 from typing import cast, Optional
 from athena.schemas.programming_submission import ProgrammingSubmission
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import CheckConstraint, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import relationship
 
 from athena.database import Base, get_db
@@ -12,6 +12,11 @@ from .big_integer_with_autoincrement import BigIntegerWithAutoincrement
 class DBProgrammingFeedback(DBFeedback, Base):
     __tablename__ = "programming_feedbacks"
 
+    severity: Optional[str] = Column(  # type: ignore
+        String(6),
+        CheckConstraint("severity IN ('low', 'medium', 'high')", name="ck_programming_feedback_severity"),
+        nullable=True,
+    )
     file_path: Optional[str] = Column(String)  # type: ignore
     line_start: Optional[int] = Column(Integer)  # type: ignore
     line_end: Optional[int] = Column(Integer)  # type: ignore
