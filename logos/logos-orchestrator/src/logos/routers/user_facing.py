@@ -39,7 +39,9 @@ _SERVER_START_TIME_ISO = datetime.fromtimestamp(_SERVER_START_TIME, tz=timezone.
 _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 
 
-def _anthropic_entries(models: list[dict], stats: dict) -> list[tuple[str, str, Optional[str]]]:
+def _anthropic_entries(
+    models: list[dict], stats: dict, other_models: Optional[list[dict]] = None
+) -> list[tuple[str, str, Optional[str]]]:
     """(id, model_name, description) rows for the Anthropic listing.
 
     One row per accessible model, aliases left out. ``model_name`` is the
@@ -49,13 +51,17 @@ def _anthropic_entries(models: list[dict], stats: dict) -> list[tuple[str, str, 
     in it, so each id is listed as ``claude-<name>`` (see ``claude_visible_id``)
     and only in that form. The request path strips the prefix again, and the
     plain name and the aliases keep resolving there. A prefixed id that would
-    resolve to a different model is never advertised.
+    resolve to a different model is never advertised. ``other_models`` widens that
+    check to models the key cannot see: the proxy resolver searches every model
+    for administrator keys, so a hidden ``claude-foo`` would still capture it.
     """
+    visible = {model["name"] for model in models}
+    candidates = models + [model for model in other_models or [] if model["name"] not in visible]
     entries: list[tuple[str, str, Optional[str]]] = []
     for model in models:
         name = model["name"]
         entry_id = claude_visible_id(name) or name
-        if entry_id != name and _resolve_requested_model_name(entry_id, models) != name:
+        if entry_id != name and _resolve_requested_model_name(entry_id, candidates) != name:
             # Another model or alias already owns claude-<name> (``foo`` next to
             # ``claude-foo``): advertising it would select that one instead, so
             # this model is listed under its own name.
@@ -95,7 +101,11 @@ def _parse_models_limit(raw: Optional[str]) -> Optional[int]:
 
 
 def _anthropic_models_response(
-    models: list[dict], stats: dict, limit: Optional[int], after_id: Optional[str]
+    models: list[dict],
+    stats: dict,
+    limit: Optional[int],
+    after_id: Optional[str],
+    other_models: Optional[list[dict]] = None,
 ) -> JSONResponse:
     """The Anthropic ``GET /v1/models`` envelope over the accessible models.
 
@@ -104,7 +114,7 @@ def _anthropic_models_response(
     paginate would otherwise silently miss models. ``after_id`` is a cursor into
     the (stable, id-ordered) listing.
     """
-    entries = _anthropic_entries(models, stats)
+    entries = _anthropic_entries(models, stats, other_models)
     if after_id:
         for index, (entry_id, _, _) in enumerate(entries):
             if entry_id == after_id:
@@ -158,17 +168,20 @@ async def list_models(request: Request):
     """
     auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
+    anthropic_shape = _ANTHROPIC_VERSION_HEADER in request.headers
     with DBManager() as db:
         models = db.get_models_for_api_key(auth.api_key_id)
+        other_models = db.get_all_model_names_with_aliases() if anthropic_shape else None
 
     stats = _served_context_window_stats()
 
-    if _ANTHROPIC_VERSION_HEADER in request.headers:
+    if anthropic_shape:
         return _anthropic_models_response(
             models,
             stats,
             _parse_models_limit(request.query_params.get("limit")),
             request.query_params.get("after_id"),
+            other_models,
         )
 
     # An alias that (case-insensitively) belongs to more than one accessible

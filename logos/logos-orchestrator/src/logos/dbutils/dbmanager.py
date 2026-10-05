@@ -3458,6 +3458,24 @@ class DBManager:
         rows = self.session.execute(sql, {}).mappings().all()
         return [dict(row) for row in rows]
 
+    def get_all_model_names_with_aliases(self) -> list[Dict[str, Any]]:
+        """Name and aliases of every model, regardless of any key's permissions.
+
+        Only for deciding whether a generated id (``claude-<name>``) could be
+        resolved to another model: ``resolve_proxy_model`` searches every model
+        for administrator keys, so the check has to see them all. Nothing from
+        this list is returned to a caller.
+        """
+        sql = text("""
+            SELECT m.name,
+                   (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                    FROM model_aliases a
+                    WHERE a.model_id = m.id) AS aliases
+            FROM models m
+        """)
+        rows = self.session.execute(sql).mappings().all()
+        return [{"name": row["name"], "aliases": self._split_alias_list(row["aliases"])} for row in rows]
+
     def get_models_for_api_key(self, api_key_id: int) -> list[Dict[str, Any]]:
         """
         Get all models that an api key has access to.

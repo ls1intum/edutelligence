@@ -28,8 +28,10 @@ def _make_request(headers: dict | None = None):
 class DummyDB:
     """Minimal DBManager stub used via monkeypatch."""
 
-    def __init__(self, models=None, historic=None, cloud=None, catalog=None):
+    def __init__(self, models=None, historic=None, cloud=None, catalog=None, hidden=None):
         self._models = models if models is not None else []
+        # Models this key cannot see (but an administrator key's resolver can).
+        self._hidden = hidden if hidden is not None else []
         # Model name -> widest context ever reported (model_profiles high-water mark).
         self._historic = historic if historic is not None else {}
         # Model name -> the windows cloud upstreams report (cloud_model_context).
@@ -45,6 +47,9 @@ class DummyDB:
 
     def get_models_for_api_key(self, _api_key_id: int):
         return self._models
+
+    def get_all_model_names_with_aliases(self):
+        return self._models + self._hidden
 
     def get_model_for_api_key(self, _api_key_id: int, model_name: str):
         return next((m for m in self._models if m["name"] == model_name), None)
@@ -651,15 +656,20 @@ async def _list_anthropic_body(
     cloud=None,
     catalog=None,
     query_params=None,
+    hidden=None,
 ):
     """Call list_models the way an Anthropic client does and return the body."""
     import json
 
     monkeypatch.setattr(
-        main, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog)
+        main,
+        "DBManager",
+        lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog, hidden=hidden),
     )
     monkeypatch.setattr(
-        user_facing_mod, "DBManager", lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog)
+        user_facing_mod,
+        "DBManager",
+        lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog, hidden=hidden),
     )
     monkeypatch.setattr(main, "_logosnode_registry", registry)
     with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
@@ -731,6 +741,16 @@ async def test_list_models_anthropic_never_advertises_a_colliding_id(monkeypatch
     ]
     body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
     assert [entry["id"] for entry in body["data"]] == ["foo", "claude-foo", "bar", "claude-baz"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_checks_collisions_against_hidden_models(monkeypatch):
+    """The proxy resolver searches every model for administrator keys, so a
+    claude-foo this key cannot see would still capture foo's prefixed id."""
+    models = [{"id": 1, "name": "foo", "description": None}]
+    hidden = [{"name": "claude-foo", "aliases": []}]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), hidden=hidden)
+    assert [entry["id"] for entry in body["data"]] == ["foo"]
 
 
 @pytest.mark.asyncio
