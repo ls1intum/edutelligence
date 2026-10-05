@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -47,6 +48,14 @@ async def lifespan(_: FastAPI):
     )
 
     threading.Thread(target=warm_up_intent_classifier, daemon=True).start()
+
+    # Course Memory orders its writes with an in-process lock, which only holds when one
+    # process writes the collection (see COURSE_MEMORY_ARTEMIS_INTEGRATION.md).
+    if int(os.environ.get("WEB_CONCURRENCY", "1") or "1") > 1:
+        logger.error(
+            "WEB_CONCURRENCY is above 1: Course Memory requires exactly one Iris process "
+            "writing the CourseMemory collection; concurrent processes can misorder writes"
+        )
 
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()

@@ -20,20 +20,24 @@ All commands assume you are in `edutelligence/iris`.
 poetry run pytest tests/test_course_memory_*.py -q
 ```
 
-105 tests cover:
+The tests cover:
 
-- schema index flags (`question` searchable, all metadata not), the `version` /
-  `deleted` ordering properties, and the in-place migration of an older collection,
-- retrieval threshold filtering, course scoping, tombstone filtering, graceful
-  degradation, backlink ids,
-- LLM Q/A extraction JSON parsing (incl. the verbatim-answer path),
-- upsert insert‑vs‑replace keyed on `postId` + question‑only embedding, **version
-  ordering** (a stale ingestion or retraction is dropped, a retraction leaves a versioned
-  tombstone, a newer write replaces a tombstone), and the channel/course purge races,
-- wire-contract validation: strict `isPublicChannel`, required `settings`, required
-  `version` (≥ 1; also on thread-scoped deletions), exactly one answer anchor, non-blank
-  `existingAnswer` for `IRIS_AUTO` and `IRIS_CORRECTED`,
-- non‑public‑channel and feature‑disabled skips.
+- schema index flags, the `base_url` instance property (exact matching) and `written_at`,
+  the migration that removes objects without an instance, and the retry of a failed
+  initialisation through `VectorDatabase()`,
+- retrieval: threshold, course and instance scoping, the required channel allowlist (with
+  an exact post-filter), tombstone filtering, graceful degradation, backlinks,
+- extraction: JSON parsing, the JSON thread (messages cannot forge flags), verbatim
+  answers for every tutor-verified source, only the anchor for tutor-verified entries,
+  redacted messages and a redacted root,
+- upsert keyed on the instance and the thread, **version ordering** (a stale ingestion or
+  retraction is dropped, a retraction leaves a versioned tombstone, a newer write
+  replaces a tombstone),
+- the nightly sync (outdated, ineligible and deleted threads, deleted courses, the
+  snapshot margin, other instances untouched),
+- the organizational evidence check (strict verdicts, fail-closed cases, review-everything
+  mode),
+- wire-contract validation and the non‑public‑channel and feature‑disabled skips.
 
 Run the full suite to confirm no regressions:
 
@@ -49,11 +53,11 @@ This proves the real storage/retrieval path against a running Weaviate using a
 **stubbed embedding** (so no LLM keys are needed), then deletes the `CourseMemory`
 collection so your Weaviate is left clean.
 
-It verifies: ingest + retrieve with backlink ids, **course scoping** (one course's
-entries never leak into another), **correction overwrite** (re‑ingesting the same
-`postId` updates the answer in place — no duplicate, even though the corrected answer
-carries a new `messageId`), and **graceful degradation** (embedding error → empty
-result, no crash).
+It verifies: ingest + retrieve with backlink ids, **course and instance scoping** (one
+course's or one Artemis instance's entries never leak into another), the **channel
+allowlist** (an entry outside the listed channels is never returned), **correction
+overwrite** (re‑ingesting the same `postId` updates the answer in place), and **graceful
+degradation** (embedding error → empty result, no crash).
 
 ### Prerequisites
 
@@ -86,6 +90,8 @@ from iris.vector_database.database import VectorDatabase
 
 COURSE = 90001
 OTHER_COURSE = 90002
+BASE = "https://artemis.example"
+OTHER_BASE = "https://other-artemis.example"
 
 
 def fake_vec(text: str):
@@ -108,17 +114,22 @@ def make_ingestion(dto):
 
 
 class DTO:
-    def __init__(self, post_id, message_id, course_id, source, version=1, verified_by=None):
+    def __init__(self, post_id, message_id, course_id, source, version=1, base_url=BASE):
         # post_id is the upsert key (the thread root); message_id is provenance;
         # version orders the write against the thread's other operations.
         self.post_id = post_id
         self.message_id = message_id
         self.course_id = course_id
-        self.conversation_id = f"channel-{course_id}"
+        self.conversation_id = "11"
         self.source = source
         self.version = version
         self.verified_at = "2026-06-21T10:00:00Z"
-        self.verified_by = verified_by
+        self.base_url = base_url
+
+
+def ask(retr, query, course_id=COURSE, base_url=BASE, channels=(11,)):
+    return retr(chat_history=[], student_query=query, course_id=course_id,
+                base_url=base_url, allowed_conversation_ids=list(channels), rewrite=False)
 
 
 db = VectorDatabase()
@@ -147,26 +158,33 @@ try:
     retr.collection = db.course_memory
 
     print("\n3) Retrieve for course", COURSE, "(rewrite off, no LLM):")
-    results = retr(chat_history=[], student_query="how to submit exercise",
-                   course_id=COURSE, rewrite=False)
+    results = ask(retr, "how to submit exercise")
     for r in results:
         print(f"   - [thread={r['post_id']} src msg={r['message_id']}] "
               f"Q={r['question']!r} A={r['answer'][:40]!r}...")
 
     print("\n4) Course scoping: querying OTHER_COURSE returns only its own entry:")
-    other = retr(chat_history=[], student_query="how to submit", course_id=OTHER_COURSE, rewrite=False)
+    other = ask(retr, "how to submit", course_id=OTHER_COURSE)
     print("   post_ids:", [r["post_id"] for r in other],
           "->", "OK" if all(r["post_id"] == "post-9" for r in other) else "LEAK!")
+
+    print("\n4b) Instance and channel scoping")
+    make_ingestion(DTO("post-1", "answer-x", COURSE, CourseMemorySource.THREAD_RESOLVED, base_url=OTHER_BASE)).upsert(
+        "How do I submit the programming exercise?", "Other instance answer - must NOT appear."
+    )
+    mine = ask(retr, "how to submit exercise")
+    print("   other instance hidden:", all("Other instance" not in r["answer"] for r in mine))
+    print("   channel not listed -> nothing:", ask(retr, "how to submit exercise", channels=(99,)) == [])
 
     print("\n5) Correction overwrite: re-ingest thread post-2 with a corrected answer + source IRIS_CORRECTED")
     # New answer message on the SAME thread: keyed on post_id, so it replaces
     # the entry rather than adding a near-duplicate. version=2 is newer than the
     # entry's version=1, so the write is applied.
-    make_ingestion(DTO("post-2", "answer-2b", COURSE, CourseMemorySource.IRIS_CORRECTED, version=2, verified_by="tutor-42")).upsert(
+    make_ingestion(DTO("post-2", "answer-2b", COURSE, CourseMemorySource.IRIS_CORRECTED, version=2)).upsert(
         "When is the exam?", "CORRECTED: the exam moved to August 5th, 09:00, MI HS2.",
     )
     count = db.course_memory.aggregate.over_all(total_count=True).total_count
-    after = retr(chat_history=[], student_query="when is the exam", course_id=COURSE, rewrite=False)
+    after = ask(retr, "when is the exam")
     exam = [r for r in after if r["post_id"] == "post-2"]
     print(f"   total objects in collection = {count} (no duplicate for post-2)")
     print(f"   post-2 answer now = {exam[0]['answer']!r}")
@@ -175,16 +193,16 @@ try:
     make_ingestion(DTO("post-2", "answer-2", COURSE, CourseMemorySource.THREAD_RESOLVED, version=1)).upsert(
         "When is the exam?", "STALE: the exam is on July 30th.",
     )
-    stale = [r for r in retr(chat_history=[], student_query="when is the exam", course_id=COURSE, rewrite=False) if r["post_id"] == "post-2"]
+    stale = [r for r in ask(retr, "when is the exam") if r["post_id"] == "post-2"]
     print("   post-2 answer still =", repr(stale[0]["answer"][:9]), "->", "OK" if stale[0]["answer"].startswith("CORRECTED") else "STALE WRITE LANDED!")
 
     print("\n7) Retraction: a versioned tombstone hides the entry and blocks a late ingestion")
     from iris.pipeline.course_memory_ingestion_pipeline import CourseMemoryDeleter
-    CourseMemoryDeleter.for_collection(db.course_memory).delete_for_thread("post-2", COURSE, version=3)
+    CourseMemoryDeleter.for_collection(db.course_memory).delete_for_thread(BASE, "post-2", COURSE, version=3)
     make_ingestion(DTO("post-2", "answer-2c", COURSE, CourseMemorySource.TUTOR_WRITTEN, version=2)).upsert(
         "When is the exam?", "LATE: this ingestion was accepted before the retraction.",
     )
-    gone = [r for r in retr(chat_history=[], student_query="when is the exam", course_id=COURSE, rewrite=False) if r["post_id"] == "post-2"]
+    gone = [r for r in ask(retr, "when is the exam") if r["post_id"] == "post-2"]
     count = db.course_memory.aggregate.over_all(total_count=True).total_count
     print(f"   post-2 retrievable = {bool(gone)} (expect False); objects in collection = {count} (tombstone kept)")
 
@@ -193,7 +211,7 @@ try:
         def embed(self, t):
             raise RuntimeError("Logos unavailable")
     retr.llm_embedding = Boom()
-    print("   result:", retr(chat_history=[], student_query="x", course_id=COURSE, rewrite=False))
+    print("   result:", ask(retr, "x"))
 
     print("\nALL CHECKS DONE ✅")
 finally:
@@ -216,10 +234,11 @@ poetry run python /tmp/cm_verify.py
    - [thread=post-2 src msg=answer-2] Q='When is the exam?' A='The exam is on July 30th, 14:00, in lect'...
 
 4) Course scoping: ... post_ids: ['post-9'] -> OK
-5) Correction overwrite: total objects in collection = 3 (no duplicate for post-2)
+4b) Instance and channel scoping: other instance hidden: True, channel not listed -> nothing: True
+5) Correction overwrite: total objects in collection = 4 (no duplicate for post-2)
    post-2 answer now = 'CORRECTED: the exam moved to August 5th, 09:00, MI HS2.'
 6) Ordering: ... post-2 answer still = 'CORRECTED' -> OK
-7) Retraction: post-2 retrievable = False (expect False); objects in collection = 3 (tombstone kept)
+7) Retraction: post-2 retrievable = False (expect False); objects in collection = 4 (tombstone kept)
 8) Graceful degradation: ... result: []
 ALL CHECKS DONE ✅
 ```
@@ -258,7 +277,7 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/ingest \
   -H "Authorization: secret" -H "Content-Type: application/json" \
   -d '{
     "settings": {"authenticationToken":"tok","artemisBaseUrl":"http://localhost:9999","selection":"CLOUD_AI","variant":"default"},
-    "courseId": 1, "conversationId": "c1", "postId": "post-1", "messageId": "answer-1",
+    "courseId": 1, "conversationId": "11", "postId": "post-1", "messageId": "answer-1",
     "version": 1, "source": "THREAD_RESOLVED", "isPublicChannel": true,
     "thread": [
       {"id":"post-1","authorRole":"student","content":"How do I submit the exercise?"},
@@ -277,9 +296,9 @@ curl -X POST http://localhost:8000/api/v1/webhooks/course-memory/ingest \
   it returns `202` but the log says `Ignoring stale course memory ingestion`, and the
   corrected answer stays.
 - **Validation tests (expect `422`, nothing stored):** drop `postId`; drop `version` or
-  send `0`; send `"isPublicChannel": "true"` as a string; send a thread where no message
-  sets `isVerifiedAnswer`/`resolvesPost`; set two messages to `isVerifiedAnswer`; send
-  `IRIS_CORRECTED` or `IRIS_AUTO` with a blank `existingAnswer`.
+  send `0`; send `"isPublicChannel": "true"` as a string; send a thread without exactly one
+  `isVerifiedAnswer`; send `IRIS_AUTO`, `IRIS_CORRECTED` or `TUTOR_WRITTEN` with a blank
+  `existingAnswer`; leave out `settings.artemisBaseUrl`.
 - **Deletion test:** `POST /api/v1/webhooks/course-memory/delete` with
   `{"settings": {...}, "courseId": 1, "postId": "post-1", "version": 3}` — the delete key
   is the thread root, not the answer message, and `version` is required with it. The
@@ -295,8 +314,10 @@ agent call the course-memory tool and cite the source message:
 POST /api/v1/pipelines/autonomous-tutor/run
 ```
 
-(Use an `AutonomousTutorPipelineExecutionDTO` with `course.id = 1` and a `post`
-asking a question similar to a stored one.) With LangFuse enabled you can trace the
+(Use an `AutonomousTutorPipelineExecutionDTO` with `course.id = 1`, a `post` asking a
+question similar to a stored one, and `"courseMemoryConversationIds": [11]` — without the
+channel of the stored entry in that list the tool is not even offered.) The final status
+update reports `usedCourseMemoryConversationIds`. With LangFuse enabled you can trace the
 tool calls.
 
 ---
@@ -316,6 +337,8 @@ tool calls.
   On a small/sparse collection genuine matches can still fall below the default `0.85` —
   lower `course_memory.similarity_threshold` in `application.local.yml` while testing if
   retrieval comes back empty. (Empirical calibration is future work.)
+- **Readable channels only.** Retrieval serves only entries from the channels listed in
+  `courseMemoryConversationIds` of the run.
 - **Public channels only.** Ingestion with `"isPublicChannel": false` is skipped by
   design; Artemis should only emit public-channel events. The field is a **strict**
   boolean — `"true"` or `1` is rejected with a `422` rather than coerced, so a malformed
