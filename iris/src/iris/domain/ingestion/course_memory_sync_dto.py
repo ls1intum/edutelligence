@@ -18,8 +18,9 @@ class CourseMemorySyncThreadDTO(BaseModel):
     # older version missed an update that Artemis already dispatched.
     version: int = Field(alias="version", ge=1)
     # Whether the thread may be stored right now: readable channel, Iris enabled, root
-    # post exists. A thread that is not eligible must not keep a live entry.
-    eligible: bool
+    # post exists. A thread that is not eligible must not keep a live entry. Artemis
+    # leaves false out of the payload, so a missing value means not eligible.
+    eligible: bool = False
 
 
 class _SyncDTO(PipelineExecutionDTO):

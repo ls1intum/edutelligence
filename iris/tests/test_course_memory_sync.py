@@ -230,3 +230,9 @@ def test_entries_of_deleted_courses_are_retracted_for_good():
     assert deleted_course[CourseMemorySchema.VERSION.value] == cm_module.FINAL_VERSION
     other = collection.get("13", course_id=9, base_url=OTHER)
     assert other[CourseMemorySchema.DELETED.value] is False
+
+
+def test_a_thread_without_the_eligible_flag_counts_as_not_eligible():
+    # Artemis leaves false out of the payload; a missing flag must never keep an entry.
+    dto = _course_sync([{"postId": 11, "version": 4}])
+    assert dto.threads[0].eligible is False
