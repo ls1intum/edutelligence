@@ -416,7 +416,7 @@ services:
   # Shared cloud RPM/TPM window for logos-webservice replicas. Ephemeral:
   # a restart clears the sliding window (limits reset for up to 60 s).
   logos-redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     container_name: logos-redis
     restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]

@@ -39,13 +39,13 @@ services:
     networks: [e2e]
 
   logos-redis:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     networks: [e2e]
 
   # One-shot: bring the schema up to the same revision the webservice would.
   migrate:
-    image: liquibase/liquibase:4.31
+    image: liquibase/liquibase:5.0
     depends_on:
       logos-db:
         condition: service_healthy
@@ -62,7 +62,7 @@ services:
 
   # One-shot: the admin and developer keys the tests authenticate with.
   seed:
-    image: postgres:17
+    image: postgres:18
     depends_on:
       migrate:
         condition: service_completed_successfully

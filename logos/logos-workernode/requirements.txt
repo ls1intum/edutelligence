@@ -3,10 +3,10 @@ uvicorn==0.54.0
 httpx==0.28.1
 pyyaml==6.0.3
 pydantic==2.13.5
-websockets==14.2
+websockets==17.2
 prometheus-client==0.26.0
 # Startup model prefetch (main._download_one_model), the sharded-checkpoint
 # helper and the HF model-info lookup (hf_model_info) import this directly; on
 # the Linux image it previously arrived transitively via vLLM, but the
 # isolated macOS worker venv only installs this file.
-huggingface-hub==1.33.0
+huggingface-hub==2.1.1
