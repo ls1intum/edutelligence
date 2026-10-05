@@ -53,6 +53,10 @@ This proves the real storage/retrieval path against a running Weaviate using a
 **stubbed embedding** (so no LLM keys are needed), then deletes the `CourseMemory`
 collection so your Weaviate is left clean.
 
+> **Only run this against a disposable Weaviate** (for example a fresh local container).
+> The cleanup deletes the whole `CourseMemory` collection, including entries that were
+> there before.
+
 It verifies: ingest + retrieve with backlink ids, **course and instance scoping** (one
 course's or one Artemis instance's entries never leak into another), the **channel
 allowlist** (an entry outside the listed channels is never returned), **correction

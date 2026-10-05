@@ -47,11 +47,14 @@ course_memory:
 
 autonomous_tutor:
   organizational_evidence_guard:
-    # Organizational/exam facts (dates, rooms, scope, deadlines, grading, registration) can only
-    # come from the course FAQ or a tutor-verified prior answer. When neither returned anything,
-    # the reply's confidence is capped so Artemis routes it to tutor review instead of publishing
-    # it. Artemis publishes at >= 0.85, reviews in [0.70, 0.85), discards below 0.70.
+    # Every reply Artemis would publish unreviewed (confidence >= 0.85) is checked by an LLM: it
+    # lists the organizational facts (dates, rooms, scope, deadlines, grading, registration) and
+    # whether tutor-verified Course Memory answers state each of them. FAQs and community-resolved
+    # entries do not count. A reply with an unsupported fact, or a failed check, is capped to
+    # confidence_cap, so Artemis routes it to tutor review. Artemis publishes at >= 0.85, reviews in
+    # [0.70, 0.85), discards below 0.70.
     enabled: true
+    llm_check_enabled: true # false: cap every such reply ("review everything"), no LLM check
     confidence_cap: 0.75
 
 local_llm_enabled: true # Set to false to disable local LLM support entirely
@@ -242,7 +245,7 @@ llm_configuration:
   course_memory_retrieval_pipeline:
     default:
       chat:
-        local: oai-gpt-5-mini
+        local: qwen3.8-27b # must be an on-premise model: LOCAL_AI runs rewrite the student's question with it
         cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
 

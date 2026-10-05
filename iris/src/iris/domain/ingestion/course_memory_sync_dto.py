@@ -1,7 +1,6 @@
-from datetime import datetime
 from typing import List
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from iris.common.artemis_instance import canonical_artemis_base_url
 from iris.domain.pipeline_execution_dto import PipelineExecutionDTO
@@ -30,7 +29,7 @@ class _SyncDTO(PipelineExecutionDTO):
     # When Artemis read the state it reports. Objects Iris wrote after this moment (with
     # a safety margin for clock skew) are left alone: they can describe threads that
     # changed after the snapshot.
-    snapshot_at: datetime = Field(alias="snapshotAt")
+    snapshot_at: AwareDatetime = Field(alias="snapshotAt")
 
     @model_validator(mode="after")
     def _require_artemis_instance(self):

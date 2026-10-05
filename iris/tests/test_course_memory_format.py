@@ -173,7 +173,9 @@ def test_ingestion_requires_settings():
 
 def test_deletion_requires_settings():
     with pytest.raises(ValidationError):
-        CourseMemoryDeletionExecutionDto(courseId=1, postId="post-1", settings=None)
+        CourseMemoryDeletionExecutionDto(
+            courseId=1, postId="post-1", version=1, settings=None
+        )
 
 
 def test_deletion_dto_accepts_settings():

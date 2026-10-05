@@ -414,3 +414,9 @@ def test_guard_can_be_switched_off(pipeline, monkeypatch):
 def test_cap_must_stay_below_the_publish_threshold():
     with pytest.raises(ValueError):
         OrganizationalEvidenceGuardSettings(confidence_cap=0.85)
+
+
+def test_cap_must_stay_in_the_review_band():
+    # Below 0.70 Artemis discards the reply, so no tutor would ever see what the guard held back.
+    with pytest.raises(ValueError):
+        OrganizationalEvidenceGuardSettings(confidence_cap=0.5)

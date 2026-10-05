@@ -103,6 +103,8 @@ class CourseMemorySettings(BaseModel):
 # (AutonomousTutorService.AUTO_VERIFY_CONFIDENCE_THRESHOLD in Artemis), holds it for tutor
 # review in [0.70, 0.85) and discards it below 0.70.
 ARTEMIS_AUTO_PUBLISH_THRESHOLD = 0.85
+# Artemis discards replies below this confidence and sends the rest below the publish threshold to tutor review.
+ARTEMIS_REVIEW_THRESHOLD = 0.70
 
 
 class OrganizationalEvidenceGuardSettings(BaseModel):
@@ -124,7 +126,7 @@ class OrganizationalEvidenceGuardSettings(BaseModel):
     llm_check_enabled: bool = Field(default=True)
     confidence_cap: float = Field(
         default=0.75,
-        ge=0.0,
+        ge=ARTEMIS_REVIEW_THRESHOLD,
         lt=ARTEMIS_AUTO_PUBLISH_THRESHOLD,
         description=(
             "Confidence a reply gets when the guard holds it back. Must stay below "
