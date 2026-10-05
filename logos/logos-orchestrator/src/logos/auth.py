@@ -6,6 +6,12 @@ from fastapi import HTTPException
 
 from logos import batch_credential, refcache
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmodules import LoggingLevel
+
+# Per-request opt-in/out for FULL logging. Carries a LoggingLevel value
+# (FULL / BILLING) and, when present, overrides the key's own level for the
+# request's log row — see resolve_log_level.
+LOG_LEVEL_HEADER = "logos-logging"
 
 
 def _get_header_value(headers: Dict[str, str], name: str) -> Optional[str]:
@@ -14,6 +20,37 @@ def _get_header_value(headers: Dict[str, str], name: str) -> Optional[str]:
         if key.lower() == name.lower():
             return value
     return None
+
+
+def resolve_log_level(headers: Optional[Dict[str, str]], key_log_level) -> str:
+    """Resolve the logging level for a single request.
+
+    The API key's own level (``key_log_level``, from the key's ``log`` column)
+    is the default and remains the effective value when no header is present,
+    so the per-key setting keeps working unchanged. A per-request
+    ``logos-logging`` header overrides it when set, so an application's end
+    user can consent to (or decline) FULL logging per request instead of only
+    per key. The header carries a :class:`~logos.dbutils.dbmodules.LoggingLevel`
+    value (``FULL`` or ``BILLING``, case-insensitive). A present but
+    unrecognized value fails closed to the minimum-logging level (``BILLING``):
+    the header is a consent signal, so an ambiguous value must never be
+    treated as consent to store full request and response data.
+
+    Params:
+        headers: Request headers (case-insensitive lookup); None treated as empty.
+        key_log_level: The key's own logging level (str or LoggingLevel).
+
+    Returns:
+        The effective logging level as a string ("FULL" or "BILLING").
+    """
+    raw = _get_header_value(headers or {}, LOG_LEVEL_HEADER) or _get_header_value(headers or {}, "logos_logging")
+    if raw is None or not raw.strip():
+        return key_log_level.value if hasattr(key_log_level, "value") else str(key_log_level)
+    value = raw.strip().upper()
+    for level in LoggingLevel:
+        if level.value == value:
+            return level.value
+    return LoggingLevel.BILLING.value
 
 
 def _resolve_logos_key(headers: Optional[Dict[str, str]], required: bool = True) -> Optional[str]:

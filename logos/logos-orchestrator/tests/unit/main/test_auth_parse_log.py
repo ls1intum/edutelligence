@@ -28,13 +28,13 @@ import logos as main
 _DEPLOYMENT_ROW = {"model_id": 1, "provider_id": 2, "model_name": "m", "aliases": None}
 
 
-def _request(body: dict) -> Request:
+def _request(body: dict, headers: dict | None = None) -> Request:
     request = Request(
         {
             "type": "http",
             "method": "POST",
             "path": "/v1/chat/completions",
-            "headers": [],
+            "headers": [(name.lower().encode(), value.encode()) for name, value in (headers or {}).items()],
             "query_string": b"",
             "client": ("127.0.0.1", 1234),
             "server": ("logos.test", 80),
@@ -230,3 +230,57 @@ async def test_bad_json_is_rejected_before_any_db_access(monkeypatch):
         await main.auth_parse_log(request, use_profile_auth=True, request_id="req-1")
 
     assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Per-request logging opt-in: the logos-logging header overrides the key's
+# level for this request's log row, and only this one.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_log_level_defaults_to_the_keys_own_level_without_header(_profile_auth):
+    # The pre-existing behavior: with no header the key's level is used.
+    db, _ = _profile_auth()
+    await main.auth_parse_log(_request({"model": "m"}), use_profile_auth=True, request_id="req-1")
+
+    assert db.log_usage_kwargs["log_level"] == "BILLING"
+
+
+@pytest.mark.asyncio
+async def test_log_level_header_opting_in_overrides_a_billing_key(_profile_auth):
+    # Header yes + key no => yes.
+    db, _ = _profile_auth()
+    await main.auth_parse_log(
+        _request({"model": "m"}, headers={"logos-logging": "FULL"}),
+        use_profile_auth=True,
+        request_id="req-1",
+    )
+
+    assert db.log_usage_kwargs["log_level"] == "FULL"
+
+
+@pytest.mark.asyncio
+async def test_log_level_header_opting_out_overrides_a_full_key(_profile_auth):
+    # Header no + key yes => no.
+    db, auth = _profile_auth()
+    auth.log_level = "FULL"
+    await main.auth_parse_log(
+        _request({"model": "m"}, headers={"logos-logging": "BILLING"}),
+        use_profile_auth=True,
+        request_id="req-1",
+    )
+
+    assert db.log_usage_kwargs["log_level"] == "BILLING"
+
+
+@pytest.mark.asyncio
+async def test_log_level_header_case_insensitive_on_the_request_path(_profile_auth):
+    db, _ = _profile_auth()
+    await main.auth_parse_log(
+        _request({"model": "m"}, headers={"Logos-Logging": "full"}),
+        use_profile_auth=True,
+        request_id="req-1",
+    )
+
+    assert db.log_usage_kwargs["log_level"] == "FULL"
