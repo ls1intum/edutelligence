@@ -112,3 +112,7 @@ def test_unknown_claude_id_stays_unresolved():
 def test_ambiguous_claude_name_is_not_retried_without_the_prefix():
     models = [_row("claude-foo"), _row("CLAUDE-FOO"), _row("foo")]
     assert _resolve_requested_model_name("claude-foo", models) is None
+
+
+def test_ambiguous_stripped_name_resolves_to_none_not_a_sentinel():
+    assert _resolve_requested_model_name("claude-foo", [_row("Foo"), _row("FOO")]) is None

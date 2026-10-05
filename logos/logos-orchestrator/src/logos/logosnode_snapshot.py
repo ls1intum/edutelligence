@@ -132,7 +132,8 @@ def _resolve_requested_model_name(
         return resolved
     requested = str(requested_name or "").strip()
     if requested.lower().startswith(CLAUDE_MODEL_PREFIX):
-        return _resolve_exact_model_name(requested[len(CLAUDE_MODEL_PREFIX) :], available_models)
+        stripped = _resolve_exact_model_name(requested[len(CLAUDE_MODEL_PREFIX) :], available_models)
+        return None if stripped is _AMBIGUOUS else stripped
     return None
 
 
