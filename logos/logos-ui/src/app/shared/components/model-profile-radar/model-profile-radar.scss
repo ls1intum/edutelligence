@@ -2,6 +2,8 @@
   display: block;
   max-width: 100%;
   height: auto;
+  // The side labels sit past the chart's box; an svg clips to it by default.
+  overflow: visible;
 }
 
 .radar__grid {

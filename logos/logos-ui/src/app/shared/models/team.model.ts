@@ -199,6 +199,28 @@ export interface AiLlmCallRecommendation {
   confirmed_objective_priority?: ObjectiveKey[] | null;
   reviewed_by?: number | null;
   reviewed_at?: string | null;
+  /** The owner picked detected_model; re-analyses keep it. */
+  model_set_by_owner?: boolean;
+  /** The review was carried over from an earlier decision by a re-analysis. */
+  review_carried_over?: boolean;
+  /** The owner's decision on the recommendation this one succeeds, when there was one. */
+  previous?: PreviousDecision | null;
+}
+
+/** What was decided on a call site before the latest analysis proposed it again. */
+export interface PreviousDecision {
+  id: number;
+  review_status: Exclude<RecommendationReviewStatus, 'pending'>;
+  sla: RecommendedSla;
+  objective_priority: ObjectiveKey[];
+  reviewed_at?: string | null;
+}
+
+/** Result of queueing an analysis of every linked repository. */
+export interface AnalyzeAllResult {
+  queued: number;
+  already_in_flight: number;
+  message: string;
 }
 
 export interface TeamWorkflowsResponse {

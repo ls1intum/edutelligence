@@ -128,26 +128,80 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           BRANCH: ${{ steps.version.outputs.branch }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add "$DOCKERFILE" "$EFFORT_MODULE"
           git commit -m "\`Logos\`: Update vLLM to v$VERSION"
           git push -u origin "$BRANCH"
-          PR_URL=$(gh pr create \
-            --title "\`Logos\`: Update vLLM to v$VERSION" \
-            --body "## Motivation
 
-          Keep the workernode's inference stack current: bump the default vLLM pin to [v$VERSION](https://github.com/vllm-project/vllm/releases/tag/v$VERSION).
+          # Embed the upstream release notes in the PR body so reviewers do not
+          # have to leave GitHub. Contributor lists are dropped (noise + size);
+          # the rest is capped so we stay under GitHub's PR-body limit. Body
+          # assembly is done in Python so shell never expands $ / backticks
+          # inside the release markdown.
+          BODY_FILE="$(mktemp)"
+          NOTES_RAW="$(mktemp)"
+          if ! gh release view "v$VERSION" --repo vllm-project/vllm --json body -q .body >"$NOTES_RAW" 2>/dev/null \
+             || [ ! -s "$NOTES_RAW" ]; then
+            echo "::warning::Could not fetch vLLM v$VERSION release notes; linking to the release page instead."
+            : >"$NOTES_RAW"
+          fi
+          DOCKERFILE="$DOCKERFILE" EFFORT_MODULE="$EFFORT_MODULE" VERSION="$VERSION" \
+          NOTES_RAW="$NOTES_RAW" BODY_FILE="$BODY_FILE" python3 <<'PY'
+          import os, pathlib, re, textwrap
+
+          version = os.environ["VERSION"]
+          dockerfile = os.environ["DOCKERFILE"]
+          effort_module = os.environ["EFFORT_MODULE"]
+          release_url = f"https://github.com/vllm-project/vllm/releases/tag/v{version}"
+          notes = pathlib.Path(os.environ["NOTES_RAW"]).read_text(encoding="utf-8").strip()
+          if notes:
+              notes = re.split(r"\n## (?:New )?Contributors\b", notes, maxsplit=1)[0].rstrip()
+              # GitHub PR bodies are capped at 65536; leave room for the wrapper.
+              max_notes = 50000
+              if len(notes) > max_notes:
+                  notes = notes[:max_notes].rstrip() + "\n\n… (truncated; see the full release page.)"
+              notes_block = (
+                  f"<details>\n<summary>vLLM v{version} release notes</summary>\n\n"
+                  f"{notes}\n</details>"
+              )
+          else:
+              notes_block = (
+                  f"Release notes could not be fetched automatically — "
+                  f"see [{release_url}]({release_url})."
+              )
+
+          body = textwrap.dedent(f"""\
+          ## Motivation
+
+          Keep the workernode's inference stack current: bump the default vLLM pin to [v{version}]({release_url}).
 
           ## Description
 
-          Bumps the version in the \`VLLM_PIP_SPEC\` build arg default in \`$DOCKERFILE\` to v$VERSION — extras carried by the pin (e.g. \`[audio]\`, which the speech-to-text endpoints need) are preserved — and the \`VLLM_REASONING_EFFORT_VALUES\` snapshot label in \`$EFFORT_MODULE\` alongside it. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
+          Bumps the version in the `VLLM_PIP_SPEC` build arg default in `{dockerfile}` to v{version} — extras carried by the pin (e.g. `[audio]`, which the speech-to-text endpoints need) are preserved — and the `VLLM_REASONING_EFFORT_VALUES` snapshot label in `{effort_module}` alongside it. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
 
-          Please check the release notes for new \`ChatCompletionRequest.reasoning_effort\` values: only the label is bumped automatically, the tuple is not. Runtime normalization is unaffected either way — unknown values fall back to the template family's default.
+          Please check the release notes for new `ChatCompletionRequest.reasoning_effort` values: only the label is bumped automatically, the tuple is not. Runtime normalization is unaffected either way — unknown values fall back to the template family's default.
+
+          ## Release notes
+
+          {{notes_block}}
 
           ---
-          *This PR was created automatically by the \`Logos - Update vLLM\` workflow.*")
+          *This PR was created automatically by the `Logos - Update vLLM` workflow.*
+          """)
+          # notes_block is inserted after the f-string so release markdown cannot
+          # accidentally introduce format placeholders.
+          body = body.replace("{notes_block}", notes_block)
+          pathlib.Path(os.environ["BODY_FILE"]).write_text(body, encoding="utf-8")
+          PY
+          rm -f "$NOTES_RAW"
+
+          PR_URL=$(gh pr create \
+            --title "\`Logos\`: Update vLLM to v$VERSION" \
+            --body-file "$BODY_FILE")
+          rm -f "$BODY_FILE"
           echo "Created $PR_URL"
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
 

@@ -170,10 +170,10 @@ public class VramService {
 
     /**
      * Attaches live connection metadata (connected/connection_state/
-     * last_heartbeat/connected_at/worker_started_at) from the orchestrator's
-     * worker registry and adds configured providers without snapshots in
-     * range, so offline providers still show up — and show up as offline —
-     * on the statistics page.
+     * last_heartbeat/connected_at/worker_started_at/worker_version_checksum)
+     * from the orchestrator's worker registry and adds configured providers
+     * without snapshots in range, so offline providers still show up — and
+     * show up as offline — on the statistics page.
      */
     private List<Map<String, Object>> enrichProviders(Map<Integer, Map<String, Object>> providersData) {
         Map<Integer, Map<String, Object>> statusById = orchestratorStatusClient.getProviderStatusById();
@@ -193,6 +193,7 @@ public class VramService {
             provider.put("last_heartbeat", status.get("last_heartbeat"));
             provider.put("connected_at", status.get("connected_at"));
             provider.put("worker_started_at", status.get("worker_started_at"));
+            provider.put("worker_version_checksum", status.get("worker_version_checksum"));
             provider.put("calibrating",
                 Boolean.TRUE.equals(status.get("calibrating")) ? Boolean.TRUE : null);
         }

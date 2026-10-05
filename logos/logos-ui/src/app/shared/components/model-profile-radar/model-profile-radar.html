@@ -27,7 +27,7 @@
         class="radar__label"
         [attr.x]="label.x"
         [attr.y]="label.y"
-        text-anchor="middle"
+        [attr.text-anchor]="label.anchor"
         dominant-baseline="middle"
       >{{ label.label }}</text>
     }
