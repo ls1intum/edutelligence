@@ -109,7 +109,7 @@ at read time (§5) and the nightly sync (§7) removes what deleted channels and 
 Every operation on a thread carries a monotonic per-thread version (`post.course_memory_version` in Artemis, minted
 atomically before the thread is read). Iris keeps the highest version per thread and drops anything not newer.
 
-Artemis also bumps the version **in the same transaction as** every change that can make a stored entry outdated:
+Artemis also bumps the version **right before it saves** every change that can make a stored entry outdated:
 editing or deleting a message of the thread, an opt-out from AI, a deactivation, the deletion of an account's
 messages. If the follow-up refresh never reaches Iris, the stored entry has an older version than Artemis, and the
 nightly sync retracts it.
@@ -117,13 +117,14 @@ nightly sync retracts it.
 ## 5. Retrieval inside the autonomous tutor
 
 Artemis sends `courseMemoryConversationIds` with every run of `/api/v1/pipelines/autonomous-tutor/run`: the channels of
-the course that every student can read **at dispatch time** (public or course-wide, not an exam channel, exercise
-released). Iris filters every Course Memory query by this list, by the instance and by the course, and checks each hit
+the course that every student can read **at dispatch time** (public or course-wide, not an exam channel, not a
+tutorial lecture channel, exercise released). Iris filters every Course Memory query by this list, by the instance and by the course, and checks each hit
 again. A missing or empty list means no Course Memory for the run.
 
 The final status update reports `usedCourseMemoryConversationIds`: the channels of every entry the run retrieved.
-Before Artemis publishes a reply without review it checks them against a fresh list, before and after saving; a reply
-whose sources are no longer readable, or that reports none, goes to tutor review.
+Artemis first saves such a reply as a hidden draft. It then checks the channels against a fresh list and only then
+publishes the reply. A reply whose sources are no longer readable, or that does not report them, stays a draft for
+tutor review.
 
 Organizational facts (dates, rooms, deadlines, grading, exam scope, …) in a reply that would be published unreviewed
 are checked by an LLM against the answers of tutor-verified entries; anything not explicitly backed sends the reply to
