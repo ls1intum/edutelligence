@@ -778,20 +778,25 @@ class TriggerPoller:
             if review is not None:
                 review_id = int(review["id"])
                 comments = await github.review_comments(number, review_id)
-                consumed.update(c["id"] for c in comments if isinstance(c.get("id"), int))
                 if branch is None:
                     # Nowhere to put the fix: a fork's head, or a protected
                     # branch. Queueing it anyway would start a session from
                     # the default branch on a fresh branch of its own, which
                     # cannot update the pull request its task is about.
+                    # Leave the inline notes unconsumed so a later comment
+                    # pass can still answer them in words.
                     logger.info("review on pull request %s has no writable branch; leaving it to a person", number)
                     continue
                 reviewer = str((review.get("user") or {}).get("login") or "")
-                if not await self._writer(reviewer):
+                if not await self._worth_reading(reviewer):
                     # Anybody may review a public pull request, and a review
                     # is a request to change code: acting on one from
                     # outside the repository would let a stranger direct
-                    # what the agent commits.
+                    # what the agent commits. Silence their notes so they
+                    # do not become a comment session apiece on a pull
+                    # request this runner already owns. Configured review
+                    # apps pass `_worth_reading` and never reach here.
+                    consumed.update(c["id"] for c in comments if isinstance(c.get("id"), int))
                     logger.info(
                         "review on pull request %s is by %s, who may not write to this repository; "
                         "leaving it to a person",
@@ -799,6 +804,9 @@ class TriggerPoller:
                         reviewer or "an unknown account",
                     )
                     continue
+                # Taking the review: its inline notes travel with this
+                # session, so the comment pass must not queue them again.
+                consumed.update(c["id"] for c in comments if isinstance(c.get("id"), int))
                 found.append(
                     {
                         "ref": f"pr-{number}-review-{review_id}",
@@ -998,17 +1006,20 @@ class TriggerPoller:
         return self._writers[key]
 
     async def _worth_reading(self, login: str) -> bool:
-        """Whether this account's words belong in a task.
+        """Whether this account's words belong in a task — and may direct one.
 
-        Wider than :meth:`_writer`, and only here. Directing the agent is a
-        decision about people; *reading* a review is not, and this
-        repository's review runs on two apps that are in no team and may
-        push nothing. Dropping them left a session taking over its own pull
-        request to address a review it had not been shown.
+        Wider than :meth:`_writer`. This repository's review runs on apps
+        that are in no team and may push nothing. Dropping them left a
+        session taking over its own pull request to address a review it had
+        not been shown, and ignoring a ``CHANGES_REQUESTED`` from one of
+        them left the agent's own pull request looking abandoned — the
+        review sat unanswered while the runner logged that it was leaving
+        it to a person.
 
-        They still direct nothing: no review of theirs starts a session and
-        no comment of theirs steers one — a person the runner listens to has
-        already decided that this work happens.
+        On a pull request this runner already owns, a configured review app
+        requesting changes *is* the next step the operators chose: the
+        consent was opening (or being handed) the pull request, not a
+        second maintainer click. Strangers still fail this check.
         """
         return login.lower() in settings.review_bots or await self._writer(login)
 
@@ -1240,7 +1251,13 @@ class TriggerPoller:
                 # credential. They stay out of the task; the conversation
                 # as a whole is still answered, so the ref and the reaction
                 # are built from every comment in it.
-                directed = await self._trusted_comments(comments)
+                #
+                # On a pull request this runner already owns, configured
+                # review apps may steer too — otherwise a @mention from
+                # Claudia on the agent's own pull request is answered
+                # without a branch, while the CHANGES_REQUESTED that
+                # carried it was left to a person.
+                directed = await self._readable_comments(comments) if pull else await self._trusted_comments(comments)
                 if not directed:
                     logger.info("comments on #%s come from outside the repository; answering without a branch", number)
                     branch = None

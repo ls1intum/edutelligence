@@ -169,20 +169,16 @@ class Settings:
         for team in os.getenv("LOGOS_AGENT_TRUSTED_TEAMS", "logos-developers,logos-maintainers").split(",")
         if team.strip()
     )
-    # The review apps this repository runs on its own pull requests. They may
-    # not direct anything — no review of theirs starts a session, no comment
-    # of theirs steers one — but what they wrote travels with a task that
-    # somebody trusted has already directed.
+    # The review apps this repository runs on its own pull requests. What
+    # they wrote travels with a task somebody trusted has already directed
+    # — without that, a handover dropped the review itself. On a pull
+    # request this runner already owns they may also direct: a
+    # CHANGES_REQUESTED or @mention from one of them is the ordinary next
+    # step after the agent opened the work, not a stranger injecting
+    # direction. Strangers still cannot.
     #
-    # Without this the agent takes over its own pull request to address a
-    # review and is handed the pull request without the review: on prod,
-    # every handover dropped between six and seventeen comments, and on the
-    # busy ones those were the entire review. An agent given a diff and told
-    # "start from what is still open" reconstructs a review from the diff,
-    # which is guesswork dressed up as work.
-    #
-    # Named accounts rather than "any bot": this is a list of two apps that
-    # this repository chose, and it is emptied by setting the variable to
+    # Named accounts rather than "any bot": this is a list of apps this
+    # repository chose, and it is emptied by setting the variable to
     # nothing.
     review_bots: tuple[str, ...] = tuple(
         name.strip().lower()

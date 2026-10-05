@@ -1898,14 +1898,54 @@ class TestTheReviewTheWorkIsAbout:
         assert "cache pressure gate is inverted" in task
         assert "coderabbitai[bot]" in task
 
-    async def test_it_still_cannot_ask_for_a_session_of_its_own(self, monkeypatch):
-        # Reading a review is not the same as being obeyed. A review app may
-        # not start work — a person the runner listens to decides that.
+    async def test_a_configured_review_app_can_ask_for_a_session_on_its_own_pull_request(self, monkeypatch):
+        # Opening the pull request was the consent. A CHANGES_REQUESTED from
+        # an app the operators named is the ordinary next step — leaving it
+        # "to a person" is how an agent's own pull request sat unanswered
+        # while the runner logged that Claudia may not write here.
         repo = FakeRepo(
             assigned_pulls=[],
             authored_pulls=[pull(864, "A change")],
             heads={864: ("logos/agent/x/session-3", REPO)},
-            reviews={864: {**review(991), "user": {"login": "coderabbitai[bot]"}}},
+            reviews={864: {**review(991), "user": {"login": "Claudia-Anthropica"}}},
+            review_comments={
+                (864, 991): [
+                    {
+                        "id": 7001,
+                        "path": "app/x.py",
+                        "line": 10,
+                        "body": f"@{AGENT} please fix this",
+                        "user": {"login": "Claudia-Anthropica"},
+                    }
+                ]
+            },
+        )
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        queued = [s for s in fake_db.created if s.get("trigger_kind") == "review"]
+        assert len(queued) == 1
+        assert queued[0]["trigger_ref"] == "pr-864-review-991"
+        assert queued[0]["branch"] == "logos/agent/x/session-3"
+        assert queued[0]["no_push"] is False
+        # The inline notes travelled with the review session, so they are
+        # not also queued as a separate comment thread.
+        assert [s for s in fake_db.created if s.get("trigger_kind") == "comment"] == []
+
+    async def test_a_stranger_still_cannot_ask_for_a_review_session(self, monkeypatch):
+        # The control for the test above: only configured review apps and
+        # writers may direct. A passer-by requesting changes is still left
+        # to a person.
+        repo = FakeRepo(
+            assigned_pulls=[],
+            authored_pulls=[pull(864, "A change")],
+            heads={864: ("logos/agent/x/session-3", REPO)},
+            reviews={864: {**review(991), "user": {"login": "a-passer-by"}}},
         )
         repo.writers = {"wasnertobias"}
         repo.install(monkeypatch)
@@ -1935,6 +1975,38 @@ class TestTheReviewTheWorkIsAbout:
         await triggers.TriggerPoller().poll_once()
 
         assert [s for s in fake_db.created if s.get("trigger_kind") == "review"]
+
+    async def test_a_review_app_mention_on_its_own_pull_request_gets_a_branch(self, monkeypatch):
+        # A CHANGES_REQUESTED and a plain @mention are two shapes of the
+        # same ask. The mention must not be answered without a branch while
+        # the review path would have pushed — that is how session 278 on
+        # #1171 spent hours implementing with no_push set.
+        repo = FakeRepo(
+            authored_pulls=[pull(1171, "Support per-request logging")],
+            heads={1171: ("logos/agent/issue-1170/session-277", REPO)},
+            inline_comments=[
+                comment(
+                    4182596450,
+                    1171,
+                    f"@{AGENT} please carry the logging override through",
+                    "Claudia-Anthropica",
+                    path="logos/logos-orchestrator/src/logos/main.py",
+                )
+            ],
+        )
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        created = fake_db.created[0]
+        assert created["trigger_kind"] == "comment"
+        assert created["branch"] == "logos/agent/issue-1170/session-277"
+        assert created["no_push"] is False
+        assert "carry the logging override" in created["task"]
 
     async def test_an_account_that_is_neither_is_still_left_out(self, monkeypatch):
         from datetime import datetime, timezone
