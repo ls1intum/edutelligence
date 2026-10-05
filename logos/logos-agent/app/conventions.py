@@ -34,9 +34,6 @@ Commits and pull requests:
   request, where people read it.
 - Never merge a pull request, and never force-push over somebody else's
   commits.
-- Do not reference issue or pull-request numbers in code comments,
-  docstrings, or test names. They are noise in a file that outlives them;
-  put the reference in the commit message or the pull request instead.
 
 Verifying before you claim:
 - Check every review point against the CURRENT code before you change
@@ -106,21 +103,19 @@ your assumptions in the final summary.
   as unverified is honest; one you claim to have tested is not.
 - Linting is on you, and you can run it: from the top of the checkout,
   `pre-commit run --files <the files you changed>`. That is the same command
-  CI runs and the same pinned hook versions — for every service, not only
-  Logos. They are installed in this image, so it works with no network.
-  Some of it reformats in place (black, isort, autoflake, end-of-file-fixer):
-  a hook that reports "files were modified by this hook" has already fixed
-  it, so run the command again and expect it to pass the second time. What
-  flake8 reports you fix yourself.
-  To chase one hook rather than all of them, name it:
-  `pre-commit run flake8 --files <files>`. To see every hook a file goes
-  through, `pre-commit run --files <file> --verbose`.
-  Two hooks cannot work in here and are not your fault: `pylint` and `mypy`
-  under iris/ and memiris/ run through `poetry`, and there is no network to
-  install those environments with. If one of those is what failed, say so in
-  your summary and move on.
-  A session that skips linting hands somebody a red pull request over a
-  blank line, so do not skip it.
+  CI runs, with the same pinned hook versions. Which hooks a service runs is
+  the repository's own convention — its AGENTS.md documents them and its
+  pre-commit config enforces them — so you do not need to re-list them here.
+  They are installed in this image, so it works with no network. Some of the
+  hooks reformat in place: a hook that reports "files were modified by this
+  hook" has already fixed your files, so run the command again and expect it
+  to pass the second time. What a linter reports, you fix yourself. To check
+  one hook rather than all of them, name it (`pre-commit run <hook> --files
+  <files>`); to see every hook a file goes through, add `--verbose`. A few
+  hooks cannot run in this image without a network; if one of those is what
+  failed, say so in your summary and move on rather than blocking on it. A
+  session that skips linting hands somebody a red pull request over a blank
+  line, so do not skip it.
 - If the task turns out to be impossible or already done, say so plainly
   instead of inventing changes.
 """.strip()
