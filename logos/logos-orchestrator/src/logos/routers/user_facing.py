@@ -171,7 +171,11 @@ async def list_models(request: Request):
     anthropic_shape = _ANTHROPIC_VERSION_HEADER in request.headers
     with DBManager() as db:
         models = db.get_models_for_api_key(auth.api_key_id)
-        other_models = db.get_all_model_names_with_aliases() if anthropic_shape else None
+        # Only administrator keys resolve against every model (the same test
+        # as proxy mode in main.py); for any other key a hidden model cannot
+        # capture a prefixed id, so it must not hide a usable one.
+        admin_scope = auth.role in ("logos_admin", "app_admin")
+        other_models = db.get_all_model_names_with_aliases() if anthropic_shape and admin_scope else None
 
     stats = _served_context_window_stats()
 

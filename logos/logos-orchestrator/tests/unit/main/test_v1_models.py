@@ -657,6 +657,7 @@ async def _list_anthropic_body(
     catalog=None,
     query_params=None,
     hidden=None,
+    role=None,
 ):
     """Call list_models the way an Anthropic client does and return the body."""
     import json
@@ -673,7 +674,7 @@ async def _list_anthropic_body(
     )
     monkeypatch.setattr(main, "_logosnode_registry", registry)
     with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
-        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key", role=role)
         response = await user_facing_mod.list_models(_anthropic_request(query_params))
     return json.loads(response.body)
 
@@ -744,13 +745,26 @@ async def test_list_models_anthropic_never_advertises_a_colliding_id(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_list_models_anthropic_checks_collisions_against_hidden_models(monkeypatch):
+@pytest.mark.parametrize("role", ["logos_admin", "app_admin"])
+async def test_list_models_anthropic_admin_checks_collisions_against_hidden_models(monkeypatch, role):
     """The proxy resolver searches every model for administrator keys, so a
-    claude-foo this key cannot see would still capture foo's prefixed id."""
+    claude-foo the key's permissions do not cover would still capture foo's
+    prefixed id."""
     models = [{"id": 1, "name": "foo", "description": None}]
     hidden = [{"name": "claude-foo", "aliases": []}]
-    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), hidden=hidden)
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), hidden=hidden, role=role)
     assert [entry["id"] for entry in body["data"]] == ["foo"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [None, "app_developer"])
+async def test_list_models_anthropic_non_admin_ignores_hidden_models(monkeypatch, role):
+    """A non-admin key resolves only among its permitted models, so a hidden
+    claude-foo cannot capture foo and foo keeps its prefixed, visible id."""
+    models = [{"id": 1, "name": "foo", "description": None}]
+    hidden = [{"name": "claude-foo", "aliases": []}]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), hidden=hidden, role=role)
+    assert [entry["id"] for entry in body["data"]] == ["claude-foo"]
 
 
 @pytest.mark.asyncio
