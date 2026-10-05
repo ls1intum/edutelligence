@@ -42,43 +42,19 @@ _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 def _anthropic_entries(models: list[dict], stats: dict) -> list[tuple[str, str, Optional[str]]]:
     """(id, model_name, description) rows for the Anthropic listing.
 
-    Mirrors the OpenAI listing exactly: every accessible model plus each alias
-    that resolves to a single accessible model. ``model_name`` is the canonical
-    name the context-window stats are keyed by, so an alias carries the window
-    of the model it points at.
+    One row per accessible model, aliases left out. ``model_name`` is the
+    canonical name the context-window stats are keyed by.
 
-    Each id is followed by its ``claude-`` prefixed twin (see
-    ``claude_visible_id``): Claude Code drops every gateway model whose id has
-    no "claude"/"anthropic" in it, so without the twin /model lists nothing.
-    The request path strips the prefix again.
+    Claude Code drops every gateway model whose id has no "claude"/"anthropic"
+    in it, so each id is listed as ``claude-<name>`` (see ``claude_visible_id``)
+    and only in that form. The request path strips the prefix again, and the
+    plain name and the aliases keep resolving there.
     """
-    # An alias that (case-insensitively) belongs to more than one accessible
-    # model cannot be resolved at request time, so it is not advertised.
-    alias_owners: dict[str, set[str]] = {}
-    for model in models:
-        for alias in model.get("aliases") or []:
-            alias_owners.setdefault(str(alias).strip().lower(), set()).add(model["name"])
-
     entries: list[tuple[str, str, Optional[str]]] = []
-
-    def add(entry_id: str, name: str, description: Optional[str]) -> None:
-        entries.append((entry_id, name, description))
-        twin = claude_visible_id(entry_id)
-        if twin is not None:
-            # The picker shows display_name, so the twin keeps the plain id there.
-            entries.append((twin, name, description or entry_id))
-
     for model in models:
         name = model["name"]
-        description = model.get("description")
-        add(name, name, description)
-        seen: set[str] = set()
-        for alias in model.get("aliases") or []:
-            key = str(alias).strip().lower()
-            if key in seen or len(alias_owners.get(key, set())) != 1:
-                continue
-            seen.add(key)
-            add(str(alias), name, description)
+        # The picker shows display_name, so the prefixed id keeps the plain name there.
+        entries.append((claude_visible_id(name) or name, name, model.get("description") or name))
     return entries
 
 

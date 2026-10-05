@@ -163,10 +163,11 @@ slot (`opus`, `sonnet`, `haiku`, …) is pinned to that id — useful as a defau
 not required for the setup flow.
 
 Claude Code only lists a gateway model in `/model` when its id contains `claude`
-or `anthropic`. The Anthropic-shaped `GET /v1/models` therefore lists every other
-id twice, plain and as `claude-<id>` (`claude-Qwen/Qwen3.8-27B`), with the same
-window and display name. A request for `claude-<id>` resolves to `<id>` unless a
-model with exactly that name exists. The OpenAI-shaped listing is unchanged.
+or `anthropic`. The Anthropic-shaped `GET /v1/models` therefore lists each model
+once, as `claude-<id>` (`claude-Qwen/Qwen3.8-27B`), with the plain name as display
+name and no aliases. A request for `claude-<id>` resolves to `<id>` unless a model
+with exactly that name exists; the plain name and aliases keep working in requests.
+The OpenAI-shaped listing is unchanged.
 
 It also does two things with the listing it already has in hand:
 
