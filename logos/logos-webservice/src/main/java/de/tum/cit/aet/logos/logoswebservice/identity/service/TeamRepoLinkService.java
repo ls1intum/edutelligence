@@ -299,7 +299,7 @@ public class TeamRepoLinkService {
             .isPresent();
         m.put("has_credentials", hasCredentials);
         Optional<AiWorkflowAnalysis> latest = analysisRepository
-            .findFirstByTeamRepositoryIdAndStatusOrderByFinishedAtDesc(link.getId(), "succeeded");
+            .findLatestSucceeded(link.getId());
         if (latest.isPresent()) {
             AiWorkflowAnalysis a = latest.get();
             Map<String, Object> summary = new LinkedHashMap<>();

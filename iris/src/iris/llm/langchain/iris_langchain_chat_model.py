@@ -103,13 +103,8 @@ class IrisLangchainChatModel(BaseChatModel):
             self.last_token_logprobs = iris_message.token_logprobs
             self.last_token_logprob_entries = iris_message.token_logprob_entries
         chat_generation = ChatGeneration(message=base_message)
-        self.tokens = TokenUsageDTO(
-            model=iris_message.token_usage.model_info,
-            numInputTokens=iris_message.token_usage.num_input_tokens,
-            costPerMillionInputToken=iris_message.token_usage.cost_per_million_input_token,
-            numOutputTokens=iris_message.token_usage.num_output_tokens,
-            costPerMillionOutputToken=iris_message.token_usage.cost_per_million_output_token,
-            pipeline=PipelineEnum.NOT_SET,
+        self.tokens = iris_message.token_usage.model_copy(
+            update={"pipeline": PipelineEnum.NOT_SET}
         )
         return ChatResult(generations=[chat_generation])
 

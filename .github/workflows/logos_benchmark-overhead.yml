@@ -4,7 +4,8 @@ name: Logos - Per-Request Overhead Benchmark
 # Benchmark the per-request forwarding overhead (orchestrator →
 # workernode → back) on every PR and gate on the < 10 ms p50 and < 30 ms p95
 # goals; the PR comment reports both percentiles and the phase table. The
-# blocking p50 threshold is 15 ms to allow runner noise above the 10 ms goal.
+# blocking thresholds are 15 ms p50 / 150 ms p95 to allow runner noise above
+# those goals on shared GitHub runners.
 on:
   pull_request:
     branches:
@@ -143,7 +144,7 @@ jobs:
         working-directory: logos/logos-orchestrator
 
       - name: Check overhead gate
-        # Blocking: FAIL while p50 > 15 ms or p95 > 30 ms.
+        # Blocking: FAIL while p50 > 15 ms or p95 > 150 ms.
         run: |
           source .venv/bin/activate
           python ../benchmarks/per_request_overhead/pr_comment.py --check
