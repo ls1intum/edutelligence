@@ -21,6 +21,7 @@ import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './stat
 import {
   applyTimeSeriesLabels,
   chooseDynamicTargetBuckets,
+  describeWorkerVersion,
   extractProviderHostRamMb,
   extractProviderVramMb,
   formatPercent,
@@ -53,6 +54,7 @@ import type {
   VramProviderMeta,
   VramV2Payload,
   VramV2Sample,
+  WorkerVersionChip,
 } from './statistics.models';
 
 // Child components
@@ -69,6 +71,7 @@ import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
+import { VersionHint } from './components/version-hint/version-hint';
 import { VramDonutComponent, type DonutSlice } from './components/vram-donut/vram-donut';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
@@ -80,6 +83,7 @@ type ProviderGlassRow = {
   name: string;
   online: boolean;
   calibrating: boolean;
+  versionChip: WorkerVersionChip | null;
   lanes: Record<string, LaneSignalData>;
   hasLanes: boolean;
   laneCount: number;
@@ -120,6 +124,7 @@ type ProviderGlassRow = {
     StatKpiCardComponent,
     StatusBars,
     StatsSkeletonComponent,
+    VersionHint,
     VramDonutComponent,
     WorkerGpuPanel,
     TimeRangeBarComponent,
@@ -629,6 +634,7 @@ export class Statistics implements OnInit, OnDestroy {
         name,
         online: this._isProviderOnline(name),
         calibrating: metaByName[name]?.calibrating === true,
+        versionChip: describeWorkerVersion(metaByName[name]?.worker_version_checksum, this._isProviderOnline(name)),
         lanes,
         hasLanes: Object.keys(lanes).length > 0,
         laneCount: Object.keys(lanes).length,
@@ -1372,6 +1378,10 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Raw-series updaters ───────────────────────────────────────────────────────
 
+  /**
+   * Replaces everything held per provider (samples, metadata, devices) with a
+   * full-day payload, as the websocket's init message delivers it.
+   */
   private replaceRawVramSeries(providers: any[]): void {
     const next: Record<string, VramV2Sample[]> = {};
     const nextMeta: Record<string, VramProviderMeta> = {};
@@ -1398,6 +1408,7 @@ export class Statistics implements OnInit, OnDestroy {
         last_heartbeat: provider.last_heartbeat,
         connected_at: provider.connected_at,
         worker_started_at: provider.worker_started_at,
+        worker_version_checksum: provider.worker_version_checksum,
         calibrating: Boolean(provider.calibrating),
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
@@ -1410,6 +1421,12 @@ export class Statistics implements OnInit, OnDestroy {
     this.devicesByProvider.set(nextDevices);
   }
 
+  /**
+   * Applies a delta payload: each provider's metadata and devices first, then
+   * its new samples merged into the series already held. A delta can carry no
+   * samples at all (a worker went offline, or reports another version), so the
+   * metadata is taken from it whether or not samples came with it.
+   */
   private appendRawVramSeries(providers: any[]): void {
     if (!providers || providers.length === 0) return;
 
@@ -1427,6 +1444,7 @@ export class Statistics implements OnInit, OnDestroy {
         last_heartbeat: provider.last_heartbeat,
         connected_at: provider.connected_at,
         worker_started_at: provider.worker_started_at,
+        worker_version_checksum: provider.worker_version_checksum,
         calibrating: Boolean(provider.calibrating),
       };
       const current = prevMeta[provider.name];
@@ -1440,6 +1458,7 @@ export class Statistics implements OnInit, OnDestroy {
         current?.last_heartbeat === meta.last_heartbeat &&
         current?.connected_at === meta.connected_at &&
         current?.worker_started_at === meta.worker_started_at &&
+        current?.worker_version_checksum === meta.worker_version_checksum &&
         Boolean(current?.calibrating) === meta.calibrating;
       if (!same) {
         if (nextMeta === prevMeta) nextMeta = { ...prevMeta };

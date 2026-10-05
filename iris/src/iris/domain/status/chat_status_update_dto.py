@@ -3,12 +3,15 @@ from typing import List, Optional
 from memiris.api.memory_dto import MemoryDTO
 from pydantic import Field
 
+from iris.domain.data.compaction_dto import CompactionDTO
 from iris.domain.status.activity_dto import ActivityDTO
 from iris.domain.status.status_update_dto import StatusUpdateDTO
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 
 
 class ChatStatusUpdateDTO(StatusUpdateDTO):
+    """Status update that Pyris sends to Artemis while a chat run is in progress."""
+
     result: Optional[str] = None
     final: Optional[bool] = Field(alias="final", default=None)
     partial_result: Optional[str] = Field(alias="partialResult", default=None)
@@ -22,3 +25,4 @@ class ChatStatusUpdateDTO(StatusUpdateDTO):
     suggested_context: Optional[SuggestedContextDTO] = Field(
         alias="suggestedContext", default=None
     )
+    compaction: Optional[CompactionDTO] = None

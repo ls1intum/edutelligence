@@ -70,6 +70,7 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
 
     pipeline.prepare_state = lambda state: None
     pipeline.build_system_message = lambda state: "system prompt"
+    pipeline.build_turn_context_message = lambda state: "turn context"
     pipeline.get_tools = lambda state: []
     pipeline.pre_agent_hook = lambda state: None
 
@@ -116,6 +117,10 @@ def _run_pipeline(pipeline: ChatPipeline, callback: MagicMock) -> None:
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
         patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
+        patch(
+            "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
+            return_value=None,
+        ),
         patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
         patch("iris.pipeline.chat.chat_pipeline.mcq_post_agent_hook"),
     ):
