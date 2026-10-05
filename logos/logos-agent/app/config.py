@@ -185,6 +185,14 @@ class Settings:
         for name in os.getenv("LOGOS_AGENT_REVIEW_BOTS", "coderabbitai[bot],Claudia-Anthropica").split(",")
         if name.strip()
     )
+    # Who is asked to review a pull request this runner just opened. Separate
+    # from ``review_bots``: that list is who may *direct* the agent on its
+    # own work; this one is who GitHub is asked to review it. Default is
+    # Claudia alone — CodeRabbit reviews via its own app installation and
+    # does not need a review request.
+    pr_reviewers: tuple[str, ...] = tuple(
+        name.strip() for name in os.getenv("LOGOS_AGENT_PR_REVIEWERS", "Claudia-Anthropica").split(",") if name.strip()
+    )
     # Wall-clock ceiling for one session, or 0 for none — which is the
     # default. A clock is the wrong thing to stop an agent with: a session
     # that has read the repository for two hours and is halfway through a

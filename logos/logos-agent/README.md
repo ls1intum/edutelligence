@@ -351,6 +351,12 @@ handover that dropped the review left the agent reconstructing one from
 the diff. Strangers still cannot start a session or steer a push. Setting
 the variable to nothing removes the exception.
 
+**It asks Claudia to review what it opened.** A fresh pull request from an
+issue session requests `Claudia-Anthropica` (`LOGOS_AGENT_PR_REVIEWERS`)
+in addition to whatever CODEOWNERS already names. A reused pull request
+asks again — GitHub treats a repeat as a no-op when she is already
+requested. Empty the variable to leave only CODEOWNERS.
+
 **It reads the pull request it is asked about.** A question on somebody
 else's pull request used to be answered from a checkout of the default
 branch — the agent was asked about a diff it had never seen, and could only
