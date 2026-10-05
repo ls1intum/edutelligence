@@ -81,6 +81,14 @@ coding-agent sessions: what each is working on, its state, and its pull
 request. The page is reachable to every Logos Admin; the **Agents** entry in
 the sidebar only appears when the deployment runs the optional agent stack.
 
+Repository analyses of the teams' linked repositories run here too. They
+re-run every night for repositories with new commits; **Analyze all
+repositories** queues one for every linked repository right away, regardless
+of commit — for example after the analysis itself was improved. Repositories
+that already have an analysis queued or running are left alone. Results reach
+the teams as proposals on their **Workflows** tab
+([Team detail](app-admin.md#workflows)).
+
 ![Agent Sessions page](/img/roles/logos-admin-agents.png)
 
 ## My Workspace

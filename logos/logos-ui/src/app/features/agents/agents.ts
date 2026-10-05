@@ -10,6 +10,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AgentService } from '../../core/services/agent.service';
+import { TeamManagementService } from '../../core/services/team-management.service';
 import {
   AgentCapacity,
   AgentControls,
@@ -38,6 +39,7 @@ const POLL_MS = 4000;
 })
 export class Agents implements OnInit {
   private agentService = inject(AgentService);
+  private teamService = inject(TeamManagementService);
   private destroyRef = inject(DestroyRef);
   /** Local clock: elapsed timings keep moving even when session polling stops. */
   private now = signal(Date.now());
@@ -55,6 +57,8 @@ export class Agents implements OnInit {
   controlBusy = signal(false);
   loading = signal(true);
   error = signal<string | null>(null);
+  analyzingAll = signal(false);
+  analyzeAllMessage = signal<string | null>(null);
 
   // ── selected session ─────────────────────────────────────────────────────
   selectedId = signal<number | null>(null);
@@ -721,6 +725,22 @@ export class Agents implements OnInit {
 
   selectModel(name: string): void {
     this.formModel.set(name || null);
+  }
+
+  /** Queue an analysis of every linked team repository, regardless of commit. */
+  async analyzeAllRepositories(): Promise<void> {
+    if (this.analyzingAll()) return;
+    this.analyzingAll.set(true);
+    this.analyzeAllMessage.set(null);
+    try {
+      const result = await this.teamService.analyzeAllRepositories();
+      this.analyzeAllMessage.set(result.message);
+      await this.refresh({ quiet: true });
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not queue the repository analyses.'));
+    } finally {
+      this.analyzingAll.set(false);
+    }
   }
 
   /** Where a session came from, for the list. */
