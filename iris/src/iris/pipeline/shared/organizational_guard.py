@@ -254,20 +254,24 @@ def parse_evidence_verdict(text: str | None) -> EvidenceVerdict | None:
         return None
 
 
-def verdict_allows_publication(verdict: EvidenceVerdict | None) -> bool:
+def verdict_allows_publication(
+    verdict: EvidenceVerdict | None, *, evidence: list[str]
+) -> bool:
     """Whether an answer may keep a confidence that lets Artemis publish it unreviewed.
 
     Two outcomes pass: the answer states no organizational fact at all, or it states
     some and every one of them is explicitly backed by the evidence. Anything else —
-    no verdict, an unsupported fact, or a verdict that contradicts itself — sends the
-    answer to a tutor.
+    no verdict, an unsupported fact, a fact declared supported while there was no
+    evidence to support it, or a verdict that contradicts itself — sends the answer to
+    a tutor.
     """
     if verdict is None:
         return False
     if not verdict.has_organizational_facts:
         return not verdict.facts
     return (
-        bool(verdict.facts)
+        bool(evidence)
+        and bool(verdict.facts)
         and all(fact.supported for fact in verdict.facts)
         and verdict.all_supported
     )

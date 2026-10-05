@@ -127,7 +127,7 @@ whose sources are no longer readable, or that reports none, goes to tutor review
 
 Organizational facts (dates, rooms, deadlines, grading, exam scope, …) in a reply that would be published unreviewed
 are checked by an LLM against the answers of tutor-verified entries; anything not explicitly backed sends the reply to
-review. FAQs do not count as evidence until FAQ entries are scoped to their instance.
+review, and so does a reply with organizational facts when the run found no tutor-verified entry at all. FAQs do not count as evidence until FAQ entries are scoped to their instance.
 
 ## 6. Status callback (Iris → Artemis)
 
@@ -139,8 +139,11 @@ exactly one terminal state. Skips (feature disabled, non-public channel) finish 
 
 Two endpoints, both `202 Accepted`, processed in the background; no status callback.
 
-- `POST /api/v1/webhooks/course-memory/sync/instance` — `{ settings, snapshotAt, courseIds }`: every course that
-  exists. Iris retracts the live entries of every other course of this instance.
+- `POST /api/v1/webhooks/course-memory/sync/instance` — `{ settings, snapshotAt, courseIds, courseIdsWithThreads }`:
+  every course that exists, and those of them with at least one thread that has a version. Both lists are required,
+  also when empty. Iris raises every object of a course not in `courseIds` (deleted course) to a tombstone with the
+  final version, tombstones included. For an existing course not in `courseIdsWithThreads`, Artemis sends no course
+  sync; Iris retracts its live entries at their stored version, as for unlisted threads below.
 - `POST /api/v1/webhooks/course-memory/sync/course` — `{ settings, snapshotAt, courseId, threads: [{ postId, version,
 eligible }] }`: the **complete** list of the course's threads that have a version. Iris, per object of the course:
   listed and eligible with stored version ≥ listed → keep; listed and eligible with an older stored version → retract

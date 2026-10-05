@@ -213,16 +213,24 @@ def test_other_courses_and_other_instances_are_untouched():
     )
 
 
+def _instance_sync(course_ids, course_ids_with_threads):
+    return CourseMemoryInstanceSyncDTO.model_validate(
+        {
+            "settings": _settings(),
+            "snapshotAt": NOW.isoformat(),
+            "courseIds": course_ids,
+            "courseIdsWithThreads": course_ids_with_threads,
+        }
+    )
+
+
 def test_entries_of_deleted_courses_are_retracted_for_good():
     collection = FakeCollection()
     collection.put("11", 4, course_id=7)
     collection.put("12", 4, course_id=9)
     collection.put("13", 4, course_id=9, base_url=OTHER)
-    dto = CourseMemoryInstanceSyncDTO.model_validate(
-        {"settings": _settings(), "snapshotAt": NOW.isoformat(), "courseIds": [7]}
-    )
 
-    _deleter(collection).sync_instance(dto)
+    _deleter(collection).sync_instance(_instance_sync([7], [7]))
 
     assert collection.get("11", course_id=7)[CourseMemorySchema.DELETED.value] is False
     deleted_course = collection.get("12", course_id=9)
@@ -230,6 +238,70 @@ def test_entries_of_deleted_courses_are_retracted_for_good():
     assert deleted_course[CourseMemorySchema.VERSION.value] == cm_module.FINAL_VERSION
     other = collection.get("13", course_id=9, base_url=OTHER)
     assert other[CourseMemorySchema.DELETED.value] is False
+
+
+def test_tombstones_of_deleted_courses_are_raised_to_the_final_version():
+    # A finite tombstone would let an ingestion with a higher version that is still
+    # running bring an entry of the deleted course back.
+    collection = FakeCollection()
+    collection.put("12", 4, course_id=9, deleted=True)
+
+    _deleter(collection).sync_instance(_instance_sync([7], [7]))
+
+    assert (
+        collection.get("12", course_id=9)[CourseMemorySchema.VERSION.value]
+        == cm_module.FINAL_VERSION
+    )
+
+
+def test_course_whose_last_thread_is_gone_is_cleaned_up():
+    # Artemis sends no course sync for a course without threads; the instance sync
+    # retracts its entries at their stored version, so the course can be used again.
+    collection = FakeCollection()
+    collection.put("11", 4, course_id=8)
+    collection.put("12", 3, course_id=8, deleted=True)
+    collection.put("13", 1, course_id=8, at=NOW + timedelta(minutes=1))
+
+    _deleter(collection).sync_instance(_instance_sync([7, 8], [7]))
+
+    gone = collection.get("11", course_id=8)
+    assert gone[CourseMemorySchema.DELETED.value] is True
+    assert gone[CourseMemorySchema.VERSION.value] == 4
+    assert collection.get("12", course_id=8)[CourseMemorySchema.VERSION.value] == 3
+    assert collection.get("13", course_id=8)[CourseMemorySchema.DELETED.value] is False
+
+
+def test_course_with_threads_is_left_to_its_course_sync():
+    collection = FakeCollection()
+    collection.put("11", 4, course_id=7)
+
+    _deleter(collection).sync_instance(_instance_sync([7], [7]))
+
+    assert collection.get("11", course_id=7)[CourseMemorySchema.DELETED.value] is False
+
+
+def test_an_instance_sync_without_both_lists_is_rejected():
+    # A list that went missing on the way must never read as "no courses".
+    for payload in ({"courseIds": [7]}, {"courseIdsWithThreads": [7]}):
+        try:
+            CourseMemoryInstanceSyncDTO.model_validate(
+                {"settings": _settings(), "snapshotAt": NOW.isoformat()} | payload
+            )
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {payload}")
+
+
+def test_an_empty_instance_retracts_every_course_for_good():
+    collection = FakeCollection()
+    collection.put("11", 4, course_id=7)
+
+    _deleter(collection).sync_instance(_instance_sync([], []))
+
+    assert (
+        collection.get("11", course_id=7)[CourseMemorySchema.VERSION.value]
+        == cm_module.FINAL_VERSION
+    )
 
 
 def test_a_thread_without_the_eligible_flag_counts_as_not_eligible():

@@ -481,7 +481,7 @@ class AutonomousTutorPipeline(
             state, self._evidence_check_question(state.dto.post), evidence
         )
         verdict = parse_evidence_verdict(raw_verdict)
-        allowed = verdict_allows_publication(verdict)
+        allowed = verdict_allows_publication(verdict, evidence=evidence)
         logger.info(
             "Organizational evidence check | model=%s parsed=%s organizational=%s "
             "facts=%d supported=%d evidence=%d keyword_category=%s publish=%s",

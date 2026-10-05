@@ -55,9 +55,14 @@ class CourseMemoryCourseSyncDTO(_SyncDTO):
 
 
 class CourseMemoryInstanceSyncDTO(_SyncDTO):
-    """Every course of the Artemis instance that still exists.
+    """Every course of the Artemis instance that still exists, and those with threads.
 
-    Entries of courses not in the list belong to deleted courses and are retracted.
+    Entries of courses not in ``course_ids`` belong to deleted courses and are retracted
+    for good. Entries of existing courses not in ``course_ids_with_threads`` belong to
+    threads that no longer exist; Artemis sends no course sync for such a course, so this
+    request retracts them. Both lists are required: a list that went missing on the way
+    must not read as "no courses".
     """
 
     course_ids: List[int] = Field(alias="courseIds")
+    course_ids_with_threads: List[int] = Field(alias="courseIdsWithThreads")

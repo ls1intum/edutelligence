@@ -279,23 +279,38 @@ class CourseMemoryDeleter:
         return counts
 
     def sync_instance(self, dto: CourseMemoryInstanceSyncDTO) -> Dict[str, int]:
-        """Retract every live entry of a course that no longer exists in Artemis."""
+        """Reconcile the courses for which Artemis sends no course sync.
+
+        * course deleted: every object, tombstones included, is raised to the final
+          version, so no ingestion that is still running can bring an entry back;
+        * course exists but has no thread with a version any more: its live entries are
+          treated like unlisted threads in :meth:`sync_course` and retracted at their
+          stored version;
+        * course with threads: left to its course sync.
+
+        Objects written after the snapshot (minus the clock margin) are skipped.
+        """
         base_url = dto.base_url
         existing_courses = set(dto.course_ids)
+        courses_with_threads = set(dto.course_ids_with_threads)
         cutoff = dto.snapshot_at.astimezone(timezone.utc) - _SYNC_CLOCK_MARGIN
         counts = {"retracted": 0, "skipped": 0, "failed": 0}
         for props in list(self._objects_of_instance(base_url)):
             course_id = props.get(CourseMemorySchema.COURSE_ID.value)
-            if course_id in existing_courses or props.get(
-                CourseMemorySchema.DELETED.value
-            ):
+            if course_id in courses_with_threads:
+                continue
+            stored = int(props.get(CourseMemorySchema.VERSION.value) or 0)
+            tombstone = bool(props.get(CourseMemorySchema.DELETED.value))
+            course_deleted = course_id not in existing_courses
+            if tombstone and (not course_deleted or stored == FINAL_VERSION):
                 continue
             written_at = _as_utc(props.get(CourseMemorySchema.WRITTEN_AT.value))
             if written_at is not None and written_at > cutoff:
                 counts["skipped"] += 1
                 continue
             post_id = props.get(CourseMemorySchema.POST_ID.value)
-            if self.delete_for_thread(base_url, post_id, course_id, FINAL_VERSION):
+            target = FINAL_VERSION if course_deleted else stored
+            if self.delete_for_thread(base_url, post_id, course_id, target):
                 counts["retracted"] += 1
             else:
                 counts["failed"] += 1

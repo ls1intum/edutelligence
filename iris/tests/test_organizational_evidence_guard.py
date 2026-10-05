@@ -146,7 +146,7 @@ def test_no_organizational_facts_passes():
     verdict = parse_evidence_verdict(
         _verdict(has_organizational_facts=False, facts=[], all_supported=True)
     )
-    assert verdict_allows_publication(verdict)
+    assert verdict_allows_publication(verdict, evidence=[])
 
 
 def test_all_facts_supported_passes():
@@ -157,7 +157,14 @@ def test_all_facts_supported_passes():
             all_supported=True,
         )
     )
-    assert verdict_allows_publication(verdict)
+    assert verdict_allows_publication(verdict, evidence=["The exam is on July 30th."])
+
+
+def test_supported_facts_without_any_evidence_are_held_back():
+    # A checker that declares a fact supported while it was given nothing to support
+    # it contradicts its input; the answer goes to a tutor.
+    verdict = parse_evidence_verdict(SUPPORTED)
+    assert not verdict_allows_publication(verdict, evidence=[])
 
 
 @pytest.mark.parametrize(
@@ -199,7 +206,9 @@ def test_all_facts_supported_passes():
     ],
 )
 def test_anything_else_holds_the_answer_back(raw):
-    assert not verdict_allows_publication(parse_evidence_verdict(raw))
+    assert not verdict_allows_publication(
+        parse_evidence_verdict(raw), evidence=["The exam is on July 30th."]
+    )
 
 
 def test_code_fenced_verdict_is_accepted():
@@ -208,7 +217,7 @@ def test_code_fenced_verdict_is_accepted():
         + _verdict(has_organizational_facts=False, facts=[], all_supported=True)
         + "\n```"
     )
-    assert verdict_allows_publication(parse_evidence_verdict(raw))
+    assert verdict_allows_publication(parse_evidence_verdict(raw), evidence=[])
 
 
 def test_checker_input_keeps_fields_apart():
@@ -304,6 +313,21 @@ def test_supported_answer_keeps_its_score(pipeline, monkeypatch):
     assert pipeline._apply_organizational_guard(state, 0.93) == 0.93
     # Only the tutor-verified answer reaches the checker as evidence.
     assert calls[0][1] == ["July 30th."]
+
+
+@pytest.mark.parametrize(
+    "memories",
+    [[], [_memory("THREAD_RESOLVED")]],
+    ids=["no-retrieval", "community-only"],
+)
+def test_supported_verdict_without_tutor_evidence_is_capped(
+    pipeline, monkeypatch, guard_cap, memories
+):
+    # Community answers are no evidence; a "supported" verdict over nothing is capped.
+    _checker(pipeline, monkeypatch, SUPPORTED)
+    state = _state("When is the exam?", memories=memories)
+
+    assert pipeline._apply_organizational_guard(state, 0.93) == guard_cap
 
 
 def test_subject_matter_answer_keeps_its_score(pipeline, monkeypatch):
