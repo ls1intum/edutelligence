@@ -389,6 +389,85 @@
   }
 }
 
+// ── CSV import: mapping + preview ─────────────────────────────────────
+.import-mapping {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.import-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.import-count {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+}
+
+.import-toolbar__actions {
+  display: inline-flex;
+  gap: 14px;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-text-accent));
+  cursor: pointer;
+
+  &:hover:not(:disabled) { text-decoration: underline; }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+}
+
+.import-preview-scroll {
+  max-height: 360px;
+  overflow: auto;
+  border-radius: 8px;
+
+  // The data table carries its own margin-top; drop it inside the scroll box.
+  .table-card { margin-top: 0; }
+}
+
+.import-preview-row {
+  &--existing {
+    opacity: var(--opacity-muted);
+  }
+}
+
+.col-select {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-row-cb {
+  width: 15px;
+  height: 15px;
+  accent-color: rgb(var(--color-primary-500));
+  cursor: pointer;
+}
+
+.import-preview-cell {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-0));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-status.status-new {
+  background: rgb(var(--color-primary-400) / var(--opacity-faint));
+  color: rgb(var(--color-typography-300));
+}
+
 // ── Mobile ────────────────────────────────────────────────────────────
 @media (max-width: 768px) {
   .user-management { padding: 24px 16px 32px; }
@@ -412,6 +491,13 @@
 
   .col-role { display: none; }
   .col-actions { display: none; }
+
+  // Preview table row checkbox floats to the card's top-left on mobile.
+  .import-preview-row .col-select {
+    position: absolute;
+    top: 8px;
+    left: 10px;
+  }
 
   .name-mobile-actions {
     display: flex;
