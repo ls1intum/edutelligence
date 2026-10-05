@@ -20,6 +20,7 @@ not affect connectedness — patch
 """
 
 import datetime
+import re
 from typing import Any, Dict, Optional
 
 from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
@@ -90,7 +91,42 @@ def _planner_model_alias(model_name: str) -> str:
     return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
 
 
+# Claude Code only offers a gateway model in /model when its id contains
+# "claude" or "anthropic", so GET /v1/models (Anthropic shape) also advertises
+# every model as ``claude-<id>``. ``claude_visible_id`` builds that id and
+# ``_resolve_requested_model_name`` takes the prefix off again.
+CLAUDE_MODEL_PREFIX = "claude-"
+_CLAUDE_CODE_VISIBLE = re.compile(r"claude|anthropic", re.IGNORECASE)
+
+
+def claude_visible_id(model_id: str) -> Optional[str]:
+    """The ``claude-`` prefixed id for ``model_id``, or None when it already
+    contains "claude"/"anthropic" and so needs no second listing."""
+    if _CLAUDE_CODE_VISIBLE.search(model_id):
+        return None
+    return f"{CLAUDE_MODEL_PREFIX}{model_id}"
+
+
 def _resolve_requested_model_name(
+    requested_name: str,
+    available_models: list[Dict[str, Any]],
+) -> Optional[str]:
+    """Resolve a user-supplied model id, also accepting the advertised
+    ``claude-`` prefixed form of any model.
+
+    The name as written always wins, so a model genuinely called
+    ``claude-foo`` is never shadowed by the prefix of a model called ``foo``.
+    """
+    resolved = _resolve_exact_model_name(requested_name, available_models)
+    if resolved is not None:
+        return resolved
+    requested = str(requested_name or "").strip()
+    if requested.lower().startswith(CLAUDE_MODEL_PREFIX):
+        return _resolve_exact_model_name(requested[len(CLAUDE_MODEL_PREFIX) :], available_models)
+    return None
+
+
+def _resolve_exact_model_name(
     requested_name: str,
     available_models: list[Dict[str, Any]],
 ) -> Optional[str]:

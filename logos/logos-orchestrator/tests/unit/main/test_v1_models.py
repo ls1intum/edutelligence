@@ -679,9 +679,9 @@ async def test_list_models_anthropic_shape(monkeypatch):
     body = await _list_anthropic_body(monkeypatch, models, registry)
 
     assert body["first_id"] == "qwen-27b"
-    assert body["last_id"] == "gpt-4o"
+    assert body["last_id"] == "claude-gpt-4o"
     assert body["has_more"] is False
-    assert [entry["id"] for entry in body["data"]] == ["qwen-27b", "gpt-4o"]
+    assert [entry["id"] for entry in body["data"]] == ["qwen-27b", "claude-qwen-27b", "gpt-4o", "claude-gpt-4o"]
 
     first = body["data"][0]
     assert first["type"] == "model"
@@ -693,10 +693,36 @@ async def test_list_models_anthropic_shape(monkeypatch):
     assert first["capabilities"] is None
     assert first["allowed_fallback_models"] is None
 
-    second = body["data"][1]
+    # The claude- twin carries the same window and the plain display name.
+    twin = body["data"][1]
+    assert twin["display_name"] == "Qwen 27B"
+    assert twin["max_input_tokens"] == 33000
+
+    third = body["data"][2]
     # No description: the id is the display name. No known window: null.
-    assert second["display_name"] == "gpt-4o"
-    assert second["max_input_tokens"] is None
+    assert third["display_name"] == "gpt-4o"
+    assert third["max_input_tokens"] is None
+    # ... and so is the twin's, without the prefix.
+    assert body["data"][3]["display_name"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_adds_claude_prefixed_twins(monkeypatch):
+    """Claude Code drops gateway models whose id lacks "claude"/"anthropic",
+    so every other id is also listed as claude-<id>. An id that already
+    contains either word needs no twin."""
+    models = [
+        {"id": 1, "name": "Qwen/Qwen3.8-27B", "description": None},
+        {"id": 2, "name": "claude-native", "description": None},
+        {"id": 3, "name": "my-Anthropic-proxy", "description": None},
+    ]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
+    assert [entry["id"] for entry in body["data"]] == [
+        "Qwen/Qwen3.8-27B",
+        "claude-Qwen/Qwen3.8-27B",
+        "claude-native",
+        "my-Anthropic-proxy",
+    ]
 
 
 @pytest.mark.asyncio
@@ -757,9 +783,9 @@ async def test_list_models_anthropic_limit_caps_the_page(monkeypatch):
     models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(5)]
     body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"limit": "2"})
 
-    assert [entry["id"] for entry in body["data"]] == ["model-0", "model-1"]
+    assert [entry["id"] for entry in body["data"]] == ["model-0", "claude-model-0"]
     assert body["first_id"] == "model-0"
-    assert body["last_id"] == "model-1"
+    assert body["last_id"] == "claude-model-0"
     assert body["has_more"] is True
 
 
@@ -768,7 +794,7 @@ async def test_list_models_anthropic_limit_without_a_remainder(monkeypatch):
     """A limit that covers the whole list still says has_more: false."""
     models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(3)]
     body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"limit": "10"})
-    assert len(body["data"]) == 3
+    assert len(body["data"]) == 6
     assert body["has_more"] is False
 
 
@@ -777,11 +803,13 @@ async def test_list_models_anthropic_after_id_cursors_past_a_model(monkeypatch):
     """after_id starts the page after the named model, so pagination walks
     the listing without repeating entries."""
     models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(3)]
-    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"after_id": "model-1"})
+    body = await _list_anthropic_body(
+        monkeypatch, models, DummyRegistry({}), query_params={"after_id": "claude-model-1"}
+    )
 
-    assert [entry["id"] for entry in body["data"]] == ["model-2"]
+    assert [entry["id"] for entry in body["data"]] == ["model-2", "claude-model-2"]
     assert body["first_id"] == "model-2"
-    assert body["last_id"] == "model-2"
+    assert body["last_id"] == "claude-model-2"
     assert body["has_more"] is False
 
 
@@ -791,7 +819,7 @@ async def test_list_models_anthropic_stale_after_id_starts_over(monkeypatch):
     the full listing rather than an error."""
     models = [{"id": 1, "name": "model-a", "description": None}]
     body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"after_id": "gone"})
-    assert [entry["id"] for entry in body["data"]] == ["model-a"]
+    assert [entry["id"] for entry in body["data"]] == ["model-a", "claude-model-a"]
 
 
 @pytest.mark.asyncio
@@ -806,9 +834,16 @@ async def test_list_models_anthropic_lists_aliases_with_their_model(monkeypatch)
     body = await _list_anthropic_body(monkeypatch, models, registry)
 
     ids = [entry["id"] for entry in body["data"]]
-    assert ids == ["qwen-27b", "local-most-powerful", "other-model"]
+    assert ids == [
+        "qwen-27b",
+        "claude-qwen-27b",
+        "local-most-powerful",
+        "claude-local-most-powerful",
+        "other-model",
+        "claude-other-model",
+    ]
 
-    alias = body["data"][1]
+    alias = body["data"][2]
     assert alias["max_input_tokens"] == 33000
     assert alias["display_name"] == "Qwen 27B"
 
@@ -822,7 +857,7 @@ async def test_list_models_anthropic_omits_ambiguous_aliases(monkeypatch):
         {"id": 2, "name": "model-b", "description": None, "aliases": ["shared"]},
     ]
     body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
-    assert [entry["id"] for entry in body["data"]] == ["model-a", "model-b"]
+    assert [entry["id"] for entry in body["data"]] == ["model-a", "claude-model-a", "model-b", "claude-model-b"]
 
 
 @pytest.mark.asyncio

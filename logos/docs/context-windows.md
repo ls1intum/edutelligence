@@ -162,6 +162,12 @@ that listing and you switch with `/model`. When set, every Claude Code model
 slot (`opus`, `sonnet`, `haiku`, …) is pinned to that id — useful as a default,
 not required for the setup flow.
 
+Claude Code only lists a gateway model in `/model` when its id contains `claude`
+or `anthropic`. The Anthropic-shaped `GET /v1/models` therefore lists every other
+id twice, plain and as `claude-<id>` (`claude-Qwen/Qwen3.8-27B`), with the same
+window and display name. A request for `claude-<id>` resolves to `<id>` unless a
+model with exactly that name exists. The OpenAI-shaped listing is unchanged.
+
 It also does two things with the listing it already has in hand:
 
 - **Warms the model up.** `POST /v1/models/{model}/warmup` tells the planner the

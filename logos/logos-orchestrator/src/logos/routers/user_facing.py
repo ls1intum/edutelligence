@@ -20,7 +20,7 @@ from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.errors import coerce_upstream_error
 from logos.jobs.job_service import JobService
-from logos.logosnode_snapshot import _resolve_requested_model_name
+from logos.logosnode_snapshot import _resolve_requested_model_name, claude_visible_id
 from logos.main import _model_context_fields, _served_context_window_stats, handle_sync_request, submit_job_request
 from logos.responses import get_client_ip
 
@@ -46,6 +46,11 @@ def _anthropic_entries(models: list[dict], stats: dict) -> list[tuple[str, str, 
     that resolves to a single accessible model. ``model_name`` is the canonical
     name the context-window stats are keyed by, so an alias carries the window
     of the model it points at.
+
+    Each id is followed by its ``claude-`` prefixed twin (see
+    ``claude_visible_id``): Claude Code drops every gateway model whose id has
+    no "claude"/"anthropic" in it, so without the twin /model lists nothing.
+    The request path strips the prefix again.
     """
     # An alias that (case-insensitively) belongs to more than one accessible
     # model cannot be resolved at request time, so it is not advertised.
@@ -55,17 +60,25 @@ def _anthropic_entries(models: list[dict], stats: dict) -> list[tuple[str, str, 
             alias_owners.setdefault(str(alias).strip().lower(), set()).add(model["name"])
 
     entries: list[tuple[str, str, Optional[str]]] = []
+
+    def add(entry_id: str, name: str, description: Optional[str]) -> None:
+        entries.append((entry_id, name, description))
+        twin = claude_visible_id(entry_id)
+        if twin is not None:
+            # The picker shows display_name, so the twin keeps the plain id there.
+            entries.append((twin, name, description or entry_id))
+
     for model in models:
         name = model["name"]
         description = model.get("description")
-        entries.append((name, name, description))
+        add(name, name, description)
         seen: set[str] = set()
         for alias in model.get("aliases") or []:
             key = str(alias).strip().lower()
             if key in seen or len(alias_owners.get(key, set())) != 1:
                 continue
             seen.add(key)
-            entries.append((str(alias), name, description))
+            add(str(alias), name, description)
     return entries
 
 

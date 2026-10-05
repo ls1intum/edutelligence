@@ -89,3 +89,21 @@ def test_unknown_and_empty_requests_resolve_to_none():
     assert _resolve_requested_model_name("nope", [_row("llama")]) is None
     assert _resolve_requested_model_name("", [_row("llama")]) is None
     assert _resolve_requested_model_name(None, [_row("llama")]) is None
+
+
+def test_claude_prefixed_id_resolves_to_the_model():
+    models = [_row("Qwen/Qwen3.8-27B", ["local-most-powerful"])]
+    assert _resolve_requested_model_name("claude-Qwen/Qwen3.8-27B", models) == "Qwen/Qwen3.8-27B"
+    assert _resolve_requested_model_name("CLAUDE-qwen/qwen3.8-27b", models) == "Qwen/Qwen3.8-27B"
+    assert _resolve_requested_model_name("claude-local-most-powerful", models) == "Qwen/Qwen3.8-27B"
+    assert _resolve_requested_model_name("claude-Qwen_Qwen3.8-27B", models) == "Qwen/Qwen3.8-27B"
+
+
+def test_claude_prefix_never_shadows_a_model_with_that_exact_name():
+    models = [_row("foo"), _row("claude-foo")]
+    assert _resolve_requested_model_name("claude-foo", models) == "claude-foo"
+
+
+def test_unknown_claude_id_stays_unresolved():
+    assert _resolve_requested_model_name("claude-sonnet-5-5", [_row("llama")]) is None
+    assert _resolve_requested_model_name("claude-", [_row("llama")]) is None
