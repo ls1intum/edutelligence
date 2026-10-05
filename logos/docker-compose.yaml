@@ -589,6 +589,12 @@ services:
       # repository's organisation. Empty falls back to "may write to this
       # repository", which is what the runner used before.
       LOGOS_AGENT_TRUSTED_TEAMS: "${LOGOS_AGENT_TRUSTED_TEAMS:-logos-developers,logos-maintainers}"
+      # Review apps that may direct the agent on its own pull requests, and
+      # who is asked to review a pull request it just opened. Single-dash
+      # defaults: an explicitly empty value in .env disables the behaviour
+      # instead of falling back to the built-in list (`:-` would not).
+      LOGOS_AGENT_REVIEW_BOTS: "${LOGOS_AGENT_REVIEW_BOTS-coderabbitai[bot],Claudia-Anthropica}"
+      LOGOS_AGENT_PR_REVIEWERS: "${LOGOS_AGENT_PR_REVIEWERS-Claudia-Anthropica}"
       LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-0}"
 
       # Capacity gates: start only below the first threshold, hand capacity

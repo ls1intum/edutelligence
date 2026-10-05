@@ -2008,6 +2008,45 @@ class TestTheReviewTheWorkIsAbout:
         assert created["no_push"] is False
         assert "carry the logging override" in created["task"]
 
+    async def test_a_review_bot_mention_on_its_own_pull_request_gets_a_branch(self, monkeypatch):
+        # Claudia is not a bot login, so the previous test never exercised
+        # the is_bot filter. CodeRabbit is: without an exception for a
+        # configured review app naming the agent on an owned PR, the
+        # mention is dropped before the allowlist runs and zero sessions
+        # are queued.
+        repo = FakeRepo(
+            authored_pulls=[pull(1171, "Support per-request logging")],
+            heads={1171: ("logos/agent/issue-1170/session-277", REPO)},
+            inline_comments=[
+                comment(
+                    4182596450,
+                    1171,
+                    f"@{AGENT} please accept yes/no logging header values",
+                    "coderabbitai[bot]",
+                    path="logos/logos-orchestrator/src/logos/auth.py",
+                )
+            ],
+            # An ordinary bot note with no mention must still be ignored —
+            # otherwise every CodeRabbit finding in the window is a session.
+            issue_comments=[
+                comment(9001, 1171, "Actionable comments posted: 1", "coderabbitai[bot]"),
+            ],
+        )
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert len(fake_db.created) == 1
+        created = fake_db.created[0]
+        assert created["trigger_kind"] == "comment"
+        assert created["branch"] == "logos/agent/issue-1170/session-277"
+        assert created["no_push"] is False
+        assert "yes/no logging header" in created["task"]
+
     async def test_an_account_that_is_neither_is_still_left_out(self, monkeypatch):
         from datetime import datetime, timezone
 

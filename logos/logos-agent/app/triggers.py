@@ -1133,8 +1133,10 @@ class TriggerPoller:
 
         Two kinds count: anything on a pull request it is responsible for,
         and anything anywhere that mentions it by name. Its own comments and
-        those of bots are skipped — the first would be a conversation with
-        itself, the second a stampede.
+        ordinary bot notes are skipped — the first would be a conversation
+        with itself, the second a stampede. A configured review app that
+        names the agent on a pull request this runner already owns is the
+        exception: that is direction, not noise.
 
         A *conversation* is the unit, not a pull request: an inline thread is
         its own question, asked about one place in the diff and answered
@@ -1150,12 +1152,21 @@ class TriggerPoller:
 
         def consider(comment: dict[str, Any], number: int, *, root: int | None) -> None:
             author = str((comment.get("user") or {}).get("login") or "")
-            if not author or author.lower() == settings.github_login.lower() or is_bot(author):
+            if not author or author.lower() == settings.github_login.lower():
+                return
+            body = str(comment.get("body") or "")
+            # Bots' notes are a stampede; an explicit @mention from a
+            # configured review app on a pull request this runner already
+            # owns is the next step the operators chose — otherwise
+            # CodeRabbit naming the agent on its own PR never reaches the
+            # allowlist below, while Claudia (not a bot login) does.
+            if is_bot(author) and not (
+                author.lower() in settings.review_bots and number in responsible and mentions_agent(body)
+            ):
                 return
             comment_id = comment.get("id")
             if not isinstance(comment_id, int) or comment_id in consumed:
                 return
-            body = str(comment.get("body") or "")
             if number not in responsible and not mentions_agent(body):
                 return
             key = ("inline", root) if root is not None else ("issue", number)
