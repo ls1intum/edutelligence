@@ -2,16 +2,20 @@ import os
 from typing import Callable, List, Tuple, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from iris.common.logging_config import get_logger
+from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
-from iris.config import settings
+from iris.config import ARTEMIS_AUTO_PUBLISH_THRESHOLD, settings
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
 )
 from iris.domain.data.post_dto import PostDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.domain.variant.variant import Dep, Variant
+from iris.llm import CompletionArguments, LlmRequestHandler
+from iris.llm.langchain import IrisLangchainChatModel
 from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
@@ -23,9 +27,12 @@ from iris.pipeline.shared.confidence_scoring import (
     parse_confidence_response,
 )
 from iris.pipeline.shared.organizational_guard import (
+    EVIDENCE_CHECK_SYSTEM_PROMPT,
+    build_evidence_check_input,
     classify_organizational_question,
-    has_organizational_evidence,
-    tutor_verified_memory_hits,
+    evidence_answers,
+    parse_evidence_verdict,
+    verdict_allows_publication,
 )
 from iris.pipeline.shared.uncertainty_scoring import (
     DEFAULT_TOP_LOGPROBS,
@@ -53,6 +60,7 @@ from iris.tools import (
     create_tool_lecture_content_retrieval,
 )
 from iris.tracing import observe
+from iris.vector_database.course_memory_schema import CourseMemorySchema
 from iris.web.status.status_update import AutonomousTutorCallback
 
 logger = get_logger(__name__)
@@ -131,9 +139,7 @@ class AutonomousTutorPipeline(
     ) -> list[Callable]:
         allow_lecture_tool = should_allow_lecture_tool(state.db, state.dto.course.id)
         allow_faq_tool = should_allow_faq_tool(state.db, state.dto.course.id)
-        allow_course_memory_tool = should_allow_course_memory_tool(
-            state.db, state.dto.course.id
-        )
+        allow_course_memory_tool = self._course_memory_tool_allowed(state)
         is_programming_exercise = state.dto.programming_exercise is not None
         is_text_exercise = state.dto.text_exercise is not None
 
@@ -219,6 +225,7 @@ class AutonomousTutorPipeline(
                     state.dto.course.id,
                     state.dto.course.name,
                     (state.dto.settings.artemis_base_url if state.dto.settings else ""),
+                    state.dto.course_memory_conversation_ids,
                     callback,
                     query_text,
                     state.message_history,
@@ -282,9 +289,7 @@ class AutonomousTutorPipeline(
                 state.db, state.dto.course.id
             ),
             "allow_faq_tool": should_allow_faq_tool(state.db, state.dto.course.id),
-            "allow_course_memory_tool": should_allow_course_memory_tool(
-                state.db, state.dto.course.id
-            ),
+            "allow_course_memory_tool": self._course_memory_tool_allowed(state),
             "is_programming_exercise": state.dto.programming_exercise is not None,
             "is_text_exercise": state.dto.text_exercise is not None,
             "target_author": target_label,
@@ -375,19 +380,26 @@ class AutonomousTutorPipeline(
             AutonomousTutorPipelineExecutionDTO, Variant
         ],
     ) -> str:
-        """Send the final response back to Artemis with confidence score."""
+        """Send the final response back to Artemis with confidence score.
+
+        Also reports the channels of every Course Memory entry the run retrieved, so
+        Artemis can check again, right before publishing, that each is still readable
+        by every student.
+        """
+        used_conversation_ids = self._used_course_memory_conversation_ids(state)
         if state.result and self.NO_RESPONSE_MARKER in state.result:
             logger.info("Post does not require a tutoring response, skipping.")
             state.callback.finish(
                 result=None,
                 tokens=self.tokens,
                 confidence=0.0,
+                used_course_memory_conversation_ids=used_conversation_ids,
             )
             return ""
 
         confidence = self._estimate_confidence(state)
-        confidence = self._cap_unsupported_organizational_confidence(state, confidence)
         state.result = self._strip_author_label(state.result)
+        confidence = self._apply_organizational_guard(state, confidence)
 
         logger.info("Generated response: %s", state.result)
         logger.info("Confidence score | score=%.4f", confidence)
@@ -396,72 +408,143 @@ class AutonomousTutorPipeline(
             result=state.result,
             tokens=self.tokens,
             confidence=confidence,
+            used_course_memory_conversation_ids=used_conversation_ids,
         )
         return state.result
 
-    def _cap_unsupported_organizational_confidence(
+    @staticmethod
+    def _used_course_memory_conversation_ids(state) -> List[int]:
+        """The channel ids of every Course Memory entry retrieved during the run."""
+        ids = set()
+        for hit in getattr(state, "memory_storage", {}).get("memories") or []:
+            conversation_id = hit.get(CourseMemorySchema.CONVERSATION_ID.value)
+            try:
+                ids.add(int(conversation_id))
+            except (TypeError, ValueError):
+                continue
+        return sorted(ids)
+
+    def _course_memory_tool_allowed(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+    ) -> bool:
+        return should_allow_course_memory_tool(
+            state.db,
+            course_id=state.dto.course.id,
+            base_url=state.dto.settings.artemis_base_url if state.dto.settings else "",
+            allowed_conversation_ids=state.dto.course_memory_conversation_ids,
+        )
+
+    def _apply_organizational_guard(
         self,
         state: AgentPipelineExecutionState[
             AutonomousTutorPipelineExecutionDTO, Variant
         ],
         confidence: float,
     ) -> float:
-        """Hold back an organizational answer that no tool could support.
+        """Hold back a reply that states organizational facts nobody confirmed.
 
         Exam scope, dates, rooms, deadlines, grading and registration are facts about
-        this one course. They cannot be derived from what the course teaches, so an
-        answer to such a question is only worth publishing when a course FAQ entry or
-        a tutor-verified prior answer actually stated it. A community-resolved prior
-        answer is not that: it is a hint the agent may weigh, not evidence that lets
-        the answer skip tutor review.
+        this one course; a fluent invention looks exactly like the truth and scores high
+        in every confidence strategy. So every reply that Artemis would publish
+        unreviewed goes through an LLM check: it lists the organizational facts the
+        reply states, and the reply keeps its score only if it states none, or if
+        tutor-verified Course Memory answers of this course state every one of them
+        explicitly. Anything else — an unsupported fact, a failed or malformed check —
+        caps the score inside the review band, so a tutor sees the reply first.
 
-        Neither confidence strategy catches this on its own. The verbalized prompt
-        asks the model to score itself low and it often does not; the logprob
-        strategies measure how sure the model is of its own *wording*, and an invented
-        exam scope is worded very fluently — it scores high. So the check is made
-        here, on facts the pipeline knows: what was asked, and what the tools returned.
-
-        The score is only ever lowered, and only to the review band, so the reply
-        reaches a tutor instead of a student. See
-        ``iris.pipeline.shared.organizational_guard`` for why the two sources are the
-        only ones that count as support.
+        Replies below the auto-publish threshold are not checked: a tutor reviews them
+        (or Artemis discards them) anyway. The score is only ever lowered.
         """
         guard = settings.autonomous_tutor.organizational_evidence_guard
-        if not guard.enabled:
+        if not guard.enabled or confidence < ARTEMIS_AUTO_PUBLISH_THRESHOLD:
             return confidence
+        if not state.result or not state.result.strip():
+            return confidence
+        if not guard.llm_check_enabled:
+            logger.info(
+                "Capping confidence: organizational LLM check disabled, every reply is "
+                "reviewed | confidence=%.4f cap=%.4f",
+                confidence,
+                guard.confidence_cap,
+            )
+            return guard.confidence_cap
 
         _, target_message = self._target_message(state.dto.post)
         category = classify_organizational_question(target_message)
-        if category is None:
-            return confidence
-
-        faq_hits = getattr(state, "faq_storage", {}).get("faqs")
-        memory_hits = getattr(state, "memory_storage", {}).get("memories")
-        if has_organizational_evidence(faq_hits, memory_hits):
-            logger.info(
-                "Organizational question (%s) is supported by retrieved evidence | "
-                "faqs=%d verified_memories=%d",
-                category,
-                len(faq_hits or []),
-                len(tutor_verified_memory_hits(memory_hits)),
-            )
-            return confidence
-
-        if confidence <= guard.confidence_cap:
-            return confidence
-
-        # The memory count is logged so a capped answer can be told apart from one
-        # with no memory hit at all: community-resolved hits are present but do not
-        # count as support.
-        logger.info(
-            "Capping confidence for unsupported organizational question | "
-            "category=%s confidence=%.4f cap=%.4f unverified_memories=%d",
-            category,
-            confidence,
-            guard.confidence_cap,
-            len(memory_hits or []),
+        evidence = evidence_answers(
+            getattr(state, "memory_storage", {}).get("memories")
         )
+        model_id, raw_verdict = self._run_evidence_check(
+            state, self._evidence_check_question(state.dto.post), evidence
+        )
+        verdict = parse_evidence_verdict(raw_verdict)
+        allowed = verdict_allows_publication(verdict)
+        logger.info(
+            "Organizational evidence check | model=%s parsed=%s organizational=%s "
+            "facts=%d supported=%d evidence=%d keyword_category=%s publish=%s",
+            model_id,
+            verdict is not None,
+            verdict.has_organizational_facts if verdict else None,
+            len(verdict.facts) if verdict else 0,
+            sum(1 for fact in verdict.facts if fact.supported) if verdict else 0,
+            len(evidence),
+            category,
+            allowed,
+        )
+        if allowed:
+            return confidence
         return guard.confidence_cap
+
+    def _evidence_check_question(self, post: PostDTO) -> str:
+        """The question context for the evidence check: the thread before the reply,
+        Iris's own earlier replies excluded (they are not the student's question)."""
+        lines = []
+        for role, label, text in self._thread_turns(post):
+            if role == IRIS_AUTHOR_ROLE or not text:
+                continue
+            lines.append(f"{label}: {text}")
+        return "\n".join(lines[-8:])
+
+    def _run_evidence_check(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+        question: str,
+        evidence: List[str],
+    ) -> Tuple[str, str | None]:
+        """Ask the run's own chat model whether the reply's organizational facts are
+        backed by the evidence. Uses the same local/cloud selection as the run, so a
+        LOCAL_AI thread never leaves on-premise inference. Returns the model id and the
+        raw output, or ``None`` when the call failed."""
+        model_id = state.variant.model("chat", state.local) or ""
+        try:
+            llm = IrisLangchainChatModel(
+                request_handler=LlmRequestHandler(model_id=model_id),
+                completion_args=CompletionArguments(temperature=0),
+            )
+            response = llm.invoke(
+                [
+                    SystemMessage(content=EVIDENCE_CHECK_SYSTEM_PROMPT),
+                    HumanMessage(
+                        content=build_evidence_check_input(
+                            question, state.result, evidence
+                        )
+                    ),
+                ]
+            )
+            if llm.tokens is not None:
+                self._append_tokens(
+                    llm.tokens, PipelineEnum.IRIS_ORGANIZATIONAL_EVIDENCE_CHECK
+                )
+            content = response.content if hasattr(response, "content") else response
+            return model_id, content if isinstance(content, str) else None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Organizational evidence check failed: %s", e)
+            return model_id, None
 
     def _strip_author_label(self, result: str) -> str:
         """Drop a role label the model copied from the thread onto its own answer.

@@ -99,26 +99,36 @@ class CourseMemorySettings(BaseModel):
     )
 
 
-class OrganizationalEvidenceGuardSettings(BaseModel):
-    """Confidence cap for organizational answers no tool could support.
+# Artemis publishes an autonomous-tutor reply without review at or above this confidence
+# (AutonomousTutorService.AUTO_VERIFY_CONFIDENCE_THRESHOLD in Artemis), holds it for tutor
+# review in [0.70, 0.85) and discards it below 0.70.
+ARTEMIS_AUTO_PUBLISH_THRESHOLD = 0.85
 
-    Artemis publishes an Iris reply on its own at >= 0.85, holds it for tutor review
-    in [0.70, 0.85) and discards it below 0.70. Capping inside the review band means
-    an ungrounded exam/deadline/grading answer is never posted without a human
-    looking at it, while still reaching a tutor who can correct it — and that
-    correction is what course memory ingests, so the same question is grounded the
-    next time it is asked.
+
+class OrganizationalEvidenceGuardSettings(BaseModel):
+    """Guard against organizational answers that reach students without review.
+
+    Every reply whose confidence would let Artemis publish it unreviewed is checked by
+    an LLM: if it states organizational facts (dates, rooms, deadlines, grading, exam
+    scope, ...) that tutor-verified Course Memory answers do not explicitly state, its
+    confidence is capped inside the review band, so a tutor sees it first.
+
+    Modes:
+    - ``enabled=false``: no guard at all.
+    - ``enabled=true, llm_check_enabled=true`` (default): the check above.
+    - ``enabled=true, llm_check_enabled=false``: "review everything" — every reply that
+      would be published unreviewed is capped, so nothing is auto-published.
     """
 
     enabled: bool = Field(default=True)
+    llm_check_enabled: bool = Field(default=True)
     confidence_cap: float = Field(
         default=0.75,
         ge=0.0,
-        le=1.0,
+        lt=ARTEMIS_AUTO_PUBLISH_THRESHOLD,
         description=(
-            "Highest confidence an organizational answer may carry when no FAQ entry "
-            "and no course-memory entry supported it. Keep it below Artemis's "
-            "auto-publish threshold (0.85); the guard only ever lowers a score."
+            "Confidence a reply gets when the guard holds it back. Must stay below "
+            "Artemis's auto-publish threshold (0.85); the guard only ever lowers a score."
         ),
     )
 

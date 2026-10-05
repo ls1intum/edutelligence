@@ -46,6 +46,7 @@ def _ingestion_dto(thread):
         messageId="answer-9",
         version=3,
         source=CourseMemorySource.TUTOR_WRITTEN,
+        existingAnswer="content-answer-9",
         isPublicChannel=True,
         thread=thread,
     )
@@ -95,8 +96,6 @@ def test_deletion_webhook_logs_receipt(monkeypatch, caplog):
         course_id=42,
         post_id="post-7",
         version=5,
-        conversation_id=None,
-        whole_course=False,
         settings=None,
     )
     monkeypatch.setattr(webhooks, "validate_pipeline_variant", lambda *_: "default")
@@ -108,26 +107,6 @@ def test_deletion_webhook_logs_receipt(monkeypatch, caplog):
     assert "Course memory deletion webhook received" in caplog.text
     assert "course=42" in caplog.text and "thread=post-7" in caplog.text
     assert "version=5" in caplog.text
-
-
-def test_deletion_webhook_logs_channel_scope(monkeypatch, caplog):
-    # A channel-wide purge and a single-thread retraction have very different blast
-    # radii, so the log line has to say which one was asked for.
-    dto = SimpleNamespace(
-        course_id=42,
-        post_id=None,
-        version=None,
-        conversation_id="channel-3",
-        whole_course=False,
-        settings=None,
-    )
-    monkeypatch.setattr(webhooks, "validate_pipeline_variant", lambda *_: "default")
-    monkeypatch.setattr(webhooks, "Thread", lambda **kw: MagicMock())
-
-    with caplog.at_level(logging.INFO, logger="iris.web.routers.webhooks"):
-        webhooks.course_memory_deletion_webhook(dto)
-
-    assert "channel=channel-3" in caplog.text
 
 
 def _skippable_pipeline(is_public_channel: bool):
@@ -186,7 +165,7 @@ def test_upsert_logs_insert_replace_and_stale_branches(caplog):
             source=CourseMemorySource.TUTOR_WRITTEN,
             version=version,
             verified_at=None,
-            verified_by=None,
+            base_url="https://artemis.example",
         )
         return pipeline
 

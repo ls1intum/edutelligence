@@ -184,31 +184,43 @@ def test_deletion_dto_accepts_settings():
     assert dto.settings.artemis_base_url == "http://localhost:8080"
 
 
-def test_deletion_requires_exactly_one_scope():
-    # Neither scope would delete nothing while reporting success; both would leave the
-    # blast radius ambiguous. Reject at the boundary instead.
+def test_deletion_is_always_thread_scoped():
+    # Channel- and course-wide purges no longer exist: they removed tombstones and so
+    # let a late ingestion resurrect retracted content.
     with pytest.raises(ValidationError):
         CourseMemoryDeletionExecutionDto.model_validate(
-            {"courseId": 1, "settings": _settings()}
-        )
-    with pytest.raises(ValidationError):
-        CourseMemoryDeletionExecutionDto.model_validate(
-            {
-                "courseId": 1,
-                "postId": "7",
-                "version": 1,
-                "conversationId": "c1",
-                "settings": _settings(),
-            }
+            {"courseId": 1, "version": 1, "settings": _settings()}
         )
 
 
-def test_deletion_accepts_channel_scope():
-    dto = CourseMemoryDeletionExecutionDto.model_validate(
-        {"courseId": 1, "conversationId": "c1", "settings": _settings()}
-    )
-    assert dto.conversation_id == "c1"
-    assert dto.post_id is None
+def test_deletion_requires_the_artemis_instance():
+    for base_url in (None, "", "not a url"):
+        with pytest.raises(ValidationError):
+            CourseMemoryDeletionExecutionDto.model_validate(
+                {
+                    "courseId": 1,
+                    "postId": "7",
+                    "version": 1,
+                    "settings": {
+                        "authenticationToken": "t",
+                        "artemisBaseUrl": base_url,
+                    },
+                }
+            )
+
+
+def test_ingestion_requires_the_artemis_instance():
+    with pytest.raises(ValidationError):
+        CourseMemoryIngestionExecutionDTO(
+            courseId=1,
+            conversationId="c1",
+            postId="post-1",
+            messageId="answer-1",
+            version=1,
+            thread=_thread("post-1", "answer-1"),
+            source=CourseMemorySource.THREAD_RESOLVED,
+            settings={"authenticationToken": "t", "artemisBaseUrl": ""},
+        )
 
 
 def _correction_dto(existing_answer):
@@ -267,14 +279,17 @@ def test_approved_draft_with_verbatim_text_is_accepted():
     assert dto.existing_answer == "The approved draft."
 
 
-def test_sources_without_a_dashboard_signoff_need_no_verbatim_answer():
-    # TUTOR_WRITTEN and THREAD_RESOLVED are extracted from the flagged thread
-    # messages; there is no single approved wording to carry.
-    for source in (
-        CourseMemorySource.TUTOR_WRITTEN,
-        CourseMemorySource.THREAD_RESOLVED,
-    ):
-        assert _dto_with_source(source).existing_answer is None
+def test_tutor_written_requires_the_endorsed_text_verbatim():
+    # A tutor marking an answer resolving vouches for exactly that text; extracting a
+    # new answer from the thread could mix in what other messages said.
+    for blank in (None, "", "   "):
+        with pytest.raises(ValidationError, match="TUTOR_WRITTEN"):
+            _dto_with_source(CourseMemorySource.TUTOR_WRITTEN, blank)
+
+
+def test_community_entries_need_no_verbatim_answer():
+    dto = _dto_with_source(CourseMemorySource.THREAD_RESOLVED)
+    assert dto.existing_answer is None
 
 
 def _versioned_dto(**overrides):
@@ -331,18 +346,6 @@ def test_thread_deletion_carries_its_version():
     assert dto.version == 9
 
 
-def test_channel_and_course_deletions_need_no_version():
-    # Both delete by filter across many threads; there is no per-thread version to
-    # compare against, and Artemis sends none.
-    channel = CourseMemoryDeletionExecutionDto.model_validate(
-        {"courseId": 1, "conversationId": "c1", "settings": _settings()}
-    )
-    course = CourseMemoryDeletionExecutionDto.model_validate(
-        {"courseId": 1, "wholeCourse": True, "settings": _settings()}
-    )
-    assert channel.version is None and course.version is None
-
-
 def _thread_dto(thread, message_id="answer-1"):
     return CourseMemoryIngestionExecutionDTO(
         courseId=1,
@@ -351,7 +354,7 @@ def _thread_dto(thread, message_id="answer-1"):
         messageId=message_id,
         version=1,
         thread=thread,
-        source=CourseMemorySource.TUTOR_WRITTEN,
+        source=CourseMemorySource.THREAD_RESOLVED,
         settings=_settings(),
     )
 
@@ -361,7 +364,7 @@ def test_thread_must_flag_a_verified_answer():
     # would pick a message of its own choosing and it would be stored as
     # tutor-verified.
     for thread in ([], [_message("post-1"), _message("answer-1")]):
-        with pytest.raises(ValidationError, match="at least one message flagged"):
+        with pytest.raises(ValidationError, match="exactly one"):
             _thread_dto(thread)
 
 
@@ -373,7 +376,7 @@ def test_thread_must_not_flag_several_verified_answers():
         _message("answer-1", verified=True),
         _message("answer-2", verified=True),
     ]
-    with pytest.raises(ValidationError, match="at most one"):
+    with pytest.raises(ValidationError, match="exactly one"):
         _thread_dto(thread)
 
 
@@ -387,7 +390,7 @@ def test_thread_with_several_resolving_answers_is_accepted():
     # resolvesPost flags are a legitimate state; they are merged into one answer.
     thread = [
         _message("post-1"),
-        _message("answer-1", resolves=True),
+        _message("answer-1", verified=True, resolves=True),
         _message("answer-2", resolves=True),
         _message("answer-3", resolves=True),
     ]
@@ -395,10 +398,11 @@ def test_thread_with_several_resolving_answers_is_accepted():
     assert sum(m.resolves_post for m in dto.thread) == 3
 
 
-def test_resolving_answer_alone_anchors_the_thread():
-    # Trigger B marks an answer resolving without any isVerifiedAnswer flag.
+def test_resolving_answers_without_an_anchor_are_rejected():
+    # Artemis always names the anchor; without it the answer source is ambiguous.
     thread = [_message("post-1"), _message("answer-1", resolves=True)]
-    assert _thread_dto(thread).thread[1].resolves_post is True
+    with pytest.raises(ValidationError, match="exactly one"):
+        _thread_dto(thread)
 
 
 def test_colliding_post_and_answer_ids_are_accepted():

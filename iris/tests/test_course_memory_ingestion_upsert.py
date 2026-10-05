@@ -16,6 +16,7 @@ from iris.web.status.course_memory_ingestion_status_callback import (
 # pylint: disable=protected-access
 
 JAVA_LONG_MAX = 9223372036854775807
+BASE = "https://artemis.example"
 
 
 def _stored(
@@ -56,9 +57,15 @@ def _make_pipeline(
         source=source,
         version=version,
         verified_at=None,
-        verified_by=None,
+        base_url=BASE,
     )
     return pipeline
+
+
+def _retract(pipeline, version, post_id="post-1", course_id=7, base_url=BASE):
+    """Retract through a deleter on the pipeline's collection mock."""
+    deleter = cm_module.CourseMemoryDeleter.for_collection(pipeline.collection)
+    return deleter.delete_for_thread(base_url, post_id, course_id, version)
 
 
 def _real_callback():
@@ -87,11 +94,19 @@ def _assert_nothing_written(pipeline):
 
 
 def test_deterministic_uuid_is_stable():
-    u1 = cm_module._deterministic_uuid("post-1", 7)
-    u2 = cm_module._deterministic_uuid("post-1", 7)
-    u3 = cm_module._deterministic_uuid("post-2", 7)
+    u1 = cm_module._deterministic_uuid(BASE, "post-1", 7)
+    u2 = cm_module._deterministic_uuid(BASE, "post-1", 7)
+    u3 = cm_module._deterministic_uuid(BASE, "post-2", 7)
     assert u1 == u2
     assert u1 != u3
+
+
+def test_uuid_is_scoped_to_the_artemis_instance():
+    # Two instances sharing Weaviate have overlapping course and post ids; their
+    # entries must never land on the same object.
+    assert cm_module._deterministic_uuid(
+        "https://a.example", "post-1", 7
+    ) != cm_module._deterministic_uuid("https://b.example", "post-1", 7)
 
 
 def test_uuid_is_keyed_on_the_thread_not_the_answer():
@@ -258,7 +273,7 @@ def test_the_version_check_and_the_write_share_one_fetch():
     pipeline.upsert("q", "a")
 
     pipeline.collection.query.fetch_object_by_id.assert_called_once_with(
-        cm_module._deterministic_uuid("post-1", 7)
+        cm_module._deterministic_uuid(BASE, "post-1", 7)
     )
     pipeline.collection.data.exists.assert_not_called()
 
@@ -272,12 +287,12 @@ def test_retraction_writes_a_versioned_tombstone_over_the_entry():
     """Un-resolving the last answer does not delete the object; it tombstones it."""
     pipeline = _make_pipeline(existing=_stored(3, source="TUTOR_WRITTEN"))
 
-    assert pipeline.delete_for_thread("post-1", 7, version=4) is True
+    assert _retract(pipeline, version=4) is True
 
     pipeline.collection.data.delete_by_id.assert_not_called()
     pipeline.collection.data.replace.assert_called_once()
     call = pipeline.collection.data.replace.call_args.kwargs
-    assert call["uuid"] == cm_module._deterministic_uuid("post-1", 7)
+    assert call["uuid"] == cm_module._deterministic_uuid(BASE, "post-1", 7)
     props = call["properties"]
     assert props[CourseMemorySchema.DELETED.value] is True
     assert props[CourseMemorySchema.VERSION.value] == 4
@@ -285,7 +300,8 @@ def test_retraction_writes_a_versioned_tombstone_over_the_entry():
     assert props[CourseMemorySchema.QUESTION.value] == ""
     assert props[CourseMemorySchema.ANSWER.value] == ""
     assert props[CourseMemorySchema.SOURCE.value] == ""
-    # The purge keys stay so a later channel or course purge still removes it.
+    # The keys stay, scoped to the instance, so the nightly sync can find it.
+    assert props[CourseMemorySchema.BASE_URL.value] == BASE
     assert props[CourseMemorySchema.COURSE_ID.value] == 7
     assert props[CourseMemorySchema.POST_ID.value] == "post-1"
     assert props[CourseMemorySchema.CONVERSATION_ID.value] == "conv-1"
@@ -302,7 +318,7 @@ def test_retraction_of_a_thread_without_an_entry_still_leaves_a_tombstone():
     """
     pipeline = _make_pipeline(existing=None)
 
-    assert pipeline.delete_for_thread("post-1", 7, version=2) is True
+    assert _retract(pipeline, version=2) is True
 
     pipeline.collection.data.insert.assert_called_once()
     props = pipeline.collection.data.insert.call_args.kwargs["properties"]
@@ -316,7 +332,7 @@ def test_stale_retraction_is_ignored():
     # retraction (v5) arrived; the newer live entry must stand.
     pipeline = _make_pipeline(existing=_stored(6))
 
-    assert pipeline.delete_for_thread("post-1", 7, version=5) is True
+    assert _retract(pipeline, version=5) is True
 
     _assert_nothing_written(pipeline)
     pipeline.collection.data.delete_by_id.assert_not_called()
@@ -328,7 +344,7 @@ def test_retraction_with_an_equal_version_still_applies():
     # its thread.
     pipeline = _make_pipeline(existing=_stored(5))
 
-    assert pipeline.delete_for_thread("post-1", 7, version=5) is True
+    assert _retract(pipeline, version=5) is True
 
     pipeline.collection.data.replace.assert_called_once()
 
@@ -338,7 +354,7 @@ def test_thread_deletion_sends_a_final_version_nothing_can_follow():
     # an int64 Weaviate property and beat every conceivable ingestion version.
     pipeline = _make_pipeline(existing=_stored(41))
 
-    assert pipeline.delete_for_thread("post-1", 7, version=JAVA_LONG_MAX) is True
+    assert _retract(pipeline, version=JAVA_LONG_MAX) is True
 
     props = pipeline.collection.data.replace.call_args.kwargs["properties"]
     assert props[CourseMemorySchema.VERSION.value] == JAVA_LONG_MAX
@@ -352,65 +368,15 @@ def test_retraction_failure_is_reported_not_raised():
     pipeline = _make_pipeline(existing=_stored(1))
     pipeline.collection.data.replace.side_effect = RuntimeError("weaviate down")
 
-    assert pipeline.delete_for_thread("post-1", 7, version=2) is False
+    assert _retract(pipeline, version=2) is False
 
 
 # ---------------------------------------------------------------------------
-# Channel and course purges (in-process counters, versionless scopes)
+# Running the pipeline
 # ---------------------------------------------------------------------------
 
 
-def test_channel_purge_during_ingestion_prevents_stale_write():
-    """A channel purge mid-ingestion must not be undone by the older write.
-
-    The purge cannot leave a tombstone per thread — it does not know the thread
-    keys — so the channel-scoped counter is what stops the entry from coming back
-    after its source channel was deleted or made private (req. 5).
-    """
-    pipeline = _make_pipeline(existing=None, conversation_id="conv-purged")
-    start = cm_module._current_channel_delete_generation("conv-purged", 7)
-    pipeline.delete_for_conversation("conv-purged", 7)
-
-    pipeline.upsert("q", "a", start_channel_delete_gen=start)
-
-    _assert_nothing_written(pipeline)
-
-
-def test_channel_accepted_generation_survives_a_late_worker_start():
-    """An ingestion accepted before a channel purge must not resurrect its entry.
-
-    The webhook returns 202 and hands the run to a background thread, so the
-    worker can start *after* a later-accepted purge already finished. Sampling
-    the counter at accept time is what keeps the ordering tied to the requests.
-    """
-    pipeline = _make_pipeline(existing=None, conversation_id="conv-late")
-    accepted_gen = CourseMemoryIngestionPipeline.channel_delete_generation_for(
-        "conv-late", 7
-    )
-    pipeline.delete_for_conversation("conv-late", 7)
-    pipeline.dto.is_public_channel = True
-    pipeline.tokens = []
-    pipeline.callback = _real_callback()
-    pipeline.extract_qa = MagicMock(return_value=("q", "a"))
-
-    assert pipeline(start_channel_delete_gen=accepted_gen) is True
-
-    _assert_nothing_written(pipeline)
-
-
-def test_purge_of_another_channel_does_not_block_the_write():
-    """The counter is per channel, so an unrelated purge must not skip this write."""
-    pipeline = _make_pipeline(existing=None, conversation_id="conv-kept")
-    start = cm_module._current_channel_delete_generation("conv-kept", 7)
-    pipeline.delete_for_conversation("conv-other", 7)
-
-    pipeline.upsert("q", "a", start_channel_delete_gen=start)
-
-    pipeline.collection.data.insert.assert_called_once()
-
-
-def test_generation_sampled_in_the_worker_still_writes_without_a_purge():
-    """Omitting the accept-time samples falls back to sampling inside the run."""
+def test_a_run_writes_and_finishes():
     pipeline = _make_pipeline(existing=None, post_id="post-fresh")
     pipeline.dto.is_public_channel = True
     pipeline.tokens = []
@@ -421,63 +387,6 @@ def test_generation_sampled_in_the_worker_still_writes_without_a_purge():
 
     pipeline.collection.data.insert.assert_called_once()
     assert pipeline.callback.status.run_state == RunStateEnum.FINISHED
-
-
-def test_course_purge_during_ingestion_prevents_stale_write():
-    """A course purge mid-ingestion must not be undone by the older write.
-
-    The course scope is the one from which nothing can retract afterwards: once
-    the course is gone Artemis has no post, channel or course left that could ask
-    for the entry's removal, so a write landing after the purge is permanent.
-    """
-    pipeline = _make_pipeline(existing=None)
-    pipeline.dto.course_id = 4242
-    start = cm_module._current_course_delete_generation(4242)
-    pipeline.delete_for_course(4242)
-
-    pipeline.upsert("q", "a", start_course_delete_gen=start)
-
-    _assert_nothing_written(pipeline)
-
-
-def test_purge_of_another_course_does_not_block_the_write():
-    pipeline = _make_pipeline(existing=None)
-    start = cm_module._current_course_delete_generation(7)
-    pipeline.delete_for_course(4243)
-
-    pipeline.upsert("q", "a", start_course_delete_gen=start)
-
-    pipeline.collection.data.insert.assert_called_once()
-
-
-def test_course_purge_filters_on_the_course_alone():
-    """Course deletion drops every conversation at once, so no channel id survives."""
-    pipeline = _make_pipeline(existing=_stored(1))
-
-    assert pipeline.delete_for_course(7) is True
-
-    pipeline.collection.data.delete_many.assert_called_once()
-
-
-def test_delete_generations_are_bounded():
-    """The counters must not grow one entry per purged scope forever."""
-    generations = cm_module._DeleteGenerations(max_entries=3)
-    for key in ("a", "b", "c", "d"):
-        generations.bump(key)
-
-    assert len(generations._counters) == 3
-    # The oldest key is evicted; a counter only has to outlive the ingestion that
-    # sampled it, which is a matter of seconds.
-    assert generations.get("a") == 0
-    assert generations.get("d") == 1
-
-
-def test_delete_generations_are_monotonic_per_key():
-    generations = cm_module._DeleteGenerations()
-
-    assert generations.bump("k") == 1
-    assert generations.bump("k") == 2
-    assert generations.get("k") == 2
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Tool for retrieving verified prior answers from course memory."""
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Sequence
 
 from ..retrieval.course_memory_retrieval import CourseMemoryRetrieval
 from ..retrieval.course_memory_retrieval_utils import format_course_memories
@@ -12,6 +12,7 @@ def create_tool_course_memory_retrieval(
     course_id: int,
     course_name: str,
     base_url: str,
+    allowed_conversation_ids: Sequence[int],
     callback: StatusCallback,
     query_text: str,
     history: List[Any],
@@ -25,10 +26,14 @@ def create_tool_course_memory_retrieval(
         course_id: Course ID.
         course_name: Course name.
         base_url: Base URL for Artemis.
+        allowed_conversation_ids: Channels readable by every student at dispatch time;
+            the only channels an entry may come from.
         callback: Callback for status updates.
         query_text: The student's query text.
         history: Chat history messages.
-        memory_storage: Storage for retrieved memories (for backlinking/citation).
+        memory_storage: Storage for retrieved memories. ``memories`` holds every hit of
+            every call in this run, since the publication check in Artemis needs all
+            channels the run drew from, not only the last call's.
 
     Returns:
         Callable[[], str]: Function that returns formatted verified prior answers.
@@ -62,10 +67,12 @@ def create_tool_course_memory_retrieval(
             course_name=course_name,
             course_id=course_id,
             base_url=base_url,
+            allowed_conversation_ids=allowed_conversation_ids,
         )
 
-        # Store the retrieved memories for later use (e.g., citation/backlinking).
-        memory_storage["memories"] = retrieved_memories
+        # Accumulated, not replaced: a second call must not hide the channels the first
+        # one drew from.
+        memory_storage.setdefault("memories", []).extend(retrieved_memories)
 
         return format_course_memories(retrieved_memories)
 

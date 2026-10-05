@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from weaviate.collections.classes.config import DataType
 
 from iris.vector_database import course_memory_schema as schema_module
+from iris.vector_database import database as database_module
 from iris.vector_database.course_memory_schema import (
     CourseMemorySchema,
     init_course_memory_schema,
@@ -105,23 +107,44 @@ def test_up_to_date_collection_is_not_migrated():
     collection.data.update.assert_not_called()
 
 
-def test_missing_properties_are_added_and_backfilled():
-    """A collection created before version/deleted existed is migrated in place.
+def _uuid(key):
+    # Real UUIDs: the deletion filter is built with Filter.by_id().contains_any.
+    return str(uuid5(NAMESPACE_URL, key))
 
-    Objects written back then carry null for the new properties, and an equality
-    filter does not match null — a `deleted == False` filter would silently hide
-    every legacy entry. The backfill is what keeps them retrievable without a
-    collection reset.
-    """
+
+def _with_deletable_objects(collection, objects):
+    """Let the collection's cursor see ``objects`` and delete_many remove them."""
+    store = list(objects)
+
+    def iterator(return_properties=None):
+        del return_properties
+        return iter(list(store))
+
+    def delete_many(where):
+        del where
+        # The production code deletes the batch it collected: at most one batch of
+        # objects without an instance per call.
+        removed = [obj for obj in store if not obj.properties.get("base_url")][
+            : schema_module._LEGACY_DELETE_BATCH
+        ]
+        for obj in removed:
+            store.remove(obj)
+        return SimpleNamespace(failed=0, successful=len(removed))
+
+    collection.iterator.side_effect = iterator
+    collection.data.delete_many.side_effect = delete_many
+    return store
+
+
+def test_missing_properties_are_added():
     client = MagicMock()
-    legacy_names = [
+    names_before_isolation = [
         name
         for name in _all_property_names()
         if name
-        not in (CourseMemorySchema.VERSION.value, CourseMemorySchema.DELETED.value)
+        not in (CourseMemorySchema.BASE_URL.value, CourseMemorySchema.WRITTEN_AT.value)
     ]
-    legacy_object = SimpleNamespace(uuid="u-legacy", properties={})
-    collection = _existing_collection(client, legacy_names, [legacy_object])
+    collection = _existing_collection(client, names_before_isolation)
 
     init_course_memory_schema(client)
 
@@ -129,32 +152,58 @@ def test_missing_properties_are_added_and_backfilled():
         call.args[0].name for call in collection.config.add_property.call_args_list
     ]
     assert sorted(added) == sorted(
-        [CourseMemorySchema.VERSION.value, CourseMemorySchema.DELETED.value]
-    )
-    collection.data.update.assert_called_once_with(
-        uuid="u-legacy",
-        properties={
-            CourseMemorySchema.VERSION.value: 0,
-            CourseMemorySchema.DELETED.value: False,
-        },
+        [CourseMemorySchema.BASE_URL.value, CourseMemorySchema.WRITTEN_AT.value]
     )
 
 
-def test_backfill_leaves_objects_that_already_carry_the_property_alone():
+def test_objects_without_an_instance_are_deleted_and_isolated_ones_kept():
+    """Objects written before instance isolation belong to no known Artemis: no filter
+    can serve them and no retraction can address them. They are removed; objects
+    that carry their instance are left alone."""
     client = MagicMock()
-    legacy_names = [
-        name
-        for name in _all_property_names()
-        if name != CourseMemorySchema.DELETED.value
+    collection = _existing_collection(client, _all_property_names())
+    legacy = [
+        SimpleNamespace(uuid=_uuid(f"legacy-{i}"), properties={}) for i in range(2500)
     ]
-    already_set = SimpleNamespace(
-        uuid="u-set", properties={CourseMemorySchema.DELETED.value: False}
+    kept = SimpleNamespace(
+        uuid=_uuid("kept"), properties={"base_url": "https://a.example"}
     )
-    collection = _existing_collection(client, legacy_names, [already_set])
+    store = _with_deletable_objects(collection, legacy + [kept])
 
     init_course_memory_schema(client)
 
-    collection.data.update.assert_not_called()
+    assert store == [kept]
+    # More than one pass: the deletion is bounded per call.
+    assert collection.data.delete_many.call_count >= 3
+
+
+def test_failed_cleanup_raises_and_is_retried_by_the_next_init():
+    client = MagicMock()
+    collection = _existing_collection(client, _all_property_names())
+    store = _with_deletable_objects(
+        collection, [SimpleNamespace(uuid=_uuid("legacy"), properties={})]
+    )
+    collection.data.delete_many.side_effect = [SimpleNamespace(failed=1)]
+
+    with pytest.raises(RuntimeError):
+        init_course_memory_schema(client)
+
+    # Not recorded as done: the next initialisation tries again and succeeds.
+    _with_deletable_objects(collection, store)
+    init_course_memory_schema(client)
+    assert collection.config.get.call_count == 2
+
+
+def test_new_collection_scopes_the_instance_exactly():
+    client = MagicMock()
+    client.collections.exists.return_value = False
+
+    init_course_memory_schema(client)
+
+    props = _props_by_name(client.collections.create.call_args.kwargs)
+    base_url = props[CourseMemorySchema.BASE_URL.value]
+    assert base_url.tokenization.value == "field"
+    assert props[CourseMemorySchema.WRITTEN_AT.value].dataType == DataType.DATE
 
 
 def test_migration_runs_once_per_process():
@@ -168,11 +217,48 @@ def test_migration_runs_once_per_process():
     collection.config.get.assert_called_once()
 
 
-def test_migration_failure_does_not_break_initialisation():
-    client = MagicMock()
-    collection = _existing_collection(client, [])
-    collection.config.add_property.side_effect = RuntimeError("schema locked")
+def test_vector_database_retries_after_a_failed_initialisation(monkeypatch):
+    """A failed schema init must not leave a client without collections behind.
 
-    result = init_course_memory_schema(client)
+    The client is published only after every schema initialised; otherwise every
+    later construction would skip initialisation and fail on missing collections.
+    """
+    clients = []
 
-    assert result is collection
+    def connect(**_kwargs):
+        client = MagicMock()
+        clients.append(client)
+        return client
+
+    calls = {"count": 0}
+
+    def flaky_course_memory_init(client):
+        del client
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("weaviate busy")
+        return MagicMock(name="course_memory")
+
+    monkeypatch.setattr(database_module.weaviate, "connect_to_custom", connect)
+    monkeypatch.setattr(
+        database_module, "init_course_memory_schema", flaky_course_memory_init
+    )
+    for name in (
+        "init_lecture_unit_page_chunk_schema",
+        "init_lecture_transcription_schema",
+        "init_lecture_unit_segment_schema",
+        "init_lecture_unit_schema",
+        "init_faq_schema",
+    ):
+        monkeypatch.setattr(database_module, name, lambda client: MagicMock())
+    monkeypatch.setattr(database_module.VectorDatabase, "static_client_instance", None)
+    monkeypatch.setattr(database_module.VectorDatabase, "_static_collections", {})
+
+    with pytest.raises(RuntimeError):
+        database_module.VectorDatabase()
+    assert database_module.VectorDatabase.static_client_instance is None
+    clients[0].close.assert_called_once()
+
+    db = database_module.VectorDatabase()
+    assert db.client is clients[1]
+    assert db.course_memory is not None

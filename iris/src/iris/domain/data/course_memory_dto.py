@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -30,12 +31,18 @@ TUTOR_VERIFIED_SOURCES: frozenset[str] = frozenset(
     )
 )
 
-# Sources whose stored answer is the exact text a tutor signed off on in the dashboard —
-# unchanged (IRIS_AUTO) or edited (IRIS_CORRECTED). The payload must carry that text
-# verbatim as ``existingAnswer``; letting the extractor paraphrase it would store, and
-# later serve as tutor-verified, wording no tutor ever saw.
+# Sources whose stored answer is the exact text a tutor signed off on: an Iris draft
+# approved unchanged (IRIS_AUTO) or edited (IRIS_CORRECTED), or an answer a tutor marked
+# as resolving (TUTOR_WRITTEN). The payload must carry that text verbatim as
+# ``existingAnswer``; letting the extractor rewrite it would store, and later serve as
+# tutor-verified, wording no tutor ever saw — including anything other messages in the
+# thread tried to slip into it. Only the question is extracted for these sources.
 VERBATIM_ANSWER_SOURCES: frozenset[CourseMemorySource] = frozenset(
-    {CourseMemorySource.IRIS_AUTO, CourseMemorySource.IRIS_CORRECTED}
+    {
+        CourseMemorySource.IRIS_AUTO,
+        CourseMemorySource.IRIS_CORRECTED,
+        CourseMemorySource.TUTOR_WRITTEN,
+    }
 )
 
 
@@ -56,7 +63,8 @@ class CourseMemoryEntryDTO(BaseModel):
     conversation_id: str = Field(alias="conversationId")
     source: CourseMemorySource
     verified_at: Optional[str] = Field(default=None, alias="verifiedAt")
-    verified_by: Optional[str] = Field(default=None, alias="verifiedBy")
+    # Canonical URL of the Artemis instance the entry belongs to.
+    base_url: str = Field(alias="baseUrl")
     # The Artemis operation version this entry was written by; see
     # CourseMemoryIngestionExecutionDTO.version for the ordering it establishes.
     version: int
@@ -75,7 +83,8 @@ class CourseMemoryEntryDTO(BaseModel):
             CourseMemorySchema.CONVERSATION_ID.value: self.conversation_id,
             CourseMemorySchema.SOURCE.value: self.source.value,
             CourseMemorySchema.VERIFIED_AT.value: self.verified_at or "",
-            CourseMemorySchema.VERIFIED_BY.value: self.verified_by or "",
             CourseMemorySchema.VERSION.value: self.version,
             CourseMemorySchema.DELETED.value: self.deleted,
+            CourseMemorySchema.BASE_URL.value: self.base_url,
+            CourseMemorySchema.WRITTEN_AT.value: datetime.now(timezone.utc),
         }

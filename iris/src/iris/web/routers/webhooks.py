@@ -10,6 +10,10 @@ from iris.dependencies import TokenValidator
 from iris.domain.ingestion.course_memory_ingestion_dto import (
     CourseMemoryIngestionExecutionDTO,
 )
+from iris.domain.ingestion.course_memory_sync_dto import (
+    CourseMemoryCourseSyncDTO,
+    CourseMemoryInstanceSyncDTO,
+)
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     FaqIngestionPipelineExecutionDto,
     IngestionPipelineExecutionDto,
@@ -340,17 +344,10 @@ def faq_deletion_webhook(dto: FaqDeletionExecutionDto):
 
 
 def run_course_memory_ingestion_worker(
-    dto: CourseMemoryIngestionExecutionDTO,
-    variant_id: str,
-    start_channel_delete_gen: Optional[int] = None,
-    start_course_delete_gen: Optional[int] = None,
+    dto: CourseMemoryIngestionExecutionDTO, variant_id: str
 ):
     """Run the course memory ingestion pipeline in a separate thread.
 
-    ``start_channel_delete_gen`` / ``start_course_delete_gen`` are the channel- and
-    course-scoped purge counters as sampled when the request was accepted, so a purge
-    accepted afterwards — of the thread's whole channel, or of the whole course —
-    cannot be undone by this ingestion even if the OS schedules this worker later.
     Ordering against other operations on the same thread needs no sampling: the
     payload carries the Artemis operation version and the write compares against the
     stored one (see ``CourseMemoryIngestionPipeline.upsert``).
@@ -374,10 +371,7 @@ def run_course_memory_ingestion_worker(
             variant=variant,
             local=is_local,
         )
-        pipeline(
-            start_channel_delete_gen=start_channel_delete_gen,
-            start_course_delete_gen=start_course_delete_gen,
-        )
+        pipeline()
     except Exception as e:
         logger.error("Error in course memory ingestion pipeline", exc_info=e)
         # If the pipeline never ran (e.g. Weaviate/variant init failed), its own
@@ -420,39 +414,21 @@ def course_memory_ingestion_webhook(dto: CourseMemoryIngestionExecutionDTO):
     )
     variant = validate_pipeline_variant(dto.settings, CourseMemoryIngestionPipeline)
 
-    # Sampled here, not in the worker: the thread may not be scheduled before a
-    # channel or course purge that arrives after this one completes, and an
-    # ingestion accepted earlier must never resurrect an entry purged later. The
-    # per-thread ordering needs no sample — it rides on dto.version.
-    start_channel_delete_gen = (
-        CourseMemoryIngestionPipeline.channel_delete_generation_for(
-            dto.conversation_id, dto.course_id
-        )
-    )
-    start_course_delete_gen = (
-        CourseMemoryIngestionPipeline.course_delete_generation_for(dto.course_id)
-    )
     thread = Thread(
         target=run_course_memory_ingestion_worker,
-        args=(
-            dto,
-            variant,
-            start_channel_delete_gen,
-            start_course_delete_gen,
-        ),
+        args=(dto, variant),
     )
     thread.start()
 
 
 def run_course_memory_deletion_worker(dto: CourseMemoryDeletionExecutionDto):
-    """Delete course memory entries at the DTO's scope, in a separate thread.
+    """Retract the entry of one thread, in a separate thread.
 
     Uses :class:`CourseMemoryDeleter` rather than the ingestion pipeline on
     purpose: the pipeline resolves a chat *and* an embedding model in its
     constructor, so a deployment running only local models — or one whose cloud
     variant is misconfigured — would ingest happily while every retraction failed
-    on model resolution. Deleting needs nothing but the Weaviate collection, so it
-    now works wherever ingestion does, and in some places where it does not.
+    on model resolution. Deleting needs nothing but the Weaviate collection.
     """
     callback = None
     try:
@@ -462,16 +438,9 @@ def run_course_memory_deletion_worker(dto: CourseMemoryDeletionExecutionDto):
         )
         db = VectorDatabase()
         deleter = CourseMemoryDeleter(db.get_client())
-        if dto.whole_course:
-            deleted = deleter.delete_for_course(dto.course_id)
-        elif dto.conversation_id:
-            deleted = deleter.delete_for_conversation(
-                dto.conversation_id, dto.course_id
-            )
-        else:
-            # The DTO validator guarantees a version for the thread scope.
-            deleted = deleter.delete_for_thread(dto.post_id, dto.course_id, dto.version)
-        if deleted:
+        if deleter.delete_for_thread(
+            dto.base_url, dto.post_id, dto.course_id, dto.version
+        ):
             callback.finish()
         else:
             callback.fail("Error while deleting course memory entry")
@@ -492,13 +461,10 @@ def course_memory_deletion_webhook(dto: CourseMemoryDeletionExecutionDto):
     """Webhook endpoint to remove a course memory entry when its source answer is
     deleted or its verification is retracted in Artemis."""
     logger.info(
-        "Course memory deletion webhook received: course=%s thread=%s version=%s "
-        "channel=%s whole_course=%s",
+        "Course memory deletion webhook received: course=%s thread=%s version=%s",
         dto.course_id,
         dto.post_id,
         dto.version,
-        dto.conversation_id,
-        dto.whole_course,
     )
     # No variant validation here, unlike the ingestion route: deletion resolves no
     # model, so rejecting a request over a variant nothing reads would only turn a
@@ -506,3 +472,50 @@ def course_memory_deletion_webhook(dto: CourseMemoryDeletionExecutionDto):
 
     thread = Thread(target=run_course_memory_deletion_worker, args=(dto,))
     thread.start()
+
+
+def run_course_memory_sync_worker(dto):
+    """Reconcile Course Memory with the state Artemis reported, in a separate thread.
+
+    No status callback: the sync is a nightly backstop that Artemis does not wait for;
+    its outcome is logged here.
+    """
+    try:
+        deleter = CourseMemoryDeleter(VectorDatabase().get_client())
+        if isinstance(dto, CourseMemoryCourseSyncDTO):
+            deleter.sync_course(dto)
+        else:
+            deleter.sync_instance(dto)
+    except Exception as e:
+        logger.error("Error in course memory sync", exc_info=e)
+        capture_exception(e)
+
+
+@router.post(
+    "/course-memory/sync/course",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+@observe(name="POST /webhooks/course-memory/sync/course")
+def course_memory_course_sync_webhook(dto: CourseMemoryCourseSyncDTO):
+    """Nightly sync of one course: retract every entry that is outdated, no longer
+    eligible or belongs to a deleted thread. The list must be complete for the course.
+    """
+    logger.info(
+        "Course memory course sync received: course=%s threads=%d",
+        dto.course_id,
+        len(dto.threads),
+    )
+    Thread(target=run_course_memory_sync_worker, args=(dto,)).start()
+
+
+@router.post(
+    "/course-memory/sync/instance",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(TokenValidator())],
+)
+@observe(name="POST /webhooks/course-memory/sync/instance")
+def course_memory_instance_sync_webhook(dto: CourseMemoryInstanceSyncDTO):
+    """Nightly sync of one Artemis instance: retract every entry of a deleted course."""
+    logger.info("Course memory instance sync received: courses=%d", len(dto.course_ids))
+    Thread(target=run_course_memory_sync_worker, args=(dto,)).start()

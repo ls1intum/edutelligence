@@ -1,39 +1,65 @@
+from typing import Iterable, Sequence
+
 from weaviate.collections.classes.filters import Filter
 
+from iris.common.artemis_instance import canonical_artemis_base_url
 from iris.config import settings
 from iris.domain.data.course_memory_dto import TUTOR_VERIFIED_SOURCES
 from iris.vector_database.course_memory_schema import CourseMemorySchema
 from iris.vector_database.database import VectorDatabase
 
 
-def should_allow_course_memory_tool(db: VectorDatabase, course_id: int) -> bool:
-    """
-    Check if course memory is enabled and there are stored entries for the course.
+def course_memory_scope_filter(base_url: str, course_id: int, allowed: Iterable[str]):
+    """The filter every Course Memory read uses: live entries of this Artemis instance
+    and course, from channels Artemis lists as readable by every student."""
+    return (
+        Filter.by_property(CourseMemorySchema.BASE_URL.value).equal(base_url)
+        & Filter.by_property(CourseMemorySchema.COURSE_ID.value).equal(course_id)
+        & Filter.by_property(CourseMemorySchema.DELETED.value).equal(False)
+        & Filter.by_property(CourseMemorySchema.CONVERSATION_ID.value).contains_any(
+            list(allowed)
+        )
+    )
 
-    Tombstones of retracted threads do not count: a course whose every entry was
-    retracted has nothing to retrieve, and offering the tool would only cost a
-    round-trip that returns nothing.
+
+def should_allow_course_memory_tool(
+    db: VectorDatabase,
+    *,
+    course_id: int,
+    base_url: str,
+    allowed_conversation_ids: Sequence[int],
+) -> bool:
+    """
+    Check if course memory is enabled and there are servable entries for the course.
+
+    Only entries this run may serve count: live entries of the calling Artemis
+    instance, from channels Artemis lists as readable by every student. Offering the
+    tool for anything else would only cost a round-trip that returns nothing.
 
     Args:
         db (VectorDatabase): The vector database instance.
         course_id (int): The course ID.
+        base_url (str): The base URL of the calling Artemis instance.
+        allowed_conversation_ids (Sequence[int]): Channels readable by every student.
 
     Returns:
-        bool: True if course memory is enabled and has live entries for the course.
+        bool: True if course memory is enabled and has servable entries for the course.
     """
-    if not settings.course_memory.enabled:
+    if not settings.course_memory.enabled or not course_id:
         return False
-    if course_id:
-        result = db.course_memory.query.fetch_objects(
-            filters=Filter.by_property(CourseMemorySchema.COURSE_ID.value).equal(
-                course_id
-            )
-            & Filter.by_property(CourseMemorySchema.DELETED.value).equal(False),
-            limit=1,
-            return_properties=[CourseMemorySchema.MESSAGE_ID.value],
-        )
-        return len(result.objects) > 0
-    return False
+    if not allowed_conversation_ids:
+        return False
+    try:
+        instance = canonical_artemis_base_url(base_url)
+    except ValueError:
+        return False
+    allowed = [str(conversation_id) for conversation_id in allowed_conversation_ids]
+    result = db.course_memory.query.fetch_objects(
+        filters=course_memory_scope_filter(instance, course_id, allowed),
+        limit=1,
+        return_properties=[CourseMemorySchema.MESSAGE_ID.value],
+    )
+    return len(result.objects) > 0
 
 
 def build_thread_link(memory) -> str:

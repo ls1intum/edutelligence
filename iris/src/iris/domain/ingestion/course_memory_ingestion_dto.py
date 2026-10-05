@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from pydantic import Field, StrictBool, model_validator
 
+from iris.common.artemis_instance import canonical_artemis_base_url
 from iris.domain.data.course_memory_dto import (
     VERBATIM_ANSWER_SOURCES,
     CourseMemorySource,
@@ -42,7 +43,6 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     version: int = Field(alias="version", ge=1)
     thread: List[ThreadMessageDTO] = Field(default_factory=list)
     source: CourseMemorySource
-    verified_by: Optional[str] = Field(default=None, alias="verifiedBy")
     verified_at: Optional[str] = Field(default=None, alias="verifiedAt")
     # Fail closed: an omitted/malformed flag must NOT ingest private content.
     # Strict on purpose — Pydantic's lax mode coerces "yes"/"TRUE"/1 to True, which
@@ -55,14 +55,13 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     def _require_verbatim_answer_for_dashboard_signoff(
         self,
     ) -> "CourseMemoryIngestionExecutionDTO":
-        """A dashboard sign-off must carry the exact text the tutor approved.
+        """A tutor-verified entry must carry the exact text the tutor signed off on.
 
-        ``IRIS_AUTO`` and ``IRIS_CORRECTED`` both mark an entry as tutor-verified
-        on the strength of a tutor having read and approved one specific wording —
-        unchanged in the first case, edited in the second. Without a non-blank
-        ``existingAnswer`` the pipeline would fall back to LLM extraction and still
-        store the result under that label, so retrieval would present a paraphrase
-        no tutor ever saw as tutor-approved. Reject the payload instead.
+        ``IRIS_AUTO``, ``IRIS_CORRECTED`` and ``TUTOR_WRITTEN`` mark an entry as
+        tutor-verified on the strength of a tutor having read one specific wording.
+        Without a non-blank ``existingAnswer`` the pipeline would fall back to LLM
+        extraction and still store the result under that label, so retrieval would
+        present text no tutor ever saw as tutor-approved. Reject the payload instead.
         """
         if self.source in VERBATIM_ANSWER_SOURCES and not (
             self.existing_answer and self.existing_answer.strip()
@@ -76,33 +75,29 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     def _require_unambiguous_verified_answer(
         self,
     ) -> "CourseMemoryIngestionExecutionDTO":
-        """The thread must carry an unambiguous verified answer.
+        """The thread must carry an unambiguous answer source.
 
-        The extractor synthesizes its answer from the flagged messages only. With
-        nothing flagged it would instead pick a message of its own choosing, and
-        the result would still be stored under a tutor-verified provenance label
-        it did not earn — so reject at the boundary rather than guess.
-
-        Several ``resolves_post`` messages are legitimate (Artemis marks a post
-        resolved if *any* answer resolves it) and are merged into one answer. More
-        than one ``is_verified_answer`` is not: Artemis derives that flag from a
-        single triggering answer, so duplicates mean an upstream bug and leave the
-        anchor ambiguous.
+        Exactly one message is the anchor (``isVerifiedAnswer``): the answer the entry
+        is built from. For a tutor-verified source its text arrives verbatim as
+        ``existingAnswer`` and nothing else in the thread may become part of the stored
+        answer. For ``THREAD_RESOLVED`` the extractor may additionally merge the other
+        ``resolvesPost`` messages, which is why those stay flagged in the payload.
         """
-        anchors = sum(
-            1
-            for message in self.thread
-            if message.is_verified_answer or message.resolves_post
-        )
-        if anchors == 0:
-            raise ValueError(
-                "thread must contain at least one message flagged isVerifiedAnswer "
-                "or resolvesPost"
-            )
         verified = sum(1 for message in self.thread if message.is_verified_answer)
-        if verified > 1:
+        if verified != 1:
             raise ValueError(
-                "at most one thread message may be flagged isVerifiedAnswer "
+                "exactly one thread message must be flagged isVerifiedAnswer "
                 f"(found {verified})"
             )
         return self
+
+    @model_validator(mode="after")
+    def _require_artemis_instance(self) -> "CourseMemoryIngestionExecutionDTO":
+        """Every entry is scoped to the Artemis instance that sent it."""
+        canonical_artemis_base_url(self.settings.artemis_base_url)
+        return self
+
+    @property
+    def base_url(self) -> str:
+        """Canonical URL of the sending Artemis instance."""
+        return canonical_artemis_base_url(self.settings.artemis_base_url)

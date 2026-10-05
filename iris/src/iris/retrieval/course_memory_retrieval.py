@@ -1,8 +1,9 @@
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
 
+from iris.common.artemis_instance import canonical_artemis_base_url
 from iris.config import settings
 from iris.tracing import observe
 
@@ -18,6 +19,7 @@ from ..vector_database.course_memory_schema import (
     init_course_memory_schema,
 )
 from .basic_retrieval import BaseRetrieval
+from .course_memory_retrieval_utils import course_memory_scope_filter
 
 logger = get_logger(__name__)
 
@@ -50,7 +52,6 @@ class CourseMemoryRetrieval(BaseRetrieval):
             CourseMemorySchema.CONVERSATION_ID.value,
             CourseMemorySchema.SOURCE.value,
             CourseMemorySchema.VERIFIED_AT.value,
-            CourseMemorySchema.VERIFIED_BY.value,
         ]
 
     @observe(name="Full Course Memory Retrieval")
@@ -59,14 +60,28 @@ class CourseMemoryRetrieval(BaseRetrieval):
         chat_history: list[PyrisMessage],
         student_query: str,
         result_limit: Optional[int] = None,
-        course_id: Optional[int] = None,
+        *,
+        course_id: int,
+        base_url: str,
+        allowed_conversation_ids: Sequence[int],
         course_name: Optional[str] = None,
-        base_url: Optional[str] = None,
         rewrite: bool = True,
     ) -> List[dict]:
-        # Course scoping is mandatory.
-        if not course_id:
+        """Retrieve entries that may be served for this run.
+
+        ``allowed_conversation_ids`` lists the channels Artemis considers readable by
+        every student of the course at dispatch time. It is required: Iris must never
+        cite from a channel that is not, however the entry got stored. An empty list
+        returns nothing. ``base_url`` scopes the search to the calling Artemis instance.
+        """
+        if not course_id or not allowed_conversation_ids:
             return []
+        try:
+            instance = canonical_artemis_base_url(base_url)
+        except ValueError:
+            logger.warning("Course memory retrieval without a valid Artemis base URL")
+            return []
+        allowed = {str(conversation_id) for conversation_id in allowed_conversation_ids}
 
         config = settings.course_memory
         result_limit = result_limit or config.result_limit
@@ -102,9 +117,7 @@ class CourseMemoryRetrieval(BaseRetrieval):
         # Both queries below carry this filter so a tombstone can never be ranked,
         # gated or returned. The filter applies to both the hybrid ranking and the
         # certainty gate.
-        course_filter = Filter.by_property(CourseMemorySchema.COURSE_ID.value).equal(
-            course_id
-        ) & Filter.by_property(CourseMemorySchema.DELETED.value).equal(False)
+        course_filter = course_memory_scope_filter(instance, course_id, allowed)
         try:
             vec = self.llm_embedding.embed(query)
             # Rank by hybrid (BM25 + dense). Pin the fusion type so fused scores are
@@ -136,7 +149,7 @@ class CourseMemoryRetrieval(BaseRetrieval):
                 limit=len(ranked_ids),
                 return_metadata=MetadataQuery(certainty=True),
             )
-            allowed = {obj.uuid for obj in gate.objects}
+            gate_passed = {obj.uuid for obj in gate.objects}
         except Exception as e:  # noqa: BLE001
             # Graceful degradation: embedding service / Weaviate unavailable.
             logger.warning(
@@ -144,5 +157,13 @@ class CourseMemoryRetrieval(BaseRetrieval):
             )
             return []
 
-        # Keep hybrid-ranked results that clear the cosine-similarity floor.
-        return [obj.properties for obj in ranked.objects if obj.uuid in allowed]
+        # Keep hybrid-ranked results that clear the cosine-similarity floor. The channel
+        # membership is checked again on the returned properties, so a hit can never be
+        # served from a channel outside the allowlist, whatever the filter matched.
+        return [
+            obj.properties
+            for obj in ranked.objects
+            if obj.uuid in gate_passed
+            and str(obj.properties.get(CourseMemorySchema.CONVERSATION_ID.value))
+            in allowed
+        ]

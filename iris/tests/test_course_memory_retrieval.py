@@ -11,6 +11,9 @@ from iris.retrieval.course_memory_retrieval_utils import (
 )
 from iris.vector_database.course_memory_schema import CourseMemorySchema
 
+BASE = "https://artemis.example"
+ALLOWED = [1]
+
 
 def _make_retriever():
     retriever = object.__new__(CourseMemoryRetrieval)
@@ -20,7 +23,7 @@ def _make_retriever():
     return retriever
 
 
-def _obj(key, message_id="m1", source="TUTOR_WRITTEN"):
+def _obj(key, message_id="m1", source="TUTOR_WRITTEN", conversation_id="1"):
     # Real UUIDs (deterministic per key): the gate filter is built with
     # Filter.by_id().contains_any, which rejects non-UUID strings.
     return SimpleNamespace(
@@ -29,7 +32,7 @@ def _obj(key, message_id="m1", source="TUTOR_WRITTEN"):
             CourseMemorySchema.QUESTION.value: "q",
             CourseMemorySchema.ANSWER.value: "a",
             CourseMemorySchema.MESSAGE_ID.value: message_id,
-            CourseMemorySchema.CONVERSATION_ID.value: "c1",
+            CourseMemorySchema.CONVERSATION_ID.value: conversation_id,
             CourseMemorySchema.SOURCE.value: source,
         },
     )
@@ -50,7 +53,12 @@ def test_cosine_gate_drops_results_below_the_floor():
     )
 
     results = retriever(
-        chat_history=[], student_query="how?", course_id=42, rewrite=False
+        chat_history=[],
+        student_query="how?",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=False,
     )
 
     assert len(results) == 1
@@ -61,7 +69,14 @@ def test_hybrid_fusion_is_pinned_to_relative_score():
     retriever = _make_retriever()
     _wire(retriever, ranked=[_obj("u1")], gate=[_obj("u1")])
 
-    retriever(chat_history=[], student_query="q", course_id=42, rewrite=False)
+    retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=False,
+    )
 
     kwargs = retriever.collection.query.hybrid.call_args.kwargs
     assert kwargs["fusion_type"] == HybridFusion.RELATIVE_SCORE
@@ -75,7 +90,14 @@ def test_ranked_order_preserved_over_gated_set():
         gate=[_obj("c", "c"), _obj("a", "a")],  # gate order must not matter
     )
 
-    results = retriever(chat_history=[], student_query="q", course_id=42, rewrite=False)
+    results = retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=False,
+    )
 
     ids = [r[CourseMemorySchema.MESSAGE_ID.value] for r in results]
     assert ids == ["a", "c"]  # hybrid order kept, "b" dropped by the gate
@@ -83,7 +105,13 @@ def test_ranked_order_preserved_over_gated_set():
 
 def test_missing_course_id_returns_empty():
     retriever = _make_retriever()
-    assert not retriever(chat_history=[], student_query="q", course_id=None)
+    assert not retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=None,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+    )
     retriever.collection.query.hybrid.assert_not_called()
     retriever.collection.query.near_vector.assert_not_called()
 
@@ -92,7 +120,14 @@ def test_graceful_degradation_when_embedding_fails():
     retriever = _make_retriever()
     retriever.llm_embedding.embed.side_effect = RuntimeError("Logos down")
 
-    results = retriever(chat_history=[], student_query="q", course_id=42, rewrite=False)
+    results = retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=False,
+    )
 
     assert not results
 
@@ -101,10 +136,17 @@ def test_results_include_backlink_ids():
     retriever = _make_retriever()
     _wire(retriever, ranked=[_obj("u7", "msg-7")], gate=[_obj("u7", "msg-7")])
 
-    results = retriever(chat_history=[], student_query="q", course_id=42, rewrite=False)
+    results = retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=False,
+    )
 
     assert results[0][CourseMemorySchema.MESSAGE_ID.value] == "msg-7"
-    assert results[0][CourseMemorySchema.CONVERSATION_ID.value] == "c1"
+    assert results[0][CourseMemorySchema.CONVERSATION_ID.value] == "1"
 
 
 def test_rewrite_used_and_never_queries_missing_language_property():
@@ -117,7 +159,14 @@ def test_rewrite_used_and_never_queries_missing_language_property():
         side_effect=AssertionError("must not fetch course language")
     )
 
-    retriever(chat_history=[], student_query="how do I?", course_id=42, rewrite=True)
+    retriever(
+        chat_history=[],
+        student_query="how do I?",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=True,
+    )
 
     retriever.rewrite_student_query.assert_called_once()
     retriever.llm_embedding.embed.assert_called_once_with("self-contained query")
@@ -128,7 +177,14 @@ def test_rewrite_failure_falls_back_to_raw_query():
     _wire(retriever, ranked=[_obj("u1")], gate=[_obj("u1")])
     retriever.rewrite_student_query = MagicMock(side_effect=RuntimeError("llm down"))
 
-    retriever(chat_history=[], student_query="raw query", course_id=42, rewrite=True)
+    retriever(
+        chat_history=[],
+        student_query="raw query",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=True,
+    )
 
     retriever.llm_embedding.embed.assert_called_once_with("raw query")
 
@@ -140,7 +196,14 @@ def test_gate_is_restricted_to_ranked_candidates():
     retriever = _make_retriever()
     _wire(retriever, ranked=[_obj("u1"), _obj("u2"), _obj("u3")], gate=[_obj("u2")])
 
-    results = retriever(chat_history=[], student_query="q", course_id=42, rewrite=False)
+    results = retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=False,
+    )
 
     kwargs = retriever.collection.query.near_vector.call_args.kwargs
     assert kwargs["limit"] == 3  # exactly the ranked candidates, no wider pool
@@ -151,7 +214,14 @@ def test_empty_hybrid_result_skips_the_gate_query():
     retriever = _make_retriever()
     _wire(retriever, ranked=[], gate=[])
 
-    results = retriever(chat_history=[], student_query="q", course_id=42, rewrite=False)
+    results = retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=False,
+    )
 
     assert not results
     retriever.collection.query.near_vector.assert_not_called()
@@ -172,6 +242,15 @@ def _equality_clauses(filters):
     return clauses
 
 
+def _filter_targets(filters):
+    """Every property a composed Weaviate filter constrains."""
+    nested = getattr(filters, "filters", None)
+    if nested is not None:
+        return set().union(*(_filter_targets(child) for child in nested))
+    target = getattr(filters, "target", None)
+    return {target} if isinstance(target, str) else set()
+
+
 def test_tombstones_are_filtered_out_of_ranking_and_gate():
     """A retracted thread keeps its object as a tombstone (deleted=True, with its
     version) so a stale ingestion cannot resurrect it. That object still sits in the
@@ -180,7 +259,14 @@ def test_tombstones_are_filtered_out_of_ranking_and_gate():
     retriever = _make_retriever()
     _wire(retriever, ranked=[_obj("u1")], gate=[_obj("u1")])
 
-    retriever(chat_history=[], student_query="q", course_id=42, rewrite=False)
+    retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=42,
+        base_url=BASE,
+        allowed_conversation_ids=ALLOWED,
+        rewrite=False,
+    )
 
     for query in (
         retriever.collection.query.hybrid,
@@ -189,6 +275,7 @@ def test_tombstones_are_filtered_out_of_ranking_and_gate():
         clauses = _equality_clauses(query.call_args.kwargs["filters"])
         assert clauses[CourseMemorySchema.COURSE_ID.value] == 42
         assert clauses[CourseMemorySchema.DELETED.value] is False
+        assert clauses[CourseMemorySchema.BASE_URL.value] == BASE
 
 
 def test_tool_gate_ignores_tombstones():
@@ -197,10 +284,90 @@ def test_tool_gate_ignores_tombstones():
     db = MagicMock()
     db.course_memory.query.fetch_objects.return_value = SimpleNamespace(objects=[])
 
-    assert should_allow_course_memory_tool(db, course_id=42) is False
+    assert (
+        should_allow_course_memory_tool(
+            db, course_id=42, base_url=BASE, allowed_conversation_ids=ALLOWED
+        )
+        is False
+    )
 
     clauses = _equality_clauses(
         db.course_memory.query.fetch_objects.call_args.kwargs["filters"]
     )
     assert clauses[CourseMemorySchema.COURSE_ID.value] == 42
     assert clauses[CourseMemorySchema.DELETED.value] is False
+    assert clauses[CourseMemorySchema.BASE_URL.value] == BASE
+
+
+def _scoped_call(retriever, allowed=None, base_url=BASE):
+    return retriever(
+        chat_history=[],
+        student_query="q",
+        course_id=42,
+        base_url=base_url,
+        allowed_conversation_ids=ALLOWED if allowed is None else allowed,
+        rewrite=False,
+    )
+
+
+def test_no_allowlist_means_no_results_and_no_query():
+    # Iris must never cite from a channel Artemis did not list as readable; without a
+    # list there is nothing it may cite.
+    retriever = _make_retriever()
+    _wire(retriever, ranked=[_obj("u1")], gate=[_obj("u1")])
+
+    assert not _scoped_call(retriever, allowed=[])
+    retriever.collection.query.hybrid.assert_not_called()
+
+
+def test_hit_from_a_channel_outside_the_allowlist_is_never_returned():
+    # Even if the filter matched it (stale index, wrong tokenization), a hit from a
+    # channel that is not readable now is dropped before anything sees it.
+    retriever = _make_retriever()
+    inside, outside = _obj("u1", "inside"), _obj("u2", "outside", conversation_id="2")
+    _wire(retriever, ranked=[inside, outside], gate=[inside, outside])
+
+    results = _scoped_call(retriever)
+
+    assert [r[CourseMemorySchema.MESSAGE_ID.value] for r in results] == ["inside"]
+
+
+def test_allowlist_is_part_of_both_queries():
+    retriever = _make_retriever()
+    _wire(retriever, ranked=[_obj("u1")], gate=[_obj("u1")])
+
+    _scoped_call(retriever, allowed=[1, 5])
+
+    for query in (
+        retriever.collection.query.hybrid,
+        retriever.collection.query.near_vector,
+    ):
+        assert CourseMemorySchema.CONVERSATION_ID.value in _filter_targets(
+            query.call_args.kwargs["filters"]
+        )
+
+
+def test_invalid_base_url_returns_nothing():
+    retriever = _make_retriever()
+    _wire(retriever, ranked=[_obj("u1")], gate=[_obj("u1")])
+
+    assert not _scoped_call(retriever, base_url="")
+    retriever.collection.query.hybrid.assert_not_called()
+
+
+def test_tool_is_not_offered_without_an_allowlist_or_instance():
+    db = MagicMock()
+    db.course_memory.query.fetch_objects.return_value = SimpleNamespace(
+        objects=[_obj("u1")]
+    )
+
+    assert not should_allow_course_memory_tool(
+        db, course_id=42, base_url=BASE, allowed_conversation_ids=[]
+    )
+    assert not should_allow_course_memory_tool(
+        db, course_id=42, base_url="", allowed_conversation_ids=ALLOWED
+    )
+    db.course_memory.query.fetch_objects.assert_not_called()
+    assert should_allow_course_memory_tool(
+        db, course_id=42, base_url=BASE, allowed_conversation_ids=ALLOWED
+    )
