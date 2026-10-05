@@ -584,7 +584,7 @@ class TestListingPagination:
         }
         self._paged_client(monkeypatch, [noise, [request]])
 
-        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("wasnertobias", 412345678)
+        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("wasnertobias", 412345678, None)
 
     async def test_a_review_request_lost_to_the_page_ceiling_is_not_answered(self, monkeypatch):
         # The timeline is oldest-first, so a truncated read holds the
@@ -619,7 +619,7 @@ class TestListingPagination:
             ],
         )
 
-        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("", None)
+        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("", None, None)
 
     async def test_a_remade_review_request_answers_with_the_newest_event(self, monkeypatch):
         # Asking again — remove the reviewer, add them back — writes a new
@@ -645,7 +645,45 @@ class TestListingPagination:
             ],
         )
 
-        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("wasnertobias", 222)
+        assert await github.who_asked_for_a_review(772, "LogosOSSAgent") == ("wasnertobias", 222, None)
+
+    async def test_a_team_review_request_is_found_on_the_last_page(self, monkeypatch):
+        noise = [{"event": "commented", "actor": {"login": "a"}} for _ in range(100)]
+        request = {
+            "id": 32494428281,
+            "event": "review_requested",
+            "requested_team": {"slug": "logos-maintainers"},
+            "actor": {"login": "wasnertobias"},
+        }
+        self._paged_client(monkeypatch, [noise, [request]])
+
+        assert await github.who_asked_for_a_review(1175, "LogosOSSAgent") == (
+            "wasnertobias",
+            32494428281,
+            "logos-maintainers",
+        )
+
+    async def test_review_requests_include_configured_teams(self, monkeypatch):
+        async def fake_get_all(path, params=None):
+            assert path.endswith("/pulls")
+            return [
+                {
+                    "number": 1175,
+                    "requested_reviewers": [],
+                    "requested_teams": [{"slug": "logos-maintainers"}],
+                },
+                {
+                    "number": 999,
+                    "requested_reviewers": [],
+                    "requested_teams": [{"slug": "iris-maintainers"}],
+                },
+            ]
+
+        monkeypatch.setattr(github, "_get_all", fake_get_all)
+
+        asked = await github.review_requests("LogosOSSAgent")
+
+        assert [pull["number"] for pull in asked] == [1175]
 
 
 class TestReactionsAndReplies:

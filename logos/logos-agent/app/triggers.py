@@ -883,7 +883,7 @@ class TriggerPoller:
                     number,
                 )
                 continue
-            requester, request_event_id = answer
+            requester, request_event_id, team_slug = answer
             if not requester or not await self._writer(requester):
                 logger.info(
                     "the review request on #%s comes from %s, who does not direct this runner",
@@ -914,9 +914,17 @@ class TriggerPoller:
                     # for the one already answered — a ref built from the
                     # requester alone would suppress it forever.
                     "ref": (
-                        f"pr-{number}-review-requested-{requester.lower()}-event-{request_event_id}"
+                        (
+                            f"pr-{number}-review-requested-team-{team_slug}-event-{request_event_id}"
+                            if team_slug
+                            else f"pr-{number}-review-requested-{requester.lower()}-event-{request_event_id}"
+                        )
                         if request_event_id is not None
-                        else f"pr-{number}-review-requested-{requester.lower()}"
+                        else (
+                            f"pr-{number}-review-requested-team-{team_slug}"
+                            if team_slug
+                            else f"pr-{number}-review-requested-{requester.lower()}"
+                        )
                     ),
                     "kind": "review-request",
                     "task": await review_request_task(

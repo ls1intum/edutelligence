@@ -96,6 +96,7 @@ class FakeRepo:
         # re-made request is a new event, and the poller's ref must be able
         # to tell the two apart.
         self.review_request_ids: dict[int, int] = {}
+        self.review_request_teams: dict[int, str | None] = {}
         # Numbers that are plain issues rather than pull requests.
         self.not_pulls: set[int] = set()
         self.titles: dict[int, str] = {}
@@ -157,12 +158,17 @@ class FakeRepo:
             requester = self.review_requesters.get(number, "")
             if requester is None:
                 return None
-            if not requester:
-                return "", None
+            team = self.review_request_teams.get(number)
+            if not requester and not team:
+                return "", None, None
             # A stable identity per pull request by default, so a ref built
             # from it is stable across passes; a test that re-makes the
             # request names the new event itself.
-            return requester, self.review_request_ids.get(number, 900_000 + number)
+            return (
+                requester or "wasnertobias",
+                self.review_request_ids.get(number, 900_000 + number),
+                team,
+            )
 
         async def recent_issue_comments(_since):
             return self.issue_comments
@@ -2128,10 +2134,36 @@ class TestBeingAskedForAReview:
     def asked(number: int, title: str = "A change", body: str = "What it does."):
         return {"number": number, "title": title, "body": body, "labels": []}
 
+    async def test_a_team_review_request_from_a_maintainer_is_answered(self, monkeypatch):
+        # CODEOWNERS and the review UI often request a team, not the agent
+        # login. PR #1175 had logos-maintainers requested and nothing
+        # happened because only requested_reviewers was read.
+        repo = FakeRepo()
+        repo.review_requests = [self.asked(1175, "Let configured review apps direct the agent")]
+        repo.review_requesters = {1175: "wasnertobias"}
+        repo.review_request_teams = {1175: "logos-maintainers"}
+        repo.review_request_ids = {1175: 32494428281}
+        repo.heads = {1175: ("feature/logos/review-bots-may-direct-agent-prs", REPO)}
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert len(fake_db.created) == 1
+        queued = fake_db.created[0]
+        assert queued["trigger_kind"] == "review-request"
+        assert queued["trigger_ref"] == "pr-1175-review-requested-team-logos-maintainers-event-32494428281"
+        assert queued["reply_target"] == "issue:1175"
+        assert "you can fix what you find" in queued["task"]
+
     async def test_a_review_request_from_a_maintainer_is_answered(self, monkeypatch):
         repo = FakeRepo()
         repo.review_requests = [self.asked(882, "Add dynamic Scheduler")]
         repo.review_requesters = {882: "wasnertobias"}
+        repo.review_request_teams = {882: None}
         repo.writers = {"wasnertobias"}
         repo.install(monkeypatch)
         fake_db = FakeDb()
