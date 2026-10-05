@@ -193,6 +193,15 @@ class Settings:
     pr_reviewers: tuple[str, ...] = tuple(
         name.strip() for name in os.getenv("LOGOS_AGENT_PR_REVIEWERS", "Claudia-Anthropica").split(",") if name.strip()
     )
+    # Team review requests that mean this account. GitHub lists teams and
+    # people separately on a pull request; asking ``logos-maintainers`` does
+    # not put ``LogosOSSAgent`` in ``requested_reviewers``, so the runner
+    # never saw the request until this list existed.
+    review_teams: tuple[str, ...] = tuple(
+        slug.strip().lower()
+        for slug in os.getenv("LOGOS_AGENT_REVIEW_TEAMS", "logos-maintainers,logos-developers").split(",")
+        if slug.strip()
+    )
     # Wall-clock ceiling for one session, or 0 for none — which is the
     # default. A clock is the wrong thing to stop an agent with: a session
     # that has read the repository for two hours and is halfway through a

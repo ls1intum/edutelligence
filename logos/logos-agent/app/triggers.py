@@ -794,9 +794,15 @@ class TriggerPoller:
                     # outside the repository would let a stranger direct
                     # what the agent commits. Silence their notes so they
                     # do not become a comment session apiece on a pull
-                    # request this runner already owns. Configured review
-                    # apps pass `_worth_reading` and never reach here.
-                    consumed.update(c["id"] for c in comments if isinstance(c.get("id"), int))
+                    # request this runner already owns — except an explicit
+                    # @mention, which the comment path still answers
+                    # read-only. Configured review apps pass
+                    # `_worth_reading` and never reach here.
+                    consumed.update(
+                        c["id"]
+                        for c in comments
+                        if isinstance(c.get("id"), int) and not mentions_agent(str(c.get("body") or ""))
+                    )
                     logger.info(
                         "review on pull request %s is by %s, who may not write to this repository; "
                         "leaving it to a person",
@@ -872,7 +878,10 @@ class TriggerPoller:
                 # is a different thing from working on it, and the work
                 # comes first.
                 continue
-            answer = await github.who_asked_for_a_review(number, login)
+            requested_teams = {
+                str((team or {}).get("slug") or "").lower() for team in (pull.get("requested_teams") or [])
+            }
+            answer = await github.who_asked_for_a_review(number, login, requested_teams)
             if answer is None:
                 # The timeline is longer than the runner can read, and what
                 # was read is its oldest part — the newest request is not in
@@ -883,7 +892,7 @@ class TriggerPoller:
                     number,
                 )
                 continue
-            requester, request_event_id = answer
+            requester, request_event_id, team_slug = answer
             if not requester or not await self._writer(requester):
                 logger.info(
                     "the review request on #%s comes from %s, who does not direct this runner",
@@ -914,9 +923,17 @@ class TriggerPoller:
                     # for the one already answered — a ref built from the
                     # requester alone would suppress it forever.
                     "ref": (
-                        f"pr-{number}-review-requested-{requester.lower()}-event-{request_event_id}"
+                        (
+                            f"pr-{number}-review-requested-team-{team_slug}-event-{request_event_id}"
+                            if team_slug
+                            else f"pr-{number}-review-requested-{requester.lower()}-event-{request_event_id}"
+                        )
                         if request_event_id is not None
-                        else f"pr-{number}-review-requested-{requester.lower()}"
+                        else (
+                            f"pr-{number}-review-requested-team-{team_slug}"
+                            if team_slug
+                            else f"pr-{number}-review-requested-{requester.lower()}"
+                        )
                     ),
                     "kind": "review-request",
                     "task": await review_request_task(

@@ -520,12 +520,18 @@ async def authored_pull_requests(login: str) -> list[dict[str, Any]]:
     ]
 
 
+def _configured_review_team_slugs() -> set[str]:
+    return set(settings.review_teams)
+
+
 async def review_requests(login: str) -> list[dict[str, Any]]:
     """Open pull requests that have asked this account for a review.
 
-    The ordinary way to ask a colleague to look at something, and until
-    now the one gesture the runner did not answer: an operator added the
-    agent as a reviewer and nothing happened at all.
+    The ordinary way to ask a colleague to look at something. GitHub names
+    people and teams separately: only the login appears under
+    ``requested_reviewers``, while a team request lives under
+    ``requested_teams`` — asking ``logos-maintainers`` never listed the
+    agent by name, so nothing was queued.
 
     Read off the pull requests themselves rather than through search, so
     the answer is the repository's current state rather than an index that
@@ -536,6 +542,7 @@ async def review_requests(login: str) -> list[dict[str, Any]]:
         {"state": "open", "sort": "updated", "direction": "desc"},
     )
     wanted = login.strip().lower()
+    teams = _configured_review_team_slugs()
     asked = []
     for pull in payload:
         if not isinstance(pull, dict):
@@ -543,12 +550,15 @@ async def review_requests(login: str) -> list[dict[str, Any]]:
         reviewers = [
             str((person or {}).get("login") or "").lower() for person in (pull.get("requested_reviewers") or [])
         ]
-        if wanted in reviewers:
+        requested_teams = {str((team or {}).get("slug") or "").lower() for team in (pull.get("requested_teams") or [])}
+        if wanted in reviewers or (teams and requested_teams.intersection(teams)):
             asked.append(pull)
     return asked
 
 
-async def who_asked_for_a_review(number: int, login: str) -> tuple[str, int | None] | None:
+async def who_asked_for_a_review(
+    number: int, login: str, requested_teams: set[str] | None = None
+) -> tuple[str, int | None, str | None] | None:
     """The account that last asked `login` to review this pull request, and
     the timeline event that said so.
 
@@ -558,6 +568,11 @@ async def who_asked_for_a_review(number: int, login: str) -> tuple[str, int | No
     the actor because the asking is an event, not a state: removing the
     agent and adding it back is a *new* request, and the memory of the old
     one must not answer for the new.
+
+    ``requested_teams`` is the pull request's *current* team requests. Team
+    timeline events only authorize when that team is still outstanding —
+    otherwise a withdrawn request for team A could authorize a still-active
+    request for team B.
 
     A complete read answers with the actor, or the empty string when the
     timeline names none. An incomplete read answers with None instead: the
@@ -571,8 +586,11 @@ async def who_asked_for_a_review(number: int, login: str) -> tuple[str, int | No
     if truncated:
         return None
     wanted = login.strip().lower()
+    teams = _configured_review_team_slugs()
+    active_teams = {slug.lower() for slug in (requested_teams or set()) if slug}
     actor = ""
     event_id: int | None = None
+    team_slug: str | None = None
     for event in events:
         if not isinstance(event, dict) or event.get("event") != "review_requested":
             continue
@@ -580,7 +598,14 @@ async def who_asked_for_a_review(number: int, login: str) -> tuple[str, int | No
         if requested == wanted:
             actor = str(((event.get("actor") or {}).get("login")) or "")
             event_id = event.get("id") if isinstance(event.get("id"), int) else None
-    return actor, event_id
+            team_slug = None
+            continue
+        slug = str(((event.get("requested_team") or {}).get("slug")) or "").lower()
+        if slug and slug in teams and slug in active_teams:
+            actor = str(((event.get("actor") or {}).get("login")) or "")
+            event_id = event.get("id") if isinstance(event.get("id"), int) else None
+            team_slug = slug
+    return actor, event_id, team_slug
 
 
 async def pull_request(number: int) -> dict[str, Any]:

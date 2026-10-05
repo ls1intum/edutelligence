@@ -595,6 +595,7 @@ services:
       # instead of falling back to the built-in list (`:-` would not).
       LOGOS_AGENT_REVIEW_BOTS: "${LOGOS_AGENT_REVIEW_BOTS-coderabbitai[bot],Claudia-Anthropica}"
       LOGOS_AGENT_PR_REVIEWERS: "${LOGOS_AGENT_PR_REVIEWERS-Claudia-Anthropica}"
+      LOGOS_AGENT_REVIEW_TEAMS: "${LOGOS_AGENT_REVIEW_TEAMS-logos-maintainers,logos-developers}"
       LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-0}"
 
       # Capacity gates: start only below the first threshold, hand capacity

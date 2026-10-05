@@ -357,6 +357,11 @@ in addition to whatever CODEOWNERS already names. A reused pull request
 asks again — GitHub treats a repeat as a no-op when she is already
 requested. Empty the variable to leave only CODEOWNERS.
 
+**Team review requests count too.** Asking `logos-maintainers` or
+`logos-developers` (`LOGOS_AGENT_REVIEW_TEAMS`) is treated like asking the
+agent by name: GitHub never puts the bot login in `requested_reviewers` for
+a team request, so without this list the gesture was silent.
+
 **It reads the pull request it is asked about.** A question on somebody
 else's pull request used to be answered from a checkout of the default
 branch — the agent was asked about a diff it had never seen, and could only

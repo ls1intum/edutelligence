@@ -96,6 +96,9 @@ class FakeRepo:
         # re-made request is a new event, and the poller's ref must be able
         # to tell the two apart.
         self.review_request_ids: dict[int, int] = {}
+        # Team slug when the request was for a configured review team
+        # rather than the agent login itself.
+        self.review_request_teams: dict[int, str | None] = {}
         # Numbers that are plain issues rather than pull requests.
         self.not_pulls: set[int] = set()
         self.titles: dict[int, str] = {}
@@ -153,16 +156,17 @@ class FakeRepo:
         async def review_requests(_login):
             return list(self.review_requests)
 
-        async def who_asked_for_a_review(number, _login):
+        async def who_asked_for_a_review(number, _login, requested_teams=None):
             requester = self.review_requesters.get(number, "")
             if requester is None:
                 return None
             if not requester:
-                return "", None
+                return "", None, None
             # A stable identity per pull request by default, so a ref built
             # from it is stable across passes; a test that re-makes the
             # request names the new event itself.
-            return requester, self.review_request_ids.get(number, 900_000 + number)
+            team = self.review_request_teams.get(number)
+            return requester, self.review_request_ids.get(number, 900_000 + number), team
 
         async def recent_issue_comments(_since):
             return self.issue_comments
@@ -2010,6 +2014,33 @@ class TestTheReviewTheWorkIsAbout:
 
         assert fake_db.created == []
 
+    async def test_a_strangers_mention_in_a_refused_review_still_gets_a_read_only_reply(self, monkeypatch):
+        # Untrusted review notes are consumed so they do not become one
+        # session apiece — except an explicit @mention, which the comment
+        # path still answers without a writable branch.
+        inline = comment(7022, 864, f"@{AGENT} why is this gate inverted?", "a-passer-by", path="app/x.py")
+        repo = FakeRepo(
+            assigned_pulls=[],
+            authored_pulls=[pull(864, "A change")],
+            heads={864: ("logos/agent/x/session-3", REPO)},
+            reviews={864: {**review(991), "user": {"login": "a-passer-by"}}},
+            review_comments={(864, 991): [inline]},
+            inline_comments=[inline],
+        )
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert len(fake_db.created) == 1
+        queued = fake_db.created[0]
+        assert queued["trigger_kind"] == "comment"
+        assert queued["no_push"] is True
+        assert "why is this gate inverted" in queued["task"]
+
     async def test_the_same_review_from_a_maintainer_does_start_one(self, monkeypatch):
         # The control for the test above: the shape is right, so what is
         # being tested there is the author and not the fixture.
@@ -2207,6 +2238,33 @@ class TestBeingAskedForAReview:
         assert queued["reply_target"] == "issue:882"
         assert "Add dynamic Scheduler" in queued["task"]
         assert "you can fix what you find" in queued["task"]
+
+    async def test_a_configured_team_review_request_is_answered(self, monkeypatch):
+        # Asking logos-maintainers never puts LogosOSSAgent in
+        # requested_reviewers; the configured team list is what makes that
+        # gesture reach the agent.
+        repo = FakeRepo()
+        repo.review_requests = [
+            {
+                **self.asked(1175, "Let review apps direct the agent"),
+                "requested_teams": [{"slug": "logos-maintainers"}],
+            }
+        ]
+        repo.review_requesters = {1175: "wasnertobias"}
+        repo.review_request_teams = {1175: "logos-maintainers"}
+        repo.review_request_ids = {1175: 32494428281}
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert len(fake_db.created) == 1
+        queued = fake_db.created[0]
+        assert queued["trigger_kind"] == "review-request"
+        assert queued["trigger_ref"] == "pr-1175-review-requested-team-logos-maintainers-event-32494428281"
 
     async def test_a_fork_is_reviewed_from_its_own_code_without_a_branch(self, monkeypatch):
         repo = FakeRepo(heads={882: ("their-branch", "someone/edutelligence")})
