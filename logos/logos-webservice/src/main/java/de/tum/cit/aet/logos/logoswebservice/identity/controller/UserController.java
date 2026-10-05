@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -123,7 +124,8 @@ public class UserController {
     public ResponseEntity<?> previewImport(
             @RequestAttribute("authContext") AuthContext auth,
             @RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
-        if (!file.getOriginalFilename().endsWith(".csv")) {
+        String filename = file.getOriginalFilename();
+        if (filename == null || !filename.toLowerCase(Locale.ROOT).endsWith(".csv")) {
             return ResponseEntity.status(400).body(Map.of("detail", "Only .csv files are accepted."));
         }
         try {
