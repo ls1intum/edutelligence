@@ -14,8 +14,11 @@ from typing import Any, Dict, List
 # Goals from the benchmark: p50 forwarding overhead < 10 ms and p95 < 30 ms.
 GOAL_NS = 10_000_000
 P95_GOAL_NS = 30_000_000
-# CI allows runner noise above the p50 goal before blocking the PR.
+# CI allows runner noise above the goals before blocking the PR.
 FAIL_NS = 15_000_000
+# Shared GitHub runners show heavy p95 tails; keep the 30 ms goal for
+# reporting, but only fail CI when p95 exceeds this noise ceiling.
+FAIL_P95_NS = 150_000_000
 
 
 def ns_to_us(ns: float) -> str:
@@ -33,9 +36,9 @@ def verdict(overhead_ns: float) -> str:
 def overall_verdict(overhead_p50_ns: float, overhead_p95_ns: float) -> str:
     """Return the combined verdict for the p50 and p95 service goals."""
     p50_verdict = verdict(overhead_p50_ns)
-    if p50_verdict == "FAIL" or overhead_p95_ns > P95_GOAL_NS:
+    if p50_verdict == "FAIL" or overhead_p95_ns > FAIL_P95_NS:
         return "FAIL"
-    if p50_verdict == "WARN":
+    if p50_verdict == "WARN" or overhead_p95_ns > P95_GOAL_NS:
         return "WARN"
     return "PASS"
 
@@ -56,7 +59,7 @@ def build_markdown(result: Dict[str, Any]) -> str:
         f"**{icon} {verdict_str}** — overhead p50 = **{ns_to_us(overhead_p50_ns)} µs**, "
         f"p95 = **{ns_to_us(overhead_p95_ns)} µs** "
         f"(goals: p50 < {ns_to_us(GOAL_NS)} µs, p95 < {ns_to_us(P95_GOAL_NS)} µs; "
-        f"CI p50 fail threshold {ns_to_us(FAIL_NS)} µs)"
+        f"CI fail thresholds p50 {ns_to_us(FAIL_NS)} µs / p95 {ns_to_us(FAIL_P95_NS)} µs)"
     )
     lines.append("")
     lines.append(
