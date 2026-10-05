@@ -20,6 +20,14 @@ not drop its usage from these views: the historical requests keep showing
 under the model's former name, marked with a trash icon so the entry is
 recognizable as deleted.
 
+On the **Local Providers** tab, every worker node gets its own section with
+memory, lane health, and GPU metrics. The commit its image was built from is
+shown beside the worker's name as `version: <commit>`, followed by an info icon.
+Hover over the icon (or tap it on a touch screen) to see the full commit and
+copy it with the button there, so you can tell which workers have picked up an
+update. A worker that cannot report one shows `version: unknown`, and the same
+icon explains why.
+
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 
 ## Models

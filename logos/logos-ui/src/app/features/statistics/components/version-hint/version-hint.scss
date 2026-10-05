@@ -1,0 +1,195 @@
+// The info icon beside a worker's version and the card it opens; see
+// version-hint.ts for when the card is open.
+
+:host {
+  display: inline-flex;
+}
+
+.hint {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+// ── Icon ──────────────────────────────────────────────────────────────────────
+.hint__icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: inherit;
+  line-height: 1;
+  cursor: default;
+  transition: color 0.12s ease;
+
+  .pi {
+    font-size: var(--font-size-xs);
+  }
+
+  &:hover,
+  &--active {
+    color: rgb(var(--color-typography-100));
+  }
+
+  &:focus-visible {
+    outline: 2px solid rgb(var(--color-primary-500));
+    outline-offset: 2px;
+  }
+}
+
+// ── Card ──────────────────────────────────────────────────────────────────────
+// Same surface as the chart tooltip on this page.
+.hint__bubble {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: -12px;
+  z-index: 30;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(26rem, calc(100vw - 2rem));
+  padding: 10px 12px;
+  background: rgb(var(--color-surface-0));
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgb(var(--shadow-color) / 0.35);
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+  line-height: 1.4;
+  text-align: left;
+  // The badge around the icon is nowrap, and the card would inherit that.
+  white-space: normal;
+
+  // Closed: invisible and untouchable, but still laid out, so it can fade.
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease,
+    visibility 0s linear 0.15s;
+
+  &--open {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+    transition-delay: 0s;
+  }
+
+  // Bridges the gap to the icon, so moving the mouse down to the card does not
+  // cross a dead zone that would close it.
+  &::before {
+    content: '';
+    position: absolute;
+    top: -10px;
+    right: 0;
+    left: 0;
+    height: 10px;
+  }
+}
+
+.hint__text {
+  margin: 0;
+}
+
+.hint__bubble--pinned .hint__text {
+  // The close button sits in the top-right corner.
+  padding-right: 28px;
+}
+
+.hint__close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.hint__commit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+
+  .btn-copy {
+    gap: 6px;
+  }
+}
+
+.hint__commit {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: rgb(var(--color-typography-100));
+  font-family: var(--font-family-mono, monospace);
+  overflow-wrap: anywhere;
+  // One click selects the whole commit, which also lets it be copied by hand
+  // where the clipboard button cannot write.
+  user-select: all;
+}
+
+.hint__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+// On a phone the card spans the row's header instead of hanging off the icon, so
+// it can never run past the screen edge (the header is its positioning parent).
+@media (max-width: 640px) {
+  .hint {
+    position: static;
+  }
+
+  .hint__bubble {
+    right: 0;
+    left: 0;
+    width: auto;
+    max-width: none;
+  }
+}
+
+// A fingertip needs more than an 11px icon: grow the targets, not the icon.
+@media (pointer: coarse) {
+  .hint__icon::before {
+    content: '';
+    position: absolute;
+    inset: -12px;
+  }
+
+  .hint__bubble--pinned .hint__text {
+    padding-right: 44px;
+  }
+
+  .hint__close {
+    top: 2px;
+    right: 2px;
+  }
+
+  .hint__bubble .btn-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .hint__bubble .btn-copy {
+    height: 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hint__icon,
+  .hint__bubble {
+    transition: none;
+  }
+
+  .hint__bubble {
+    transform: none;
+  }
+}
