@@ -719,6 +719,21 @@ async def test_list_models_anthropic_lists_only_claude_prefixed_ids(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_list_models_anthropic_never_advertises_a_colliding_id(monkeypatch):
+    """foo next to claude-foo, or a model whose alias is claude-foo: the
+    prefixed id belongs to the other model, so foo is listed under its own
+    name rather than under an id that would select the wrong model."""
+    models = [
+        {"id": 1, "name": "foo", "description": None},
+        {"id": 2, "name": "claude-foo", "description": None},
+        {"id": 3, "name": "bar", "description": None},
+        {"id": 4, "name": "baz", "description": None, "aliases": ["claude-bar"]},
+    ]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
+    assert [entry["id"] for entry in body["data"]] == ["foo", "claude-foo", "bar", "claude-baz"]
+
+
+@pytest.mark.asyncio
 async def test_list_models_anthropic_max_input_prefers_the_guaranteed_window(monkeypatch):
     """max_input_tokens is the window a request is sure to get (smallest
     served), not the widest one."""

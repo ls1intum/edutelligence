@@ -48,13 +48,20 @@ def _anthropic_entries(models: list[dict], stats: dict) -> list[tuple[str, str, 
     Claude Code drops every gateway model whose id has no "claude"/"anthropic"
     in it, so each id is listed as ``claude-<name>`` (see ``claude_visible_id``)
     and only in that form. The request path strips the prefix again, and the
-    plain name and the aliases keep resolving there.
+    plain name and the aliases keep resolving there. A prefixed id that would
+    resolve to a different model is never advertised.
     """
     entries: list[tuple[str, str, Optional[str]]] = []
     for model in models:
         name = model["name"]
+        entry_id = claude_visible_id(name) or name
+        if entry_id != name and _resolve_requested_model_name(entry_id, models) != name:
+            # Another model or alias already owns claude-<name> (``foo`` next to
+            # ``claude-foo``): advertising it would select that one instead, so
+            # this model is listed under its own name.
+            entry_id = name
         # The picker shows display_name, so the prefixed id keeps the plain name there.
-        entries.append((claude_visible_id(name) or name, name, model.get("description") or name))
+        entries.append((entry_id, name, model.get("description") or name))
     return entries
 
 

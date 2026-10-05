@@ -99,6 +99,11 @@ CLAUDE_MODEL_PREFIX = "claude-"
 _CLAUDE_CODE_VISIBLE = re.compile(r"claude|anthropic", re.IGNORECASE)
 
 
+# Returned by ``_resolve_exact_model_name`` when the name matches several
+# models, so the caller can tell that apart from "no match".
+_AMBIGUOUS: Any = object()
+
+
 def claude_visible_id(model_id: str) -> Optional[str]:
     """The ``claude-`` prefixed id for ``model_id``, or None when it already
     contains "claude"/"anthropic" and so needs no second listing."""
@@ -115,9 +120,14 @@ def _resolve_requested_model_name(
     ``claude-`` prefixed form of any model.
 
     The name as written always wins, so a model genuinely called
-    ``claude-foo`` is never shadowed by the prefix of a model called ``foo``.
+    ``claude-foo`` is never shadowed by the prefix of a model called ``foo``,
+    and an ambiguous ``claude-foo`` is refused rather than retried as ``foo``.
     """
     resolved = _resolve_exact_model_name(requested_name, available_models)
+    if resolved is _AMBIGUOUS:
+        # The name as written matches several models: stripping the prefix
+        # would silently pick a different one, so it stays unresolved.
+        return None
     if resolved is not None:
         return resolved
     requested = str(requested_name or "").strip()
@@ -129,7 +139,7 @@ def _resolve_requested_model_name(
 def _resolve_exact_model_name(
     requested_name: str,
     available_models: list[Dict[str, Any]],
-) -> Optional[str]:
+) -> Optional[str]:  # or _AMBIGUOUS
     """Resolve a user-supplied model id to a canonical DB model name.
 
     ``available_models`` are the accessible model rows (each with a ``name``
@@ -226,18 +236,18 @@ def _resolve_exact_model_name(
         return next(iter(canonical_matches))
     if canonical_matches:
         # duplicate normalized model names — no way to tell which one was meant
-        return None
+        return _AMBIGUOUS
     if len(stored_alias_matches) == 1:
         return next(iter(stored_alias_matches))
     if stored_alias_matches:
         # an ambiguous stored alias must not fall through to planner aliases
-        return None
+        return _AMBIGUOUS
     if len(planner_alias_matches) == 1:
         return next(iter(planner_alias_matches))
     if planner_alias_matches:
         # Two distinct models sharing one planner-safe alias is a genuine
         # ambiguity — refuse rather than guess.
-        return None
+        return _AMBIGUOUS
     if len(replica_matches) == 1:
         return next(iter(replica_matches))
     return None

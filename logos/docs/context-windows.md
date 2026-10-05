@@ -165,7 +165,9 @@ not required for the setup flow.
 Claude Code only lists a gateway model in `/model` when its id contains `claude`
 or `anthropic`. The Anthropic-shaped `GET /v1/models` therefore lists each model
 once, as `claude-<id>` (`claude-Qwen/Qwen3.8-27B`), with the plain name as display
-name and no aliases. A request for `claude-<id>` resolves to `<id>` unless a model
+name and no aliases. An id that already contains `claude` or `anthropic` is listed
+unchanged (`my-Anthropic-proxy`, not `claude-my-Anthropic-proxy`), and so is an id
+whose `claude-` form would resolve to another model. A request for `claude-<id>` resolves to `<id>` unless a model
 with exactly that name exists; the plain name and aliases keep working in requests.
 The OpenAI-shaped listing is unchanged.
 

@@ -107,3 +107,8 @@ def test_claude_prefix_never_shadows_a_model_with_that_exact_name():
 def test_unknown_claude_id_stays_unresolved():
     assert _resolve_requested_model_name("claude-sonnet-5-5", [_row("llama")]) is None
     assert _resolve_requested_model_name("claude-", [_row("llama")]) is None
+
+
+def test_ambiguous_claude_name_is_not_retried_without_the_prefix():
+    models = [_row("claude-foo"), _row("CLAUDE-FOO"), _row("foo")]
+    assert _resolve_requested_model_name("claude-foo", models) is None
