@@ -328,7 +328,6 @@ use it the way you use a person's:
 | assign it a pull request | takes it over, on that pull request's own branch |
 | request changes on one of its pull requests | addresses that review on its branch |
 | add it as a reviewer | reviews the diff, and fixes what it found if the branch is ours |
-| request a configured team (`logos-maintainers`, `logos-developers`) | same as adding the agent — team requests do not list its login |
 | comment on a pull request it is responsible for | reads the thread and answers (within a day of writing) |
 | mention it anywhere by name | answers there (within a day); changes code only if that is what was asked |
 
