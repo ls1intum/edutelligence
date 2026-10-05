@@ -557,7 +557,11 @@ async def review_requests(login: str) -> list[dict[str, Any]]:
 
 
 async def who_asked_for_a_review(
-    number: int, login: str, requested_teams: set[str] | None = None
+    number: int,
+    login: str,
+    requested_teams: set[str] | None = None,
+    *,
+    requested_reviewers: set[str] | None = None,
 ) -> tuple[str, int | None, str | None] | None:
     """The account that last asked `login` to review this pull request, and
     the timeline event that said so.
@@ -569,10 +573,11 @@ async def who_asked_for_a_review(
     agent and adding it back is a *new* request, and the memory of the old
     one must not answer for the new.
 
-    ``requested_teams`` is the pull request's *current* team requests. Team
-    timeline events only authorize when that team is still outstanding —
-    otherwise a withdrawn request for team A could authorize a still-active
-    request for team B.
+    ``requested_teams`` and ``requested_reviewers`` are the pull request's
+    *current* review targets. Timeline events only authorize when that
+    target is still outstanding — otherwise a withdrawn personal request
+    from a maintainer could authorize a still-active team request from
+    somebody else (and the same for a withdrawn team).
 
     A complete read answers with the actor, or the empty string when the
     timeline names none. An incomplete read answers with None instead: the
@@ -588,6 +593,11 @@ async def who_asked_for_a_review(
     wanted = login.strip().lower()
     teams = _configured_review_team_slugs()
     active_teams = {slug.lower() for slug in (requested_teams or set()) if slug}
+    # None means the caller did not supply current reviewers (tests, older
+    # call sites): treat the wanted login as still personally requested.
+    personally_active = (
+        True if requested_reviewers is None else wanted in {name.lower() for name in requested_reviewers if name}
+    )
     actor = ""
     event_id: int | None = None
     team_slug: str | None = None
@@ -595,7 +605,7 @@ async def who_asked_for_a_review(
         if not isinstance(event, dict) or event.get("event") != "review_requested":
             continue
         requested = str(((event.get("requested_reviewer") or {}).get("login")) or "").lower()
-        if requested == wanted:
+        if requested == wanted and personally_active:
             actor = str(((event.get("actor") or {}).get("login")) or "")
             event_id = event.get("id") if isinstance(event.get("id"), int) else None
             team_slug = None

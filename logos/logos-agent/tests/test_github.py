@@ -693,6 +693,42 @@ class TestListingPagination:
             "logos-developers",
         )
 
+    async def test_a_withdrawn_personal_request_cannot_authorize_an_active_team(self, monkeypatch):
+        # Untrusted account requests a team; maintainer then requests and
+        # removes the agent personally. Only the team request remains, and
+        # the withdrawn personal event must not supply the maintainer's
+        # identity as authorization for it.
+        self._paged_client(
+            monkeypatch,
+            [
+                [
+                    {
+                        "id": 111,
+                        "event": "review_requested",
+                        "requested_team": {"slug": "logos-developers"},
+                        "actor": {"login": "a-passer-by"},
+                    },
+                    {
+                        "id": 222,
+                        "event": "review_requested",
+                        "requested_reviewer": {"login": "LogosOSSAgent"},
+                        "actor": {"login": "wasnertobias"},
+                    },
+                ]
+            ],
+        )
+
+        assert await github.who_asked_for_a_review(
+            1175,
+            "LogosOSSAgent",
+            {"logos-developers"},
+            requested_reviewers=set(),
+        ) == (
+            "a-passer-by",
+            111,
+            "logos-developers",
+        )
+
     async def test_review_requests_include_configured_teams(self, monkeypatch):
         async def fake_get_all(path, params=None):
             assert path.endswith("/pulls")

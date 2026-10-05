@@ -778,15 +778,6 @@ class TriggerPoller:
             if review is not None:
                 review_id = int(review["id"])
                 comments = await github.review_comments(number, review_id)
-                if branch is None:
-                    # Nowhere to put the fix: a fork's head, or a protected
-                    # branch. Queueing it anyway would start a session from
-                    # the default branch on a fresh branch of its own, which
-                    # cannot update the pull request its task is about.
-                    # Leave the inline notes unconsumed so a later comment
-                    # pass can still answer them in words.
-                    logger.info("review on pull request %s has no writable branch; leaving it to a person", number)
-                    continue
                 reviewer = str((review.get("user") or {}).get("login") or "")
                 if not await self._worth_reading(reviewer):
                     # Anybody may review a public pull request, and a review
@@ -794,10 +785,11 @@ class TriggerPoller:
                     # outside the repository would let a stranger direct
                     # what the agent commits. Silence their notes so they
                     # do not become a comment session apiece on a pull
-                    # request this runner already owns — except an explicit
-                    # @mention, which the comment path still answers
-                    # read-only. Configured review apps pass
-                    # `_worth_reading` and never reach here.
+                    # request this runner already owns — including when the
+                    # head is not pushable — except an explicit @mention,
+                    # which the comment path still answers read-only.
+                    # Configured review apps pass `_worth_reading` and
+                    # never reach here.
                     consumed.update(
                         c["id"]
                         for c in comments
@@ -809,6 +801,15 @@ class TriggerPoller:
                         number,
                         reviewer or "an unknown account",
                     )
+                    continue
+                if branch is None:
+                    # Authorized, but nowhere to put the fix: a fork's head,
+                    # or a protected branch. Queueing it anyway would start
+                    # a session from the default branch on a fresh branch of
+                    # its own, which cannot update the pull request its task
+                    # is about. Leave the inline notes unconsumed so a later
+                    # comment pass can still answer them in words.
+                    logger.info("review on pull request %s has no writable branch; leaving it to a person", number)
                     continue
                 # Taking the review: its inline notes travel with this
                 # session, so the comment pass must not queue them again.
@@ -881,7 +882,12 @@ class TriggerPoller:
             requested_teams = {
                 str((team or {}).get("slug") or "").lower() for team in (pull.get("requested_teams") or [])
             }
-            answer = await github.who_asked_for_a_review(number, login, requested_teams)
+            requested_reviewers = {
+                str((person or {}).get("login") or "").lower() for person in (pull.get("requested_reviewers") or [])
+            }
+            answer = await github.who_asked_for_a_review(
+                number, login, requested_teams, requested_reviewers=requested_reviewers
+            )
             if answer is None:
                 # The timeline is longer than the runner can read, and what
                 # was read is its oldest part — the newest request is not in
@@ -1172,14 +1178,14 @@ class TriggerPoller:
             if not author or author.lower() == settings.github_login.lower():
                 return
             body = str(comment.get("body") or "")
-            # Bots' notes are a stampede; an explicit @mention from a
-            # configured review app on a pull request this runner already
-            # owns is the next step the operators chose — otherwise
-            # CodeRabbit naming the agent on its own PR never reaches the
-            # allowlist below, while Claudia (not a bot login) does.
-            if is_bot(author) and not (
-                author.lower() in settings.review_bots and number in responsible and mentions_agent(body)
-            ):
+            # Configured review apps need an explicit @mention on a pull
+            # request this runner already owns — a bare COMMENTED note is
+            # not direction. CHANGES_REQUESTED still reaches the review
+            # path via `_worth_reading`. Other bots remain a stampede.
+            if author.lower() in settings.review_bots:
+                if number not in responsible or not mentions_agent(body):
+                    return
+            elif is_bot(author):
                 return
             comment_id = comment.get("id")
             if not isinstance(comment_id, int) or comment_id in consumed:

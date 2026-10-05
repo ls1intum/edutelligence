@@ -156,7 +156,7 @@ class FakeRepo:
         async def review_requests(_login):
             return list(self.review_requests)
 
-        async def who_asked_for_a_review(number, _login, requested_teams=None):
+        async def who_asked_for_a_review(number, _login, requested_teams=None, *, requested_reviewers=None):
             requester = self.review_requesters.get(number, "")
             if requester is None:
                 return None
@@ -1182,6 +1182,26 @@ class TestReviewRouting:
         # The answer is about that pull request's diff, not the default branch.
         assert fake_db.workspaces[-1]["base_branch"] == "refs/pull/900/head"
 
+    async def test_a_strangers_branchless_review_notes_are_not_answered(self, monkeypatch):
+        # Authorization runs before the branchless early return: unmentioned
+        # stranger notes on a fork must stay silent, not become one read-only
+        # session per thread.
+        inline = comment(7012, 900, "the gate is inverted here", "a-passer-by", path="app/db.py")
+        FakeRepo(
+            authored_pulls=[pull(900)],
+            reviews={900: {**review(1), "user": {"login": "a-passer-by"}}},
+            review_comments={(900, 1): [inline]},
+            inline_comments=[inline],
+            heads={900: ("feature", "someone/edutelligence")},
+        ).install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created == []
+
     async def test_a_review_is_acknowledged_on_the_pull_request(self, monkeypatch):
         # A submitted review is not a review *comment*: the two id sequences
         # are independent, so reacting to the review id as though it were a
@@ -2130,6 +2150,34 @@ class TestTheReviewTheWorkIsAbout:
         assert created["branch"] == "logos/agent/issue-1170/session-277"
         assert created["no_push"] is False
         assert "yes/no logging header" in created["task"]
+
+    async def test_an_unmentioned_review_app_note_does_not_get_a_writable_session(self, monkeypatch):
+        # Claudia is not a bot login, so without an explicit-mention gate she
+        # would pass consider() and `_readable_comments` would keep the
+        # writable branch on an owned PR. A bare COMMENTED note is not
+        # direction — only an @mention (or CHANGES_REQUESTED) is.
+        repo = FakeRepo(
+            authored_pulls=[pull(1171, "Support per-request logging")],
+            heads={1171: ("logos/agent/issue-1170/session-277", REPO)},
+            inline_comments=[
+                comment(
+                    4182596451,
+                    1171,
+                    "please accept yes/no logging header values",
+                    "Claudia-Anthropica",
+                    path="logos/logos-orchestrator/src/logos/auth.py",
+                )
+            ],
+        )
+        repo.writers = {"wasnertobias"}
+        repo.install(monkeypatch)
+        fake_db = FakeDb()
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+
+        await triggers.TriggerPoller().poll_once()
+
+        assert fake_db.created == []
 
     async def test_an_account_that_is_neither_is_still_left_out(self, monkeypatch):
         from datetime import datetime, timezone
