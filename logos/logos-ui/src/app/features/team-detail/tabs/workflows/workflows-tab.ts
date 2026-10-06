@@ -279,10 +279,14 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   startEditDiagram(wf: AiWorkflow): void {
     this.editingDiagramId.set(wf.id);
     this.diagramDraft.update((m) => ({ ...m, [wf.id]: wf.diagram_mermaid ?? '' }));
+    // Switching from another editor brings that workflow's <pre> back as source.
+    this.diagramsDirty = true;
   }
 
   cancelEditDiagram(): void {
     this.editingDiagramId.set(null);
+    // The restored <pre> holds Mermaid source until the next render pass.
+    this.diagramsDirty = true;
   }
 
   setDiagramDraft(workflowId: number, value: string): void {

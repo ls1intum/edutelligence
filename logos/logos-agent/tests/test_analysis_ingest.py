@@ -486,6 +486,56 @@ async def test_reanalysis_proposes_a_new_diagram_after_a_dismissal(monkeypatch):
     assert wf["proposed"] == "flowchart TD\n  Agent-->Newer"
 
 
+def _owner_wf(name="chat", diagram="flowchart TD\n  Owner-->Edit"):
+    return {
+        "name": name,
+        "diagram_mermaid": diagram,
+        "diagram_set_by_owner": True,
+        "proposed_diagram_mermaid": None,
+        "dismissed_diagram_mermaid": None,
+    }
+
+
+async def test_reanalysis_keeps_an_owner_edit_when_the_workflow_name_changes_case(monkeypatch):
+    payload = _one_rec_payload(workflow="Chat")
+    payload["workflows"][0]["name"] = "Chat"
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Agent-->New"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[_owner_wf()])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["name"] == "Chat"
+    assert wf["diagram"] == "flowchart TD\n  Owner-->Edit"
+    assert wf["diagram_set_by_owner"] is True
+    assert wf["proposed"] == "flowchart TD\n  Agent-->New"
+
+
+async def test_reanalysis_follows_a_renamed_workflow_by_its_call_sites(monkeypatch):
+    payload = _one_rec_payload(workflow="Support conversation")
+    payload["workflows"][0]["name"] = "Support conversation"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[_owner_wf()])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["diagram"] == "flowchart TD\n  Owner-->Edit"
+    assert wf["diagram_set_by_owner"] is True
+
+
+def test_match_workflows_skips_an_ambiguous_call_site_overlap():
+    previous_recs = [{"workflow_name": "chat", "file_path": "src/llm.py"}]
+    workflows = [{"name": "Support"}, {"name": "Tutor"}]
+    recommendations = [
+        {"workflow": "Support", "file_path": "src/llm.py"},
+        {"workflow": "Tutor", "file_path": "src/llm.py"},
+    ]
+    assert analysis_ingest.match_workflows([_owner_wf()], previous_recs, workflows, recommendations) == {}
+
+
+def test_match_workflows_prefers_a_name_match_over_call_sites():
+    previous = [_owner_wf("chat"), _owner_wf("summary", "flowchart TD\n  S")]
+    previous_recs = [{"workflow_name": "summary", "file_path": "src/llm.py"}]
+    workflows = [{"name": "Summary"}, {"name": "chat"}]
+    recommendations = [{"workflow": "chat", "file_path": "src/llm.py"}]
+    matched = analysis_ingest.match_workflows(previous, previous_recs, workflows, recommendations)
+    assert matched[0]["name"] == "summary" and matched[1]["name"] == "chat"
+
+
 def test_match_recommendations_prefers_the_same_workflow_then_the_nearest_line():
     previous = [
         {"id": 1, "file_path": "a.py", "workflow_name": "chat", "start_line": 10},

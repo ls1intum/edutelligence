@@ -307,6 +307,18 @@ describe('WorkflowsTabComponent review actions', () => {
     ).toBeNull();
   });
 
+  it('re-renders diagrams when leaving or switching the diagram editor', async () => {
+    const component = setup();
+    await component.load();
+    const [first] = component.workflowsForRepo(component.data()!.repositories[0]);
+    component['diagramsDirty'] = false;
+    component.startEditDiagram(first);
+    expect(component['diagramsDirty']).toBe(true);
+    component['diagramsDirty'] = false;
+    component.cancelEditDiagram();
+    expect(component['diagramsDirty']).toBe(true);
+  });
+
   it('resolves profile ratings for a detected model', async () => {
     const component = setup();
     await component.load();

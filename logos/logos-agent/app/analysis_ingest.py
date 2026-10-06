@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
@@ -332,15 +333,15 @@ async def upsert_analysis(
 
         previous_recs = await _previous_recommendations(conn, team_repository_id, int(analysis_id))
         previous_workflows = await _previous_workflows(conn, team_repository_id, int(analysis_id))
-        previous_by_name = {str(w["name"]): w for w in previous_workflows if w.get("name")}
+        previous_for = match_workflows(previous_workflows, previous_recs, workflows, recommendations)
 
         workflow_ids: dict[str, int] = {}
         for index, raw in enumerate(workflows):
             if not isinstance(raw, dict):
                 continue
-            name = str(raw.get("name") or "").strip() or f"workflow-{index + 1}"
+            name = _workflow_name(raw, index)
             agent_diagram = str(raw.get("diagram_mermaid") or "")
-            previous_wf = previous_by_name.get(name)
+            previous_wf = previous_for.get(index)
             diagram, owner_flag, proposed, dismissed = _diagram_for_ingest(agent_diagram, previous_wf)
             wf_id = (
                 await conn.execute(
@@ -463,6 +464,77 @@ async def upsert_analysis(
     return int(analysis_id)
 
 
+def _workflow_name(raw: dict[str, Any], index: int) -> str:
+    return str(raw.get("name") or "").strip() or f"workflow-{index + 1}"
+
+
+def _workflow_key(name: str) -> str:
+    """`Chat`, `chat` and `chat-flow` / `Chat flow` name the same workflow."""
+    return re.sub(r"[^0-9a-z]+", " ", name.casefold()).strip()
+
+
+def match_workflows(
+    previous_workflows: list[dict[str, Any]],
+    previous_recs: list[dict[str, Any]],
+    workflows: list[Any],
+    recommendations: list[Any],
+) -> dict[int, dict[str, Any]]:
+    """Pair each new workflow (by index) with its previous-analysis workflow.
+
+    The agent names workflows freely on every run, so an exact name is not a
+    stable identity. Match on the case- and punctuation-insensitive name first;
+    an owner-edited workflow still unmatched then follows the new workflow whose
+    recommended call sites share the most files with its own (a unique best
+    overlap only). Each previous workflow carries forward at most once.
+    """
+    entries = [(i, _workflow_name(raw, i)) for i, raw in enumerate(workflows) if isinstance(raw, dict)]
+    matched: dict[int, dict[str, Any]] = {}
+    used: set[int] = set()
+    by_key: dict[str, int] = {}
+    for p_index, prev in enumerate(previous_workflows):
+        key = _workflow_key(str(prev.get("name") or ""))
+        if key:
+            by_key.setdefault(key, p_index)
+    for index, name in entries:
+        p_index = by_key.get(_workflow_key(name))
+        if p_index is not None and p_index not in used:
+            matched[index] = previous_workflows[p_index]
+            used.add(p_index)
+
+    prev_files: dict[str, set[str]] = {}
+    for rec in previous_recs:
+        if rec.get("workflow_name") and rec.get("file_path"):
+            prev_files.setdefault(_workflow_key(str(rec["workflow_name"])), set()).add(str(rec["file_path"]))
+    new_files: dict[str, set[str]] = {}
+    for rec in recommendations:
+        if isinstance(rec, dict) and rec.get("file_path"):
+            wf = str(rec.get("workflow") or rec.get("workflow_name") or "")
+            new_files.setdefault(_workflow_key(wf), set()).add(str(rec["file_path"]).strip())
+    for i, raw in enumerate(workflows):
+        nested = raw.get("recommendations") if isinstance(raw, dict) else None
+        for rec in nested if isinstance(nested, list) else []:
+            if isinstance(rec, dict) and rec.get("file_path"):
+                key = _workflow_key(_workflow_name(raw, i))
+                new_files.setdefault(key, set()).add(str(rec["file_path"]).strip())
+
+    for p_index, prev in enumerate(previous_workflows):
+        if p_index in used or not bool(prev.get("diagram_set_by_owner")):
+            continue
+        files = prev_files.get(_workflow_key(str(prev.get("name") or "")), set())
+        overlaps = sorted(
+            (
+                (len(files & new_files.get(_workflow_key(name), set())), index)
+                for index, name in entries
+                if index not in matched
+            ),
+            reverse=True,
+        )
+        if overlaps and overlaps[0][0] > 0 and (len(overlaps) == 1 or overlaps[1][0] < overlaps[0][0]):
+            matched[overlaps[0][1]] = prev
+            used.add(p_index)
+    return matched
+
+
 def _normalize_diagram(text: str) -> str:
     """Compare Mermaid without trailing whitespace noise."""
     return "\n".join(line.rstrip() for line in (text or "").strip().splitlines())
@@ -492,7 +564,7 @@ def _diagram_for_ingest(
 async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
     """Workflows of the latest other succeeded analysis of this repository.
 
-    Matched by name when carrying owner-edited diagrams forward. The caller
+    Matched by :func:`match_workflows` when carrying owner-edited diagrams forward. The caller
     holds the repository row lock; owner diagram edits take it too.
     """
     rows = (
