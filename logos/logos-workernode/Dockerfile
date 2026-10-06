@@ -84,7 +84,7 @@ ARG NCCL_PIP_SPEC=
 # uv — pinned to a specific version to mitigate supply-chain risk (update
 # explicitly). Used via RUN --mount so the binary is never stored in a layer.
 # ---------------------------------------------------------------------------
-FROM ghcr.io/astral-sh/uv:0.12.5 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.23 AS uv
 
 # ---------------------------------------------------------------------------
 # Final image

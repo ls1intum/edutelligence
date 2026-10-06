@@ -12,7 +12,7 @@
 # Build context is the `logos/` directory:
 #   docker build -f e2e/harness/nodesim/Dockerfile logos/
 
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
@@ -27,7 +27,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends procps psmisc curl \
   && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
 
 COPY logos-workernode/requirements.txt /tmp/requirements.txt
 # vllm and its CUDA stack are deliberately excluded: the simulator provides the
