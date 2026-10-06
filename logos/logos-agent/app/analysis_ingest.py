@@ -367,10 +367,11 @@ async def upsert_analysis(
 
         previous_recs = await _previous_recommendations(conn, team_repository_id, int(analysis_id))
         previous_workflows = await _previous_workflows(conn, team_repository_id, int(analysis_id))
+        previous_for = match_workflows(previous_workflows, previous_recs, workflows, recommendations)
         # Tags are matched team-wide; reserve every carried-over tag first so a
         # new one cannot take it, then allocate the rest against that set.
         taken_tags = await _lock_team_tags(conn, team_id, team_repository_id)
-        for previous_wf in previous_workflows.values():
+        for previous_wf in previous_workflows:
             taken_tags.update(t for t in [previous_wf.get("tag")] if t)
             taken_tags.update(st["tag"] for st in previous_wf.get("steps", {}).values() if st.get("tag"))
 
@@ -380,32 +381,38 @@ async def upsert_analysis(
         for index, raw in enumerate(workflows):
             if not isinstance(raw, dict):
                 continue
-            name = str(raw.get("name") or "").strip() or f"workflow-{index + 1}"
-            # Owner edits live on the workflow row, which a re-analysis replaces:
-            # carry status, soft-delete and an established tag over by name so an
-            # ignored workflow stays ignored and applications keep matching.
-            previous_wf = previous_workflows.get(name)
+            name = _workflow_name(raw, index)
+            agent_diagram = str(raw.get("diagram_mermaid") or "")
+            # Owner edits live on the workflow row, which a re-analysis
+            # replaces: the matched previous workflow carries them over.
+            previous_wf = previous_for.get(index)
+            diagram, owner_flag, proposed, dismissed = _diagram_for_ingest(agent_diagram, previous_wf)
             wf_id = (
                 await conn.execute(
                     text("""
                         INSERT INTO ai_workflows
                             (analysis_id, name, trigger_summary, diagram_mermaid, sort_order, tag,
-                             status, deleted_at)
+                             status, deleted_at,
+                             diagram_set_by_owner, proposed_diagram_mermaid, dismissed_diagram_mermaid)
                         VALUES
                             (:analysis_id, :name, :trigger_summary, :diagram, :sort_order, :tag,
-                             :status, :deleted_at)
+                             :status, :deleted_at,
+                             :diagram_set_by_owner, :proposed, :dismissed)
                         RETURNING id
                         """),
                     {
                         "analysis_id": analysis_id,
                         "name": name,
                         "trigger_summary": _str_or_none(raw.get("trigger_summary")),
-                        "diagram": str(raw.get("diagram_mermaid") or ""),
+                        "diagram": diagram,
                         "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
                         "tag": (previous_wf or {}).get("tag")
                         or unique_workflow_tag(normalize_workflow_tag(raw.get("tag")), taken_tags),
                         "status": (previous_wf or {}).get("status") or "active",
                         "deleted_at": (previous_wf or {}).get("deleted_at"),
+                        "diagram_set_by_owner": owner_flag,
+                        "proposed": proposed,
+                        "dismissed": dismissed,
                     },
                 )
             ).scalar_one()
@@ -625,21 +632,140 @@ async def _lock_team_tags(conn: Any, team_id: int, team_repository_id: int) -> s
     return {str(r["tag"]) for r in rows}
 
 
-async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: int) -> dict[str, dict[str, Any]]:
-    """Workflows (with their steps) of the latest other succeeded analysis, by name.
+def _workflow_name(raw: dict[str, Any], index: int) -> str:
+    return str(raw.get("name") or "").strip() or f"workflow-{index + 1}"
 
-    Each value holds ``status``, ``deleted_at``, ``tag`` and ``steps`` (step
-    name → ``tag`` / ``confirmed_sla`` / ``confirmed_objective_priority``).
+
+def _workflow_key(name: str) -> str:
+    """`Chat`, `chat` and `chat-flow` / `Chat flow` name the same workflow."""
+    return re.sub(r"[^0-9a-z]+", " ", name.casefold()).strip()
+
+
+def match_workflows(
+    previous_workflows: list[dict[str, Any]],
+    previous_recs: list[dict[str, Any]],
+    workflows: list[Any],
+    recommendations: list[Any],
+) -> dict[int, dict[str, Any]]:
+    """Pair each new workflow (by index) with its previous-analysis workflow.
+
+    The agent names workflows freely on every run, so an exact name is not a
+    stable identity. Match on the case- and punctuation-insensitive name first;
+    the rest pair up by how many files their recommended call sites share,
+    taking only mutually unique best pairs (repeated until none is left). Each
+    previous workflow carries forward at most once.
+    """
+    entries = [(i, _workflow_name(raw, i)) for i, raw in enumerate(workflows) if isinstance(raw, dict)]
+    matched: dict[int, dict[str, Any]] = {}
+    used: set[int] = set()
+    by_key: dict[str, int] = {}
+    for p_index, prev in enumerate(previous_workflows):
+        key = _workflow_key(str(prev.get("name") or ""))
+        if key:
+            by_key.setdefault(key, p_index)
+    for index, name in entries:
+        p_index = by_key.get(_workflow_key(name))
+        if p_index is not None and p_index not in used:
+            matched[index] = previous_workflows[p_index]
+            used.add(p_index)
+
+    prev_files: dict[str, set[str]] = {}
+    for rec in previous_recs:
+        if rec.get("workflow_name") and rec.get("file_path"):
+            prev_files.setdefault(_workflow_key(str(rec["workflow_name"])), set()).add(str(rec["file_path"]))
+    new_files: dict[str, set[str]] = {}
+    for rec in recommendations:
+        if isinstance(rec, dict) and rec.get("file_path"):
+            wf = str(rec.get("workflow") or rec.get("workflow_name") or "")
+            new_files.setdefault(_workflow_key(wf), set()).add(str(rec["file_path"]).strip())
+    for i, raw in enumerate(workflows):
+        nested = raw.get("recommendations") if isinstance(raw, dict) else None
+        for rec in nested if isinstance(nested, list) else []:
+            if isinstance(rec, dict) and rec.get("file_path"):
+                key = _workflow_key(_workflow_name(raw, i))
+                new_files.setdefault(key, set()).add(str(rec["file_path"]).strip())
+
+    # Score every unmatched pair, then take only pairs that are each other's
+    # unique best; drop them and repeat, so neither list order nor an earlier
+    # tie decides who keeps an owner diagram. Ambiguous pairs stay unmatched.
+    while True:
+        scores: dict[tuple[int, int], int] = {}
+        for p_index, prev in enumerate(previous_workflows):
+            if p_index in used:
+                continue
+            files = prev_files.get(_workflow_key(str(prev.get("name") or "")), set())
+            for index, name in entries:
+                if index in matched:
+                    continue
+                overlap = len(files & new_files.get(_workflow_key(name), set()))
+                if overlap:
+                    scores[(p_index, index)] = overlap
+        best_for_prev = _unique_best(scores, side=0)
+        best_for_new = _unique_best(scores, side=1)
+        pairs = [(p_index, index) for p_index, index in best_for_prev.items() if best_for_new.get(index) == p_index]
+        if not pairs:
+            break
+        for p_index, index in pairs:
+            matched[index] = previous_workflows[p_index]
+            used.add(p_index)
+    return matched
+
+
+def _unique_best(scores: dict[tuple[int, int], int], *, side: int) -> dict[int, int]:
+    """For each key on ``side`` of the pairs, its single highest-scoring partner (ties: none)."""
+    ranked: dict[int, list[tuple[int, int]]] = {}
+    for pair, score in scores.items():
+        ranked.setdefault(pair[side], []).append((score, pair[1 - side]))
+    best: dict[int, int] = {}
+    for key, options in ranked.items():
+        options.sort(reverse=True)
+        if len(options) == 1 or options[1][0] < options[0][0]:
+            best[key] = options[0][1]
+    return best
+
+
+def _normalize_diagram(text: str) -> str:
+    """Compare Mermaid without trailing whitespace noise."""
+    return "\n".join(line.rstrip() for line in (text or "").strip().splitlines())
+
+
+def _diagram_for_ingest(
+    agent_diagram: str, previous: dict[str, Any] | None
+) -> tuple[str, bool, str | None, str | None]:
+    """Keep an owner-edited diagram; store a differing agent version as a proposal.
+
+    Returns (diagram, set_by_owner, proposed, dismissed). A proposal the owner
+    already dismissed ("Keep mine") is not offered again while the agent keeps
+    drawing the same Mermaid.
+    """
+    if previous is None or not bool(previous.get("diagram_set_by_owner")):
+        return agent_diagram, False, None, None
+    owner_diagram = str(previous.get("diagram_mermaid") or "")
+    dismissed = _str_or_none(previous.get("dismissed_diagram_mermaid"))
+    agent_norm = _normalize_diagram(agent_diagram)
+    if not agent_norm or agent_norm == _normalize_diagram(owner_diagram):
+        return owner_diagram, True, None, dismissed
+    if dismissed is not None and agent_norm == _normalize_diagram(dismissed):
+        return owner_diagram, True, None, dismissed
+    return owner_diagram, True, agent_diagram, dismissed
+
+
+async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
+    """Workflows of the latest other succeeded analysis of this repository.
+
+    Matched by :func:`match_workflows` when carrying owner edits forward:
+    diagrams, lifecycle, tags, and — under ``steps`` (step name → row) —
+    step tags and confirmed SLAs. The caller holds the repository row lock;
+    owner edits take it too.
     """
     rows = (
         (
             await conn.execute(
                 text("""
-                    SELECT w.name AS workflow_name, w.status, w.deleted_at, w.tag AS workflow_tag,
-                           s.name AS step_name, s.tag AS step_tag, s.confirmed_sla,
-                           s.confirmed_objective_priority
+                    SELECT w.id, w.name, w.diagram_mermaid, w.diagram_set_by_owner,
+                           w.proposed_diagram_mermaid, w.dismissed_diagram_mermaid,
+                           w.status, w.deleted_at, w.tag
                       FROM ai_workflows w
-                      LEFT JOIN ai_workflow_steps s ON s.workflow_id = w.id
                      WHERE w.analysis_id = (
                              SELECT a.id FROM ai_workflow_analyses a
                               WHERE a.team_repository_id = :repo
@@ -648,7 +774,7 @@ async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: i
                               ORDER BY a.finished_at DESC NULLS LAST, a.id DESC
                               LIMIT 1
                            )
-                     ORDER BY w.id, s.id
+                     ORDER BY w.sort_order, w.id
                     """),
                 {"repo": team_repository_id, "current": analysis_id},
             )
@@ -656,17 +782,35 @@ async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: i
         .mappings()
         .all()
     )
-    previous: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        workflow = previous.setdefault(
-            str(row["workflow_name"]),
-            {"status": row["status"], "deleted_at": row["deleted_at"], "tag": row["workflow_tag"], "steps": {}},
+    previous = [dict(r) for r in rows]
+    for p in previous:
+        p["steps"] = {}
+    ids = [int(p["id"]) for p in previous if p.get("id") is not None]
+    if not ids:
+        return previous
+    step_rows = (
+        (
+            await conn.execute(
+                text("""
+                    SELECT s.workflow_id, s.name, s.tag, s.confirmed_sla, s.confirmed_objective_priority
+                      FROM ai_workflow_steps s
+                     WHERE s.workflow_id = ANY(:ids)
+                     ORDER BY s.id
+                    """),
+                {"ids": ids},
+            )
         )
-        if row["step_name"] is not None:
+        .mappings()
+        .all()
+    )
+    by_id = {int(p["id"]): p for p in previous if p.get("id") is not None}
+    for row in step_rows:
+        workflow = by_id.get(int(row["workflow_id"]))
+        if workflow is not None:
             workflow["steps"].setdefault(
-                str(row["step_name"]),
+                str(row["name"]),
                 {
-                    "tag": row["step_tag"],
+                    "tag": row["tag"],
                     "confirmed_sla": row["confirmed_sla"],
                     "confirmed_objective_priority": row["confirmed_objective_priority"],
                 },

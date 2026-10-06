@@ -7,6 +7,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from app import analysis_ingest, db
 
 
@@ -39,11 +40,13 @@ class _Conn:
         analysed_commit=None,
         decisions=None,
         previous_workflows=None,
+        previous_steps=None,
         team_tags=None,
     ):
         self.statements: list[tuple[str, dict]] = []
         self.previous = previous or []
         self.previous_workflows = previous_workflows or []
+        self.previous_steps = previous_steps or []
         self.team_tags = team_tags or []
         # start_id -> decision row; by default a reviewed row is its own decision.
         self.decisions = decisions
@@ -67,12 +70,14 @@ class _Conn:
             if self.decisions is not None:
                 return _Result([{"start_id": k, **v} for k, v in self.decisions.items()])
             return _Result([{"start_id": p["id"], **p} for p in self.previous if p["review_status"] != "pending"])
+        if "FROM ai_workflows w" in text_sql and "diagram_set_by_owner" in text_sql:
+            return _Result([dict(p) for p in self.previous_workflows])
         if "FROM ai_llm_call_recommendations r" in text_sql:
             return _Result([dict(p) for p in self.previous])
         if "WITH current_analyses" in text_sql:
             return _Result([{"tag": t} for t in self.team_tags])
-        if "FROM ai_workflows w LEFT JOIN ai_workflow_steps s" in text_sql:
-            return _Result([dict(p) for p in self.previous_workflows])
+        if "FROM ai_workflow_steps s WHERE s.workflow_id = ANY" in text_sql:
+            return _Result([dict(p) for p in self.previous_steps if p["workflow_id"] in params["ids"]])
         if "SELECT commit_sha FROM ai_workflow_analyses" in text_sql:
             return _Result(self.analysed_commit)
         if "FROM team_repositories" in text_sql and "SELECT" in text_sql:
@@ -252,29 +257,26 @@ async def test_upsert_persists_workflow_tag_and_steps(monkeypatch):
 
 
 async def test_upsert_carries_workflow_lifecycle_and_step_confirmation(monkeypatch):
-    previous_row = {
-        "workflow_name": "checkout",
-        "status": "ignored",
-        "deleted_at": None,
-        "workflow_tag": "owner-tag",
-    }
     conn = _Conn(
         previous_workflows=[
+            {"id": 40, "name": "checkout", "status": "ignored", "deleted_at": None, "tag": "owner-tag"},
+        ],
+        previous_steps=[
             {
-                **previous_row,
-                "step_name": "score",
-                "step_tag": "owner-score",
+                "workflow_id": 40,
+                "name": "score",
+                "tag": "owner-score",
                 "confirmed_sla": "ux-background",
                 "confirmed_objective_priority": '["price", "quality", "latency"]',
             },
             {
-                **previous_row,
-                "step_name": "summarize",
-                "step_tag": None,
+                "workflow_id": 40,
+                "name": "summarize",
+                "tag": None,
                 "confirmed_sla": None,
                 "confirmed_objective_priority": None,
             },
-        ]
+        ],
     )
     monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
     payload = {
@@ -313,18 +315,7 @@ async def test_upsert_carries_workflow_lifecycle_and_step_confirmation(monkeypat
 async def test_upsert_keeps_tags_unique_across_the_team(monkeypatch):
     conn = _Conn(
         team_tags=["checkout", "checkout-score"],
-        previous_workflows=[
-            {
-                "workflow_name": "search",
-                "status": "active",
-                "deleted_at": None,
-                "workflow_tag": "search",
-                "step_name": None,
-                "step_tag": None,
-                "confirmed_sla": None,
-                "confirmed_objective_priority": None,
-            }
-        ],
+        previous_workflows=[{"id": 41, "name": "search", "status": "active", "deleted_at": None, "tag": "search"}],
     )
     monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
     payload = {
@@ -497,15 +488,16 @@ def _one_rec_payload(**rec):
     }
 
 
-async def _ingest_all(monkeypatch, previous, payload, decisions=None):
-    conn = _Conn(previous=previous, decisions=decisions)
+async def _ingest_all(monkeypatch, previous, payload, decisions=None, previous_workflows=None):
+    conn = _Conn(previous=previous, decisions=decisions, previous_workflows=previous_workflows)
     monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
     await analysis_ingest.upsert_analysis(session_id=5, team_repository_id=11, payload=payload)
-    return [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql]
+    return conn
 
 
-async def _ingest_with_previous(monkeypatch, previous, payload, decisions=None):
-    return (await _ingest_all(monkeypatch, previous, payload, decisions))[0]
+async def _ingest_with_previous(monkeypatch, previous, payload, decisions=None, previous_workflows=None):
+    conn = await _ingest_all(monkeypatch, previous, payload, decisions, previous_workflows)
+    return [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql][0]
 
 
 async def test_reanalysis_keeps_an_unchanged_decision(monkeypatch):
@@ -579,7 +571,8 @@ async def test_an_added_call_site_in_the_same_file_does_not_take_the_existing_re
     payload["recommendations"].insert(
         0, {"workflow": "summary", "file_path": "src/llm.py", "start_line": 12, "recommended_sla": "ux-critical"}
     )
-    summary, chat = await _ingest_all(monkeypatch, [_previous()], payload)
+    conn = await _ingest_all(monkeypatch, [_previous()], payload)
+    summary, chat = [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql]
     assert chat["review_status"] == "accepted" and chat["previous_id"] == 501
     assert summary["review_status"] == "pending" and summary["previous_id"] is None
 
@@ -588,7 +581,8 @@ async def test_ambiguous_rows_in_one_file_stay_pending(monkeypatch):
     payload = _one_rec_payload(workflow="")
     payload["recommendations"].append({"file_path": "src/llm.py", "start_line": 90, "recommended_sla": "ux-critical"})
     previous = [_previous(workflow_name=None), _previous(id=502, start_line=95, workflow_name=None)]
-    recs = await _ingest_all(monkeypatch, previous, payload)
+    conn = await _ingest_all(monkeypatch, previous, payload)
+    recs = [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql]
     assert [r["previous_id"] for r in recs] == [None, None]
     assert all(r["review_status"] == "pending" for r in recs)
 
@@ -603,6 +597,168 @@ async def test_the_decision_before_an_unreviewed_proposal_still_counts(monkeypat
     assert rec["review_status"] == "accepted"
     assert rec["api_key_id"] == 33
     assert rec["carried_over"] is True
+
+
+async def test_reanalysis_keeps_an_owner_edited_diagram_and_stores_a_proposal(monkeypatch):
+    previous_wf = {
+        "name": "chat",
+        "diagram_mermaid": "flowchart TD\n  Owner-->Edit",
+        "diagram_set_by_owner": True,
+        "proposed_diagram_mermaid": None,
+    }
+    payload = _one_rec_payload()
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Agent-->New"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[previous_wf])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["diagram"] == "flowchart TD\n  Owner-->Edit"
+    assert wf["diagram_set_by_owner"] is True
+    assert wf["proposed"] == "flowchart TD\n  Agent-->New"
+
+
+async def test_reanalysis_takes_the_agent_diagram_when_the_owner_did_not_edit(monkeypatch):
+    previous_wf = {
+        "name": "chat",
+        "diagram_mermaid": "flowchart TD\n  Old-->Flow",
+        "diagram_set_by_owner": False,
+        "proposed_diagram_mermaid": None,
+    }
+    payload = _one_rec_payload()
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Agent-->New"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[previous_wf])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["diagram"] == "flowchart TD\n  Agent-->New"
+    assert wf["diagram_set_by_owner"] is False
+    assert wf["proposed"] is None
+
+
+async def test_reanalysis_clears_a_proposal_when_the_agent_matches_the_owner(monkeypatch):
+    previous_wf = {
+        "name": "chat",
+        "diagram_mermaid": "flowchart TD\n  Owner-->Edit",
+        "diagram_set_by_owner": True,
+        "proposed_diagram_mermaid": "flowchart TD\n  Stale-->Proposal",
+    }
+    payload = _one_rec_payload()
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Owner-->Edit\n"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[previous_wf])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["diagram"] == "flowchart TD\n  Owner-->Edit"
+    assert wf["diagram_set_by_owner"] is True
+    assert wf["proposed"] is None
+
+
+async def test_reanalysis_does_not_repropose_a_dismissed_diagram(monkeypatch):
+    previous_wf = {
+        "name": "chat",
+        "diagram_mermaid": "flowchart TD\n  Owner-->Edit",
+        "diagram_set_by_owner": True,
+        "proposed_diagram_mermaid": None,
+        "dismissed_diagram_mermaid": "flowchart TD\n  Agent-->New",
+    }
+    payload = _one_rec_payload()
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Agent-->New  \n"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[previous_wf])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["diagram"] == "flowchart TD\n  Owner-->Edit"
+    assert wf["proposed"] is None
+    assert wf["dismissed"] == "flowchart TD\n  Agent-->New"
+
+
+async def test_reanalysis_proposes_a_new_diagram_after_a_dismissal(monkeypatch):
+    previous_wf = {
+        "name": "chat",
+        "diagram_mermaid": "flowchart TD\n  Owner-->Edit",
+        "diagram_set_by_owner": True,
+        "proposed_diagram_mermaid": None,
+        "dismissed_diagram_mermaid": "flowchart TD\n  Agent-->New",
+    }
+    payload = _one_rec_payload()
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Agent-->Newer"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[previous_wf])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["proposed"] == "flowchart TD\n  Agent-->Newer"
+
+
+def _owner_wf(name="chat", diagram="flowchart TD\n  Owner-->Edit"):
+    return {
+        "name": name,
+        "diagram_mermaid": diagram,
+        "diagram_set_by_owner": True,
+        "proposed_diagram_mermaid": None,
+        "dismissed_diagram_mermaid": None,
+    }
+
+
+async def test_reanalysis_keeps_an_owner_edit_when_the_workflow_name_changes_case(monkeypatch):
+    payload = _one_rec_payload(workflow="Chat")
+    payload["workflows"][0]["name"] = "Chat"
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Agent-->New"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[_owner_wf()])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["name"] == "Chat"
+    assert wf["diagram"] == "flowchart TD\n  Owner-->Edit"
+    assert wf["diagram_set_by_owner"] is True
+    assert wf["proposed"] == "flowchart TD\n  Agent-->New"
+
+
+async def test_reanalysis_follows_a_renamed_workflow_by_its_call_sites(monkeypatch):
+    payload = _one_rec_payload(workflow="Support conversation")
+    payload["workflows"][0]["name"] = "Support conversation"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[_owner_wf()])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["diagram"] == "flowchart TD\n  Owner-->Edit"
+    assert wf["diagram_set_by_owner"] is True
+
+
+def test_match_workflows_skips_an_ambiguous_call_site_overlap():
+    previous_recs = [{"workflow_name": "chat", "file_path": "src/llm.py"}]
+    workflows = [{"name": "Support"}, {"name": "Tutor"}]
+    recommendations = [
+        {"workflow": "Support", "file_path": "src/llm.py"},
+        {"workflow": "Tutor", "file_path": "src/llm.py"},
+    ]
+    assert analysis_ingest.match_workflows([_owner_wf()], previous_recs, workflows, recommendations) == {}
+
+
+_CHAT_SUMMARY_RECS = [
+    {"workflow_name": "chat", "file_path": "src/llm.py"},
+    {"workflow_name": "summary", "file_path": "src/llm.py"},
+    {"workflow_name": "summary", "file_path": "src/summary.py"},
+]
+
+
+@pytest.mark.parametrize("order", [("chat", "summary"), ("summary", "chat")])
+def test_match_workflows_pairs_renamed_workflows_regardless_of_order(order):
+    previous = [_owner_wf(name, f"flowchart TD\n  {name}") for name in order]
+    workflows = [{"name": "Conversation"}, {"name": "Digest"}]
+    recommendations = [
+        {"workflow": "Conversation", "file_path": "src/llm.py"},
+        {"workflow": "Digest", "file_path": "src/llm.py"},
+        {"workflow": "Digest", "file_path": "src/summary.py"},
+    ]
+    matched = analysis_ingest.match_workflows(previous, _CHAT_SUMMARY_RECS, workflows, recommendations)
+    assert matched[0]["name"] == "chat" and matched[1]["name"] == "summary"
+
+
+@pytest.mark.parametrize("order", [("chat", "summary"), ("summary", "chat")])
+def test_match_workflows_does_not_give_a_removed_workflows_diagram_to_a_stronger_match(order):
+    previous = [_owner_wf(name, f"flowchart TD\n  {name}") for name in order]
+    workflows = [{"name": "Digest"}]
+    recommendations = [
+        {"workflow": "Digest", "file_path": "src/llm.py"},
+        {"workflow": "Digest", "file_path": "src/summary.py"},
+    ]
+    matched = analysis_ingest.match_workflows(previous, _CHAT_SUMMARY_RECS, workflows, recommendations)
+    assert matched[0]["name"] == "summary"
+
+
+def test_match_workflows_prefers_a_name_match_over_call_sites():
+    previous = [_owner_wf("chat"), _owner_wf("summary", "flowchart TD\n  S")]
+    previous_recs = [{"workflow_name": "summary", "file_path": "src/llm.py"}]
+    workflows = [{"name": "Summary"}, {"name": "chat"}]
+    recommendations = [{"workflow": "chat", "file_path": "src/llm.py"}]
+    matched = analysis_ingest.match_workflows(previous, previous_recs, workflows, recommendations)
+    assert matched[0]["name"] == "summary" and matched[1]["name"] == "chat"
 
 
 def test_match_recommendations_prefers_the_same_workflow_then_the_nearest_line():

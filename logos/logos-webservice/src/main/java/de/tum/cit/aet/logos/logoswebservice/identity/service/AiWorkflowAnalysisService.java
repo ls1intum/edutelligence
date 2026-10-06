@@ -28,7 +28,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewRecommendationRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewWorkflowDiagramProposalRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetRecommendationModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetWorkflowDiagramRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.StoreDeployKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateWorkflowRequestDTO;
@@ -56,6 +58,7 @@ public class AiWorkflowAnalysisService {
     private static final Set<String> VALID_SLAS = Set.of("ux-critical", "ux-high-prio", "ux-background");
     private static final Set<String> VALID_WORKFLOW_STATUSES = Set.of("active", "deprecated", "ignored");
     private static final int MAX_MODEL_NAME_LENGTH = 200;
+    private static final int MAX_DIAGRAM_MERMAID_LENGTH = 100_000;
     private static final int MAX_ANCESTOR_HOPS = 50;
     private static final int DEFAULT_BENCHMARK_SAMPLE_SIZE = 50;
     private static final int MAX_BENCHMARK_SAMPLE_SIZE = 200;
@@ -64,6 +67,7 @@ public class AiWorkflowAnalysisService {
     private static final int TAG_SUFFIX_RESERVE = 6;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> REVIEW_ACTIONS = Set.of("accept", "override", "reject");
+    private static final Set<String> DIAGRAM_PROPOSAL_ACTIONS = Set.of("accept", "dismiss");
 
     /**
      * Same contract as logos-agent {@code analysis_triggers.ANALYSIS_TASK}.
@@ -276,6 +280,66 @@ public class AiWorkflowAnalysisService {
         rec.setModelSetByOwner(true);
         recommendationRepository.save(rec);
         return recommendationToMap(rec);
+    }
+
+    /**
+     * Saves an owner-edited Mermaid activity diagram. The next analysis keeps
+     * this source and, when it differs, stores the agent's version as a
+     * proposal instead of overwriting.
+     */
+    @Transactional
+    public Map<String, Object> setWorkflowDiagram(int teamId, int workflowId,
+                                                  SetWorkflowDiagramRequestDTO body) {
+        AiWorkflow workflow = lockCurrentWorkflow(teamId, workflowId);
+        if (body == null || body.diagramMermaid() == null || body.diagramMermaid().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "diagram_mermaid is required");
+        }
+        String diagram = body.diagramMermaid().strip();
+        if (diagram.length() > MAX_DIAGRAM_MERMAID_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "diagram_mermaid must be at most " + MAX_DIAGRAM_MERMAID_LENGTH + " characters");
+        }
+        workflow.setDiagramMermaid(diagram);
+        workflow.setDiagramSetByOwner(true);
+        // The owner's save is the confirmed diagram; drop any pending agent proposal.
+        workflow.setProposedDiagramMermaid(null);
+        workflowRepository.save(workflow);
+        return workflowToMap(workflow);
+    }
+
+    /**
+     * Accept the agent's proposed Mermaid (replace the owner's) or dismiss it
+     * and keep the current diagram.
+     */
+    @Transactional
+    public Map<String, Object> reviewWorkflowDiagramProposal(
+            int teamId, int workflowId, ReviewWorkflowDiagramProposalRequestDTO body) {
+        if (body == null || body.action() == null || body.action().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "action is required");
+        }
+        String action = body.action().trim().toLowerCase(Locale.ROOT);
+        if (!DIAGRAM_PROPOSAL_ACTIONS.contains(action)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "action must be accept or dismiss");
+        }
+        AiWorkflow workflow = lockCurrentWorkflow(teamId, workflowId);
+        String proposed = workflow.getProposedDiagramMermaid();
+        if (proposed == null || proposed.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "No agent diagram proposal is pending for this workflow");
+        }
+        if ("accept".equals(action)) {
+            workflow.setDiagramMermaid(proposed.strip());
+            // Back under agent control: later analyses may update freely again.
+            workflow.setDiagramSetByOwner(false);
+            workflow.setDismissedDiagramMermaid(null);
+        } else {
+            // Keep mine: re-analyses drawing this same Mermaid do not propose it again.
+            workflow.setDismissedDiagramMermaid(proposed);
+        }
+        workflow.setProposedDiagramMermaid(null);
+        workflowRepository.save(workflow);
+        return workflowToMap(workflow);
     }
 
     @Transactional
@@ -545,7 +609,7 @@ public class AiWorkflowAnalysisService {
             }
         }
         workflowRepository.save(workflow);
-        return workflowToMap(workflow, stepRepository.findByWorkflowIdOrderBySortOrderAsc(workflow.getId()));
+        return workflowToMap(workflow);
     }
 
     @Transactional
@@ -871,52 +935,6 @@ public class AiWorkflowAnalysisService {
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found"));
     }
 
-    /**
-     * Lock a workflow for an owner edit, after its repository — the same
-     * order and reason as {@link #lockCurrentRecommendation}: the agent ingest
-     * takes the repository lock before it reads the lifecycle and step SLAs
-     * it carries over, so an edit either lands before that read or waits for
-     * the new analysis. An edit to a workflow a newer analysis superseded is
-     * refused — the page is showing old workflows and must reload.
-     */
-    private AiWorkflow lockCurrentWorkflow(int teamId, int workflowId) {
-        if (!teamExists(teamId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Team not found");
-        }
-        // Identity only, by plain query: the entity is loaded after the lock,
-        // so a concurrent edit that held it is seen rather than overwritten.
-        Map<String, Object> owner = jdbc.query("""
-            SELECT a.id AS analysis_id, a.team_id, a.team_repository_id
-              FROM ai_workflows w
-              JOIN ai_workflow_analyses a ON a.id = w.analysis_id
-             WHERE w.id = ?
-            """, rs -> {
-                if (!rs.next()) {
-                    return null;
-                }
-                Map<String, Object> row = new HashMap<>();
-                row.put("analysis_id", rs.getObject("analysis_id"));
-                row.put("team_id", rs.getObject("team_id"));
-                row.put("team_repository_id", rs.getObject("team_repository_id"));
-                return row;
-            }, workflowId);
-        if (owner == null || !Integer.valueOf(teamId).equals(owner.get("team_id"))) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found");
-        }
-        Integer repoId = (Integer) owner.get("team_repository_id");
-        if (repoId != null) {
-            jdbc.query("SELECT id FROM team_repositories WHERE id = ? FOR UPDATE", rs -> null, repoId);
-            Integer latest = analysisRepository.findLatestSucceeded(repoId)
-                .map(AiWorkflowAnalysis::getId).orElse(null);
-            if (latest != null && !latest.equals(owner.get("analysis_id"))) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "A newer analysis replaced this workflow; reload the Workflows tab");
-            }
-        }
-        return workflowRepository.findById(workflowId)
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found"));
-    }
-
     /** Lock a step's workflow as {@link #lockCurrentWorkflow} does, then load the step. */
     private AiWorkflowStep lockCurrentStep(int teamId, int stepId) {
         Integer workflowId = jdbc.query("SELECT workflow_id FROM ai_workflow_steps WHERE id = ?",
@@ -1138,6 +1156,10 @@ public class AiWorkflowAnalysisService {
         return m;
     }
 
+    private Map<String, Object> workflowToMap(AiWorkflow workflow) {
+        return workflowToMap(workflow, stepRepository.findByWorkflowIdOrderBySortOrderAsc(workflow.getId()));
+    }
+
     private Map<String, Object> workflowToMap(AiWorkflow workflow, List<AiWorkflowStep> steps) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", workflow.getId());
@@ -1146,6 +1168,8 @@ public class AiWorkflowAnalysisService {
         m.put("trigger_summary", workflow.getTriggerSummary());
         m.put("diagram_mermaid", workflow.getDiagramMermaid());
         m.put("sort_order", workflow.getSortOrder());
+        m.put("diagram_set_by_owner", workflow.isDiagramSetByOwner());
+        m.put("proposed_diagram_mermaid", workflow.getProposedDiagramMermaid());
         m.put("status", workflow.getStatus());
         m.put("deleted_at", workflow.getDeletedAt() != null ? workflow.getDeletedAt().toString() : null);
         m.put("tag", workflow.getTag());
@@ -1233,6 +1257,34 @@ public class AiWorkflowAnalysisService {
             }
         }
         return rec;
+    }
+
+    /**
+     * Same repository-then-row lock as recommendations: ingest copies
+     * owner edits (diagrams, lifecycle, tags, step SLAs) from the previous
+     * analysis under the repository
+     * lock, so an edit either lands first or waits for the new analysis. An
+     * edit on a workflow a newer analysis superseded is refused.
+     */
+    private AiWorkflow lockCurrentWorkflow(int teamId, int workflowId) {
+        Integer repoId = jdbc.query("""
+            SELECT a.team_repository_id FROM ai_workflows w
+              JOIN ai_workflow_analyses a ON a.id = w.analysis_id
+             WHERE w.id = ? AND a.team_id = ?
+            """, rs -> rs.next() ? (Integer) rs.getObject(1) : null, workflowId, teamId);
+        if (repoId == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found");
+        }
+        jdbc.query("SELECT id FROM team_repositories WHERE id = ? FOR UPDATE", rs -> null, repoId);
+        AiWorkflow workflow = workflowRepository.lockById(workflowId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "Workflow not found"));
+        Integer latest = analysisRepository.findLatestSucceeded(repoId).map(AiWorkflowAnalysis::getId).orElse(null);
+        if (latest != null && !latest.equals(workflow.getAnalysisId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "A newer analysis replaced this workflow; reload the Workflows tab");
+        }
+        return workflow;
     }
 
     /**

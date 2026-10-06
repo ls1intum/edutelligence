@@ -74,6 +74,4 @@ def test_effective_queue_role_rank_folds_admin_rank():
     assert effective_queue_role_rank("developer", "app_admin", 3) == (100000 - 3) * 10 + 1
     assert effective_queue_role_rank("developer", None, 10) == (100000 - 10) * 10 + 0
     # Rank 1 beats rank 2 within the same base role.
-    assert effective_queue_role_rank("application", None, 1) > effective_queue_role_rank(
-        "application", None, 2
-    )
+    assert effective_queue_role_rank("application", None, 1) > effective_queue_role_rank("application", None, 2)
