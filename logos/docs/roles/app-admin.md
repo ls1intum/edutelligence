@@ -66,7 +66,10 @@ and set per-key limits / model permissions.
 GitHub repositories this team's applications live in. Owners link a repository
 URL, branch, and optional path filters; for private repos they can paste a
 read-only deploy key. LogosOSSAgent picks up a newly linked repository on its
-own within a few minutes; queue an analysis from the same tab to run it sooner.
+own within a few minutes; queue an analysis from the same tab to run it sooner
+(one at a time — a second request while one is queued or running is refused).
+Every night it re-analyses each repository whose branch has new commits;
+an unchanged repository is skipped.
 
 ![Team detail — Repositories](/img/roles/team-detail-repositories.png)
 
@@ -75,16 +78,30 @@ own within a few minutes; queue an analysis from the same tab to run it sooner.
 Latest AI-workflow analyses for the team's linked repositories: Mermaid
 diagrams of detected flows and per-call **SLA** plus **objective priority**
 recommendations (ordered latency / quality / price). Owners (and Logos Admins)
-can **Accept** a recommendation, **Override** SLA or priority order, or
-**Reject** it. The **Application key** picker above the recommendations applies
+can **edit** a workflow's Mermaid diagram; later analyses keep that edit and,
+when the agent draws something different, show an **Agent update** beside it
+so you can **Accept** the proposal or **Keep mine**. Owners can also **Accept**
+a recommendation, **Override** SLA or priority order, or **Reject** it. The
+**Application key** picker above the recommendations applies
 to every Accept and Override on the tab — it defaults to the team's
 highest-priority key (usually production), and **No key** leaves key
 priorities untouched. Accepting or overriding sets that key's queue priority
 from the confirmed SLA so the orchestrator serves traffic accordingly.
 
+A re-analysis **proposes**, it does not overwrite. When it recommends what you
+already accepted, overrode to, or rejected for a call site, that decision is
+kept ("Kept from the previous analysis"). When it recommends something else,
+the call site is **pending** again and shows the earlier decision next to the
+new proposal ("Was accepted: ux-critical · latency › quality › price"); key
+priorities change only when you review it. A decision survives analyses you
+have not reviewed yet: the earlier one is still what is shown and carried
+over. If a newer analysis arrived while the tab was open, reviewing an
+outdated proposal is refused — reload the tab.
+
 The analysis often cannot tell which model a call site uses (it is usually
 configuration, not code), so the **Model** column is a picker: choose the model
-the call site actually uses, or leave it **Unknown**. When the model has Likert
+the call site actually uses, or leave it **Unknown**. Later analyses keep your
+pick. When the model has Likert
 profile ratings, a spider chart is shown beside it.
 
 ![Team detail — Workflows](/img/roles/team-detail-workflows.png)

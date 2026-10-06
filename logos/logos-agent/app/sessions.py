@@ -1661,6 +1661,9 @@ class SessionManager:
             # request. The finalizer reads it rather than the task, for the
             # same reason it reads no_push and open_pull_request from the row.
             "LOGOS_SESSION_CLOSES": closes,
+            # Who to ask for a review when this session opens (or reuses) a
+            # pull request. Empty means nobody beyond CODEOWNERS.
+            "LOGOS_SESSION_PR_REVIEWERS": ",".join(settings.pr_reviewers),
             "LOGOS_REPO_URL": session.get("repo_url") or settings.repo_url,
             "LOGOS_REPO_SLUG": session.get("repo_slug") or settings.repo_slug,
             "LOGOS_ARTIFACT_DIR": "/artifacts",
