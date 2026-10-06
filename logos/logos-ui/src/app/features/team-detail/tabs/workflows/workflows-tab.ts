@@ -6,6 +6,7 @@ import {
   Input,
   OnChanges,
   Output,
+  effect,
   inject,
   signal,
 } from '@angular/core';
@@ -16,6 +17,7 @@ import { DataTableComponent } from '../../../../shared/components/data-table/dat
 import { ModelProfileRadarComponent } from '../../../../shared/components/model-profile-radar/model-profile-radar';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { ModelManagementService } from '../../../../core/services/model-management.service';
+import { ThemeService } from '../../../../core/services/theme.service';
 import {
   AiLlmCallRecommendation,
   AiWorkflow,
@@ -92,8 +94,13 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
 
   private teamService = inject(TeamManagementService);
   private modelService = inject(ModelManagementService);
+  private theme = inject(ThemeService);
   private diagramsDirty = false;
   private mermaidReady: Promise<typeof import('mermaid')> | null = null;
+  /** Avoid wiping diagrams on the first theme effect before load() paints them. */
+  private themeWatchStarted = false;
+  /** Bumped on theme toggle so Angular re-runs AfterViewChecked to re-paint Mermaid. */
+  private readonly diagramEpoch = signal(0);
 
   loading = signal(true);
   loadError = signal('');
@@ -128,6 +135,19 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   readonly recGrid =
     'minmax(10rem, 1.6fr) minmax(12rem, 1fr) minmax(9rem, 1fr) 6.5rem 7.5rem 21rem';
 
+  constructor() {
+    // Mermaid paints node fills/text at initialize time; follow Logos theme.
+    effect(() => {
+      this.theme.isDark();
+      if (!this.themeWatchStarted) {
+        this.themeWatchStarted = true;
+        return;
+      }
+      this.diagramsDirty = true;
+      this.diagramEpoch.update((n) => n + 1);
+    });
+  }
+
   ngOnChanges(): void {
     if (this.teamId) {
       void this.load();
@@ -137,6 +157,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   ngAfterViewChecked(): void {
     if (!this.diagramsDirty) return;
     this.diagramsDirty = false;
+    this.resetProcessedDiagrams();
     void this.renderDiagrams();
   }
 
@@ -420,10 +441,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
       const mod = await this.mermaidReady;
       const mermaid = mod.default;
       // No "Syntax error" bomb in place of a diagram that does not parse.
+      // `dark` keeps node text/fills readable on the app's dark theme; `neutral`
+      // matches light. Re-initialize whenever we paint so a theme toggle sticks.
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'strict',
-        theme: 'neutral',
+        theme: this.theme.isDark() ? 'dark' : 'neutral',
         suppressErrorRendering: true,
       });
       // One at a time: a diagram that still fails to parse keeps its source
@@ -439,5 +462,20 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     } catch {
       // Leave <pre class="mermaid"> source visible if render fails or mermaid is unavailable.
     }
+  }
+
+  /**
+   * Mermaid replaces each <pre> with an SVG and marks it processed. To switch
+   * themes we restore the source from data-diagram-source and clear the flag.
+   */
+  private resetProcessedDiagrams(): void {
+    document.querySelectorAll<HTMLElement>('.workflows-tab .mermaid[data-processed]').forEach((node) => {
+      const source = node.getAttribute('data-diagram-source');
+      if (source == null) return;
+      node.removeAttribute('data-processed');
+      // Drop Mermaid's generated id so the next run does not collide.
+      node.removeAttribute('id');
+      node.textContent = source;
+    });
   }
 }

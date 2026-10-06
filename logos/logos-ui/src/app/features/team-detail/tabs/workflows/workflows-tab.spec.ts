@@ -1,14 +1,16 @@
 import { TestBed } from '@angular/core/testing';
+import { signal } from '@angular/core';
 
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { ModelManagementService } from '../../../../core/services/model-management.service';
+import { ThemeService } from '../../../../core/services/theme.service';
 import {
   AiLlmCallRecommendation,
   TeamApiKey,
   TeamWorkflowsResponse,
 } from '../../../../shared/models/team.model';
 import { WorkflowsTabComponent } from './workflows-tab';
-
+import mermaid from 'mermaid';
 vi.mock('mermaid', () => ({
   default: {
     initialize: vi.fn(),
@@ -23,6 +25,7 @@ describe('WorkflowsTabComponent review actions', () => {
   const setWorkflowDiagram = vi.fn();
   const reviewWorkflowDiagramProposal = vi.fn();
   const getModels = vi.fn();
+  const isDark = signal(false);
 
   const pending: AiLlmCallRecommendation = {
     id: 55,
@@ -93,6 +96,7 @@ describe('WorkflowsTabComponent review actions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    isDark.set(false);
     // A copy per load: the component updates recommendations in place.
     getTeamWorkflows.mockImplementation(async () => structuredClone(payload));
     reviewRecommendation.mockResolvedValue({ ...pending, review_status: 'accepted' });
@@ -125,6 +129,10 @@ describe('WorkflowsTabComponent review actions', () => {
         {
           provide: ModelManagementService,
           useValue: { getModels },
+        },
+        {
+          provide: ThemeService,
+          useValue: { isDark, toggle: vi.fn() },
         },
       ],
     });
@@ -307,5 +315,22 @@ describe('WorkflowsTabComponent review actions', () => {
       quality: 3,
       price: 4,
     });
+  });
+
+  it('initializes Mermaid with the dark theme when Logos is dark', async () => {
+    isDark.set(true);
+    const component = setup();
+    await component.load();
+    component['diagramsDirty'] = true;
+    await component['renderDiagrams']();
+    expect(mermaid.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: 'dark' }),
+    );
+
+    isDark.set(false);
+    await component['renderDiagrams']();
+    expect(mermaid.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: 'neutral' }),
+    );
   });
 });

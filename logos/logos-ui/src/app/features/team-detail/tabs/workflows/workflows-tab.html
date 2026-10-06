@@ -161,7 +161,7 @@
                 </div>
               </div>
             } @else if (wf.diagram_mermaid) {
-              <pre class="mermaid">{{ diagramSource(wf) }}</pre>
+              <pre class="mermaid" [attr.data-diagram-source]="diagramSource(wf)">{{ diagramSource(wf) }}</pre>
             }
 
             @if (wf.proposed_diagram_mermaid && !isEditingDiagram(wf)) {
@@ -192,7 +192,10 @@
                     </div>
                   }
                 </div>
-                <pre class="mermaid mermaid--proposal">{{ proposedDiagramSource(wf) }}</pre>
+                <pre
+                  class="mermaid mermaid--proposal"
+                  [attr.data-diagram-source]="proposedDiagramSource(wf)"
+                >{{ proposedDiagramSource(wf) }}</pre>
               </div>
             }
           </article>

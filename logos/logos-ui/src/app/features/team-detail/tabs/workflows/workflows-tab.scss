@@ -282,6 +282,12 @@
     height: auto;
   }
 
+  // Mermaid's dark theme paints opaque node fills; keep the SVG background
+  // transparent so the card chrome shows through without a washed-out slab.
+  :host-context([data-theme='dark']) & svg {
+    background: transparent;
+  }
+
   &--proposal {
     opacity: 0.92;
   }
