@@ -19,7 +19,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
 @Service
 public class ExportImportService {
 
-    static final List<String> TABLES = List.of(
+    private static final List<String> TABLES = List.of(
         "users", "teams", "team_repositories", "team_repository_credentials",
         "team_members", "api_keys", "providers", "models",
         "model_provider", "team_model_permissions", "api_key_model_permissions",
@@ -29,9 +29,6 @@ public class ExportImportService {
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );
     private static final Set<String> TABLE_WHITELIST = Set.copyOf(TABLES);
-
-    /** Tables added after exports already existed; an export without one restores it empty. */
-    private static final Set<String> OPTIONAL_TABLES = Set.of("team_provider_budgets");
 
     private static final List<String> SEQUENCE_TABLES = List.of(
         "users", "teams", "team_repositories", "api_keys", "providers", "models",
@@ -109,7 +106,11 @@ public class ExportImportService {
 
     @Transactional
     public Map<String, Object> importData(Map<String, Object> jsonData) {
-        requireTables(jsonData);
+        for (String table : TABLES) {
+            if (!jsonData.containsKey(table)) {
+                throw new IllegalArgumentException("Missing table in json: " + table);
+            }
+        }
         // Snapshot (session_id → team_id + repo_slug) so linked analysis
         // sessions can be reattached after truncate replaces repository rows.
         List<Map<String, Object>> sessionLinks = jdbc.queryForList("""
@@ -120,7 +121,7 @@ public class ExportImportService {
         detachAgentSessionsFromRepositories();
         try {
             for (String table : TABLES) {
-                List<?> rows = (List<?>) jsonData.getOrDefault(table, List.of());
+                List<?> rows = (List<?>) jsonData.get(table);
                 jdbc.execute("TRUNCATE TABLE " + safeTable(table) + " CASCADE");
                 List<Map<String, Object>> normalized = normalizeImportRows(table, rows);
                 if (!normalized.isEmpty()) {
@@ -144,14 +145,6 @@ public class ExportImportService {
         sanitizeImportedAnalysisSessionLinks();
         resetSequences();
         return Map.of("result", "Import successful");
-    }
-
-    static void requireTables(Map<String, Object> jsonData) {
-        for (String table : TABLES) {
-            if (!jsonData.containsKey(table) && !OPTIONAL_TABLES.contains(table)) {
-                throw new IllegalArgumentException("Missing table in json: " + table);
-            }
-        }
     }
 
     /**

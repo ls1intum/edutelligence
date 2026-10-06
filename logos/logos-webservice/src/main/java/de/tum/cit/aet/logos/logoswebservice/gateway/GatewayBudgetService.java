@@ -152,7 +152,7 @@ public class GatewayBudgetService {
                 ProviderBudgetOverride override = teamProviderBudget(key.teamId(), providerId);
                 if (override.exists()) {
                     // Dedicated / sponsored bucket for this provider only.
-                    if (override.limitMicroCents() != null) {
+                    if (override.limitMicroCents() != null && override.limitMicroCents() > 0) {
                         long used = teamProviderBudgetUsage(key.teamId(), providerId, monthStart);
                         if (used >= override.limitMicroCents()) {
                             throw new ResponseStatusException(
@@ -594,8 +594,7 @@ public class GatewayBudgetService {
 
     /**
      * {@code exists} false → use the team default budget; true with a null
-     * limit → unlimited for that provider; true with any other limit (0
-     * included) → cap.
+     * limit → unlimited for that provider; true with a positive limit → cap.
      */
     record ProviderBudgetOverride(boolean exists, Long limitMicroCents) {
         static ProviderBudgetOverride absent() {

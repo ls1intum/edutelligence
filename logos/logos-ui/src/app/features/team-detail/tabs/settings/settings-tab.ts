@@ -6,7 +6,6 @@ import {
   signal,
   inject,
   OnChanges,
-  SimpleChanges,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -30,19 +29,6 @@ function mcToDollars(mc: number | null): string {
 function dollarsToMc(s: string): number | null {
   const v = parseFloat(s.trim().replace(',', '.'));
   return isNaN(v) ? null : Math.round(v * MICRO);
-}
-
-/**
- * A provider cap as typed: blank is no cap (null), a non-negative dollar
- * amount is a cap, and anything else is rejected (undefined) rather than read
- * as "no cap".
- */
-export function parseProviderCap(s: string): number | null | undefined {
-  const trimmed = s.trim();
-  if (trimmed === '') return null;
-  if (!/^\d+([.,]\d+)?$/.test(trimmed)) return undefined;
-  const mc = Math.round(Number(trimmed.replace(',', '.')) * MICRO);
-  return Number.isSafeInteger(mc) ? mc : undefined;
 }
 
 function strToIntOrNull(s: string): number | null {
@@ -89,9 +75,9 @@ export class SettingsTabComponent implements OnChanges {
   deleteLoading = signal(false);
   deleteError = signal(false);
 
-  ngOnChanges(changes: SimpleChanges): void {
+  ngOnChanges(): void {
     if (this.team) this.resetForm();
-    if (this.teamId && changes['teamId']) void this.loadProviderBudgets();
+    if (this.teamId) void this.loadProviderBudgets();
   }
 
   private resetForm(): void {
@@ -133,17 +119,14 @@ export class SettingsTabComponent implements OnChanges {
       this.providerBudgetError.set('Select a cloud provider.');
       return;
     }
-    const cap = parseProviderCap(this.newProviderBudget());
-    if (cap === undefined) {
-      this.providerBudgetError.set(
-        'Enter a dollar amount such as 50 or 12.50, or leave it blank for unlimited.',
-      );
-      return;
-    }
     this.providerBudgetLoading.set(true);
     this.providerBudgetError.set('');
     try {
-      await this.teamService.upsertTeamProviderBudget(this.teamId, providerId, cap);
+      await this.teamService.upsertTeamProviderBudget(
+        this.teamId,
+        providerId,
+        dollarsToMc(this.newProviderBudget()),
+      );
       this.newProviderId.set('');
       this.newProviderBudget.set('');
       await this.loadProviderBudgets();
