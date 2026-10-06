@@ -54,6 +54,13 @@ REPLY_FILE = "reply.md"
 # answers every thread somewhere none of them was asked.
 REPLY_DIR = "replies"
 
+# The inline comments of a review the agent was asked for: a JSON list of
+# ``{"path", "line", "body"}`` objects, ``line`` being a line of the new
+# file inside the diff. The runner posts them with the summary in
+# ``REPLY_FILE`` as one pull-request review, so each remark sits on the code
+# it is about.
+REVIEW_COMMENTS_FILE = "review-comments.json"
+
 # The file the runner appends to whenever it freezes a session, relative to
 # the session's state directory — not the artefact directory: the state
 # directory is the runner's own, mounted into the session read-only, so the

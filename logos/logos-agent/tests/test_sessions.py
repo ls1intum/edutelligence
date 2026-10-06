@@ -6438,3 +6438,159 @@ async def test_cancel_from_supervisor_task_still_removes_container(monkeypatch):
     assert outcome["ok"] is True
     assert outcome["removed"] == ["ctr-9"]
     assert 9 not in sessions.manager._supervisors
+
+
+class TestRequestedReviewDelivery:
+    """A review the agent was asked for lands as a review with inline comments.
+
+    The remarks sit on the lines they are about. Where GitHub cannot place
+    them, they are said as one ordinary answer, so nothing the review found
+    is lost.
+    """
+
+    ROW = {
+        "id": 31,
+        "trigger_kind": "review-request",
+        "trigger_ref": "pr-772-review-requested-wasnertobias-event-1",
+        "reply_target": "issue:772",
+        "reply_posted_at": None,
+        "status": "succeeded",
+    }
+
+    def install(self, monkeypatch, tmp_path, *, refuse=None, already=False):
+        from app import github, sessions
+
+        recorded = TestReviewReplyDelivery().install(monkeypatch, tmp_path, self.ROW)
+        recorded["reviews"] = []
+
+        async def fake_create(number, body, comments):
+            if refuse is not None:
+                raise github.GitHubError("refused", status=refuse)
+            recorded["reviews"].append((number, body, comments))
+            return "https://github.com/x/y/pull/772#pullrequestreview-1"
+
+        async def fake_contains(_number, _marker):
+            return already
+
+        monkeypatch.setattr(sessions.github, "create_pull_review", fake_create)
+        monkeypatch.setattr(sessions.github, "pull_review_contains", fake_contains)
+        return recorded
+
+    @staticmethod
+    def write(tmp_path, *, summary=None, comments=None):
+        directory = tmp_path / "31"
+        directory.mkdir(parents=True, exist_ok=True)
+        if summary is not None:
+            (directory / "reply.md").write_text(summary)
+        if comments is not None:
+            (directory / "review-comments.json").write_text(
+                comments if isinstance(comments, str) else json.dumps(comments)
+            )
+
+    async def test_inline_comments_are_posted_as_one_review(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path)
+        self.write(
+            tmp_path,
+            summary="One real problem.",
+            comments=[{"path": "app/x.py", "line": 12, "body": "This drops the error."}],
+        )
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == [
+            (
+                772,
+                "One real problem.\n\n" + sessions._answer_marker(31),
+                [{"path": "app/x.py", "line": 12, "body": "This drops the error."}],
+            )
+        ]
+        assert recorded["summaries"] == []
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_comments_github_cannot_place_are_said_as_text(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, refuse=422)
+        self.write(
+            tmp_path,
+            summary="One real problem.",
+            comments=[{"path": "app/x.py", "line": 999, "body": "This drops the error."}],
+        )
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [
+            (
+                772,
+                "One real problem.\n\n**`app/x.py:999`**\n\nThis drops the error.\n\n" + sessions._answer_marker(31),
+            )
+        ]
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_a_failed_post_is_retried_rather_than_said_as_text(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, refuse=502)
+        self.write(tmp_path, summary="ok", comments=[{"path": "a.py", "line": 1, "body": "b"}])
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == []
+        assert recorded["attempts"] == [(31, False)]
+
+    async def test_a_review_already_posted_is_not_posted_again(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, already=True)
+        self.write(tmp_path, summary="ok", comments=[{"path": "a.py", "line": 1, "body": "b"}])
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == []
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_without_inline_comments_it_is_an_ordinary_answer(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path)
+        self.write(tmp_path, summary="Looks right; I checked the migration and the tests.")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == []
+        assert recorded["summaries"] == [
+            (772, "Looks right; I checked the migration and the tests.\n\n" + sessions._answer_marker(31))
+        ]
+
+    async def test_an_entry_without_a_line_is_still_said(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path)
+        self.write(
+            tmp_path,
+            summary="Two things.",
+            comments=[
+                {"path": "a.py", "line": 3, "body": "placed"},
+                {"path": "README.md", "body": "the whole section is stale"},
+            ],
+        )
+
+        await sessions.SessionManager()._post_reply(31)
+
+        number, body, comments = recorded["reviews"][0]
+        assert comments == [{"path": "a.py", "line": 3, "body": "placed"}]
+        assert "**`README.md`**\n\nthe whole section is stale" in body
+        assert body.startswith("Two things.")
+
+    async def test_a_comments_file_that_is_not_json_is_still_said(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path)
+        self.write(tmp_path, summary="Summary.", comments="a.py:3 this is wrong")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == []
+        assert "a.py:3 this is wrong" in recorded["summaries"][0][1]
