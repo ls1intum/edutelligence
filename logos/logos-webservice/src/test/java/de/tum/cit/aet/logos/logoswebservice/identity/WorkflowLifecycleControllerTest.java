@@ -226,6 +226,52 @@ class WorkflowLifecycleControllerTest {
     }
 
     @Test
+    void benchmark_followsTheWorkflowAcrossAnalysesNotAReassignedTag() throws Exception {
+        int oldWorkflow = seedWorkflowWithStep()[0];
+        Integer unrelated = jdbc.queryForObject("""
+            INSERT INTO ai_workflows (analysis_id, name, diagram_mermaid)
+            SELECT analysis_id, 'search', 'flowchart TD' FROM ai_workflows WHERE id = ?
+            RETURNING id
+            """, Integer.class, oldWorkflow);
+        Integer newAnalysis = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_analyses
+                (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            SELECT team_id, team_repository_id, 'newer', 'succeeded', 'agent', now() + interval '1 minute'
+              FROM ai_workflow_analyses
+             WHERE id = (SELECT analysis_id FROM ai_workflows WHERE id = ?)
+            RETURNING id
+            """, Integer.class, oldWorkflow);
+        // The successor took over the tag "search" once used by the unrelated workflow.
+        Integer successor = jdbc.queryForObject("""
+            INSERT INTO ai_workflows (analysis_id, name, diagram_mermaid, tag, previous_workflow_id)
+            VALUES (?, 'checkout', 'flowchart TD', 'search', ?)
+            RETURNING id
+            """, Integer.class, newAnalysis, oldWorkflow);
+        String insertLog = """
+            INSERT INTO log_entry (request_id, team_id, workflow_id, workflow_tag, timestamp_request)
+            VALUES (?, 2001, ?, ?, now())
+            """;
+        try {
+            jdbc.update(insertLog, "wf-bench-1", oldWorkflow, "checkout");
+            jdbc.update(insertLog, "wf-bench-2", oldWorkflow, "checkout");
+            jdbc.update(insertLog, "wf-bench-3", unrelated, "search");
+            jdbc.update(insertLog, "wf-bench-4", unrelated, "search");
+            jdbc.update(insertLog, "wf-bench-5", null, "search");
+
+            mvc.perform(post("/admin/teams/2001/workflows/" + successor + "/benchmark")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"candidate_model\":\"gpt-fast\"}"))
+               .andExpect(status().isOk())
+               // Its predecessor's two requests plus the one no workflow claimed.
+               .andExpect(jsonPath("$.historic_metrics.sample_count").value(3));
+        }
+        finally {
+            jdbc.update("DELETE FROM log_entry WHERE request_id LIKE 'wf-bench-%'");
+        }
+    }
+
+    @Test
     void applicationKeyQueueRanks_replaceValidatesAndIsLogosAdminOnly() throws Exception {
         mvc.perform(put("/admin/application-key-queue-ranks")
                 .with(TestJwt.logosAdmin())

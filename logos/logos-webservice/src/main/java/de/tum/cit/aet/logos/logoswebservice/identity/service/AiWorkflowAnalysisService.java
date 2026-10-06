@@ -785,8 +785,21 @@ public class AiWorkflowAnalysisService {
                   FROM log_entry le
                   LEFT JOIN models m ON m.id = le.model_id
                  WHERE le.team_id = ?
-                   AND (le.workflow_id = ?
-                        OR (cardinality(?) > 0 AND le.workflow_tag = ANY(?)))
+                   AND (le.workflow_id IN (
+                            WITH RECURSIVE lineage AS (
+                                SELECT id, previous_workflow_id, 0 AS depth
+                                  FROM ai_workflows WHERE id = ?
+                                UNION ALL
+                                SELECT w.id, w.previous_workflow_id, l.depth + 1
+                                  FROM ai_workflows w
+                                  JOIN lineage l ON w.id = l.previous_workflow_id
+                                 WHERE l.depth < 50
+                            )
+                            SELECT id FROM lineage)
+                        -- A tag alone counts only for requests no workflow
+                        -- claimed: a tag can move to another workflow later.
+                        OR (le.workflow_id IS NULL
+                            AND cardinality(?) > 0 AND le.workflow_tag = ANY(?)))
                  ORDER BY le.timestamp_request DESC NULLS LAST
                  LIMIT ?
                 """);

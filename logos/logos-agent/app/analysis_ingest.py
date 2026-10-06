@@ -392,11 +392,11 @@ async def upsert_analysis(
                     text("""
                         INSERT INTO ai_workflows
                             (analysis_id, name, trigger_summary, diagram_mermaid, sort_order, tag,
-                             status, deleted_at,
+                             status, deleted_at, previous_workflow_id,
                              diagram_set_by_owner, proposed_diagram_mermaid, dismissed_diagram_mermaid)
                         VALUES
                             (:analysis_id, :name, :trigger_summary, :diagram, :sort_order, :tag,
-                             :status, :deleted_at,
+                             :status, :deleted_at, :previous_workflow_id,
                              :diagram_set_by_owner, :proposed, :dismissed)
                         RETURNING id
                         """),
@@ -410,6 +410,7 @@ async def upsert_analysis(
                         or unique_workflow_tag(normalize_workflow_tag(raw.get("tag")), taken_tags),
                         "status": (previous_wf or {}).get("status") or "active",
                         "deleted_at": (previous_wf or {}).get("deleted_at"),
+                        "previous_workflow_id": (previous_wf or {}).get("id"),
                         "diagram_set_by_owner": owner_flag,
                         "proposed": proposed,
                         "dismissed": dismissed,

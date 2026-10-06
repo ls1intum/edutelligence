@@ -9,7 +9,8 @@
          1. Workflow lifecycle (active / deprecated / ignored / soft-delete)
          2. Explicit steps with their own SLAs and request tags
          3. Request attribution columns on log_entry
-         4. Per-workflow historic-vs-candidate benchmark rows
+         4. Per-workflow historic-vs-candidate benchmark rows, following the
+            workflow across re-analyses
          5. Logos-admin cross–application-key queue ranks -->
     <changeSet id="052-workflow-lifecycle" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
@@ -132,6 +133,23 @@
         ]]></sql>
         <rollback>
             <sql>DROP TABLE IF EXISTS ai_workflow_benchmarks;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="052-workflow-lineage" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="ai_workflows" columnName="previous_workflow_id"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            -- The workflow of the previous analysis this one continues, so
+            -- history (request attribution, benchmarks) follows the logical
+            -- workflow across re-analyses instead of its current tags.
+            ALTER TABLE ai_workflows
+                ADD COLUMN previous_workflow_id INTEGER
+                    REFERENCES ai_workflows(id) ON DELETE SET NULL;
+        ]]></sql>
+        <rollback>
+            <sql>ALTER TABLE ai_workflows DROP COLUMN IF EXISTS previous_workflow_id;</sql>
         </rollback>
     </changeSet>
 
