@@ -86,3 +86,24 @@ def test_application_key_ignores_provider_override():
     with pytest.raises(HTTPException) as exc:
         check_monthly_budget(db, _auth(key_type="application"), True, "2026-10-01", provider_id=3)
     assert "Application monthly budget exceeded" in exc.value.detail
+
+
+def test_provider_override_zero_cap_rejects():
+    db = _FakeDb()
+    db.provider_override = (True, 0)
+    with pytest.raises(HTTPException) as exc:
+        check_monthly_budget(db, _auth(), True, "2026-10-01", provider_id=3)
+    assert exc.value.status_code == 402
+    assert "for this provider" in exc.value.detail
+
+
+def test_without_team_check_only_the_key_budget_applies():
+    db = _FakeDb()
+    db.team_used = 100
+    check_monthly_budget(db, _auth(), True, "2026-10-01", check_team=False)
+
+    db.key_limit = 10
+    db.key_used = 10
+    with pytest.raises(HTTPException) as exc:
+        check_monthly_budget(db, _auth(), True, "2026-10-01", check_team=False)
+    assert "Personal monthly budget exceeded" in exc.value.detail

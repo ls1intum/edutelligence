@@ -20,11 +20,6 @@
                 PRIMARY KEY (team_id, provider_id)
             );
         ]]></sql>
-        <rollback>
-            <sql>
-                DROP TABLE IF EXISTS team_provider_budgets;
-            </sql>
-        </rollback>
     </changeSet>
 
 </databaseChangeLog>

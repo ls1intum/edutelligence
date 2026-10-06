@@ -68,12 +68,9 @@ public class TeamProviderBudgetService {
         if (body == null || body.provider_id() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "provider_id is required");
         }
-        // 0 is rejected as well: enforcement treats only a positive cap as a
-        // cap (null = unlimited), so a zero cap would silently become a
-        // sponsored provider.
-        if (body.monthly_budget_micro_cents() != null && body.monthly_budget_micro_cents() <= 0) {
+        if (body.monthly_budget_micro_cents() != null && body.monthly_budget_micro_cents() < 0) {
             throw new ResponseStatusException(
-                HttpStatus.BAD_REQUEST, "monthly_budget_micro_cents must be null or positive");
+                HttpStatus.BAD_REQUEST, "monthly_budget_micro_cents must be null or >= 0");
         }
         Provider provider = providerRepository.findById(body.provider_id())
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Provider not found"));

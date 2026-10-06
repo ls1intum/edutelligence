@@ -239,26 +239,16 @@ class GatewayBudgetAccountingTest {
     }
 
     @Test
-    void overrideSpendDoesNotDrawFromTeamDefaultBudget() {
+    void zeroProviderCapBlocksThatProvider() {
         Fixture f = seedFixture(ApiKeyType.developer);
-        int otherProviderId = jdbc.queryForObject(
-            "INSERT INTO providers (name, base_url, provider_type, cloud_provider_type, auth_name, auth_format) "
-            + "VALUES (?, 'http://x', 'cloud', 'openai'::cloud_provider_type_enum, 'Authorization', 'Bearer %s') "
-            + "RETURNING id",
-            Integer.class, "p-" + SEQ.getAndIncrement());
         jdbc.update(
             "INSERT INTO team_provider_budgets (team_id, provider_id, monthly_budget_micro_cents) "
-            + "VALUES (?, ?, NULL)",
+            + "VALUES (?, ?, 0)",
             f.teamId(), f.providerId());
-        setTeamBudget(f.teamId(), REAL_COST);
 
-        // One charge on the sponsored provider equals the team's whole budget.
-        accounting.settleSuccess(admit(f), USAGE, null, null);
-
-        // That spend stays out of the default bucket: a provider without an
-        // override still sees the full team budget.
-        assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key(), otherProviderId))
-            .doesNotThrowAnyException();
+        assertThatThrownBy(() -> uncachedBudgetService().enforceCloudBudget(f.key(), f.providerId()))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("Team monthly budget exceeded for this provider");
     }
 
     // ------------------------------------------------------- orchestrator path
