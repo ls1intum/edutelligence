@@ -191,6 +191,33 @@ export class TeamManagementService {
     );
   }
 
+  /** Save an owner-edited Mermaid activity diagram. */
+  setWorkflowDiagram(
+    teamId: number,
+    workflowId: number,
+    diagramMermaid: string,
+  ): Promise<AiWorkflow> {
+    return firstValueFrom(
+      this.http.put<AiWorkflow>(`/api/admin/teams/${teamId}/workflows/${workflowId}/diagram`, {
+        diagram_mermaid: diagramMermaid,
+      }),
+    );
+  }
+
+  /** Accept or dismiss an agent diagram proposal on an owner-edited workflow. */
+  reviewWorkflowDiagramProposal(
+    teamId: number,
+    workflowId: number,
+    action: 'accept' | 'dismiss',
+  ): Promise<AiWorkflow> {
+    return firstValueFrom(
+      this.http.post<AiWorkflow>(
+        `/api/admin/teams/${teamId}/workflows/${workflowId}/diagram/proposal`,
+        { action },
+      ),
+    );
+  }
+
   reviewRecommendation(
     teamId: number,
     recId: number,
