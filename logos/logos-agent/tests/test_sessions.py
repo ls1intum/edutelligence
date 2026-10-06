@@ -6457,15 +6457,22 @@ class TestRequestedReviewDelivery:
         "status": "succeeded",
     }
 
-    def install(self, monkeypatch, tmp_path, *, refuse=None, already=False):
+    SHA = "0123456789abcdef0123456789abcdef01234567"
+
+    def install(self, monkeypatch, tmp_path, *, refuse=None, already=False, sha=SHA):
         from app import github, sessions
 
         recorded = TestReviewReplyDelivery().install(monkeypatch, tmp_path, self.ROW)
         recorded["reviews"] = []
+        recorded["commits"] = []
+        if sha:
+            (tmp_path / "state" / "31").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "state" / "31" / "reviewed-sha").write_text(sha + "\n")
 
-        async def fake_create(number, body, comments):
+        async def fake_create(number, body, comments, *, commit_id):
             if refuse is not None:
                 raise github.GitHubError("refused", status=refuse)
+            recorded["commits"].append(commit_id)
             recorded["reviews"].append((number, body, comments))
             return "https://github.com/x/y/pull/772#pullrequestreview-1"
 
@@ -6508,6 +6515,19 @@ class TestRequestedReviewDelivery:
         ]
         assert recorded["summaries"] == []
         assert recorded["attempts"] == [(31, True)]
+        # Anchored to the commit that was read, not to whatever the head is now.
+        assert recorded["commits"] == [self.SHA]
+
+    async def test_without_the_reviewed_commit_the_comments_are_said_as_text(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, sha="")
+        self.write(tmp_path, summary="Summary.", comments=[{"path": "a.py", "line": 3, "body": "wrong"}])
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == []
+        assert recorded["summaries"] == [(772, "Summary.\n\n**`a.py:3`**\n\nwrong\n\n" + sessions._answer_marker(31))]
 
     async def test_comments_github_cannot_place_are_said_as_text(self, monkeypatch, tmp_path):
         from app import sessions

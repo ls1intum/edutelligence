@@ -1372,11 +1372,12 @@ async def reply_to_review_comment(number: int, comment_id: int, body: str) -> st
     return str(response.json().get("html_url") or "")
 
 
-async def create_pull_review(number: int, body: str, comments: list[dict[str, Any]]) -> str:
+async def create_pull_review(number: int, body: str, comments: list[dict[str, Any]], *, commit_id: str) -> str:
     """Post a review that only comments: a summary and its inline comments.
 
     Each comment is ``{"path", "line", "body"}`` on the new side of the
-    diff. GitHub refuses the whole review (422) when one of them is not on a
+    diff of ``commit_id`` — the commit that was read, not whatever the head
+    is by now. GitHub refuses the whole review (422) when one of them is not on a
     line of the diff; the status is kept on the error so the caller can say
     the same things as plain text instead. Returns the review url.
     """
@@ -1385,6 +1386,7 @@ async def create_pull_review(number: int, body: str, comments: list[dict[str, An
             f"{_API}/repos/{settings.repo_slug}/pulls/{number}/reviews",
             headers=_headers(),
             json={
+                "commit_id": commit_id,
                 "event": "COMMENT",
                 "body": body,
                 "comments": [

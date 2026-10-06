@@ -61,6 +61,12 @@ REPLY_DIR = "replies"
 # it is about.
 REVIEW_COMMENTS_FILE = "review-comments.json"
 
+# The commit a requested review read, relative to the session's state
+# directory: recorded by the runner right after the trusted checkout, before
+# the agent runs, and sent as the review's ``commit_id`` so its line numbers
+# are read against that commit even when the pull request moved on since.
+REVIEWED_SHA_FILE = "reviewed-sha"
+
 # The file the runner appends to whenever it freezes a session, relative to
 # the session's state directory — not the artefact directory: the state
 # directory is the runner's own, mounted into the session read-only, so the
