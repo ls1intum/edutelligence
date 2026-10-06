@@ -50,7 +50,8 @@ defaults applied when a key or member has no individual limit.
 ### Members
 
 Owners and members, with per-person budget and rate-limit overrides. Add or
-remove people here (unless the team is Keycloak-managed).
+remove people here — except the members a linked Keycloak group brought in,
+which are kept in step with that group on every login.
 
 ![Team detail — Members](/img/roles/team-detail-members.png)
 
@@ -128,7 +129,10 @@ do not appear here — see Activity for that).
 ### Settings
 
 Team monthly budget, default key budget, and default cloud/local rate limits.
-Also where an owner deletes the team.
+Also where an owner deletes the team — unless the team is linked to a Keycloak
+group, in which case the tab names the group instead and only a Logos Admin can
+remove the link (see
+[Logos Admin → Linking a team to a Keycloak group](logos-admin.md#keycloak-link)).
 
 ![Team detail — Settings](/img/roles/team-detail-settings.png)
 

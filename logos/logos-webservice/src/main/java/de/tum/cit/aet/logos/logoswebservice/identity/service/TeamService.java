@@ -4,8 +4,10 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,12 +43,14 @@ public class TeamService {
     private final TeamModelPermissionRepository teamModelPermissionRepository;
     private final ApiKeyRepository apiKeyRepository;
     private final TeamMembershipService membershipService;
+    private final KeycloakGroupLinkNormalizer groupLinkNormalizer;
 
     public TeamService(TeamRepository teamRepository, TeamMemberRepository memberRepository,
                        UserRepository userRepository, TeamBudgetRepository teamBudgetRepository,
                        TeamModelPermissionRepository teamModelPermissionRepository,
                        ApiKeyRepository apiKeyRepository,
-                       TeamMembershipService membershipService) {
+                       TeamMembershipService membershipService,
+                       KeycloakGroupLinkNormalizer groupLinkNormalizer) {
         this.teamRepository = teamRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
@@ -54,6 +58,7 @@ public class TeamService {
         this.teamModelPermissionRepository = teamModelPermissionRepository;
         this.apiKeyRepository = apiKeyRepository;
         this.membershipService = membershipService;
+        this.groupLinkNormalizer = groupLinkNormalizer;
     }
 
     /**
@@ -106,7 +111,8 @@ public class TeamService {
             t.getDefaultLocalTpmLimit(),
             t.getPriority(),
             isCallerOwner,
-            t.getKeycloakGroup() != null
+            t.getKeycloakGroup() != null,
+            t.getKeycloakGroup()
         );
     }
 
@@ -118,7 +124,12 @@ public class TeamService {
     public TeamResponseDTO createTeam(CreateTeamRequestDTO body, Integer callerId) {
         Team team = new Team();
         team.setName(body.name());
-        team = teamRepository.save(team);
+        String group = groupLinkNormalizer.normalize(body.keycloak_group());
+        if (group != null) {
+            requireGroupUnlinked(group, null);
+            team.setKeycloakGroup(group);
+        }
+        team = saveWithGroupLink(team);
         List<Integer> ownerIds = (body.owner_ids() != null && !body.owner_ids().isEmpty())
             ? body.owner_ids()
             : List.of(callerId);
@@ -146,14 +157,16 @@ public class TeamService {
     }
 
     /**
-     * Keycloak owns the name and existence of synced teams (the name is derived from
-     * the Keycloak group and membership is reconciled on every login). Renaming or
-     * deleting them locally would drift from Keycloak, so we reject it. Logos-owned
-     * data (limits, budgets, ownership flags) stays editable for managed teams too.
+     * A linked team stands for a Keycloak group: its membership is reconciled on
+     * every login, and its name is what the group is called in Logos. Renaming or
+     * deleting it while the link stands would drift from Keycloak, so we reject it
+     * and point at removing the link, which hands the team back to Logos. Logos-owned
+     * data (limits, budgets, ownership flags) stays editable for linked teams too.
      */
     private void requireUnmanaged(Team team, String action) {
         if (team.getKeycloakGroup() != null) {
-            throw new ConflictException("This team is managed by Keycloak and cannot be " + action + " here.");
+            throw new ConflictException("This team is linked to Keycloak group '" + team.getKeycloakGroup()
+                + "' and cannot be " + action + " here. Remove the link first.");
         }
     }
 
@@ -168,6 +181,7 @@ public class TeamService {
             teamMap.put("name", team.getName());
             teamMap.put("is_caller_owner", isCallerOwner);
             teamMap.put("managed", team.getKeycloakGroup() != null);
+            teamMap.put("keycloak_group", team.getKeycloakGroup());
             teamMap.put("budget_used_micro_cents", budgetUsed != null ? budgetUsed : 0L);
             teamMap.put("default_monthly_budget_micro_cents", team.getDefaultMonthlyBudgetMicroCents());
             teamMap.put("team_monthly_budget_micro_cents", team.getTeamMonthlyBudgetMicroCents());
@@ -234,6 +248,64 @@ public class TeamService {
             teamRepository.save(team);
             return new TeamResponseDTO(team.getId(), team.getName());
         });
+    }
+
+    /**
+     * Links the team to a Keycloak group (or, with null/blank, unlinks it).
+     * Members of that group are joined on their next login and by the nightly
+     * directory sync; the link itself is a platform decision, so the endpoint
+     * is gated to logos_admin.
+     *
+     * <p>Dropping or repointing the link also drops the memberships the old
+     * group produced: they are Keycloak-sourced and so cannot be removed by
+     * hand, and nothing would ever reconcile them once the team no longer
+     * resolves from that group. Members still covered by the new link are
+     * re-joined on their next login.
+     */
+    @Transactional
+    public Optional<TeamResponseDTO> updateTeamKeycloakGroup(Integer teamId, String rawGroup) {
+        String group = groupLinkNormalizer.normalize(rawGroup);
+        return teamRepository.findById(teamId).map(team -> {
+            String previous = team.getKeycloakGroup();
+            if (Objects.equals(previous, group)) {
+                return new TeamResponseDTO(team.getId(), team.getName());
+            }
+            if (group != null) requireGroupUnlinked(group, teamId);
+            team.setKeycloakGroup(group);
+            saveWithGroupLink(team);
+            if (previous != null) dropSyncedMemberships(teamId);
+            return new TeamResponseDTO(team.getId(), team.getName());
+        });
+    }
+
+    /**
+     * The database enforces uniqueness (uq_teams_keycloak_group); checking up
+     * front turns the race-free-but-opaque constraint violation into a message
+     * naming the team that already holds the link.
+     */
+    private void requireGroupUnlinked(String group, Integer selfTeamId) {
+        teamRepository.findByKeycloakGroup(group)
+            .filter(other -> !other.getId().equals(selfTeamId))
+            .ifPresent(other -> {
+                throw new ConflictException("Keycloak group '" + group
+                    + "' is already linked to team '" + other.getName() + "'.");
+            });
+    }
+
+    /** Reports a lost uniqueness race as the same conflict as the up-front check. */
+    private Team saveWithGroupLink(Team team) {
+        try {
+            return teamRepository.saveAndFlush(team);
+        } catch (DataIntegrityViolationException e) {
+            throw new ConflictException("Keycloak group '" + team.getKeycloakGroup()
+                + "' is already linked to another team.");
+        }
+    }
+
+    private void dropSyncedMemberships(Integer teamId) {
+        for (TeamMember member : memberRepository.findById_TeamIdAndSource(teamId, TeamMemberSource.KEYCLOAK)) {
+            membershipService.leave(member.getId().getUserId(), teamId);
+        }
     }
 
     @Transactional

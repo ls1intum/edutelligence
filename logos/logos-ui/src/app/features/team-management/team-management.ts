@@ -13,12 +13,13 @@ import { ModalFormComponent } from '../../shared/components/modal/modal-form/mod
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
-import { Team, AdminUser } from '../../shared/models/team.model';
+import { Team, AdminUser, KeycloakGroupOption } from '../../shared/models/team.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { userDisplayName, userMatchesQuery } from '../../shared/utils/user-display';
+import { errorDetail } from '../../shared/utils/error-detail';
 
 @Component({
   selector: 'app-team-management',
@@ -59,8 +60,14 @@ export class TeamManagement implements OnInit {
   createOpen = signal(false);
   createName = signal('');
   createOwnerIds = signal<number[]>([]);
+  createKeycloakGroup = signal('');
   createLoading = signal(false);
   createError = signal('');
+
+  // ── Keycloak group picker (logos admins) ────────────────────────────────
+  /** Realm groups and roles offered as suggestions; empty when the deployment
+   *  has no Keycloak directory access, in which case the field stays free text. */
+  keycloakGroups = signal<KeycloakGroupOption[]>([]);
 
   // ── Team queue priority (logos_admin only) ──────────────────────────────
   /** Team ids with a priority PATCH in flight, one entry per team so
@@ -90,6 +97,11 @@ export class TeamManagement implements OnInit {
 
   createValid = computed(() => this.createName().trim().length > 0);
 
+  /** Suggestions minus the groups another team already holds — the link is unique. */
+  availableKeycloakGroups = computed(() =>
+    this.keycloakGroups().filter((g) => g.linked_team_id === null),
+  );
+
   constructor() {
     effect(() => {
       if (this.canCreateTeam() && this.adminUsers().length === 0) {
@@ -116,6 +128,16 @@ export class TeamManagement implements OnInit {
     }
   }
 
+  /** Group suggestions for the create dialog; silently stays free text on failure. */
+  async fetchKeycloakGroups(): Promise<void> {
+    try {
+      const directory = await this.teamService.getKeycloakGroups();
+      this.keycloakGroups.set(directory.available ? directory.groups : []);
+    } catch {
+      this.keycloakGroups.set([]);
+    }
+  }
+
   async fetchAdminUsers(): Promise<void> {
     try {
       const users = await this.teamService.getAdminUsers();
@@ -132,6 +154,13 @@ export class TeamManagement implements OnInit {
 
   displayName(u: AdminUser): string {
     return userDisplayName(u);
+  }
+
+  /** What the lock badge of a linked team explains on hover. */
+  managedTitle(team: Team): string {
+    return `Linked to the Keycloak group '${team.keycloak_group}'. Its members join on login and `
+      + 'leave again once they are out of the group; the team cannot be renamed or deleted while '
+      + 'the link is in place.';
   }
 
   formatLimit(value: number | null): string {
@@ -239,8 +268,10 @@ export class TeamManagement implements OnInit {
   openCreateDialog(): void {
     this.createName.set('');
     this.createOwnerIds.set([]);
+    this.createKeycloakGroup.set('');
     this.createError.set('');
     this.createOpen.set(true);
+    if (this.isLogosAdmin()) void this.fetchKeycloakGroups();
   }
 
   closeCreateDialog(): void {
@@ -253,14 +284,19 @@ export class TeamManagement implements OnInit {
     this.createLoading.set(true);
     this.createError.set('');
     try {
-      const team = await this.teamService.createTeam(this.createName().trim(), this.createOwnerIds());
+      const group = this.isLogosAdmin() ? this.createKeycloakGroup().trim() : '';
+      const team = await this.teamService.createTeam(
+        this.createName().trim(),
+        this.createOwnerIds(),
+        group || null,
+      );
       // Membership changes flip nav visibility (Shell), so sync our own user.
       const selfId = this.auth.currentUser()?.user_id;
       if (selfId !== undefined && this.createOwnerIds().includes(selfId)) void this.auth.refreshUser();
       this.createOpen.set(false);
       this.router.navigate(['/teams', team.id]);
-    } catch {
-      this.createError.set('Failed to create team, please try again.');
+    } catch (err) {
+      this.createError.set(errorDetail(err) ?? 'Failed to create team, please try again.');
     } finally {
       this.createLoading.set(false);
     }

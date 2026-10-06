@@ -71,9 +71,33 @@ Developers).
 
 ## Teams {#teams}
 
-Teams, their owners, and members.
+Teams, their owners, and members. A team whose membership comes from Keycloak
+carries a lock badge naming the group it is linked to.
 
 ![Teams page](/img/roles/logos-admin-team-management.png)
+
+### Linking a team to a Keycloak group {#keycloak-link}
+
+A team can draw its members from a Keycloak group (or realm role) instead of
+having them added by hand. Set the group in the **New Team** dialog, or later on
+the team's **Settings** tab; clearing the field removes the link. Only Logos
+Admins see the field — team owners manage members, not who the identity
+provider lets in.
+
+Once linked:
+
+- Everyone in the group joins the team on their next login and on the nightly
+  directory sync, and is removed again on the first login after they leave the
+  group. Those memberships cannot be added or removed on the **Members** tab.
+- One group feeds exactly one team, and the platform admin roles
+  (`KEYCLOAK_ROLES_LOGOS_ADMIN` / `KEYCLOAK_ROLES_APP_ADMIN`) cannot be linked —
+  they grant a role, not a team.
+- The team cannot be renamed or deleted while the link is in place. Remove the
+  link first; that also removes the members the group brought in.
+
+Where the deployment can read the realm (`logos.auth.sync.enabled=true`) the
+field suggests the realm's groups and roles; otherwise type the name as the
+login claim carries it (a group path without its leading `/`).
 
 Opening a team shows the same detail tabs as for an owning App Admin — see
 [App Admin → Teams](app-admin.md#teams) for Overview through Settings. Logos

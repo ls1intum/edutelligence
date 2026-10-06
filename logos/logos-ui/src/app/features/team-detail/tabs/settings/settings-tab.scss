@@ -78,6 +78,11 @@
   gap: 16px;
 }
 
+/** A hint that sits inside a card rather than above it. */
+.settings-hint--inline {
+  margin: -4px 0 12px;
+}
+
 // ── Save actions ────────────────────────────────────────────────────────────
 .settings-actions {
   display: flex;
