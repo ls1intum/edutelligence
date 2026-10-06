@@ -159,11 +159,12 @@ session's behaviour drift between builds.
 
 ## Web search
 
-Claude Code sessions receive the `mcp__logos-search__web_search` tool. It
-searches DuckDuckGo through `POST /v1/web-search` on the orchestrator, reached
-over the session's existing model gateway. The MCP process uses the harness
-already installed in the session image and Python's standard library.
-Search needs no Anthropic token or additional package in the session.
+Claude Code sessions get the `mcp__logos-search__web_search` tool instead of
+Claude Code's own `WebSearch`, which is disallowed: it runs on Anthropic's
+servers and cannot work through Logos. The tool is an MCP server the
+orchestrator serves at `POST /v1/web-search/mcp`, reached through the session
+gateway like model traffic, so the gateway adds the key and nothing runs or is
+installed in the session.
 
 The tool accepts `query` (1–500 characters) and `max_results` (1–10, default
 5), and returns titles, target URLs, and snippets. The orchestrator contacts
@@ -174,17 +175,10 @@ CIT proxy. Queries are sent to DuckDuckGo, so agents should avoid including
 credentials or private repository content in them. Search results are
 untrusted external data.
 
-This provides a self-hosted search integration, with DuckDuckGo supplying
-the index. It does not implement Anthropic's provider-native `WebSearch`
-tool. DuckDuckGo may rate limit or issue bot challenges; those return an
-explicit tool error. Empty results are reported separately. Search requests
-have bounded time, response size, and concurrency. They do not consume a
-model slot or produce model usage charges.
-
-Verify with `pytest tests/test_search_mcp.py` in `logos-agent/` and
-`pytest tests/unit/test_web_search.py` in `logos-orchestrator/`. In a session,
-ask the agent to search for Python asyncio documentation and check that the
-transcript shows `mcp__logos-search__web_search` and returns source URLs.
+DuckDuckGo may rate limit or issue bot challenges; those return an explicit
+tool error. Empty results are reported separately. Search requests have
+bounded time, response size, and concurrency. They do not consume a model
+slot or produce model usage charges.
 
 ## What a session may and may not do
 

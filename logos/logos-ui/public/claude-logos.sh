@@ -12,6 +12,10 @@
 #   claude-logos --check              show the connection, the model (if pinned) and
 #                                     how much context this session would get, then exit
 #
+# Web search works without an Anthropic account: the session gets a
+# mcp__logos-search__web_search tool that searches DuckDuckGo through Logos.
+# LOGOS_WEB_SEARCH=0 leaves it out.
+#
 # LOGOS_MODEL is optional. When set, every Claude Code model slot is pinned to it
 # (previous behaviour). When unset, Claude Code discovers Logos models via
 # GET /v1/models (Anthropic shape) and can switch with /model.
@@ -38,7 +42,7 @@ set -euo pipefail
 # version string: the comparison is a single `-gt` that cannot misread anything,
 # where sorting "1.10" against "1.9" needs care to get right. The date is here for
 # people; only the number is compared.
-CLAUDE_LOGOS_VERSION=5          # 2026-10-02
+CLAUDE_LOGOS_VERSION=6          # 2026-10-06
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -49,6 +53,7 @@ INSTALL_PATH="${LOGOS_INSTALL_PATH:-$HOME/.local/bin/claude-logos}"
 # paths rather than next to the code that uses them: --uninstall runs before that
 # code is reached, and under `set -u` an undeclared name is a hard error.
 KNOWN_MODELS_FILE="$CONFIG_DIR/known-models"
+MCP_CONFIG_FILE="$CONFIG_DIR/mcp.json"
 VERSION_STATE_FILE="$CONFIG_DIR/latest-revision"
 
 # ── Settings, lowest precedence first ───────────────────────────────────────────
@@ -120,6 +125,13 @@ LOGOS_CONTEXT_HEADROOM="${LOGOS_CONTEXT_HEADROOM:-}"
 # override what lands in output_config (measured — requests still carried "high" with it
 # set). Set LOGOS_EFFORT= (empty) to opt out once Logos accepts "high".
 LOGOS_EFFORT="${LOGOS_EFFORT:-xhigh}"
+
+# Claude Code's own WebSearch runs on Anthropic's servers and cannot work through
+# Logos (see the settings layer in --install), so the session gets Logos' search
+# instead: an MCP tool at $LOGOS_URL/v1/web-search/mcp. Queries go to DuckDuckGo
+# from the Logos server, never from this machine. Set LOGOS_WEB_SEARCH=0 to leave
+# the tool out.
+LOGOS_WEB_SEARCH="${LOGOS_WEB_SEARCH:-1}"
 
 die() { printf 'claude-logos: %s\n' "$1" >&2; exit "${2:-1}"; }
 note() { printf 'claude-logos: %s\n' "$1" >&2; }
@@ -261,7 +273,8 @@ logos_install() {
   # sends a request whose tools array holds {"type":"web_search_20250305"} with no
   # input_schema. vLLM on the Logos worker nodes requires input_schema on every tool
   # and rejects that with 400, which Claude Code then retries in a loop. Denying the
-  # tool keeps it out of the request entirely. A separate settings layer rather than
+  # tool keeps it out of the request entirely; Logos' own search takes its place
+  # (see LOGOS_WEB_SEARCH). A separate settings layer rather than
   # --disallowedTools, so it does not clash with that flag when you pass it yourself,
   # and a separate FILE so ~/.claude/settings.json stays untouched.
   cat > "$SETTINGS_FILE_DEFAULT" <<'SETTINGS'
@@ -380,7 +393,7 @@ PY
   fi
 
   for path in "$LOGOS_KEY_FILE" "$SETTINGS_FILE_DEFAULT" "$CONFIG_FILE" \
-    "$KNOWN_MODELS_FILE" "$VERSION_STATE_FILE"; do
+    "$KNOWN_MODELS_FILE" "$VERSION_STATE_FILE" "$MCP_CONFIG_FILE"; do
     if [[ -e "$path" ]]; then
       rm -f "$path"
       printf '  removed %s\n' "$path"
@@ -810,6 +823,11 @@ if [[ "${1:-}" == "--check" ]]; then
   context_report
   printf 'key      : %s (%s chars)\n' "$LOGOS_KEY_FILE" "${#LOGOS_KEY}"
   printf 'effort   : %s\n' "${LOGOS_EFFORT:-<not set by this wrapper>}"
+  if [[ "$LOGOS_WEB_SEARCH" == "0" ]]; then
+    printf 'search   : off (LOGOS_WEB_SEARCH=0)\n'
+  else
+    printf 'search   : mcp__logos-search__web_search → %s/v1/web-search/mcp (DuckDuckGo)\n' "$LOGOS_URL"
+  fi
   report_new_models "$(model_ids_probe)"
   report_new_revision
   refresh_latest_revision
@@ -850,6 +868,30 @@ if [[ -n "$LOGOS_SETTINGS" && -r "$LOGOS_SETTINGS" ]]; then
   settings_args=(--settings "$LOGOS_SETTINGS")
 fi
 
+# Written on every start rather than at --install, so an --update or a changed
+# LOGOS_URL takes effect without a re-setup. The key goes into the file itself,
+# with the key file's permissions: Claude Code expands ${ANTHROPIC_AUTH_TOKEN} in
+# an MCP config to an empty string, and exporting the key under another name
+# would hand it to every command the session runs. A file rather than inline
+# JSON so the key stays out of the process list.
+json_string() {
+  local value="${1//\\/\\\\}"
+  printf '%s' "${value//\"/\\\"}"
+}
+mcp_args=()
+if [[ "$LOGOS_WEB_SEARCH" != "0" ]]; then
+  # Removed first: umask only applies to a file being created, and a copy left
+  # behind with wider permissions would keep them.
+  if ( umask 177
+       rm -f "$MCP_CONFIG_FILE"
+       printf '{"mcpServers":{"logos-search":{"type":"http","url":"%s/v1/web-search/mcp","headers":{"Authorization":"Bearer %s"}}}}\n' \
+         "$(json_string "$LOGOS_URL")" "$(json_string "$LOGOS_KEY")" > "$MCP_CONFIG_FILE" ) 2>/dev/null; then
+    mcp_args=(--mcp-config "$MCP_CONFIG_FILE")
+  else
+    note "could not write $MCP_CONFIG_FILE — starting without web search"
+  fi
+fi
+
 # Skip our default when an --effort was passed on the command line, so it stays
 # overridable per invocation instead of being silently doubled up.
 effort_args=()
@@ -865,4 +907,5 @@ fi
 # bash macOS still ships, and either array is routinely empty — no readable
 # settings file, or an --effort passed on the command line — so the plain form
 # refused to start a session on a stock Mac.
-exec claude ${settings_args[@]+"${settings_args[@]}"} ${effort_args[@]+"${effort_args[@]}"} "$@"
+exec claude ${settings_args[@]+"${settings_args[@]}"} ${effort_args[@]+"${effort_args[@]}"} \
+  ${mcp_args[@]+"${mcp_args[@]}"} "$@"

@@ -24,7 +24,7 @@ from logos.jobs.job_service import JobService
 from logos.logosnode_snapshot import _resolve_requested_model_name, claude_visible_id
 from logos.main import _model_context_fields, _served_context_window_stats, handle_sync_request, submit_job_request
 from logos.responses import get_client_ip
-from logos.web_search import SearchUnavailable, search_web
+from logos.web_search import SearchUnavailable, mcp_response, search_web
 
 logger = logging.getLogger("LogosLogger")
 
@@ -496,6 +496,32 @@ async def web_search(body: WebSearchRequest, request: Request):
     except SearchUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"query": body.query, "source": "DuckDuckGo", "results": results}
+
+
+@router.post("/v1/web-search/mcp", tags=["user-facing"])
+async def web_search_mcp(request: Request):
+    """The same search as an MCP tool (Streamable HTTP, JSON responses only).
+
+    claude-logos and the agent harness hand Claude Code this URL with
+    --mcp-config, so a session gets search without running anything locally.
+    """
+    authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
+    try:
+        message = await request.json()
+    except ValueError:
+        return JSONResponse(
+            {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}, status_code=400
+        )
+    reply = await mcp_response(message)
+    if reply is None:
+        return Response(status_code=202)
+    return JSONResponse(reply)
+
+
+@router.get("/v1/web-search/mcp", tags=["user-facing"])
+async def web_search_mcp_stream():
+    """No server-initiated messages, so no SSE stream; the transport allows a 405."""
+    return Response(status_code=405, headers={"Allow": "POST"})
 
 
 @router.post("/v1/{path:path}", tags=["user-facing"])

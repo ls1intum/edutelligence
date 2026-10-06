@@ -187,6 +187,18 @@ It also does two things with the listing it already has in hand:
   printed. The first run records the baseline silently rather than announcing
   everything as new.
 
+**Web search.** Claude Code's own `WebSearch` is a server-side Anthropic tool that
+vLLM rejects, so the wrapper's settings layer denies it. In its place each session
+gets `mcp__logos-search__web_search`, served by the orchestrator at
+`POST /v1/web-search/mcp` (MCP over Streamable HTTP, same key as the model
+traffic). The orchestrator queries DuckDuckGo itself, through the server's proxy
+settings, and returns titles, URLs and snippets; result pages are never fetched
+and nothing is searched from the developer's machine. The wrapper writes the MCP
+config to `~/.config/claude-logos/mcp.json` (mode 600, it holds the key — Claude
+Code expands `${ANTHROPIC_AUTH_TOKEN}` there to nothing) on every start and passes
+it with `--mcp-config`. `LOGOS_WEB_SEARCH=0` leaves the tool out. Agent sessions
+(`logos-agent`) get the same endpoint through their gateway.
+
 `LOGOS_CONTEXT_SOURCE` picks which figure to size the session from: `available`
 (default, `max_model_len_current_max`), `guaranteed`
 (`max_model_len_current_min`) or `max` (`max_model_len_overall`).

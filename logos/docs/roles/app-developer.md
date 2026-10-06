@@ -74,7 +74,8 @@ it). Tabs cover macOS, Linux, and Windows.
 
 Generated commands that wire the tool to this Logos deployment — for Claude
 Code that is the `claude-logos` wrapper (your plain `claude` Anthropic setup
-is left alone).
+is left alone). Sessions started with it can search the web: Logos runs the
+search on DuckDuckGo for them, no Anthropic account needed.
 
 ![AI Tools — connect](/img/roles/ai-tools-step-connect.png)
 
