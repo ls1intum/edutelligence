@@ -395,41 +395,34 @@ def test_launch_survives_an_empty_settings_and_effort_argument_list(gateway, tmp
     assert invocation["argv"].count("--effort") == 1
 
 
-def test_launch_hands_claude_code_the_logos_web_search(gateway, tmp_path, fake_claude):
-    """Search reaches the session as an MCP server on Logos, with the session's key."""
+def test_launch_lifts_the_old_websearch_deny(gateway, tmp_path, fake_claude):
+    """Revisions before 6 denied WebSearch; Logos answers it now, so that layer goes."""
     record = tmp_path / "record.json"
-    result = _run(_env(gateway, tmp_path, fake_claude_dir=fake_claude, record=record), "-p", "hi")
-    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    env = _env(gateway, tmp_path, fake_claude_dir=fake_claude, record=record)
+    settings = tmp_path / "config" / "settings.json"
+    settings.write_text('{\n  "permissions": {\n    "deny": ["WebSearch"]\n  }\n}\n')
 
-    argv = json.loads(record.read_text())["argv"]
-    mcp_config = Path(argv[argv.index("--mcp-config") + 1])
-    server = json.loads(mcp_config.read_text())["mcpServers"]["logos-search"]
-    assert server["type"] == "http"
-    assert server["url"] == f"{gateway.url}/v1/web-search/mcp"
-    # Claude Code expands ${ANTHROPIC_AUTH_TOKEN} in an MCP config to nothing,
-    # so the key is written out — readable by its owner only, like the key file.
-    assert server["headers"]["Authorization"] == "Bearer lg-stub-key"
-    assert mcp_config.stat().st_mode & 0o777 == 0o600
-    assert argv[-2:] == ["-p", "hi"]
-
-
-def test_web_search_config_does_not_keep_wider_permissions(gateway, tmp_path, fake_claude):
-    stale = tmp_path / "config" / "mcp.json"
-    stale.parent.mkdir()
-    stale.write_text("{}")
-    stale.chmod(0o644)
-    record = tmp_path / "record.json"
-    result = _run(_env(gateway, tmp_path, fake_claude_dir=fake_claude, record=record), "-p", "hi")
-    assert result.returncode == 0, result.stderr
-    assert stale.stat().st_mode & 0o777 == 0o600
-
-
-def test_web_search_can_be_left_out(gateway, tmp_path, fake_claude):
-    record = tmp_path / "record.json"
-    env = _env(gateway, tmp_path, fake_claude_dir=fake_claude, record=record, LOGOS_WEB_SEARCH="0")
     result = _run(env, "-p", "hi")
     assert result.returncode == 0, result.stderr
-    assert "--mcp-config" not in json.loads(record.read_text())["argv"]
+    assert not settings.exists()
+    assert "--settings" not in json.loads(record.read_text())["argv"]
+
+
+def test_launch_lifts_only_the_websearch_deny(gateway, tmp_path, fake_claude):
+    """Whatever else the user put into the wrapper's layer stays, and is still passed."""
+    record = tmp_path / "record.json"
+    env = _env(gateway, tmp_path, fake_claude_dir=fake_claude, record=record)
+    settings = tmp_path / "config" / "settings.json"
+    settings.write_text('{"permissions": {"defaultMode": "bypassPermissions", "deny": ["WebSearch", "Bash(rm:*)"]}}')
+
+    result = _run(env, "-p", "hi")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(settings.read_text()) == {
+        "permissions": {"defaultMode": "bypassPermissions", "deny": ["Bash(rm:*)"]}
+    }
+    assert settings.stat().st_mode & 0o777 == 0o600
+    argv = json.loads(record.read_text())["argv"]
+    assert argv[argv.index("--settings") + 1] == str(settings)
 
 
 def test_wrapper_guards_every_array_expansion(tmp_path):

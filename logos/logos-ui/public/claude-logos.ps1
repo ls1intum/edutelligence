@@ -18,14 +18,13 @@
     claude-logos -Update             replace this wrapper with the current one
     claude-logos -Uninstall          remove the wrapper, its config and its key
 
-  Web search works without an Anthropic account: the session gets a
-  mcp__logos-search__web_search tool that searches DuckDuckGo through Logos.
-  Set LOGOS_WEB_SEARCH=0 to leave it out.
+  WebSearch works as in plain `claude`: Logos runs the searches itself, on
+  DuckDuckGo, so no Anthropic account is involved.
 
   NOTHING OUTSIDE THIS WRAPPER IS TOUCHED. The Logos credential, base URL and model are
   set on this process only - never with [Environment]::SetEnvironmentVariable at User or
-  Machine scope - and the extra Claude Code settings live in this wrapper's own folder
-  and are handed over with --settings. Your PowerShell profile,
+  Machine scope - and extra Claude Code settings, if any, live in this wrapper's own
+  folder and are handed over with --settings. Your PowerShell profile,
   %USERPROFILE%\.claude\settings.json and your claude.ai login are left exactly as they
   are, so plain `claude` keeps using your Anthropic subscription.
 
@@ -64,7 +63,6 @@ $KeyFile = Join-Path $ConfigDir 'key'
 $SettingsFile = Join-Path $ConfigDir 'settings.json'
 $KnownModelsFile = Join-Path $ConfigDir 'known-models'
 $VersionStateFile = Join-Path $ConfigDir 'latest-revision'
-$McpConfigFile = Join-Path $ConfigDir 'mcp.json'
 $InstallDir = if ($env:LOGOS_INSTALL_DIR) { $env:LOGOS_INSTALL_DIR }
               else { Join-Path $env:LOCALAPPDATA 'Programs\claude-logos' }
 $InstallPath = Join-Path $InstallDir 'claude-logos.ps1'
@@ -115,13 +113,6 @@ $MaxOutputTokens = [int](Get-Setting 'LOGOS_MAX_OUTPUT_TOKENS' 20000)
 # so a session left on high fails on every turn. xhigh is its default and the closest
 # match. Set LOGOS_EFFORT to an empty string to opt out.
 $Effort = Get-Setting 'LOGOS_EFFORT' 'xhigh'
-
-# Claude Code's own WebSearch runs on Anthropic's servers and cannot work through
-# Logos (see the settings file in -Install), so the session gets Logos' search
-# instead: an MCP tool at $LogosUrl/v1/web-search/mcp. Queries go to DuckDuckGo
-# from the Logos server, never from this machine. Set LOGOS_WEB_SEARCH=0 to leave
-# the tool out.
-$WebSearch = (Get-Setting 'LOGOS_WEB_SEARCH' '1') -ne '0'
 
 # -- Revision check --------------------------------------------------------------
 # Logos serves the current wrapper at the same URL this copy came from, so the
@@ -249,20 +240,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0claude-logos.ps1" %*
     if ($model) { $configLines += "LOGOS_MODEL=$model" }
     Set-Content -LiteralPath $ConfigFile -Value $configLines -Encoding UTF8
 
-    # WebSearch is a server-side Anthropic tool: Claude Code sends it as a tool with no
-    # input_schema, which vLLM on the Logos worker nodes rejects with 400 and Claude
-    # Code then retries in a loop. Denying it keeps it out of the request; Logos' own
-    # search takes its place (see LOGOS_WEB_SEARCH). A separate
-    # settings FILE, so %USERPROFILE%\.claude\settings.json stays untouched.
-    '{ "permissions": { "deny": ["WebSearch"] } }' |
-        Set-Content -LiteralPath $SettingsFile -Encoding UTF8
-
     Write-Host 'Installed:'
     Write-Host "  $ShimPath"
     Write-Host "  $InstallPath"
     Write-Host "  $KeyFile (key, readable by you only)"
     Write-Host "  $ConfigFile"
-    Write-Host "  $SettingsFile"
     Write-Host ''
     Write-Host 'Nothing else on this machine was modified - plain `claude` still uses your'
     Write-Host 'Anthropic subscription.'
@@ -352,7 +334,7 @@ function Invoke-LogosUninstall {
     }
 
     foreach ($path in @($KeyFile, $SettingsFile, $ConfigFile, $KnownModelsFile,
-                        $VersionStateFile, $McpConfigFile, $ShimPath, $InstallPath)) {
+                        $VersionStateFile, $ShimPath, $InstallPath)) {
         if (Test-Path -LiteralPath $path) {
             Remove-Item -LiteralPath $path -Force
             Write-Host "  removed $path"
@@ -620,11 +602,7 @@ if ($Check) {
     Write-ContextReport
     Write-Host ("key      : {0} ({1} chars)" -f $KeyFile, $LogosKey.Length)
     Write-Host ("effort   : {0}" -f $(if ($Effort) { $Effort } else { '<not set by this wrapper>' }))
-    if ($WebSearch) {
-        Write-Host ("search   : mcp__logos-search__web_search -> {0}/v1/web-search/mcp (DuckDuckGo)" -f $LogosUrl)
-    } else {
-        Write-Host 'search   : off (LOGOS_WEB_SEARCH=0)'
-    }
+    Write-Host 'search   : WebSearch, answered by Logos with DuckDuckGo results'
     Report-NewModels $AllModelIds
     Report-NewRevision
     Update-CachedRevision
@@ -660,27 +638,31 @@ Report-NewRevision
 Update-CachedRevision
 Write-Host ''
 
-$passThrough = @()
-if (Test-Path -LiteralPath $SettingsFile) { $passThrough += @('--settings', $SettingsFile) }
-# Written on every start rather than at -Install, so an -Update or a changed
-# LOGOS_URL takes effect without a re-setup. The key goes into the file itself,
-# readable by you only like the key file: Claude Code expands
-# ${ANTHROPIC_AUTH_TOKEN} in an MCP config to an empty string, and setting the key
-# under another name would hand it to every command the session runs. A file
-# rather than inline JSON keeps the key out of the process list, and Windows
-# PowerShell 5.1 mangles quotes in arguments to native programs anyway.
-if ($WebSearch) {
-    $mcpJson = '{"mcpServers":{"logos-search":{"type":"http","url":' +
-               ("$LogosUrl/v1/web-search/mcp" | ConvertTo-Json) +
-               ',"headers":{"Authorization":' + ("Bearer $LogosKey" | ConvertTo-Json) + '}}}}'
+# Revisions before 6 wrote a settings file denying WebSearch: the tool sent a request
+# vLLM rejects. Logos answers that request itself now, so the deny is lifted from
+# this wrapper's own file on every start; whatever else is in it stays, and a file
+# left empty goes. Keep WebSearch off for a run with --disallowedTools WebSearch.
+if (Test-Path -LiteralPath $SettingsFile) {
     try {
-        Set-Content -LiteralPath $McpConfigFile -Value $mcpJson -Encoding ASCII
-        Protect-UserOnly $McpConfigFile
-        $passThrough += @('--mcp-config', $McpConfigFile)
+        $cfg = Get-Content -Raw -LiteralPath $SettingsFile | ConvertFrom-Json
+        if ($cfg.permissions -and (@($cfg.permissions.deny) -contains 'WebSearch')) {
+            $kept = @($cfg.permissions.deny | Where-Object { $_ -ne 'WebSearch' })
+            if ($kept.Count) { $cfg.permissions.deny = $kept }
+            else { $cfg.permissions.PSObject.Properties.Remove('deny') }
+            if (-not @($cfg.permissions.PSObject.Properties).Count) { $cfg.PSObject.Properties.Remove('permissions') }
+            if (@($cfg.PSObject.Properties).Count) {
+                $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
+            } else {
+                Remove-Item -LiteralPath $SettingsFile -Force
+            }
+        }
     } catch {
-        Write-Note "could not write $McpConfigFile - starting without web search"
+        Write-Note "could not lift the WebSearch deny in $SettingsFile ($($_.Exception.Message))"
     }
 }
+
+$passThrough = @()
+if (Test-Path -LiteralPath $SettingsFile) { $passThrough += @('--settings', $SettingsFile) }
 $forwarded = @($ClaudeArgs | Where-Object { $null -ne $_ })
 # Skip our default when an --effort was passed on the command line, so it stays
 # overridable per invocation instead of being silently doubled up.

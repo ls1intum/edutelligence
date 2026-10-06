@@ -159,26 +159,17 @@ session's behaviour drift between builds.
 
 ## Web search
 
-Claude Code sessions get the `mcp__logos-search__web_search` tool instead of
-Claude Code's own `WebSearch`, which is disallowed: it runs on Anthropic's
-servers and cannot work through Logos. The tool is an MCP server the
-orchestrator serves at `POST /v1/web-search/mcp`, reached through the session
-gateway like model traffic, so the gateway adds the key and nothing runs or is
-installed in the session.
+Claude Code's own `WebSearch` works in sessions. It is a server-side tool:
+Claude Code asks the API to run the searches, and the orchestrator does,
+on DuckDuckGo (see "Web search" in `docs/context-windows.md`). The request
+reaches it through the session gateway like any model call, so nothing is
+installed or configured in the session.
 
-The tool accepts `query` (1–500 characters) and `max_results` (1–10, default
-5), and returns titles, target URLs, and snippets. The orchestrator contacts
-only DuckDuckGo's HTML search endpoint; it does not fetch result pages.
-Search traffic leaves from the orchestrator, which honors the standard
+Searches leave from the orchestrator, which honors the standard
 `HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` environment variables for a server or
-CIT proxy. Queries are sent to DuckDuckGo, so agents should avoid including
-credentials or private repository content in them. Search results are
-untrusted external data.
-
-DuckDuckGo may rate limit or issue bot challenges; those return an explicit
-tool error. Empty results are reported separately. Search requests have
-bounded time, response size, and concurrency. They do not consume a model
-slot or produce model usage charges.
+CIT proxy, and result pages are never fetched. Queries are sent to
+DuckDuckGo, so agents should avoid putting credentials or private repository
+content in them. Search results are untrusted external data.
 
 ## What a session may and may not do
 

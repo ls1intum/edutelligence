@@ -473,13 +473,10 @@
           <code class="inline-code">{{ modelOverrideExample() }}</code>.
         </p>
         <p class="tab-note">
-          Web search works without an Anthropic account: sessions get a
-          <code class="inline-code">web_search</code> tool that Logos answers with DuckDuckGo
-          results, so searches leave from Logos rather than your machine. Keep credentials
-          and private code out of search queries. Set
-          <code class="inline-code">LOGOS_WEB_SEARCH=0</code> to turn it off.
-        </p>
-      } @else if (ready()) {
+          Web search works too, without an Anthropic account: Logos runs the searches on
+          DuckDuckGo, so they leave from Logos rather than your machine. Keep credentials and
+          private code out of what you ask it to search for.
+        </p>      } @else if (ready()) {
         <!-- ── OpenCode: add the provider ───────────────────────────────────── -->
         <div class="privacy-callout" role="note">
           <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
@@ -582,7 +579,7 @@
         <p class="substep-label">Check the connection</p>
         <p class="apply-hint">
           Prints the gateway, the key it found, the context window this deployment currently
-          serves and whether web search is on:
+          serves and how web search is answered:
         </p>
         <div class="terminal-block">
           <span class="terminal-prefix" aria-hidden="true">{{ shellPrompt() }}</span>

@@ -722,10 +722,6 @@ _MAX_CONTINUATIONS = 3
 _MAX_PAUSED_CONTINUATIONS = 60
 
 
-def _web_search_url() -> str:
-    return os.environ.get("ANTHROPIC_BASE_URL", "").rstrip("/") + "/v1/web-search/mcp"
-
-
 def _agent_command(prompt: str, *, resuming: bool) -> list[str]:
     cmd = [
         "claude",
@@ -738,14 +734,6 @@ def _agent_command(prompt: str, *, resuming: bool) -> list[str]:
         # no production access. Prompting would deadlock an unattended run.
         "--permission-mode",
         "bypassPermissions",
-        # Claude Code's own WebSearch runs on Anthropic's servers; through Logos
-        # the request is refused and retried in a loop. Logos' search takes its
-        # place, served by the orchestrator as an MCP tool behind the same
-        # gateway, which adds the key — so this config carries none.
-        "--disallowedTools",
-        "WebSearch",
-        "--mcp-config",
-        json.dumps({"mcpServers": {"logos-search": {"type": "http", "url": _web_search_url()}}}),
     ]
     if resuming:
         # Same conversation, same working directory: the agent keeps what it
@@ -1029,7 +1017,7 @@ def _tool_detail(name: str, args: dict) -> str:
         return f"{pattern} in {where}" if where else pattern
     if name == "Glob":
         return _one_line(args.get("pattern"))
-    if name in ("WebFetch", "WebSearch", "mcp__logos-search__web_search"):
+    if name in ("WebFetch", "WebSearch"):
         return _one_line(args.get("url") or args.get("query"))
     if name == "Task":
         return _one_line(args.get("description") or args.get("subagent_type"))
