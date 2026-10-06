@@ -77,7 +77,13 @@ from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.latency_store import LatencyStore
-from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, queue_role_rank
+from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, effective_queue_role_rank
+from logos.pipeline.request_sla import (
+    VALID_SLAS,
+    parse_request_sla_header,
+    parse_workflow_tag_header,
+    sla_to_priority,
+)
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
     force_non_streaming_payload,
@@ -3123,6 +3129,17 @@ async def _execute_resource_mode(
     # Extract policy
     policy = _extract_policy(headers, auth.key_value, body)
 
+    # Per-request SLA header wins; else elevate from the workflow-tag step SLA
+    # resolved during auth_parse_log. Unset leaves the key's default_priority.
+    header_sla = parse_request_sla_header(headers)
+    tag_sla = auth.tag_sla if getattr(auth, "tag_sla", None) in VALID_SLAS else None
+    if header_sla:
+        default_priority = sla_to_priority(header_sla)
+    elif tag_sla:
+        default_priority = sla_to_priority(tag_sla)
+    else:
+        default_priority = auth.default_priority
+
     # Create Pipeline Request
     pipeline_req = PipelineRequest(
         payload=body,
@@ -3135,10 +3152,11 @@ async def _execute_resource_mode(
         request_path=request_path,
         required_provider_id=required_provider_id,
         # The key owner's queue priority; 0 falls back to the team's, then
-        # the policy-level priority inside the pipeline.
-        default_priority=auth.default_priority,
+        # the policy-level priority inside the pipeline. Elevated when a
+        # per-request or workflow-tag SLA is present.
+        default_priority=default_priority,
         team_priority=auth.team_priority,
-        role_rank=queue_role_rank(auth.key_type, auth.user_role),
+        role_rank=effective_queue_role_rank(auth.key_type, auth.user_role, auth.admin_queue_rank),
         api_key_id=auth.api_key_id,
     )
 
@@ -4323,6 +4341,34 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
 
         deployment_cache = refcache.get_ref_cache()
         cached_deployments = deployment_cache.get(("deployments", auth.api_key_id))
+
+        # Request attribution: X-Logos-SLA and/or X-Logos-Workflow-Tag.
+        header_sla = parse_request_sla_header(headers)
+        workflow_tag = parse_workflow_tag_header(headers)
+        workflow_id = None
+        workflow_step_id = None
+        tag_sla = None
+        if workflow_tag:
+            try:
+                with DBManager() as tag_db:
+                    tag_info = tag_db.lookup_workflow_tag(workflow_tag)
+            except Exception:
+                logger.exception("Failed to look up workflow tag %r", workflow_tag)
+                tag_info = None
+            # Only accept a match from the caller's own team so a guessed tag
+            # cannot escalate another team's SLA onto this key.
+            if tag_info and tag_info.get("team_id") == auth.team_id:
+                workflow_id = tag_info.get("workflow_id")
+                workflow_step_id = tag_info.get("step_id")
+                looked_up_sla = tag_info.get("sla")
+                tag_sla = looked_up_sla if looked_up_sla in VALID_SLAS else None
+        request_sla = header_sla or tag_sla
+        auth.request_sla = request_sla
+        auth.workflow_tag = workflow_tag
+        auth.workflow_id = workflow_id
+        auth.workflow_step_id = workflow_step_id
+        auth.tag_sla = tag_sla
+
         log_fields = {
             "api_key_id": auth.api_key_id,
             "team_id": auth.team_id,
@@ -4334,6 +4380,10 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
             "headers": sanitized_headers_for_persistence(headers),
             "request_id": request_id,
             "timeout_s": body.get("timeout_s"),
+            "workflow_tag": workflow_tag,
+            "workflow_id": workflow_id,
+            "workflow_step_id": workflow_step_id,
+            "request_sla": request_sla,
         }
         can_defer_log = (
             cached_deployments is not refcache._MISSING

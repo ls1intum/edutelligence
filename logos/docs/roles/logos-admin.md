@@ -71,9 +71,17 @@ Developers).
 
 ## Teams {#teams}
 
-Teams, their owners, and members.
+Teams, their owners, and members. Each team's **Priority** column sets the
+queue level of that team's traffic (1–10, or Default).
 
 ![Teams page](/img/roles/logos-admin-team-management.png)
+
+Below the team list, Logos Admins also see **Queue order**: an ordered ranking
+of application keys across teams. Rank 1 is served first when SLA / priority
+buckets tie — for example so `testapp1-prod` outranks `testapp2-prod` while
+`testapp1-staging` stays below `testapp2-test`. Move keys up or down, remove
+them from the ranking, or add an unranked application key from any team. Keys
+not in the list keep their usual team and per-key priority only.
 
 Opening a team shows the same detail tabs as for an owning App Admin — see
 [App Admin → Teams](app-admin.md#teams) for Overview through Settings. Logos

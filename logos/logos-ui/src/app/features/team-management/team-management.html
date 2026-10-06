@@ -119,6 +119,129 @@
       </div>
     }
   </app-data-table>
+
+  @if (isLogosAdmin()) {
+    <section class="queue-order-section" aria-labelledby="queue-order-heading">
+      <div class="queue-order-header">
+        <h2 id="queue-order-heading" class="queue-order-title">Queue order</h2>
+        <button
+          type="button"
+          class="btn-secondary"
+          (click)="loadQueueOrder()"
+          [disabled]="queueLoading()"
+        >
+          <i
+            class="pi"
+            [class.pi-spin]="queueLoading()"
+            [class.pi-spinner]="queueLoading()"
+            [class.pi-refresh]="!queueLoading()"
+            aria-hidden="true"
+          ></i>
+          Refresh
+        </button>
+      </div>
+      <p class="queue-order-hint">
+        Ordered ranking of application keys across teams. Rank 1 is served
+        first when SLA / priority buckets tie. Keys not listed keep their
+        usual team and per-key priority only.
+      </p>
+
+      @if (queueError()) {
+        <app-error-message variant="banner" [message]="queueError()" />
+      }
+
+      @if (queueLoading() && queueRanks().length === 0) {
+        <div class="queue-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+          Loading queue order…
+        </div>
+      } @else {
+        @if (queueRanks().length === 0) {
+          <p class="queue-empty">No application keys ranked yet. Add one below.</p>
+        } @else {
+          <ul class="queue-rank-list">
+            @for (entry of queueRanks(); track entry.api_key_id; let i = $index) {
+              <li class="queue-rank-row">
+                <span class="queue-rank-num" title="Rank">{{ entry.rank }}</span>
+                <div class="queue-rank-info">
+                  <span class="queue-rank-name">{{ entry.key_name }}</span>
+                  <span class="queue-rank-meta">
+                    {{ entry.team_name ?? '—' }}
+                    @if (entry.environment) {
+                      · {{ entry.environment }}
+                    }
+                    @if (entry.default_priority != null) {
+                      · priority {{ entry.default_priority }}
+                    }
+                  </span>
+                </div>
+                <div class="queue-rank-actions">
+                  <button
+                    type="button"
+                    class="btn-icon"
+                    [disabled]="i === 0 || queueSaving()"
+                    [attr.aria-label]="'Move ' + entry.key_name + ' up'"
+                    (click)="moveQueueRank(i, -1)"
+                  >
+                    <i class="pi pi-arrow-up" aria-hidden="true"></i>
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-icon"
+                    [disabled]="i === queueRanks().length - 1 || queueSaving()"
+                    [attr.aria-label]="'Move ' + entry.key_name + ' down'"
+                    (click)="moveQueueRank(i, 1)"
+                  >
+                    <i class="pi pi-arrow-down" aria-hidden="true"></i>
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-icon btn-icon--danger"
+                    [disabled]="queueSaving()"
+                    [attr.aria-label]="'Remove ' + entry.key_name + ' from queue order'"
+                    (click)="removeQueueRank(entry.api_key_id)"
+                  >
+                    <i class="pi pi-times" aria-hidden="true"></i>
+                  </button>
+                </div>
+              </li>
+            }
+          </ul>
+        }
+
+        <div class="queue-add">
+          <label class="field-label" for="queue-add-key">Add application key</label>
+          <div class="queue-add-row">
+            <select
+              id="queue-add-key"
+              class="field-input queue-add-select"
+              [ngModel]="queueAddKeyId()"
+              (ngModelChange)="queueAddKeyId.set($event === '' ? '' : +$event)"
+              [disabled]="queueSaving() || unrankedKeys().length === 0"
+            >
+              <option value="">
+                {{ unrankedKeys().length === 0 ? 'All keys are ranked' : 'Select a key…' }}
+              </option>
+              @for (key of unrankedKeys(); track key.api_key_id) {
+                <option [value]="key.api_key_id">{{ queueKeyLabel(key) }}</option>
+              }
+            </select>
+            <button
+              type="button"
+              class="btn-primary"
+              [disabled]="queueAddKeyId() === '' || queueSaving()"
+              (click)="addQueueRank()"
+            >
+              @if (queueSaving()) {
+                <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+              }
+              Add
+            </button>
+          </div>
+        </div>
+      }
+    </section>
+  }
 </div>
 
 <!-- ── Delete Confirmation Dialog ──────────────────────────────────────── -->

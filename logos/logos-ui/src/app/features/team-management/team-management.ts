@@ -13,12 +13,27 @@ import { ModalFormComponent } from '../../shared/components/modal/modal-form/mod
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
-import { Team, AdminUser } from '../../shared/models/team.model';
+import {
+  ApplicationKeyQueueRankEntry,
+  Team,
+  AdminUser,
+  TeamApiKey,
+} from '../../shared/models/team.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { IconTileComponent } from '../../shared/components/icon-tile/icon-tile';
 import { userDisplayName, userMatchesQuery } from '../../shared/utils/user-display';
+
+/** Application key available to add to the cross-team queue order. */
+interface QueueKeyOption {
+  api_key_id: number;
+  key_name: string;
+  team_id: number;
+  team_name: string;
+  environment?: string | null;
+  default_priority?: number | null;
+}
 
 @Component({
   selector: 'app-team-management',
@@ -69,6 +84,15 @@ export class TeamManagement implements OnInit {
   prioritySaving = signal<Set<number>>(new Set());
   priorityError = signal('');
 
+  // ── Application key queue order (logos_admin only) ─────────────────────
+  queueRanks = signal<ApplicationKeyQueueRankEntry[]>([]);
+  queueAllKeys = signal<QueueKeyOption[]>([]);
+  queueLoading = signal(false);
+  queueSaving = signal(false);
+  queueError = signal('');
+  queueAddKeyId = signal<number | ''>('');
+  private queueLoaded = false;
+
   // ── Computed ─────────────────────────────────────────────────────────────
   isLogosAdmin = computed(() => this.auth.currentUser()?.role === 'logos_admin');
   isAppAdmin = computed(() => this.auth.currentUser()?.role === 'app_admin');
@@ -90,10 +114,29 @@ export class TeamManagement implements OnInit {
 
   createValid = computed(() => this.createName().trim().length > 0);
 
+  rankedKeyIds = computed(() => new Set(this.queueRanks().map((r) => r.api_key_id)));
+
+  unrankedKeys = computed(() => {
+    const ranked = this.rankedKeyIds();
+    return this.queueAllKeys()
+      .filter((k) => !ranked.has(k.api_key_id))
+      .sort(
+        (a, b) =>
+          a.team_name.localeCompare(b.team_name) ||
+          a.key_name.localeCompare(b.key_name) ||
+          a.api_key_id - b.api_key_id,
+      );
+  });
+
   constructor() {
     effect(() => {
       if (this.canCreateTeam() && this.adminUsers().length === 0) {
         this.fetchAdminUsers();
+      }
+    });
+    effect(() => {
+      if (this.isLogosAdmin() && !this.queueLoaded && !this.queueLoading()) {
+        void this.loadQueueOrder();
       }
     });
   }
@@ -123,6 +166,50 @@ export class TeamManagement implements OnInit {
     } catch {
       // silently ignore
     }
+  }
+
+  async loadQueueOrder(): Promise<void> {
+    if (this.queueLoading()) return;
+    this.queueLoading.set(true);
+    this.queueError.set('');
+    try {
+      const [ranks, teams] = await Promise.all([
+        this.teamService.getApplicationKeyQueueRanks(),
+        this.teams().length > 0 ? Promise.resolve(this.teams()) : this.teamService.getTeams(),
+      ]);
+      if (this.teams().length === 0) this.teams.set(teams);
+      this.queueRanks.set(ranks);
+      const keyLists = await Promise.all(
+        teams.map(async (team) => {
+          try {
+            const keys = await this.teamService.getTeamApiKeys(team.id);
+            return keys
+              .filter((k) => (k.key_type ?? 'application') === 'application')
+              .map((k) => this.toQueueOption(k, team));
+          } catch {
+            return [] as QueueKeyOption[];
+          }
+        }),
+      );
+      this.queueAllKeys.set(keyLists.flat());
+    } catch {
+      this.queueError.set('Failed to load application key queue order.');
+    } finally {
+      // Mark attempted so the constructor effect does not retry in a loop.
+      this.queueLoaded = true;
+      this.queueLoading.set(false);
+    }
+  }
+
+  private toQueueOption(key: TeamApiKey, team: Team): QueueKeyOption {
+    return {
+      api_key_id: key.id,
+      key_name: key.name,
+      team_id: team.id,
+      team_name: team.name,
+      environment: key.environment,
+      default_priority: key.default_priority,
+    };
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -203,6 +290,50 @@ export class TeamManagement implements OnInit {
         return next;
       });
     }
+  }
+
+  // ── Application key queue order ─────────────────────────────────────────
+  async moveQueueRank(index: number, dir: -1 | 1): Promise<void> {
+    const list = [...this.queueRanks()];
+    const j = index + dir;
+    if (j < 0 || j >= list.length || this.queueSaving()) return;
+    [list[index], list[j]] = [list[j], list[index]];
+    await this.saveQueueOrder(list.map((r) => r.api_key_id));
+  }
+
+  async removeQueueRank(apiKeyId: number): Promise<void> {
+    if (this.queueSaving()) return;
+    const ids = this.queueRanks()
+      .filter((r) => r.api_key_id !== apiKeyId)
+      .map((r) => r.api_key_id);
+    await this.saveQueueOrder(ids);
+  }
+
+  async addQueueRank(): Promise<void> {
+    const id = this.queueAddKeyId();
+    if (id === '' || this.queueSaving()) return;
+    if (this.rankedKeyIds().has(id)) return;
+    await this.saveQueueOrder([...this.queueRanks().map((r) => r.api_key_id), id]);
+    this.queueAddKeyId.set('');
+  }
+
+  private async saveQueueOrder(apiKeyIds: number[]): Promise<void> {
+    this.queueSaving.set(true);
+    this.queueError.set('');
+    try {
+      const ranks = await this.teamService.replaceApplicationKeyQueueRanks(apiKeyIds);
+      this.queueRanks.set(ranks);
+    } catch {
+      this.queueError.set('Failed to update application key queue order.');
+    } finally {
+      this.queueSaving.set(false);
+    }
+  }
+
+  queueKeyLabel(entry: ApplicationKeyQueueRankEntry | QueueKeyOption): string {
+    const env = 'environment' in entry && entry.environment ? ` · ${entry.environment}` : '';
+    const team = entry.team_name ?? 'unknown team';
+    return `${entry.key_name}${env} (${team})`;
   }
 
   // ── Delete flow ───────────────────────────────────────────────────────────

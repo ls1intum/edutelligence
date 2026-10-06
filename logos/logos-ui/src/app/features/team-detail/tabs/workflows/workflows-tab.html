@@ -8,24 +8,37 @@
         </span>
       }
     </div>
-    <button type="button" class="btn-secondary" (click)="load()" [disabled]="loading()">
-      <i
-        class="pi"
-        [class.pi-spin]="loading()"
-        [class.pi-spinner]="loading()"
-        [class.pi-refresh]="!loading()"
-        aria-hidden="true"
-      ></i>
-      Refresh
-    </button>
+    <div class="section-header-actions">
+      <label class="filter-toggle">
+        <input
+          type="checkbox"
+          [checked]="showDeprecatedIgnored()"
+          (change)="showDeprecatedIgnored.set($any($event.target).checked)"
+        />
+        Show deprecated / ignored
+      </label>
+      <button type="button" class="btn-secondary" (click)="load()" [disabled]="loading()">
+        <i
+          class="pi"
+          [class.pi-spin]="loading()"
+          [class.pi-spinner]="loading()"
+          [class.pi-refresh]="!loading()"
+          aria-hidden="true"
+        ></i>
+        Refresh
+      </button>
+    </div>
   </div>
 
   <p class="section-hint">
     Activity diagrams plus SLA and objective-priority recommendations from the
-    latest succeeded analysis of each linked repository. Objective priority is
-    an ordered list of latency, quality, and price (most important first).
-    Confirmations can update an application key's queue priority;
-    recommendations never take effect until you review them.
+    latest succeeded analysis of each linked repository. Workflows can have
+    multiple steps with their own SLAs. Applications may send
+    <code>X-Logos-Workflow-Tag</code> to attribute a request to a workflow (or
+    step), and/or <code>X-Logos-SLA</code> to set the SLA per request.
+    Objective priority is an ordered list of latency, quality, and price
+    (most important first). Confirmations can update an application key's
+    queue priority; recommendations never take effect until you review them.
   </p>
 
   @if (canEdit && apiKeys.length > 0) {
@@ -55,6 +68,9 @@
   }
   @if (actionError()) {
     <app-error-message variant="banner" [message]="actionError()" />
+  }
+  @if (actionInfo()) {
+    <p class="action-info" role="status">{{ actionInfo() }}</p>
   }
 
   @if (loading()) {
@@ -93,13 +109,223 @@
         </header>
 
         @for (wf of workflowsForRepo(repo); track wf.id) {
-          <article class="workflow-card">
+          <article class="workflow-card" [class.workflow-card--muted]="!isActiveWorkflow(wf)">
             <div class="workflow-head">
-              <h3 class="workflow-name">{{ wf.name }}</h3>
+              <div class="workflow-title-row">
+                <h3 class="workflow-name">{{ wf.name }}</h3>
+                <span
+                  class="status-badge status-badge--wf-{{ workflowStatus(wf) }}"
+                  [attr.title]="'Workflow status: ' + workflowStatus(wf)"
+                >
+                  {{ workflowStatus(wf) }}
+                </span>
+                @if (wf.tag) {
+                  <button
+                    type="button"
+                    class="tag-chip"
+                    [title]="'Send as X-Logos-Workflow-Tag: ' + wf.tag"
+                    (click)="copyTag(wf.tag!)"
+                  >
+                    <i class="pi pi-tag" aria-hidden="true"></i>
+                    {{ wf.tag }}
+                    @if (tagCopied() === wf.tag) {
+                      <span class="tag-copied">Copied</span>
+                    }
+                  </button>
+                }
+              </div>
               @if (wf.trigger_summary) {
                 <p class="trigger-summary">{{ wf.trigger_summary }}</p>
               }
+              @if (canEdit) {
+                <div class="workflow-actions">
+                  @if (isActiveWorkflow(wf)) {
+                    <button
+                      type="button"
+                      class="btn-secondary btn-sm"
+                      [disabled]="workflowActionId() != null"
+                      (click)="setWorkflowStatus(wf, 'deprecated')"
+                    >
+                      Deprecate
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-secondary btn-sm"
+                      [disabled]="workflowActionId() != null"
+                      (click)="setWorkflowStatus(wf, 'ignored')"
+                    >
+                      Ignore
+                    </button>
+                  } @else {
+                    <button
+                      type="button"
+                      class="btn-secondary btn-sm"
+                      [disabled]="workflowActionId() != null"
+                      (click)="setWorkflowStatus(wf, 'active')"
+                    >
+                      Restore
+                    </button>
+                  }
+                  <button
+                    type="button"
+                    class="btn-secondary btn-sm btn-danger"
+                    [disabled]="workflowActionId() != null"
+                    (click)="softDeleteWorkflow(wf)"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-secondary btn-sm"
+                    [disabled]="taggingPrId() != null"
+                    (click)="proposeTaggingPr(wf)"
+                  >
+                    @if (taggingPrId() === wf.id) {
+                      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                    }
+                    Propose tagging PR
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-secondary btn-sm"
+                    (click)="toggleBenchmark(wf)"
+                  >
+                    Compare model
+                  </button>
+                </div>
+              }
             </div>
+
+            @if (stepsFor(wf).length > 0) {
+              <div class="steps-section">
+                <h4 class="steps-title">Steps</h4>
+                <ul class="steps-list">
+                  @for (step of stepsFor(wf); track step.id) {
+                    <li class="step-row">
+                      <span class="step-name">{{ step.name }}</span>
+                      @if (step.tag) {
+                        <button
+                          type="button"
+                          class="tag-chip tag-chip--sm"
+                          [title]="'Send as X-Logos-Workflow-Tag: ' + step.tag"
+                          (click)="copyTag(step.tag!)"
+                        >
+                          {{ step.tag }}
+                        </button>
+                      }
+                      @if (stepSla(step); as sla) {
+                        <span
+                          class="sla-badge"
+                          [class.sla-badge--muted]="!step.confirmed_sla"
+                          [title]="step.confirmed_sla ? 'Confirmed SLA' : 'Recommended SLA (not confirmed)'"
+                        >
+                          {{ sla }}
+                        </span>
+                      }
+                      @if (canEdit) {
+                        <select
+                          class="field-select field-select--sm"
+                          [attr.aria-label]="'Confirm SLA for step ' + step.name"
+                          [ngModel]="stepConfirmSlaValue(step)"
+                          (ngModelChange)="setStepSlaPick(step.id, $event)"
+                          [disabled]="confirmingStepId() != null"
+                        >
+                          @for (opt of slaOptions; track opt.value) {
+                            <option [value]="opt.value" [title]="opt.hint">{{ opt.label }}</option>
+                          }
+                        </select>
+                        <button
+                          type="button"
+                          class="btn-primary btn-sm"
+                          [disabled]="confirmingStepId() != null || !stepConfirmSlaValue(step)"
+                          (click)="confirmStepSla(step)"
+                        >
+                          @if (confirmingStepId() === step.id) {
+                            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                          }
+                          Confirm SLA
+                        </button>
+                      }
+                    </li>
+                  }
+                </ul>
+              </div>
+            }
+
+            @if (benchmarkOpenId() === wf.id) {
+              <div class="benchmark-panel">
+                <div class="benchmark-controls">
+                  <label class="benchmark-label" [attr.for]="'bench-model-' + wf.id">Candidate model</label>
+                  <select
+                    class="field-select"
+                    [id]="'bench-model-' + wf.id"
+                    [ngModel]="benchmarkCandidate()"
+                    (ngModelChange)="benchmarkCandidate.set($event)"
+                    [disabled]="benchmarkRunning()"
+                  >
+                    @for (name of allModelNames(); track name) {
+                      <option [value]="name">{{ name }}</option>
+                    }
+                  </select>
+                  <button
+                    type="button"
+                    class="btn-primary btn-sm"
+                    [disabled]="benchmarkRunning() || !benchmarkCandidate().trim()"
+                    (click)="runBenchmark(wf)"
+                  >
+                    @if (benchmarkRunning()) {
+                      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                    }
+                    Run compare
+                  </button>
+                </div>
+                @if (benchmarkResult(); as bench) {
+                  <div class="benchmark-result">
+                    <h5 class="benchmark-result-title">
+                      Historic sample
+                      @if (bench.historic_metrics?.sample_count != null) {
+                        ({{ bench.historic_metrics!.sample_count }} requests)
+                      }
+                    </h5>
+                    <dl class="benchmark-metrics">
+                      <div>
+                        <dt>Sample count</dt>
+                        <dd>{{ bench.historic_metrics?.sample_count ?? '—' }}</dd>
+                      </div>
+                      <div>
+                        <dt>Avg TTFT</dt>
+                        <dd>{{ formatMs(bench.historic_metrics?.avg_ttft_ms) }}</dd>
+                      </div>
+                      <div>
+                        <dt>p50 latency</dt>
+                        <dd>{{ formatMs(bench.historic_metrics?.p50_latency_ms) }}</dd>
+                      </div>
+                      <div>
+                        <dt>p95 latency</dt>
+                        <dd>{{ formatMs(bench.historic_metrics?.p95_latency_ms) }}</dd>
+                      </div>
+                      <div>
+                        <dt>Models seen</dt>
+                        <dd>
+                          @if (bench.historic_metrics?.models_seen?.length) {
+                            {{ bench.historic_metrics!.models_seen!.join(', ') }}
+                          } @else {
+                            —
+                          }
+                        </dd>
+                      </div>
+                    </dl>
+                    @if (bench.candidate_metrics?.note) {
+                      <p class="benchmark-note">
+                        Candidate <strong>{{ bench.candidate_model }}</strong>:
+                        {{ bench.candidate_metrics!.note }}
+                      </p>
+                    }
+                  </div>
+                }
+              </div>
+            }
+
             @if (wf.diagram_mermaid) {
               <pre class="mermaid">{{ diagramSource(wf) }}</pre>
             }

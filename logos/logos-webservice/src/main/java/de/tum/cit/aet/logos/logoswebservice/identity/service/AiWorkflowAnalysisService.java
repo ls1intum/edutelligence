@@ -30,14 +30,19 @@ import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewRecommendationReq
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetRecommendationModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.StoreDeployKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateWorkflowRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateWorkflowStepRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.WorkflowBenchmarkRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.AiLlmCallRecommendation;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.AiWorkflow;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.AiWorkflowAnalysis;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.AiWorkflowStep;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamRepoLink;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamRepositoryCredential;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.AiLlmCallRecommendationRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.AiWorkflowAnalysisRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.AiWorkflowRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.AiWorkflowStepRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepoLinkRepository;
@@ -48,8 +53,11 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepositoryCr
 public class AiWorkflowAnalysisService {
 
     private static final Set<String> VALID_SLAS = Set.of("ux-critical", "ux-high-prio", "ux-background");
+    private static final Set<String> VALID_WORKFLOW_STATUSES = Set.of("active", "deprecated", "ignored");
     private static final int MAX_MODEL_NAME_LENGTH = 200;
     private static final int MAX_ANCESTOR_HOPS = 50;
+    private static final int DEFAULT_BENCHMARK_SAMPLE_SIZE = 50;
+    private static final int MAX_BENCHMARK_SAMPLE_SIZE = 200;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> REVIEW_ACTIONS = Set.of("accept", "override", "reject");
 
@@ -71,7 +79,17 @@ public class AiWorkflowAnalysisService {
               "name": "<short workflow group name>",
               "trigger_summary": "<what starts this flow>",
               "diagram_mermaid": "flowchart TD\\n  A-->B",
-              "sort_order": 0
+              "sort_order": 0,
+              "tag": "<stable kebab-case tag for X-Logos-Workflow-Tag, or null>",
+              "steps": [
+                {
+                  "name": "<short step name>",
+                  "sort_order": 0,
+                  "tag": "<stable kebab-case tag for X-Logos-Workflow-Tag>",
+                  "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+                  "objective_priority": ["latency" | "quality" | "price", "..."]
+                }
+              ]
             }
           ],
           "recommendations": [
@@ -102,9 +120,32 @@ public class AiWorkflowAnalysisService {
         ux-critical → [latency, quality, price]; ux-high-prio → [quality, latency, price];
         ux-background → [price, quality, latency].
 
+        Suggest stable kebab-case `tag` values on workflows and steps so applications
+        can send `X-Logos-Workflow-Tag` (and optionally `X-Logos-SLA`) to attribute
+        traffic. Prefer short, unique tags derived from the workflow/step name.
+
         Repository: %s
         Clone URL: %s
         Focus paths (empty means whole tree): %s
+        """;
+
+    static final String TAGGING_PR_TASK_TEMPLATE = """
+        Add request attribution headers at the LLM call sites that belong to this
+        Logos workflow so traffic can be matched to the workflow and its steps.
+
+        Workflow: %s
+        Workflow tag (X-Logos-Workflow-Tag): %s
+
+        Steps (send the step tag as X-Logos-Workflow-Tag when the call is that step;
+        also set X-Logos-SLA to the confirmed or recommended SLA when known):
+        %s
+
+        Repository: %s
+        Clone URL: %s
+
+        Open a pull request with the header changes. Prefer the smallest clear
+        change that wires tags at each matching call site; do not refactor
+        unrelated code.
         """;
 
     private final TeamMemberRepository teamMemberRepository;
@@ -113,6 +154,7 @@ public class AiWorkflowAnalysisService {
     private final TeamRepositoryCredentialRepository credentialRepository;
     private final AiWorkflowAnalysisRepository analysisRepository;
     private final AiWorkflowRepository workflowRepository;
+    private final AiWorkflowStepRepository stepRepository;
     private final AiLlmCallRecommendationRepository recommendationRepository;
     private final ApiKeyRepository apiKeyRepository;
     private final ApiKeyAdminService apiKeyAdminService;
@@ -126,6 +168,7 @@ public class AiWorkflowAnalysisService {
                                      TeamRepositoryCredentialRepository credentialRepository,
                                      AiWorkflowAnalysisRepository analysisRepository,
                                      AiWorkflowRepository workflowRepository,
+                                     AiWorkflowStepRepository stepRepository,
                                      AiLlmCallRecommendationRepository recommendationRepository,
                                      ApiKeyRepository apiKeyRepository,
                                      ApiKeyAdminService apiKeyAdminService,
@@ -138,6 +181,7 @@ public class AiWorkflowAnalysisService {
         this.credentialRepository = credentialRepository;
         this.analysisRepository = analysisRepository;
         this.workflowRepository = workflowRepository;
+        this.stepRepository = stepRepository;
         this.recommendationRepository = recommendationRepository;
         this.apiKeyRepository = apiKeyRepository;
         this.apiKeyAdminService = apiKeyAdminService;
@@ -175,8 +219,15 @@ public class AiWorkflowAnalysisService {
                 AiWorkflowAnalysis analysis = latest.get();
                 repo.put("latest_analysis", analysisToMap(analysis));
                 List<AiWorkflow> workflows = workflowRepository
-                    .findByAnalysisIdOrderBySortOrderAsc(analysis.getId());
-                repo.put("workflows", workflows.stream().map(this::workflowToMap).toList());
+                    .findByAnalysisIdOrderBySortOrderAsc(analysis.getId())
+                    .stream()
+                    .filter(w -> w.getDeletedAt() == null)
+                    .toList();
+                Map<Integer, List<AiWorkflowStep>> stepsByWorkflow = stepsByWorkflowIds(
+                    workflows.stream().map(AiWorkflow::getId).toList());
+                repo.put("workflows", workflows.stream()
+                    .map(w -> workflowToMap(w, stepsByWorkflow.getOrDefault(w.getId(), List.of())))
+                    .toList());
                 List<AiLlmCallRecommendation> recs = recommendationRepository
                     .findByAnalysisIdOrderByIdAsc(analysis.getId());
                 Map<Integer, Map<String, Object>> decisions = previousDecisions(recs);
@@ -461,6 +512,427 @@ public class AiWorkflowAnalysisService {
         return result;
     }
 
+    @Transactional
+    public Map<String, Object> updateWorkflow(int teamId, int workflowId, UpdateWorkflowRequestDTO body) {
+        AiWorkflow workflow = requireWorkflowForTeam(teamId, workflowId);
+        if (body == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body is required");
+        }
+        if (body.status() != null) {
+            String status = body.status().trim().toLowerCase(Locale.ROOT);
+            if (!VALID_WORKFLOW_STATUSES.contains(status)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "status must be active, deprecated, or ignored");
+            }
+            workflow.setStatus(status);
+        }
+        if (body.tag() != null) {
+            String tag = body.tag().trim();
+            workflow.setTag(tag.isEmpty() ? null : tag);
+        }
+        if (Boolean.TRUE.equals(body.deleted())) {
+            workflow.setDeletedAt(Instant.now());
+            workflow.setStatus("ignored");
+        }
+        else if (Boolean.FALSE.equals(body.deleted())) {
+            workflow.setDeletedAt(null);
+            if (body.status() == null || "active".equalsIgnoreCase(body.status().trim())) {
+                workflow.setStatus("active");
+            }
+        }
+        workflowRepository.save(workflow);
+        return workflowToMap(workflow, stepRepository.findByWorkflowIdOrderBySortOrderAsc(workflow.getId()));
+    }
+
+    @Transactional
+    public Map<String, Object> updateWorkflowStep(int teamId, int stepId, UpdateWorkflowStepRequestDTO body) {
+        AiWorkflowStep step = requireStepForTeam(teamId, stepId);
+        if (body == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body is required");
+        }
+        if (body.confirmedSla() != null) {
+            String sla = body.confirmedSla().trim();
+            if (sla.isEmpty()) {
+                step.setConfirmedSla(null);
+            }
+            else {
+                if (!VALID_SLAS.contains(sla)) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "confirmed_sla must be ux-critical, ux-high-prio, or ux-background");
+                }
+                step.setConfirmedSla(sla);
+            }
+        }
+        if (body.confirmedObjectivePriority() != null) {
+            step.setConfirmedObjectivePriority(ObjectivePriority.asJsonList(body.confirmedObjectivePriority()));
+        }
+        if (body.tag() != null) {
+            String tag = body.tag().trim();
+            step.setTag(tag.isEmpty() ? null : tag);
+        }
+        if (body.name() != null) {
+            String name = body.name().trim();
+            if (name.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name must not be blank");
+            }
+            step.setName(name);
+        }
+        stepRepository.save(step);
+        return stepToMap(step);
+    }
+
+    @Transactional
+    public Map<String, Object> compareWorkflow(int teamId, int workflowId,
+                                              WorkflowBenchmarkRequestDTO body, Integer userId) {
+        AiWorkflow workflow = requireWorkflowForTeam(teamId, workflowId);
+        if (body == null || body.candidateModel() == null || body.candidateModel().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "candidate_model is required");
+        }
+        String candidateModel = body.candidateModel().trim();
+        if (candidateModel.length() > MAX_MODEL_NAME_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "candidate_model must be at most " + MAX_MODEL_NAME_LENGTH + " characters");
+        }
+        int sampleSize = body.sampleSize() == null ? DEFAULT_BENCHMARK_SAMPLE_SIZE : body.sampleSize();
+        if (sampleSize < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sample_size must be at least 1");
+        }
+        sampleSize = Math.min(sampleSize, MAX_BENCHMARK_SAMPLE_SIZE);
+
+        List<AiWorkflowStep> steps = stepRepository.findByWorkflowIdOrderBySortOrderAsc(workflow.getId());
+        List<String> tags = new ArrayList<>();
+        if (workflow.getTag() != null && !workflow.getTag().isBlank()) {
+            tags.add(workflow.getTag().trim());
+        }
+        for (AiWorkflowStep step : steps) {
+            if (step.getTag() != null && !step.getTag().isBlank()) {
+                tags.add(step.getTag().trim());
+            }
+        }
+
+        Map<String, Object> historicMetrics = computeHistoricMetrics(teamId, workflow.getId(), tags, sampleSize);
+        Map<String, Object> candidateMetrics = new LinkedHashMap<>();
+        candidateMetrics.put("candidate_model", candidateModel);
+        candidateMetrics.put("note",
+            "Historic sample only — re-run traffic with the candidate model to fill live metrics.");
+
+        String historicJson = toJson(historicMetrics);
+        String candidateJson = toJson(candidateMetrics);
+        Integer benchmarkId = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_benchmarks (
+                workflow_id, team_id, candidate_model, status, sample_size,
+                historic_metrics, candidate_metrics, created_by, finished_at
+            ) VALUES (
+                ?, ?, ?, 'succeeded', ?,
+                ?::jsonb, ?::jsonb, ?, CURRENT_TIMESTAMP
+            ) RETURNING id
+            """, Integer.class,
+            workflow.getId(), teamId, candidateModel, sampleSize,
+            historicJson, candidateJson, userId);
+
+        return loadBenchmark(benchmarkId);
+    }
+
+    public List<Map<String, Object>> listWorkflowBenchmarks(int teamId, int workflowId) {
+        requireWorkflowForTeam(teamId, workflowId);
+        return jdbc.query("""
+            SELECT id, workflow_id, team_id, candidate_model, status, sample_size,
+                   historic_metrics, candidate_metrics, error, created_by, created_at, finished_at
+              FROM ai_workflow_benchmarks
+             WHERE workflow_id = ? AND team_id = ?
+             ORDER BY created_at DESC
+            """, (rs, rowNum) -> benchmarkRowToMap(rs), workflowId, teamId);
+    }
+
+    @Transactional
+    public Map<String, Object> queueTaggingPullRequest(int teamId, int workflowId) {
+        AiWorkflow workflow = requireWorkflowForTeam(teamId, workflowId);
+        AiWorkflowAnalysis analysis = analysisRepository.findById(workflow.getAnalysisId())
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Analysis not found"));
+        TeamRepoLink link = requireLink(teamId, analysis.getTeamRepositoryId());
+        List<AiWorkflowStep> steps = stepRepository.findByWorkflowIdOrderBySortOrderAsc(workflow.getId());
+
+        String stepsLabel = steps.isEmpty()
+            ? "(no steps recorded — tag the workflow as a whole)"
+            : steps.stream()
+                .map(s -> "- " + s.getName()
+                    + " | tag=" + (s.getTag() != null ? s.getTag() : "(unset)")
+                    + " | sla=" + (s.getConfirmedSla() != null ? s.getConfirmedSla() : s.getRecommendedSla()))
+                .collect(Collectors.joining("\n"));
+
+        String task = TAGGING_PR_TASK_TEMPLATE.formatted(
+            workflow.getName(),
+            workflow.getTag() != null ? workflow.getTag() : "(unset — invent a stable kebab-case tag)",
+            stepsLabel,
+            link.getRepoSlug(),
+            link.getRepoUrl());
+
+        int workspaceId = ensureAnalysisWorkspace(teamId, link);
+        Integer sessionId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, model, status, created_by,
+                open_pull_request, deploy_to_dev, screenshot_paths,
+                no_push, trigger_kind, trigger_ref,
+                repo_url, repo_slug, team_repository_id, priority, priority_reason
+            ) VALUES (
+                ?, ?, NULL, 'queued', ?,
+                TRUE, FALSE, '[]'::jsonb,
+                FALSE, 'workflow-tagging', ?,
+                ?, ?, ?, 50, 'workflow tagging PR'
+            ) RETURNING id
+            """, Integer.class,
+            workspaceId,
+            task,
+            "team-" + teamId,
+            "workflow:" + workflow.getId(),
+            link.getRepoUrl(),
+            link.getRepoSlug(),
+            link.getId());
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("agent_session_id", sessionId);
+        result.put("workflow_id", workflow.getId());
+        result.put("team_repository_id", link.getId());
+        result.put("repo_slug", link.getRepoSlug());
+        result.put("status", "queued");
+        result.put("open_pull_request", true);
+        result.put("no_push", false);
+        result.put("message", "Tagging pull-request session queued");
+        return result;
+    }
+
+    private Map<String, Object> computeHistoricMetrics(int teamId, int workflowId,
+                                                       List<String> tags, int sampleSize) {
+        List<Map<String, Object>> rows = jdbc.query(con -> {
+            var ps = con.prepareStatement("""
+                SELECT le.queue_wait_ms,
+                       le.time_at_first_token,
+                       le.timestamp_forwarding,
+                       le.timestamp_request,
+                       le.timestamp_response,
+                       COALESCE(le.model_name, m.name) AS model_name
+                  FROM log_entry le
+                  LEFT JOIN models m ON m.id = le.model_id
+                 WHERE le.team_id = ?
+                   AND (le.workflow_id = ?
+                        OR (cardinality(?) > 0 AND le.workflow_tag = ANY(?)))
+                 ORDER BY le.timestamp_request DESC NULLS LAST
+                 LIMIT ?
+                """);
+            ps.setInt(1, teamId);
+            ps.setInt(2, workflowId);
+            var tagArray = con.createArrayOf("text", tags.toArray());
+            ps.setArray(3, tagArray);
+            ps.setArray(4, tagArray);
+            ps.setInt(5, sampleSize);
+            return ps;
+        }, (rs, rowNum) -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("queue_wait_ms", rs.getObject("queue_wait_ms") != null ? rs.getDouble("queue_wait_ms") : null);
+            Instant requestAt = rs.getTimestamp("timestamp_request") != null
+                ? rs.getTimestamp("timestamp_request").toInstant() : null;
+            Instant forwardingAt = rs.getTimestamp("timestamp_forwarding") != null
+                ? rs.getTimestamp("timestamp_forwarding").toInstant() : null;
+            Instant ttftAt = rs.getTimestamp("time_at_first_token") != null
+                ? rs.getTimestamp("time_at_first_token").toInstant() : null;
+            Instant responseAt = rs.getTimestamp("timestamp_response") != null
+                ? rs.getTimestamp("timestamp_response").toInstant() : null;
+            Double ttftMs = null;
+            if (ttftAt != null) {
+                Instant base = forwardingAt != null ? forwardingAt : requestAt;
+                if (base != null) {
+                    ttftMs = (double) java.time.Duration.between(base, ttftAt).toMillis();
+                }
+            }
+            Double latencyMs = null;
+            if (requestAt != null && responseAt != null) {
+                latencyMs = (double) java.time.Duration.between(requestAt, responseAt).toMillis();
+            }
+            row.put("ttft_ms", ttftMs);
+            row.put("latency_ms", latencyMs);
+            row.put("model_name", rs.getString("model_name"));
+            return row;
+        });
+
+        List<Double> queueWaits = rows.stream()
+            .map(r -> (Double) r.get("queue_wait_ms"))
+            .filter(v -> v != null)
+            .toList();
+        List<Double> ttfts = rows.stream()
+            .map(r -> (Double) r.get("ttft_ms"))
+            .filter(v -> v != null)
+            .toList();
+        List<Double> latencies = rows.stream()
+            .map(r -> (Double) r.get("latency_ms"))
+            .filter(v -> v != null)
+            .sorted()
+            .toList();
+        List<String> modelsSeen = rows.stream()
+            .map(r -> (String) r.get("model_name"))
+            .filter(n -> n != null && !n.isBlank())
+            .distinct()
+            .sorted()
+            .toList();
+
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("sample_count", rows.size());
+        metrics.put("avg_queue_wait_ms", average(queueWaits));
+        metrics.put("avg_ttft_ms", average(ttfts));
+        metrics.put("models_seen", modelsSeen);
+        metrics.put("p50_latency_ms", percentile(latencies, 0.50));
+        metrics.put("p95_latency_ms", percentile(latencies, 0.95));
+        return metrics;
+    }
+
+    private static Double average(List<Double> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        double sum = 0;
+        for (Double v : values) {
+            sum += v;
+        }
+        return sum / values.size();
+    }
+
+    private static Double percentile(List<Double> sorted, double p) {
+        if (sorted == null || sorted.isEmpty()) {
+            return null;
+        }
+        if (sorted.size() == 1) {
+            return sorted.get(0);
+        }
+        double rank = p * (sorted.size() - 1);
+        int low = (int) Math.floor(rank);
+        int high = (int) Math.ceil(rank);
+        if (low == high) {
+            return sorted.get(low);
+        }
+        double weight = rank - low;
+        return sorted.get(low) * (1 - weight) + sorted.get(high) * weight;
+    }
+
+    private Map<String, Object> loadBenchmark(Integer id) {
+        List<Map<String, Object>> rows = jdbc.query("""
+            SELECT id, workflow_id, team_id, candidate_model, status, sample_size,
+                   historic_metrics, candidate_metrics, error, created_by, created_at, finished_at
+              FROM ai_workflow_benchmarks
+             WHERE id = ?
+            """, (rs, rowNum) -> benchmarkRowToMap(rs), id);
+        if (rows.isEmpty()) {
+            throw new IllegalStateException("benchmark " + id + " vanished");
+        }
+        return rows.get(0);
+    }
+
+    private Map<String, Object> benchmarkRowToMap(java.sql.ResultSet rs) throws java.sql.SQLException {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", rs.getInt("id"));
+        m.put("workflow_id", rs.getInt("workflow_id"));
+        m.put("team_id", rs.getInt("team_id"));
+        m.put("candidate_model", rs.getString("candidate_model"));
+        m.put("status", rs.getString("status"));
+        m.put("sample_size", rs.getInt("sample_size"));
+        m.put("historic_metrics", parseJsonObject(rs.getObject("historic_metrics")));
+        m.put("candidate_metrics", parseJsonObject(rs.getObject("candidate_metrics")));
+        m.put("error", rs.getString("error"));
+        m.put("created_by", rs.getObject("created_by") != null ? rs.getInt("created_by") : null);
+        var createdAt = rs.getTimestamp("created_at");
+        m.put("created_at", createdAt != null ? createdAt.toInstant().toString() : null);
+        var finishedAt = rs.getTimestamp("finished_at");
+        m.put("finished_at", finishedAt != null ? finishedAt.toInstant().toString() : null);
+        return m;
+    }
+
+    private AiWorkflow requireWorkflowForTeam(int teamId, int workflowId) {
+        if (!teamExists(teamId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Team not found");
+        }
+        Integer foundTeamId = jdbc.query("""
+            SELECT a.team_id
+              FROM ai_workflows w
+              JOIN ai_workflow_analyses a ON a.id = w.analysis_id
+             WHERE w.id = ?
+            """, rs -> rs.next() ? (Integer) rs.getObject(1) : null, workflowId);
+        if (foundTeamId == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found");
+        }
+        if (!foundTeamId.equals(teamId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found");
+        }
+        return workflowRepository.findById(workflowId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found"));
+    }
+
+    private AiWorkflowStep requireStepForTeam(int teamId, int stepId) {
+        if (!teamExists(teamId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Team not found");
+        }
+        Integer foundTeamId = jdbc.query("""
+            SELECT a.team_id
+              FROM ai_workflow_steps s
+              JOIN ai_workflows w ON w.id = s.workflow_id
+              JOIN ai_workflow_analyses a ON a.id = w.analysis_id
+             WHERE s.id = ?
+            """, rs -> rs.next() ? (Integer) rs.getObject(1) : null, stepId);
+        if (foundTeamId == null || !foundTeamId.equals(teamId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow step not found");
+        }
+        return stepRepository.findById(stepId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow step not found"));
+    }
+
+    private Map<Integer, List<AiWorkflowStep>> stepsByWorkflowIds(List<Integer> workflowIds) {
+        if (workflowIds == null || workflowIds.isEmpty()) {
+            return Map.of();
+        }
+        return stepRepository.findByWorkflowIdInOrderByWorkflowIdAscSortOrderAsc(workflowIds)
+            .stream()
+            .collect(Collectors.groupingBy(AiWorkflowStep::getWorkflowId, LinkedHashMap::new, Collectors.toList()));
+    }
+
+    private static String toJson(Object value) {
+        try {
+            return JSON.writeValueAsString(value);
+        }
+        catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize JSON", e);
+        }
+    }
+
+    private static Object parseJsonObject(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = null;
+        if ("org.postgresql.util.PGobject".equals(value.getClass().getName())) {
+            try {
+                text = (String) value.getClass().getMethod("getValue").invoke(value);
+            }
+            catch (ReflectiveOperationException e) {
+                text = value.toString();
+            }
+        }
+        else if (value instanceof String s) {
+            text = s;
+        }
+        else if (value instanceof Map<?, ?>) {
+            return value;
+        }
+        else {
+            return value;
+        }
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return JSON.readValue(text, new TypeReference<Map<String, Object>>() { });
+        }
+        catch (JsonProcessingException e) {
+            return text;
+        }
+    }
+
     private static String formatPaths(List<String> paths) {
         if (paths == null || paths.isEmpty()) {
             return "(entire repository)";
@@ -520,7 +992,7 @@ public class AiWorkflowAnalysisService {
         return m;
     }
 
-    private Map<String, Object> workflowToMap(AiWorkflow workflow) {
+    private Map<String, Object> workflowToMap(AiWorkflow workflow, List<AiWorkflowStep> steps) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", workflow.getId());
         m.put("analysis_id", workflow.getAnalysisId());
@@ -528,6 +1000,27 @@ public class AiWorkflowAnalysisService {
         m.put("trigger_summary", workflow.getTriggerSummary());
         m.put("diagram_mermaid", workflow.getDiagramMermaid());
         m.put("sort_order", workflow.getSortOrder());
+        m.put("status", workflow.getStatus());
+        m.put("deleted_at", workflow.getDeletedAt() != null ? workflow.getDeletedAt().toString() : null);
+        m.put("tag", workflow.getTag());
+        m.put("steps", steps == null ? List.of() : steps.stream().map(this::stepToMap).toList());
+        return m;
+    }
+
+    private Map<String, Object> stepToMap(AiWorkflowStep step) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", step.getId());
+        m.put("workflow_id", step.getWorkflowId());
+        m.put("name", step.getName());
+        m.put("sort_order", step.getSortOrder());
+        m.put("tag", step.getTag());
+        m.put("recommended_sla", step.getRecommendedSla());
+        m.put("confirmed_sla", step.getConfirmedSla());
+        m.put("objective_priority", ObjectivePriority.asStringList(step.getObjectivePriority()));
+        m.put("confirmed_objective_priority",
+            step.getConfirmedObjectivePriority() != null
+                ? ObjectivePriority.asStringList(step.getConfirmedObjectivePriority())
+                : null);
         return m;
     }
 
@@ -540,6 +1033,7 @@ public class AiWorkflowAnalysisService {
         m.put("id", rec.getId());
         m.put("analysis_id", rec.getAnalysisId());
         m.put("workflow_id", rec.getWorkflowId());
+        m.put("step_id", rec.getStepId());
         m.put("team_id", rec.getTeamId());
         m.put("file_path", rec.getFilePath());
         m.put("start_line", rec.getStartLine());

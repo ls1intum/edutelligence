@@ -2,9 +2,9 @@
 
 A read-only analysis session writes ``/artifacts/analysis.json``. After a
 successful no-push finalize the runner loads that file (when present) and
-upserts ``ai_workflow_analyses`` / ``ai_workflows`` /
-``ai_llm_call_recommendations`` — the same tables Liquibase 043 and the
-webservice heuristic scanner use. Missing file is a no-op with a log line;
+upserts ``ai_workflow_analyses`` / ``ai_workflows`` / ``ai_workflow_steps`` /
+``ai_llm_call_recommendations`` — the same tables Liquibase 046/051 and the
+webservice analysis path use. Missing file is a no-op with a log line;
 the session still succeeds.
 """
 
@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +36,8 @@ MAX_ANALYSIS_BYTES = 2 * 1024 * 1024
 MAX_ANCESTOR_HOPS = 50
 # Bound on the candidate pairs one (file, workflow) group may build when matching.
 MAX_MATCH_PAIRS_PER_GROUP = 10_000
+_TAG_ALLOWED = re.compile(r"[^a-z0-9-]")
+MAX_TAG_CHARS = 80
 
 
 def objective_priority_for_sla(sla: str) -> list[str]:
@@ -61,6 +64,17 @@ def normalize_objective_priority(raw: object, *, sla: str) -> list[str]:
         if key not in seen:
             ordered.append(key)
     return ordered
+
+
+def normalize_workflow_tag(raw: object) -> str | None:
+    """Stable kebab-case tag for ``X-Logos-Workflow-Tag``; blank → None."""
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if not value:
+        return None
+    cleaned = _TAG_ALLOWED.sub("", value)[:MAX_TAG_CHARS]
+    return cleaned or None
 
 
 def artifact_analysis_path(session_id: int) -> Path:
@@ -333,6 +347,8 @@ async def upsert_analysis(
         previous_recs = await _previous_recommendations(conn, team_repository_id, int(analysis_id))
 
         workflow_ids: dict[str, int] = {}
+        # Per workflow name → step name → step id (for recommendation step_id).
+        step_ids: dict[str, dict[str, int]] = {}
         for index, raw in enumerate(workflows):
             if not isinstance(raw, dict):
                 continue
@@ -341,9 +357,9 @@ async def upsert_analysis(
                 await conn.execute(
                     text("""
                         INSERT INTO ai_workflows
-                            (analysis_id, name, trigger_summary, diagram_mermaid, sort_order)
+                            (analysis_id, name, trigger_summary, diagram_mermaid, sort_order, tag)
                         VALUES
-                            (:analysis_id, :name, :trigger_summary, :diagram, :sort_order)
+                            (:analysis_id, :name, :trigger_summary, :diagram, :sort_order, :tag)
                         RETURNING id
                         """),
                     {
@@ -352,10 +368,12 @@ async def upsert_analysis(
                         "trigger_summary": _str_or_none(raw.get("trigger_summary")),
                         "diagram": str(raw.get("diagram_mermaid") or ""),
                         "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
+                        "tag": normalize_workflow_tag(raw.get("tag")),
                     },
                 )
             ).scalar_one()
             workflow_ids[name] = int(wf_id)
+            step_ids[name] = await _insert_workflow_steps(conn, workflow_id=int(wf_id), raw_steps=raw.get("steps"))
             nested = raw.get("recommendations")
             if isinstance(nested, list):
                 for nested_rec in nested:
@@ -373,20 +391,25 @@ async def upsert_analysis(
             if sla not in VALID_SLAS:
                 sla = "ux-high-prio"
             workflow_name = str(raw.get("workflow") or raw.get("workflow_name") or "").strip()
+            step_name = str(raw.get("step") or raw.get("step_name") or "").strip()
             flags = raw.get("traffic_flags")
             confidence = raw.get("confidence")
             try:
                 confidence_f = float(confidence) if confidence is not None else 0.5
             except (TypeError, ValueError):
                 confidence_f = 0.5
+            # Never trust a numeric workflow_id / step_id from the artifact —
+            # resolve only via names created for this ingest.
+            workflow_id = workflow_ids.get(workflow_name) if workflow_name else None
+            step_id = None
+            if workflow_name and step_name:
+                step_id = step_ids.get(workflow_name, {}).get(step_name)
             parsed.append(
                 {
                     "file_path": file_path,
                     "workflow_name": workflow_name,
-                    # Never trust a numeric workflow_id from the artifact — it could
-                    # point at another analysis/team. Resolve only via names created
-                    # for this ingest.
-                    "workflow_id": workflow_ids.get(workflow_name) if workflow_name else None,
+                    "workflow_id": workflow_id,
+                    "step_id": step_id,
                     "start_line": _int_or_none(raw.get("start_line")),
                     "end_line": _int_or_none(raw.get("end_line")),
                     "code_url": _str_or_none(raw.get("code_url")),
@@ -409,13 +432,13 @@ async def upsert_analysis(
             await conn.execute(
                 text("""
                     INSERT INTO ai_llm_call_recommendations
-                        (analysis_id, workflow_id, team_id, file_path, start_line, end_line,
+                        (analysis_id, workflow_id, step_id, team_id, file_path, start_line, end_line,
                          code_url, detected_model, model_set_by_owner, recommended_sla, objective_priority,
                          confidence, justification, traffic_flags, review_status, review_carried_over,
                          confirmed_sla, confirmed_objective_priority, api_key_id, reviewed_by, reviewed_at,
                          previous_recommendation_id)
                     VALUES
-                        (:analysis_id, :workflow_id, :team_id, :file_path, :start_line, :end_line,
+                        (:analysis_id, :workflow_id, :step_id, :team_id, :file_path, :start_line, :end_line,
                          :code_url, :detected_model, :model_set_by_owner, :sla, CAST(:priority AS jsonb),
                          :confidence, :justification, CAST(:flags AS jsonb), :review_status, :carried_over,
                          :confirmed_sla, CAST(:confirmed_priority AS jsonb), :api_key_id, :reviewed_by, :reviewed_at,
@@ -427,6 +450,7 @@ async def upsert_analysis(
                     "analysis_id": analysis_id,
                     "team_id": team_id,
                     "workflow_id": rec["workflow_id"],
+                    "step_id": rec["step_id"],
                     "file_path": rec["file_path"],
                     "start_line": rec["start_line"],
                     "end_line": rec["end_line"],
@@ -451,6 +475,47 @@ async def upsert_analysis(
         len(workflow_ids),
     )
     return int(analysis_id)
+
+
+async def _insert_workflow_steps(conn: Any, *, workflow_id: int, raw_steps: object) -> dict[str, int]:
+    """Insert ``ai_workflow_steps`` for one workflow. Returns name → id.
+
+    Missing or empty ``steps`` is fine (backward compatible). Status /
+    soft-delete live on the parent workflow (defaults: active, not deleted).
+    """
+    names_to_ids: dict[str, int] = {}
+    if not isinstance(raw_steps, list):
+        return names_to_ids
+    for index, raw in enumerate(raw_steps):
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        sla = str(raw.get("recommended_sla") or "").strip()
+        if sla not in VALID_SLAS:
+            sla = "ux-high-prio"
+        step_id = (
+            await conn.execute(
+                text("""
+                    INSERT INTO ai_workflow_steps
+                        (workflow_id, name, sort_order, tag, recommended_sla, objective_priority)
+                    VALUES
+                        (:workflow_id, :name, :sort_order, :tag, :sla, CAST(:priority AS jsonb))
+                    RETURNING id
+                    """),
+                {
+                    "workflow_id": workflow_id,
+                    "name": name,
+                    "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
+                    "tag": normalize_workflow_tag(raw.get("tag")),
+                    "sla": sla,
+                    "priority": json.dumps(normalize_objective_priority(raw.get("objective_priority"), sla=sla)),
+                },
+            )
+        ).scalar_one()
+        names_to_ids[name] = int(step_id)
+    return names_to_ids
 
 
 async def _previous_recommendations(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:

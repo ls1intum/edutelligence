@@ -4,6 +4,7 @@ import { TeamManagementService } from '../../../../core/services/team-management
 import { ModelManagementService } from '../../../../core/services/model-management.service';
 import {
   AiLlmCallRecommendation,
+  AiWorkflow,
   TeamApiKey,
   TeamWorkflowsResponse,
 } from '../../../../shared/models/team.model';
@@ -20,6 +21,10 @@ describe('WorkflowsTabComponent review actions', () => {
   const getTeamWorkflows = vi.fn();
   const reviewRecommendation = vi.fn();
   const setRecommendationModel = vi.fn();
+  const updateWorkflow = vi.fn();
+  const updateWorkflowStep = vi.fn();
+  const runWorkflowBenchmark = vi.fn();
+  const proposeWorkflowTaggingPr = vi.fn();
   const getModels = vi.fn();
 
   const pending: AiLlmCallRecommendation = {
@@ -38,6 +43,36 @@ describe('WorkflowsTabComponent review actions', () => {
     api_key_id: 12,
   };
 
+  const activeWorkflow: AiWorkflow = {
+    id: 1,
+    analysis_id: 3,
+    name: 'chat',
+    trigger_summary: 'user message',
+    diagram_mermaid: 'flowchart TD\n  A-->B',
+    sort_order: 0,
+    status: 'active',
+    tag: 'chat-flow',
+    steps: [
+      {
+        id: 101,
+        workflow_id: 1,
+        name: 'reply',
+        sort_order: 0,
+        recommended_sla: 'ux-critical',
+        confirmed_sla: null,
+      },
+    ],
+  };
+
+  const deprecatedWorkflow: AiWorkflow = {
+    id: 2,
+    analysis_id: 3,
+    name: 'legacy-batch',
+    diagram_mermaid: '',
+    sort_order: 1,
+    status: 'deprecated',
+  };
+
   const payload: TeamWorkflowsResponse = {
     team_id: 7,
     repositories: [
@@ -52,16 +87,7 @@ describe('WorkflowsTabComponent review actions', () => {
           source: 'heuristic',
           commit_sha: 'abcdef0',
         },
-        workflows: [
-          {
-            id: 1,
-            analysis_id: 3,
-            name: 'chat',
-            trigger_summary: 'user message',
-            diagram_mermaid: 'flowchart TD\n  A-->B',
-            sort_order: 0,
-          },
-        ],
+        workflows: [activeWorkflow, deprecatedWorkflow],
         recommendations: [pending],
       },
     ],
@@ -94,6 +120,39 @@ describe('WorkflowsTabComponent review actions', () => {
     // A copy per load: the component updates recommendations in place.
     getTeamWorkflows.mockImplementation(async () => structuredClone(payload));
     reviewRecommendation.mockResolvedValue({ ...pending, review_status: 'accepted' });
+    updateWorkflow.mockResolvedValue({ ...activeWorkflow, status: 'deprecated' });
+    updateWorkflowStep.mockResolvedValue({
+      ...activeWorkflow.steps![0],
+      confirmed_sla: 'ux-critical',
+    });
+    runWorkflowBenchmark.mockResolvedValue({
+      id: 9,
+      workflow_id: 1,
+      team_id: 7,
+      candidate_model: 'gpt-fast',
+      status: 'succeeded',
+      sample_size: 50,
+      historic_metrics: {
+        sample_count: 12,
+        p50_latency_ms: 100,
+        p95_latency_ms: 220,
+        models_seen: ['gpt-fast'],
+      },
+      candidate_metrics: {
+        candidate_model: 'gpt-fast',
+        note: 'Historic sample only — re-run traffic with the candidate model to fill live metrics.',
+      },
+    });
+    proposeWorkflowTaggingPr.mockResolvedValue({
+      agent_session_id: 42,
+      workflow_id: 1,
+      team_repository_id: 11,
+      repo_slug: 'acme/app',
+      status: 'queued',
+      open_pull_request: true,
+      no_push: false,
+      message: 'Tagging pull-request session queued',
+    });
     getModels.mockResolvedValue([
       {
         id: 1,
@@ -112,7 +171,15 @@ describe('WorkflowsTabComponent review actions', () => {
       providers: [
         {
           provide: TeamManagementService,
-          useValue: { getTeamWorkflows, reviewRecommendation, setRecommendationModel },
+          useValue: {
+            getTeamWorkflows,
+            reviewRecommendation,
+            setRecommendationModel,
+            updateWorkflow,
+            updateWorkflowStep,
+            runWorkflowBenchmark,
+            proposeWorkflowTaggingPr,
+          },
         },
         {
           provide: ModelManagementService,
@@ -135,6 +202,23 @@ describe('WorkflowsTabComponent review actions', () => {
     await component.load();
     expect(getTeamWorkflows).toHaveBeenCalledWith(7);
     expect(component.pendingRecs()).toEqual([pending]);
+  });
+
+  it('shows only active workflows by default and includes deprecated when toggled', async () => {
+    const component = setup();
+    await component.load();
+    const repo = component.data()!.repositories[0];
+    expect(component.workflowsForRepo(repo).map((w) => w.id)).toEqual([1]);
+    component.showDeprecatedIgnored.set(true);
+    expect(component.workflowsForRepo(repo).map((w) => w.id)).toEqual([1, 2]);
+  });
+
+  it('normalises workflow status helpers', () => {
+    const component = setup();
+    expect(component.workflowStatus({ ...activeWorkflow, status: 'active' })).toBe('active');
+    expect(component.workflowStatus({ ...deprecatedWorkflow })).toBe('deprecated');
+    expect(component.workflowStatus({ ...activeWorkflow, status: undefined as never })).toBe('active');
+    expect(component.isActiveWorkflow(deprecatedWorkflow)).toBe(false);
   });
 
   it('accepts with the highest-priority key and the objective priority by default', async () => {
@@ -223,7 +307,10 @@ describe('WorkflowsTabComponent review actions', () => {
         id: 1,
         name: 'chat',
         diagram_mermaid: 'flowchart TD\n  A --> J[Title LLM (deferred)]',
-      } as never),
+        status: 'active',
+        analysis_id: 3,
+        sort_order: 0,
+      }),
     ).toBe('flowchart TD\n  A --> J["Title LLM (deferred)"]');
   });
 
@@ -256,5 +343,48 @@ describe('WorkflowsTabComponent review actions', () => {
       quality: 3,
       price: 4,
     });
+  });
+
+  it('deprecates and restores a workflow', async () => {
+    const component = setup();
+    await component.load();
+    await component.setWorkflowStatus(activeWorkflow, 'deprecated');
+    expect(updateWorkflow).toHaveBeenCalledWith(7, 1, { status: 'deprecated' });
+    await component.setWorkflowStatus(deprecatedWorkflow, 'active');
+    expect(updateWorkflow).toHaveBeenCalledWith(7, 2, { status: 'active' });
+  });
+
+  it('soft-deletes a workflow', async () => {
+    const component = setup();
+    await component.load();
+    await component.softDeleteWorkflow(activeWorkflow);
+    expect(updateWorkflow).toHaveBeenCalledWith(7, 1, { deleted: true });
+  });
+
+  it('confirms a step SLA', async () => {
+    const component = setup();
+    await component.load();
+    const step = component.data()!.repositories[0].workflows[0].steps![0];
+    await component.confirmStepSla(step);
+    expect(updateWorkflowStep).toHaveBeenCalledWith(7, 101, { confirmed_sla: 'ux-critical' });
+    expect(component.data()!.repositories[0].workflows[0].steps![0].confirmed_sla).toBe('ux-critical');
+  });
+
+  it('runs a workflow benchmark against a candidate model', async () => {
+    const component = setup();
+    await component.load();
+    component.toggleBenchmark(activeWorkflow);
+    component.benchmarkCandidate.set('gpt-fast');
+    await component.runBenchmark(activeWorkflow);
+    expect(runWorkflowBenchmark).toHaveBeenCalledWith(7, 1, { candidate_model: 'gpt-fast' });
+    expect(component.benchmarkResult()?.historic_metrics?.sample_count).toBe(12);
+  });
+
+  it('proposes a tagging pull request', async () => {
+    const component = setup();
+    await component.load();
+    await component.proposeTaggingPr(activeWorkflow);
+    expect(proposeWorkflowTaggingPr).toHaveBeenCalledWith(7, 1);
+    expect(component.actionInfo()).toContain('Tagging');
   });
 });

@@ -7,7 +7,9 @@ import {
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
   ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
   TeamRepositoryPayload, TeamWorkflowsResponse, ReviewRecommendationPayload,
-  StoreDeployKeyPayload, AiLlmCallRecommendation,
+  StoreDeployKeyPayload, AiLlmCallRecommendation, AiWorkflow, AiWorkflowStep,
+  UpdateWorkflowPayload, UpdateWorkflowStepPayload, WorkflowBenchmark,
+  WorkflowBenchmarkRequest, ProposeTaggingPrResult, ApplicationKeyQueueRankEntry,
 } from '../../shared/models/team.model';
 
 export interface TeamMembersResponse {
@@ -87,6 +89,80 @@ export class TeamManagementService {
   getTeamWorkflows(teamId: number): Promise<TeamWorkflowsResponse> {
     return firstValueFrom(
       this.http.get<TeamWorkflowsResponse>(`/api/admin/teams/${teamId}/workflows`),
+    );
+  }
+
+  updateWorkflow(
+    teamId: number,
+    workflowId: number,
+    payload: UpdateWorkflowPayload,
+  ): Promise<AiWorkflow> {
+    return firstValueFrom(
+      this.http.patch<AiWorkflow>(
+        `/api/admin/teams/${teamId}/workflows/${workflowId}`,
+        payload,
+      ),
+    );
+  }
+
+  updateWorkflowStep(
+    teamId: number,
+    stepId: number,
+    payload: UpdateWorkflowStepPayload,
+  ): Promise<AiWorkflowStep> {
+    return firstValueFrom(
+      this.http.patch<AiWorkflowStep>(
+        `/api/admin/teams/${teamId}/workflow-steps/${stepId}`,
+        payload,
+      ),
+    );
+  }
+
+  runWorkflowBenchmark(
+    teamId: number,
+    workflowId: number,
+    payload: WorkflowBenchmarkRequest,
+  ): Promise<WorkflowBenchmark> {
+    return firstValueFrom(
+      this.http.post<WorkflowBenchmark>(
+        `/api/admin/teams/${teamId}/workflows/${workflowId}/benchmark`,
+        payload,
+      ),
+    );
+  }
+
+  listWorkflowBenchmarks(teamId: number, workflowId: number): Promise<WorkflowBenchmark[]> {
+    return firstValueFrom(
+      this.http.get<WorkflowBenchmark[]>(
+        `/api/admin/teams/${teamId}/workflows/${workflowId}/benchmarks`,
+      ),
+    );
+  }
+
+  proposeWorkflowTaggingPr(
+    teamId: number,
+    workflowId: number,
+  ): Promise<ProposeTaggingPrResult> {
+    return firstValueFrom(
+      this.http.post<ProposeTaggingPrResult>(
+        `/api/admin/teams/${teamId}/workflows/${workflowId}/propose-tagging-pr`,
+        {},
+      ),
+    );
+  }
+
+  getApplicationKeyQueueRanks(): Promise<ApplicationKeyQueueRankEntry[]> {
+    return firstValueFrom(
+      this.http.get<ApplicationKeyQueueRankEntry[]>('/api/admin/application-key-queue-ranks'),
+    );
+  }
+
+  replaceApplicationKeyQueueRanks(apiKeyIds: number[]): Promise<ApplicationKeyQueueRankEntry[]> {
+    return firstValueFrom(
+      this.http.put<ApplicationKeyQueueRankEntry[]>(
+        '/api/admin/application-key-queue-ranks',
+        { api_key_ids: apiKeyIds },
+      ),
     );
   }
 

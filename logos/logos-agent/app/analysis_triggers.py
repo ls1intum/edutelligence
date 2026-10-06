@@ -50,12 +50,23 @@ Schema for `/artifacts/analysis.json`:
       "name": "<short workflow group name>",
       "trigger_summary": "<what starts this flow>",
       "diagram_mermaid": "flowchart TD\\n  A-->B",
-      "sort_order": 0
+      "sort_order": 0,
+      "tag": "<stable kebab-case tag for X-Logos-Workflow-Tag, or null>",
+      "steps": [
+        {{
+          "name": "<short step name>",
+          "sort_order": 0,
+          "tag": "<stable kebab-case tag for X-Logos-Workflow-Tag>",
+          "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+          "objective_priority": ["latency" | "quality" | "price", "..."]
+        }}
+      ]
     }}
   ],
   "recommendations": [
     {{
       "workflow": "<matching workflows[].name>",
+      "step": "<optional matching workflows[].steps[].name>",
       "file_path": "path/from/repo/root.py",
       "start_line": 1,
       "end_line": 20,
@@ -80,6 +91,10 @@ important first). It complements SLA: SLA is urgency/interactivity; the ranking
 says what to optimize for when choosing a model. If omitted, defaults are:
 ux-critical → [latency, quality, price]; ux-high-prio → [quality, latency, price];
 ux-background → [price, quality, latency].
+
+Suggest stable kebab-case `tag` values on workflows and steps so applications
+can send `X-Logos-Workflow-Tag` (and optionally `X-Logos-SLA`) to attribute
+traffic. Prefer short, unique tags derived from the workflow/step name.
 
 Repository: {repo_slug}
 Clone URL: {repo_url}

@@ -19,10 +19,13 @@ import { ModelManagementService } from '../../../../core/services/model-manageme
 import {
   AiLlmCallRecommendation,
   AiWorkflow,
+  AiWorkflowStatus,
+  AiWorkflowStep,
   ObjectiveKey,
   RecommendedSla,
   TeamApiKey,
   TeamWorkflowsResponse,
+  WorkflowBenchmark,
 } from '../../../../shared/models/team.model';
 import { Model } from '../../../../shared/models/model.model';
 import { KeySla, SLA_OPTIONS } from '../key-sla';
@@ -65,7 +68,8 @@ function normalizePriority(raw: string[] | null | undefined, sla?: string): Obje
  *
  * Latest AI-workflow analyses for linked repositories: Mermaid diagrams and
  * SLA / objective-priority recommendations that owners can accept, override,
- * or reject.
+ * or reject. Workflows support lifecycle (active / deprecated / ignored),
+ * per-step SLAs, tagging headers, and model benchmarks.
  */
 @Component({
   selector: 'app-workflows-tab',
@@ -98,6 +102,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   loading = signal(true);
   loadError = signal('');
   actionError = signal('');
+  actionInfo = signal('');
   data = signal<TeamWorkflowsResponse | null>(null);
   reviewingId = signal<number | null>(null);
   overrideSla = signal<Record<number, KeySla>>({});
@@ -107,6 +112,18 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   savingModelId = signal<number | null>(null);
   /** name/alias (lower) → model, for spider charts beside detected models */
   private modelsByName = signal<Map<string, Model>>(new Map());
+  /** Show deprecated / ignored workflows; active-only by default. */
+  showDeprecatedIgnored = signal(false);
+  workflowActionId = signal<number | null>(null);
+  confirmingStepId = signal<number | null>(null);
+  stepSlaPick = signal<Record<number, RecommendedSla>>({});
+  /** Workflow id whose inline benchmark panel is open. */
+  benchmarkOpenId = signal<number | null>(null);
+  benchmarkCandidate = signal('');
+  benchmarkRunning = signal(false);
+  benchmarkResult = signal<WorkflowBenchmark | null>(null);
+  taggingPrId = signal<number | null>(null);
+  tagCopied = signal<string | null>(null);
 
   readonly slaOptions = SLA_OPTIONS;
   readonly recCols = [
@@ -153,8 +170,33 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     }
   }
 
+  /** Active workflows by default; include deprecated/ignored when the toggle is on. */
   workflowsForRepo(repo: TeamWorkflowsResponse['repositories'][number]): AiWorkflow[] {
-    return repo.workflows ?? [];
+    const list = repo.workflows ?? [];
+    if (this.showDeprecatedIgnored()) return list;
+    return list.filter((wf) => this.workflowStatus(wf) === 'active');
+  }
+
+  workflowStatus(wf: AiWorkflow): AiWorkflowStatus {
+    const status = (wf.status ?? 'active').toLowerCase();
+    if (status === 'deprecated' || status === 'ignored') return status;
+    return 'active';
+  }
+
+  isActiveWorkflow(wf: AiWorkflow): boolean {
+    return this.workflowStatus(wf) === 'active';
+  }
+
+  stepsFor(wf: AiWorkflow): AiWorkflowStep[] {
+    return [...(wf.steps ?? [])].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+  }
+
+  stepSla(step: AiWorkflowStep): RecommendedSla | null {
+    return step.confirmed_sla ?? step.recommended_sla ?? null;
+  }
+
+  stepConfirmSlaValue(step: AiWorkflowStep): string {
+    return this.stepSlaPick()[step.id] ?? this.stepSla(step) ?? '';
   }
 
   pendingRecs(): AiLlmCallRecommendation[] {
@@ -212,8 +254,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
 
   /** Model names to pick from, plus whatever the analysis guessed if Logos does not know it. */
   modelOptions(rec: AiLlmCallRecommendation): string[] {
+    return this.allModelNames(rec.detected_model);
+  }
+
+  allModelNames(extra?: string | null): string[] {
     const names = new Set([...this.modelsByName().values()].map((m) => m.name));
-    const current = rec.detected_model?.trim();
+    const current = extra?.trim();
     if (current) names.add(current);
     return [...names].sort((a, b) => a.localeCompare(b));
   }
@@ -267,6 +313,122 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     this.overrideSla.update((m) => ({ ...m, [recId]: value as KeySla }));
   }
 
+  setStepSlaPick(stepId: number, value: string): void {
+    this.stepSlaPick.update((m) => ({ ...m, [stepId]: value as RecommendedSla }));
+  }
+
+  async setWorkflowStatus(wf: AiWorkflow, status: AiWorkflowStatus): Promise<void> {
+    if (!this.canEdit || this.workflowActionId() != null) return;
+    this.workflowActionId.set(wf.id);
+    this.actionError.set('');
+    this.actionInfo.set('');
+    try {
+      await this.teamService.updateWorkflow(this.teamId, wf.id, { status });
+      await this.load();
+    } catch (err: unknown) {
+      this.actionError.set(this.errDetail(err, 'Failed to update workflow status.'));
+    } finally {
+      this.workflowActionId.set(null);
+    }
+  }
+
+  async softDeleteWorkflow(wf: AiWorkflow): Promise<void> {
+    if (!this.canEdit || this.workflowActionId() != null) return;
+    this.workflowActionId.set(wf.id);
+    this.actionError.set('');
+    this.actionInfo.set('');
+    try {
+      await this.teamService.updateWorkflow(this.teamId, wf.id, { deleted: true });
+      await this.load();
+    } catch (err: unknown) {
+      this.actionError.set(this.errDetail(err, 'Failed to delete workflow.'));
+    } finally {
+      this.workflowActionId.set(null);
+    }
+  }
+
+  async confirmStepSla(step: AiWorkflowStep): Promise<void> {
+    if (!this.canEdit || this.confirmingStepId() != null) return;
+    const sla = this.stepSlaPick()[step.id] ?? step.confirmed_sla ?? step.recommended_sla;
+    if (!sla) return;
+    this.confirmingStepId.set(step.id);
+    this.actionError.set('');
+    try {
+      const saved = await this.teamService.updateWorkflowStep(this.teamId, step.id, {
+        confirmed_sla: sla,
+      });
+      this.patchStep(step.id, saved);
+    } catch (err: unknown) {
+      this.actionError.set(this.errDetail(err, 'Failed to confirm step SLA.'));
+    } finally {
+      this.confirmingStepId.set(null);
+    }
+  }
+
+  toggleBenchmark(wf: AiWorkflow): void {
+    if (this.benchmarkOpenId() === wf.id) {
+      this.benchmarkOpenId.set(null);
+      this.benchmarkResult.set(null);
+      return;
+    }
+    this.benchmarkOpenId.set(wf.id);
+    this.benchmarkResult.set(null);
+    this.benchmarkCandidate.set(this.allModelNames()[0] ?? '');
+    this.actionError.set('');
+  }
+
+  async runBenchmark(wf: AiWorkflow): Promise<void> {
+    const candidate = this.benchmarkCandidate().trim();
+    if (!candidate || this.benchmarkRunning()) return;
+    this.benchmarkRunning.set(true);
+    this.actionError.set('');
+    try {
+      const result = await this.teamService.runWorkflowBenchmark(this.teamId, wf.id, {
+        candidate_model: candidate,
+      });
+      this.benchmarkResult.set(result);
+    } catch (err: unknown) {
+      this.actionError.set(this.errDetail(err, 'Failed to run benchmark.'));
+    } finally {
+      this.benchmarkRunning.set(false);
+    }
+  }
+
+  async proposeTaggingPr(wf: AiWorkflow): Promise<void> {
+    if (!this.canEdit || this.taggingPrId() != null) return;
+    this.taggingPrId.set(wf.id);
+    this.actionError.set('');
+    this.actionInfo.set('');
+    try {
+      const result = await this.teamService.proposeWorkflowTaggingPr(this.teamId, wf.id);
+      this.actionInfo.set(
+        result.message
+          ?? `Tagging pull request queued for ${result.repo_slug} (session ${result.agent_session_id}).`,
+      );
+    } catch (err: unknown) {
+      this.actionError.set(this.errDetail(err, 'Failed to propose tagging pull request.'));
+    } finally {
+      this.taggingPrId.set(null);
+    }
+  }
+
+  async copyTag(tag: string): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(tag);
+      this.tagCopied.set(tag);
+      setTimeout(() => {
+        if (this.tagCopied() === tag) this.tagCopied.set(null);
+      }, 1500);
+    } catch {
+      // No clipboard — leave the chip text selectable.
+    }
+  }
+
+  formatMs(value: number | null | undefined): string {
+    if (value == null || Number.isNaN(value)) return '—';
+    return `${Math.round(value)} ms`;
+  }
+
   /**
    * The key part of a review. The first review pins the default: a review
    * changes that key's priority, and recomputing "highest priority" after the
@@ -286,6 +448,26 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
 
   private findRec(recId: number): AiLlmCallRecommendation | undefined {
     return this.allRecs().find((r) => r.id === recId);
+  }
+
+  private patchStep(stepId: number, saved: AiWorkflowStep): void {
+    const data = this.data();
+    if (!data) return;
+    for (const repo of data.repositories) {
+      for (const wf of repo.workflows ?? []) {
+        const steps = wf.steps ?? [];
+        const idx = steps.findIndex((s) => s.id === stepId);
+        if (idx >= 0) {
+          steps[idx] = { ...steps[idx], ...saved };
+          return;
+        }
+      }
+    }
+  }
+
+  private errDetail(err: unknown, fallback: string): string {
+    const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
+    return typeof detail === 'string' ? detail : fallback;
   }
 
   private indexModels(models: Model[]): Map<string, Model> {
@@ -323,10 +505,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
         this.keysChanged.emit();
       }
     } catch (err: unknown) {
-      const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
-      this.actionError.set(
-        typeof detail === 'string' ? detail : 'Failed to review recommendation.',
-      );
+      this.actionError.set(this.errDetail(err, 'Failed to review recommendation.'));
     } finally {
       this.reviewingId.set(null);
     }
