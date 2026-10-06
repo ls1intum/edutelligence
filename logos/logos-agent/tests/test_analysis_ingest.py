@@ -7,6 +7,7 @@ import os
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from app import analysis_ingest, db
 
 
@@ -525,6 +526,38 @@ def test_match_workflows_skips_an_ambiguous_call_site_overlap():
         {"workflow": "Tutor", "file_path": "src/llm.py"},
     ]
     assert analysis_ingest.match_workflows([_owner_wf()], previous_recs, workflows, recommendations) == {}
+
+
+_CHAT_SUMMARY_RECS = [
+    {"workflow_name": "chat", "file_path": "src/llm.py"},
+    {"workflow_name": "summary", "file_path": "src/llm.py"},
+    {"workflow_name": "summary", "file_path": "src/summary.py"},
+]
+
+
+@pytest.mark.parametrize("order", [("chat", "summary"), ("summary", "chat")])
+def test_match_workflows_pairs_renamed_workflows_regardless_of_order(order):
+    previous = [_owner_wf(name, f"flowchart TD\n  {name}") for name in order]
+    workflows = [{"name": "Conversation"}, {"name": "Digest"}]
+    recommendations = [
+        {"workflow": "Conversation", "file_path": "src/llm.py"},
+        {"workflow": "Digest", "file_path": "src/llm.py"},
+        {"workflow": "Digest", "file_path": "src/summary.py"},
+    ]
+    matched = analysis_ingest.match_workflows(previous, _CHAT_SUMMARY_RECS, workflows, recommendations)
+    assert matched[0]["name"] == "chat" and matched[1]["name"] == "summary"
+
+
+@pytest.mark.parametrize("order", [("chat", "summary"), ("summary", "chat")])
+def test_match_workflows_does_not_give_a_removed_workflows_diagram_to_a_stronger_match(order):
+    previous = [_owner_wf(name, f"flowchart TD\n  {name}") for name in order]
+    workflows = [{"name": "Digest"}]
+    recommendations = [
+        {"workflow": "Digest", "file_path": "src/llm.py"},
+        {"workflow": "Digest", "file_path": "src/summary.py"},
+    ]
+    matched = analysis_ingest.match_workflows(previous, _CHAT_SUMMARY_RECS, workflows, recommendations)
+    assert matched[0]["name"] == "summary"
 
 
 def test_match_workflows_prefers_a_name_match_over_call_sites():

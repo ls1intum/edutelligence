@@ -483,9 +483,9 @@ def match_workflows(
 
     The agent names workflows freely on every run, so an exact name is not a
     stable identity. Match on the case- and punctuation-insensitive name first;
-    an owner-edited workflow still unmatched then follows the new workflow whose
-    recommended call sites share the most files with its own (a unique best
-    overlap only). Each previous workflow carries forward at most once.
+    the rest pair up by how many files their recommended call sites share,
+    taking only mutually unique best pairs (repeated until none is left). Each
+    previous workflow carries forward at most once.
     """
     entries = [(i, _workflow_name(raw, i)) for i, raw in enumerate(workflows) if isinstance(raw, dict)]
     matched: dict[int, dict[str, Any]] = {}
@@ -517,22 +517,43 @@ def match_workflows(
                 key = _workflow_key(_workflow_name(raw, i))
                 new_files.setdefault(key, set()).add(str(rec["file_path"]).strip())
 
-    for p_index, prev in enumerate(previous_workflows):
-        if p_index in used or not bool(prev.get("diagram_set_by_owner")):
-            continue
-        files = prev_files.get(_workflow_key(str(prev.get("name") or "")), set())
-        overlaps = sorted(
-            (
-                (len(files & new_files.get(_workflow_key(name), set())), index)
-                for index, name in entries
-                if index not in matched
-            ),
-            reverse=True,
-        )
-        if overlaps and overlaps[0][0] > 0 and (len(overlaps) == 1 or overlaps[1][0] < overlaps[0][0]):
-            matched[overlaps[0][1]] = prev
+    # Score every unmatched pair, then take only pairs that are each other's
+    # unique best; drop them and repeat, so neither list order nor an earlier
+    # tie decides who keeps an owner diagram. Ambiguous pairs stay unmatched.
+    while True:
+        scores: dict[tuple[int, int], int] = {}
+        for p_index, prev in enumerate(previous_workflows):
+            if p_index in used:
+                continue
+            files = prev_files.get(_workflow_key(str(prev.get("name") or "")), set())
+            for index, name in entries:
+                if index in matched:
+                    continue
+                overlap = len(files & new_files.get(_workflow_key(name), set()))
+                if overlap:
+                    scores[(p_index, index)] = overlap
+        best_for_prev = _unique_best(scores, side=0)
+        best_for_new = _unique_best(scores, side=1)
+        pairs = [(p_index, index) for p_index, index in best_for_prev.items() if best_for_new.get(index) == p_index]
+        if not pairs:
+            break
+        for p_index, index in pairs:
+            matched[index] = previous_workflows[p_index]
             used.add(p_index)
     return matched
+
+
+def _unique_best(scores: dict[tuple[int, int], int], *, side: int) -> dict[int, int]:
+    """For each key on ``side`` of the pairs, its single highest-scoring partner (ties: none)."""
+    ranked: dict[int, list[tuple[int, int]]] = {}
+    for pair, score in scores.items():
+        ranked.setdefault(pair[side], []).append((score, pair[1 - side]))
+    best: dict[int, int] = {}
+    for key, options in ranked.items():
+        options.sort(reverse=True)
+        if len(options) == 1 or options[1][0] < options[0][0]:
+            best[key] = options[0][1]
+    return best
 
 
 def _normalize_diagram(text: str) -> str:
