@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -338,6 +339,9 @@ class TeamRepoLinkControllerTest {
            .andExpect(jsonPath("$.diagram_mermaid").value("flowchart TD\n  Owner-->Again"))
            .andExpect(jsonPath("$.diagram_set_by_owner").value(true))
            .andExpect(jsonPath("$.proposed_diagram_mermaid").doesNotExist());
+        // Keep mine is remembered so the next ingest does not re-propose it.
+        assertEquals("flowchart TD\n  Agent-->Other", jdbc.queryForObject(
+            "SELECT dismissed_diagram_mermaid FROM ai_workflows WHERE id = ?", String.class, workflowId));
 
         mvc.perform(put("/admin/teams/2001/workflows/999999/diagram")
                 .with(TestJwt.logosAdmin())

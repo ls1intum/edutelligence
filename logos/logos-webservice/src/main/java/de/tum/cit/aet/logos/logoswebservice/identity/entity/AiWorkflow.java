@@ -36,6 +36,9 @@ public class AiWorkflow {
     /** Agent Mermaid from a later analysis that differs from the owner's diagram. */
     private String proposedDiagramMermaid;
 
+    /** Agent Mermaid the owner dismissed; ingest does not propose it again. */
+    private String dismissedDiagramMermaid;
+
     public Integer getId() { return id; }
     public Integer getAnalysisId() { return analysisId; }
     public String getName() { return name; }
@@ -44,6 +47,7 @@ public class AiWorkflow {
     public Integer getSortOrder() { return sortOrder; }
     public boolean isDiagramSetByOwner() { return diagramSetByOwner; }
     public String getProposedDiagramMermaid() { return proposedDiagramMermaid; }
+    public String getDismissedDiagramMermaid() { return dismissedDiagramMermaid; }
 
     public void setAnalysisId(Integer analysisId) { this.analysisId = analysisId; }
     public void setName(String name) { this.name = name; }
@@ -53,5 +57,8 @@ public class AiWorkflow {
     public void setDiagramSetByOwner(boolean diagramSetByOwner) { this.diagramSetByOwner = diagramSetByOwner; }
     public void setProposedDiagramMermaid(String proposedDiagramMermaid) {
         this.proposedDiagramMermaid = proposedDiagramMermaid;
+    }
+    public void setDismissedDiagramMermaid(String dismissedDiagramMermaid) {
+        this.dismissedDiagramMermaid = dismissedDiagramMermaid;
     }
 }

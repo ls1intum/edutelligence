@@ -454,6 +454,38 @@ async def test_reanalysis_clears_a_proposal_when_the_agent_matches_the_owner(mon
     assert wf["proposed"] is None
 
 
+async def test_reanalysis_does_not_repropose_a_dismissed_diagram(monkeypatch):
+    previous_wf = {
+        "name": "chat",
+        "diagram_mermaid": "flowchart TD\n  Owner-->Edit",
+        "diagram_set_by_owner": True,
+        "proposed_diagram_mermaid": None,
+        "dismissed_diagram_mermaid": "flowchart TD\n  Agent-->New",
+    }
+    payload = _one_rec_payload()
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Agent-->New  \n"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[previous_wf])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["diagram"] == "flowchart TD\n  Owner-->Edit"
+    assert wf["proposed"] is None
+    assert wf["dismissed"] == "flowchart TD\n  Agent-->New"
+
+
+async def test_reanalysis_proposes_a_new_diagram_after_a_dismissal(monkeypatch):
+    previous_wf = {
+        "name": "chat",
+        "diagram_mermaid": "flowchart TD\n  Owner-->Edit",
+        "diagram_set_by_owner": True,
+        "proposed_diagram_mermaid": None,
+        "dismissed_diagram_mermaid": "flowchart TD\n  Agent-->New",
+    }
+    payload = _one_rec_payload()
+    payload["workflows"][0]["diagram_mermaid"] = "flowchart TD\n  Agent-->Newer"
+    conn = await _ingest_all(monkeypatch, [_previous()], payload, previous_workflows=[previous_wf])
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["proposed"] == "flowchart TD\n  Agent-->Newer"
+
+
 def test_match_recommendations_prefers_the_same_workflow_then_the_nearest_line():
     previous = [
         {"id": 1, "file_path": "a.py", "workflow_name": "chat", "start_line": 10},

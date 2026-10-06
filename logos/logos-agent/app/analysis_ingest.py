@@ -341,16 +341,16 @@ async def upsert_analysis(
             name = str(raw.get("name") or "").strip() or f"workflow-{index + 1}"
             agent_diagram = str(raw.get("diagram_mermaid") or "")
             previous_wf = previous_by_name.get(name)
-            diagram, owner_flag, proposed = _diagram_for_ingest(agent_diagram, previous_wf)
+            diagram, owner_flag, proposed, dismissed = _diagram_for_ingest(agent_diagram, previous_wf)
             wf_id = (
                 await conn.execute(
                     text("""
                         INSERT INTO ai_workflows
                             (analysis_id, name, trigger_summary, diagram_mermaid, sort_order,
-                             diagram_set_by_owner, proposed_diagram_mermaid)
+                             diagram_set_by_owner, proposed_diagram_mermaid, dismissed_diagram_mermaid)
                         VALUES
                             (:analysis_id, :name, :trigger_summary, :diagram, :sort_order,
-                             :diagram_set_by_owner, :proposed)
+                             :diagram_set_by_owner, :proposed, :dismissed)
                         RETURNING id
                         """),
                     {
@@ -361,6 +361,7 @@ async def upsert_analysis(
                         "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
                         "diagram_set_by_owner": owner_flag,
                         "proposed": proposed,
+                        "dismissed": dismissed,
                     },
                 )
             ).scalar_one()
@@ -469,14 +470,23 @@ def _normalize_diagram(text: str) -> str:
 
 def _diagram_for_ingest(
     agent_diagram: str, previous: dict[str, Any] | None
-) -> tuple[str, bool, str | None]:
-    """Keep an owner-edited diagram; store a differing agent version as a proposal."""
+) -> tuple[str, bool, str | None, str | None]:
+    """Keep an owner-edited diagram; store a differing agent version as a proposal.
+
+    Returns (diagram, set_by_owner, proposed, dismissed). A proposal the owner
+    already dismissed ("Keep mine") is not offered again while the agent keeps
+    drawing the same Mermaid.
+    """
     if previous is None or not bool(previous.get("diagram_set_by_owner")):
-        return agent_diagram, False, None
+        return agent_diagram, False, None, None
     owner_diagram = str(previous.get("diagram_mermaid") or "")
-    if _normalize_diagram(agent_diagram) == _normalize_diagram(owner_diagram):
-        return owner_diagram, True, None
-    return owner_diagram, True, agent_diagram
+    dismissed = _str_or_none(previous.get("dismissed_diagram_mermaid"))
+    agent_norm = _normalize_diagram(agent_diagram)
+    if not agent_norm or agent_norm == _normalize_diagram(owner_diagram):
+        return owner_diagram, True, None, dismissed
+    if dismissed is not None and agent_norm == _normalize_diagram(dismissed):
+        return owner_diagram, True, None, dismissed
+    return owner_diagram, True, agent_diagram, dismissed
 
 
 async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
@@ -490,7 +500,7 @@ async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: i
             await conn.execute(
                 text("""
                     SELECT w.name, w.diagram_mermaid, w.diagram_set_by_owner,
-                           w.proposed_diagram_mermaid
+                           w.proposed_diagram_mermaid, w.dismissed_diagram_mermaid
                       FROM ai_workflows w
                      WHERE w.analysis_id = (
                              SELECT a.id FROM ai_workflow_analyses a

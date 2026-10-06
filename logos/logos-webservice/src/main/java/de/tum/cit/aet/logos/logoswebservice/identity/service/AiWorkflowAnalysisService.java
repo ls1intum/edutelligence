@@ -276,6 +276,10 @@ public class AiWorkflowAnalysisService {
             workflow.setDiagramMermaid(proposed.strip());
             // Back under agent control: later analyses may update freely again.
             workflow.setDiagramSetByOwner(false);
+            workflow.setDismissedDiagramMermaid(null);
+        } else {
+            // Keep mine: re-analyses drawing this same Mermaid do not propose it again.
+            workflow.setDismissedDiagramMermaid(proposed);
         }
         workflow.setProposedDiagramMermaid(null);
         workflowRepository.save(workflow);
