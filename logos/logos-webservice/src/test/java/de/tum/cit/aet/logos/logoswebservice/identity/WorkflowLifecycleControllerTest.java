@@ -176,6 +176,39 @@ class WorkflowLifecycleControllerTest {
     }
 
     @Test
+    void proposeTaggingPr_isLogosAdminOnlyAndPersistsMissingTags() throws Exception {
+        int[] ids = seedWorkflowWithStep();
+        jdbc.update("UPDATE ai_workflows SET tag = NULL WHERE id = ?", ids[0]);
+        jdbc.update("UPDATE ai_workflow_steps SET tag = NULL WHERE id = ?", ids[1]);
+
+        // An owning App Admin may not aim the agent's GitHub account at a repository.
+        mvc.perform(post("/admin/teams/2001/workflows/" + ids[0] + "/propose-tagging-pr")
+                .with(TestJwt.adminUser()))
+           .andExpect(status().isForbidden());
+
+        MvcResult queued = mvc.perform(post("/admin/teams/2001/workflows/" + ids[0] + "/propose-tagging-pr")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.status").value("queued"))
+           .andReturn();
+        int sessionId = mapper.readTree(queued.getResponse().getContentAsString())
+            .get("agent_session_id").asInt();
+
+        String workflowTag = jdbc.queryForObject(
+            "SELECT tag FROM ai_workflows WHERE id = ?", String.class, ids[0]);
+        String stepTag = jdbc.queryForObject(
+            "SELECT tag FROM ai_workflow_steps WHERE id = ?", String.class, ids[1]);
+        org.assertj.core.api.Assertions.assertThat(workflowTag).isEqualTo("checkout");
+        org.assertj.core.api.Assertions.assertThat(stepTag).isEqualTo("checkout-score");
+        String task = jdbc.queryForObject(
+            "SELECT task FROM agent_sessions WHERE id = ? AND trigger_kind = 'workflow-tagging'",
+            String.class, sessionId);
+        org.assertj.core.api.Assertions.assertThat(task)
+            .contains("Workflow tag (X-Logos-Workflow-Tag): checkout")
+            .contains("tag=checkout-score");
+    }
+
+    @Test
     void applicationKeyQueueRanks_replaceValidatesAndIsLogosAdminOnly() throws Exception {
         mvc.perform(put("/admin/application-key-queue-ranks")
                 .with(TestJwt.logosAdmin())

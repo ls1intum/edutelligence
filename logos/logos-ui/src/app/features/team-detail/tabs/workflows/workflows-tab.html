@@ -174,17 +174,19 @@
                   >
                     Delete
                   </button>
-                  <button
-                    type="button"
-                    class="btn-secondary btn-sm"
-                    [disabled]="taggingPrId() != null"
-                    (click)="proposeTaggingPr(wf)"
-                  >
-                    @if (taggingPrId() === wf.id) {
-                      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-                    }
-                    Propose tagging PR
-                  </button>
+                  @if (canProposeTaggingPr) {
+                    <button
+                      type="button"
+                      class="btn-secondary btn-sm"
+                      [disabled]="taggingPrId() != null"
+                      (click)="proposeTaggingPr(wf)"
+                    >
+                      @if (taggingPrId() === wf.id) {
+                        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                      }
+                      Propose tagging PR
+                    </button>
+                  }
                   <button
                     type="button"
                     class="btn-secondary btn-sm"

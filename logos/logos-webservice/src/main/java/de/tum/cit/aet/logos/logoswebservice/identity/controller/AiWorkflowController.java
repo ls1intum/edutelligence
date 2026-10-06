@@ -105,15 +105,17 @@ public class AiWorkflowController {
         return ResponseEntity.ok(service.listWorkflowBenchmarks(teamId, workflowId));
     }
 
+    /**
+     * Logos admins only: the tagging session pushes and opens a pull request
+     * as the agent's GitHub account, and linking a repository proves no
+     * ownership of it — a team owner could otherwise aim that account at any
+     * repository it can write to.
+     */
     @PostMapping("/teams/{teamId}/workflows/{workflowId}/propose-tagging-pr")
-    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> proposeTaggingPr(
             @PathVariable Integer teamId,
-            @PathVariable Integer workflowId,
-            @RequestAttribute("authContext") AuthContext auth) {
-        if (forbiddenForNonOwner(auth, teamId)) {
-            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
-        }
+            @PathVariable Integer workflowId) {
         return ResponseEntity.ok(service.queueTaggingPullRequest(teamId, workflowId));
     }
 

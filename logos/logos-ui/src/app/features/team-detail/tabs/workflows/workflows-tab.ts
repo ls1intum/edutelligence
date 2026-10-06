@@ -90,6 +90,8 @@ function normalizePriority(raw: string[] | null | undefined, sla?: string): Obje
 export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   @Input() teamId!: number;
   @Input() canEdit = false;
+  /** Tagging pull requests push as the agent's account, so only Logos admins may propose one. */
+  @Input() canProposeTaggingPr = false;
   @Input() apiKeys: TeamApiKey[] = [];
   /** Fired when a review updates an application key's SLA priority. */
   @Output() keysChanged = new EventEmitter<void>();
@@ -405,7 +407,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   }
 
   async proposeTaggingPr(wf: AiWorkflow): Promise<void> {
-    if (!this.canEdit || this.taggingPrId() != null) return;
+    if (!this.canProposeTaggingPr || this.taggingPrId() != null) return;
     this.taggingPrId.set(wf.id);
     this.actionError.set('');
     this.actionInfo.set('');

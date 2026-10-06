@@ -100,8 +100,10 @@ confirmable) SLA. Applications attribute traffic by sending
 copy hint). Alternatively, a request can set its SLA directly with
 `X-Logos-SLA` (`ux-critical`, `ux-high-prio`, or `ux-background`).
 
-**Propose tagging PR** queues an agent session that opens a pull request in
-the linked repository to add those headers at the call sites.
+A Logos Admin can **Propose tagging PR**: it queues an agent session that
+opens a pull request in the linked repository to add those headers at the
+call sites. It is not offered to App Admins, because the session pushes as
+the Logos agent's GitHub account.
 
 #### Compare model
 

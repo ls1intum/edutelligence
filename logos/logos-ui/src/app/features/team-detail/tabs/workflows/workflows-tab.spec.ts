@@ -405,9 +405,13 @@ describe('WorkflowsTabComponent review actions', () => {
     expect(render).toHaveBeenCalledTimes(1);
   });
 
-  it('proposes a tagging pull request', async () => {
+  it('proposes a tagging pull request only when allowed to', async () => {
     const component = setup();
     await component.load();
+    await component.proposeTaggingPr(activeWorkflow);
+    expect(proposeWorkflowTaggingPr).not.toHaveBeenCalled();
+
+    component.canProposeTaggingPr = true;
     await component.proposeTaggingPr(activeWorkflow);
     expect(proposeWorkflowTaggingPr).toHaveBeenCalledWith(7, 1);
     expect(component.actionInfo()).toContain('Tagging');
