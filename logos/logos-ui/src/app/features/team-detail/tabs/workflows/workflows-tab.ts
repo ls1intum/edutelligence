@@ -105,6 +105,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   /** The key Accept / Override apply to; null until the owner picks one (then the default applies). */
   private reviewKeyPick = signal<number | '' | null>(null);
   savingModelId = signal<number | null>(null);
+  /** Workflow id currently being edited in the Mermaid textarea. */
+  editingDiagramId = signal<number | null>(null);
+  /** Draft Mermaid while editing; keyed by workflow id. */
+  diagramDraft = signal<Record<number, string>>({});
+  savingDiagramId = signal<number | null>(null);
+  reviewingProposalId = signal<number | null>(null);
   /** name/alias (lower) → model, for spider charts beside detected models */
   private modelsByName = signal<Map<string, Model>>(new Map());
 
@@ -241,6 +247,67 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return quoteFlowchartLabels(wf.diagram_mermaid ?? '');
   }
 
+  proposedDiagramSource(wf: AiWorkflow): string {
+    return quoteFlowchartLabels(wf.proposed_diagram_mermaid ?? '');
+  }
+
+  isEditingDiagram(wf: AiWorkflow): boolean {
+    return this.editingDiagramId() === wf.id;
+  }
+
+  startEditDiagram(wf: AiWorkflow): void {
+    this.editingDiagramId.set(wf.id);
+    this.diagramDraft.update((m) => ({ ...m, [wf.id]: wf.diagram_mermaid ?? '' }));
+  }
+
+  cancelEditDiagram(): void {
+    this.editingDiagramId.set(null);
+  }
+
+  setDiagramDraft(workflowId: number, value: string): void {
+    this.diagramDraft.update((m) => ({ ...m, [workflowId]: value }));
+  }
+
+  async saveDiagram(wf: AiWorkflow): Promise<void> {
+    if (this.savingDiagramId() != null) return;
+    const draft = (this.diagramDraft()[wf.id] ?? '').trim();
+    if (!draft) {
+      this.actionError.set('Diagram Mermaid cannot be empty.');
+      return;
+    }
+    this.savingDiagramId.set(wf.id);
+    this.actionError.set('');
+    try {
+      const saved = await this.teamService.setWorkflowDiagram(this.teamId, wf.id, draft);
+      this.applyWorkflow(saved);
+      this.editingDiagramId.set(null);
+      this.diagramsDirty = true;
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
+      this.actionError.set(typeof detail === 'string' ? detail : 'Failed to save the diagram.');
+    } finally {
+      this.savingDiagramId.set(null);
+    }
+  }
+
+  async reviewDiagramProposal(wf: AiWorkflow, action: 'accept' | 'dismiss'): Promise<void> {
+    if (this.reviewingProposalId() != null) return;
+    this.reviewingProposalId.set(wf.id);
+    this.actionError.set('');
+    try {
+      const saved = await this.teamService.reviewWorkflowDiagramProposal(this.teamId, wf.id, action);
+      this.applyWorkflow(saved);
+      this.diagramsDirty = true;
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
+      this.actionError.set(
+        typeof detail === 'string' ? detail : 'Failed to review the diagram proposal.',
+      );
+    } finally {
+      this.reviewingProposalId.set(null);
+    }
+  }
+
   async accept(rec: AiLlmCallRecommendation): Promise<void> {
     await this.review(rec, {
       action: 'accept',
@@ -286,6 +353,19 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
 
   private findRec(recId: number): AiLlmCallRecommendation | undefined {
     return this.allRecs().find((r) => r.id === recId);
+  }
+
+  private applyWorkflow(saved: AiWorkflow): void {
+    const data = this.data();
+    if (!data) return;
+    for (const repo of data.repositories) {
+      const idx = repo.workflows.findIndex((w) => w.id === saved.id);
+      if (idx >= 0) {
+        repo.workflows[idx] = { ...repo.workflows[idx], ...saved };
+        this.data.set({ ...data });
+        return;
+      }
+    }
   }
 
   private indexModels(models: Model[]): Map<string, Model> {

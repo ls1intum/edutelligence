@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Owners can edit activity diagrams; re-analysis proposes rather than
+         overwriting those edits.
+
+           * diagram_set_by_owner marks a diagram the owner saved, so the next
+             analysis keeps it instead of its own Mermaid.
+           * proposed_diagram_mermaid holds the agent's newer diagram when it
+             differs from the owner's, for Accept / Keep-mine on the Workflows
+             tab. -->
+    <changeSet id="051-editable-workflow-diagrams" author="wasnertobias">
+        <sql><![CDATA[
+            ALTER TABLE ai_workflows
+                ADD COLUMN IF NOT EXISTS diagram_set_by_owner BOOLEAN NOT NULL DEFAULT FALSE,
+                ADD COLUMN IF NOT EXISTS proposed_diagram_mermaid TEXT NULL;
+        ]]></sql>
+        <rollback>
+            <sql>
+                ALTER TABLE ai_workflows
+                    DROP COLUMN IF EXISTS proposed_diagram_mermaid,
+                    DROP COLUMN IF EXISTS diagram_set_by_owner;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

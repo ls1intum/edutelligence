@@ -275,6 +275,84 @@ class TeamRepoLinkControllerTest {
     }
 
     @Test
+    void setWorkflowDiagram_storesOwnerEditAndProposalReview() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/diagram-edit\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+        Integer analysisId = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_analyses
+                (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            VALUES (2001, ?, 'abc', 'succeeded', 'agent', now())
+            RETURNING id
+            """, Integer.class, linkId);
+        Integer workflowId = jdbc.queryForObject("""
+            INSERT INTO ai_workflows
+                (analysis_id, name, trigger_summary, diagram_mermaid, sort_order)
+            VALUES (?, 'chat', 'user message', 'flowchart TD\n  A-->B', 0)
+            RETURNING id
+            """, Integer.class, analysisId);
+
+        mvc.perform(put("/admin/teams/2001/workflows/" + workflowId + "/diagram")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"diagram_mermaid\":\"flowchart TD\\n  Owner-->Edit\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.diagram_mermaid").value("flowchart TD\n  Owner-->Edit"))
+           .andExpect(jsonPath("$.diagram_set_by_owner").value(true))
+           .andExpect(jsonPath("$.proposed_diagram_mermaid").doesNotExist());
+
+        jdbc.update("""
+            UPDATE ai_workflows
+               SET proposed_diagram_mermaid = 'flowchart TD\n  Agent-->New'
+             WHERE id = ?
+            """, workflowId);
+
+        mvc.perform(post("/admin/teams/2001/workflows/" + workflowId + "/diagram/proposal")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"accept\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.diagram_mermaid").value("flowchart TD\n  Agent-->New"))
+           .andExpect(jsonPath("$.diagram_set_by_owner").value(false))
+           .andExpect(jsonPath("$.proposed_diagram_mermaid").doesNotExist());
+
+        mvc.perform(put("/admin/teams/2001/workflows/" + workflowId + "/diagram")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"diagram_mermaid\":\"flowchart TD\\n  Owner-->Again\"}"))
+           .andExpect(status().isOk());
+        jdbc.update("""
+            UPDATE ai_workflows
+               SET proposed_diagram_mermaid = 'flowchart TD\n  Agent-->Other'
+             WHERE id = ?
+            """, workflowId);
+        mvc.perform(post("/admin/teams/2001/workflows/" + workflowId + "/diagram/proposal")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"dismiss\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.diagram_mermaid").value("flowchart TD\n  Owner-->Again"))
+           .andExpect(jsonPath("$.diagram_set_by_owner").value(true))
+           .andExpect(jsonPath("$.proposed_diagram_mermaid").doesNotExist());
+
+        mvc.perform(put("/admin/teams/2001/workflows/999999/diagram")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"diagram_mermaid\":\"flowchart TD\\n  A\"}"))
+           .andExpect(status().isNotFound());
+
+        mvc.perform(put("/admin/teams/2001/workflows/" + workflowId + "/diagram")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"diagram_mermaid\":\"flowchart TD\\n  A\"}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
     void review_noApiKeyLeavesThePreviouslyLinkedKeyAlone() throws Exception {
         MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
                 .with(TestJwt.logosAdmin())

@@ -331,27 +331,36 @@ async def upsert_analysis(
             )
 
         previous_recs = await _previous_recommendations(conn, team_repository_id, int(analysis_id))
+        previous_workflows = await _previous_workflows(conn, team_repository_id, int(analysis_id))
+        previous_by_name = {str(w["name"]): w for w in previous_workflows if w.get("name")}
 
         workflow_ids: dict[str, int] = {}
         for index, raw in enumerate(workflows):
             if not isinstance(raw, dict):
                 continue
             name = str(raw.get("name") or "").strip() or f"workflow-{index + 1}"
+            agent_diagram = str(raw.get("diagram_mermaid") or "")
+            previous_wf = previous_by_name.get(name)
+            diagram, owner_flag, proposed = _diagram_for_ingest(agent_diagram, previous_wf)
             wf_id = (
                 await conn.execute(
                     text("""
                         INSERT INTO ai_workflows
-                            (analysis_id, name, trigger_summary, diagram_mermaid, sort_order)
+                            (analysis_id, name, trigger_summary, diagram_mermaid, sort_order,
+                             diagram_set_by_owner, proposed_diagram_mermaid)
                         VALUES
-                            (:analysis_id, :name, :trigger_summary, :diagram, :sort_order)
+                            (:analysis_id, :name, :trigger_summary, :diagram, :sort_order,
+                             :diagram_set_by_owner, :proposed)
                         RETURNING id
                         """),
                     {
                         "analysis_id": analysis_id,
                         "name": name,
                         "trigger_summary": _str_or_none(raw.get("trigger_summary")),
-                        "diagram": str(raw.get("diagram_mermaid") or ""),
+                        "diagram": diagram,
                         "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
+                        "diagram_set_by_owner": owner_flag,
+                        "proposed": proposed,
                     },
                 )
             ).scalar_one()
@@ -451,6 +460,55 @@ async def upsert_analysis(
         len(workflow_ids),
     )
     return int(analysis_id)
+
+
+def _normalize_diagram(text: str) -> str:
+    """Compare Mermaid without trailing whitespace noise."""
+    return "\n".join(line.rstrip() for line in (text or "").strip().splitlines())
+
+
+def _diagram_for_ingest(
+    agent_diagram: str, previous: dict[str, Any] | None
+) -> tuple[str, bool, str | None]:
+    """Keep an owner-edited diagram; store a differing agent version as a proposal."""
+    if previous is None or not bool(previous.get("diagram_set_by_owner")):
+        return agent_diagram, False, None
+    owner_diagram = str(previous.get("diagram_mermaid") or "")
+    if _normalize_diagram(agent_diagram) == _normalize_diagram(owner_diagram):
+        return owner_diagram, True, None
+    return owner_diagram, True, agent_diagram
+
+
+async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
+    """Workflows of the latest other succeeded analysis of this repository.
+
+    Matched by name when carrying owner-edited diagrams forward. The caller
+    holds the repository row lock; owner diagram edits take it too.
+    """
+    rows = (
+        (
+            await conn.execute(
+                text("""
+                    SELECT w.name, w.diagram_mermaid, w.diagram_set_by_owner,
+                           w.proposed_diagram_mermaid
+                      FROM ai_workflows w
+                     WHERE w.analysis_id = (
+                             SELECT a.id FROM ai_workflow_analyses a
+                              WHERE a.team_repository_id = :repo
+                                AND a.status = 'succeeded'
+                                AND a.id <> :current
+                              ORDER BY a.finished_at DESC NULLS LAST, a.id DESC
+                              LIMIT 1
+                           )
+                     ORDER BY w.sort_order, w.id
+                    """),
+                {"repo": team_repository_id, "current": analysis_id},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return [dict(r) for r in rows]
 
 
 async def _previous_recommendations(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:

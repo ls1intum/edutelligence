@@ -20,6 +20,8 @@ describe('WorkflowsTabComponent review actions', () => {
   const getTeamWorkflows = vi.fn();
   const reviewRecommendation = vi.fn();
   const setRecommendationModel = vi.fn();
+  const setWorkflowDiagram = vi.fn();
+  const reviewWorkflowDiagramProposal = vi.fn();
   const getModels = vi.fn();
 
   const pending: AiLlmCallRecommendation = {
@@ -112,7 +114,13 @@ describe('WorkflowsTabComponent review actions', () => {
       providers: [
         {
           provide: TeamManagementService,
-          useValue: { getTeamWorkflows, reviewRecommendation, setRecommendationModel },
+          useValue: {
+            getTeamWorkflows,
+            reviewRecommendation,
+            setRecommendationModel,
+            setWorkflowDiagram,
+            reviewWorkflowDiagramProposal,
+          },
         },
         {
           provide: ModelManagementService,
@@ -246,6 +254,49 @@ describe('WorkflowsTabComponent review actions', () => {
     await component.load();
     await component.reject(pending);
     expect(reviewRecommendation).toHaveBeenCalledWith(7, 55, { action: 'reject' });
+  });
+
+  it('saves an edited diagram and reviews an agent proposal', async () => {
+    const component = setup();
+    await component.load();
+    const wf = component.workflowsForRepo(component.data()!.repositories[0])[0];
+    setWorkflowDiagram.mockResolvedValue({
+      ...wf,
+      diagram_mermaid: 'flowchart TD\n  Owner-->Edit',
+      diagram_set_by_owner: true,
+      proposed_diagram_mermaid: null,
+    });
+    component.startEditDiagram(wf);
+    component.setDiagramDraft(wf.id, 'flowchart TD\n  Owner-->Edit');
+    await component.saveDiagram(wf);
+    expect(setWorkflowDiagram).toHaveBeenCalledWith(7, 1, 'flowchart TD\n  Owner-->Edit');
+    expect(component.isEditingDiagram(wf)).toBe(false);
+    expect(component.workflowsForRepo(component.data()!.repositories[0])[0].diagram_set_by_owner).toBe(
+      true,
+    );
+
+    const withProposal = {
+      ...wf,
+      diagram_mermaid: 'flowchart TD\n  Owner-->Edit',
+      diagram_set_by_owner: true,
+      proposed_diagram_mermaid: 'flowchart TD\n  Agent-->New',
+    };
+    component.data.update((d) => {
+      if (!d) return d;
+      d.repositories[0].workflows[0] = withProposal;
+      return { ...d };
+    });
+    reviewWorkflowDiagramProposal.mockResolvedValue({
+      ...withProposal,
+      diagram_mermaid: 'flowchart TD\n  Agent-->New',
+      diagram_set_by_owner: false,
+      proposed_diagram_mermaid: null,
+    });
+    await component.reviewDiagramProposal(withProposal, 'accept');
+    expect(reviewWorkflowDiagramProposal).toHaveBeenCalledWith(7, 1, 'accept');
+    expect(
+      component.workflowsForRepo(component.data()!.repositories[0])[0].proposed_diagram_mermaid,
+    ).toBeNull();
   });
 
   it('resolves profile ratings for a detected model', async () => {
