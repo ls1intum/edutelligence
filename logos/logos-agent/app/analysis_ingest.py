@@ -38,6 +38,8 @@ MAX_ANCESTOR_HOPS = 50
 MAX_MATCH_PAIRS_PER_GROUP = 10_000
 _TAG_ALLOWED = re.compile(r"[^a-z0-9-]")
 MAX_TAG_CHARS = 80
+# Room kept for a "-N" suffix that makes an allocated tag unique.
+TAG_SUFFIX_RESERVE = 6
 
 
 def objective_priority_for_sla(sla: str) -> list[str]:
@@ -75,6 +77,25 @@ def normalize_workflow_tag(raw: object) -> str | None:
         return None
     cleaned = _TAG_ALLOWED.sub("", value)[:MAX_TAG_CHARS]
     return cleaned or None
+
+
+def unique_workflow_tag(tag: str | None, taken: set[str] | None) -> str | None:
+    """``tag``, or ``tag-2``, ``tag-3``, … — never one in ``taken``; reserves it.
+
+    Mirrors the webservice allocator: a long tag is cut to leave room for the
+    suffix, so truncation cannot make two tags equal.
+    """
+    if not tag or taken is None:
+        return tag
+    stem = (
+        tag[: MAX_TAG_CHARS - TAG_SUFFIX_RESERVE].rstrip("-") if len(tag) > MAX_TAG_CHARS - TAG_SUFFIX_RESERVE else tag
+    )
+    candidate, n = stem, 2
+    while candidate in taken:
+        candidate = f"{stem}-{n}"
+        n += 1
+    taken.add(candidate)
+    return candidate
 
 
 def artifact_analysis_path(session_id: int) -> Path:
@@ -346,6 +367,12 @@ async def upsert_analysis(
 
         previous_recs = await _previous_recommendations(conn, team_repository_id, int(analysis_id))
         previous_workflows = await _previous_workflows(conn, team_repository_id, int(analysis_id))
+        # Tags are matched team-wide; reserve every carried-over tag first so a
+        # new one cannot take it, then allocate the rest against that set.
+        taken_tags = await _lock_team_tags(conn, team_id, team_repository_id)
+        for previous_wf in previous_workflows.values():
+            taken_tags.update(t for t in [previous_wf.get("tag")] if t)
+            taken_tags.update(st["tag"] for st in previous_wf.get("steps", {}).values() if st.get("tag"))
 
         workflow_ids: dict[str, int] = {}
         # Per workflow name → step name → step id (for recommendation step_id).
@@ -375,7 +402,8 @@ async def upsert_analysis(
                         "trigger_summary": _str_or_none(raw.get("trigger_summary")),
                         "diagram": str(raw.get("diagram_mermaid") or ""),
                         "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
-                        "tag": (previous_wf or {}).get("tag") or normalize_workflow_tag(raw.get("tag")),
+                        "tag": (previous_wf or {}).get("tag")
+                        or unique_workflow_tag(normalize_workflow_tag(raw.get("tag")), taken_tags),
                         "status": (previous_wf or {}).get("status") or "active",
                         "deleted_at": (previous_wf or {}).get("deleted_at"),
                     },
@@ -387,6 +415,7 @@ async def upsert_analysis(
                 workflow_id=int(wf_id),
                 raw_steps=raw.get("steps"),
                 previous_steps=(previous_wf or {}).get("steps") or {},
+                taken_tags=taken_tags,
             )
             nested = raw.get("recommendations")
             if isinstance(nested, list):
@@ -497,6 +526,7 @@ async def _insert_workflow_steps(
     workflow_id: int,
     raw_steps: object,
     previous_steps: dict[str, dict[str, Any]] | None = None,
+    taken_tags: set[str] | None = None,
 ) -> dict[str, int]:
     """Insert ``ai_workflow_steps`` for one workflow. Returns name → id.
 
@@ -539,7 +569,8 @@ async def _insert_workflow_steps(
                     "workflow_id": workflow_id,
                     "name": name,
                     "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
-                    "tag": previous.get("tag") or normalize_workflow_tag(raw.get("tag")),
+                    "tag": previous.get("tag")
+                    or unique_workflow_tag(normalize_workflow_tag(raw.get("tag")), taken_tags),
                     "sla": sla,
                     "priority": json.dumps(normalize_objective_priority(raw.get("objective_priority"), sla=sla)),
                     "confirmed_sla": confirmed_sla,
@@ -549,6 +580,49 @@ async def _insert_workflow_steps(
         ).scalar_one()
         names_to_ids[name] = int(step_id)
     return names_to_ids
+
+
+async def _lock_team_tags(conn: Any, team_id: int, team_repository_id: int) -> set[str]:
+    """Take the team's tag lock (shared with the webservice) and return the tags in use.
+
+    The namespace is every other repository's latest succeeded analysis of the
+    team — what the request resolvers match in. This repository's own tags
+    are being replaced and come back through the carry-over.
+    """
+    await conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext('ai-workflow-tags'), :team_id)"),
+        {"team_id": team_id},
+    )
+    rows = (
+        (
+            await conn.execute(
+                text("""
+                    WITH current_analyses AS (
+                        SELECT a.id FROM ai_workflow_analyses a
+                         WHERE a.team_id = :team_id
+                           AND a.team_repository_id <> :repo
+                           AND a.id = (
+                                 SELECT latest.id FROM ai_workflow_analyses latest
+                                  WHERE latest.team_repository_id = a.team_repository_id
+                                    AND latest.status = 'succeeded'
+                                  ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                                  LIMIT 1
+                               )
+                    )
+                    SELECT w.tag AS tag FROM ai_workflows w
+                     WHERE w.analysis_id IN (SELECT id FROM current_analyses) AND w.tag IS NOT NULL
+                    UNION
+                    SELECT s.tag AS tag FROM ai_workflow_steps s
+                      JOIN ai_workflows w ON w.id = s.workflow_id
+                     WHERE w.analysis_id IN (SELECT id FROM current_analyses) AND s.tag IS NOT NULL
+                    """),
+                {"team_id": team_id, "repo": team_repository_id},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return {str(r["tag"]) for r in rows}
 
 
 async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: int) -> dict[str, dict[str, Any]]:

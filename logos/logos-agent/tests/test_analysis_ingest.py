@@ -39,10 +39,12 @@ class _Conn:
         analysed_commit=None,
         decisions=None,
         previous_workflows=None,
+        team_tags=None,
     ):
         self.statements: list[tuple[str, dict]] = []
         self.previous = previous or []
         self.previous_workflows = previous_workflows or []
+        self.team_tags = team_tags or []
         # start_id -> decision row; by default a reviewed row is its own decision.
         self.decisions = decisions
         self.analysed_commit = analysed_commit
@@ -67,6 +69,8 @@ class _Conn:
             return _Result([{"start_id": p["id"], **p} for p in self.previous if p["review_status"] != "pending"])
         if "FROM ai_llm_call_recommendations r" in text_sql:
             return _Result([dict(p) for p in self.previous])
+        if "WITH current_analyses" in text_sql:
+            return _Result([{"tag": t} for t in self.team_tags])
         if "FROM ai_workflows w LEFT JOIN ai_workflow_steps s" in text_sql:
             return _Result([dict(p) for p in self.previous_workflows])
         if "SELECT commit_sha FROM ai_workflow_analyses" in text_sql:
@@ -304,6 +308,60 @@ async def test_upsert_carries_workflow_lifecycle_and_step_confirmation(monkeypat
     assert steps[1]["tag"] == "summarize"
     assert steps[1]["confirmed_sla"] is None
     assert steps[1]["confirmed_priority"] is None
+
+
+async def test_upsert_keeps_tags_unique_across_the_team(monkeypatch):
+    conn = _Conn(
+        team_tags=["checkout", "checkout-score"],
+        previous_workflows=[
+            {
+                "workflow_name": "search",
+                "status": "active",
+                "deleted_at": None,
+                "workflow_tag": "search",
+                "step_name": None,
+                "step_tag": None,
+                "confirmed_sla": None,
+                "confirmed_objective_priority": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    payload = {
+        "commit_sha": "abc",
+        "workflows": [
+            {
+                "name": "checkout",
+                "tag": "checkout",
+                "steps": [
+                    {"name": "score", "tag": "checkout-score"},
+                    {"name": "rescore", "tag": "checkout-score"},
+                ],
+            },
+            # Another new workflow may not take the carried-over tag of "search".
+            {"name": "finder", "tag": "search"},
+            {"name": "search", "tag": "renamed"},
+        ],
+        "recommendations": [],
+    }
+    await analysis_ingest.upsert_analysis(session_id=8, team_repository_id=11, payload=payload)
+
+    lock = next(p for sql, p in conn.statements if "pg_advisory_xact_lock" in sql)
+    assert lock == {"team_id": 7}
+    workflows = [p["tag"] for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql]
+    assert workflows == ["checkout-2", "search-2", "search"]
+    steps = [p["tag"] for sql, p in conn.statements if "INSERT INTO ai_workflow_steps" in sql]
+    assert steps == ["checkout-score-2", "checkout-score-3"]
+
+
+def test_unique_workflow_tag_survives_truncation():
+    long_tag = "w" * 80
+    taken = {long_tag}
+    first = analysis_ingest.unique_workflow_tag(long_tag, taken)
+    second = analysis_ingest.unique_workflow_tag(long_tag, taken)
+    assert len(first) <= 80 and len(second) <= 80
+    assert len({long_tag, first, second}) == 3
+    assert analysis_ingest.unique_workflow_tag(None, taken) is None
 
 
 def test_normalize_workflow_tag():
