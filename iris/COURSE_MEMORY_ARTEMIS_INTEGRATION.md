@@ -109,10 +109,11 @@ at read time (§5) and the nightly sync (§7) removes what deleted channels and 
 Every operation on a thread carries a monotonic per-thread version (`post.course_memory_version` in Artemis, minted
 atomically before the thread is read). Iris keeps the highest version per thread and drops anything not newer.
 
-Artemis also bumps the version **right before it saves** every change that can make a stored entry outdated:
-editing or deleting a message of the thread, an opt-out from AI, a deactivation, the deletion of an account's
-messages. If the follow-up refresh never reaches Iris, the stored entry has an older version than Artemis, and the
-nightly sync retracts it.
+Artemis also bumps the version **right before and right after it saves** every change that can make a stored entry
+outdated: editing or deleting a message of the thread, an approval, an opt-out from AI, a deactivation, the deletion of
+an account's messages. If the follow-up refresh never reaches Iris, the stored entry has an older version than Artemis,
+and the nightly sync retracts it. The bump after the save covers a refresh that ran during the change and read the old
+state: its version is older than the second bump, so it cannot stay current.
 
 ## 5. Retrieval inside the autonomous tutor
 
