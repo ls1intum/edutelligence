@@ -68,6 +68,8 @@ export class TeamManagement implements OnInit {
   /** Realm groups and roles offered as suggestions; empty when the deployment
    *  has no Keycloak directory access, in which case the field stays free text. */
   keycloakGroups = signal<KeycloakGroupOption[]>([]);
+  /** The deployment can read the realm; false means the field is free text only. */
+  keycloakDirectoryAvailable = signal(false);
 
   // ── Team queue priority (logos_admin only) ──────────────────────────────
   /** Team ids with a priority PATCH in flight, one entry per team so
@@ -132,8 +134,10 @@ export class TeamManagement implements OnInit {
   async fetchKeycloakGroups(): Promise<void> {
     try {
       const directory = await this.teamService.getKeycloakGroups();
+      this.keycloakDirectoryAvailable.set(directory.available);
       this.keycloakGroups.set(directory.available ? directory.groups : []);
     } catch {
+      this.keycloakDirectoryAvailable.set(false);
       this.keycloakGroups.set([]);
     }
   }
@@ -154,6 +158,18 @@ export class TeamManagement implements OnInit {
 
   displayName(u: AdminUser): string {
     return userDisplayName(u);
+  }
+
+  /**
+   * Whether the field offers suggestions — a datalist gives no affordance of
+   * its own, so the admin would otherwise not know the realm can be browsed.
+   */
+  groupPickerHint(): string {
+    if (!this.keycloakDirectoryAvailable()) {
+      return 'Type the name exactly as a login claim carries it (a group path without its leading /).';
+    }
+    const free = this.availableKeycloakGroups().length;
+    return `Pick one of the ${free} unlinked groups and roles in the realm, or type another.`;
   }
 
   /** What the lock badge of a linked team explains on hover. */

@@ -122,6 +122,7 @@
             <option [value]="group.name">{{ group.source }}</option>
           }
         </datalist>
+        <p class="settings-hint settings-hint--field">{{ groupPickerHint() }}</p>
       </div>
 
       @if (team.managed) {
@@ -145,7 +146,7 @@
           (click)="saveKeycloakLink()"
         >
           @if (linkLoading()) { <i class="pi pi-spin pi-spinner"></i> }
-          {{ keycloakGroup().trim() ? 'Save Link' : 'Remove Link' }}
+          {{ linkButtonLabel() }}
         </button>
       </div>
     </div>

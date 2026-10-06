@@ -75,6 +75,8 @@ export class SettingsTabComponent implements OnChanges {
   /** Realm groups and roles to suggest; empty when the deployment has no
    *  Keycloak directory access, in which case the field stays free text. */
   keycloakGroupOptions = signal<KeycloakGroupOption[]>([]);
+  /** The deployment can read the realm; false means the field is free text only. */
+  keycloakDirectoryAvailable = signal(false);
   /** The directory was asked once; it stays the same while the tab is open. */
   private keycloakGroupsRequested = false;
   linkLoading = signal(false);
@@ -87,9 +89,26 @@ export class SettingsTabComponent implements OnChanges {
       .filter((g) => g.linked_team_id === null || g.linked_team_id === this.teamId);
   }
 
+  /**
+   * Whether the field offers suggestions — a datalist gives no affordance of
+   * its own, so the admin would otherwise not know the realm can be browsed.
+   */
+  groupPickerHint(): string {
+    if (!this.keycloakDirectoryAvailable()) {
+      return 'Type the name exactly as a login claim carries it (a group path without its leading /).';
+    }
+    const free = this.availableKeycloakGroups().length;
+    return `Pick one of the ${free} selectable groups and roles in the realm, or type another.`;
+  }
+
   /** Nothing to save while the field still shows what the team is linked to. */
   linkChanged(): boolean {
     return this.keycloakGroup().trim() !== (this.team?.keycloak_group ?? '');
+  }
+
+  /** Clearing the field only removes something when a link is actually stored. */
+  linkButtonLabel(): string {
+    return !this.keycloakGroup().trim() && this.team?.keycloak_group ? 'Remove Link' : 'Save Link';
   }
 
   ngOnChanges(): void {
@@ -114,8 +133,10 @@ export class SettingsTabComponent implements OnChanges {
   private async fetchKeycloakGroups(): Promise<void> {
     try {
       const directory = await this.teamService.getKeycloakGroups();
+      this.keycloakDirectoryAvailable.set(directory.available);
       this.keycloakGroupOptions.set(directory.available ? directory.groups : []);
     } catch {
+      this.keycloakDirectoryAvailable.set(false);
       this.keycloakGroupOptions.set([]);
     }
   }

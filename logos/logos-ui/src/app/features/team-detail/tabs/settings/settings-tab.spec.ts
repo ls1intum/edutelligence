@@ -80,6 +80,19 @@ describe('SettingsTabComponent — Keycloak link', () => {
     expect(updateTeamKeycloakGroup).toHaveBeenCalledWith(7, null);
   });
 
+  // An unlinked team has nothing to remove, so the button must not offer it.
+  it('labels the button Save Link until a stored link is cleared', () => {
+    const unlinked = setup(teamDetail());
+    expect(unlinked.linkButtonLabel()).toBe('Save Link');
+    unlinked.keycloakGroup.set('ios-26ws');
+    expect(unlinked.linkButtonLabel()).toBe('Save Link');
+
+    const linked = setup(teamDetail({ managed: true, keycloak_group: 'ios-26ws' }));
+    expect(linked.linkButtonLabel()).toBe('Save Link');
+    linked.keycloakGroup.set('');
+    expect(linked.linkButtonLabel()).toBe('Remove Link');
+  });
+
   it('does not save while the field still shows the stored link', async () => {
     const component = setup(teamDetail({ managed: true, keycloak_group: 'ios-26ws' }));
 
@@ -122,6 +135,29 @@ describe('SettingsTabComponent — Keycloak link', () => {
     await Promise.resolve();
 
     expect(component.availableKeycloakGroups()).toEqual([]);
+  });
+
+  // A datalist has no affordance of its own, so the hint is the only thing
+  // telling the admin whether the realm can be browsed at all.
+  it('says how many groups can be picked when the realm is readable', async () => {
+    getKeycloakGroups.mockResolvedValue({
+      available: true,
+      groups: [
+        { name: 'ios-26ws', source: 'group', linked_team_id: null, linked_team_name: null },
+        { name: 'taken', source: 'role', linked_team_id: 9, linked_team_name: 'other' },
+      ],
+    });
+    const component = setup(teamDetail());
+    await Promise.resolve();
+
+    expect(component.groupPickerHint()).toContain('1 selectable');
+  });
+
+  it('tells the admin to type the claim name when the realm is unreadable', async () => {
+    const component = setup(teamDetail());
+    await Promise.resolve();
+
+    expect(component.groupPickerHint()).toContain('login claim');
   });
 
   it('asks for no group directory when the caller may not link one', async () => {

@@ -241,6 +241,31 @@ describe('TeamManagement', () => {
     expect(component.availableKeycloakGroups().map((g) => g.name)).toEqual(['ios-26ws']);
   });
 
+  // A datalist has no affordance of its own, so the hint is the only thing
+  // telling the admin whether the realm can be browsed at all.
+  it('says how many groups can be picked when the realm is readable', async () => {
+    teamService.getKeycloakGroups.mockResolvedValue({
+      available: true,
+      groups: [
+        { name: 'ios-26ws', source: 'group', linked_team_id: null, linked_team_name: null },
+        { name: 'taken', source: 'role', linked_team_id: 2002, linked_team_name: 'other' },
+      ],
+    });
+    await createFor('logos_admin');
+    component.openCreateDialog();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(component.groupPickerHint()).toContain('1 unlinked');
+  });
+
+  it('tells the admin to type the claim name when the realm is unreadable', async () => {
+    await createFor('logos_admin');
+    component.openCreateDialog();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(component.groupPickerHint()).toContain('login claim');
+  });
+
   it('creates the team with the typed group', async () => {
     await createFor('logos_admin');
     component.openCreateDialog();

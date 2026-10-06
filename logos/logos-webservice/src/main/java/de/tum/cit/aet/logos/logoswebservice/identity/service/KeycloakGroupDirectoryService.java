@@ -8,7 +8,10 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -90,26 +93,38 @@ public class KeycloakGroupDirectoryService {
         List<KeycloakGroupOptionDTO> options = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         Set<String> reserved = normalizer.reservedNames();
-        try {
-            for (String path : client.listGroupPaths()) {
-                if (isSelectable(path, reserved) && seen.add(path)) {
-                    options.add(new KeycloakGroupOptionDTO(path, "group", null, null));
-                }
-            }
-            for (String role : client.listRealmRoleNames()) {
-                if (isSelectable(role, reserved) && !role.startsWith(DEFAULT_ROLES_PREFIX)
-                    && !BUILT_IN_ROLES.contains(role) && seen.add(role)) {
-                    options.add(new KeycloakGroupOptionDTO(role, "role", null, null));
-                }
-            }
-        } catch (Exception e) {
-            log.warn("Could not read the Keycloak group directory: {}", e.getMessage());
-            return List.of();
-        }
+
+        // Groups and roles are read independently: the service account may be
+        // granted one listing and not the other (query-groups without
+        // view-realm is the common split), and a deployment that can offer only
+        // one of them should still offer that one.
+        boolean anyRead = false;
+        anyRead |= collect("groups", client::listGroupPaths, name -> isSelectable(name, reserved),
+            name -> options.add(new KeycloakGroupOptionDTO(name, "group", null, null)), seen);
+        anyRead |= collect("realm roles", client::listRealmRoleNames,
+            name -> isSelectable(name, reserved) && !name.startsWith(DEFAULT_ROLES_PREFIX)
+                && !BUILT_IN_ROLES.contains(name),
+            name -> options.add(new KeycloakGroupOptionDTO(name, "role", null, null)), seen);
+        if (!anyRead) return List.of();
+
         options.sort(Comparator.comparing(KeycloakGroupOptionDTO::name, String.CASE_INSENSITIVE_ORDER));
         cachedNames = List.copyOf(options);
         cachedAt = Instant.now();
         return cachedNames;
+    }
+
+    /** @return whether the listing could be read at all, however empty it was */
+    private static boolean collect(String what, Supplier<List<String>> source, Predicate<String> keep,
+                                   Consumer<String> sink, Set<String> seen) {
+        List<String> names;
+        try {
+            names = source.get();
+        } catch (Exception e) {
+            log.warn("Could not read the Keycloak {}: {}", what, e.getMessage());
+            return false;
+        }
+        names.stream().filter(keep).filter(seen::add).forEach(sink);
+        return true;
     }
 
     private static boolean isSelectable(String name, Set<String> reserved) {

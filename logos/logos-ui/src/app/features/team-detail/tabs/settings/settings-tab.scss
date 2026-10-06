@@ -83,6 +83,12 @@
   margin: -4px 0 12px;
 }
 
+/** A hint directly under the field it explains. */
+.settings-hint--field {
+  margin: 6px 0 0;
+  font-size: var(--font-size-sm);
+}
+
 // ── Save actions ────────────────────────────────────────────────────────────
 .settings-actions {
   display: flex;

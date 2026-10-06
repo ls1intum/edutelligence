@@ -84,6 +84,8 @@ the team's **Settings** tab; clearing the field removes the link. Only Logos
 Admins see the field — team owners manage members, not who the identity
 provider lets in.
 
+![New Team dialog with a Keycloak group](/img/roles/logos-admin-new-team.png)
+
 Once linked:
 
 - Everyone in the group joins the team on their next login and on the nightly
@@ -96,8 +98,11 @@ Once linked:
   link first; that also removes the members the group brought in.
 
 Where the deployment can read the realm (`logos.auth.sync.enabled=true`) the
-field suggests the realm's groups and roles; otherwise type the name as the
-login claim carries it (a group path without its leading `/`).
+field suggests the realm's groups and roles and says how many are still
+unlinked; otherwise it asks for the name as the login claim carries it (a group
+path without its leading `/`). The same field sits on the team's **Settings**
+tab, where it also reports what the link currently costs you: a linked team
+cannot be renamed or deleted, so its Danger Zone is replaced by that note.
 
 Opening a team shows the same detail tabs as for an owning App Admin — see
 [App Admin → Teams](app-admin.md#teams) for Overview through Settings. Logos
