@@ -27,7 +27,7 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 ANALYSIS_FILE = "analysis.json"
-VALID_SLAS = frozenset({"ux-critical", "ux-high-prio", "ux-background"})
+VALID_SLOS = frozenset({"ux-critical", "ux-high-prio", "ux-background"})
 OBJECTIVE_KEYS = ("latency", "quality", "price")
 DEFAULT_OBJECTIVE_PRIORITY = list(OBJECTIVE_KEYS)
 # Cap memory: an agent-written artifact must not exhaust the runner.
@@ -38,15 +38,15 @@ MAX_ANCESTOR_HOPS = 50
 MAX_MATCH_PAIRS_PER_GROUP = 10_000
 
 
-def objective_priority_for_sla(sla: str) -> list[str]:
-    if sla == "ux-critical":
+def objective_priority_for_slo(slo: str) -> list[str]:
+    if slo == "ux-critical":
         return ["latency", "quality", "price"]
-    if sla == "ux-background":
+    if slo == "ux-background":
         return ["price", "quality", "latency"]
     return ["quality", "latency", "price"]
 
 
-def normalize_objective_priority(raw: object, *, sla: str) -> list[str]:
+def normalize_objective_priority(raw: object, *, slo: str) -> list[str]:
     ordered: list[str] = []
     seen: set[str] = set()
     if isinstance(raw, list):
@@ -56,7 +56,7 @@ def normalize_objective_priority(raw: object, *, sla: str) -> list[str]:
                 ordered.append(key)
                 seen.add(key)
     if not ordered:
-        ordered = objective_priority_for_sla(sla)
+        ordered = objective_priority_for_slo(slo)
         seen = set(ordered)
     for key in OBJECTIVE_KEYS:
         if key not in seen:
@@ -380,9 +380,11 @@ async def upsert_analysis(
             file_path = str(raw.get("file_path") or "").strip()
             if not file_path:
                 continue
-            sla = str(raw.get("recommended_sla") or "").strip()
-            if sla not in VALID_SLAS:
-                sla = "ux-high-prio"
+            # Sessions queued before the sla → slo rename still write the old
+            # key; honour it rather than defaulting the tier.
+            slo = str(raw.get("recommended_slo") or raw.get("recommended_sla") or "").strip()
+            if slo not in VALID_SLOS:
+                slo = "ux-high-prio"
             workflow_name = str(raw.get("workflow") or raw.get("workflow_name") or "").strip()
             flags = raw.get("traffic_flags")
             confidence = raw.get("confidence")
@@ -402,8 +404,8 @@ async def upsert_analysis(
                     "end_line": _int_or_none(raw.get("end_line")),
                     "code_url": _str_or_none(raw.get("code_url")),
                     "detected_model": _str_or_none(raw.get("detected_model")),
-                    "sla": sla,
-                    "priority": normalize_objective_priority(raw.get("objective_priority"), sla=sla),
+                    "slo": slo,
+                    "priority": normalize_objective_priority(raw.get("objective_priority"), slo=slo),
                     "confidence": confidence_f,
                     "justification": str(raw.get("justification") or ""),
                     "flags": json.dumps(flags if isinstance(flags, dict) else {}),
@@ -414,22 +416,22 @@ async def upsert_analysis(
         for index, rec in enumerate(parsed):
             previous = predecessors.get(index)
             review = carried_review(
-                previous.get("decision") if previous else None, sla=rec["sla"], priority=rec["priority"]
+                previous.get("decision") if previous else None, slo=rec["slo"], priority=rec["priority"]
             )
             owner_model = previous is not None and bool(previous["model_set_by_owner"])
             await conn.execute(
                 text("""
                     INSERT INTO ai_llm_call_recommendations
                         (analysis_id, workflow_id, team_id, file_path, start_line, end_line,
-                         code_url, detected_model, model_set_by_owner, recommended_sla, objective_priority,
+                         code_url, detected_model, model_set_by_owner, recommended_slo, objective_priority,
                          confidence, justification, traffic_flags, review_status, review_carried_over,
-                         confirmed_sla, confirmed_objective_priority, api_key_id, reviewed_by, reviewed_at,
+                         confirmed_slo, confirmed_objective_priority, api_key_id, reviewed_by, reviewed_at,
                          previous_recommendation_id)
                     VALUES
                         (:analysis_id, :workflow_id, :team_id, :file_path, :start_line, :end_line,
-                         :code_url, :detected_model, :model_set_by_owner, :sla, CAST(:priority AS jsonb),
+                         :code_url, :detected_model, :model_set_by_owner, :slo, CAST(:priority AS jsonb),
                          :confidence, :justification, CAST(:flags AS jsonb), :review_status, :carried_over,
-                         :confirmed_sla, CAST(:confirmed_priority AS jsonb), :api_key_id, :reviewed_by, :reviewed_at,
+                         :confirmed_slo, CAST(:confirmed_priority AS jsonb), :api_key_id, :reviewed_by, :reviewed_at,
                          :previous_id)
                     """),
                 {
@@ -447,7 +449,7 @@ async def upsert_analysis(
                     "detected_model": previous["detected_model"] if owner_model else rec["detected_model"],
                     "model_set_by_owner": owner_model,
                     "previous_id": previous["id"] if previous is not None else None,
-                    "sla": rec["sla"],
+                    "slo": rec["slo"],
                     "priority": json.dumps(rec["priority"]),
                     "confidence": rec["confidence"],
                     "justification": rec["justification"],
@@ -664,8 +666,8 @@ async def _previous_recommendations(conn: Any, team_repository_id: int, analysis
                          WHERE c.review_status = 'pending' AND c.depth < :max_hops
                     )
                     SELECT DISTINCT ON (c.start_id) c.start_id,
-                           d.id, d.review_status, d.recommended_sla, d.objective_priority,
-                           d.confirmed_sla, d.confirmed_objective_priority,
+                           d.id, d.review_status, d.recommended_slo, d.objective_priority,
+                           d.confirmed_slo, d.confirmed_objective_priority,
                            d.api_key_id, d.reviewed_by, d.reviewed_at
                       FROM chain c
                       JOIN ai_llm_call_recommendations d ON d.id = c.id
@@ -737,16 +739,16 @@ def match_recommendations(previous: list[dict[str, Any]], current: list[dict[str
     return matched
 
 
-def _priority_list(raw: Any, *, sla: str) -> list[str]:
+def _priority_list(raw: Any, *, slo: str) -> list[str]:
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except json.JSONDecodeError:
             raw = None
-    return normalize_objective_priority(raw, sla=sla)
+    return normalize_objective_priority(raw, slo=slo)
 
 
-def carried_review(previous: dict[str, Any] | None, *, sla: str, priority: list[str]) -> dict[str, Any]:
+def carried_review(previous: dict[str, Any] | None, *, slo: str, priority: list[str]) -> dict[str, Any]:
     """Review fields for a new recommendation, given the last reviewed decision it inherits.
 
     A re-analysis proposes; it never overwrites a decision. When the new
@@ -756,7 +758,7 @@ def carried_review(previous: dict[str, Any] | None, *, sla: str, priority: list[
     """
     pending: dict[str, Any] = {
         "review_status": "pending",
-        "confirmed_sla": None,
+        "confirmed_slo": None,
         "confirmed_priority": None,
         "api_key_id": None,
         "reviewed_by": None,
@@ -766,23 +768,23 @@ def carried_review(previous: dict[str, Any] | None, *, sla: str, priority: list[
         return pending
     status = previous["review_status"]
     if status in ("accepted", "overridden"):
-        confirmed_sla = previous["confirmed_sla"] or previous["recommended_sla"]
+        confirmed_slo = previous["confirmed_slo"] or previous["recommended_slo"]
         confirmed = _priority_list(
-            previous["confirmed_objective_priority"] or previous["objective_priority"], sla=confirmed_sla
+            previous["confirmed_objective_priority"] or previous["objective_priority"], slo=confirmed_slo
         )
-        if (sla, priority) != (confirmed_sla, confirmed):
+        if (slo, priority) != (confirmed_slo, confirmed):
             return pending
         return {
             "review_status": status,
-            "confirmed_sla": confirmed_sla,
+            "confirmed_slo": confirmed_slo,
             "confirmed_priority": json.dumps(confirmed),
             "api_key_id": previous["api_key_id"],
             "reviewed_by": previous["reviewed_by"],
             "reviewed_at": previous["reviewed_at"],
         }
     if status == "rejected":
-        rejected_sla = previous["recommended_sla"]
-        if (sla, priority) != (rejected_sla, _priority_list(previous["objective_priority"], sla=rejected_sla)):
+        rejected_slo = previous["recommended_slo"]
+        if (slo, priority) != (rejected_slo, _priority_list(previous["objective_priority"], slo=rejected_slo)):
             return pending
         return {
             **pending,

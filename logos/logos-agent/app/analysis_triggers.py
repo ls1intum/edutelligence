@@ -1,7 +1,7 @@
 """Queue read-only agent sessions that analyse linked team repositories.
 
 Linked application repos (``team_repositories``) need AI-workflow diagrams and
-SLA recommendations. Owners can trigger that from the UI; this poller also
+SLO recommendations. Owners can trigger that from the UI; this poller also
 queues spare-capacity analysis when a link has no succeeded analysis yet, and
 once a night (``LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC``) for every analysed
 link whose branch head moved past the analysed commit.
@@ -37,7 +37,7 @@ ANALYSIS_PRIORITY_REASON = "workflow analysis — spare capacity"
 
 ANALYSIS_TASK = """\
 Analyse this linked application repository for AI / LLM call sites and produce
-workflow diagrams plus SLA recommendations.
+workflow diagrams plus SLO recommendations.
 
 Write structured results ONLY to `/artifacts/analysis.json` (UTF-8 JSON).
 Do not push commits, open pull requests, or modify the remote.
@@ -61,10 +61,10 @@ Schema for `/artifacts/analysis.json`:
       "end_line": 20,
       "code_url": "optional permalink to the call site, or null",
       "detected_model": "optional model name or null",
-      "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+      "recommended_slo": "ux-critical" | "ux-high-prio" | "ux-background",
       "objective_priority": ["latency" | "quality" | "price", "..."],
       "confidence": 0.0,
-      "justification": "why this SLA and objective order",
+      "justification": "why this SLO and objective order",
       "traffic_flags": {{"night_heavy": false}}
     }}
   ]
@@ -76,7 +76,7 @@ in double quotes (`A["Session title LLM (deferred)"]`, `B{{"EXERCISE mode?"}}`,
 unquoted label are syntax errors and the diagram will not render.
 
 `objective_priority` is a full ranking of latency, quality, and price (most
-important first). It complements SLA: SLA is urgency/interactivity; the ranking
+important first). It complements SLO: SLO is urgency/interactivity; the ranking
 says what to optimize for when choosing a model. If omitted, defaults are:
 ux-critical → [latency, quality, price]; ux-high-prio → [quality, latency, price];
 ux-background → [price, quality, latency].
