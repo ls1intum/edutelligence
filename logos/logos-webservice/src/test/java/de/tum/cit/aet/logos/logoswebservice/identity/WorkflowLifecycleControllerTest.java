@@ -161,6 +161,13 @@ class WorkflowLifecycleControllerTest {
                 .content("{\"tag\":\"!!!\"}"))
            .andExpect(status().isBadRequest());
 
+        // The workflow's own tag is taken within the team.
+        mvc.perform(patch("/admin/teams/2001/workflow-steps/" + stepId)
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"tag\":\"checkout\"}"))
+           .andExpect(status().isConflict());
+
         // Another team's id in the path does not reach this team's step.
         mvc.perform(patch("/admin/teams/2002/workflow-steps/" + stepId)
                 .with(TestJwt.logosAdmin())
@@ -180,6 +187,16 @@ class WorkflowLifecycleControllerTest {
         int[] ids = seedWorkflowWithStep();
         jdbc.update("UPDATE ai_workflows SET tag = NULL WHERE id = ?", ids[0]);
         jdbc.update("UPDATE ai_workflow_steps SET tag = NULL WHERE id = ?", ids[1]);
+        // A same-named workflow already holds the tags generation would pick first.
+        Integer sibling = jdbc.queryForObject("""
+            INSERT INTO ai_workflows (analysis_id, name, diagram_mermaid, tag)
+            SELECT analysis_id, 'checkout', 'flowchart TD', 'checkout' FROM ai_workflows WHERE id = ?
+            RETURNING id
+            """, Integer.class, ids[0]);
+        jdbc.update("""
+            INSERT INTO ai_workflow_steps (workflow_id, name, tag, recommended_sla)
+            VALUES (?, 'score', 'checkout-2-score', 'ux-background')
+            """, sibling);
 
         // An owning App Admin may not aim the agent's GitHub account at a repository.
         mvc.perform(post("/admin/teams/2001/workflows/" + ids[0] + "/propose-tagging-pr")
@@ -198,14 +215,14 @@ class WorkflowLifecycleControllerTest {
             "SELECT tag FROM ai_workflows WHERE id = ?", String.class, ids[0]);
         String stepTag = jdbc.queryForObject(
             "SELECT tag FROM ai_workflow_steps WHERE id = ?", String.class, ids[1]);
-        org.assertj.core.api.Assertions.assertThat(workflowTag).isEqualTo("checkout");
-        org.assertj.core.api.Assertions.assertThat(stepTag).isEqualTo("checkout-score");
+        org.assertj.core.api.Assertions.assertThat(workflowTag).isEqualTo("checkout-2");
+        org.assertj.core.api.Assertions.assertThat(stepTag).isEqualTo("checkout-2-score-2");
         String task = jdbc.queryForObject(
             "SELECT task FROM agent_sessions WHERE id = ? AND trigger_kind = 'workflow-tagging'",
             String.class, sessionId);
         org.assertj.core.api.Assertions.assertThat(task)
-            .contains("Workflow tag (X-Logos-Workflow-Tag): checkout")
-            .contains("tag=checkout-score");
+            .contains("Workflow tag (X-Logos-Workflow-Tag): checkout-2")
+            .contains("tag=checkout-2-score-2");
     }
 
     @Test

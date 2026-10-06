@@ -3,6 +3,7 @@ package de.tum.cit.aet.logos.logoswebservice.identity.service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -59,6 +60,8 @@ public class AiWorkflowAnalysisService {
     private static final int DEFAULT_BENCHMARK_SAMPLE_SIZE = 50;
     private static final int MAX_BENCHMARK_SAMPLE_SIZE = 200;
     private static final int MAX_TAG_LENGTH = 80;
+    /** Room kept for a "-N" suffix that makes a generated tag unique. */
+    private static final int TAG_SUFFIX_RESERVE = 6;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> REVIEW_ACTIONS = Set.of("accept", "override", "reject");
 
@@ -529,7 +532,7 @@ public class AiWorkflowAnalysisService {
             workflow.setStatus(status);
         }
         if (body.tag() != null) {
-            workflow.setTag(normalizeTag(body.tag()));
+            workflow.setTag(claimTag(teamId, workflow.getTag(), normalizeTag(body.tag())));
         }
         if (Boolean.TRUE.equals(body.deleted())) {
             workflow.setDeletedAt(Instant.now());
@@ -550,8 +553,7 @@ public class AiWorkflowAnalysisService {
         if (body == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body is required");
         }
-        AiWorkflowStep step = requireStepForTeam(teamId, stepId);
-        lockCurrentWorkflow(teamId, step.getWorkflowId());
+        AiWorkflowStep step = lockCurrentStep(teamId, stepId);
         if (body.confirmedSla() != null) {
             String sla = body.confirmedSla().trim();
             if (sla.isEmpty()) {
@@ -569,7 +571,7 @@ public class AiWorkflowAnalysisService {
             step.setConfirmedObjectivePriority(ObjectivePriority.asJsonList(body.confirmedObjectivePriority()));
         }
         if (body.tag() != null) {
-            step.setTag(normalizeTag(body.tag()));
+            step.setTag(claimTag(teamId, step.getTag(), normalizeTag(body.tag())));
         }
         if (body.name() != null) {
             String name = body.name().trim();
@@ -655,7 +657,7 @@ public class AiWorkflowAnalysisService {
         // The session only changes the application repository; its result is
         // never ingested. Tags it would invent could match nothing, so every
         // missing tag is fixed here first and the task names the stored values.
-        assignMissingTags(workflow, steps);
+        assignMissingTags(teamId, workflow, steps);
 
         String stepsLabel = steps.isEmpty()
             ? "(no steps recorded — send the workflow tag at every call site)"
@@ -878,35 +880,58 @@ public class AiWorkflowAnalysisService {
      * refused — the page is showing old workflows and must reload.
      */
     private AiWorkflow lockCurrentWorkflow(int teamId, int workflowId) {
-        AiWorkflow workflow = requireWorkflowForTeam(teamId, workflowId);
-        AiWorkflowAnalysis analysis = analysisRepository.findById(workflow.getAnalysisId())
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found"));
-        Integer repoId = analysis.getTeamRepositoryId();
+        if (!teamExists(teamId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Team not found");
+        }
+        // Identity only, by plain query: the entity is loaded after the lock,
+        // so a concurrent edit that held it is seen rather than overwritten.
+        Map<String, Object> owner = jdbc.query("""
+            SELECT a.id AS analysis_id, a.team_id, a.team_repository_id
+              FROM ai_workflows w
+              JOIN ai_workflow_analyses a ON a.id = w.analysis_id
+             WHERE w.id = ?
+            """, rs -> {
+                if (!rs.next()) {
+                    return null;
+                }
+                Map<String, Object> row = new HashMap<>();
+                row.put("analysis_id", rs.getObject("analysis_id"));
+                row.put("team_id", rs.getObject("team_id"));
+                row.put("team_repository_id", rs.getObject("team_repository_id"));
+                return row;
+            }, workflowId);
+        if (owner == null || !Integer.valueOf(teamId).equals(owner.get("team_id"))) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found");
+        }
+        Integer repoId = (Integer) owner.get("team_repository_id");
         if (repoId != null) {
             jdbc.query("SELECT id FROM team_repositories WHERE id = ? FOR UPDATE", rs -> null, repoId);
             Integer latest = analysisRepository.findLatestSucceeded(repoId)
                 .map(AiWorkflowAnalysis::getId).orElse(null);
-            if (latest != null && !latest.equals(analysis.getId())) {
+            if (latest != null && !latest.equals(owner.get("analysis_id"))) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "A newer analysis replaced this workflow; reload the Workflows tab");
             }
         }
-        return workflow;
+        return workflowRepository.findById(workflowId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found"));
     }
 
-    private AiWorkflowStep requireStepForTeam(int teamId, int stepId) {
-        if (!teamExists(teamId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Team not found");
-        }
-        Integer foundTeamId = jdbc.query("""
-            SELECT a.team_id
-              FROM ai_workflow_steps s
-              JOIN ai_workflows w ON w.id = s.workflow_id
-              JOIN ai_workflow_analyses a ON a.id = w.analysis_id
-             WHERE s.id = ?
-            """, rs -> rs.next() ? (Integer) rs.getObject(1) : null, stepId);
-        if (foundTeamId == null || !foundTeamId.equals(teamId)) {
+    /** Lock a step's workflow as {@link #lockCurrentWorkflow} does, then load the step. */
+    private AiWorkflowStep lockCurrentStep(int teamId, int stepId) {
+        Integer workflowId = jdbc.query("SELECT workflow_id FROM ai_workflow_steps WHERE id = ?",
+            rs -> rs.next() ? (Integer) rs.getObject(1) : null, stepId);
+        if (workflowId == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow step not found");
+        }
+        try {
+            lockCurrentWorkflow(teamId, workflowId);
+        }
+        catch (ResponseStatusException e) {
+            if (e.getStatusCode() == HttpStatus.NOT_FOUND) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow step not found");
+            }
+            throw e;
         }
         return stepRepository.findById(stepId)
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow step not found"));
@@ -957,28 +982,84 @@ public class AiWorkflowAnalysisService {
         }
     }
 
-    private void assignMissingTags(AiWorkflow workflow, List<AiWorkflowStep> steps) {
+    private void assignMissingTags(int teamId, AiWorkflow workflow, List<AiWorkflowStep> steps) {
+        Set<String> taken = lockTeamTags(teamId);
         if (workflow.getTag() == null || workflow.getTag().isBlank()) {
-            workflow.setTag(slugOrDefault(workflow.getName(), "workflow-" + workflow.getId()));
+            workflow.setTag(uniqueTag(slugOrDefault(workflow.getName(), "workflow-" + workflow.getId()), taken));
             workflowRepository.save(workflow);
         }
         for (AiWorkflowStep step : steps) {
             if (step.getTag() == null || step.getTag().isBlank()) {
-                String tag = workflow.getTag() + "-" + slugOrDefault(step.getName(), "step-" + step.getId());
-                step.setTag(tag.length() > MAX_TAG_LENGTH ? tag.substring(0, MAX_TAG_LENGTH) : tag);
+                String base = workflow.getTag() + "-" + slugOrDefault(step.getName(), "step-" + step.getId());
+                step.setTag(uniqueTag(base, taken));
                 stepRepository.save(step);
             }
         }
+    }
+
+    /**
+     * Serialize tag changes of one team and return the tags its current
+     * workflows and steps hold — the namespace both request resolvers match
+     * in (each repository's latest succeeded analysis).
+     */
+    private Set<String> lockTeamTags(int teamId) {
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtext('ai-workflow-tags'), ?)", rs -> null, teamId);
+        List<String> tags = jdbc.queryForList("""
+            WITH current_analyses AS (
+                SELECT a.id FROM ai_workflow_analyses a
+                 WHERE a.team_id = ?
+                   AND a.id = (
+                         SELECT latest.id FROM ai_workflow_analyses latest
+                          WHERE latest.team_repository_id = a.team_repository_id
+                            AND latest.status = 'succeeded'
+                          ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                          LIMIT 1
+                       )
+            )
+            SELECT w.tag FROM ai_workflows w
+             WHERE w.analysis_id IN (SELECT id FROM current_analyses) AND w.tag IS NOT NULL
+            UNION
+            SELECT s.tag FROM ai_workflow_steps s
+              JOIN ai_workflows w ON w.id = s.workflow_id
+             WHERE w.analysis_id IN (SELECT id FROM current_analyses) AND s.tag IS NOT NULL
+            """, String.class, teamId);
+        return new HashSet<>(tags);
+    }
+
+    /**
+     * An owner-chosen tag must stay unique among the team's current workflows
+     * and steps: both resolvers would otherwise attribute requests to
+     * whichever match they find first.
+     */
+    private String claimTag(int teamId, String current, String wanted) {
+        if (wanted == null || wanted.equals(current)) {
+            return wanted;
+        }
+        if (lockTeamTags(teamId).contains(wanted)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "tag " + wanted + " is already used by another workflow or step of this team");
+        }
+        return wanted;
+    }
+
+    /** {@code base}, or {@code base-2}, {@code base-3}, … — never one in {@code taken}; reserves it. */
+    static String uniqueTag(String base, Set<String> taken) {
+        String stem = base.length() > MAX_TAG_LENGTH - TAG_SUFFIX_RESERVE
+            ? base.substring(0, MAX_TAG_LENGTH - TAG_SUFFIX_RESERVE).replaceAll("-+$", "")
+            : base;
+        String candidate = stem;
+        for (int n = 2; taken.contains(candidate); n++) {
+            candidate = stem + "-" + n;
+        }
+        taken.add(candidate);
+        return candidate;
     }
 
     private static String slugOrDefault(String name, String fallback) {
         String slug = name == null ? "" : name.trim().toLowerCase(Locale.ROOT)
             .replaceAll("[^a-z0-9]+", "-")
             .replaceAll("^-+|-+$", "");
-        if (slug.isEmpty()) {
-            return fallback;
-        }
-        return slug.length() > MAX_TAG_LENGTH ? slug.substring(0, MAX_TAG_LENGTH) : slug;
+        return slug.isEmpty() ? fallback : slug;
     }
 
     /**

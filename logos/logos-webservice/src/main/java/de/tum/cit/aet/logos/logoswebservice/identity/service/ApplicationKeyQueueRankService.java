@@ -99,6 +99,9 @@ public class ApplicationKeyQueueRankService {
             }
         }
 
+        // One shared ranking: serialize whole replacements, including on an
+        // empty table, so two of them cannot both insert rank 1.
+        jdbc.execute("LOCK TABLE application_key_queue_ranks IN SHARE ROW EXCLUSIVE MODE");
         rankRepository.deleteAllInBatch();
         rankRepository.flush();
         Instant now = Instant.now();
