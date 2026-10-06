@@ -1,14 +1,16 @@
 import { TestBed } from '@angular/core/testing';
+import { signal } from '@angular/core';
 
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { ModelManagementService } from '../../../../core/services/model-management.service';
+import { ThemeService } from '../../../../core/services/theme.service';
 import {
   AiLlmCallRecommendation,
   TeamApiKey,
   TeamWorkflowsResponse,
 } from '../../../../shared/models/team.model';
 import { WorkflowsTabComponent } from './workflows-tab';
-
+import mermaid from 'mermaid';
 vi.mock('mermaid', () => ({
   default: {
     initialize: vi.fn(),
@@ -20,7 +22,10 @@ describe('WorkflowsTabComponent review actions', () => {
   const getTeamWorkflows = vi.fn();
   const reviewRecommendation = vi.fn();
   const setRecommendationModel = vi.fn();
+  const setWorkflowDiagram = vi.fn();
+  const reviewWorkflowDiagramProposal = vi.fn();
   const getModels = vi.fn();
+  const isDark = signal(false);
 
   const pending: AiLlmCallRecommendation = {
     id: 55,
@@ -91,6 +96,7 @@ describe('WorkflowsTabComponent review actions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    isDark.set(false);
     // A copy per load: the component updates recommendations in place.
     getTeamWorkflows.mockImplementation(async () => structuredClone(payload));
     reviewRecommendation.mockResolvedValue({ ...pending, review_status: 'accepted' });
@@ -112,11 +118,21 @@ describe('WorkflowsTabComponent review actions', () => {
       providers: [
         {
           provide: TeamManagementService,
-          useValue: { getTeamWorkflows, reviewRecommendation, setRecommendationModel },
+          useValue: {
+            getTeamWorkflows,
+            reviewRecommendation,
+            setRecommendationModel,
+            setWorkflowDiagram,
+            reviewWorkflowDiagramProposal,
+          },
         },
         {
           provide: ModelManagementService,
           useValue: { getModels },
+        },
+        {
+          provide: ThemeService,
+          useValue: { isDark, toggle: vi.fn() },
         },
       ],
     });
@@ -248,6 +264,61 @@ describe('WorkflowsTabComponent review actions', () => {
     expect(reviewRecommendation).toHaveBeenCalledWith(7, 55, { action: 'reject' });
   });
 
+  it('saves an edited diagram and reviews an agent proposal', async () => {
+    const component = setup();
+    await component.load();
+    const wf = component.workflowsForRepo(component.data()!.repositories[0])[0];
+    setWorkflowDiagram.mockResolvedValue({
+      ...wf,
+      diagram_mermaid: 'flowchart TD\n  Owner-->Edit',
+      diagram_set_by_owner: true,
+      proposed_diagram_mermaid: null,
+    });
+    component.startEditDiagram(wf);
+    component.setDiagramDraft(wf.id, 'flowchart TD\n  Owner-->Edit');
+    await component.saveDiagram(wf);
+    expect(setWorkflowDiagram).toHaveBeenCalledWith(7, 1, 'flowchart TD\n  Owner-->Edit');
+    expect(component.isEditingDiagram(wf)).toBe(false);
+    expect(component.workflowsForRepo(component.data()!.repositories[0])[0].diagram_set_by_owner).toBe(
+      true,
+    );
+
+    const withProposal = {
+      ...wf,
+      diagram_mermaid: 'flowchart TD\n  Owner-->Edit',
+      diagram_set_by_owner: true,
+      proposed_diagram_mermaid: 'flowchart TD\n  Agent-->New',
+    };
+    component.data.update((d) => {
+      if (!d) return d;
+      d.repositories[0].workflows[0] = withProposal;
+      return { ...d };
+    });
+    reviewWorkflowDiagramProposal.mockResolvedValue({
+      ...withProposal,
+      diagram_mermaid: 'flowchart TD\n  Agent-->New',
+      diagram_set_by_owner: false,
+      proposed_diagram_mermaid: null,
+    });
+    await component.reviewDiagramProposal(withProposal, 'accept');
+    expect(reviewWorkflowDiagramProposal).toHaveBeenCalledWith(7, 1, 'accept');
+    expect(
+      component.workflowsForRepo(component.data()!.repositories[0])[0].proposed_diagram_mermaid,
+    ).toBeNull();
+  });
+
+  it('re-renders diagrams when leaving or switching the diagram editor', async () => {
+    const component = setup();
+    await component.load();
+    const [first] = component.workflowsForRepo(component.data()!.repositories[0]);
+    component['diagramsDirty'] = false;
+    component.startEditDiagram(first);
+    expect(component['diagramsDirty']).toBe(true);
+    component['diagramsDirty'] = false;
+    component.cancelEditDiagram();
+    expect(component['diagramsDirty']).toBe(true);
+  });
+
   it('resolves profile ratings for a detected model', async () => {
     const component = setup();
     await component.load();
@@ -256,5 +327,22 @@ describe('WorkflowsTabComponent review actions', () => {
       quality: 3,
       price: 4,
     });
+  });
+
+  it('initializes Mermaid with the dark theme when Logos is dark', async () => {
+    isDark.set(true);
+    const component = setup();
+    await component.load();
+    component['diagramsDirty'] = true;
+    await component['renderDiagrams']();
+    expect(mermaid.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: 'dark' }),
+    );
+
+    isDark.set(false);
+    await component['renderDiagrams']();
+    expect(mermaid.initialize).toHaveBeenCalledWith(
+      expect.objectContaining({ theme: 'neutral' }),
+    );
   });
 });
