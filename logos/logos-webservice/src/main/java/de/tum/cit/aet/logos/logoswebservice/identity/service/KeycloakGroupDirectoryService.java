@@ -98,19 +98,25 @@ public class KeycloakGroupDirectoryService {
         // granted one listing and not the other (query-groups without
         // view-realm is the common split), and a deployment that can offer only
         // one of them should still offer that one.
-        boolean anyRead = false;
-        anyRead |= collect("groups", client::listGroupPaths, name -> isSelectable(name, reserved),
+        boolean groupsRead = collect("groups", client::listGroupPaths, name -> isSelectable(name, reserved),
             name -> options.add(new KeycloakGroupOptionDTO(name, "group", null, null)), seen);
-        anyRead |= collect("realm roles", client::listRealmRoleNames,
+        boolean rolesRead = collect("realm roles", client::listRealmRoleNames,
             name -> isSelectable(name, reserved) && !name.startsWith(DEFAULT_ROLES_PREFIX)
                 && !BUILT_IN_ROLES.contains(name),
             name -> options.add(new KeycloakGroupOptionDTO(name, "role", null, null)), seen);
-        if (!anyRead) return List.of();
+        if (!groupsRead && !rolesRead) return List.of();
 
         options.sort(Comparator.comparing(KeycloakGroupOptionDTO::name, String.CASE_INSENSITIVE_ORDER));
-        cachedNames = List.copyOf(options);
-        cachedAt = Instant.now();
-        return cachedNames;
+        List<KeycloakGroupOptionDTO> result = List.copyOf(options);
+        // Only a complete listing is worth keeping: caching a half of it would
+        // hide the other half for the whole TTL after one transient failure,
+        // while a permanent one (a service account granted query-groups but not
+        // view-realm) costs a cheap retry per request.
+        if (groupsRead && rolesRead) {
+            cachedNames = result;
+            cachedAt = Instant.now();
+        }
+        return result;
     }
 
     /** @return whether the listing could be read at all, however empty it was */

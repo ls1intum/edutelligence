@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -215,6 +216,12 @@ public class KeycloakUserSyncService {
             .flatMap(Optional::stream)
             .collect(Collectors.toMap(Team::getId, t -> t, (a, b) -> a));
 
+        // Hold each resolved team until this sync commits. A link removed in
+        // the meantime drops the memberships it produced and must not see a new
+        // one appear behind it: with the row locked, either the removal waits
+        // for us and then cleans up, or it wins and the re-read finds no link.
+        desired = confirmLinksUnderLock(desired, claimNames);
+
         List<TeamMember> currentKeycloak =
             memberRepository.findById_UserIdAndSource(user.getId(), TeamMemberSource.KEYCLOAK);
 
@@ -226,6 +233,20 @@ public class KeycloakUserSyncService {
         for (Team team : desired.values()) {
             membershipService.join(user.getId(), team.getId(), false, TeamMemberSource.KEYCLOAK);
         }
+    }
+
+    /**
+     * Re-reads each resolved team with its row locked and keeps only the ones
+     * still linked to a group this login carries. Teams are locked in id order
+     * so two concurrent logins can never take them in opposite orders.
+     */
+    private Map<Integer, Team> confirmLinksUnderLock(Map<Integer, Team> desired, Set<String> claimNames) {
+        Map<Integer, Team> confirmed = new LinkedHashMap<>();
+        desired.keySet().stream().sorted().forEach(teamId ->
+            teamRepository.lockAndReadKeycloakGroup(teamId)
+                .filter(claimNames::contains)
+                .ifPresent(group -> confirmed.put(teamId, desired.get(teamId))));
+        return confirmed;
     }
 
     private Optional<Team> resolveTeamForRole(String roleName) {

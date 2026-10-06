@@ -148,8 +148,9 @@ public class TeamService {
         return memberRepository.isMember(teamId, userId);
     }
 
+    @Transactional
     public boolean deleteTeam(Integer teamId) {
-        Optional<Team> teamOpt = teamRepository.findById(teamId);
+        Optional<Team> teamOpt = teamRepository.findByIdForUpdate(teamId);
         if (teamOpt.isEmpty()) return false;
         requireUnmanaged(teamOpt.get(), "deleted");
         teamRepository.deleteById(teamId);
@@ -215,8 +216,9 @@ public class TeamService {
         });
     }
 
+    @Transactional
     public Optional<TeamResponseDTO> updateTeamLimits(Integer teamId, UpdateTeamRequestDTO body) {
-        return teamRepository.findById(teamId).map(team -> {
+        return teamRepository.findByIdForUpdate(teamId).map(team -> {
             if (body.default_cloud_rpm_limit() != null) team.setDefaultCloudRpmLimit(body.default_cloud_rpm_limit());
             if (body.default_cloud_tpm_limit() != null) team.setDefaultCloudTpmLimit(body.default_cloud_tpm_limit());
             if (body.default_local_rpm_limit() != null) team.setDefaultLocalRpmLimit(body.default_local_rpm_limit());
@@ -228,8 +230,9 @@ public class TeamService {
         });
     }
 
+    @Transactional
     public Optional<TeamResponseDTO> updateTeamName(Integer teamId, String name) {
-        return teamRepository.findById(teamId).map(team -> {
+        return teamRepository.findByIdForUpdate(teamId).map(team -> {
             requireUnmanaged(team, "renamed");
             team.setName(name);
             teamRepository.save(team);
@@ -242,8 +245,9 @@ public class TeamService {
      * The priority is a platform-level decision, so the endpoint is gated to
      * logos_admin only. Null restores the policy-level priority behaviour.
      */
+    @Transactional
     public Optional<TeamResponseDTO> updateTeamPriority(Integer teamId, Integer priority) {
-        return teamRepository.findById(teamId).map(team -> {
+        return teamRepository.findByIdForUpdate(teamId).map(team -> {
             team.setPriority(priority);
             teamRepository.save(team);
             return new TeamResponseDTO(team.getId(), team.getName());
@@ -265,7 +269,7 @@ public class TeamService {
     @Transactional
     public Optional<TeamResponseDTO> updateTeamKeycloakGroup(Integer teamId, String rawGroup) {
         String group = groupLinkNormalizer.normalize(rawGroup);
-        return teamRepository.findById(teamId).map(team -> {
+        return teamRepository.findByIdForUpdate(teamId).map(team -> {
             String previous = team.getKeycloakGroup();
             if (Objects.equals(previous, group)) {
                 return new TeamResponseDTO(team.getId(), team.getName());

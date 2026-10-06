@@ -171,13 +171,22 @@ public class KeycloakAdminClient {
         }
         boolean hasChildren = group.get("subGroupCount") instanceof Number count && count.intValue() > 0;
         if (!hasChildren || !(group.get("id") instanceof String id)) return List.of();
-        List<Map<String, Object>> children = restClient.get()
-            .uri("/admin/realms/{realm}/groups/{id}/children?briefRepresentation=true&first=0&max={max}",
-                props.sync().realm(), id, PAGE_SIZE)
-            .header("Authorization", "Bearer " + accessToken())
-            .retrieve()
-            .body(LIST_OF_MAPS);
-        return children != null ? children : List.of();
+        List<Map<String, Object>> all = new ArrayList<>();
+        int first = 0;
+        List<Map<String, Object>> page;
+        do {
+            page = restClient.get()
+                .uri("/admin/realms/{realm}/groups/{id}/children?briefRepresentation=true&first={first}&max={max}",
+                    props.sync().realm(), id, first, PAGE_SIZE)
+                .header("Authorization", "Bearer " + accessToken())
+                .retrieve()
+                .body(LIST_OF_MAPS);
+            if (page != null) {
+                all.addAll(page);
+                first += page.size();
+            }
+        } while (page != null && page.size() == PAGE_SIZE && all.size() < MAX_DIRECTORY_ENTRIES);
+        return all;
     }
 
     private static void addName(Set<String> target, Map<String, Object> rep) {
