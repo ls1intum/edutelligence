@@ -24,6 +24,7 @@ public class ExportImportService {
         "team_members", "api_keys", "providers", "models",
         "model_provider", "team_model_permissions", "api_key_model_permissions",
         "team_provider_permissions", "api_key_provider_permissions", "policies",
+        "team_provider_budgets",
         "ai_workflow_analyses", "ai_workflows", "ai_llm_call_recommendations",
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );

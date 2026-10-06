@@ -1,6 +1,6 @@
 """Monthly budget enforcement, shared by the request pipeline and the Batch API."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
 
@@ -9,7 +9,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from logos.dbutils.dbmanager import DBManager
 
 
-def check_monthly_budget(db: "DBManager", auth: "AuthContext", is_cloud: bool, month_start: str) -> None:
+def check_monthly_budget(
+    db: "DBManager",
+    auth: "AuthContext",
+    is_cloud: bool,
+    month_start: str,
+    provider_id: Optional[int] = None,
+) -> None:
     """
     Raise HTTPException(402) if this key/team is over its monthly budget.
 
@@ -20,6 +26,10 @@ def check_monthly_budget(db: "DBManager", auth: "AuthContext", is_cloud: bool, m
     with the real resolved provider type, not a guess from the permission list --
     that's what lets this be exact for mixed cloud+local keys instead of only
     for pure-type ones.
+
+    When ``provider_id`` is set, a ``team_provider_budgets`` row for the team
+    takes that provider out of the default team monthly bucket (null limit =
+    sponsored / unlimited for that provider alone).
     """
     if not is_cloud:
         return
@@ -34,12 +44,40 @@ def check_monthly_budget(db: "DBManager", auth: "AuthContext", is_cloud: bool, m
                 raise HTTPException(status_code=402, detail="Application monthly budget exceeded.")
     else:
         if auth.team_id is not None:
-            team_info = db.get_team(auth.team_id)
-            if team_info and team_info.get("team_monthly_budget_micro_cents"):
-                team_limit = team_info["team_monthly_budget_micro_cents"]
-                team_used = db.get_team_budget_usage(auth.team_id, month_start)
-                if team_used >= team_limit:
-                    raise HTTPException(status_code=402, detail="Team monthly budget exceeded. Contact your admin.")
+            if provider_id is not None:
+                exists, provider_limit = db.get_team_provider_budget(auth.team_id, provider_id)
+                if exists:
+                    if provider_limit is not None and provider_limit > 0:
+                        team_used = db.get_team_provider_budget_usage(
+                            auth.team_id, provider_id, month_start
+                        )
+                        if team_used >= provider_limit:
+                            raise HTTPException(
+                                status_code=402,
+                                detail=(
+                                    "Team monthly budget exceeded for this provider. "
+                                    "Contact your admin."
+                                ),
+                            )
+                else:
+                    team_info = db.get_team(auth.team_id)
+                    if team_info and team_info.get("team_monthly_budget_micro_cents"):
+                        team_limit = team_info["team_monthly_budget_micro_cents"]
+                        team_used = db.get_team_default_budget_usage(auth.team_id, month_start)
+                        if team_used >= team_limit:
+                            raise HTTPException(
+                                status_code=402,
+                                detail="Team monthly budget exceeded. Contact your admin.",
+                            )
+            else:
+                team_info = db.get_team(auth.team_id)
+                if team_info and team_info.get("team_monthly_budget_micro_cents"):
+                    team_limit = team_info["team_monthly_budget_micro_cents"]
+                    team_used = db.get_team_budget_usage(auth.team_id, month_start)
+                    if team_used >= team_limit:
+                        raise HTTPException(
+                            status_code=402, detail="Team monthly budget exceeded. Contact your admin."
+                        )
 
         personal_limit = db.get_api_key_budget_limit(auth.api_key_id)
         if personal_limit is not None:

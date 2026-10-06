@@ -131,6 +131,14 @@ export interface TeamLimitsPayload {
   default_local_tpm_limit?: number | null;
 }
 
+/** Per-provider monthly budget override (null = unlimited / sponsored). */
+export interface TeamProviderBudget {
+  provider_id: number;
+  provider_name: string;
+  provider_type?: string;
+  monthly_budget_micro_cents: number | null;
+}
+
 /** GitHub repository linked to a team for later AI-workflow / SLA analysis. */
 export interface TeamRepository {
   id: number;

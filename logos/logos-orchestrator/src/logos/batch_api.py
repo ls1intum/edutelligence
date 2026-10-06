@@ -1292,13 +1292,19 @@ async def _read_json_body(request: Request) -> Dict[str, Any]:
     return json_body
 
 
-def _check_batch_budget(db: DBManager, auth: AuthContext) -> None:
+def _check_batch_budget(db: DBManager, auth: AuthContext, provider_id: int | None = None) -> None:
     """A key already over its monthly budget does not get to start more work.
 
     The batch's own cost lands when it finishes, so this is the same guard the
     request pipeline applies, not a forecast.
     """
-    check_monthly_budget(db, auth, True, datetime.now(timezone.utc).date().replace(day=1).isoformat())
+    check_monthly_budget(
+        db,
+        auth,
+        True,
+        datetime.now(timezone.utc).date().replace(day=1).isoformat(),
+        provider_id=provider_id,
+    )
 
 
 async def _handle_file_upload(request: Request, auth: AuthContext, headers: Dict[str, str], db: DBManager):
@@ -1431,7 +1437,8 @@ async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, d
     if input_file is None or not _owns_object(auth, input_file):
         raise_openai_error(404, f"No such file: {input_file_id!r}.", code="not_found")
 
-    _check_batch_budget(db, auth)
+    provider_id = int(input_file["provider_id"]) if input_file.get("provider_id") is not None else None
+    _check_batch_budget(db, auth, provider_id=provider_id)
 
     if input_file.get("execution") != "logos":
         provider = db.get_batch_provider(int(input_file["provider_id"]))

@@ -755,6 +755,15 @@ class _FakeDB:
     def get_team(self, team_id):
         return None
 
+    def get_team_provider_budget(self, team_id, provider_id):
+        return False, None
+
+    def get_team_default_budget_usage(self, team_id, month_start):
+        return 0
+
+    def get_team_provider_budget_usage(self, team_id, provider_id, month_start):
+        return 0
+
 
 def _patch_env(monkeypatch, db, upstream, auth=None):
     """Point the Batch API at a fake DB, a canned upstream and a fixed key."""

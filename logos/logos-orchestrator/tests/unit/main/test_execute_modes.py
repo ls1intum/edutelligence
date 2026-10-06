@@ -150,6 +150,15 @@ async def test_execute_resource_mode_uses_sync_response_for_resolved_whisper_ali
         def get_api_key_budget_limit(self, api_key_id):
             return None
 
+        def get_team_provider_budget(self, team_id, provider_id):
+            return False, None
+
+        def get_team_default_budget_usage(self, team_id, month_start):
+            return 0
+
+        def get_team_provider_budget_usage(self, team_id, provider_id, month_start):
+            return 0
+
     monkeypatch.setattr(main, "DBManager", DummyDB)
 
     class Result:
@@ -262,6 +271,15 @@ async def test_execute_resource_mode_cloud_still_checks_the_budget_in_db(monkeyp
 
         def get_api_key_budget_limit(self, api_key_id):
             return None
+
+        def get_team_provider_budget(self, team_id, provider_id):
+            return False, None
+
+        def get_team_default_budget_usage(self, team_id, month_start):
+            return 0
+
+        def get_team_provider_budget_usage(self, team_id, provider_id, month_start):
+            return 0
 
     monkeypatch.setattr(main, "DBManager", DummyDB)
 
