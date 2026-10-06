@@ -6,6 +6,7 @@ import {
   Input,
   OnChanges,
   Output,
+  effect,
   inject,
   signal,
 } from '@angular/core';
@@ -16,6 +17,7 @@ import { DataTableComponent } from '../../../../shared/components/data-table/dat
 import { ModelProfileRadarComponent } from '../../../../shared/components/model-profile-radar/model-profile-radar';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { ModelManagementService } from '../../../../core/services/model-management.service';
+import { ThemeService } from '../../../../core/services/theme.service';
 import {
   AiLlmCallRecommendation,
   AiWorkflow,
@@ -92,8 +94,13 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
 
   private teamService = inject(TeamManagementService);
   private modelService = inject(ModelManagementService);
+  private theme = inject(ThemeService);
   private diagramsDirty = false;
   private mermaidReady: Promise<typeof import('mermaid')> | null = null;
+  /** Avoid wiping diagrams on the first theme effect before load() paints them. */
+  private themeWatchStarted = false;
+  /** Bumped on theme toggle so Angular re-runs AfterViewChecked to re-paint Mermaid. */
+  private readonly diagramEpoch = signal(0);
 
   loading = signal(true);
   loadError = signal('');
@@ -105,6 +112,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   /** The key Accept / Override apply to; null until the owner picks one (then the default applies). */
   private reviewKeyPick = signal<number | '' | null>(null);
   savingModelId = signal<number | null>(null);
+  /** Workflow id currently being edited in the Mermaid textarea. */
+  editingDiagramId = signal<number | null>(null);
+  /** Draft Mermaid while editing; keyed by workflow id. */
+  diagramDraft = signal<Record<number, string>>({});
+  savingDiagramId = signal<number | null>(null);
+  reviewingProposalId = signal<number | null>(null);
   /** name/alias (lower) → model, for spider charts beside detected models */
   private modelsByName = signal<Map<string, Model>>(new Map());
 
@@ -122,6 +135,19 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   readonly recGrid =
     'minmax(10rem, 1.6fr) minmax(12rem, 1fr) minmax(9rem, 1fr) 6.5rem 7.5rem 21rem';
 
+  constructor() {
+    // Mermaid paints node fills/text at initialize time; follow Logos theme.
+    effect(() => {
+      this.theme.isDark();
+      if (!this.themeWatchStarted) {
+        this.themeWatchStarted = true;
+        return;
+      }
+      this.diagramsDirty = true;
+      this.diagramEpoch.update((n) => n + 1);
+    });
+  }
+
   ngOnChanges(): void {
     if (this.teamId) {
       void this.load();
@@ -131,6 +157,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   ngAfterViewChecked(): void {
     if (!this.diagramsDirty) return;
     this.diagramsDirty = false;
+    this.resetProcessedDiagrams();
     void this.renderDiagrams();
   }
 
@@ -241,6 +268,71 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return quoteFlowchartLabels(wf.diagram_mermaid ?? '');
   }
 
+  proposedDiagramSource(wf: AiWorkflow): string {
+    return quoteFlowchartLabels(wf.proposed_diagram_mermaid ?? '');
+  }
+
+  isEditingDiagram(wf: AiWorkflow): boolean {
+    return this.editingDiagramId() === wf.id;
+  }
+
+  startEditDiagram(wf: AiWorkflow): void {
+    this.editingDiagramId.set(wf.id);
+    this.diagramDraft.update((m) => ({ ...m, [wf.id]: wf.diagram_mermaid ?? '' }));
+    // Switching from another editor brings that workflow's <pre> back as source.
+    this.diagramsDirty = true;
+  }
+
+  cancelEditDiagram(): void {
+    this.editingDiagramId.set(null);
+    // The restored <pre> holds Mermaid source until the next render pass.
+    this.diagramsDirty = true;
+  }
+
+  setDiagramDraft(workflowId: number, value: string): void {
+    this.diagramDraft.update((m) => ({ ...m, [workflowId]: value }));
+  }
+
+  async saveDiagram(wf: AiWorkflow): Promise<void> {
+    if (this.savingDiagramId() != null) return;
+    const draft = (this.diagramDraft()[wf.id] ?? '').trim();
+    if (!draft) {
+      this.actionError.set('Diagram Mermaid cannot be empty.');
+      return;
+    }
+    this.savingDiagramId.set(wf.id);
+    this.actionError.set('');
+    try {
+      const saved = await this.teamService.setWorkflowDiagram(this.teamId, wf.id, draft);
+      this.applyWorkflow(saved);
+      this.editingDiagramId.set(null);
+      this.diagramsDirty = true;
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
+      this.actionError.set(typeof detail === 'string' ? detail : 'Failed to save the diagram.');
+    } finally {
+      this.savingDiagramId.set(null);
+    }
+  }
+
+  async reviewDiagramProposal(wf: AiWorkflow, action: 'accept' | 'dismiss'): Promise<void> {
+    if (this.reviewingProposalId() != null) return;
+    this.reviewingProposalId.set(wf.id);
+    this.actionError.set('');
+    try {
+      const saved = await this.teamService.reviewWorkflowDiagramProposal(this.teamId, wf.id, action);
+      this.applyWorkflow(saved);
+      this.diagramsDirty = true;
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
+      this.actionError.set(
+        typeof detail === 'string' ? detail : 'Failed to review the diagram proposal.',
+      );
+    } finally {
+      this.reviewingProposalId.set(null);
+    }
+  }
+
   async accept(rec: AiLlmCallRecommendation): Promise<void> {
     await this.review(rec, {
       action: 'accept',
@@ -286,6 +378,19 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
 
   private findRec(recId: number): AiLlmCallRecommendation | undefined {
     return this.allRecs().find((r) => r.id === recId);
+  }
+
+  private applyWorkflow(saved: AiWorkflow): void {
+    const data = this.data();
+    if (!data) return;
+    for (const repo of data.repositories) {
+      const idx = repo.workflows.findIndex((w) => w.id === saved.id);
+      if (idx >= 0) {
+        repo.workflows[idx] = { ...repo.workflows[idx], ...saved };
+        this.data.set({ ...data });
+        return;
+      }
+    }
   }
 
   private indexModels(models: Model[]): Map<string, Model> {
@@ -340,10 +445,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
       const mod = await this.mermaidReady;
       const mermaid = mod.default;
       // No "Syntax error" bomb in place of a diagram that does not parse.
+      // `dark` keeps node text/fills readable on the app's dark theme; `neutral`
+      // matches light. Re-initialize whenever we paint so a theme toggle sticks.
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'strict',
-        theme: 'neutral',
+        theme: this.theme.isDark() ? 'dark' : 'neutral',
         suppressErrorRendering: true,
       });
       // One at a time: a diagram that still fails to parse keeps its source
@@ -359,5 +466,20 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     } catch {
       // Leave <pre class="mermaid"> source visible if render fails or mermaid is unavailable.
     }
+  }
+
+  /**
+   * Mermaid replaces each <pre> with an SVG and marks it processed. To switch
+   * themes we restore the source from data-diagram-source and clear the flag.
+   */
+  private resetProcessedDiagrams(): void {
+    document.querySelectorAll<HTMLElement>('.workflows-tab .mermaid[data-processed]').forEach((node) => {
+      const source = node.getAttribute('data-diagram-source');
+      if (source == null) return;
+      node.removeAttribute('data-processed');
+      // Drop Mermaid's generated id so the next run does not collide.
+      node.removeAttribute('id');
+      node.textContent = source;
+    });
   }
 }

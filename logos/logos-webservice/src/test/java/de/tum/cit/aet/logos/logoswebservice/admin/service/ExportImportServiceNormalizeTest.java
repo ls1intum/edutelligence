@@ -75,6 +75,15 @@ class ExportImportServiceNormalizeTest {
     }
 
     @Test
+    void normalizeWorkflowsDefaultsDiagramSetByOwnerForOlderDumps() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", 3);
+        row.put("diagram_mermaid", "flowchart TD\n  A-->B");
+        List<Map<String, Object>> out = service.normalizeImportRows("ai_workflows", List.of(row));
+        assertEquals(false, out.get(0).get("diagram_set_by_owner"));
+    }
+
+    @Test
     void normalizeAnalysesKeepsOnlyTheNewestInFlightPerRepository() {
         List<Map<String, Object>> rows = List.of(
             analysis(1, 7, "queued"), analysis(2, 7, "running"), analysis(3, 7, "succeeded"),

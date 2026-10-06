@@ -190,6 +190,9 @@ public class ExportImportService {
                     if (copy.get(flag) == null) copy.put(flag, false);
                 }
             }
+            if ("ai_workflows".equals(table) && copy.get("diagram_set_by_owner") == null) {
+                copy.put("diagram_set_by_owner", false);
+            }
             out.add(copy);
         }
         if ("ai_workflow_analyses".equals(table)) {

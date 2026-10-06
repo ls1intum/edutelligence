@@ -176,6 +176,10 @@ export interface AiWorkflow {
   trigger_summary?: string | null;
   diagram_mermaid: string;
   sort_order: number;
+  /** The owner saved diagram_mermaid; re-analyses keep it. */
+  diagram_set_by_owner?: boolean;
+  /** Agent Mermaid that differs from the owner's; Accept / Keep mine. */
+  proposed_diagram_mermaid?: string | null;
 }
 
 export type RecommendedSla = 'ux-critical' | 'ux-high-prio' | 'ux-background';
