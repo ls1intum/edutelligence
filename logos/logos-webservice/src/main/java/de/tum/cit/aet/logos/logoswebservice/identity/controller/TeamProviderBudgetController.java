@@ -21,7 +21,8 @@ import de.tum.cit.aet.logos.logoswebservice.identity.service.TeamProviderBudgetS
 /**
  * Per-provider monthly budgets for a team (sponsored / dedicated caps).
  * Same ownership gate as team settings: logos admins, or an app admin who owns
- * the team.
+ * the team. The gateway caches each override per instance, so a change reaches
+ * gateway admission after at most {@code logos.gateway.budget-cache-ttl-seconds}.
  */
 @RestController
 @RequestMapping("/admin")

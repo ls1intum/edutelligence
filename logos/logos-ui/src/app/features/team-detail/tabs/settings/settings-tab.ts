@@ -6,6 +6,7 @@ import {
   signal,
   inject,
   OnChanges,
+  SimpleChanges,
   ChangeDetectionStrategy,
 } from '@angular/core';
 import { FormsModule } from '@angular/forms';
@@ -40,7 +41,8 @@ export function parseProviderCap(s: string): number | null | undefined {
   const trimmed = s.trim();
   if (trimmed === '') return null;
   if (!/^\d+([.,]\d+)?$/.test(trimmed)) return undefined;
-  return Math.round(Number(trimmed.replace(',', '.')) * MICRO);
+  const mc = Math.round(Number(trimmed.replace(',', '.')) * MICRO);
+  return Number.isSafeInteger(mc) ? mc : undefined;
 }
 
 function strToIntOrNull(s: string): number | null {
@@ -87,9 +89,9 @@ export class SettingsTabComponent implements OnChanges {
   deleteLoading = signal(false);
   deleteError = signal(false);
 
-  ngOnChanges(): void {
+  ngOnChanges(changes: SimpleChanges): void {
     if (this.team) this.resetForm();
-    if (this.teamId) void this.loadProviderBudgets();
+    if (this.teamId && changes['teamId']) void this.loadProviderBudgets();
   }
 
   private resetForm(): void {

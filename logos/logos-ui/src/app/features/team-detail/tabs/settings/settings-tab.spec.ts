@@ -16,7 +16,7 @@ describe('parseProviderCap', () => {
   });
 
   it('rejects anything that is not a complete non-negative amount', () => {
-    for (const input of ['abc', '12abc', '-5', '1.2.3', '$5']) {
+    for (const input of ['abc', '12abc', '-5', '1.2.3', '$5', '9'.repeat(310)]) {
       expect(parseProviderCap(input)).toBeUndefined();
     }
   });
