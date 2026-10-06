@@ -470,33 +470,15 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
                 self.llm.tokens, PipelineEnum.IRIS_COURSE_MEMORY_INGESTION
             )
 
-        has_verbatim_answer = self.dto.source in VERBATIM_ANSWER_SOURCES
-        try:
-            question, extracted_answer = self._parse_extraction(response)
-        except ValueError:
-            # With a verbatim answer at hand, don't fail the whole ingestion on a
-            # malformed extraction; fall back to the thread's root post as a
-            # best-effort question, unless its author opted out.
-            root_question = self._root_post_content()
-            if has_verbatim_answer and root_question:
-                logger.warning(
-                    "Q/A extraction unparseable for message %s with a verbatim "
-                    "answer; falling back to the thread root post as the question",
-                    self.dto.message_id,
-                )
-                return root_question, self.dto.existing_answer
-            raise
+        # A malformed extraction fails the ingestion, also with a verbatim answer at
+        # hand: the question is only ever stored in condensed form, never as the
+        # root post's own text. The thread is stored with its next change.
+        question, extracted_answer = self._parse_extraction(response)
 
-        if has_verbatim_answer:
+        if self.dto.source in VERBATIM_ANSWER_SOURCES:
             return question, self.dto.existing_answer
 
         return question, extracted_answer
-
-    def _root_post_content(self) -> str:
-        """Content of the thread's first message (the original question), if usable."""
-        if self.dto.thread and not self.dto.thread[0].redacted:
-            return (self.dto.thread[0].content or "").strip()
-        return ""
 
     @staticmethod
     def _parse_extraction(response: str) -> Tuple[str, str]:

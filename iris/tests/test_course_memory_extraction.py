@@ -124,7 +124,7 @@ def test_extract_qa_does_not_fall_back_to_a_redacted_root():
         pipeline.extract_qa()
 
 
-def test_extract_qa_falls_back_to_root_post_when_parse_fails_for_correction():
+def test_extract_qa_raises_on_parse_failure_for_correction():
     dto = SimpleNamespace(
         thread=[ThreadMessageDTO(id="1", authorRole="student", content="Why is X?")],
         source=CourseMemorySource.IRIS_CORRECTED,
@@ -134,12 +134,10 @@ def test_extract_qa_falls_back_to_root_post_when_parse_fails_for_correction():
     pipeline = _pipeline_with_mocked_llm(dto)
     _mock_response(pipeline, "not json at all")
 
-    question, answer = pipeline.extract_qa()
-
-    # The tutor's answer is already at hand; a malformed extraction must not
-    # fail the correction. The thread's root post serves as the question.
-    assert question == "Why is X?"
-    assert answer == "The corrected answer."
+    # The question is only stored in condensed form, never as the root post's own
+    # text, so a malformed extraction fails even with the tutor's answer at hand.
+    with pytest.raises(ValueError):
+        pipeline.extract_qa()
 
 
 def test_extract_qa_still_raises_on_parse_failure_for_non_correction():
