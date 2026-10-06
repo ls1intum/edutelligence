@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
@@ -331,27 +332,37 @@ async def upsert_analysis(
             )
 
         previous_recs = await _previous_recommendations(conn, team_repository_id, int(analysis_id))
+        previous_workflows = await _previous_workflows(conn, team_repository_id, int(analysis_id))
+        previous_for = match_workflows(previous_workflows, previous_recs, workflows, recommendations)
 
         workflow_ids: dict[str, int] = {}
         for index, raw in enumerate(workflows):
             if not isinstance(raw, dict):
                 continue
-            name = str(raw.get("name") or "").strip() or f"workflow-{index + 1}"
+            name = _workflow_name(raw, index)
+            agent_diagram = str(raw.get("diagram_mermaid") or "")
+            previous_wf = previous_for.get(index)
+            diagram, owner_flag, proposed, dismissed = _diagram_for_ingest(agent_diagram, previous_wf)
             wf_id = (
                 await conn.execute(
                     text("""
                         INSERT INTO ai_workflows
-                            (analysis_id, name, trigger_summary, diagram_mermaid, sort_order)
+                            (analysis_id, name, trigger_summary, diagram_mermaid, sort_order,
+                             diagram_set_by_owner, proposed_diagram_mermaid, dismissed_diagram_mermaid)
                         VALUES
-                            (:analysis_id, :name, :trigger_summary, :diagram, :sort_order)
+                            (:analysis_id, :name, :trigger_summary, :diagram, :sort_order,
+                             :diagram_set_by_owner, :proposed, :dismissed)
                         RETURNING id
                         """),
                     {
                         "analysis_id": analysis_id,
                         "name": name,
                         "trigger_summary": _str_or_none(raw.get("trigger_summary")),
-                        "diagram": str(raw.get("diagram_mermaid") or ""),
+                        "diagram": diagram,
                         "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
+                        "diagram_set_by_owner": owner_flag,
+                        "proposed": proposed,
+                        "dismissed": dismissed,
                     },
                 )
             ).scalar_one()
@@ -451,6 +462,156 @@ async def upsert_analysis(
         len(workflow_ids),
     )
     return int(analysis_id)
+
+
+def _workflow_name(raw: dict[str, Any], index: int) -> str:
+    return str(raw.get("name") or "").strip() or f"workflow-{index + 1}"
+
+
+def _workflow_key(name: str) -> str:
+    """`Chat`, `chat` and `chat-flow` / `Chat flow` name the same workflow."""
+    return re.sub(r"[^0-9a-z]+", " ", name.casefold()).strip()
+
+
+def match_workflows(
+    previous_workflows: list[dict[str, Any]],
+    previous_recs: list[dict[str, Any]],
+    workflows: list[Any],
+    recommendations: list[Any],
+) -> dict[int, dict[str, Any]]:
+    """Pair each new workflow (by index) with its previous-analysis workflow.
+
+    The agent names workflows freely on every run, so an exact name is not a
+    stable identity. Match on the case- and punctuation-insensitive name first;
+    the rest pair up by how many files their recommended call sites share,
+    taking only mutually unique best pairs (repeated until none is left). Each
+    previous workflow carries forward at most once.
+    """
+    entries = [(i, _workflow_name(raw, i)) for i, raw in enumerate(workflows) if isinstance(raw, dict)]
+    matched: dict[int, dict[str, Any]] = {}
+    used: set[int] = set()
+    by_key: dict[str, int] = {}
+    for p_index, prev in enumerate(previous_workflows):
+        key = _workflow_key(str(prev.get("name") or ""))
+        if key:
+            by_key.setdefault(key, p_index)
+    for index, name in entries:
+        p_index = by_key.get(_workflow_key(name))
+        if p_index is not None and p_index not in used:
+            matched[index] = previous_workflows[p_index]
+            used.add(p_index)
+
+    prev_files: dict[str, set[str]] = {}
+    for rec in previous_recs:
+        if rec.get("workflow_name") and rec.get("file_path"):
+            prev_files.setdefault(_workflow_key(str(rec["workflow_name"])), set()).add(str(rec["file_path"]))
+    new_files: dict[str, set[str]] = {}
+    for rec in recommendations:
+        if isinstance(rec, dict) and rec.get("file_path"):
+            wf = str(rec.get("workflow") or rec.get("workflow_name") or "")
+            new_files.setdefault(_workflow_key(wf), set()).add(str(rec["file_path"]).strip())
+    for i, raw in enumerate(workflows):
+        nested = raw.get("recommendations") if isinstance(raw, dict) else None
+        for rec in nested if isinstance(nested, list) else []:
+            if isinstance(rec, dict) and rec.get("file_path"):
+                key = _workflow_key(_workflow_name(raw, i))
+                new_files.setdefault(key, set()).add(str(rec["file_path"]).strip())
+
+    # Score every unmatched pair, then take only pairs that are each other's
+    # unique best; drop them and repeat, so neither list order nor an earlier
+    # tie decides who keeps an owner diagram. Ambiguous pairs stay unmatched.
+    while True:
+        scores: dict[tuple[int, int], int] = {}
+        for p_index, prev in enumerate(previous_workflows):
+            if p_index in used:
+                continue
+            files = prev_files.get(_workflow_key(str(prev.get("name") or "")), set())
+            for index, name in entries:
+                if index in matched:
+                    continue
+                overlap = len(files & new_files.get(_workflow_key(name), set()))
+                if overlap:
+                    scores[(p_index, index)] = overlap
+        best_for_prev = _unique_best(scores, side=0)
+        best_for_new = _unique_best(scores, side=1)
+        pairs = [(p_index, index) for p_index, index in best_for_prev.items() if best_for_new.get(index) == p_index]
+        if not pairs:
+            break
+        for p_index, index in pairs:
+            matched[index] = previous_workflows[p_index]
+            used.add(p_index)
+    return matched
+
+
+def _unique_best(scores: dict[tuple[int, int], int], *, side: int) -> dict[int, int]:
+    """For each key on ``side`` of the pairs, its single highest-scoring partner (ties: none)."""
+    ranked: dict[int, list[tuple[int, int]]] = {}
+    for pair, score in scores.items():
+        ranked.setdefault(pair[side], []).append((score, pair[1 - side]))
+    best: dict[int, int] = {}
+    for key, options in ranked.items():
+        options.sort(reverse=True)
+        if len(options) == 1 or options[1][0] < options[0][0]:
+            best[key] = options[0][1]
+    return best
+
+
+def _normalize_diagram(text: str) -> str:
+    """Compare Mermaid without trailing whitespace noise."""
+    return "\n".join(line.rstrip() for line in (text or "").strip().splitlines())
+
+
+def _diagram_for_ingest(
+    agent_diagram: str, previous: dict[str, Any] | None
+) -> tuple[str, bool, str | None, str | None]:
+    """Keep an owner-edited diagram; store a differing agent version as a proposal.
+
+    Returns (diagram, set_by_owner, proposed, dismissed). A proposal the owner
+    already dismissed ("Keep mine") is not offered again while the agent keeps
+    drawing the same Mermaid.
+    """
+    if previous is None or not bool(previous.get("diagram_set_by_owner")):
+        return agent_diagram, False, None, None
+    owner_diagram = str(previous.get("diagram_mermaid") or "")
+    dismissed = _str_or_none(previous.get("dismissed_diagram_mermaid"))
+    agent_norm = _normalize_diagram(agent_diagram)
+    if not agent_norm or agent_norm == _normalize_diagram(owner_diagram):
+        return owner_diagram, True, None, dismissed
+    if dismissed is not None and agent_norm == _normalize_diagram(dismissed):
+        return owner_diagram, True, None, dismissed
+    return owner_diagram, True, agent_diagram, dismissed
+
+
+async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
+    """Workflows of the latest other succeeded analysis of this repository.
+
+    Matched by :func:`match_workflows` when carrying owner-edited diagrams forward. The caller
+    holds the repository row lock; owner diagram edits take it too.
+    """
+    rows = (
+        (
+            await conn.execute(
+                text("""
+                    SELECT w.name, w.diagram_mermaid, w.diagram_set_by_owner,
+                           w.proposed_diagram_mermaid, w.dismissed_diagram_mermaid
+                      FROM ai_workflows w
+                     WHERE w.analysis_id = (
+                             SELECT a.id FROM ai_workflow_analyses a
+                              WHERE a.team_repository_id = :repo
+                                AND a.status = 'succeeded'
+                                AND a.id <> :current
+                              ORDER BY a.finished_at DESC NULLS LAST, a.id DESC
+                              LIMIT 1
+                           )
+                     ORDER BY w.sort_order, w.id
+                    """),
+                {"repo": team_repository_id, "current": analysis_id},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return [dict(r) for r in rows]
 
 
 async def _previous_recommendations(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
