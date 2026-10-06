@@ -9,10 +9,19 @@
 # BuildKit prefers a `<Dockerfile>.dockerignore` next to the Dockerfile over the
 # context-root `.dockerignore`, so these rules apply to the iris build only and
 # leave the logos context untouched. Patterns are relative to the context root
-# (the repo root). Keep only what iris/Dockerfile needs, minus caches/VCS noise.
+# (the repo root). Keep only what iris/Dockerfile copies, the same inputs the repo-root .dockerignore lists.
+# Never whole directories: gitignored local secrets (.env, application.local.yml, llm_config.local.yml) must
+# not enter the image, and `COPY memiris ../memiris` copies whatever of memiris/ is in the context.
 *
-!iris
-!memiris
+!iris/pyproject.toml
+!iris/poetry.lock
+!iris/src/iris
+!iris/log_conf.yml
+!iris/models
+!memiris/pyproject.toml
+!memiris/README.md
+!memiris/src
+!memiris/tests
 
 **/__pycache__
 **/.venv
