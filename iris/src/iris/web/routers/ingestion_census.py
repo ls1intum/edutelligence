@@ -2,10 +2,13 @@
 
 Artemis calls this to verify its ingestion ledger against reality: which
 units have rows, under which fingerprint, with how many chunks over which
-page range. Counts and ranges come from Weaviate aggregations grouped by
-lecture unit, so a course costs four Weaviate calls regardless of its size,
-and a unit that any collection still knows about is reported even when its
-unit row is missing. The endpoint reads identity properties only.
+page range. Weaviate aggregations grouped by lecture unit only enumerate which
+units each collection holds. The counts and ranges come from a scan per unit,
+and every scanned row is confirmed against the object store (one read per row)
+to exclude ghost rows, so the cost of a course grows with its number of rows.
+Those reads run concurrently, bounded by ``census_confirm_concurrency``. A unit
+that any collection still knows about is reported even when its unit row is
+missing. The endpoint reads identity properties only.
 """
 
 import json
@@ -18,6 +21,7 @@ from weaviate.collections.classes.filters import Filter
 
 from iris.common.ingestion_version import INGESTION_PIPELINE_VERSION
 from iris.common.logging_config import get_logger
+from iris.config import settings
 from iris.dependencies import TokenValidator
 from iris.domain.ingestion.ingestion_census_dto import (
     IngestionCensusDTO,
@@ -71,6 +75,19 @@ def _discover_unit_ids(collection, schema, course_id: int, base_url: str) -> set
     }
 
 
+def _fill_lecture_id(entry: IngestionCensusUnitDTO, rows, property_name: str) -> None:
+    """Set the lecture id from a content row when the unit row did not provide one.
+
+    A unit with no unit row (an orphan) still needs its lecture id, so that Artemis can
+    address the deletion.
+    """
+    if entry.lecture_id is not None:
+        return
+    lecture_ids = _int_values(rows, property_name)
+    if lecture_ids:
+        entry.lecture_id = lecture_ids[0]
+
+
 def _int_values(rows, property_name: str) -> list[int]:
     """Integer values of ``property_name`` across ``rows``, skipping missing ones."""
     values = []
@@ -93,6 +110,7 @@ def get_course_ingestion_census(
     """Report the aggregated index state of every lecture unit in the course."""
     db = VectorDatabase()
     decoded_base_url = unquote(base_url)
+    concurrency = settings.lecture_ingestion.census_confirm_concurrency
     units: dict[int, IngestionCensusUnitDTO] = {}
 
     def unit(lecture_unit_id: int) -> IngestionCensusUnitDTO:
@@ -120,14 +138,12 @@ def get_course_ingestion_census(
     # response rather than just undercounting one -- surfaced at the course
     # level rather than attributed to any single unit.
     course_scan_truncated = len(unit_rows) >= _UNIT_ROW_LIMIT
-    for row in unit_rows:
-        # Skip object-store-only ghost unit rows: they are visible to this scan
-        # but absent from the object store (and from retrieval), so counting them
-        # would inflate unit_row_count into a false "duplicate rows" divergence
-        # that a re-ingest can never clear, and reading their stale ledger values
-        # could mislead the reconciler.
-        if db.lecture_units.query.fetch_object_by_id(row.uuid) is None:
-            continue
+    # Skip object-store-only ghost unit rows: they are visible to this scan
+    # but absent from the object store (and from retrieval), so counting them
+    # would inflate unit_row_count into a false "duplicate rows" divergence
+    # that a re-ingest can never clear, and reading their stale ledger values
+    # could mislead the reconciler.
+    for row in confirmed_rows(db.lecture_units, unit_rows, concurrency=concurrency):
         lecture_unit_id = int(row.properties[LectureUnitSchema.LECTURE_UNIT_ID.value])
         entry = unit(lecture_unit_id)
         entry.unit_row_count += 1
@@ -188,10 +204,12 @@ def get_course_ingestion_census(
             LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
             limit=_UNIT_ROW_LIMIT,
             return_properties=[
+                LectureUnitPageChunkSchema.LECTURE_ID.value,
                 LectureUnitPageChunkSchema.PAGE_NUMBER.value,
                 LectureUnitPageChunkSchema.PAGE_VERSION.value,
                 LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value,
             ],
+            concurrency=concurrency,
         )
         generation_matches = [
             row
@@ -202,7 +220,10 @@ def get_course_ingestion_census(
         # confirmed_generations only confirms one row per generation; a second,
         # row-level pass keeps an object-store-missing sibling in an otherwise-real
         # generation from inflating the exact chunk_count/page range below.
-        real_rows = confirmed_rows(db.lectures, generation_matches)
+        real_rows = confirmed_rows(
+            db.lectures, generation_matches, concurrency=concurrency
+        )
+        _fill_lecture_id(entry, real_rows, LectureUnitPageChunkSchema.LECTURE_ID.value)
         pages = _int_values(real_rows, LectureUnitPageChunkSchema.PAGE_NUMBER.value)
         versions = _int_values(real_rows, LectureUnitPageChunkSchema.PAGE_VERSION.value)
         # Scoped to this one unit, so a cap hit here only makes THIS unit's
@@ -248,6 +269,8 @@ def get_course_ingestion_census(
             ).equal(unit_id),
             LectureTranscriptionSchema.INGESTION_RUN_ID.value,
             limit=_UNIT_ROW_LIMIT,
+            return_properties=[LectureTranscriptionSchema.LECTURE_ID.value],
+            concurrency=concurrency,
         )
         entry = unit(unit_id)
         if len(all_transcription_objects) >= _UNIT_ROW_LIMIT:
@@ -259,7 +282,12 @@ def get_course_ingestion_census(
             in real_generations
         ]
         # See the page-chunk loop above for why a second, row-level pass is needed.
-        confirmed_transcriptions = confirmed_rows(db.transcriptions, generation_matches)
+        confirmed_transcriptions = confirmed_rows(
+            db.transcriptions, generation_matches, concurrency=concurrency
+        )
+        _fill_lecture_id(
+            entry, confirmed_transcriptions, LectureTranscriptionSchema.LECTURE_ID.value
+        )
         entry.transcription_count = len(confirmed_transcriptions)
 
     for unit_id in _discover_unit_ids(
@@ -277,11 +305,19 @@ def get_course_ingestion_census(
                 unit_id
             ),
             limit=_UNIT_ROW_LIMIT,
-            return_properties=[LectureUnitSegmentSchema.PAGE_NUMBER.value],
+            return_properties=[
+                LectureUnitSegmentSchema.LECTURE_ID.value,
+                LectureUnitSegmentSchema.PAGE_NUMBER.value,
+            ],
         ).objects
         if len(all_segment_rows) >= _UNIT_ROW_LIMIT:
             entry.truncated = True
-        real_segment_rows = confirmed_rows(db.lecture_segments, all_segment_rows)
+        real_segment_rows = confirmed_rows(
+            db.lecture_segments, all_segment_rows, concurrency=concurrency
+        )
+        _fill_lecture_id(
+            entry, real_segment_rows, LectureUnitSegmentSchema.LECTURE_ID.value
+        )
         segment_pages = _int_values(
             real_segment_rows, LectureUnitSegmentSchema.PAGE_NUMBER.value
         )

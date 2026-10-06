@@ -82,10 +82,18 @@ class IngestionJobHandler:
         lecture_id: int,
         lecture_unit_id: int,
         cancel_event: Event,
-    ):
+    ) -> bool:
+        """Start ``process`` as the unit's current job, superseding the previous one.
+
+        Returns False without starting or superseding anything when ``cancel_event`` is
+        already set: a claim that was revoked before it started must not cancel a newer
+        run of the same unit.
+        """
         key = self._job_key(base_url, course_id, lecture_id, lecture_unit_id)
         with lecture_update_lock(base_url, course_id, lecture_id, lecture_unit_id):
             with self._jobs_lock:
+                if cancel_event.is_set():
+                    return False
                 previous_cancel_event = self._running_jobs.get(key)
                 if previous_cancel_event is not None:
                     previous_cancel_event.set()
@@ -116,6 +124,7 @@ class IngestionJobHandler:
                 lecture_id,
                 lecture_unit_id,
             )
+        return True
 
     def complete_job(
         self,

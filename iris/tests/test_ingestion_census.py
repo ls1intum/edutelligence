@@ -4,8 +4,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.config import settings
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.pipeline.lecture_unit_pipeline import LectureUnitPipeline
+from iris.vector_database.batch_verify import (
+    confirmed_generations,
+    confirmed_rows,
+)
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
 )
@@ -41,11 +46,12 @@ _UNSET = object()
 
 
 def _chunk_row(
-    unit_id, run_id, page, version, object_uuid, display=_UNSET
+    unit_id, run_id, page, version, object_uuid, display=_UNSET, lecture_id=None
 ) -> SimpleNamespace:
     return SimpleNamespace(
         uuid=object_uuid,
         properties={
+            LectureUnitPageChunkSchema.LECTURE_ID.value: lecture_id,
             LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value: unit_id,
             LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: run_id,
             LectureUnitPageChunkSchema.PAGE_NUMBER.value: page,
@@ -305,6 +311,127 @@ def test_census_excludes_object_store_ghost_generations():
     assert (entry.chunk_page_min, entry.chunk_page_max) == (1, 3)
     # The version range reflects the real generation (4), not the ghost's (3).
     assert (entry.chunk_version_min, entry.chunk_version_max) == (4, 4)
+
+
+def test_census_reports_the_lecture_id_of_orphans_without_a_unit_row():
+    """Orphan units have no unit row to take the lecture id from, so it comes from
+    whichever content collection still holds rows for them."""
+    chunk_orphan = _chunk_row(9, "r9", 1, 1, "c9", lecture_id=7)
+    transcription_orphan = SimpleNamespace(
+        uuid="t10",
+        properties={
+            LectureTranscriptionSchema.LECTURE_ID.value: 8,
+            LectureTranscriptionSchema.LECTURE_UNIT_ID.value: 10,
+            LectureTranscriptionSchema.INGESTION_RUN_ID.value: "t10",
+        },
+    )
+    segment_orphan = SimpleNamespace(
+        uuid="s11",
+        properties={
+            LectureUnitSegmentSchema.LECTURE_ID.value: 6,
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: 11,
+            LectureUnitSegmentSchema.PAGE_NUMBER.value: 1,
+        },
+    )
+    db = SimpleNamespace(
+        lecture_units=_unit_rows_collection([]),
+        lectures=_chunk_collection([(9, [chunk_orphan])], {"c9"}),
+        transcriptions=_chunk_collection([(10, [transcription_orphan])], {"t10"}),
+        lecture_segments=_chunk_collection([(11, [segment_orphan])], {"s11"}),
+    )
+
+    with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
+        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+
+    assert {entry.lecture_unit_id: entry.lecture_id for entry in census.units} == {
+        9: 7,
+        10: 8,
+        11: 6,
+    }
+
+
+def test_census_keeps_the_unit_row_lecture_id_over_content_rows():
+    unit_row = SimpleNamespace(
+        uuid="ur-3",
+        properties={
+            LectureUnitSchema.LECTURE_ID.value: 2,
+            LectureUnitSchema.LECTURE_UNIT_ID.value: 3,
+        },
+    )
+    chunk = _chunk_row(3, "r3", 1, 1, "c3", lecture_id=99)
+    db = SimpleNamespace(
+        lecture_units=_unit_rows_collection([unit_row]),
+        lectures=_chunk_collection([(3, [chunk])], {"c3"}),
+        transcriptions=_aggregating_collection([]),
+        lecture_segments=_aggregating_collection([]),
+    )
+
+    with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
+        census = get_course_ingestion_census(1, base_url="https://artemis.example")
+
+    assert census.units[0].lecture_id == 2
+
+
+def test_census_requests_the_lecture_id_from_every_content_scan():
+    db = SimpleNamespace(
+        lecture_units=_unit_rows_collection([]),
+        lectures=_chunk_collection([(9, [_chunk_row(9, "r", 1, 1, "c9")])], {"c9"}),
+        transcriptions=_aggregating_collection([]),
+        lecture_segments=_aggregating_collection([]),
+    )
+
+    with patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db):
+        get_course_ingestion_census(1, base_url="https://artemis.example")
+
+    requested = db.lectures.query.fetch_objects.call_args.kwargs["return_properties"]
+    assert LectureUnitPageChunkSchema.LECTURE_ID.value in requested
+
+
+def test_census_passes_the_configured_confirm_concurrency_to_every_confirmation():
+    unit_row = SimpleNamespace(
+        uuid="ur-3",
+        properties={LectureUnitSchema.LECTURE_UNIT_ID.value: 3},
+    )
+    chunk = _chunk_row(3, "r3", 1, 1, "c3")
+    transcription = SimpleNamespace(
+        uuid="t3",
+        properties={
+            LectureTranscriptionSchema.LECTURE_UNIT_ID.value: 3,
+            LectureTranscriptionSchema.INGESTION_RUN_ID.value: "t3",
+        },
+    )
+    segment = SimpleNamespace(
+        uuid="s3",
+        properties={
+            LectureUnitSegmentSchema.LECTURE_UNIT_ID.value: 3,
+            LectureUnitSegmentSchema.PAGE_NUMBER.value: 1,
+        },
+    )
+    db = SimpleNamespace(
+        lecture_units=_unit_rows_collection([unit_row]),
+        lectures=_chunk_collection([(3, [chunk])], {"c3"}),
+        transcriptions=_chunk_collection([(3, [transcription])], {"t3"}),
+        lecture_segments=_chunk_collection([(3, [segment])], {"s3"}),
+    )
+
+    with (
+        patch("iris.web.routers.ingestion_census.VectorDatabase", return_value=db),
+        patch.object(settings.lecture_ingestion, "census_confirm_concurrency", 5),
+        patch(
+            "iris.web.routers.ingestion_census.confirmed_rows", wraps=confirmed_rows
+        ) as rows_spy,
+        patch(
+            "iris.web.routers.ingestion_census.confirmed_generations",
+            wraps=confirmed_generations,
+        ) as generations_spy,
+    ):
+        get_course_ingestion_census(1, base_url="https://artemis.example")
+
+    # unit row, chunks, transcriptions, segments / chunks, transcriptions
+    assert rows_spy.call_count == 4
+    assert generations_spy.call_count == 2
+    for call in [*rows_spy.call_args_list, *generations_spy.call_args_list]:
+        assert call.kwargs["concurrency"] == 5
 
 
 def test_census_wire_format_uses_camel_case():

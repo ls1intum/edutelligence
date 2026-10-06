@@ -728,6 +728,10 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         the unit and rewrite this generation from scratch — and re-check. Bounded:
         a unit that still will not converge fails the run so the reconciler retries
         rather than certifying a dirty unit.
+
+        The default allows no escalation (``convergence_max_escalations = 0``): the
+        escalation deletes the verified generation before the rewrite, so the run fails
+        with the verified generation intact instead.
         """
         for escalation in range(settings.lecture_ingestion.convergence_max_escalations):
             if len(self._distinct_page_run_ids(retry)) <= 1:

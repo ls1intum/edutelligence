@@ -9,6 +9,7 @@ def test_defaults_are_valid():
     assert settings.capacity == 2
     assert settings.poll_interval_seconds == 2.0
     assert settings.heartbeat_interval_seconds == 5.0
+    assert settings.heartbeat_timeout_seconds == 10.0
 
 
 def test_capacity_rejects_zero():
@@ -43,3 +44,21 @@ def test_heartbeat_interval_seconds_rejects_zero():
 def test_heartbeat_interval_seconds_rejects_negative():
     with pytest.raises(ValidationError):
         IngestionWorkerSettings(heartbeat_interval_seconds=-1.0)
+
+
+def test_heartbeat_timeout_seconds_rejects_zero():
+    with pytest.raises(ValidationError):
+        IngestionWorkerSettings(heartbeat_timeout_seconds=0)
+
+
+def test_heartbeat_timeout_seconds_rejects_more_than_the_claim_timeout():
+    # Claims keep 30 s; a heartbeat that may hang longer than that defeats its purpose.
+    with pytest.raises(ValidationError):
+        IngestionWorkerSettings(heartbeat_timeout_seconds=31)
+
+
+def test_heartbeat_timeout_seconds_accepts_the_upper_bound():
+    assert (
+        IngestionWorkerSettings(heartbeat_timeout_seconds=30).heartbeat_timeout_seconds
+        == 30
+    )

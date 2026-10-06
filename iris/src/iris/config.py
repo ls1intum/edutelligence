@@ -194,6 +194,16 @@ class IngestionWorkerSettings(BaseModel):
             "non-positive-wait hazard as poll_interval_seconds."
         ),
     )
+    heartbeat_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        le=30,
+        description=(
+            "Request timeout for heartbeats only; claims keep their own 30 s. Kept "
+            "well below the Artemis lease so one hanging upstream cannot make its "
+            "runs look dead."
+        ),
+    )
     # Hostnames (case-insensitive, port ignored) an announced upstream must match to be
     # registered. Empty (the default) accepts any http(s) URL, matching today's zero-config
     # discovery for local and single-tenant deployments. Set this where Iris is reachable by
@@ -224,12 +234,23 @@ class LectureIngestionSettings(BaseModel):
         ),
     )
     convergence_max_escalations: int = Field(
-        default=2,
+        default=0,
         ge=0,
         description=(
             "After write-then-purge, how many times to escalate to a full "
             "delete-and-rewrite if a stale generation the id-scoped purge missed is "
-            "still visible, before failing the run so the reconciler retries."
+            "still visible, before failing the run so the reconciler retries. "
+            "The default 0 fails the run at once and keeps the verified generation: an "
+            "escalation deletes it before the rewrite, so a crash in between would "
+            "leave the unit empty."
+        ),
+    )
+    census_confirm_concurrency: int = Field(
+        default=16,
+        ge=1,
+        description=(
+            "Parallel object-store confirmations (one read per row) while the ingestion "
+            "census checks a course for ghost rows. 1 keeps the census sequential."
         ),
     )
     language_detection_min_chars: int = Field(

@@ -9,7 +9,9 @@ unit.
 """
 
 import uuid as uuid_module
-from typing import Optional
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, TypeVar
 
 from weaviate.classes.query import Filter
 
@@ -25,6 +27,9 @@ from iris.vector_database.write_retry import (
 )
 
 logger = get_logger(__name__)
+
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 def _failed_object_payloads(failed) -> Optional[list]:
@@ -156,6 +161,34 @@ def fetch_with_retry(fetch, *, retry: Optional[WeaviateWriteRetry] = None):
     return retry.run(fetch, description="Weaviate read")
 
 
+def _map_confirmations(
+    check: Callable[[T, WeaviateWriteRetry], R],
+    items: list[T],
+    concurrency: int,
+    retry: WeaviateWriteRetry,
+) -> list[R]:
+    """Results of ``check(item, retry)`` for every item, in item order.
+
+    With ``concurrency`` 1 the checks run one after another and share ``retry``, exactly as
+    before. Above 1 they run on a pool created for this call, ``concurrency`` at a time, so
+    outstanding work stays bounded. Each check then gets its own retry context, because the
+    wait budget is mutable state that concurrent threads must not share. An error from a
+    check propagates once the checks started alongside it have finished.
+    """
+    if concurrency <= 1:
+        return [check(item, retry) for item in items]
+    results: list[R] = []
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        for start in range(0, len(items), concurrency):
+            chunk = items[start:][:concurrency]
+            futures = [
+                pool.submit(check, item, WeaviateWriteRetry.for_request())
+                for item in chunk
+            ]
+            results.extend(future.result() for future in futures)
+    return results
+
+
 def confirmed_generations(
     collection,
     unit_filter,
@@ -164,6 +197,7 @@ def confirmed_generations(
     limit: int,
     return_properties: Optional[list[str]] = None,
     retry: Optional[WeaviateWriteRetry] = None,
+    concurrency: int = 1,
 ) -> tuple[set, list]:
     """Distinct *real* ingestion generations for a unit, excluding store ghosts.
 
@@ -187,6 +221,9 @@ def confirmed_generations(
     this costs the same as a capped sample whenever the generation is genuinely
     real, and only checks further when the earliest scanned rows happen to be
     ghosts — exactly the case a capped sample would otherwise misjudge as fake.
+
+    ``concurrency`` above 1 confirms several generations at once (the ids of one generation
+    are still checked in scan order); the result is the same as the sequential one.
     """
     retry = retry or WeaviateWriteRetry.for_request()
     properties = [run_id_property]
@@ -204,38 +241,50 @@ def confirmed_generations(
     for stored_object in objects:
         generation = stored_object.properties.get(run_id_property)
         ids_by_generation.setdefault(generation, []).append(stored_object.uuid)
-    real_generations: set = set()
-    for generation, candidate_ids in ids_by_generation.items():
-        for object_uuid in candidate_ids:
+
+    def is_real(generation, check_retry: WeaviateWriteRetry) -> bool:
+        for object_uuid in ids_by_generation[generation]:
             found = fetch_with_retry(
                 lambda uid=object_uuid: collection.query.fetch_object_by_id(uid),
-                retry=retry,
+                retry=check_retry,
             )
             if found is not None:
-                real_generations.add(generation)
-                break
+                return True
+        return False
+
+    generations = list(ids_by_generation)
+    verdicts = _map_confirmations(is_real, generations, concurrency, retry)
+    real_generations: set = {
+        generation for generation, real in zip(generations, verdicts) if real
+    }
     return real_generations, objects
 
 
 def confirmed_rows(
-    collection, rows: list, *, retry: Optional[WeaviateWriteRetry] = None
+    collection,
+    rows: list,
+    *,
+    retry: Optional[WeaviateWriteRetry] = None,
+    concurrency: int = 1,
 ) -> list:
     """Keep only rows the object store confirms, for a collection with no run-id
     property to group by (segments, the unit row): unlike :func:`confirmed_generations`,
-    there is no generation to amortize the check over, so each row is checked directly.
-    Row counts here are small (one segment per slide, one row expected per unit), so this
-    stays cheap.
+    there is no generation to amortize the check over, so each row is checked directly,
+    one object-store read per row. The ingestion paths call this on small sets (one
+    segment per slide, one row expected per unit). The census calls it on whole courses,
+    so it passes ``concurrency`` to run the reads in parallel; the result and its order
+    are the same as the sequential one.
     """
     retry = retry or WeaviateWriteRetry.for_request()
-    confirmed = []
-    for row in rows:
+
+    def is_present(row, check_retry: WeaviateWriteRetry) -> bool:
         found = fetch_with_retry(
-            lambda uid=row.uuid: collection.query.fetch_object_by_id(uid),
-            retry=retry,
+            lambda: collection.query.fetch_object_by_id(row.uuid), retry=check_retry
         )
-        if found is not None:
-            confirmed.append(row)
-    return confirmed
+        return found is not None
+
+    present = _map_confirmations(is_present, rows, concurrency, retry)
+    return [row for row, found in zip(rows, present) if found]
 
 
 def purge_other_rows(

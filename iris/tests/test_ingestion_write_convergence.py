@@ -240,6 +240,35 @@ def test_convergence_ignores_object_store_ghost_generations(monkeypatch):
     pipeline.callback.fail.assert_not_called()
 
 
+def test_leftover_generations_fail_the_run_without_deleting_the_verified_one(
+    monkeypatch,
+):
+    """With the default (no escalation), a stale real generation that survives the purge
+    fails the run. The full delete-and-rewrite escalation would delete the verified
+    generation first, so it must not run."""
+    monkeypatch.setattr(settings.lecture_ingestion, "convergence_max_escalations", 0)
+    events: list = []
+    pipeline = _page_pipeline(
+        events,
+        stale_rows=[
+            _stale_row(run_id="run-new", uuid=_UUID_NEW),
+            _stale_row(run_id="run-old", uuid=_UUID_OLD),
+        ],
+    )
+    pipeline.chunk_data = MagicMock(
+        side_effect=lambda **_kwargs: events.append("chunk") or [_sample_chunk()]
+    )
+    _patch_pdf(monkeypatch)
+
+    with pytest.raises(IngestionStageError) as exc_info:
+        pipeline()
+
+    assert exc_info.value.error_code == STALE_CONTENT_DELETE_FAILED
+    # One insert and only the id-scoped purge: no delete of every row, no rewrite.
+    assert events == ["chunk", "embed", "insert", "delete"]
+    pipeline.collection.data.delete_many.assert_called_once()
+
+
 def test_page_replacement_purges_by_unit_identity_every_run(monkeypatch):
     # The purge is a single unit-scoped delete that keeps this run's written ids
     # and removes everything else; it runs every time (idempotent when the unit is

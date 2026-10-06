@@ -7,8 +7,9 @@ transcript's slide numbers, and the attachment version. Any deviation, such
 as a missing page, a chunk from an older attachment version, a transcript
 that should or should not exist, a segment gap, or a duplicated unit row,
 fails the run instead of certifying a partial unit. The audit reads only
-identity properties, never content, so it costs a handful of queries and no
-LLM calls.
+identity properties, never content, and makes no LLM calls. It also confirms
+the rows it reads against the object store, one read per row (per generation for
+page chunks and transcripts), so its cost grows with the size of the unit.
 """
 
 import base64

@@ -8,7 +8,8 @@ def test_defaults_are_valid():
     settings = LectureIngestionSettings()
     assert settings.vision_max_attempts == 3
     assert settings.skip_check_fetch_limit == 10_000
-    assert settings.convergence_max_escalations == 2
+    assert settings.convergence_max_escalations == 0
+    assert settings.census_confirm_concurrency == 16
     assert settings.language_detection_min_chars == 200
     assert settings.language_detection_max_chars == 10_000
     assert settings.default_language == "en"
@@ -38,6 +39,11 @@ def test_convergence_max_escalations_allows_zero():
     # Zero is a legitimate way to disable escalation outright.
     settings = LectureIngestionSettings(convergence_max_escalations=0)
     assert settings.convergence_max_escalations == 0
+
+
+def test_census_confirm_concurrency_must_be_at_least_one():
+    with pytest.raises(ValidationError):
+        LectureIngestionSettings(census_confirm_concurrency=0)
 
 
 def test_language_detection_min_chars_must_be_positive():
