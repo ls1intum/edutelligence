@@ -55,13 +55,14 @@ class CourseMemoryIngestionExecutionDTO(PipelineExecutionDTO):
     def _require_verbatim_answer_for_dashboard_signoff(
         self,
     ) -> "CourseMemoryIngestionExecutionDTO":
-        """A tutor-verified entry must carry the exact text the tutor signed off on.
+        """A tutor sign-off on an Iris answer must carry the exact text the tutor approved.
 
-        ``IRIS_AUTO``, ``IRIS_CORRECTED`` and ``TUTOR_WRITTEN`` mark an entry as
-        tutor-verified on the strength of a tutor having read one specific wording.
-        Without a non-blank ``existingAnswer`` the pipeline would fall back to LLM
-        extraction and still store the result under that label, so retrieval would
-        present text no tutor ever saw as tutor-approved. Reject the payload instead.
+        ``IRIS_AUTO`` and ``IRIS_CORRECTED`` mark an Iris answer a tutor read and
+        approved in one specific wording. Without a non-blank ``existingAnswer`` the
+        pipeline would fall back to LLM extraction and still store the result under that
+        label, so retrieval would present text no tutor ever saw as tutor-approved.
+        Reject the payload instead. ``TUTOR_WRITTEN`` answers are condensed by the
+        extraction like community answers.
         """
         if self.source in VERBATIM_ANSWER_SOURCES and not (
             self.existing_answer and self.existing_answer.strip()

@@ -94,18 +94,19 @@ def test_extract_qa_keeps_the_approved_draft_verbatim():
     assert answer == "The exact draft the tutor approved."
 
 
-def test_extract_qa_keeps_a_tutor_endorsed_answer_verbatim():
-    # A tutor marked this answer resolving and vouches for exactly its text.
+def test_extract_qa_condenses_a_tutor_endorsed_answer():
+    # Only Iris answers a tutor approved are stored verbatim; a tutor-written or
+    # tutor-marked answer is condensed by the extraction.
     dto = SimpleNamespace(
         thread=[ThreadMessageDTO(id="1", authorRole="student", content="why?")],
         source=CourseMemorySource.TUTOR_WRITTEN,
-        existing_answer="The answer the tutor endorsed.",
+        existing_answer=None,
         message_id="1",
     )
     pipeline = _pipeline_with_mocked_llm(dto)
-    _mock_response(pipeline, '{"question": "Why?", "answer": "merged with others"}')
+    _mock_response(pipeline, '{"question": "Why?", "answer": "The condensed answer."}')
 
-    assert pipeline.extract_qa() == ("Why?", "The answer the tutor endorsed.")
+    assert pipeline.extract_qa() == ("Why?", "The condensed answer.")
 
 
 def test_extract_qa_does_not_fall_back_to_a_redacted_root():

@@ -41,7 +41,6 @@ VERBATIM_ANSWER_SOURCES: frozenset[CourseMemorySource] = frozenset(
     {
         CourseMemorySource.IRIS_AUTO,
         CourseMemorySource.IRIS_CORRECTED,
-        CourseMemorySource.TUTOR_WRITTEN,
     }
 )
 

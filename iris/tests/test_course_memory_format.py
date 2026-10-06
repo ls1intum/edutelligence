@@ -281,12 +281,13 @@ def test_approved_draft_with_verbatim_text_is_accepted():
     assert dto.existing_answer == "The approved draft."
 
 
-def test_tutor_written_requires_the_endorsed_text_verbatim():
-    # A tutor marking an answer resolving vouches for exactly that text; extracting a
-    # new answer from the thread could mix in what other messages said.
+def test_tutor_written_entries_need_no_verbatim_answer():
+    # Tutor-written answers are condensed by the extraction like community answers.
     for blank in (None, "", "   "):
-        with pytest.raises(ValidationError, match="TUTOR_WRITTEN"):
-            _dto_with_source(CourseMemorySource.TUTOR_WRITTEN, blank)
+        assert (
+            _dto_with_source(CourseMemorySource.TUTOR_WRITTEN, blank).source
+            == CourseMemorySource.TUTOR_WRITTEN
+        )
 
 
 def test_community_entries_need_no_verbatim_answer():

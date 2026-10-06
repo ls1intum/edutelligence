@@ -11,9 +11,10 @@ Guarantees this contract is built around:
 2. **Stored content follows Artemis.** Every change that can affect an entry raises the thread's version; the latest
    version wins in Iris, and a nightly sync retracts whatever an immediate update did not reach.
 3. **No user identity is stored.** No logins, no ids of people. Messages of authors who opted out of AI, whose account
-   is inactive or who no longer exist are redacted.
-4. **Tutor-verified means tutor-verified.** Entries labelled as tutor-verified store exactly the text a tutor signed
-   off on.
+   is inactive or who no longer exist are redacted when a thread is stored. An opt-out applies to what is stored from
+   then on; existing entries hold condensed course knowledge, not the author's own text, and stay.
+4. **Approved Iris answers stay exact.** An Iris answer a tutor approved or corrected is stored exactly as the tutor
+   signed off on it. Every other answer is condensed by the extraction.
 5. **Instances are isolated.** Several Artemis instances may share one Weaviate; every entry is scoped to the
    canonical base URL of its instance.
 
@@ -74,9 +75,9 @@ Returns `202 Accepted`; the run reports `RUNNING`/`FINISHED`/`FAILED` to the sta
 Rules:
 
 - **Exactly one** message carries `isVerifiedAnswer`: the anchor Artemis selected from persisted state.
-- **Tutor-verified sources** (`IRIS_AUTO`, `IRIS_CORRECTED`, `TUTOR_WRITTEN`) must carry `existingAnswer`, the anchor's
-  text exactly as the tutor read it. Iris stores it verbatim and only extracts the question. `THREAD_RESOLVED` extracts
-  the answer from the messages flagged `resolvesPost`.
+- **Iris answers approved by a tutor** (`IRIS_AUTO`, `IRIS_CORRECTED`) must carry `existingAnswer`, the anchor's text
+  exactly as the tutor read it. Iris stores it verbatim and only extracts the question. For `TUTOR_WRITTEN` Iris
+  condenses the answer from the anchor, and for `THREAD_RESOLVED` from the messages flagged `resolvesPost`.
 - **Redacted messages** carry no content and no flags. A redacted root post is fine; the question is then extracted
   from what the remaining messages make clear.
 - **Structured mentions** are sent without their login (`[user]Name(login)[/user]` becomes `Name`).
@@ -109,9 +110,8 @@ at read time (§5) and the nightly sync (§7) removes what deleted channels and 
 Every operation on a thread carries a monotonic per-thread version (`post.course_memory_version` in Artemis, minted
 atomically before the thread is read). Iris keeps the highest version per thread and drops anything not newer.
 
-Artemis also bumps the version **right before and right after it saves** every change that can make a stored entry
-outdated: editing or deleting a message of the thread, an approval, an opt-out from AI, a deactivation, the deletion of
-an account's messages. If the follow-up refresh never reaches Iris, the stored entry has an older version than Artemis,
+Artemis also bumps the version **right before and right after it saves** every change to a thread that can make a
+stored entry outdated: editing or deleting a message of the thread, a resolution change, an approval. If the follow-up refresh never reaches Iris, the stored entry has an older version than Artemis,
 and the nightly sync retracts it. The bump after the save covers a refresh that ran during the change and read the old
 state: its version is older than the second bump, so it cannot stay current.
 

@@ -450,10 +450,10 @@ class CourseMemoryIngestionPipeline(AbstractIngestion, Pipeline):
     def extract_qa(self) -> Tuple[str, str]:
         """Extract the canonical question and answer from the thread.
 
-        For a tutor-verified source (``IRIS_AUTO``, ``IRIS_CORRECTED``,
-        ``TUTOR_WRITTEN``) the DTO carries the exact text the tutor signed off on as
-        ``existing_answer``; it is stored verbatim and only the question is derived
-        from the thread.
+        For an Iris answer a tutor approved (``IRIS_AUTO``, ``IRIS_CORRECTED``) the DTO
+        carries the exact text the tutor signed off on as ``existing_answer``; it is
+        stored verbatim and only the question is derived from the thread. Every other
+        answer, a tutor-written one included, is condensed by the extraction.
         """
         thread_text = self._format_thread()
         # Pass the transcript as a plain human message, not a prompt template:
