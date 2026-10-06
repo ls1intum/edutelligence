@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────
 # Stage 1: Builder – resolve dependencies into a virtual env
 # ──────────────────────────────────────────────────────────
-FROM python:3.14-slim AS builder
+FROM python:3.13-slim AS builder
 
 WORKDIR /build
 
@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ──────────────────────────────────────────────────────────
 # Stage 2: Runtime
 # ──────────────────────────────────────────────────────────
-FROM python:3.14-slim
+FROM python:3.13-slim
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:$PATH" \

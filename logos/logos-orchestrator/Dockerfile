@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────
 # Stage 1: Builder – compile wheels and install dependencies
 # ──────────────────────────────────────────────────────────
-FROM python:3.14-slim AS builder
+FROM python:3.13-slim AS builder
 
 # The build tree mirrors the repository layout, because uv.lock records the
 # `shared` path dependency relative to this directory as ../../shared. Keeping
@@ -71,7 +71,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ──────────────────────────────────────────────────────────
 # Stage 2: Runtime – slim image without compilers or build tools
 # ──────────────────────────────────────────────────────────
-FROM python:3.14-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
