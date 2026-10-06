@@ -5,7 +5,7 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- SLA / workflow improvements (#1144):
+    <!-- SLA / workflow improvements:
          1. Workflow lifecycle (active / deprecated / ignored / soft-delete)
          2. Explicit steps with their own SLAs and request tags
          3. Request attribution columns on log_entry

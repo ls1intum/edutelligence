@@ -11,7 +11,8 @@ import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * Parses {@code X-Logos-SLA} / {@code X-Logos-Workflow-Tag} and resolves a
- * matching workflow step (or workflow) for the caller's team.
+ * matching workflow step (or workflow) for the caller's team. Tags are only
+ * unique per analysis, so the newest workflow wins.
  */
 @Component
 public class GatewayWorkflowAttributionResolver {
@@ -46,7 +47,7 @@ public class GatewayWorkflowAttributionResolver {
                AND a.team_id = :team_id
                AND w.deleted_at IS NULL
                AND w.status <> 'ignored'
-             ORDER BY s.id
+             ORDER BY w.id DESC, s.id
              LIMIT 1
             """, params, (rs, rowNum) -> new GatewayRequestAttribution(
                 normalizedTag,
@@ -65,7 +66,7 @@ public class GatewayWorkflowAttributionResolver {
                AND a.team_id = :team_id
                AND w.deleted_at IS NULL
                AND w.status <> 'ignored'
-             ORDER BY w.id
+             ORDER BY w.id DESC
              LIMIT 1
             """, params, (rs, rowNum) -> new GatewayRequestAttribution(
                 normalizedTag,

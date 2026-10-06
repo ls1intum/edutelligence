@@ -58,6 +58,7 @@ public class AiWorkflowAnalysisService {
     private static final int MAX_ANCESTOR_HOPS = 50;
     private static final int DEFAULT_BENCHMARK_SAMPLE_SIZE = 50;
     private static final int MAX_BENCHMARK_SAMPLE_SIZE = 200;
+    private static final int MAX_TAG_LENGTH = 80;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> REVIEW_ACTIONS = Set.of("accept", "override", "reject");
 
@@ -527,8 +528,7 @@ public class AiWorkflowAnalysisService {
             workflow.setStatus(status);
         }
         if (body.tag() != null) {
-            String tag = body.tag().trim();
-            workflow.setTag(tag.isEmpty() ? null : tag);
+            workflow.setTag(normalizeTag(body.tag()));
         }
         if (Boolean.TRUE.equals(body.deleted())) {
             workflow.setDeletedAt(Instant.now());
@@ -567,8 +567,7 @@ public class AiWorkflowAnalysisService {
             step.setConfirmedObjectivePriority(ObjectivePriority.asJsonList(body.confirmedObjectivePriority()));
         }
         if (body.tag() != null) {
-            String tag = body.tag().trim();
-            step.setTag(tag.isEmpty() ? null : tag);
+            step.setTag(normalizeTag(body.tag()));
         }
         if (body.name() != null) {
             String name = body.name().trim();
@@ -901,11 +900,8 @@ public class AiWorkflowAnalysisService {
     }
 
     private static Object parseJsonObject(Object value) {
-        if (value == null) {
-            return null;
-        }
-        String text = null;
-        if ("org.postgresql.util.PGobject".equals(value.getClass().getName())) {
+        String text;
+        if (value != null && "org.postgresql.util.PGobject".equals(value.getClass().getName())) {
             try {
                 text = (String) value.getClass().getMethod("getValue").invoke(value);
             }
@@ -915,9 +911,6 @@ public class AiWorkflowAnalysisService {
         }
         else if (value instanceof String s) {
             text = s;
-        }
-        else if (value instanceof Map<?, ?>) {
-            return value;
         }
         else {
             return value;
@@ -931,6 +924,23 @@ public class AiWorkflowAnalysisService {
         catch (JsonProcessingException e) {
             return text;
         }
+    }
+
+    /**
+     * Same shape the analysis ingest produces: lowercase kebab-case, at most
+     * {@value #MAX_TAG_LENGTH} characters. Blank clears the tag.
+     */
+    static String normalizeTag(String raw) {
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        String cleaned = trimmed.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9-]", "");
+        if (cleaned.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "tag must contain lowercase letters, digits, or hyphens");
+        }
+        return cleaned.length() > MAX_TAG_LENGTH ? cleaned.substring(0, MAX_TAG_LENGTH) : cleaned;
     }
 
     private static String formatPaths(List<String> paths) {
