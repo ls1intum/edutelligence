@@ -11,9 +11,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * Parses {@code X-Logos-SLA} / {@code X-Logos-Workflow-Tag} and resolves a
- * matching workflow step (or workflow) for the caller's team. Only each
- * repository's latest succeeded analysis counts, so ignoring, deleting, or
- * renaming a tag is not undone by a superseded copy.
+ * matching workflow step (or workflow) for the caller's team.
  */
 @Component
 public class GatewayWorkflowAttributionResolver {
@@ -46,16 +44,9 @@ public class GatewayWorkflowAttributionResolver {
               JOIN ai_workflow_analyses a ON a.id = w.analysis_id
              WHERE s.tag = :tag
                AND a.team_id = :team_id
-               AND a.id = (
-                     SELECT latest.id FROM ai_workflow_analyses latest
-                      WHERE latest.team_repository_id = a.team_repository_id
-                        AND latest.status = 'succeeded'
-                      ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
-                      LIMIT 1
-                   )
                AND w.deleted_at IS NULL
                AND w.status <> 'ignored'
-             ORDER BY w.id DESC, s.id
+             ORDER BY s.id
              LIMIT 1
             """, params, (rs, rowNum) -> new GatewayRequestAttribution(
                 normalizedTag,
@@ -72,16 +63,9 @@ public class GatewayWorkflowAttributionResolver {
               JOIN ai_workflow_analyses a ON a.id = w.analysis_id
              WHERE w.tag = :tag
                AND a.team_id = :team_id
-               AND a.id = (
-                     SELECT latest.id FROM ai_workflow_analyses latest
-                      WHERE latest.team_repository_id = a.team_repository_id
-                        AND latest.status = 'succeeded'
-                      ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
-                      LIMIT 1
-                   )
                AND w.deleted_at IS NULL
                AND w.status <> 'ignored'
-             ORDER BY w.id DESC
+             ORDER BY w.id
              LIMIT 1
             """, params, (rs, rowNum) -> new GatewayRequestAttribution(
                 normalizedTag,

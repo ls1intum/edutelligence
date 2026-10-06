@@ -78,11 +78,8 @@ an unchanged repository is skipped.
 Latest AI-workflow analyses for the team's linked repositories: Mermaid
 diagrams of detected flows and per-call **SLA** plus **objective priority**
 recommendations (ordered latency / quality / price). Owners (and Logos Admins)
-can **edit** a workflow's Mermaid diagram; later analyses keep that edit and,
-when the agent draws something different, show an **Agent update** beside it
-so you can **Accept** the proposal or **Keep mine**. Owners can also **Accept**
-a recommendation, **Override** SLA or priority order, or **Reject** it. The
-**Application key** picker above the recommendations applies
+can **Accept** a recommendation, **Override** SLA or priority order, or
+**Reject** it. The **Application key** picker above the recommendations applies
 to every Accept and Override on the tab — it defaults to the team's
 highest-priority key (usually production), and **No key** leaves key
 priorities untouched. Accepting or overriding sets that key's queue priority
@@ -103,10 +100,8 @@ confirmable) SLA. Applications attribute traffic by sending
 copy hint). Alternatively, a request can set its SLA directly with
 `X-Logos-SLA` (`ux-critical`, `ux-high-prio`, or `ux-background`).
 
-A Logos Admin can **Propose tagging PR**: it queues an agent session that
-opens a pull request in the linked repository to add those headers at the
-call sites. It is not offered to App Admins, because the session pushes as
-the Logos agent's GitHub account.
+**Propose tagging PR** queues an agent session that opens a pull request in
+the linked repository to add those headers at the call sites.
 
 #### Compare model
 

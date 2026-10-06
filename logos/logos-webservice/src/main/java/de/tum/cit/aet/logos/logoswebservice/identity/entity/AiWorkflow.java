@@ -39,15 +39,6 @@ public class AiWorkflow {
 
     /** Stable tag applications send as X-Logos-Workflow-Tag to attribute traffic. */
     private String tag;
-    /** The owner saved {@link #diagramMermaid}; the next analysis keeps it. */
-    @Column(nullable = false)
-    private boolean diagramSetByOwner;
-
-    /** Agent Mermaid from a later analysis that differs from the owner's diagram. */
-    private String proposedDiagramMermaid;
-
-    /** Agent Mermaid the owner dismissed; ingest does not propose it again. */
-    private String dismissedDiagramMermaid;
 
     public Integer getId() { return id; }
     public Integer getAnalysisId() { return analysisId; }
@@ -58,9 +49,6 @@ public class AiWorkflow {
     public String getStatus() { return status; }
     public Instant getDeletedAt() { return deletedAt; }
     public String getTag() { return tag; }
-    public boolean isDiagramSetByOwner() { return diagramSetByOwner; }
-    public String getProposedDiagramMermaid() { return proposedDiagramMermaid; }
-    public String getDismissedDiagramMermaid() { return dismissedDiagramMermaid; }
 
     public void setAnalysisId(Integer analysisId) { this.analysisId = analysisId; }
     public void setName(String name) { this.name = name; }
@@ -70,11 +58,4 @@ public class AiWorkflow {
     public void setStatus(String status) { this.status = status; }
     public void setDeletedAt(Instant deletedAt) { this.deletedAt = deletedAt; }
     public void setTag(String tag) { this.tag = tag; }
-    public void setDiagramSetByOwner(boolean diagramSetByOwner) { this.diagramSetByOwner = diagramSetByOwner; }
-    public void setProposedDiagramMermaid(String proposedDiagramMermaid) {
-        this.proposedDiagramMermaid = proposedDiagramMermaid;
-    }
-    public void setDismissedDiagramMermaid(String dismissedDiagramMermaid) {
-        this.dismissedDiagramMermaid = dismissedDiagramMermaid;
-    }
 }

@@ -5,14 +5,13 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- SLA / workflow improvements:
+    <!-- SLA / workflow improvements (#1144):
          1. Workflow lifecycle (active / deprecated / ignored / soft-delete)
          2. Explicit steps with their own SLAs and request tags
          3. Request attribution columns on log_entry
-         4. Per-workflow historic-vs-candidate benchmark rows, following the
-            workflow across re-analyses
+         4. Per-workflow historic-vs-candidate benchmark rows
          5. Logos-admin cross–application-key queue ranks -->
-    <changeSet id="052-workflow-lifecycle" author="wasnertobias">
+    <changeSet id="051-workflow-lifecycle" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="ai_workflows" columnName="status"/></not>
         </preConditions>
@@ -37,7 +36,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-workflow-steps" author="wasnertobias">
+    <changeSet id="051-workflow-steps" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="ai_workflow_steps"/></not>
         </preConditions>
@@ -75,7 +74,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-log-entry-workflow-attribution" author="wasnertobias">
+    <changeSet id="051-log-entry-workflow-attribution" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="log_entry" columnName="workflow_tag"/></not>
         </preConditions>
@@ -107,7 +106,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-workflow-benchmarks" author="wasnertobias">
+    <changeSet id="051-workflow-benchmarks" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="ai_workflow_benchmarks"/></not>
         </preConditions>
@@ -136,24 +135,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-workflow-lineage" author="wasnertobias">
-        <preConditions onFail="MARK_RAN">
-            <not><columnExists tableName="ai_workflows" columnName="previous_workflow_id"/></not>
-        </preConditions>
-        <sql><![CDATA[
-            -- The workflow of the previous analysis this one continues, so
-            -- history (request attribution, benchmarks) follows the logical
-            -- workflow across re-analyses instead of its current tags.
-            ALTER TABLE ai_workflows
-                ADD COLUMN previous_workflow_id INTEGER
-                    REFERENCES ai_workflows(id) ON DELETE SET NULL;
-        ]]></sql>
-        <rollback>
-            <sql>ALTER TABLE ai_workflows DROP COLUMN IF EXISTS previous_workflow_id;</sql>
-        </rollback>
-    </changeSet>
-
-    <changeSet id="052-application-key-queue-ranks" author="wasnertobias">
+    <changeSet id="051-application-key-queue-ranks" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="application_key_queue_ranks"/></not>
         </preConditions>

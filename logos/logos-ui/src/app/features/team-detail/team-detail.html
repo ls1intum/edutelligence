@@ -86,7 +86,6 @@
         <app-workflows-tab
           [teamId]="teamId()"
           [canEdit]="canEdit()"
-          [canProposeTaggingPr]="isLogosAdmin()"
           [apiKeys]="apiKeys()"
           (keysChanged)="refreshApiKeys()"
         />
