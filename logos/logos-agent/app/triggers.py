@@ -488,8 +488,8 @@ class TriggerPoller:
         if not settings.triggers_enabled:
             logger.info("repository triggers are off (LOGOS_AGENT_TRIGGERS_ENABLED=false)")
             return
-        if not settings.github_token:
-            logger.warning("repository triggers are on but no GitHub token is configured; not polling")
+        if not settings.github_token and not (settings.github_app_id and settings.github_app_private_key):
+            logger.warning("repository triggers are on but no GitHub credential is configured; not polling")
             return
         self._task = asyncio.create_task(self._loop(), name="agent-triggers")
         logger.info(

@@ -249,14 +249,19 @@ labels things differently.
 
 ## Configuration
 
-Two variables are required — a Logos key and a GitHub token. Everything else
-has a default that is right for this deployment.
+Two things are required — a Logos key and a credential for the agent
+account: either a GitHub token or a GitHub App (below). Everything else has
+a default that is right for this deployment.
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `LOGOS_AGENT_API_KEY` | — | Logos key sessions call models with. **Required.** |
-| `LOGOS_AGENT_GITHUB_TOKEN` | — | The agent account's token. **Required.** |
-| `LOGOS_AGENT_GITHUB_LOGIN` | `LogosOSSAgent` | The account every token must belong to |
+| `LOGOS_AGENT_GITHUB_TOKEN` | — | The agent account's token. **Required** unless the GitHub App fields are set (then ignored) |
+| `LOGOS_AGENT_GITHUB_LOGIN` | `LogosOSSAgent` | The account every credential must belong to; with a GitHub App, that app's bot user |
+| `LOGOS_AGENT_GITHUB_APP_ID` | — | The app's id. With the key below, replaces the personal tokens — the service mints short-lived installation tokens on demand |
+| `LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY` | — | The app's private key: the PEM, or its base64 for a one-line value |
+| `LOGOS_AGENT_GITHUB_INSTALLATION_ID` | resolved from the repository | The app's installation on this repository |
+| `LOGOS_AGENT_GITHUB_TOKEN_TTL_S` | `1800` | How long a minted token may live, in seconds; GitHub caps it at `3600`, and the token is re-minted before it lapses |
 | `LOGOS_AGENT_DEFAULT_MODEL` | — | Model when a session does not name one. Optional: with exactly one local model reachable, that one is the default |
 | `LOGOS_AGENT_TRIGGERS_ENABLED` | `true` | Kill switch for reacting to the repository |
 | `LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC` | `0` | UTC hour of the nightly re-analysis of linked team repositories whose branch head moved; `-1` turns it off |
@@ -267,7 +272,7 @@ has a default that is right for this deployment.
 | `LOGOS_AGENT_SESSION_CPUS` | `2` | Per-session CPU ceiling |
 | `LOGOS_AGENT_SESSION_TIMEOUT_S` | `0` | Wall-clock ceiling per session; `0` is none, which is the default |
 | `LOGOS_AGENT_SESSION_MODEL_URL` | `http://logos-agent-gateway` | Where sessions send model traffic — a gateway that exposes only the orchestrator's `/v1` model surface, so a session never reaches the rest of the internal network |
-| `LOGOS_AGENT_SESSION_GITHUB_TOKEN` | falls back to the token above | Given to containers; best without `workflow` scope |
+| `LOGOS_AGENT_SESSION_GITHUB_TOKEN` | falls back to the token above | Given to containers; best without `workflow` scope; ignored when the GitHub App fields are set |
 | `LOGOS_AGENT_DEPLOY_ENABLED` | `false` | Whether dev deploys may be dispatched at all |
 | `LOGOS_AGENT_REQUIRED_ROLE` | `logos_admin` | Realm role required to drive agents |
 
@@ -278,7 +283,35 @@ Everything this service does on GitHub happens as one account —
 comments are visibly the platform's own, whose access is withdrawn in one
 place, and which owns nothing a human contributor owns.
 
-A classic personal access token from that account needs exactly two scopes:
+**A GitHub App, if you can.** A token of the account is a standing door: it
+stays usable until somebody revokes it, and a log line, transcript, or
+environment dump that names it publishes it for that whole span. A GitHub
+App is the other way to hold the same access. The service keeps only the
+app's *signing key*, which cannot act on its own, and mints an installation
+token on demand — a bearer credential that lives at most an hour and is
+re-minted automatically before the previous one lapses. What reaches a
+container is a minted token, so a credential that is published by accident
+stops being one within its own lifetime.
+
+Run it: create the app, give it these repository permissions — Contents,
+Pull requests, and Issues *read and write*; Checks *read*; Workflows *read
+and write*; Metadata *read* — plus Organisation members *read* if the
+deployment uses `LOGOS_AGENT_TRUSTED_TEAMS`, install it on the repository,
+and set `LOGOS_AGENT_GITHUB_APP_ID` and `LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY`
+(the installation id is optional — the service resolves it from the
+repository at the first mint). Set `LOGOS_AGENT_GITHUB_LOGIN` to the app's
+bot user, for example `LogosOSSAgent[bot]`; while the app is configured the
+personal tokens are ignored.
+
+One difference from the two-token setup: one kind of token then serves every
+phase, and it carries the app's full permissions, including dispatching a
+deploy. The scope boundary a second token without `workflow` used to give is
+gone, so the finalizer enforces the part that matters itself — the same
+enforcement the one-token setup relies on.
+
+Personal access tokens work too, for a deployment that does not run the
+account as an app. A classic personal access token from that account needs
+exactly two scopes:
 
 - **`repo`** — push branches, open pull requests, read commit status and checks.
 - **`workflow`** — dispatch the dev deploy, and let a session change files
@@ -290,10 +323,12 @@ administration. Outside the token, the account needs write access to the
 repository, and — if the organisation enforces SAML — the token authorised
 for it.
 
-The account is not taken on trust. Both tokens are checked against it when
-the service starts, and a token belonging to somebody else stops the service
-rather than committing agent work under that person's name. The finalizer
-checks again inside the container, immediately before it pushes.
+The account is not taken on trust. Every credential is checked against it
+when the service starts, and one belonging to somebody else stops the service
+rather than committing agent work under that person's name. With a GitHub
+App that is the minted installation token, checked once — one kind of token
+serves both the runner and the containers. The finalizer checks again inside
+the container, immediately before it pushes.
 
 **Two tokens if you can.** A second token of the same account *without*
 `workflow` scope, given to session containers, means a session cannot dispatch

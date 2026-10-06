@@ -9,6 +9,8 @@ own branch name.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -2536,3 +2538,59 @@ class TestAHeadThePassCouldNotRead:
     @staticmethod
     def asked(number: int, title: str = "A change", body: str = "What it does."):
         return {"number": number, "title": title, "body": body, "labels": []}
+
+
+class TestPollerStartup:
+    """Whether the poller runs at all depends on whether it can act.
+
+    A poller with no credential of the agent account can only read, and
+    reading is not what it is for — so it does not start. A deployment that
+    has moved the account to a GitHub App keeps no personal token: the app
+    credential alone must be enough to start it.
+    """
+
+    @staticmethod
+    def _idle_poller(monkeypatch):
+        # The question under test is whether a polling task is created at
+        # all, not what a pass does — so a started poller has nothing to
+        # run against, and the pass stubbed in never talks to GitHub.
+        async def idle(_self):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(triggers.TriggerPoller, "poll_once", idle)
+
+    async def test_app_credentials_start_the_poller(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(
+                triggers.settings,
+                github_token="",
+                session_github_token="",
+                github_app_id="41234",
+                github_app_private_key="an-app-key",
+            ),
+        )
+        poller = triggers.TriggerPoller()
+        self._idle_poller(monkeypatch)
+
+        with caplog.at_level(logging.INFO, logger="app.triggers"):
+            await poller.start()
+
+        assert poller._task is not None
+        assert any("watching" in message for message in caplog.messages)
+        await poller.stop()
+
+    async def test_no_credential_starts_no_poller(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(triggers.settings, github_token="", session_github_token=""),
+        )
+        poller = triggers.TriggerPoller()
+
+        with caplog.at_level(logging.WARNING, logger="app.triggers"):
+            await poller.start()
+
+        assert poller._task is None
+        assert any("no GitHub credential" in message for message in caplog.messages)

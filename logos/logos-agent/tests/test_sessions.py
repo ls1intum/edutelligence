@@ -1332,6 +1332,115 @@ class TestAgentPhaseIsolation:
         # Only the agent container is a supervised session.
         assert supervised == [(7, "cid-7")]
 
+    async def test_a_github_app_gives_the_helper_a_minted_token(self, monkeypatch, tmp_path):
+        # The deployment runs the agent account as a GitHub App: the helper
+        # receives a token minted for the run, never a standing credential —
+        # and the agent phase still receives nothing at all.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        app_settings = replace(
+            patched,
+            github_app_id="41234",
+            github_app_private_key="an-app-key",
+            session_github_token="",
+        )
+        monkeypatch.setattr(sessions, "settings", app_settings)
+        mints: list = []
+
+        async def minted(**kwargs):
+            mints.append(kwargs)
+            return "ghs-minted"
+
+        monkeypatch.setattr(sessions.github_tokens, "installation_token", minted)
+        created: list = []
+        container_ids = iter(["cid-prepare", "cid-7"])
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return next(container_ids)
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", lambda *_args, **_kwargs: None)
+
+        await sessions.manager._launch(self.SESSION)
+
+        prepare, agent = created
+        assert prepare["env"]["GITHUB_TOKEN"] == "ghs-minted"
+        assert "GITHUB_TOKEN" not in agent["env"]
+        assert "GH_TOKEN" not in agent["env"]
+        # The mint is asked for this repository, with the configured
+        # lifetime — the standing session token, though it could still be
+        # set, is not in the picture at all.
+        assert len(mints) == 1
+        assert mints[0]["app_id"] == "41234"
+        assert mints[0]["repo_slug"] == app_settings.repo_slug
+        assert mints[0]["ttl_s"] == app_settings.github_token_ttl_s
+
+    async def test_the_finalizer_receives_a_minted_token_in_app_mode(self, monkeypatch, tmp_path):
+        # One token kind serves every phase, so it carries the app's full
+        # permissions — including the ones that dispatch deploys. The
+        # scope boundary a separate session token gets from GitHub must
+        # then come from the finalizer itself, not from the credential.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        app_settings = replace(
+            patched, github_app_id="41234", github_app_private_key="an-app-key", session_github_token=""
+        )
+        monkeypatch.setattr(sessions, "settings", app_settings)
+        mints: list = []
+
+        async def minted(**kwargs):
+            mints.append(kwargs)
+            return "ghs-minted"
+
+        monkeypatch.setattr(sessions.github_tokens, "installation_token", minted)
+        created: list = []
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def fake_remove(_cid, **_kwargs):
+            pass
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        helper = created[0]
+        assert helper["env"]["GITHUB_TOKEN"] == "ghs-minted"
+        assert helper["env"]["GH_TOKEN"] == "ghs-minted"
+        assert helper["env"]["LOGOS_AGENT_WORKFLOW_CHANGES"] == "deny"
+        assert len(mints) == 1
+
     async def test_a_successful_settlement_runs_the_trusted_finalizer(self, monkeypatch, tmp_path):
         # The agent phase pushed nothing: with a clean agent exit, settlement
         # runs the finalize helper — the container that commits, pushes, and

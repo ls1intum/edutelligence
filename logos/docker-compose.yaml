@@ -607,13 +607,31 @@ services:
       # session token below should carry contents + pull-request write only.
       LOGOS_AGENT_REPO_URL: "${LOGOS_AGENT_REPO_URL:-https://github.com/ls1intum/edutelligence.git}"
       LOGOS_AGENT_REPO_SLUG: "${LOGOS_AGENT_REPO_SLUG:-ls1intum/edutelligence}"
-      # The account every agent token must belong to. Both tokens are checked
-      # against it at startup, and the finalizer checks again before it pushes.
+      # The account every agent credential must belong to. The credential is
+      # checked against it at startup, and the finalizer checks again before
+      # it pushes.
       LOGOS_AGENT_GITHUB_LOGIN: "${LOGOS_AGENT_GITHUB_LOGIN:-LogosOSSAgent}"
       LOGOS_AGENT_GITHUB_TOKEN: "${LOGOS_AGENT_GITHUB_TOKEN:-}"
       # Optional: a second token of the same account without 'workflow' scope,
-      # handed to session containers. Falls back to the token above.
+      # handed to session containers. Falls back to the token above. Both are
+      # ignored when the GitHub App fields below are set.
       LOGOS_AGENT_SESSION_GITHUB_TOKEN: "${LOGOS_AGENT_SESSION_GITHUB_TOKEN:-}"
+      # Alternative to the tokens above: run the account as a GitHub App. The
+      # service then holds only the app's signing key and mints short-lived
+      # installation tokens on demand, so no standing bearer credential exists
+      # to leak — a token published by accident stops being one within its
+      # lifetime. With the app id and key set, the two personal tokens above
+      # are ignored, and the login must be the app's bot user (for example
+      # `LogosOSSAgent[bot]`).
+      LOGOS_AGENT_GITHUB_APP_ID: "${LOGOS_AGENT_GITHUB_APP_ID:-}"
+      # The app's private key: the PEM, or its base64 for a one-line value.
+      LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY: "${LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY:-}"
+      # The app's installation on this repository. Optional: when empty the
+      # service resolves it from the repository at the first mint.
+      LOGOS_AGENT_GITHUB_INSTALLATION_ID: "${LOGOS_AGENT_GITHUB_INSTALLATION_ID:-}"
+      # How long a minted token may live, in seconds. GitHub caps it at an
+      # hour; the service re-mints before it lapses either way.
+      LOGOS_AGENT_GITHUB_TOKEN_TTL_S: "${LOGOS_AGENT_GITHUB_TOKEN_TTL_S:-1800}"
       # Whether the agent's GitHub account may be used like a colleague's:
       # assignments, reviews on its pull requests, and comments addressed to
       # it queue sessions. On unless explicitly switched off — running this

@@ -30,7 +30,18 @@ from typing import Any
 
 import httpx
 
-from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
+from . import (
+    attachments,
+    capacity,
+    controls,
+    conventions,
+    db,
+    docker_engine,
+    github,
+    github_tokens,
+    model_policy,
+    triggers,
+)
 from .config import INTERRUPTION_FILE, REPLY_DIR, REPLY_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
@@ -221,6 +232,25 @@ def state_dir(session_id: int) -> Path:
     says into it — the pause mark — cannot be written back by the session.
     """
     return Path(settings.state_root) / str(session_id)
+
+
+async def _session_github_token() -> str:
+    """The credential a trusted helper container may hold.
+
+    The configured personal access token, or — when the deployment runs the
+    agent account as a GitHub App — a token minted for this run. A container
+    must never hold the account's standing credential, and a minted one
+    stops being a credential a little while after the container is gone.
+    """
+    if settings.github_app_id and settings.github_app_private_key:
+        return await github_tokens.installation_token(
+            app_id=settings.github_app_id,
+            private_key=settings.github_app_private_key,
+            installation_id=settings.github_app_installation_id,
+            repo_slug=settings.repo_slug,
+            ttl_s=settings.github_token_ttl_s,
+        )
+    return settings.session_github_token
 
 
 def _give_to_session_user(path: Path) -> None:
@@ -1547,8 +1577,10 @@ class SessionManager:
         # otherwise the helper uses anonymous HTTPS.
         is_analysis = str(session.get("trigger_kind") or "") == "analysis"
         team_repo_id = session.get("team_repository_id")
-        if settings.session_github_token and not is_analysis:
-            env["GITHUB_TOKEN"] = settings.session_github_token
+        if not is_analysis:
+            token = await _session_github_token()
+            if token:
+                env["GITHUB_TOKEN"] = token
 
         # Per-link deploy keys: write via the runner-mounted artifact root
         # (same volume the helper binds at /artifacts). Never write through
@@ -1680,9 +1712,10 @@ class SessionManager:
             # first line of its task.
             "LOGOS_SESSION_SUBJECT": _fallback_subject(session),
         }
-        if settings.session_github_token:
-            env["GITHUB_TOKEN"] = settings.session_github_token
-            env["GH_TOKEN"] = settings.session_github_token
+        token = await _session_github_token()
+        if token:
+            env["GITHUB_TOKEN"] = token
+            env["GH_TOKEN"] = token
         code = await self._run_helper(
             phase="finalize",
             session_id=session_id,

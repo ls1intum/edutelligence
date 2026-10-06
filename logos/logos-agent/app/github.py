@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 import httpx
 
-from . import attachments
+from . import attachments, github_tokens
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -96,58 +96,108 @@ async def token_login(token: str, *, timeout_s: float = 15.0) -> str:
 _verified_login: str | None = None
 
 
+async def _check_one(label: str, token: str, expected: str) -> list[str]:
+    """Check one credential against the configured agent account.
+
+    Raises :class:`IdentityError` when it resolves to a *different* account:
+    that is a misconfiguration which would put agent commits, pull requests,
+    and deploy dispatches under somebody else's name, and it must stop the
+    service rather than be discovered afterwards in the repository's
+    history. An unreachable API is not a mismatch and does not stop
+    anything — the notes say why the check could not be made.
+    """
+    global _verified_login
+    if not token:
+        return [f"{label} is not configured"]
+    try:
+        login = await token_login(token)
+    except GitHubError as exc:
+        return [f"{label} could not be verified: {exc}"]
+    if login.strip().lower() != expected:
+        raise IdentityError(
+            f"{label} authenticates as '{login}', not as the configured agent "
+            f"account '{settings.github_login}'. Agent work must run under that "
+            f"account only — issue the token from it, or set "
+            f"LOGOS_AGENT_GITHUB_LOGIN to the account it belongs to."
+        )
+    # Remembered for the marker lookups: the configured identity may carry
+    # any casing, and the API's spelling is what recognizes the account's
+    # own posted comments.
+    _verified_login = login
+    return [f"{label} authenticates as {login}"]
+
+
 async def verify_identities() -> list[str]:
     """Check every configured token belongs to the agent account.
 
+    With a GitHub App there is one credential kind — a minted installation
+    token, and the account it authenticates as is the app's bot user — so
+    one check covers both the runner's calls and the containers' work.
+
     Returns the notes worth logging (which token resolved to what, or why a
-    check could not be made). Raises :class:`IdentityError` when a token
-    resolves to a *different* account: that is a misconfiguration which would
-    otherwise put agent commits, pull requests, and deploy dispatches under
-    somebody else's name, and it must stop the service rather than be
-    discovered afterwards in the repository's history.
-
-    An unreachable API is not a mismatch and does not stop anything: the
-    finalizer verifies the same thing inside the container before it pushes,
-    so a network blip at startup cannot smuggle work out under a wrong
-    identity.
-
-    When a token resolves to the expected account, the login the API spelled
-    it with is remembered (see :data:`_verified_login`): the configured
-    identity may carry any casing, and that spelling is what later marker
-    lookups recognize their own comments by.
+    check could not be made). See :func:`_check_one` for the two failure
+    shapes: a different account stops the service, an unreachable API does
+    not.
     """
-    global _verified_login
     expected = settings.github_login.strip().lower()
+    app = _app_credentials()
+    if app is not None:
+        label = "GitHub App installation token"
+        try:
+            token = await _github_token()
+        except github_tokens.CredentialError as exc:
+            return [f"{label} could not be verified: {exc}"]
+        return await _check_one(label, token, expected)
     notes: list[str] = []
     for label, token in (
         ("LOGOS_AGENT_GITHUB_TOKEN", settings.github_token),
         ("LOGOS_AGENT_SESSION_GITHUB_TOKEN", settings.session_github_token),
     ):
-        if not token:
-            notes.append(f"{label} is not configured")
-            continue
-        try:
-            login = await token_login(token)
-        except GitHubError as exc:
-            notes.append(f"{label} could not be verified: {exc}")
-            continue
-        if login.strip().lower() != expected:
-            raise IdentityError(
-                f"{label} authenticates as '{login}', not as the configured agent "
-                f"account '{settings.github_login}'. Agent work must run under that "
-                f"account only — issue the token from it, or set "
-                f"LOGOS_AGENT_GITHUB_LOGIN to the account it belongs to."
-            )
-        _verified_login = login
-        notes.append(f"{label} authenticates as {login}")
+        notes.extend(await _check_one(label, token, expected))
     return notes
 
 
-def _headers() -> dict[str, str]:
-    if not settings.github_token:
-        raise GitHubError("LOGOS_AGENT_GITHUB_TOKEN is not configured")
+def _app_credentials() -> tuple[str, str, str] | None:
+    """The app's standing credential, when the deployment configured one.
+
+    ``(app id, private key, installation id)`` — the installation id may be
+    empty; it is resolved from the repository at the first mint. ``None``
+    means the account still runs on personal access tokens, which the
+    callers read from the settings instead.
+    """
+    if settings.github_app_id and settings.github_app_private_key:
+        return settings.github_app_id, settings.github_app_private_key, settings.github_app_installation_id
+    return None
+
+
+async def _github_token(session: bool = False) -> str:
+    """The credential this service acts with, ready to use.
+
+    The configured personal access token, or — when the deployment runs the
+    agent account as a GitHub App — an installation token minted on demand
+    and refreshed before it lapses. The ``session`` flag only matters with
+    personal access tokens: there are two standing credentials, one per
+    phase, and they may differ; with the app one kind of token, minted,
+    serves both.
+    """
+    app = _app_credentials()
+    if app is not None:
+        return await github_tokens.installation_token(
+            app_id=app[0],
+            private_key=app[1],
+            installation_id=app[2],
+            repo_slug=settings.repo_slug,
+            ttl_s=settings.github_token_ttl_s,
+        )
+    return settings.session_github_token if session else settings.github_token
+
+
+async def _headers() -> dict[str, str]:
+    token = await _github_token()
+    if not token:
+        raise GitHubError("no GitHub credential is configured (LOGOS_AGENT_GITHUB_TOKEN or the GitHub App fields)")
     return {
-        "Authorization": f"Bearer {settings.github_token}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
@@ -173,7 +223,7 @@ async def dispatch_dev_deploy(*, image_tag: str) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             url,
-            headers=_headers(),
+            headers=await _headers(),
             json={"ref": _DEPLOY_REF, "inputs": {"image-tag": image_tag}},
         )
     if response.status_code not in (201, 204):
@@ -194,7 +244,7 @@ async def latest_dev_deploy_run_id() -> int | None:
     """
     url = f"{_API}/repos/{settings.repo_slug}/actions/workflows/{settings.deploy_workflow}/runs"
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, headers=_headers(), params={"per_page": 10})
+        response = await client.get(url, headers=await _headers(), params={"per_page": 10})
     if response.status_code != 200:
         raise GitHubError(f"workflow run lookup failed ({response.status_code})")
     for run in response.json().get("workflow_runs", []):
@@ -240,7 +290,7 @@ async def wait_for_dev_deploy(
 
     async def our_run() -> dict | None:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=_headers(), params=params)
+            response = await client.get(url, headers=await _headers(), params=params)
         if response.status_code != 200:
             raise GitHubError(f"workflow run lookup failed ({response.status_code})")
         for run in response.json().get("workflow_runs", []):
@@ -300,7 +350,7 @@ async def wait_for_pr_builds(
 
     async def build_for_head() -> dict | None:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=_headers(), params=params)
+            response = await client.get(url, headers=await _headers(), params=params)
         if response.status_code != 200:
             raise GitHubError(f"build run lookup failed ({response.status_code})")
         for run in response.json().get("workflow_runs", []):
@@ -385,7 +435,7 @@ async def wait_for_checks(
 async def _get(path: str, params: dict[str, Any] | None = None, *, timeout_s: float = 30.0) -> Any:
     """One authenticated read of the repository. Raises on anything but 200."""
     async with httpx.AsyncClient(timeout=timeout_s) as client:
-        response = await client.get(f"{_API}{path}", headers=_headers(), params=params or {})
+        response = await client.get(f"{_API}{path}", headers=await _headers(), params=params or {})
     if response.status_code != 200:
         raise GitHubError(
             f"GET {path} failed ({response.status_code}): {response.text[:200]}",
@@ -402,8 +452,15 @@ async def branch_head(repo_slug: str, branch: str, *, timeout_s: float = 15.0) -
     Uses the runner token when there is one (rate limit), anonymous otherwise.
     """
     headers = {"Accept": "application/vnd.github.sha", "X-GitHub-Api-Version": "2022-11-28"}
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
+    try:
+        token = await _github_token()
+    except github_tokens.CredentialError as exc:
+        # A mint that fails is the same answer as an unreachable API for
+        # this question: the caller lets the session find out itself.
+        logger.info("branch head lookup for %s@%s skipped: %s", repo_slug, branch, exc)
+        return None
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
             response = await client.get(f"{_API}/repos/{repo_slug}/commits/{quote(branch, safe='')}", headers=headers)
@@ -482,7 +539,7 @@ async def _graphql(query: str, variables: dict[str, Any]) -> dict[str, Any]:
     treating its 200 as success would move on as if it had.
     """
     async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(_GRAPHQL, headers=_headers(), json={"query": query, "variables": variables})
+        response = await client.post(_GRAPHQL, headers=await _headers(), json={"query": query, "variables": variables})
     if response.status_code != 200:
         raise GitHubError(
             f"GraphQL failed ({response.status_code}): {response.text[:200]}", status=response.status_code
@@ -988,7 +1045,7 @@ async def fetch_image(url: str, *, max_bytes: int) -> tuple[bytes, str] | None:
         for _ in range(_MAX_REDIRECTS):
             # Derived per hop rather than carried along: the credential goes
             # to GitHub or to nobody.
-            headers = _headers() if attachments.may_carry_the_token(target) else {}
+            headers = await _headers() if attachments.may_carry_the_token(target) else {}
             async with client.stream("GET", target, headers=headers) as response:
                 if response.status_code in (301, 302, 303, 307, 308):
                     location = response.headers.get("location", "")
@@ -1316,7 +1373,7 @@ async def react(path: str, content: str = REACTION_QUEUED) -> bool:
     the point is the state, not who created it.
     """
     async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(f"{_API}{path}/reactions", headers=_headers(), json={"content": content})
+        response = await client.post(f"{_API}{path}/reactions", headers=await _headers(), json={"content": content})
     if response.status_code in (200, 201):
         return True
     raise GitHubError(f"reaction on {path} failed ({response.status_code}): {response.text[:200]}")
@@ -1327,7 +1384,7 @@ async def post_issue_comment(number: int, body: str) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{_API}/repos/{settings.repo_slug}/issues/{number}/comments",
-            headers=_headers(),
+            headers=await _headers(),
             json={"body": body},
         )
     if response.status_code != 201:
@@ -1362,7 +1419,7 @@ async def reply_to_review_comment(number: int, comment_id: int, body: str) -> st
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{_API}/repos/{settings.repo_slug}/pulls/{number}/comments/{comment_id}/replies",
-            headers=_headers(),
+            headers=await _headers(),
             json={"body": body},
         )
     if response.status_code != 201:
@@ -1388,7 +1445,7 @@ async def request_pull_review(number: int, logins: list[str]) -> None:
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{_API}/repos/{settings.repo_slug}/pulls/{number}/requested_reviewers",
-            headers=_headers(),
+            headers=await _headers(),
             json={"reviewers": list(logins)},
         )
     if response.status_code not in (200, 201, 204):
@@ -1442,7 +1499,7 @@ async def pull_request_state(pr_url: str) -> dict[str, object] | None:
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(f"{_API}/repos/{settings.repo_slug}/pulls/{number}", headers=_headers())
+            response = await client.get(f"{_API}/repos/{settings.repo_slug}/pulls/{number}", headers=await _headers())
         if response.status_code != 200:
             return None
         payload = response.json()

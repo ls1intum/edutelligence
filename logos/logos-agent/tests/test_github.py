@@ -11,7 +11,9 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from app import github
+from app import github, github_tokens
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +21,17 @@ def _clean_verified_login(monkeypatch):
     # verify_identities remembers the API's spelling of the account in the
     # module; every test starts from a service that has not verified yet.
     monkeypatch.setattr(github, "_verified_login", None)
+
+
+@pytest.fixture()
+def app_pem():
+    """A generated app private key, the way an environment would carry it."""
+    key = Ed25519PrivateKey.generate()
+    return key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
 
 
 class FakeResponse:
@@ -486,6 +499,107 @@ class TestAgentIdentity:
         notes = await github.verify_identities()
 
         assert all("is not configured" in note for note in notes)
+
+
+class TestAppIdentity:
+    """The same check when the agent account runs as a GitHub App.
+
+    The deployment then holds no personal access token of the account at
+    all: one credential kind — the minted installation token — serves both
+    the runner and the containers, and the account it authenticates as is
+    the app's bot user, so the configured login is that spelling.
+    """
+
+    @staticmethod
+    def _app(monkeypatch, pem, *, login="LogosOSSAgent[bot]", mint="ghs-minted"):
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(
+                github.settings,
+                github_login=login,
+                github_token="",
+                session_github_token="",
+                github_app_id="41234",
+                github_app_private_key=pem,
+            ),
+        )
+
+        async def minted_token(**kwargs):
+            return mint
+
+        monkeypatch.setattr(github.github_tokens, "installation_token", minted_token)
+        return mint
+
+    async def test_the_minted_token_is_checked_against_the_bot_account(self, monkeypatch, app_pem):
+        mint = self._app(monkeypatch, app_pem)
+        seen = TestAgentIdentity._identity_client(monkeypatch, {mint: "LogosOSSAgent[bot]"})
+
+        notes = await github.verify_identities()
+
+        # One credential kind, one check — and it is the minted token that
+        # is asked about, nothing the operator configured by hand.
+        assert seen == [("https://api.github.com/user", mint)]
+        assert notes == ["GitHub App installation token authenticates as LogosOSSAgent[bot]"]
+
+    async def test_a_minted_token_of_another_account_stops_the_service(self, monkeypatch, app_pem):
+        mint = self._app(monkeypatch, app_pem)
+        TestAgentIdentity._identity_client(monkeypatch, {mint: "wasnertobias"})
+
+        with pytest.raises(github.IdentityError, match="wasnertobias"):
+            await github.verify_identities()
+
+    async def test_a_mint_failure_is_a_note_not_a_stop(self, monkeypatch, app_pem):
+        # A mint that fails at startup is a degraded start, like an
+        # unreachable API: the finalizer checks the same thing inside the
+        # container before it pushes.
+        self._app(monkeypatch, app_pem)
+
+        async def broken(**kwargs):
+            raise github_tokens.CredentialError("could not reach the GitHub API")
+
+        monkeypatch.setattr(github.github_tokens, "installation_token", broken)
+        TestAgentIdentity._identity_client(monkeypatch, {})
+
+        notes = await github.verify_identities()
+
+        assert any("could not be verified" in note for note in notes)
+
+    async def test_stale_personal_tokens_are_ignored_with_the_app_configured(self, monkeypatch, app_pem):
+        # A migration keeps the old tokens set for a while: the app must
+        # win, or the standing credential is back in the picture the moment
+        # somebody calls with it.
+        mint = self._app(monkeypatch, app_pem)
+        monkeypatch.setattr(github, "settings", replace(github.settings, github_token="stale-pat"))
+        seen = TestAgentIdentity._identity_client(monkeypatch, {mint: "LogosOSSAgent[bot]"})
+
+        await github.verify_identities()
+
+        assert [token for _, token in seen] == [mint]
+
+    async def test_the_runner_acts_with_the_minted_token(self, monkeypatch, app_pem):
+        mint = self._app(monkeypatch, app_pem)
+        calls: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                calls.append({"url": url, "headers": headers or {}})
+                return FakeResponse(201)
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+
+        await github.dispatch_dev_deploy(image_tag="pr-772")
+
+        assert calls[0]["headers"]["Authorization"] == f"Bearer {mint}"
 
 
 class TestListingPagination:
