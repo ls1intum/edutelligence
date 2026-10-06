@@ -4343,19 +4343,16 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         workflow_id = None
         workflow_step_id = None
         tag_sla = None
-        if workflow_tag:
+        if workflow_tag and auth.team_id is not None:
+            # Scoped to the caller's own team so a guessed tag cannot
+            # escalate another team's SLA onto this key.
             try:
                 with DBManager() as tag_db:
-                    # Scope to the caller's team: tags are not globally unique,
-                    # so an unscoped LIMIT 1 could return another team's row
-                    # and hide the caller's own live match.
                     tag_info = tag_db.lookup_workflow_tag(workflow_tag, auth.team_id)
             except Exception:
                 logger.exception("Failed to look up workflow tag %r", workflow_tag)
                 tag_info = None
-            # Only accept a match from the caller's own team so a guessed tag
-            # cannot escalate another team's SLA onto this key.
-            if tag_info and tag_info.get("team_id") == auth.team_id:
+            if tag_info:
                 workflow_id = tag_info.get("workflow_id")
                 workflow_step_id = tag_info.get("step_id")
                 looked_up_sla = tag_info.get("sla")

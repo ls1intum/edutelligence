@@ -4594,40 +4594,44 @@ class DBManager:
         # from the permission-scoped in-memory resolver.
         return data
 
-    def lookup_workflow_tag(self, tag: str, team_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        """Resolve a workflow/step tag to attribution + SLA for a request.
+    def lookup_workflow_tag(self, tag: str, team_id: Optional[int]) -> Optional[Dict[str, Any]]:
+        """Resolve a workflow/step tag of ``team_id`` to attribution + SLA for a request.
 
         Prefers a matching ``ai_workflow_steps.tag`` whose parent workflow is
         not soft-deleted and not ``ignored``. Falls back to ``ai_workflows.tag``
         under the same filters (workflows themselves have no SLA — ``sla`` is
         then None). Step SLA prefers ``confirmed_sla`` over ``recommended_sla``.
-
-        When ``team_id`` is given, only that team's live tags match — tags are
-        not globally unique, so the first row for a shared tag must not hide a
-        later team's (or the caller's own) match.
+        Only each repository's latest succeeded analysis counts — the one the
+        Workflows tab shows — so ignoring, deleting, or renaming a tag there
+        is not undone by a superseded copy. Another team's tag never matches.
 
         Returns:
-            Dict with ``workflow_id``, ``step_id``, ``sla``, ``team_id``, or
-            None when no live tag matches.
+            Dict with ``workflow_id``, ``step_id``, ``sla``, or None when no
+            live tag of the team matches.
         """
-        if not tag:
+        if not tag or team_id is None:
             return None
-        team_filter = "AND a.team_id = :team_id" if team_id is not None else ""
-        params = {"tag": tag, "team_id": team_id}
+        params = {"tag": tag, "team_id": int(team_id)}
         step_row = self.session.execute(
-            text(f"""
+            text("""
                  SELECT s.workflow_id AS workflow_id,
                         s.id AS step_id,
-                        COALESCE(s.confirmed_sla, s.recommended_sla) AS sla,
-                        a.team_id AS team_id
+                        COALESCE(s.confirmed_sla, s.recommended_sla) AS sla
                  FROM ai_workflow_steps s
                           JOIN ai_workflows w ON w.id = s.workflow_id
                           JOIN ai_workflow_analyses a ON a.id = w.analysis_id
                  WHERE s.tag = :tag
+                   AND a.team_id = :team_id
+                   AND a.id = (
+                         SELECT latest.id FROM ai_workflow_analyses latest
+                          WHERE latest.team_repository_id = a.team_repository_id
+                            AND latest.status = 'succeeded'
+                          ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                          LIMIT 1
+                       )
                    AND w.deleted_at IS NULL
                    AND w.status <> 'ignored'
-                   {team_filter}
-                 ORDER BY s.id
+                 ORDER BY w.id DESC, s.id
                  LIMIT 1
                  """),
             params,
@@ -4636,18 +4640,24 @@ class DBManager:
             return dict(step_row._mapping)
 
         workflow_row = self.session.execute(
-            text(f"""
+            text("""
                  SELECT w.id AS workflow_id,
                         CAST(NULL AS INTEGER) AS step_id,
-                        CAST(NULL AS TEXT) AS sla,
-                        a.team_id AS team_id
+                        CAST(NULL AS TEXT) AS sla
                  FROM ai_workflows w
                           JOIN ai_workflow_analyses a ON a.id = w.analysis_id
                  WHERE w.tag = :tag
+                   AND a.team_id = :team_id
+                   AND a.id = (
+                         SELECT latest.id FROM ai_workflow_analyses latest
+                          WHERE latest.team_repository_id = a.team_repository_id
+                            AND latest.status = 'succeeded'
+                          ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                          LIMIT 1
+                       )
                    AND w.deleted_at IS NULL
                    AND w.status <> 'ignored'
-                   {team_filter}
-                 ORDER BY w.id
+                 ORDER BY w.id DESC
                  LIMIT 1
                  """),
             params,
@@ -4655,18 +4665,6 @@ class DBManager:
         if workflow_row:
             return dict(workflow_row._mapping)
         return None
-
-    def get_application_key_queue_rank(self, api_key_id: int) -> Optional[int]:
-        """Return the logos-admin queue rank for an application key, if any."""
-        row = self.session.execute(
-            text("""
-                 SELECT rank
-                 FROM application_key_queue_ranks
-                 WHERE api_key_id = :api_key_id
-                 """),
-            {"api_key_id": int(api_key_id)},
-        ).fetchone()
-        return int(row.rank) if row else None
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(
