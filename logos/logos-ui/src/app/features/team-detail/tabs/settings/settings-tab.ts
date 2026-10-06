@@ -31,6 +31,18 @@ function dollarsToMc(s: string): number | null {
   return isNaN(v) ? null : Math.round(v * MICRO);
 }
 
+/**
+ * A provider cap as typed: blank is no cap (null), a non-negative dollar
+ * amount is a cap, and anything else is rejected (undefined) rather than read
+ * as "no cap".
+ */
+export function parseProviderCap(s: string): number | null | undefined {
+  const trimmed = s.trim();
+  if (trimmed === '') return null;
+  if (!/^\d+([.,]\d+)?$/.test(trimmed)) return undefined;
+  return Math.round(Number(trimmed.replace(',', '.')) * MICRO);
+}
+
 function strToIntOrNull(s: string): number | null {
   const v = parseInt(s.trim(), 10);
   return isNaN(v) ? null : v;
@@ -119,14 +131,17 @@ export class SettingsTabComponent implements OnChanges {
       this.providerBudgetError.set('Select a cloud provider.');
       return;
     }
+    const cap = parseProviderCap(this.newProviderBudget());
+    if (cap === undefined) {
+      this.providerBudgetError.set(
+        'Enter a dollar amount such as 50 or 12.50, or leave it blank for unlimited.',
+      );
+      return;
+    }
     this.providerBudgetLoading.set(true);
     this.providerBudgetError.set('');
     try {
-      await this.teamService.upsertTeamProviderBudget(
-        this.teamId,
-        providerId,
-        dollarsToMc(this.newProviderBudget()),
-      );
+      await this.teamService.upsertTeamProviderBudget(this.teamId, providerId, cap);
       this.newProviderId.set('');
       this.newProviderBudget.set('');
       await this.loadProviderBudgets();

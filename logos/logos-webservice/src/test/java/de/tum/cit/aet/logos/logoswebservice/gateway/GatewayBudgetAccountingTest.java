@@ -238,6 +238,19 @@ class GatewayBudgetAccountingTest {
             .hasMessageContaining("Team monthly budget exceeded for this provider");
     }
 
+    @Test
+    void zeroProviderCapBlocksThatProvider() {
+        Fixture f = seedFixture(ApiKeyType.developer);
+        jdbc.update(
+            "INSERT INTO team_provider_budgets (team_id, provider_id, monthly_budget_micro_cents) "
+            + "VALUES (?, ?, 0)",
+            f.teamId(), f.providerId());
+
+        assertThatThrownBy(() -> uncachedBudgetService().enforceCloudBudget(f.key(), f.providerId()))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("Team monthly budget exceeded for this provider");
+    }
+
     // ------------------------------------------------------- orchestrator path
 
     @Test
