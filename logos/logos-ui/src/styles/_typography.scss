@@ -1,5 +1,5 @@
 .logo-name {
-  font-family: "Plus Jakarta Sans", Inter, sans-serif;
+  font-family: var(--font-family-display);
   font-size: var(--font-size-3xl);
   font-weight: var(--font-weight-normal);
   letter-spacing: var(--letter-spacing-wide);
@@ -9,7 +9,7 @@
 }
 
 html {
-  font-family: Inter, sans-serif;
+  font-family: var(--font-family-base);
   font-size: var(--font-size-lg);
   line-height: var(--line-height-normal);
   -webkit-font-smoothing: antialiased;
