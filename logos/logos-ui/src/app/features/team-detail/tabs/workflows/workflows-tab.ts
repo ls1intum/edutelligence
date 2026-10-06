@@ -177,6 +177,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return list.filter((wf) => this.workflowStatus(wf) === 'active');
   }
 
+  /** The filter inserts workflow cards whose Mermaid source has not been rendered yet. */
+  setShowDeprecatedIgnored(show: boolean): void {
+    this.showDeprecatedIgnored.set(show);
+    this.diagramsDirty = true;
+  }
+
   workflowStatus(wf: AiWorkflow): AiWorkflowStatus {
     const status = (wf.status ?? 'active').toLowerCase();
     if (status === 'deprecated' || status === 'ignored') return status;
@@ -382,11 +388,15 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     if (!candidate || this.benchmarkRunning()) return;
     this.benchmarkRunning.set(true);
     this.actionError.set('');
+    const teamId = this.teamId;
     try {
-      const result = await this.teamService.runWorkflowBenchmark(this.teamId, wf.id, {
+      const result = await this.teamService.runWorkflowBenchmark(teamId, wf.id, {
         candidate_model: candidate,
       });
-      this.benchmarkResult.set(result);
+      // The panel may have moved to another workflow (or team) meanwhile.
+      if (this.teamId === teamId && this.benchmarkOpenId() === wf.id) {
+        this.benchmarkResult.set(result);
+      }
     } catch (err: unknown) {
       this.actionError.set(this.errDetail(err, 'Failed to run benchmark.'));
     } finally {

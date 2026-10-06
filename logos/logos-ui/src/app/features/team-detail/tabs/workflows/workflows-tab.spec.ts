@@ -380,6 +380,31 @@ describe('WorkflowsTabComponent review actions', () => {
     expect(component.benchmarkResult()?.historic_metrics?.sample_count).toBe(12);
   });
 
+  it('drops a benchmark result once the panel moved to another workflow', async () => {
+    const component = setup();
+    await component.load();
+    let resolve!: (value: unknown) => void;
+    runWorkflowBenchmark.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    component.toggleBenchmark(activeWorkflow);
+    component.benchmarkCandidate.set('gpt-fast');
+    const pendingRun = component.runBenchmark(activeWorkflow);
+    component.toggleBenchmark(deprecatedWorkflow);
+    resolve({ id: 1, workflow_id: 1, historic_metrics: { sample_count: 3 } });
+    await pendingRun;
+    expect(component.benchmarkOpenId()).toBe(deprecatedWorkflow.id);
+    expect(component.benchmarkResult()).toBeNull();
+  });
+
+  it('renders the diagrams the lifecycle filter reveals', () => {
+    const component = setup();
+    const internals = component as unknown as { renderDiagrams: () => Promise<void> };
+    const render = vi.spyOn(internals, 'renderDiagrams').mockResolvedValue(undefined);
+    component.setShowDeprecatedIgnored(true);
+    component.ngAfterViewChecked();
+    expect(component.showDeprecatedIgnored()).toBe(true);
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
   it('proposes a tagging pull request', async () => {
     const component = setup();
     await component.load();

@@ -115,6 +115,29 @@ class WorkflowLifecycleControllerTest {
     }
 
     @Test
+    void workflowEdits_refuseASupersededAnalysis() throws Exception {
+        int[] ids = seedWorkflowWithStep();
+        jdbc.update("""
+            INSERT INTO ai_workflow_analyses
+                (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            SELECT team_id, team_repository_id, 'newer', 'succeeded', 'agent', now() + interval '1 minute'
+              FROM ai_workflow_analyses
+             WHERE id = (SELECT analysis_id FROM ai_workflows WHERE id = ?)
+            """, ids[0]);
+
+        mvc.perform(patch("/admin/teams/2001/workflows/" + ids[0])
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\":\"ignored\"}"))
+           .andExpect(status().isConflict());
+        mvc.perform(patch("/admin/teams/2001/workflow-steps/" + ids[1])
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"confirmed_sla\":\"ux-background\"}"))
+           .andExpect(status().isConflict());
+    }
+
+    @Test
     void workflowStep_confirmSlaValidatesAndIsTeamScoped() throws Exception {
         int stepId = seedWorkflowWithStep()[1];
 

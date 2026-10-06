@@ -4601,8 +4601,9 @@ class DBManager:
         not soft-deleted and not ``ignored``. Falls back to ``ai_workflows.tag``
         under the same filters (workflows themselves have no SLA — ``sla`` is
         then None). Step SLA prefers ``confirmed_sla`` over ``recommended_sla``.
-        Tags are only unique per analysis, so the newest workflow wins and
-        another team's tag never matches.
+        Only each repository's latest succeeded analysis counts — the one the
+        Workflows tab shows — so ignoring, deleting, or renaming a tag there
+        is not undone by a superseded copy. Another team's tag never matches.
 
         Returns:
             Dict with ``workflow_id``, ``step_id``, ``sla``, or None when no
@@ -4621,6 +4622,13 @@ class DBManager:
                           JOIN ai_workflow_analyses a ON a.id = w.analysis_id
                  WHERE s.tag = :tag
                    AND a.team_id = :team_id
+                   AND a.id = (
+                         SELECT latest.id FROM ai_workflow_analyses latest
+                          WHERE latest.team_repository_id = a.team_repository_id
+                            AND latest.status = 'succeeded'
+                          ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                          LIMIT 1
+                       )
                    AND w.deleted_at IS NULL
                    AND w.status <> 'ignored'
                  ORDER BY w.id DESC, s.id
@@ -4640,6 +4648,13 @@ class DBManager:
                           JOIN ai_workflow_analyses a ON a.id = w.analysis_id
                  WHERE w.tag = :tag
                    AND a.team_id = :team_id
+                   AND a.id = (
+                         SELECT latest.id FROM ai_workflow_analyses latest
+                          WHERE latest.team_repository_id = a.team_repository_id
+                            AND latest.status = 'succeeded'
+                          ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                          LIMIT 1
+                       )
                    AND w.deleted_at IS NULL
                    AND w.status <> 'ignored'
                  ORDER BY w.id DESC

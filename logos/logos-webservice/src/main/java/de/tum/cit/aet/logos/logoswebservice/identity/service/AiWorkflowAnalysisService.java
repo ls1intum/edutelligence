@@ -144,6 +144,7 @@ public class AiWorkflowAnalysisService {
         Repository: %s
         Clone URL: %s
 
+        Use these tag values exactly as written; Logos matches them verbatim.
         Open a pull request with the header changes. Prefer the smallest clear
         change that wires tags at each matching call site; do not refactor
         unrelated code.
@@ -515,10 +516,10 @@ public class AiWorkflowAnalysisService {
 
     @Transactional
     public Map<String, Object> updateWorkflow(int teamId, int workflowId, UpdateWorkflowRequestDTO body) {
-        AiWorkflow workflow = requireWorkflowForTeam(teamId, workflowId);
         if (body == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body is required");
         }
+        AiWorkflow workflow = lockCurrentWorkflow(teamId, workflowId);
         if (body.status() != null) {
             String status = body.status().trim().toLowerCase(Locale.ROOT);
             if (!VALID_WORKFLOW_STATUSES.contains(status)) {
@@ -546,10 +547,11 @@ public class AiWorkflowAnalysisService {
 
     @Transactional
     public Map<String, Object> updateWorkflowStep(int teamId, int stepId, UpdateWorkflowStepRequestDTO body) {
-        AiWorkflowStep step = requireStepForTeam(teamId, stepId);
         if (body == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body is required");
         }
+        AiWorkflowStep step = requireStepForTeam(teamId, stepId);
+        lockCurrentWorkflow(teamId, step.getWorkflowId());
         if (body.confirmedSla() != null) {
             String sla = body.confirmedSla().trim();
             if (sla.isEmpty()) {
@@ -645,23 +647,27 @@ public class AiWorkflowAnalysisService {
 
     @Transactional
     public Map<String, Object> queueTaggingPullRequest(int teamId, int workflowId) {
-        AiWorkflow workflow = requireWorkflowForTeam(teamId, workflowId);
+        AiWorkflow workflow = lockCurrentWorkflow(teamId, workflowId);
         AiWorkflowAnalysis analysis = analysisRepository.findById(workflow.getAnalysisId())
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Analysis not found"));
         TeamRepoLink link = requireLink(teamId, analysis.getTeamRepositoryId());
         List<AiWorkflowStep> steps = stepRepository.findByWorkflowIdOrderBySortOrderAsc(workflow.getId());
+        // The session only changes the application repository; its result is
+        // never ingested. Tags it would invent could match nothing, so every
+        // missing tag is fixed here first and the task names the stored values.
+        assignMissingTags(workflow, steps);
 
         String stepsLabel = steps.isEmpty()
-            ? "(no steps recorded — tag the workflow as a whole)"
+            ? "(no steps recorded — send the workflow tag at every call site)"
             : steps.stream()
                 .map(s -> "- " + s.getName()
-                    + " | tag=" + (s.getTag() != null ? s.getTag() : "(unset)")
+                    + " | tag=" + s.getTag()
                     + " | sla=" + (s.getConfirmedSla() != null ? s.getConfirmedSla() : s.getRecommendedSla()))
                 .collect(Collectors.joining("\n"));
 
         String task = TAGGING_PR_TASK_TEMPLATE.formatted(
             workflow.getName(),
-            workflow.getTag() != null ? workflow.getTag() : "(unset — invent a stable kebab-case tag)",
+            workflow.getTag(),
             stepsLabel,
             link.getRepoSlug(),
             link.getRepoUrl());
@@ -863,6 +869,31 @@ public class AiWorkflowAnalysisService {
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found"));
     }
 
+    /**
+     * Lock a workflow for an owner edit, after its repository — the same
+     * order and reason as {@link #lockCurrentRecommendation}: the agent ingest
+     * takes the repository lock before it reads the lifecycle and step SLAs
+     * it carries over, so an edit either lands before that read or waits for
+     * the new analysis. An edit to a workflow a newer analysis superseded is
+     * refused — the page is showing old workflows and must reload.
+     */
+    private AiWorkflow lockCurrentWorkflow(int teamId, int workflowId) {
+        AiWorkflow workflow = requireWorkflowForTeam(teamId, workflowId);
+        AiWorkflowAnalysis analysis = analysisRepository.findById(workflow.getAnalysisId())
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found"));
+        Integer repoId = analysis.getTeamRepositoryId();
+        if (repoId != null) {
+            jdbc.query("SELECT id FROM team_repositories WHERE id = ? FOR UPDATE", rs -> null, repoId);
+            Integer latest = analysisRepository.findLatestSucceeded(repoId)
+                .map(AiWorkflowAnalysis::getId).orElse(null);
+            if (latest != null && !latest.equals(analysis.getId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A newer analysis replaced this workflow; reload the Workflows tab");
+            }
+        }
+        return workflow;
+    }
+
     private AiWorkflowStep requireStepForTeam(int teamId, int stepId) {
         if (!teamExists(teamId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Team not found");
@@ -924,6 +955,30 @@ public class AiWorkflowAnalysisService {
         catch (JsonProcessingException e) {
             return text;
         }
+    }
+
+    private void assignMissingTags(AiWorkflow workflow, List<AiWorkflowStep> steps) {
+        if (workflow.getTag() == null || workflow.getTag().isBlank()) {
+            workflow.setTag(slugOrDefault(workflow.getName(), "workflow-" + workflow.getId()));
+            workflowRepository.save(workflow);
+        }
+        for (AiWorkflowStep step : steps) {
+            if (step.getTag() == null || step.getTag().isBlank()) {
+                String tag = workflow.getTag() + "-" + slugOrDefault(step.getName(), "step-" + step.getId());
+                step.setTag(tag.length() > MAX_TAG_LENGTH ? tag.substring(0, MAX_TAG_LENGTH) : tag);
+                stepRepository.save(step);
+            }
+        }
+    }
+
+    private static String slugOrDefault(String name, String fallback) {
+        String slug = name == null ? "" : name.trim().toLowerCase(Locale.ROOT)
+            .replaceAll("[^a-z0-9]+", "-")
+            .replaceAll("^-+|-+$", "");
+        if (slug.isEmpty()) {
+            return fallback;
+        }
+        return slug.length() > MAX_TAG_LENGTH ? slug.substring(0, MAX_TAG_LENGTH) : slug;
     }
 
     /**
