@@ -20,6 +20,14 @@ not drop its usage from these views: the historical requests keep showing
 under the model's former name, marked with a trash icon so the entry is
 recognizable as deleted.
 
+On the **Local Providers** tab, every worker node gets its own section with
+memory, lane health, and GPU metrics. The commit its image was built from is
+shown beside the worker's name as `version: <commit>`, followed by an info icon.
+Hover over the icon (or tap it on a touch screen) to see the full commit and
+copy it with the button there, so you can tell which workers have picked up an
+update. A worker that cannot report one shows `version: unknown`, and the same
+icon explains why.
+
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 
 ## Models
@@ -80,6 +88,14 @@ The [agent runner's](https://github.com/ls1intum/edutelligence/blob/main/logos/l
 coding-agent sessions: what each is working on, its state, and its pull
 request. The page is reachable to every Logos Admin; the **Agents** entry in
 the sidebar only appears when the deployment runs the optional agent stack.
+
+Repository analyses of the teams' linked repositories run here too. They
+re-run every night for repositories with new commits; **Analyze all
+repositories** queues one for every linked repository right away, regardless
+of commit — for example after the analysis itself was improved. Repositories
+that already have an analysis queued or running are left alone. Results reach
+the teams as proposals on their **Workflows** tab
+([Team detail](app-admin.md#workflows)).
 
 ![Agent Sessions page](/img/roles/logos-admin-agents.png)
 

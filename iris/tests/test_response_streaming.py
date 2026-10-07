@@ -110,6 +110,8 @@ def _mock_responses_response(
     output_text="ok",
     input_tokens=1,
     output_tokens=1,
+    cached_tokens=0,
+    cache_write_tokens=0,
     status="completed",
 ):
     return SimpleNamespace(
@@ -132,6 +134,9 @@ def _mock_responses_response(
         output_text=output_text,
         usage=SimpleNamespace(
             input_tokens=input_tokens,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+            ),
             output_tokens=output_tokens,
             output_tokens_details=SimpleNamespace(reasoning_tokens=0),
         ),
@@ -235,7 +240,15 @@ def test_openai_streaming_resets_on_tool_call_and_returns_tool_call_message():
             ),
             _chunk(tool_calls=[_tool_delta(0, arguments=':"iris"}')]),
             _chunk(content="This must not be forwarded."),
-            _chunk(usage=SimpleNamespace(prompt_tokens=7, completion_tokens=4)),
+            _chunk(
+                usage=SimpleNamespace(
+                    prompt_tokens=7,
+                    completion_tokens=4,
+                    prompt_tokens_details=SimpleNamespace(
+                        cached_tokens=5, cache_write_tokens=1
+                    ),
+                )
+            ),
         ]
     )
 
@@ -253,6 +266,8 @@ def test_openai_streaming_resets_on_tool_call_and_returns_tool_call_message():
     assert result.tool_calls[0].function.arguments == {"query": "iris"}
     assert result.token_usage.num_input_tokens == 7
     assert result.token_usage.num_output_tokens == 4
+    assert result.token_usage.num_cached_input_tokens == 5
+    assert result.token_usage.num_cache_write_input_tokens == 1
 
 
 def test_openai_non_streaming_tool_call_retains_assistant_content():
@@ -415,6 +430,8 @@ def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message()
                     output_text="",
                     input_tokens=7,
                     output_tokens=4,
+                    cached_tokens=6,
+                    cache_write_tokens=1,
                 ),
             ),
         ]
@@ -434,6 +451,8 @@ def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message()
     assert result.tool_calls[0].function.arguments == {"query": "iris"}
     assert result.token_usage.num_input_tokens == 7
     assert result.token_usage.num_output_tokens == 4
+    assert result.token_usage.num_cached_input_tokens == 6
+    assert result.token_usage.num_cache_write_input_tokens == 1
 
 
 def test_responses_streaming_resets_and_retries_after_retryable_mid_stream_error():
@@ -782,6 +801,7 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
     pipeline.mcq_pipeline = MagicMock()
     pipeline.prepare_state = lambda state: None
     pipeline.build_system_message = lambda state: "system prompt"
+    pipeline.build_turn_context_message = lambda state: "turn context"
     pipeline.get_tools = lambda state: []
     pipeline.execute_agent = lambda state: "agent answer"
     pipeline.create_tracing_context = lambda dto, variant: None
@@ -862,6 +882,10 @@ def _run_stubbed_pipeline_details(
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
         patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
+        patch(
+            "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
+            return_value=None,
+        ),
         patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel", FakeLlm),
         patch("iris.pipeline.abstract_agent_pipeline.PartialResultSender", FakeSender),
     ):
