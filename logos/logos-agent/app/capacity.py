@@ -237,13 +237,16 @@ def parse_scheduler_state(
     ``_live`` prefers — because those are different populations and
     subtracting one from the other understates user load. Engine-side
     waiting is a third population: ledger actives the engine has accepted
-    but not started sit in ``queue_waiting_current``, so the residual of
-    the keyed active count after matching the engine running sample comes
-    off that wait list. Orchestrator backlog ownership is yet another
-    split (``queued_by_api_key``); the in-flight figure must not stand in
-    for it, or a runner pauses for its own orchestrator backlog. An
-    orchestrator that does not report a split falls back to the session
-    count for that population.
+    but not started sit in ``queue_waiting_current``. Those waiters are
+    discounted only when the same engine snapshot accounts for the ledger
+    (running plus waiting covers ``active``) — then keyed actives not in
+    the running sample are the ones still waiting. A lagging sample that
+    is missing a newly dispatched request must not spend that residual on
+    the wait list, or a real user's waiter is erased. Orchestrator backlog
+    ownership is yet another split (``queued_by_api_key``); the in-flight
+    figure must not stand in for it, or a runner pauses for its own
+    orchestrator backlog. An orchestrator that does not report a split
+    falls back to the session count for that population.
     """
     mine = {str(name).strip().lower(): int(count) for name, count in (ours or {}).items()}
     if lane is not None and not lane:
@@ -401,11 +404,14 @@ def parse_scheduler_state(
             slots[0] = max(max(0, engine - own_active), max(0, ledger - own_active))
             # Ledger `active` includes requests the engine has accepted but
             # not yet started — those show up in `queue_waiting_current`,
-            # not in `queued_by_api_key`. Own keyed actives not explained by
-            # the engine running sample are that residual; cap by the wait
-            # list so a real user behind us is preserved.
-            own_engine_waiting = min(engine_waiting, max(0, own_active - engine))
-            engine_waiting = max(0, engine_waiting - own_engine_waiting)
+            # not in `queued_by_api_key`. Attribute keyed residuals to that
+            # wait list only when this snapshot explains the ledger: every
+            # in-flight request is either running or waiting. Otherwise the
+            # sample is lagging and the residual may be a request that has
+            # not appeared yet; clearing a waiter then would hide a user.
+            if ledger <= engine + engine_waiting:
+                own_engine_waiting = min(engine_waiting, max(0, own_active - engine))
+                engine_waiting = max(0, engine_waiting - own_engine_waiting)
             if name in queue_key_reported:
                 depth = max(0, depth - per_model_own_queued.get(name, 0))
             else:
