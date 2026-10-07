@@ -109,6 +109,35 @@ async def test_reports_connected_at_and_worker_started_at(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reports_worker_version_checksum(monkeypatch):
+    monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
+    _FakeDBManager.providers = [
+        {"provider_id": 1, "name": "node-a", "provider_type": "logosnode"},
+        {"provider_id": 2, "name": "node-b", "provider_type": "logosnode"},
+        {"provider_id": 3, "name": "node-c", "provider_type": "logosnode"},
+    ]
+
+    commit = "a3f9c21e0b7d4f65a1c2d3e4f5061728394a5b6c"
+    fresh_heartbeat = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    runtimes = {
+        1: {"version_checksum": commit},
+        2: {},  # online, but a worker that predates the field
+    }
+    registry = MagicMock()
+    registry.peek_runtime_snapshot = lambda pid: (
+        {"last_heartbeat": fresh_heartbeat, "runtime": runtimes[pid]} if pid in runtimes else None
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+
+    result = await main_mod.internal_provider_status(_make_request("Bearer correct-secret"))
+
+    by_id = {p["provider_id"]: p for p in result["providers"]}
+    assert by_id[1]["worker_version_checksum"] == commit
+    assert by_id[2]["worker_version_checksum"] is None
+    assert by_id[3]["worker_version_checksum"] is None  # offline: no live status to read it from
+
+
+@pytest.mark.asyncio
 async def test_stale_heartbeat_counts_as_offline(monkeypatch):
     monkeypatch.setattr(main_mod, "_INTERNAL_SECRET", "correct-secret")
     _FakeDBManager.providers = [

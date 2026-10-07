@@ -220,6 +220,31 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
     @Transactional(readOnly = true)
     @Query(value = """
+        SELECT le.model_id AS id,
+               COALESCE(m.name, le.model_name, 'Model ' || le.model_id) AS label,
+               COUNT(*) AS requestCount
+        FROM log_entry le
+        LEFT JOIN models m ON m.id = le.model_id
+        WHERE le.request_id IS NOT NULL
+          AND le.timestamp_request BETWEEN :start AND :end
+          AND le.model_id IS NOT NULL
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
+        GROUP BY le.model_id, COALESCE(m.name, le.model_name, 'Model ' || le.model_id)
+        ORDER BY requestCount DESC, label
+        """, nativeQuery = true)
+    List<ScopeOptionProjection> findModelsWithTraffic(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("teamId") Integer teamId,
+        @Param("userId") Integer userId,
+        @Param("providerId") Integer providerId,
+        @Param("errorsOnly") Boolean errorsOnly);
+
+    @Transactional(readOnly = true)
+    @Query(value = """
         SELECT le.request_id AS requestId,
                COALESCE(m.name, le.model_name, 'Model ' || le.model_id) AS modelName,
                COALESCE(p.name, 'Provider ' || le.provider_id) AS providerName,
@@ -300,6 +325,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (:allModels = TRUE OR le.model_id IN (:modelIds))
+          AND (:allProviders = TRUE OR le.provider_id IN (:providerIds))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
           -- One of the four lifecycle buckets the feed can be narrowed to:
           -- queued (not yet scheduled), running (scheduled, not answered),
@@ -346,6 +373,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
         @Param("errorsOnly") Boolean errorsOnly,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
+        @Param("allProviders") boolean allProviders,
+        @Param("providerIds") List<Integer> providerIds,
         @Param("status") String status,
         @Param("cursorTs") Timestamp cursorTs,
         @Param("cursorId") String cursorId,
@@ -409,6 +440,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (:allModels = TRUE OR le.model_id IN (:modelIds))
+          AND (:allProviders = TRUE OR le.provider_id IN (:providerIds))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
           -- Identical to the predicate in {@link #findLatestRequests} (minus the
           -- cursor): the count and the rows must describe the same set.
@@ -434,6 +467,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
         @Param("errorsOnly") Boolean errorsOnly,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
+        @Param("allProviders") boolean allProviders,
+        @Param("providerIds") List<Integer> providerIds,
         @Param("status") String status);
 
     @Transactional(readOnly = true)
@@ -498,28 +535,38 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("requestIds") List<String> requestIds);
 
     /**
-     * The request traces of one team for the export, one keyset page at a
-     * time.
+     * The capped export slice as ordered keyset keys (newest first).
      *
-     * Every request of the window comes out — the export must describe the
-     * same slice of traffic the activity list above shows, and a download that
-     * is empty just because the team never consented reads as a bug. Only the
-     * rows the orchestrator recorded at FULL privacy carry the request and
-     * response payloads; for the billing-only ones the content columns come
-     * back NULL, and the envelope says so.
-     *
-     * The token and cost columns reuse the lateral joins of
-     * {@link #findLatestRequests} so an exported number and the same request in
-     * the feed can never disagree. Newest first, with the primary key as tie
-     * break: the export is capped, and the rows kept must be a stable,
-     * explainable slice of the window rather than an arbitrary one.
-     *
-     * Paged by the same (timestamp_request, id) keyset the feed uses: the
-     * export streams row by row into the download, so it must be able to hold
-     * one chunk of the window in memory rather than the whole capped slice.
-     * A null cursor starts at the newest row; the ORDER BY is what
-     * idx_log_entry_team_ts_request (042) walks backwards, so a page costs the
-     * same at the start of the window as at the cap.
+     * Captured in the short preparation snapshot so the download can stream
+     * exactly those row ids after the transaction ends — a late commit whose
+     * timestamp falls inside the slice cannot enlarge the file past the cap.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.timestamp_request AS timestampRequest, le.id AS id
+        FROM log_entry le
+        WHERE le.team_id = :teamId
+          AND le.timestamp_request BETWEEN :startTs AND :endTs
+          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
+               OR (le.timestamp_request, le.id)
+                  < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
+        ORDER BY le.timestamp_request DESC, le.id DESC
+        LIMIT :limitN
+        """, nativeQuery = true)
+    List<ExportSliceCursorProjection> findExportSliceKeys(
+        @Param("teamId") int teamId,
+        @Param("startTs") Timestamp startTs,
+        @Param("endTs") Timestamp endTs,
+        @Param("userId") Integer userId,
+        @Param("cursorTs") Timestamp cursorTs,
+        @Param("cursorId") Integer cursorId,
+        @Param("limitN") int limitN);
+
+    /**
+     * Full export rows for a prepared id set. Order is not relied on here —
+     * the service reorders to the preparation list so a late commit cannot
+     * insert itself between two prepared ids.
      */
     @Transactional(readOnly = true)
     @Query(value = """
@@ -576,23 +623,22 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
             WHERE ut.log_entry_id = le.id
         ) tk ON true
         LEFT JOIN log_entry_cost c ON c.log_entry_id = le.id
-        WHERE le.team_id = :teamId
-          AND le.timestamp_request BETWEEN :startTs AND :endTs
-          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
-          AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
-               OR (le.timestamp_request, le.id)
-                  < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
-        ORDER BY le.timestamp_request DESC, le.id DESC
-        LIMIT :limitN
+        WHERE le.id IN (:ids)
         """, nativeQuery = true)
-    List<LogExportProjection> findTracesForExport(
-        @Param("teamId") int teamId,
-        @Param("startTs") Timestamp startTs,
-        @Param("endTs") Timestamp endTs,
-        @Param("userId") Integer userId,
-        @Param("cursorTs") Timestamp cursorTs,
-        @Param("cursorId") Integer cursorId,
-        @Param("limitN") int limitN);
+    List<LogExportProjection> findTracesForExportByIds(@Param("ids") List<Integer> ids);
+
+    /**
+     * How many of the prepared slice ids were recorded at FULL privacy — the
+     * consent note describes the file that will be written, not the live window.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*)
+        FROM log_entry le
+        WHERE le.privacy_level = 'FULL'
+          AND le.id IN (:ids)
+        """, nativeQuery = true)
+    Long countConsentedAmongIds(@Param("ids") List<Integer> ids);
 
     /**
      * How many requests the export window holds under the same narrowing the
@@ -623,79 +669,6 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("cursorTs") Timestamp cursorTs,
         @Param("cursorId") Integer cursorId);
-
-    /**
-     * How many of the rows the export keeps were recorded at FULL privacy.
-     *
-     * The envelope's note turns on whether not a single row of the file
-     * carries content, and "the file" is the capped newest slice, not the
-     * whole window: a team that consented last month and not this week has
-     * full-logging traffic in the window and none in the download. So the
-     * count is taken over exactly the slice {@link #findTracesForExport}
-     * keeps — the same ordering and cap, then the privacy filter on the ids.
-     * A continuation cursor shifts the slice to the next one, so the note
-     * keeps describing the file that is actually written.
-     */
-    @Transactional(readOnly = true)
-    @Query(value = """
-        WITH slice AS (
-            SELECT le.id
-            FROM log_entry le
-            WHERE le.team_id = :teamId
-              AND le.timestamp_request BETWEEN :startTs AND :endTs
-              AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
-              AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
-                   OR (le.timestamp_request, le.id)
-                      < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
-            ORDER BY le.timestamp_request DESC, le.id DESC
-            LIMIT :limitN
-        )
-        SELECT COUNT(*)
-        FROM log_entry le
-        WHERE le.privacy_level = 'FULL'
-          AND le.id IN (SELECT id FROM slice)
-        """, nativeQuery = true)
-    Long countConsentedInExportSlice(
-        @Param("teamId") int teamId,
-        @Param("startTs") Timestamp startTs,
-        @Param("endTs") Timestamp endTs,
-        @Param("userId") Integer userId,
-        @Param("cursorTs") Timestamp cursorTs,
-        @Param("cursorId") Integer cursorId,
-        @Param("limitN") int limitN);
-
-    /**
-     * The last row of the export's capped slice, as the cursor a continued
-     * export starts from.
-     *
-     * The row is only needed when the export is truncated — and then it has
-     * to be known before the first byte goes out, because the header that
-     * carries it cannot follow the body. Walking {@code offsetN + 1} index
-     * entries of the slice instead of fetching the slice's rows keeps that a
-     * timestamp-and-id read, no payloads, even though the slice itself can
-     * hold multi-megabyte consented rows.
-     */
-    @Transactional(readOnly = true)
-    @Query(value = """
-        SELECT le.timestamp_request AS timestampRequest, le.id AS id
-        FROM log_entry le
-        WHERE le.team_id = :teamId
-          AND le.timestamp_request BETWEEN :startTs AND :endTs
-          AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
-          AND (CAST(:cursorTs AS TIMESTAMPTZ) IS NULL
-               OR (le.timestamp_request, le.id)
-                  < (CAST(:cursorTs AS TIMESTAMPTZ), CAST(:cursorId AS INTEGER)))
-        ORDER BY le.timestamp_request DESC, le.id DESC
-        LIMIT 1 OFFSET :offsetN
-        """, nativeQuery = true)
-    ExportSliceCursorProjection findExportSliceTail(
-        @Param("teamId") int teamId,
-        @Param("startTs") Timestamp startTs,
-        @Param("endTs") Timestamp endTs,
-        @Param("userId") Integer userId,
-        @Param("cursorTs") Timestamp cursorTs,
-        @Param("cursorId") Integer cursorId,
-        @Param("offsetN") int offsetN);
 
     @Transactional(readOnly = true)
     @Query(value = """

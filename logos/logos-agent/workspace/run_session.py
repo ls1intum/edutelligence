@@ -659,13 +659,13 @@ def build_prompt(task: str) -> str:
         "it.\n"
         "- Lint what you changed: from the top of the checkout, `pre-commit "
         "run --files <the files you changed>`. Same command and same pinned "
-        "hooks as CI, installed in this image, no network needed. Several of "
-        "them reformat in place, so a hook that says it modified your files "
-        "has already fixed them — run it once more and it passes. To chase one "
-        "hook, name it: `pre-commit run flake8 --files <files>`. "
-        "The `pylint` and `mypy` hooks under iris/ and memiris/ go through "
-        "poetry and cannot run in here; say so if one of those is what "
-        "failed.\n"
+        "hooks as CI, installed in this image, no network needed. Which hooks "
+        "run is the repository's own convention (its AGENTS.md and pre-commit "
+        "config), not yours to re-list. Several of them reformat in place, so "
+        "a hook that says it modified your files has already fixed them — run "
+        "it once more and it passes. To chase one hook, name it: "
+        "`pre-commit run <hook> --files <files>`. A few hooks cannot run in "
+        "here without a network; say so if one of those is what failed.\n"
         "- If the task turns out to be impossible or already done, say so "
         "plainly instead of inventing changes.\n"
         f"- Changing nothing is a legitimate outcome, but it is never a silent "
@@ -1231,25 +1231,31 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
     # issues that are pointers, not authorizations to close.
     title = _commit_subject(task)
     body = _closed_issues(os.environ.get("LOGOS_SESSION_CLOSES", ""))
+    reviewers = _pr_reviewers()
+    create_cmd = [
+        "gh",
+        "pr",
+        "create",
+        "--repo",
+        slug,
+        "--base",
+        base_branch,
+        "--head",
+        branch,
+        "--title",
+        title,
+        # Present rather than absent: `gh` prompts for a body it was
+        # not given, and a session has no terminal to prompt at.
+        # Empty when the session has no issue to close.
+        "--body",
+        body,
+    ]
+    for login in reviewers:
+        # One flag per login: `gh` accepts repeated `--reviewer`, and a
+        # comma-joined value is easy to misread as a single login.
+        create_cmd.extend(["--reviewer", login])
     process = run(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--repo",
-            slug,
-            "--base",
-            base_branch,
-            "--head",
-            branch,
-            "--title",
-            title,
-            # Present rather than absent: `gh` prompts for a body it was
-            # not given, and a session has no terminal to prompt at.
-            # Empty when the session has no issue to close.
-            "--body",
-            body,
-        ],
+        create_cmd,
         cwd=CHECKOUT,
         check=False,
     )
@@ -1274,8 +1280,24 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
         if not number:
             fail("could not open a pull request")
             return None
+        edit_cmd = [
+            "gh",
+            "pr",
+            "edit",
+            str(number),
+            "--repo",
+            slug,
+            "--title",
+            title,
+            "--body",
+            body,
+        ]
+        for login in reviewers:
+            # Asking again is a no-op when they are already requested —
+            # which is what makes a reused pull request safe to refresh.
+            edit_cmd.extend(["--add-reviewer", login])
         refreshed = run(
-            ["gh", "pr", "edit", str(number), "--repo", slug, "--title", title, "--body", body],
+            edit_cmd,
             cwd=CHECKOUT,
             check=False,
             quiet=True,
@@ -1294,6 +1316,16 @@ def open_pull_request(branch: str, base_branch: str, task: str) -> str | None:
         if line.startswith("https://"):
             return line.strip()
     return None
+
+
+def _pr_reviewers() -> list[str]:
+    """Logins the runner asked to review a freshly opened pull request.
+
+    Empty when the runner named nobody — CODEOWNERS still applies on its
+    own. Parsed here rather than hard-coded so a deployment can clear or
+    widen the list without rebuilding the session image.
+    """
+    return [name.strip() for name in os.environ.get("LOGOS_SESSION_PR_REVIEWERS", "").split(",") if name.strip()]
 
 
 def run_prepare() -> None:

@@ -5,29 +5,142 @@ last — a router included after the catch-all would be unreachable for any
 /v1/* path.
 """
 
+import asyncio
+import json
 import logging
+import secrets
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import logos.main as _main
+from logos.anthropic_compat import translate_error
+from logos.anthropic_compat import web_search as server_web_search
 from logos.auth import authenticate_api_key
 from logos.batch_api import handle_batch_api_request
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
+from logos.dbutils.dbrequest import WebSearchRequest
 from logos.errors import coerce_upstream_error
 from logos.jobs.job_service import JobService
-from logos.logosnode_snapshot import _resolve_requested_model_name
+from logos.logosnode_snapshot import _resolve_requested_model_name, claude_visible_id
 from logos.main import _model_context_fields, _served_context_window_stats, handle_sync_request, submit_job_request
 from logos.responses import get_client_ip
+from logos.web_search import SearchUnavailable, search_web
 
 logger = logging.getLogger("LogosLogger")
 
 router = APIRouter()
 
 _SERVER_START_TIME = int(time.time())
+
+# RFC 3339 rendering of the start time, for the Anthropic models shape whose
+# ``created_at`` is a datetime string (the OpenAI shape uses the bare epoch int).
+_SERVER_START_TIME_ISO = datetime.fromtimestamp(_SERVER_START_TIME, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+# The header every Anthropic SDK / Claude Code request carries; OpenAI clients
+# never send it. It is how one shared GET /v1/models answers both dialects.
+_ANTHROPIC_VERSION_HEADER = "anthropic-version"
+
+
+def _anthropic_entries(
+    models: list[dict], stats: dict, other_models: Optional[list[dict]] = None
+) -> list[tuple[str, str, Optional[str]]]:
+    """(id, model_name, description) rows for the Anthropic listing.
+
+    One row per accessible model, aliases left out. ``model_name`` is the
+    canonical name the context-window stats are keyed by.
+
+    Claude Code drops every gateway model whose id has no "claude"/"anthropic"
+    in it, so each id is listed as ``claude-<name>`` (see ``claude_visible_id``)
+    and only in that form. The request path strips the prefix again, and the
+    plain name and the aliases keep resolving there. A prefixed id that would
+    resolve to a different model is never advertised. ``other_models`` widens that
+    check to models the key cannot see: the proxy resolver searches every model
+    for administrator keys, so a hidden ``claude-foo`` would still capture it.
+    """
+    visible = {model["name"] for model in models}
+    candidates = models + [model for model in other_models or [] if model["name"] not in visible]
+    entries: list[tuple[str, str, Optional[str]]] = []
+    for model in models:
+        name = model["name"]
+        entry_id = claude_visible_id(name) or name
+        if entry_id != name and _resolve_requested_model_name(entry_id, candidates) != name:
+            # Another model or alias already owns claude-<name> (``foo`` next to
+            # ``claude-foo``): advertising it would select that one instead, so
+            # this model is listed under its own name.
+            entry_id = name
+        # The picker shows display_name, so the prefixed id keeps the plain name there.
+        entries.append((entry_id, name, model.get("description") or name))
+    return entries
+
+
+def _anthropic_model_info(model_id: str, model_name: str, description: Optional[str], stats: dict) -> dict:
+    """One ``BetaModelInfo`` object for the Anthropic models listing."""
+    fields = _model_context_fields(stats.get(model_name))
+    # The guaranteed window a request is sure to get (the smallest served),
+    # falling back to the widest the model is ever served with, else unknown.
+    max_input = fields.get("max_model_len") or fields.get("max_model_len_overall")
+    return {
+        "type": "model",
+        "id": model_id,
+        "display_name": description or model_id,
+        "created_at": _SERVER_START_TIME_ISO,
+        "max_input_tokens": max_input,
+        "max_tokens": None,
+        "capabilities": None,
+        "allowed_fallback_models": None,
+    }
+
+
+def _parse_models_limit(raw: Optional[str]) -> Optional[int]:
+    """The ``limit`` query param clamped to the API's 1..1000 range, or None."""
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(1, min(value, 1000))
+
+
+def _anthropic_models_response(
+    models: list[dict],
+    stats: dict,
+    limit: Optional[int],
+    after_id: Optional[str],
+    other_models: Optional[list[dict]] = None,
+) -> JSONResponse:
+    """The Anthropic ``GET /v1/models`` envelope over the accessible models.
+
+    Logos lists are small, so ``limit`` defaults to "everything" (``has_more``
+    stays false) rather than the Anthropic API's 20 — a client that does not
+    paginate would otherwise silently miss models. ``after_id`` is a cursor into
+    the (stable, id-ordered) listing.
+    """
+    entries = _anthropic_entries(models, stats, other_models)
+    if after_id:
+        for index, (entry_id, _, _) in enumerate(entries):
+            if entry_id == after_id:
+                entries = entries[index + 1 :]
+                break
+        # A stale/unknown cursor starts the list rather than erroring.
+    total = len(entries)
+    page = entries[:limit] if limit is not None else entries
+    data = [
+        _anthropic_model_info(entry_id, model_name, description, stats) for entry_id, model_name, description in page
+    ]
+    return JSONResponse(
+        content={
+            "data": data,
+            "first_id": data[0]["id"] if data else None,
+            "last_id": data[-1]["id"] if data else None,
+            "has_more": len(page) < total,
+        }
+    )
 
 
 @router.get("/v1/models", tags=["user-facing"])
@@ -39,8 +152,17 @@ async def list_models(request: Request):
     Also served under /openai/models: the /openai prefix mirrors /v1, and the
     POST catch-all alias cannot answer this GET.
 
-    Returns an OpenAI-compatible response listing all models the user's
-    current API key has access to (Union of Team models and specific API Key models).
+    Answers in the dialect the caller speaks:
+
+    * With the mandatory ``anthropic-version`` header (every Anthropic SDK and
+      Claude Code request carries it) the response is the Anthropic models
+      shape (``data`` of ``BetaModelInfo`` plus ``first_id``/``last_id``/
+      ``has_more``), so a Messages client can discover the models it may use
+      and switch between them on demand.
+    * Otherwise it is the OpenAI-compatible response listing all models the
+      user's current API key has access to (Union of Team models and specific
+      API Key models).
+
     Stored aliases of an accessible model are listed as additional model ids
     right after their model, so logical names (e.g. 'local-most-powerful')
     can be discovered and used directly in requests. An alias that belongs to
@@ -48,14 +170,31 @@ async def list_models(request: Request):
     advertising it would promise a model id that retrieval rejects.
 
     Returns:
-        JSONResponse matching the OpenAI GET /v1/models spec.
+        JSONResponse matching the OpenAI GET /v1/models spec, or the Anthropic
+        models shape when the caller sends ``anthropic-version``.
     """
     auth = authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
+    anthropic_shape = _ANTHROPIC_VERSION_HEADER in request.headers
     with DBManager() as db:
         models = db.get_models_for_api_key(auth.api_key_id)
+        # Only administrator keys resolve against every model (the same test
+        # as proxy mode in main.py); for any other key a hidden model cannot
+        # capture a prefixed id, so it must not hide a usable one.
+        admin_scope = auth.role in ("logos_admin", "app_admin")
+        other_models = db.get_all_model_names_with_aliases() if anthropic_shape and admin_scope else None
 
     stats = _served_context_window_stats()
+
+    if anthropic_shape:
+        return _anthropic_models_response(
+            models,
+            stats,
+            _parse_models_limit(request.query_params.get("limit")),
+            request.query_params.get("after_id"),
+            other_models,
+        )
+
     # An alias that (case-insensitively) belongs to more than one accessible
     # model cannot be resolved at request time, so it is not advertised.
     alias_owners: dict[str, set[str]] = {}
@@ -353,6 +492,120 @@ for _batch_prefix in ("v1", "openai", "jobs/v1", "jobs/openai"):
         )
 
 
+@router.post("/v1/web-search", tags=["user-facing"])
+async def web_search(body: WebSearchRequest, request: Request):
+    """Return DuckDuckGo results through the existing API-key gateway."""
+    authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
+    try:
+        results = await search_web(body.query, body.max_results)
+    except SearchUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"query": body.query, "source": "DuckDuckGo", "results": results}
+
+
+_ERROR_TYPES = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    413: "request_too_large",
+    429: "rate_limit_error",
+    529: "overloaded_error",
+}
+
+
+async def _messages_turn(request: Request, payload: dict) -> tuple[int, dict]:
+    """One non-streaming Messages request through the normal pipeline, in process.
+
+    The client's own request with a different body: same headers, so the same
+    key, client IP and routing hints; a fresh request id and log entry, so the
+    turn is accounted like any other. The body stream ends after the payload
+    and then waits instead of reporting a disconnect — a client that leaves
+    cancels the task running this turn instead.
+    """
+    raw = json.dumps(payload).encode()
+    headers = [(k, v) for k, v in request.scope["headers"] if k.lower() != b"content-length"]
+    headers.append((b"content-length", str(len(raw)).encode()))
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": raw, "more_body": False}
+        await asyncio.Event().wait()
+
+    turn = Request({**request.scope, "headers": headers}, receive)
+    try:
+        response = await handle_sync_request("v1/messages", turn)
+    except HTTPException as exc:
+        status = exc.status_code
+        return status, {
+            "type": "error",
+            "error": {"type": _ERROR_TYPES.get(status, "api_error"), "message": str(exc.detail)},
+        }
+    if isinstance(response, StreamingResponse):
+        body = b"".join(
+            [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
+        )
+    else:
+        body = response.body
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return 502, {
+            "type": "error",
+            "error": {"type": "api_error", "message": "The model returned an unreadable response."},
+        }
+    if response.status_code != 200:
+        return response.status_code, translate_error(data)
+    return 200, data
+
+
+async def _serve_server_web_search(request: Request, payload: dict, tool: dict):
+    """Answer a Messages request that carries Anthropic's web search server tool."""
+    # Rejected up front: a stream, once open, can only report it as an error
+    # event, and a bad key deserves its 401.
+    authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
+
+    async def turn(body: dict) -> tuple[int, dict]:
+        return await _messages_turn(request, body)
+
+    if not payload.get("stream"):
+        status, body = await server_web_search.run(payload, tool, turn)
+        return JSONResponse(body, status_code=status)
+
+    async def events():
+        message_id = f"msg_{secrets.token_hex(12)}"
+        yield server_web_search.stream_start(message_id, payload.get("model"))
+        work = asyncio.create_task(server_web_search.run(payload, tool, turn))
+        try:
+            # Model turns and searches add up to minutes on a cold model;
+            # pings keep proxies and the client from timing the stream out.
+            while True:
+                done, _ = await asyncio.wait({work}, timeout=10)
+                if done:
+                    break
+                yield server_web_search.stream_ping()
+            try:
+                status, message = work.result()
+            except Exception:  # The stream is open: report it there, not as a cut-off.
+                logger.exception("Web search for a Messages request failed")
+                status, message = 500, {
+                    "type": "error",
+                    "error": {"type": "api_error", "message": "Web search failed."},
+                }
+        finally:
+            work.cancel()
+        if status != 200:
+            yield server_web_search.stream_error(status, message)
+            return
+        for event in server_web_search.stream_rest({**message, "id": message_id}):
+            yield event
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
 @router.post("/v1/{path:path}", tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
@@ -364,6 +617,16 @@ async def logos_service_sync(path: str, request: Request):
     get a proper 405 from the router instead of the misleading
     "400 Invalid JSON body" the body parser used to raise on body-less GETs.
     """
+    if path == "messages":
+        raw = await request.body()
+        if b'"web_search_' in raw:
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = None
+            tool = server_web_search.server_web_search_tool(payload)
+            if tool is not None:
+                return await _serve_server_web_search(request, payload, tool)
     return await handle_sync_request(f"v1/{path}", request)
 
 

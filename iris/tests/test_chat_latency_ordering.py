@@ -128,6 +128,7 @@ def _make_pipeline(chat_mode: IrisChatMode, call_log: list[str]) -> ChatPipeline
     # post-agent callback ordering.
     pipeline.prepare_state = lambda state: None
     pipeline.build_system_message = lambda state: "system prompt"
+    pipeline.build_turn_context_message = lambda state: "turn context"
     pipeline.get_tools = lambda state: []
     pipeline.execute_agent = lambda state: "agent answer"
     pipeline.create_tracing_context = lambda dto, variant: None
@@ -142,6 +143,10 @@ def _run_pipeline(pipeline: ChatPipeline, callback: _RecordingCallback) -> None:
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
         patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
+        patch(
+            "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
+            return_value=None,
+        ),
         patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
     ):
         pipeline(_make_dto(), variant, callback)

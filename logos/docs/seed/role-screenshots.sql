@@ -50,18 +50,20 @@ WHERE created_by = 'docs-role-screenshots';
 -- Docs AI-workflow demo (commit_sha is the wipe namespace; short form abc123d).
 -- Do not delete team_repositories rows — on a shared DB the Logos team may
 -- already link the same slug for real use; only replace the docs analysis.
+-- abc122d is the earlier analysis whose reviews the current one carries over
+-- or re-proposes.
 DELETE FROM ai_llm_call_recommendations
 WHERE analysis_id IN (
     SELECT id FROM ai_workflow_analyses
-    WHERE commit_sha = 'abc123docsrolescreenshots'
+    WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots')
 );
 DELETE FROM ai_workflows
 WHERE analysis_id IN (
     SELECT id FROM ai_workflow_analyses
-    WHERE commit_sha = 'abc123docsrolescreenshots'
+    WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots')
 );
 DELETE FROM ai_workflow_analyses
-WHERE commit_sha = 'abc123docsrolescreenshots';
+WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots');
 
 DELETE FROM policies
 WHERE name LIKE 'Docs — %'
@@ -560,8 +562,8 @@ WHERE k.name = 'docs-role-tobias.wasner-key'
 INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by)
 SELECT v.name, 'main', 'docs-role-vol-' || v.suffix, 'docs-role-screenshots'
 FROM (VALUES
-    ('edutelligence from main', 'edu'),
-    ('logos-ui from main', 'ui')
+    ('edutelligence', 'edu'),
+    ('logos-ui', 'ui')
 ) AS v(name, suffix)
 WHERE NOT EXISTS (SELECT 1 FROM agent_workspaces w WHERE w.name = v.name);
 
@@ -586,16 +588,16 @@ SELECT w.id, s.task, 'qwen-2.5-72b-instruct', s.status,
        s.tin, s.tout, s.cost
 FROM agent_workspaces w
 JOIN (VALUES
-    ('edutelligence from main', 'queued',
+    ('edutelligence', 'queued',
      'Investigate the statistics WebSocket reconnect loop on the requests tab',
      interval '10 minutes', interval '10 minutes', interval '0', 0, 0, 0::numeric),
-    ('edutelligence from main', 'running',
+    ('edutelligence', 'running',
      'Fix the flaky login spec in the e2e suite — it times out on slow runners',
      interval '2 hours', interval '1 hour 47 minutes', interval '0', 12000, 4000, 0.42),
-    ('edutelligence from main', 'succeeded',
+    ('edutelligence', 'succeeded',
      'Add pagination to the request log export endpoint',
      interval '1 day', interval '1 day', interval '22 hours', 18000, 6000, 0.55),
-    ('logos-ui from main', 'failed',
+    ('logos-ui', 'failed',
      'Remove the duplicated theme tokens from the data table component',
      interval '3 days', interval '3 days', interval '2 days 23 hours', 5000, 1200, 0.11)
 ) AS s(workspace_name, status, task, created_ago, started_ago, finished_ago, tin, tout, cost)
@@ -622,7 +624,7 @@ WHERE t.name = 'Logos'
 INSERT INTO ai_workflow_analyses (
     team_id, team_repository_id, commit_sha, status, source, finished_at
 )
-SELECT t.id, tr.id, 'abc123docsrolescreenshots', 'succeeded', 'heuristic',
+SELECT t.id, tr.id, 'abc123docsrolescreenshots', 'succeeded', 'agent',
        now() - interval '5 minutes'
 FROM teams t
 JOIN team_repositories tr
@@ -641,7 +643,7 @@ SELECT a.id,
   A[Session succeeds] --> B{no_push?}
   B -->|yes| C[Skip remote push]
   C --> D[Write analysis.json]
-  D --> E[Ingest recommendations]
+  D --> E[Ingest recommendations (pending review)]
   B -->|no| F[Finalize + open PR]$mm$,
        0
 FROM ai_workflow_analyses a
@@ -652,30 +654,82 @@ WHERE a.commit_sha = 'abc123docsrolescreenshots'
 
 INSERT INTO ai_llm_call_recommendations (
     analysis_id, workflow_id, team_id, file_path, start_line, end_line,
-    detected_model, recommended_sla, objective_priority, confidence, justification, review_status
+    detected_model, recommended_slo, objective_priority, confidence, justification, review_status
 )
 SELECT a.id, w.id, a.team_id, r.file_path, r.start_line, r.end_line,
-       r.detected_model, r.recommended_sla, r.objective_priority::jsonb,
+       r.detected_model, r.recommended_slo, r.objective_priority::jsonb,
        r.confidence, r.justification, 'pending'
 FROM ai_workflow_analyses a
 JOIN ai_workflows w ON w.analysis_id = a.id
 JOIN (VALUES
-    ('logos/logos-agent/app/sessions.py', 1483, 1483, 'claude-opus',
+    ('logos/logos-agent/app/sessions.py', 1483, 1483, 'qwen-2.5-72b-instruct',
      'ux-high-prio', '["quality","latency","price"]', 0.72,
      'Async agent helper work — user is not blocked on the response.'),
     ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 115, 'claude-opus',
      'ux-critical', '["latency","quality","price"]', 0.81,
      'Interactive team detail load awaited by the signed-in owner.'),
-    ('logos/docs/seed/role-screenshots.sql', 1, 1, 'claude-opus',
+    ('logos/docs/seed/role-screenshots.sql', 1, 1, NULL,
      'ux-background', '["price","quality","latency"]', 0.66,
      'Offline seed / batch documentation path.')
-) AS r(file_path, start_line, end_line, detected_model, recommended_sla, objective_priority, confidence, justification)
+) AS r(file_path, start_line, end_line, detected_model, recommended_slo, objective_priority, confidence, justification)
   ON true
 WHERE a.commit_sha = 'abc123docsrolescreenshots'
   AND NOT EXISTS (
       SELECT 1 FROM ai_llm_call_recommendations rec
       WHERE rec.analysis_id = a.id AND rec.file_path = r.file_path
   );
+
+-- The analysis before it (yesterday), with the owner's reviews: one that the
+-- current analysis proposes again unchanged (kept), one it now proposes
+-- differently (pending, shown next to the earlier decision).
+INSERT INTO ai_workflow_analyses (
+    team_id, team_repository_id, commit_sha, status, source, finished_at
+)
+SELECT a.team_id, a.team_repository_id, 'abc122docsrolescreenshots', 'succeeded', 'agent',
+       now() - interval '1 day'
+FROM ai_workflow_analyses a
+WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_workflow_analyses p WHERE p.commit_sha = 'abc122docsrolescreenshots'
+  );
+
+INSERT INTO ai_llm_call_recommendations (
+    analysis_id, team_id, file_path, start_line, end_line, recommended_slo, objective_priority,
+    confidence, justification, review_status, confirmed_slo, confirmed_objective_priority, reviewed_at
+)
+SELECT p.id, p.team_id, r.file_path, r.line, r.line, r.slo, r.priority::jsonb, 0.7, r.why,
+       'accepted', r.slo, r.priority::jsonb, now() - interval '20 hours'
+FROM ai_workflow_analyses p
+JOIN (VALUES
+    ('logos/logos-agent/app/sessions.py', 1480, 'ux-high-prio', '["quality","latency","price"]',
+     'Async agent helper work.'),
+    ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 'ux-high-prio',
+     '["quality","latency","price"]', 'Team detail load.')
+) AS r(file_path, line, slo, priority, why) ON true
+WHERE p.commit_sha = 'abc122docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_llm_call_recommendations x WHERE x.analysis_id = p.id
+  );
+
+UPDATE ai_llm_call_recommendations cur
+   SET previous_recommendation_id = prev.id
+  FROM ai_llm_call_recommendations prev
+  JOIN ai_workflow_analyses pa ON pa.id = prev.analysis_id
+ WHERE pa.commit_sha = 'abc122docsrolescreenshots'
+   AND cur.analysis_id = (SELECT id FROM ai_workflow_analyses WHERE commit_sha = 'abc123docsrolescreenshots')
+   AND cur.file_path = prev.file_path;
+
+-- Same proposal as yesterday's accepted one: the review carries over.
+UPDATE ai_llm_call_recommendations cur
+   SET review_status = prev.review_status,
+       review_carried_over = TRUE,
+       confirmed_slo = prev.confirmed_slo,
+       confirmed_objective_priority = prev.confirmed_objective_priority,
+       reviewed_at = prev.reviewed_at
+  FROM ai_llm_call_recommendations prev
+ WHERE cur.previous_recommendation_id = prev.id
+   AND cur.recommended_slo = prev.confirmed_slo
+   AND cur.objective_priority = prev.confirmed_objective_priority;
 
 COMMIT;
 
