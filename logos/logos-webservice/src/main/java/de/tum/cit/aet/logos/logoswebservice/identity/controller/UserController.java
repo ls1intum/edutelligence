@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.ImportUsersRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserRoleRequestDTO;
@@ -117,19 +119,29 @@ public class UserController {
             .orElse(ResponseEntity.status(404).body(null));
     }
 
+    @PostMapping("/import/preview")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> previewImport(
+            @RequestAttribute("authContext") AuthContext auth,
+            @RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
+        String filename = file.getOriginalFilename();
+        if (filename == null || !filename.toLowerCase(Locale.ROOT).endsWith(".csv")) {
+            return ResponseEntity.status(400).body(Map.of("detail", "Only .csv files are accepted."));
+        }
+        try {
+            return ResponseEntity.ok(userService.previewImport(file));
+        } catch (Exception e) {
+            return ResponseEntity.status(400).body(Map.of("error", e.getMessage()));
+        }
+    }
+
     @PostMapping("/import")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> importUsers(
             @RequestAttribute("authContext") AuthContext auth,
-            @RequestParam("file") org.springframework.web.multipart.MultipartFile file) {
-        if (!file.getOriginalFilename().endsWith(".csv")) {
-            return ResponseEntity.status(400).body(Map.of("detail", "Only .csv files are accepted."));
-        }
-        try {
-            return ResponseEntity.ok(userService.importUsers(file));
-        } catch (Exception e) {
-            return ResponseEntity.status(400).body(Map.of("error", e.getMessage()));
-        }
+            @RequestBody ImportUsersRequestDTO body) {
+        List<ImportUsersRequestDTO.Row> rows = body.rows() == null ? List.of() : body.rows();
+        return ResponseEntity.ok(userService.importUsers(rows));
     }
 
     public static boolean isAppAdminOrAbove(AuthContext auth) {
