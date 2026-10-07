@@ -32,7 +32,7 @@ secret that you need to call the [Logos API](../user/api-usage.md).
 
 ![My Workspace page](/img/roles/app-developer-my-workspace.png)
 
-## AI Tools {#ai-tools}
+## AI Tools
 
 **AI Coding Tools** is a guided wizard that every role uses. The page does not
 change with the role badge. The wizard helps you to connect a coding

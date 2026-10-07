@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
@@ -49,19 +50,36 @@ public class ProviderService {
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final ModelMetricsService modelMetricsService;
     private final JdbcTemplate jdbc;
+    private final AuditLogService auditLog;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
                            TokenPriceRepository tokenPriceRepository,
                            OrchestratorNotificationService orchestratorNotificationService,
                            ModelMetricsService modelMetricsService,
-                           JdbcTemplate jdbc) {
+                           JdbcTemplate jdbc,
+                           AuditLogService auditLog) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
         this.tokenPriceRepository = tokenPriceRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.modelMetricsService = modelMetricsService;
         this.jdbc = jdbc;
+        this.auditLog = auditLog;
+    }
+
+    /** What the audit trail keeps of a provider: never the API key, only whether it was replaced. */
+    private static Map<String, Object> providerSnapshot(Provider p, boolean apiKeyChanged) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("name", p.getName());
+        m.put("base_url", p.getBaseUrl());
+        m.put("provider_type", p.getProviderType() == null ? null : p.getProviderType().name());
+        m.put("cloud_provider_type", p.getCloudProviderType() == null ? null : p.getCloudProviderType().name());
+        m.put("privacy_level", p.getPrivacyLevel() == null ? null : p.getPrivacyLevel().name());
+        if (apiKeyChanged) {
+            m.put("api_key_replaced", true);
+        }
+        return m;
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
@@ -100,6 +118,7 @@ public class ProviderService {
         p.setApiKey(apiKey);
 
         p = providerRepository.save(p);
+        auditLog.record("provider.created", "provider", p.getId(), null, Map.of(), providerSnapshot(p, false));
         // A cloud provider is created empty: its models come from the orchestrator's
         // /v1/models scrape. Ask for that pass now instead of leaving the operator
         // looking at an empty list until the next interval tick.
@@ -126,6 +145,8 @@ public class ProviderService {
             ModelMetricsService.providerDerivationLockKey(req.providerId()));
         Provider p = providerRepository.findById(req.providerId())
             .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + req.providerId()));
+        Map<String, Object> before = providerSnapshot(p, false);
+        boolean apiKeyChanged = req.apiKey() != null && !req.apiKey().equals(p.getApiKey());
         if (req.providerName() != null) p.setName(req.providerName());
         if (req.baseUrl() != null) p.setBaseUrl(normalizeBaseUrl(req.baseUrl()));
         if (req.apiKey() != null) p.setApiKey(req.apiKey());
@@ -141,6 +162,7 @@ public class ProviderService {
             p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
         }
         providerRepository.save(p);
+        auditLog.record("provider.updated", "provider", p.getId(), null, before, providerSnapshot(p, apiKeyChanged));
         if (p.getCloudProviderType() != oldType) {
             // The type change redefines the unit of the pairs' persisted
             // derived cost (USD per million tokens <-> USD per request), so
@@ -203,7 +225,12 @@ public class ProviderService {
         // longer exists until the daily job.
         List<Integer> modelIds = modelProviderRepository.findByProviderId(providerId).stream()
             .map(ModelProvider::getModelId).distinct().toList();
+        Provider doomed = providerRepository.findById(providerId).orElse(null);
         providerRepository.deleteById(providerId);
+        // Cascades the provider's team budget overrides away, so the deletion is part of the budget trail.
+        if (doomed != null) {
+            auditLog.record("provider.deleted", "provider", providerId, null, providerSnapshot(doomed, false), Map.of());
+        }
         rederiveAfterCommit(modelIds, false);
         orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Deleted Provider.");

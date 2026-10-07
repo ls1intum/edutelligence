@@ -4634,6 +4634,63 @@ class DBManager:
         ).fetchone()
         return int(row._mapping["total"] or 0) if row else 0
 
+    def get_team_provider_budget(self, team_id: int, provider_id: int) -> tuple[bool, Optional[int]]:
+        """Return (exists, limit) for a team-provider budget override.
+
+        ``exists=False`` means the team default bucket applies. ``exists=True``
+        with ``limit=None`` means unlimited (sponsored) for that provider.
+        """
+        row = self.session.execute(
+            text("""
+                 SELECT monthly_budget_micro_cents
+                 FROM team_provider_budgets
+                 WHERE team_id = :tid AND provider_id = :pid
+                 """),
+            {"tid": team_id, "pid": provider_id},
+        ).fetchone()
+        if row is None:
+            return False, None
+        limit = row._mapping["monthly_budget_micro_cents"]
+        return True, (int(limit) if limit is not None else None)
+
+    def get_team_default_budget_usage(self, team_id: int, month_start: str) -> int:
+        """Developer-key spend that still draws from the team's default monthly budget."""
+        row = self.session.execute(
+            text("""
+                 SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
+                 FROM log_entry_cost lec
+                 JOIN log_entry le ON le.id = lec.log_entry_id
+                 WHERE lec.api_key_id = ANY(
+                         ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                       )
+                   AND lec.timestamp_request >= CAST(:month AS DATE)
+                   AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                   AND (le.provider_id IS NULL OR le.provider_id NOT IN (
+                         SELECT provider_id FROM team_provider_budgets WHERE team_id = :tid
+                       ))
+                 """),
+            {"tid": team_id, "month": month_start},
+        ).fetchone()
+        return int(row._mapping["total"] or 0) if row else 0
+
+    def get_team_provider_budget_usage(self, team_id: int, provider_id: int, month_start: str) -> int:
+        """Developer-key spend on one provider for the team."""
+        row = self.session.execute(
+            text("""
+                 SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
+                 FROM log_entry_cost lec
+                 JOIN log_entry le ON le.id = lec.log_entry_id
+                 WHERE lec.api_key_id = ANY(
+                         ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                       )
+                   AND le.provider_id = :pid
+                   AND lec.timestamp_request >= CAST(:month AS DATE)
+                   AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                 """),
+            {"tid": team_id, "pid": provider_id, "month": month_start},
+        ).fetchone()
+        return int(row._mapping["total"] or 0) if row else 0
+
     def create_api_key(
         self,
         name: str,
