@@ -1,7 +1,7 @@
 /**
  * Manual drag-and-drop ordering of a team's application keys.
  *
- * Only the SLA tier reaches the orchestrator (via `api_keys.default_priority`);
+ * Only the SLO tier reaches the orchestrator (via `api_keys.default_priority`);
  * there is no server-side field for the order *within* a tier, so the manual
  * order is a per-browser display preference stored in `localStorage`. Keys the
  * stored order does not mention keep their server order, after the ones it does.

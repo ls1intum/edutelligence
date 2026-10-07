@@ -170,16 +170,24 @@ public class ExportImportService {
             if ("models".equals(table) && copy.get("profile_ratings") == null) {
                 copy.put("profile_ratings", Map.of());
             }
-            if ("ai_llm_call_recommendations".equals(table)
-                    && copy.get("objective_priority") == null) {
-                Object sla = copy.get("recommended_sla");
-                copy.put(
-                    "objective_priority",
-                    ObjectivePriority.forSla(sla == null ? null : String.valueOf(sla)));
-            }
             if ("ai_llm_call_recommendations".equals(table)) {
+                // Dumps taken before the sla → slo column rename still carry the
+                // old key names; jsonb_populate_recordset drops unknown keys,
+                // which would fail the NOT NULL recommended_slo insert.
+                if (copy.get("recommended_slo") == null && copy.get("recommended_sla") != null) {
+                    copy.put("recommended_slo", copy.remove("recommended_sla"));
+                }
+                if (copy.get("confirmed_slo") == null && copy.get("confirmed_sla") != null) {
+                    copy.put("confirmed_slo", copy.remove("confirmed_sla"));
+                }
                 for (String flag : List.of("model_set_by_owner", "review_carried_over")) {
                     if (copy.get(flag) == null) copy.put(flag, false);
+                }
+                if (copy.get("objective_priority") == null) {
+                    Object slo = copy.get("recommended_slo");
+                    copy.put(
+                        "objective_priority",
+                        ObjectivePriority.forSlo(slo == null ? null : String.valueOf(slo)));
                 }
             }
             if ("ai_workflows".equals(table) && copy.get("diagram_set_by_owner") == null) {
