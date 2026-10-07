@@ -244,8 +244,14 @@ async def _session_github_token() -> str:
     The minted token must outlive the helper's wall-clock budget: the
     credential is fixed in the container environment and cannot be refreshed
     from the runner's cache while the helper runs.
+
+    In App mode the bot login must already have been verified (or verified
+    on retry after a degraded startup) before a token is minted: the
+    finalizer cannot detect a login mismatch via
+    ``GET /installation/repositories``.
     """
     if settings.github_app_id and settings.github_app_private_key:
+        await github.ensure_app_identity_verified()
         return await github_tokens.installation_token(
             app_id=settings.github_app_id,
             private_key=settings.github_app_private_key,
@@ -1725,11 +1731,12 @@ class SessionManager:
         }
         try:
             token = await _session_github_token()
-        except github_tokens.CredentialError as exc:
+        except (github_tokens.CredentialError, github.IdentityError) as exc:
             # The row already holds the finalizing state, and this
-            # settlement is the one that would clear it: a mint failure that
-            # escapes here leaves the session finalizing forever and its
-            # workspace occupied. Fail through the ordinary path instead.
+            # settlement is the one that would clear it: a mint or identity
+            # failure that escapes here leaves the session finalizing forever
+            # and its workspace occupied. Fail through the ordinary path
+            # instead.
             logger.warning("could not obtain a push token for session %s: %s", session_id, exc)
             self._last_helper_output[session_id] = f"could not obtain a GitHub credential: {exc}"
             return False

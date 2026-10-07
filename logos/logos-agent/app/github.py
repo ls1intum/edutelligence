@@ -257,6 +257,30 @@ async def verify_identities() -> list[str]:
     return notes
 
 
+async def ensure_app_identity_verified() -> None:
+    """Require a successful App identity check before a helper may hold a token.
+
+    Startup may continue after a network failure without remembering the bot
+    login. The finalizer's installation-token check
+    (``GET /installation/repositories``) only proves the token works — it
+    cannot catch a bot login that differs from ``LOGOS_AGENT_GITHUB_LOGIN`` —
+    so a helper must not receive a minted token until verification has
+    succeeded. When startup left the identity unverified, this retries the
+    App JWT checks once GitHub is reachable again.
+    """
+    if _verified_login is not None:
+        return
+    app = _app_credentials()
+    if app is None:
+        return
+    expected = settings.github_login.strip().lower()
+    notes = await _check_app(app[0], app[1], app[2], expected)
+    if _verified_login is not None:
+        return
+    detail = "; ".join(notes) if notes else "App identity is not verified"
+    raise IdentityError(f"GitHub App identity could not be verified; refusing to hand a token to a helper ({detail})")
+
+
 def _app_credentials() -> tuple[str, str, str] | None:
     """The app's standing credential, when the deployment configured one.
 

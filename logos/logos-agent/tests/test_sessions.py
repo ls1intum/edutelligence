@@ -1346,6 +1346,9 @@ class TestAgentPhaseIsolation:
             session_github_token="",
         )
         monkeypatch.setattr(sessions, "settings", app_settings)
+        # Startup already verified the bot login; helpers must not mint
+        # without that gate having succeeded.
+        monkeypatch.setattr(sessions.github, "_verified_login", "LogosOSSAgent[bot]")
         mints: list = []
 
         async def minted(**kwargs):
@@ -1406,6 +1409,7 @@ class TestAgentPhaseIsolation:
             patched, github_app_id="41234", github_app_private_key="an-app-key", session_github_token=""
         )
         monkeypatch.setattr(sessions, "settings", app_settings)
+        monkeypatch.setattr(sessions.github, "_verified_login", "LogosOSSAgent[bot]")
         mints: list = []
 
         async def minted(**kwargs):
@@ -1461,6 +1465,7 @@ class TestAgentPhaseIsolation:
             patched, github_app_id="41234", github_app_private_key="an-app-key", session_github_token=""
         )
         monkeypatch.setattr(sessions, "settings", app_settings)
+        monkeypatch.setattr(sessions.github, "_verified_login", "LogosOSSAgent[bot]")
         created: list = []
         transitions: list = []
         events: list = []
@@ -1501,6 +1506,69 @@ class TestAgentPhaseIsolation:
         assert "finalization failed" in fields["error"]
         assert "could not obtain a GitHub credential" in fields["error"]
         assert "could not reach the GitHub API" in fields["error"]
+        assert events[0]["status"] == "failed"
+
+    async def test_a_mismatched_bot_login_after_degraded_startup_settles_failed(self, monkeypatch, tmp_path):
+        # Startup left App identity unverified; recovery finds the wrong bot
+        # login. Finalization must settle failed without handing the helper a
+        # token — IdentityError must not escape past FINALIZING.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        app_settings = replace(
+            patched, github_app_id="41234", github_app_private_key="an-app-key", session_github_token=""
+        )
+        monkeypatch.setattr(sessions, "settings", app_settings)
+        monkeypatch.setattr(sessions.github, "_verified_login", None)
+        created: list = []
+        transitions: list = []
+        events: list = []
+        mints: list = []
+
+        async def reject_identity():
+            raise sessions.github.IdentityError(
+                "GitHub App installation token authenticates as 'SomeOtherApp[bot]', "
+                "not as the configured agent account 'LogosOSSAgent[bot]'."
+            )
+
+        async def minted(**kwargs):
+            mints.append(kwargs)
+            return "ghs-should-not-mint"
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_transition(_sid, target, **fields):
+            transitions.append((target, fields))
+            return True
+
+        async def fake_event(_sid, _kind, payload):
+            events.append(payload)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.github, "ensure_app_identity_verified", reject_identity)
+        monkeypatch.setattr(sessions.github_tokens, "installation_token", minted)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert created == []
+        assert mints == []
+        assert transitions[0][0] is SessionStatus.FINALIZING
+        target, fields = transitions[1]
+        assert target is SessionStatus.FAILED
+        assert "could not obtain a GitHub credential" in fields["error"]
+        assert "SomeOtherApp" in fields["error"]
         assert events[0]["status"] == "failed"
 
     async def test_a_successful_settlement_runs_the_trusted_finalizer(self, monkeypatch, tmp_path):

@@ -658,6 +658,43 @@ class TestAppIdentity:
 
         assert any("could not be verified" in note for note in notes)
 
+    async def test_helper_token_retries_verification_after_degraded_startup(self, monkeypatch, app_pem):
+        # A startup network failure leaves the service running without a
+        # remembered bot login. Once GitHub recovers, a helper must not get a
+        # token until the App check succeeds — and a mismatched bot login
+        # must still stop delivery (the finalizer cannot catch it).
+        self._app(monkeypatch, app_pem, login="LogosOSSAgent[bot]")
+        self._app_identity_client(monkeypatch, app_error=RuntimeError("no route to host"))
+
+        notes = await github.verify_identities()
+
+        assert any("could not be verified" in note for note in notes)
+        assert github._verified_login is None
+
+        self._app_identity_client(monkeypatch, slug="SomeOtherApp")
+
+        with pytest.raises(github.IdentityError, match="SomeOtherApp\\[bot\\]"):
+            await github.ensure_app_identity_verified()
+
+        assert github._verified_login is None
+
+    async def test_helper_token_verifies_on_recovery_after_degraded_startup(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem, login="LogosOSSAgent[bot]")
+        self._app_identity_client(monkeypatch, app_error=RuntimeError("no route to host"))
+
+        await github.verify_identities()
+        assert github._verified_login is None
+
+        self._app_identity_client(monkeypatch, slug="LogosOSSAgent")
+
+        await github.ensure_app_identity_verified()
+
+        assert github._verified_login == "LogosOSSAgent[bot]"
+        # A second call must not repeat the App checks.
+        seen = self._app_identity_client(monkeypatch, slug="LogosOSSAgent")
+        await github.ensure_app_identity_verified()
+        assert seen == []
+
     async def test_stale_personal_tokens_are_ignored_with_the_app_configured(self, monkeypatch, app_pem):
         # A migration keeps the old tokens set for a while: the app must
         # win, or the standing credential is back in the picture the moment
