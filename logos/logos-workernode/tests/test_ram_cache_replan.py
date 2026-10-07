@@ -84,8 +84,12 @@ class _FakeCache:
         caching_now: str | None = None,
         host_available_mb: float | None = None,
     ) -> None:
+        from logos_worker_node.model_cache import _cache_identity
+
         self.enabled = True
-        self._cached = set(cached or [])
+        # Cache residents are keyed on repository identity, matching
+        # ModelRamCache._cached_models.
+        self._cached = {_cache_identity(m) for m in (cached or [])}
         self._sizes = sizes or {}
         self.queue = list(queue or [])
         self.caching_now = caching_now
@@ -109,23 +113,33 @@ class _FakeCache:
         self._cache_use_refs: dict[str, int] = {}
 
     def reserve_cache_use(self, model: str) -> None:  # noqa: ANN001
-        self._cache_use_refs[model] = self._cache_use_refs.get(model, 0) + 1
+        from logos_worker_node.model_cache import _cache_identity
+
+        key = _cache_identity(model)
+        self._cache_use_refs[key] = self._cache_use_refs.get(key, 0) + 1
 
     def release_cache_use(self, model: str) -> None:  # noqa: ANN001
-        refs = self._cache_use_refs.get(model, 0)
+        from logos_worker_node.model_cache import _cache_identity
+
+        key = _cache_identity(model)
+        refs = self._cache_use_refs.get(key, 0)
         if refs <= 1:
-            self._cache_use_refs.pop(model, None)
+            self._cache_use_refs.pop(key, None)
         else:
-            self._cache_use_refs[model] = refs - 1
+            self._cache_use_refs[key] = refs - 1
 
     def cache_use_reservations(self) -> set[str]:
         return set(self._cache_use_refs)
 
     def model_size_bytes(self, name: str) -> int:
-        return self._sizes.get(name, 0)
+        from logos_worker_node.model_cache import _cache_identity
+
+        return self._sizes.get(name, self._sizes.get(_cache_identity(name), 0))
 
     def held_bytes(self) -> int:
-        return sum(self._sizes.get(m, 0) for m in self._cached)
+        from logos_worker_node.model_cache import _cache_identity
+
+        return sum(self.model_size_bytes(_cache_identity(m)) for m in self._cached)
 
     def set_host_ram_floor_mb(self, floor_mb: float) -> None:
         self.floor_mb = floor_mb
@@ -144,21 +158,27 @@ class _FakeCache:
         # Admit from the tmpfs root (as ModelRamCache does) and record the
         # floor at the moment of admission — the pending-lane reserve must
         # already hold the lane's sleeping footprint by then.
+        from logos_worker_node.model_cache import _cache_identity
+
+        identity = _cache_identity(model)
         self.floor_at_ensure_cached = self.floor_mb
-        if model in self._cached and self.host_available_mb is not None and self.host_available_mb < self.floor_mb:
+        if identity in self._cached and self.host_available_mb is not None and self.host_available_mb < self.floor_mb:
             # Same already-cached below-floor rejection as the sync path
             # (the lane's first sleep must have planned host RAM).
             return "/fake/source"
-        # The copy landed: the real cache adds the model to _cached_models.
-        self._cached.add(model)
+        # The copy landed: the real cache adds the repository identity.
+        self._cached.add(identity)
         return str(self._cache_hub.parent)
 
     def ensure_cached_sync(self, model: str) -> str:  # noqa: ANN001
         # Mirrors ModelRamCache.ensure_cached_sync (the calibration path):
         # record the floor at the moment of admission — the probe's floor
         # escalation must have re-established it before this call.
+        from logos_worker_node.model_cache import _cache_identity
+
+        identity = _cache_identity(model)
         self.floor_at_ensure_cached = self.floor_mb
-        if model in self._cached and self.host_available_mb is not None and self.host_available_mb < self.floor_mb:
+        if identity in self._cached and self.host_available_mb is not None and self.host_available_mb < self.floor_mb:
             # Already cached but the host is below the raised floor: the
             # real cache serves this from the source (and leaves the entry
             # evictable) — mirrors its _would_starve_host(0) re-check.
@@ -169,16 +189,22 @@ class _FakeCache:
         # Same coordination as ModelRamCache.reclaim: a copy in flight is
         # left alone, rejected queue entries are dropped, and the live
         # reservation count is re-checked per model — a calibration can
-        # reserve an entry after the caller's protected snapshot.
+        # reserve an entry after the caller's protected snapshot. Keep
+        # entries are compared by repository identity so a live
+        # ``repo:Q8_0`` lane spares a bare ``repo`` cache resident.
+        from logos_worker_node.model_cache import _cache_identity
+
+        keep_ids = {_cache_identity(m) for m in keep}
+        caching_now = _cache_identity(self.caching_now) if self.caching_now else None
         removed: list[str] = []
-        for m in sorted(self._cached - keep):
-            if m == self.caching_now:
+        for m in sorted(self._cached - keep_ids):
+            if m == caching_now:
                 continue
             if self._cache_use_refs.get(m, 0) > 0:
                 continue
             removed.append(m)
         self._cached -= set(removed)
-        self.queue = [m for m in self.queue if m in keep]
+        self.queue = [m for m in self.queue if _cache_identity(m) in keep_ids]
         self.reclaimed.append(removed)
         return removed
 
@@ -192,7 +218,9 @@ class _FakeCache:
         return pending
 
     def is_cached(self, name: str) -> bool:
-        return name in self._cached
+        from logos_worker_node.model_cache import _cache_identity
+
+        return _cache_identity(name) in self._cached
 
     def start_background_caching(self, models: list[str]) -> None:
         self.recache_calls.append(list(models))
@@ -2779,3 +2807,102 @@ def test_replan_loop_failed_tick_is_logged_as_warning(monkeypatch, caplog) -> No
 
     assert calls["n"] == 1
     assert any("re-plan failed" in rec.message.lower() and rec.levelno >= logging.WARNING for rec in caplog.records)
+
+
+# ── GGUF repository identity in pressure accounting ──────────────────────────
+
+
+def test_build_candidates_counts_sibling_gguf_quant_sleep_reserves() -> None:
+    """Sibling GGUF quant lanes share one tmpfs directory but each keep their
+    own sleeping weights. Deduplicating candidates by repository must not drop
+    the second quant's sleep reserve — only the physical tmpfs cost is shared.
+    """
+    repo = "org/model-GGUF"
+    q4 = f"{repo}:Q4_K_M"
+    q8 = f"{repo}:Q8_0"
+    registry = _FakeRegistry(
+        {
+            q4: _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=4_000.0),
+            q8: _FakeProfile(base_residency_mb=20_000.0, sleeping_mb=8_000.0),
+        }
+    )
+    cache = _FakeCache(sizes={repo: _mb(12_000)})
+    cfg = AppConfig(logos=LogosConfig(capabilities_models=[q4, q8]))
+
+    candidates, uncalibrated = worker_main._build_ram_cache_candidates(
+        cfg, cache, registry, [q4, q8], reserve_replicas={q4: 1, q8: 1}
+    )
+
+    assert uncalibrated == []
+    by_name = {c.name: c for c in candidates}
+    assert set(by_name) == {q4, q8}
+    assert by_name[q4].sleeping_host_ram_mb == 4_000.0
+    assert by_name[q8].sleeping_host_ram_mb == 8_000.0
+    assert by_name[q4].sleeping_replicas == 1
+    assert by_name[q8].sleeping_replicas == 1
+    # Shared directory charged exactly once across the sibling candidates.
+    assert sorted(c.size_bytes for c in candidates) == [0, _mb(12_000)]
+
+
+def test_replan_reserves_both_sibling_gguf_quant_sleep_footprints(monkeypatch) -> None:
+    """End to end: two sleep-enabled quant lanes with different footprints
+    raise the host-RAM floor by the sum of both sleeping residencies, while
+    the shared tmpfs tree is still only one cache entry."""
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(300_000.0))
+
+    repo = "org/model-GGUF"
+    q4 = f"{repo}:Q4_K_M"
+    q8 = f"{repo}:Q8_0"
+    registry = _FakeRegistry(
+        {
+            q4: _FakeProfile(base_residency_mb=10_000.0, sleeping_mb=4_000.0),
+            q8: _FakeProfile(base_residency_mb=20_000.0, sleeping_mb=8_000.0),
+        }
+    )
+    cache = _FakeCache(cached=[repo], sizes={repo: _mb(12_000)})
+    lanes = _FakeLaneManager(
+        {
+            "q4": _FakeHandle("q4", q4, ProcessState.RUNNING),
+            "q8": _FakeHandle("q8", q8, ProcessState.RUNNING),
+        }
+    )
+    app = _app(cache, registry, lanes, [q4, q8])
+
+    asyncio.run(worker_main._replan_ram_cache_once(app))
+
+    margin = worker_main._host_ram_safety_margin_mb(512_000.0)
+    assert cache.floor_mb == pytest.approx(4_000.0 + 8_000.0 + margin)
+    assert cache.is_cached(repo) is True
+
+
+def test_replan_terminates_when_over_budget_gguf_repo_is_protected_by_quant_lane(
+    monkeypatch,
+) -> None:
+    """An over-budget bare-repo cache resident protected by a live ``repo:quant``
+    lane must not spin the reconciliation loop.
+
+    Cache residents are keyed on the bare repository; live protection carries
+    the full GGUF reference. Comparing them without canonicalizing treats the
+    protected tree as evictable, reclaim() then refuses (it already
+    canonicalizes), and the loop repeats forever — blocking the worker event
+    loop. With identity-consistent protection the replan terminates and the
+    protected tree stays.
+    """
+    monkeypatch.setattr(worker_main, "_build_host_memory_summary", lambda: _host_memory(60_000.0))
+
+    repo = "org/model-GGUF"
+    q8 = f"{repo}:Q8_0"
+    registry = _FakeRegistry({q8: _FakeProfile(base_residency_mb=50_000.0, sleeping_mb=50_000.0)})
+    # 48 GB resident against a ~30 GB live budget — over budget, nothing else
+    # to reclaim, and the only protection is the Q8 quant lane.
+    cache = _FakeCache(cached=[repo], sizes={repo: _mb(48_000)})
+    lanes = _FakeLaneManager({"q8": _FakeHandle("q8", q8, ProcessState.RUNNING)})
+    app = _app(cache, registry, lanes, [q8])
+
+    async def _run() -> None:
+        await asyncio.wait_for(worker_main._replan_ram_cache_once(app), timeout=2.0)
+
+    asyncio.run(_run())
+
+    assert cache.is_cached(repo) is True
+    assert cache.reclaimed[-1] == []

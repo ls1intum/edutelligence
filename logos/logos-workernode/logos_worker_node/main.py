@@ -656,52 +656,76 @@ def _build_ram_cache_candidates(
     reserve_replicas = dict(reserve_replicas or {})
     candidates: list[CacheCandidate] = []
     uncalibrated: list[str] = []
-    # Repository identity: sibling GGUF quant references share one tmpfs
-    # directory, so the planner must not admit the same tree twice (once per
-    # quant) or miss a resident that was admitted under a different form.
-    seen: set[str] = set()
+    # Sibling GGUF quant references (``repo:Q4_K_M``, ``repo:Q8_0``) share one
+    # tmpfs directory but each keep their own sleeping weights in host RAM.
+    # Deduplicate only the physical tmpfs cost by repository identity; keep a
+    # separate sleep-reserve candidate per reference so every lane's footprint
+    # and asleep count still reach the planner.
+    seen_refs: set[str] = set()
+    sized_identities: set[str] = set()
+    covered_identities: set[str] = set()
+
+    def _tmpfs_size_bytes(name: str) -> int:
+        identity = _cache_identity(name)
+        if identity in sized_identities:
+            return 0
+        sized_identities.add(identity)
+        return model_cache.model_size_bytes(name)
+
+    def _remember(name: str) -> None:
+        seen_refs.add(name)
+        covered_identities.add(_cache_identity(name))
+
     for m in caps:
         profile = model_profiles.get_profile(m)
         if profile is None or (profile.base_residency_mb or 0) <= 0:
             uncalibrated.append(m)
             continue
-        identity = _cache_identity(m)
-        if identity in seen:
+        if m in seen_refs:
             continue
-        seen.add(identity)
-        candidates.append(
-            _cache_candidate(
-                cfg,
-                model_cache,
-                model_profiles,
-                m,
-                sleeping_replicas=reserve_replicas.get(m, 1),
-                # A reserve-backed model is counted because a LANE can sleep
-                # (post-override lane configuration); a conflicting
-                # capabilities_overrides.enable_sleep_mode=false must not
-                # evict the lane's footprint via the model-level default.
-                can_sleep=model_can_sleep(cfg, m) or m in reserve_replicas,
-            )
+        _remember(m)
+        identity = _cache_identity(m)
+        cand = _cache_candidate(
+            cfg,
+            model_cache,
+            model_profiles,
+            m,
+            sleeping_replicas=reserve_replicas.get(m, 1),
+            # A reserve-backed model is counted because a LANE can sleep
+            # (post-override lane configuration); a conflicting
+            # capabilities_overrides.enable_sleep_mode=false must not
+            # evict the lane's footprint via the model-level default.
+            can_sleep=model_can_sleep(cfg, m) or m in reserve_replicas,
         )
+        # `_cache_candidate` always reads the full tree size; zero a
+        # sibling's share so the shared directory is charged once.
+        if identity in sized_identities:
+            cand = replace(cand, size_bytes=0)
+        else:
+            sized_identities.add(identity)
+        candidates.append(cand)
     for m in sorted(reserve_replicas):
-        identity = _cache_identity(m)
-        if identity in seen:
+        if m in seen_refs:
             continue
-        seen.add(identity)
-        candidates.append(
-            _cache_candidate(
-                cfg,
-                model_cache,
-                model_profiles,
-                m,
-                sleeping_replicas=reserve_replicas[m],
-                # These models are here BECAUSE a lane can sleep (they may
-                # have no profile at all), so the lane-derived decision —
-                # sleepable — is the only correct one; model_can_sleep can
-                # disagree via capabilities_overrides.
-                can_sleep=True,
-            )
+        _remember(m)
+        identity = _cache_identity(m)
+        cand = _cache_candidate(
+            cfg,
+            model_cache,
+            model_profiles,
+            m,
+            sleeping_replicas=reserve_replicas[m],
+            # These models are here BECAUSE a lane can sleep (they may
+            # have no profile at all), so the lane-derived decision —
+            # sleepable — is the only correct one; model_can_sleep can
+            # disagree via capabilities_overrides.
+            can_sleep=True,
         )
+        if identity in sized_identities:
+            cand = replace(cand, size_bytes=0)
+        else:
+            sized_identities.add(identity)
+        candidates.append(cand)
     # In-flight adds not covered above: an UNCATALOGUED pending lane with
     # sleep disabled appears in none of the sets the planner otherwise
     # reads — not in caps (uncatalogued), not in reserve_replicas (its
@@ -710,18 +734,17 @@ def _build_ram_cache_candidates(
     # in lane_manager.pending_lanes, so without this the candidate list can
     # be empty, the empty path zeroes the floor, and the add's
     # ensure_cached() admits the copy without the host safety margin.
-    # Sleep-enabled pending lanes are already reserve-backed (in `seen`).
+    # Sleep-enabled pending lanes are already reserve-backed.
     for m in sorted(pending_lane_models or set()):
-        identity = _cache_identity(m)
-        if identity in seen:
+        if _cache_identity(m) in covered_identities:
             continue
-        seen.add(identity)
+        _remember(m)
         candidates.append(
             CacheCandidate(
                 name=m,
                 can_sleep=False,
                 sleeping_host_ram_mb=0.0,
-                size_bytes=model_cache.model_size_bytes(m),
+                size_bytes=_tmpfs_size_bytes(m),
                 sleeping_replicas=1,
             )
         )
@@ -748,16 +771,15 @@ def _build_ram_cache_candidates(
         | set(model_cache.cache_use_reservations())
     )
     for m in sorted(residents):
-        identity = _cache_identity(m)
-        if identity in seen:
+        if _cache_identity(m) in covered_identities:
             continue
-        seen.add(identity)
+        _remember(m)
         candidates.append(
             CacheCandidate(
                 name=m,
                 can_sleep=False,
                 sleeping_host_ram_mb=0.0,
-                size_bytes=model_cache.model_size_bytes(m),
+                size_bytes=_tmpfs_size_bytes(m),
                 sleeping_replicas=1,
             )
         )
@@ -805,7 +827,10 @@ async def _apply_ram_cache_plan(
         # every would-be eviction is protected by a live lane (a model the
         # plan does not want and that is not protected would have been
         # dropped). See the docstring for why the protection wins.
-        spared = [m for m in model_cache.cached_models() if m not in set(plan.order)]
+        # Compare by repository identity: plan.order may carry a GGUF
+        # ``repo:quant`` form while cached_models() stores the bare repo.
+        plan_ids = {_cache_identity(m) for m in plan.order}
+        spared = [m for m in model_cache.cached_models() if _cache_identity(m) not in plan_ids]
         if spared:
             logger.warning(
                 "RAM cache cannot free host RAM right now: the plan no longer "
@@ -1009,7 +1034,17 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # (see ModelRamCache.reserve_cache_use), so only the reservation pins it
     # while a probe is running — reclaiming mid-session would rmtree the tree
     # out from under the probe.
-    protected = _lane_models_with_live_processes(lane_manager) | model_cache.cache_use_reservations()
+    #
+    # Canonicalize to repository identity: cache residents are keyed on the
+    # bare repo (``org/model-GGUF``), while live lanes and reservations may
+    # carry a full GGUF reference (``org/model-GGUF:Q8_0``). Comparing the
+    # bare key to the full reference would treat a protected shared tree as
+    # evictable; reclaim() would then refuse the eviction (it already
+    # canonicalizes), and the reconciliation loop below would spin forever.
+    protected = {
+        _cache_identity(m)
+        for m in (_lane_models_with_live_processes(lane_manager) | model_cache.cache_use_reservations())
+    }
 
     # plan_cache_order keeps every unsleepable candidate in the plan
     # regardless of budget — the startup rule, where they benefit most from
@@ -1033,32 +1068,55 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # re-cache logic below neither re-queues them (no pressure-fighting
     # refill) nor carries their hold-down stamps forward; when headroom
     # returns, a later pass re-admits and re-caches them after the hold-down.
-    candidate_size_mb = {c.name: c.size_bytes / (1024 * 1024) for c in candidates}
+    #
+    # Size and membership are tracked by repository identity: sibling quant
+    # candidates share one physical tree, so packing must charge it once.
+    candidate_size_mb: dict[str, float] = {}
+    for c in candidates:
+        identity = _cache_identity(c.name)
+        size_mb = c.size_bytes / (1024 * 1024)
+        if identity not in candidate_size_mb or size_mb > candidate_size_mb[identity]:
+            candidate_size_mb[identity] = size_mb
 
     def _size_mb(name: str) -> float:
         # Candidates carry their size; a protected entry the plan rejected
         # (out of order) falls back to the same source walk the candidate
         # builder uses.
-        size = candidate_size_mb.get(name)
+        identity = _cache_identity(name)
+        size = candidate_size_mb.get(identity)
         if size is None:
             size = model_cache.model_size_bytes(name) / (1024 * 1024)
         return size
 
+    def _plan_identities(order: list[str]) -> list[str]:
+        # Unique repository identities in plan order (first occurrence wins).
+        seen: set[str] = set()
+        out: list[str] = []
+        for m in order:
+            identity = _cache_identity(m)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            out.append(identity)
+        return out
+
     remaining_budget_mb = plan.sleepable_tmpfs_budget_mb
-    retained = (set(plan.order) | set(model_cache.cached_models())) & protected
+    plan_ids = _plan_identities(plan.order)
+    cached_ids = {_cache_identity(m) for m in model_cache.cached_models()}
+    retained = (set(plan_ids) | cached_ids) & protected
     for m in sorted(retained):
         remaining_budget_mb -= _size_mb(m)
     dropped: set[str] = set()
-    for m in plan.order:
+    for m in plan_ids:
         if m in protected:
             continue  # retained, already accounted
-        size_mb = candidate_size_mb[m]
+        size_mb = _size_mb(m)
         if size_mb <= remaining_budget_mb:
             remaining_budget_mb -= size_mb
         else:
             dropped.add(m)
     if dropped:
-        plan = replace(plan, order=[m for m in plan.order if m not in dropped])
+        plan = replace(plan, order=[m for m in plan.order if _cache_identity(m) not in dropped])
 
     reclaimed = await _apply_ram_cache_plan(model_cache, plan, protected)
     if reclaimed:
@@ -1093,16 +1151,19 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
     # since each iteration either evicts a drop or moves it behind a live
     # reservation, and plan membership only shrinks.
     while True:
-        live = _lane_models_with_live_processes(lane_manager) | model_cache.cache_use_reservations()
-        cached = list(model_cache.cached_models())
+        live = {
+            _cache_identity(m)
+            for m in (_lane_models_with_live_processes(lane_manager) | model_cache.cache_use_reservations())
+        }
+        cached = [_cache_identity(m) for m in model_cache.cached_models()]
         held_now_mb = sum(_size_mb(m) for m in cached)
         if held_now_mb <= plan.sleepable_tmpfs_budget_mb:
             break
         evictable = {m for m in cached if m not in live}
         if not evictable:
             break
-        plan_rank = {m: i for i, m in enumerate(plan.order)}
-        ordered = [m for m in reversed(plan.order) if m in evictable] + sorted(
+        plan_rank = {identity: i for i, identity in enumerate(_plan_identities(plan.order))}
+        ordered = [m for m in reversed(_plan_identities(plan.order)) if m in evictable] + sorted(
             (m for m in evictable if m not in plan_rank), key=_size_mb, reverse=True
         )
         to_drop: list[str] = []
@@ -1111,7 +1172,8 @@ async def _run_ram_cache_replan(app: FastAPI) -> None:
                 break
             to_drop.append(m)
             held_now_mb -= _size_mb(m)
-        plan = replace(plan, order=[m for m in plan.order if m not in to_drop])
+        drop_ids = set(to_drop)
+        plan = replace(plan, order=[m for m in plan.order if _cache_identity(m) not in drop_ids])
         reconciled = await model_cache.reclaim(set(plan.order) | live)
         if reconciled:
             logger.info(
