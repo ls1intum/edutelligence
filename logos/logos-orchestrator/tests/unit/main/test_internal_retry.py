@@ -620,7 +620,11 @@ async def test_failover_to_cloud_reselects_bucket_and_reruns_budget_check(retry_
     limiter = _FakeRateLimiter()
     retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
     budget_calls = []
-    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+    retry_env.setattr(
+        main,
+        "_check_budget_if_cloud",
+        lambda db, auth, is_cloud, month, **_kwargs: budget_calls.append(is_cloud),
+    )
 
     pipeline = _run_sync_response(
         retry_env,
@@ -665,7 +669,11 @@ async def test_same_provider_retry_does_not_recharge_the_bucket(retry_env):
     limiter = _FakeRateLimiter()
     retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
     budget_calls = []
-    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+    retry_env.setattr(
+        main,
+        "_check_budget_if_cloud",
+        lambda db, auth, is_cloud, month, **_kwargs: budget_calls.append(is_cloud),
+    )
 
     pipeline = _run_sync_response(
         retry_env,
@@ -706,7 +714,11 @@ async def test_azure_to_cloud_failover_charges_the_cloud_bucket_once(retry_env):
     limiter = _FakeRateLimiter()
     retry_env.setattr(rl_module, "get_rate_limiter", lambda: limiter)
     budget_calls = []
-    retry_env.setattr(main, "_check_budget_if_cloud", lambda db, auth, is_cloud, month: budget_calls.append(is_cloud))
+    retry_env.setattr(
+        main,
+        "_check_budget_if_cloud",
+        lambda db, auth, is_cloud, month, **_kwargs: budget_calls.append(is_cloud),
+    )
 
     pipeline = _run_sync_response(
         retry_env,

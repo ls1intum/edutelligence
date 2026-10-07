@@ -45,7 +45,7 @@ services:
 
   # One-shot: bring the schema up to the same revision the webservice would.
   migrate:
-    image: liquibase/liquibase:4.31
+    image: liquibase/liquibase:4.33
     depends_on:
       logos-db:
         condition: service_healthy
@@ -187,7 +187,7 @@ services:
 
   traefik:
     profiles: [ui]
-    image: traefik:v3.7.10
+    image: traefik:v3.7.13
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
@@ -204,7 +204,7 @@ services:
 
   keycloak:
     profiles: [ui]
-    image: quay.io/keycloak/keycloak:26.7
+    image: quay.io/keycloak/keycloak:26.8
     command: ["start-dev", "--import-realm", "--health-enabled=true"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
