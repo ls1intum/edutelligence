@@ -10,20 +10,27 @@
          key owner: rename the columns from SLA to SLO to match the capacity
          terminology. Postgres rewrites the check constraints that reference
          the renamed columns and keeps their names; the tier values are
-         untouched. -->
+         untouched. Each RENAME COLUMN is its own ALTER TABLE statement:
+         Postgres rejects combining rename operations in one. -->
     <changeSet id="052-rename-recommendation-sla-to-slo" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="ai_llm_call_recommendations" columnName="recommended_slo"/></not>
         </preConditions>
         <sql>
             ALTER TABLE ai_llm_call_recommendations
-                RENAME COLUMN recommended_sla TO recommended_slo,
+                RENAME COLUMN recommended_sla TO recommended_slo;
+        </sql>
+        <sql>
+            ALTER TABLE ai_llm_call_recommendations
                 RENAME COLUMN confirmed_sla TO confirmed_slo;
         </sql>
         <rollback>
             <sql>
                 ALTER TABLE ai_llm_call_recommendations
-                    RENAME COLUMN recommended_slo TO recommended_sla,
+                    RENAME COLUMN recommended_slo TO recommended_sla;
+            </sql>
+            <sql>
+                ALTER TABLE ai_llm_call_recommendations
                     RENAME COLUMN confirmed_slo TO confirmed_sla;
             </sql>
         </rollback>
