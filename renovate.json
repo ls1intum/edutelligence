@@ -38,6 +38,17 @@
       "groupName": "shared",
       "matchFileNames": ["shared/**"],
       "commitMessagePrefix": "`Shared`:"
+    },
+    {
+      "description": "tiktoken (via PyO3 0.22) does not build on Python 3.14 yet",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "<3.14"
+    },
+    {
+      "description": "logos-webservice ships mvnw without .mvn/wrapper, so Renovate cannot regenerate it",
+      "matchManagers": ["maven-wrapper"],
+      "enabled": false
     }
   ],
   "timezone": "Europe/Berlin",

@@ -2,7 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,13 +13,14 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
+import de.tum.cit.aet.logos.logoswebservice.identity.Csv;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateUserRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.ImportUsersRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.TeamResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateUserInfoRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UserResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.User;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
@@ -125,87 +126,64 @@ public class UserService {
         });
     }
 
-    public Map<String, Object> importUsers(MultipartFile file) throws IOException {
-        String content = new String(file.getBytes());
-        String[] lines = content.split("\n");
+    /**
+     * Parses the uploaded CSV and returns its header row plus the raw data rows
+     * so the web application can map columns, let the user pick rows and show a
+     * preview before anything is written.
+     */
+    public Map<String, Object> previewImport(MultipartFile file) throws IOException {
+        List<String[]> records = Csv.parse(new String(file.getBytes()));
+        List<String> columns = new ArrayList<>();
+        List<List<String>> rows = new ArrayList<>();
+        for (int i = 0; i < records.size(); i++) {
+            if (i == 0) {
+                columns = Arrays.asList(records.get(0));
+            } else {
+                rows.add(Arrays.asList(records.get(i)));
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("columns", columns);
+        result.put("rows", rows);
+        return result;
+    }
+
+    /**
+     * Creates the users the web application mapped and selected from the preview.
+     * No team is part of the import: users are created as app_developers without
+     * one and added to a team's members afterwards.
+     */
+    public Map<String, Object> importUsers(List<ImportUsersRequestDTO.Row> rowsIn) {
         List<Map<String, Object>> rows = new ArrayList<>();
         int created = 0, existing = 0, failed = 0;
-
-        if (lines.length < 2) {
-            return Map.of("summary", Map.of("created", 0, "existing", 0, "failed", 0), "rows", rows);
-        }
-
-        String[] headers = lines[0].trim().split(",");
-        Map<String, Integer> idx = new HashMap<>();
-        for (int i = 0; i < headers.length; i++) {
-            idx.put(headers[i].trim().toLowerCase(), i);
-        }
-
-        for (int i = 1; i < lines.length; i++) {
-            String line = lines[i].trim();
-            if (line.isEmpty()) continue;
-            String[] parts = line.split(",");
-
-            String prename = col(parts, idx, "prename");
-            String name = col(parts, idx, "name");
-            String email = col(parts, idx, "email");
-            String teamName = col(parts, idx, "team");
-
+        for (ImportUsersRequestDTO.Row in : rowsIn) {
+            String prename = trimToNull(in.prename());
+            String name = trimToNull(in.name());
+            String email = trimToNull(in.email());
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("email", email);
             row.put("username", null);
-            row.put("apiKey", null);
-            row.put("team", teamName);
             row.put("status", "failed");
             row.put("error", null);
-
             try {
-                if (email != null && !email.isBlank() && userRepository.existsByEmailIgnoreCase(email)) {
+                if (email != null && userRepository.existsByEmailIgnoreCase(email)) {
                     User existingUser = userRepository.findFirstByEmailIgnoreCase(email).get();
                     row.put("username", existingUser.getUsername());
-
-                    if (teamName != null && !teamName.isBlank()) {
-                        Team team = teamRepository.findFirstByName(teamName).orElseGet(() -> {
-                            Team t = new Team();
-                            t.setName(teamName);
-                            return teamRepository.save(t);
-                        });
-                        if (!teamService.isMember(team.getId(), existingUser.getId())) {
-                            teamService.addMember(team.getId(), new AddTeamMemberRequestDTO(existingUser.getId(), false))
-                                .ifPresent(k -> row.put("apiKey", k));
-                        }
-                        row.put("team", team.getName());
-                    }
-
                     row.put("status", "existing");
                     existing++;
-                    rows.add(row);
-                    continue;
+                } else {
+                    String username = generateUsername(prename, name);
+                    User user = new User();
+                    user.setUsername(username);
+                    user.setPrename(prename);
+                    user.setName(name);
+                    user.setEmail(email);
+                    user.setRole(Role.APP_DEVELOPER.getValue());
+                    user = userRepository.save(user);
+                    row.put("username", user.getUsername());
+                    row.put("status", "created");
+                    created++;
                 }
-
-                String username = generateUsername(prename, name);
-                User user = new User();
-                user.setUsername(username);
-                user.setPrename(prename);
-                user.setName(name);
-                user.setEmail(email);
-                user.setRole(Role.APP_DEVELOPER.getValue());
-                user = userRepository.save(user);
-                row.put("username", user.getUsername());
-
-                if (teamName != null && !teamName.isBlank()) {
-                    Team team = teamRepository.findByName(teamName).orElseGet(() -> {
-                        Team t = new Team();
-                        t.setName(teamName);
-                        return teamRepository.save(t);
-                    });
-                    teamService.addMember(team.getId(), new AddTeamMemberRequestDTO(user.getId(), false))
-                        .ifPresent(k -> row.put("apiKey", k));
-                    row.put("team", team.getName());
-                }
-
-                row.put("status", "created");
-                created++;
             } catch (Exception e) {
                 row.put("error", e.getMessage());
                 row.put("status", "failed");
@@ -213,7 +191,6 @@ public class UserService {
             }
             rows.add(row);
         }
-
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put("created",  created);
         summary.put("existing", existing);
@@ -233,11 +210,10 @@ public class UserService {
         }
     }
 
-    private static String col(String[] parts, Map<String, Integer> idx, String header) {
-        Integer i = idx.get(header);
-        if (i == null || i >= parts.length) return null;
-        String val = parts[i].trim();
-        return val.isEmpty() ? null : val;
+    private static String trimToNull(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     public UserResponseDTO toDto(User u) {
