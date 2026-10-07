@@ -4,20 +4,20 @@ title: Self-hosted Installation
 
 # Self-hosted installation
 
-This guide deploys the complete Logos stack with Docker Compose. The stack
-contains the web UI, API service, orchestrator, PostgreSQL, and Traefik.
-The development stack additionally runs a local Keycloak; production expects
-an external identity provider configured via the `KEYCLOAK_*` variables in
-`.env`.
+This guide shows how to deploy the complete Logos stack with Docker Compose.
+The stack contains the web UI, the API service, the orchestrator, PostgreSQL
+and Traefik. The development stack also runs a local Keycloak. Production
+needs an external identity provider. Configure it with the `KEYCLOAK_*`
+variables in `.env`.
 
 ## Prerequisites
 
 - Docker Engine with the Compose plugin
-- A domain name and an SMTP/identity-provider setup for production
-- Python 3.13 and `uv` only when developing Logos outside containers
-- A GPU worker node when serving local models
+- A domain name and an SMTP/identity-provider configuration for production
+- Python 3.13 and `uv`, only if you develop Logos outside containers
+- A GPU worker node, if you serve local models
 
-Clone the repository and enter the service directory:
+Clone the repository and go to the service directory:
 
 ```bash
 git clone https://github.com/ls1intum/edutelligence.git
@@ -27,15 +27,15 @@ cp .env.example .env
 
 ## Development deployment
 
-The development compose file builds all services locally and includes a
+The development compose file builds all services locally. It includes a
 development Keycloak realm:
 
 ```bash
 docker compose -f docker-compose.dev.yaml up --build
 ```
 
-The compose stack serves the API (Traefik at `http://localhost:18081`) but
-not the web UI. Start the Angular dev server on the host as well:
+The compose stack serves the API (Traefik at `http://localhost:18081`). It
+does not serve the web UI. Also start the Angular dev server on the host:
 
 ```bash
 cd logos-ui
@@ -44,23 +44,23 @@ npm start
 ```
 
 Then open `http://localhost:4200/` and sign in with one of the seeded
-development accounts. These accounts and their roles are defined in
-`keycloak/tum-realm.json`; never use them in a production deployment.
+development accounts. `keycloak/tum-realm.json` defines these accounts and
+their roles. Do not use them in a production deployment.
 
 ## Production deployment
 
-For production, use `docker-compose.yaml`. Every image is published to the
-public mirror at `ghcr.io/ls1intum/edutelligence`, which is what the compose
-file pulls by default — no registry configuration and no login:
+For production, use `docker-compose.yaml`. Every image is on the public mirror
+at `ghcr.io/ls1intum/edutelligence`. The compose file pulls from this mirror
+by default. You do not need registry configuration or a login:
 
 ```bash
 docker compose --env-file .env up -d
 ```
 
-The mirror is fed by `main`, so it carries one tag: `latest`. Version tags go
-to the project's deployment registry, which is team-internal. To pull from
-that registry, or from a mirror of your own, set both in `.env` and log in
-once:
+The mirror receives images from `main`, so it has one tag: `latest`. Version
+tags go to the deployment registry of the project, which is team-internal. To
+pull from that registry, or from your own mirror, set both variables in
+`.env` and log in one time:
 
 ```bash
 REGISTRY=<registry-host>/<namespace>
@@ -68,13 +68,13 @@ IMAGE_TAG=<published tag>
 docker login <registry-host>         # host only, no path
 ```
 
-To run images you built yourself, build them from the Dockerfiles the build
-workflow uses and tag them for a registry the host can pull from (e.g. a
-local registry):
+To run images that you built yourself, build them from the Dockerfiles that
+the build workflow uses. Tag them for a registry from which the host can pull,
+for example a local registry:
 
 ```bash
-# The build contexts below are repository-root relative — return there
-# first (the guide's working directory is edutelligence/logos):
+# The build contexts below are relative to the repository root. Go there
+# first (the working directory of this guide is edutelligence/logos):
 cd ..
 REGISTRY=localhost:5000
 IMAGE_TAG=latest
@@ -88,31 +88,31 @@ docker build -t "$REGISTRY/logos-agent-workspace:$IMAGE_TAG" -f logos/logos-agen
 docker build -t "$REGISTRY/logos-rate-gateway:$IMAGE_TAG" -f logos/rate-limit-gateway/Dockerfile .
 ```
 
-(All eight images are required to run the full stack: `logos-rate-gateway` is
-the only router on the public entrypoints, so without it the stack serves no
-public traffic at all, and the agent runner refuses to start a session when
-the `logos-agent-workspace` image is absent.)
+The full stack needs all eight images. `logos-rate-gateway` is the only router
+on the public entrypoints. Without it, the stack serves no public traffic. If
+the `logos-agent-workspace` image is absent, the agent runner refuses to start
+a session.
 
-Set the same `REGISTRY` and `IMAGE_TAG` in `.env`, then start the stack
-(the worker node image is built on the GPU host instead — see the worker
-node guide):
+Set the same `REGISTRY` and `IMAGE_TAG` in `.env`, then start the stack. Build
+the worker node image on the GPU host instead (see the worker node guide):
 
 ```bash
 cd logos
 docker compose --env-file .env up -d
 ```
 
-Set a real `LOGOS_DOMAIN`, `ACME_EMAIL`, `LOGOS_CORS_ALLOWED_ORIGINS`, and
-strong values for `LOGOS_INTERNAL_SECRET` and `PROMETHEUS_API_KEY`. Ensure
-the host's ports 80, 443, and (if required) 8080 are available. Traefik
-obtains a certificate through Let's Encrypt when `ACME_EMAIL` is configured.
+Set real values for `LOGOS_DOMAIN`, `ACME_EMAIL` and
+`LOGOS_CORS_ALLOWED_ORIGINS`. Set strong values for `LOGOS_INTERNAL_SECRET`
+and `PROMETHEUS_API_KEY`. Make sure that ports 80, 443 and (if necessary) 8080
+of the host are available. If you configure `ACME_EMAIL`, Traefik gets a
+certificate through Let's Encrypt.
 
-After startup, verify the UI at `https://<your-domain>/` and the API
+After startup, verify the UI at `https://<your-domain>/`. Verify the API
 documentation at `https://<your-domain>/docs`.
 
 ## Persistent data and upgrades
 
-The production stack persists the following:
+The production stack keeps the following data:
 
 | Storage | Type | Contents |
 | --- | --- | --- |
@@ -122,11 +122,11 @@ The production stack persists the following:
 | `agent_state` (literal name `logos_agent_state`) | named volume | agent session state |
 | `./letsencrypt` | bind mount | Traefik Let's Encrypt certificate state |
 
-Back up these volumes and the `./letsencrypt` directory before upgrades.
-Keycloak is external to the stack, so back up its realm export (see
-`keycloak/tum-realm.json` in this repository for the realm format) together
-with your identity provider; in the development stack Keycloak state is
-ephemeral. Pull the desired image tag and recreate the stack:
+Before an upgrade, back up these volumes and the `./letsencrypt` directory.
+Keycloak is external to the stack. Back up its realm export together with your
+identity provider (for the realm format, see `keycloak/tum-realm.json` in this
+repository). In the development stack, the Keycloak state is temporary. Pull
+the necessary image tag and recreate the stack:
 
 ```bash
 docker compose --env-file .env pull
