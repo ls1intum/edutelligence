@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Provider;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ProviderType;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
@@ -27,16 +28,19 @@ public class TeamProviderBudgetService {
     private final TeamMemberRepository memberRepository;
     private final TeamProviderBudgetRepository budgetRepository;
     private final ProviderRepository providerRepository;
+    private final AuditLogService auditLog;
 
     public TeamProviderBudgetService(
             TeamRepository teamRepository,
             TeamMemberRepository memberRepository,
             TeamProviderBudgetRepository budgetRepository,
-            ProviderRepository providerRepository) {
+            ProviderRepository providerRepository,
+            AuditLogService auditLog) {
         this.teamRepository = teamRepository;
         this.memberRepository = memberRepository;
         this.budgetRepository = budgetRepository;
         this.providerRepository = providerRepository;
+        this.auditLog = auditLog;
     }
 
     public boolean teamExists(Integer teamId) {
@@ -80,10 +84,18 @@ public class TeamProviderBudgetService {
         }
 
         TeamProviderBudgetId id = new TeamProviderBudgetId(teamId, body.provider_id());
-        TeamProviderBudget row = budgetRepository.findById(id)
-            .orElseGet(() -> new TeamProviderBudget(teamId, body.provider_id(), null));
+        Optional<TeamProviderBudget> existing = budgetRepository.findById(id);
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("sponsored", existing.isPresent());
+        before.put("monthly_budget_micro_cents", existing.map(TeamProviderBudget::getMonthlyBudgetMicroCents).orElse(null));
+        TeamProviderBudget row = existing.orElseGet(() -> new TeamProviderBudget(teamId, body.provider_id(), null));
         row.setMonthlyBudgetMicroCents(body.monthly_budget_micro_cents());
         budgetRepository.save(row);
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("sponsored", true);
+        after.put("monthly_budget_micro_cents", row.getMonthlyBudgetMicroCents());
+        auditLog.record("team.provider_budget_set", "team_provider_budget",
+            teamId + "/" + body.provider_id(), teamId, before, after);
 
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("provider_id", provider.getId());
@@ -96,10 +108,19 @@ public class TeamProviderBudgetService {
     @Transactional
     public boolean delete(Integer teamId, Integer providerId) {
         TeamProviderBudgetId id = new TeamProviderBudgetId(teamId, providerId);
-        if (!budgetRepository.existsById(id)) {
+        Optional<TeamProviderBudget> existing = budgetRepository.findById(id);
+        if (existing.isEmpty()) {
             return false;
         }
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("sponsored", true);
+        before.put("monthly_budget_micro_cents", existing.get().getMonthlyBudgetMicroCents());
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("sponsored", false);
+        after.put("monthly_budget_micro_cents", null);
         budgetRepository.deleteById(id);
+        auditLog.record("team.provider_budget_removed", "team_provider_budget",
+            teamId + "/" + providerId, teamId, before, after);
         return true;
     }
 

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Append-only record of who changed which budget or logging/privacy
+         setting, and when.
+
+         actor_user_id, team_id and target_id are deliberately not foreign
+         keys: the record has to outlive the user, team, key or provider it
+         is about. actor_username and actor_role are copied at write time for
+         the same reason. before_state / after_state hold only the fields
+         that changed; secrets (provider API keys) are never stored. -->
+    <changeSet id="053-audit-log" author="wasnertobias">
+        <sql><![CDATA[
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id BIGSERIAL PRIMARY KEY,
+                occurred_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                actor_user_id INTEGER NULL,
+                actor_username TEXT NULL,
+                actor_role TEXT NULL,
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id TEXT NULL,
+                team_id INTEGER NULL,
+                before_state JSONB NULL,
+                after_state JSONB NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_log_team ON audit_log (team_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_audit_log_occurred ON audit_log (id DESC);
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS audit_log;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

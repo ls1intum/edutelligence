@@ -56,5 +56,6 @@
     <include file="liquibase/changelog/050_analysis_proposals.xml"/>
     <include file="liquibase/changelog/051_editable_workflow_diagrams.xml"/>
     <include file="liquibase/changelog/052_team_provider_budgets.xml"/>
+    <include file="liquibase/changelog/053_audit_log.xml"/>
 
 </databaseChangeLog>

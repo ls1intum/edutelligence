@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateAppKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
@@ -32,13 +33,16 @@ public class ApiKeyAdminService {
     private final ApiKeyRepository apiKeyRepository;
     private final TeamRepository teamRepository;
     private final TeamMemberRepository teamMemberRepository;
+    private final AuditLogService auditLog;
 
     public ApiKeyAdminService(ApiKeyRepository apiKeyRepository,
                               TeamRepository teamRepository,
-                              TeamMemberRepository teamMemberRepository) {
+                              TeamMemberRepository teamMemberRepository,
+                              AuditLogService auditLog) {
         this.apiKeyRepository = apiKeyRepository;
         this.teamRepository = teamRepository;
         this.teamMemberRepository = teamMemberRepository;
+        this.auditLog = auditLog;
     }
 
     public List<Map<String, Object>> getKeysForTeam(int teamId) {
@@ -140,6 +144,7 @@ public class ApiKeyAdminService {
         ApiKey k = apiKeyRepository.findById(keyId)
             .orElseThrow(() -> new IllegalArgumentException("API key not found: " + keyId));
         Map<String, Object> settings = parseJsonToMap(k.getSettings());
+        Map<String, Object> before = keySettingsSnapshot(k, settings);
 
         applyLimit(settings, "budget_limit_micro_cents", req.budgetLimitMicroCents());
         applyLimit(settings, "cloud_rpm_limit", req.cloudRpmLimit() != null ? req.cloudRpmLimit().longValue() : null);
@@ -153,7 +158,22 @@ public class ApiKeyAdminService {
         if (req.log() != null) k.setLog(LogLevel.valueOf(req.log()));
         if (req.useCustomPermissions() != null) k.setUseCustomPermissions(req.useCustomPermissions());
         apiKeyRepository.save(k);
+        auditLog.record("api_key.updated", "api_key", keyId, k.getTeamId(), before, keySettingsSnapshot(k, settings));
         return Map.of("result", "API Key updated successfully");
+    }
+
+    /** Budget, rate-limit and logging fields only; never the key value. */
+    private static Map<String, Object> keySettingsSnapshot(ApiKey k, Map<String, Object> settings) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("log", k.getLog() == null ? null : k.getLog().name());
+        m.put("environment", k.getEnvironment());
+        m.put("default_priority", k.getDefaultPriority());
+        m.put("use_custom_permissions", k.getUseCustomPermissions());
+        for (String field : List.of("budget_limit_micro_cents", "cloud_rpm_limit", "cloud_tpm_limit",
+                "local_rpm_limit", "local_tpm_limit")) {
+            m.put(field, settings.get(field));
+        }
+        return m;
     }
 
     private static final int API_KEY_TOKEN_LENGTH = 128;
