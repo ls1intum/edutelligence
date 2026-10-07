@@ -996,20 +996,19 @@ class LectureGlobalSearchRetrieval:
         if not unit_keys:
             return kept
 
-        unit_ids = list({key[2] for key in unit_keys})
         t_expand = time.perf_counter()
         with TracedThreadPoolExecutor(max_workers=2) as executor:
             seg_future = executor.submit(
                 self._fetch_unit_objects,
                 self.collection,
                 LectureUnitSegmentSchema,
-                unit_ids,
+                unit_keys,
             )
             trans_future = executor.submit(
                 self._fetch_unit_objects,
                 self.transcription_collection,
                 LectureTranscriptionSchema,
-                unit_ids,
+                unit_keys,
                 # A page-numbered transcription row is already represented by that
                 # page's slide segment (see _search_video_transcriptions); without
                 # this, the join pulls it in a second time as a duplicate
@@ -1075,23 +1074,50 @@ class LectureGlobalSearchRetrieval:
     def _fetch_unit_objects(
         collection: Any,
         schema: Any,
-        unit_ids: list[int],
+        unit_keys: list[tuple[Any, Any, Any]],
         extra_filter: Any | None = None,
     ) -> list[Any]:
-        """Every object of the given units, fetched by join rather than ranked."""
-        if not unit_ids:
-            return []
-        unit_filter = Filter.by_property(schema.LECTURE_UNIT_ID.value).contains_any(
-            unit_ids
-        )
-        return collection.query.fetch_objects(
-            filters=(
-                Filter.all_of([unit_filter, extra_filter])
-                if extra_filter is not None
-                else unit_filter
-            ),
-            limit=settings.global_search_expand_fetch_limit,
-        ).objects
+        """Fetch in anchor order under one raw-row budget for this collection.
+
+        A capped ID-union query chooses in storage order, so a lower-ranked
+        unit that returns many rows can starve higher-ranked anchors of their
+        siblings. Structural-key queries preserve the existing ``kept`` order
+        instead. An incomplete key consumes no rows.
+        """
+        objects: list[Any] = []
+        queries = 0
+        remaining = settings.global_search_expand_fetch_limit
+        started = time.perf_counter()
+        try:
+            for owner, course_id, unit_id in unit_keys:
+                if remaining <= 0:
+                    break
+                if owner is None or course_id is None or unit_id is None:
+                    continue
+                filters = [
+                    Filter.by_property(schema.BASE_URL.value).equal(owner),
+                    Filter.by_property(schema.COURSE_ID.value).equal(course_id),
+                    Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(unit_id),
+                ]
+                if extra_filter is not None:
+                    filters.append(extra_filter)
+                queries += 1
+                rows = collection.query.fetch_objects(
+                    filters=Filter.all_of(filters), limit=remaining
+                ).objects
+                objects.extend(rows)
+                remaining -= len(rows)
+            return objects
+        finally:
+            logger.info(
+                "[LectureSearch] expansion_fetch collection=%s queries=%d "
+                "raw_rows=%d budget=%d fetch_ms=%.0f",
+                schema.COLLECTION_NAME.value,
+                queries,
+                len(objects),
+                settings.global_search_expand_fetch_limit,
+                (time.perf_counter() - started) * 1000,
+            )
 
     @staticmethod
     def _log_results(
