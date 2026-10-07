@@ -198,8 +198,29 @@ async def test_payload_is_translated_for_an_openai_upstream(monkeypatch):
     context = await _resolve(monkeypatch, "v1/messages")
     _, payload = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
     assert payload["messages"][0] == {"role": "system", "content": "Be brief."}
-    assert payload["max_tokens"] == 32
+    assert payload["max_completion_tokens"] == 32
+    assert "max_tokens" not in payload
     assert "system" not in payload
+
+
+@pytest.mark.asyncio
+async def test_azure_chat_deployment_sends_max_completion_tokens(monkeypatch):
+    # gpt-6-luna (and every other chat deployment) stores a chat/completions
+    # URL; that surface decides the cap name, independent of the model.
+    context = await _resolve(
+        monkeypatch,
+        "v1/messages",
+        cloud_provider_type="azure",
+        model_name="gpt-6-luna",
+        base_url="https://ase-se01.openai.azure.com/openai/deployments/",
+        endpoint=(
+            "https://ase-se01.openai.azure.com/openai/deployments/"
+            "gpt-6-luna/chat/completions?api-version=2025-01-01-preview"
+        ),
+    )
+    _, payload = ContextResolver.prepare_headers_and_payload(context, {**MESSAGES_BODY, "model": "gpt-6-luna"})
+    assert payload["max_completion_tokens"] == 32
+    assert "max_tokens" not in payload
 
 
 @pytest.mark.asyncio

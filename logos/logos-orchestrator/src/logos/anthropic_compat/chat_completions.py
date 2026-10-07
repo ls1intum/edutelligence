@@ -38,7 +38,12 @@ from logos.anthropic_compat.common import (
 _PASSTHROUGH_PARAMS = ("temperature", "top_p")
 
 
-def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = None) -> Dict[str, Any]:
+def to_chat_completions(
+    payload: Dict[str, Any],
+    *,
+    model_name: Optional[str] = None,
+    endpoint_url: Optional[str] = None,
+) -> Dict[str, Any]:
     """Translate an Anthropic Messages request into a chat/completions one.
 
     Only fields with a chat/completions counterpart are carried over — an
@@ -74,12 +79,12 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         "messages": messages,
     }
 
-    # The output-cap name is selected by model family, not by is_reasoning_model:
-    # gpt-6 rejects max_tokens on chat/completions, while Azure GPT-4 Turbo
-    # still requires it and rejects max_completion_tokens.
+    # The output-cap name follows the upstream operation in ``endpoint_url``:
+    # chat/completions wants max_completion_tokens; the legacy text completions
+    # endpoint still wants max_tokens. See wants_max_completion_tokens.
     max_tokens = payload.get("max_tokens")
     if max_tokens is not None:
-        cap = "max_completion_tokens" if wants_max_completion_tokens(served_model) else "max_tokens"
+        cap = "max_completion_tokens" if wants_max_completion_tokens(endpoint_url) else "max_tokens"
         result[cap] = max_tokens
 
     if not reasoning:

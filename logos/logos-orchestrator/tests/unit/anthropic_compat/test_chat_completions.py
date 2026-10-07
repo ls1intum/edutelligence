@@ -49,24 +49,34 @@ def test_system_blocks_become_a_leading_system_message():
     )
     assert result["messages"][0] == {"role": "system", "content": "You are Claude Code.\n\nBe brief."}
     assert result["messages"][1] == {"role": "user", "content": "hi"}
-    assert result["max_tokens"] == 64
+    assert result["max_completion_tokens"] == 64
 
 
 @pytest.mark.parametrize(
-    "model,cap",
+    "endpoint_url,cap",
     [
-        # gpt-6 rejects max_tokens on chat/completions; Azure GPT-4 Turbo still
-        # requires it and rejects max_completion_tokens. The cap is selected by
-        # family, not by is_reasoning_model (which does not match gpt-6).
-        ("gpt-6-luna", "max_completion_tokens"),
-        ("openai/gpt-6-luna", "max_completion_tokens"),
-        ("gpt-5.6-luna", "max_completion_tokens"),
-        ("gpt-4-turbo-2024-04-09", "max_tokens"),
-        ("gpt-4.1-nano", "max_tokens"),
+        # The upstream operation decides the cap name, not the model: gpt-6 and
+        # Azure GPT-4 Turbo both store a chat/completions URL, and that surface
+        # wants max_completion_tokens. The legacy text completions endpoint is
+        # the one that still wants max_tokens.
+        (
+            "https://ase.openai.azure.com/openai/deployments/gpt-6-luna/chat/completions"
+            "?api-version=2025-01-01-preview",
+            "max_completion_tokens",
+        ),
+        (
+            "https://ase.openai.azure.com/openai/deployments/turbo/chat/completions" "?api-version=2024-02-01",
+            "max_completion_tokens",
+        ),
+        ("https://api.openai.com/v1/chat/completions", "max_completion_tokens"),
+        ("https://api.openai.com/v1/completions", "max_tokens"),
     ],
 )
-def test_output_cap_follows_model_family(model, cap):
-    result = to_chat_completions({"model": model, "max_tokens": 64, "messages": []})
+def test_output_cap_follows_endpoint_url(endpoint_url, cap):
+    result = to_chat_completions(
+        {"model": "gpt-6-luna", "max_tokens": 64, "messages": []},
+        endpoint_url=endpoint_url,
+    )
     assert result[cap] == 64
     other = "max_tokens" if cap == "max_completion_tokens" else "max_completion_tokens"
     assert other not in result
@@ -218,7 +228,7 @@ def test_the_two_openai_families_get_mutually_exclusive_parameters():
 
     older = to_chat_completions({**request, "model": "gpt-4.1-nano"})
     assert older["temperature"] == 0.3 and older["top_p"] == 0.9
-    assert older["max_tokens"] == 8
+    assert older["max_completion_tokens"] == 8
     assert older["stop"] == ["END"]
     assert older["messages"][0] == {"role": "system", "content": "Be brief."}
     assert "reasoning_effort" not in older

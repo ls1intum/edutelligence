@@ -39,12 +39,6 @@ CHAT_COMPLETIONS_PATH = "v1/chat/completions"
 # parameter set on chat/completions than every older model.
 _REASONING_MODEL_RE = re.compile(r"^(?:o\d|gpt-5)", re.IGNORECASE)
 
-# Families that reject the deprecated ``max_tokens`` on chat/completions with a
-# 400. Broader than the reasoning set: gpt-6 is served on chat/completions and
-# rejects ``max_tokens``, but is not a reasoning model for temperature / effort.
-# Older Azure deployments (GPT-4 Turbo) still require ``max_tokens``.
-_MAX_COMPLETION_TOKENS_MODEL_RE = re.compile(r"^(?:o\d|gpt-5|gpt-6)", re.IGNORECASE)
-
 
 class UpstreamDialect(str, Enum):
     """Which API surface the resolved upstream actually serves.
@@ -95,16 +89,25 @@ def is_reasoning_model(model_name: Optional[str]) -> bool:
     return bool(_REASONING_MODEL_RE.match(name))
 
 
-def wants_max_completion_tokens(model_name: Optional[str]) -> bool:
-    """Whether this model needs ``max_completion_tokens`` on chat/completions.
+def wants_max_completion_tokens(endpoint_url: Optional[str]) -> bool:
+    """Whether the upstream URL's chat surface wants ``max_completion_tokens``.
 
-    Anthropic requires ``max_tokens`` on every request, so the translation
-    always has a value to forward; only its name differs by model family.
-    Reasoning families and gpt-6 reject ``max_tokens``; Azure GPT-4 Turbo
-    deployments still require the older name.
+    Anthropic requires ``max_tokens`` on every Messages request, so the
+    translation always has a value to forward; only its name differs by the
+    upstream operation the request is posted to. ``chat/completions`` takes
+    the modern name; the legacy text ``completions`` endpoint still takes
+    ``max_tokens``. The path alone decides — not the model name — because the
+    same deployment id can serve either surface and a new family is invisible
+    to a name regex.
     """
-    name = (model_name or "").rsplit("/", 1)[-1]
-    return bool(_MAX_COMPLETION_TOKENS_MODEL_RE.match(name))
+    path = (endpoint_url or "").split("?", 1)[0].rstrip("/")
+    if path.endswith("/chat/completions"):
+        return True
+    if path.endswith("/completions"):
+        return False
+    # No usable URL: the caller is already translating into the
+    # chat/completions dialect, which is the surface that wants the modern name.
+    return True
 
 
 def new_message_id(upstream_id: Any) -> str:
