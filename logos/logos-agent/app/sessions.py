@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 
 from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
-from .config import INTERRUPTION_FILE, REPLY_DIR, REPLY_FILE, settings
+from .config import INTERRUPTION_FILE, REPLY_DIR, REPLY_FILE, REVIEW_COMMENTS_FILE, REVIEWED_SHA_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
 logger = logging.getLogger(__name__)
@@ -1631,6 +1631,14 @@ class SessionManager:
         if code != 0:
             said = self._last_helper_output.pop(session["id"], "")
             raise RuntimeError(f"checkout preparation failed (exit {code}){f': {said}' if said else ''}")
+        if str(session.get("trigger_kind") or "") == "review-request":
+            # Read now, while only the trusted helper has written the result
+            # file: the agent phase runs next and could write anything there.
+            sha = str(self._read_result(int(session["id"])).get("checkout_sha") or "").strip()
+            if sha:
+                path = state_dir(int(session["id"])) / REVIEWED_SHA_FILE
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(sha)
 
     async def _finalize(self, session_id: int) -> bool:
         """Phase three: commit, push, and open the pull request, if asked.
@@ -2442,9 +2450,131 @@ class SessionManager:
                 logger.warning("could not post the review answer of session %s (will retry): %s", session_id, exc)
                 await db.add_event(session_id, EventKind.ERROR, {"error": f"could not post the review reply: {exc}"})
             return
+        if str((session or {}).get("trigger_kind") or "") == "review-request":
+            await self._post_requested_review(session_id, session or {}, target)
+            return
         await self._post_single_reply(session_id, session or {}, target)
 
-    async def _post_single_reply(self, session_id: int, session: dict[str, Any], target: str) -> None:
+    async def _post_requested_review(self, session_id: int, session: dict[str, Any], target: str) -> None:
+        """Deliver a review the agent was asked for: a summary plus inline comments.
+
+        The comments go on the lines they are about, as one review that only
+        comments. When GitHub refuses them (a line outside the diff), the
+        same remarks are posted as one ordinary answer instead, so nothing
+        the review found is lost. Without inline comments it is an ordinary
+        answer from the start.
+        """
+        read = self._read_review_comments(session_id)
+        if read is None:
+            await db.record_reply_attempt(session_id, delivered=False)
+            return
+        comments, unplaced = read
+        if not comments or not target.startswith("issue:"):
+            await self._post_single_reply(
+                session_id, session, target, extra=self._render_review_comments(comments) + unplaced
+            )
+            return
+        body = await self._read_answer(session_id)
+        if body is None:
+            return
+        number = int(target.partition(":")[2])
+        commit_id = self._reviewed_sha(session_id)
+        if not commit_id:
+            # Without the commit that was read, the line numbers would be
+            # read against whatever the pull request's head is now.
+            await self._post_single_reply(
+                session_id, session, target, extra=self._render_review_comments(comments) + unplaced
+            )
+            return
+        marker = _answer_marker(session_id)
+        review_body = "\n\n".join(part for part in (body, unplaced.strip(), marker) if part)
+        if len(review_body) > _MAX_REPLY_CHARS:
+            await self._post_single_reply(
+                session_id, session, target, extra=self._render_review_comments(comments) + unplaced
+            )
+            return
+        try:
+            url = ""
+            if not await github.pull_review_contains(number, marker):
+                url = await github.create_pull_review(number, review_body, comments, commit_id=commit_id)
+        except github.GitHubError as exc:
+            if exc.status == 422:
+                logger.info("session %s: GitHub refused the inline comments, posting them as text: %s", session_id, exc)
+                await self._post_single_reply(
+                    session_id, session, target, extra=self._render_review_comments(comments) + unplaced
+                )
+                return
+            await db.record_reply_attempt(session_id, delivered=False)
+            logger.warning("could not post the review of session %s (will retry): %s", session_id, exc)
+            await db.add_event(session_id, EventKind.ERROR, {"error": f"could not post the review: {exc}"})
+            return
+        except Exception as exc:
+            await db.record_reply_attempt(session_id, delivered=False)
+            logger.warning("could not post the review of session %s (will retry): %s", session_id, exc)
+            await db.add_event(session_id, EventKind.ERROR, {"error": f"could not post the review: {exc}"})
+            return
+        await db.record_reply_attempt(session_id, delivered=True)
+        await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": url, "reply": True})
+        logger.info("session %s reviewed at %s", session_id, url)
+
+    @staticmethod
+    def _reviewed_sha(session_id: int) -> str:
+        """The commit a requested review read, as the trusted checkout recorded it."""
+        try:
+            return (state_dir(session_id) / REVIEWED_SHA_FILE).read_text().strip()
+        except OSError:
+            return ""
+
+    def _read_review_comments(self, session_id: int) -> tuple[list[dict[str, Any]], str] | None:
+        """The inline comments a requested review wrote, and the text of any that cannot be placed.
+
+        None when the file could not be read (the next pass tries again). A
+        file that is not valid JSON, or an entry without a usable path, line
+        and body, is not dropped: it comes back as text, so it is still said.
+        """
+        path = artifact_dir(session_id) / REVIEW_COMMENTS_FILE
+        try:
+            raw = path.read_text()
+        except FileNotFoundError:
+            return [], ""
+        except OSError as exc:
+            logger.warning("could not read the review comments of session %s (will retry): %s", session_id, exc)
+            return None
+        try:
+            entries = json.loads(raw)
+        except ValueError:
+            entries = None
+        if not isinstance(entries, list):
+            return ([], f"\n\n```\n{raw.strip()}\n```") if raw.strip() else ([], "")
+        comments: list[dict[str, Any]] = []
+        leftover: list[str] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                leftover.append(str(entry))
+                continue
+            file, line, text = entry.get("path"), entry.get("line"), entry.get("body")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if (
+                isinstance(file, str)
+                and file.strip()
+                and isinstance(line, int)
+                and not isinstance(line, bool)
+                and line > 0
+            ):
+                comments.append({"path": file.strip(), "line": line, "body": text.strip()})
+            else:
+                leftover.append(f"**`{file}`**\n\n{text.strip()}" if file else text.strip())
+        return comments, "".join(f"\n\n{item}" for item in leftover)
+
+    @staticmethod
+    def _render_review_comments(comments: list[dict[str, Any]]) -> str:
+        """Inline comments said as text, each under the line it is about."""
+        return "".join(f"\n\n**`{c['path']}:{c['line']}`**\n\n{c['body']}" for c in comments)
+
+    async def _post_single_reply(
+        self, session_id: int, session: dict[str, Any], target: str, *, extra: str = ""
+    ) -> None:
         """One answer, posted where its question was asked.
 
         A review whose threads are gone (the review was deleted) owes its
@@ -2461,6 +2591,7 @@ class SessionManager:
         body = await self._read_answer(session_id)
         if body is None:
             return
+        body = (body + extra).strip()
         answers = await self._combined_review_answers(session_id)
         if answers is None:
             return
