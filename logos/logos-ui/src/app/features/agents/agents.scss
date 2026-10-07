@@ -243,7 +243,7 @@
 
 .session__head {
   display: grid;
-  grid-template-columns: 10rem 1fr auto;
+  grid-template-columns: 10rem minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.75rem;
   width: 100%;
@@ -270,9 +270,21 @@
 
 .session__meta {
   display: flex;
+  align-items: center;
   gap: 0.75rem;
   font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-300));
+}
+
+@media (max-width: 900px) {
+  .session__head {
+    grid-template-columns: 10rem minmax(0, 1fr);
+  }
+
+  .session__meta {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+  }
 }
 
 .status {

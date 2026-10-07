@@ -779,9 +779,10 @@ export class Agents implements OnInit {
     if (!session.started_at) return '—';
     const end = session.finished_at ? new Date(session.finished_at) : new Date();
     const seconds = Math.max(0, (end.getTime() - new Date(session.started_at).getTime()) / 1000);
-    if (seconds < 60) return `${Math.round(seconds)}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+    const wholeSeconds = Math.floor(seconds);
+    if (wholeSeconds < 60) return `${wholeSeconds}s`;
+    if (wholeSeconds < 3600) return `${Math.floor(wholeSeconds / 60)}m ${wholeSeconds % 60}s`;
+    return `${Math.floor(wholeSeconds / 3600)}h ${Math.floor((wholeSeconds % 3600) / 60)}m`;
   }
 
   taskPreview(task: string): string {
