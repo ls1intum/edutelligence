@@ -5,12 +5,14 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import openai
+import pytest
 import requests
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
     PipelineExecutionSettingsDTO,
 )
+from iris.domain.status.suggested_context_dto import SuggestedContextDTO  # noqa: E402
 from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
@@ -911,7 +913,8 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     sender = sender_instances[0]
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
-    assert created_args[0].stream_handler == sender.on_delta
+    created_args[0].stream_handler("Hello")
+    assert sender.deltas == ["Hello"]
     assert events.index("sender.start") < events.index("sender.stop")
     assert events.index("sender.stop") < events.index("callback.finish")
 
@@ -947,6 +950,68 @@ def test_exercise_streaming_does_not_forward_raw_agent_deltas():
         delta for sender in details.sender_instances for delta in sender.deltas
     ]
     assert details.callback.send_result.call_args_list[0].args[0] == "agent answer"
+
+
+def _switching_agent(switch):
+    """An agent that narrates, calls the switch tool, then streams a draft answer."""
+
+    def execute_agent(state):
+        handler = state.llm.completion_args.stream_handler
+        handler("Let me look that up. ")
+        handler(None)  # the tool-call turn resets the visible draft
+        state.pending_context_switch = switch
+        handler("class SortStrategy ")
+        handler("{ solution }")
+        return "class SortStrategy { solution }"
+
+    return execute_agent
+
+
+@pytest.mark.parametrize(
+    "chat_mode",
+    [IrisChatMode.COURSE, IrisChatMode.LECTURE, IrisChatMode.TEXT_EXERCISE],
+)
+def test_switch_into_programming_exercise_never_streams_the_draft(chat_mode):
+    """The guide rewrites the draft, so the draft must never reach a partial payload."""
+
+    def guide_refinement(state_arg, response, stream_handler=None):
+        del state_arg
+        assert response == "class SortStrategy { solution }"
+        assert stream_handler is None
+        return "Think about a common interface.", "Think about a common interface."
+
+    details = _run_stubbed_pipeline_details(
+        True,
+        chat_mode=chat_mode,
+        execute_agent=_switching_agent(
+            SuggestedContextDTO(mode=IrisChatMode.EXERCISE, entity_id=4)
+        ),
+        guide_refinement=guide_refinement,
+    )
+
+    deltas = [d for sender in details.sender_instances for d in sender.deltas]
+    assert deltas == ["Let me look that up. ", None]
+    assert details.callback.send_result.call_args_list[0].args[0] == (
+        "Think about a common interface."
+    )
+
+
+def test_switch_into_a_lecture_keeps_streaming_the_answer():
+    details = _run_stubbed_pipeline_details(
+        True,
+        chat_mode=IrisChatMode.COURSE,
+        execute_agent=_switching_agent(
+            SuggestedContextDTO(mode=IrisChatMode.LECTURE, entity_id=3)
+        ),
+    )
+
+    deltas = [d for sender in details.sender_instances for d in sender.deltas]
+    assert deltas == [
+        "Let me look that up. ",
+        None,
+        "class SortStrategy ",
+        "{ solution }",
+    ]
 
 
 def test_exercise_streaming_forwards_guide_rewrite_deltas():
