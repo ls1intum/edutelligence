@@ -6,6 +6,7 @@ import {
   Input,
   OnChanges,
   Output,
+  effect,
   inject,
   signal,
 } from '@angular/core';
@@ -16,22 +17,23 @@ import { DataTableComponent } from '../../../../shared/components/data-table/dat
 import { ModelProfileRadarComponent } from '../../../../shared/components/model-profile-radar/model-profile-radar';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import { ModelManagementService } from '../../../../core/services/model-management.service';
+import { ThemeService } from '../../../../core/services/theme.service';
 import {
   AiLlmCallRecommendation,
   AiWorkflow,
   ObjectiveKey,
-  RecommendedSla,
+  RecommendedSlo,
   TeamApiKey,
   TeamWorkflowsResponse,
 } from '../../../../shared/models/team.model';
 import { Model } from '../../../../shared/models/model.model';
-import { KeySla, SLA_OPTIONS } from '../key-sla';
+import { KeySlo, SLO_OPTIONS } from '../key-slo';
 import { quoteFlowchartLabels } from './mermaid-labels';
 
 const OBJECTIVE_KEYS: ObjectiveKey[] = ['latency', 'quality', 'price'];
 
-function defaultPriorityForSla(sla: string | null | undefined): ObjectiveKey[] {
-  switch ((sla ?? '').trim()) {
+function defaultPriorityForSlo(slo: string | null | undefined): ObjectiveKey[] {
+  switch ((slo ?? '').trim()) {
     case 'ux-critical':
       return ['latency', 'quality', 'price'];
     case 'ux-background':
@@ -41,7 +43,7 @@ function defaultPriorityForSla(sla: string | null | undefined): ObjectiveKey[] {
   }
 }
 
-function normalizePriority(raw: string[] | null | undefined, sla?: string): ObjectiveKey[] {
+function normalizePriority(raw: string[] | null | undefined, slo?: string): ObjectiveKey[] {
   const seen = new Set<string>();
   const ordered: ObjectiveKey[] = [];
   for (const item of raw ?? []) {
@@ -52,7 +54,7 @@ function normalizePriority(raw: string[] | null | undefined, sla?: string): Obje
     }
   }
   if (ordered.length === 0) {
-    return defaultPriorityForSla(sla);
+    return defaultPriorityForSlo(slo);
   }
   for (const key of OBJECTIVE_KEYS) {
     if (!seen.has(key)) ordered.push(key);
@@ -64,7 +66,7 @@ function normalizePriority(raw: string[] | null | undefined, sla?: string): Obje
  * Team → Workflows.
  *
  * Latest AI-workflow analyses for linked repositories: Mermaid diagrams and
- * SLA / objective-priority recommendations that owners can accept, override,
+ * SLO / objective-priority recommendations that owners can accept, override,
  * or reject.
  */
 @Component({
@@ -87,28 +89,39 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   @Input() teamId!: number;
   @Input() canEdit = false;
   @Input() apiKeys: TeamApiKey[] = [];
-  /** Fired when a review updates an application key's SLA priority. */
+  /** Fired when a review updates an application key's SLO priority. */
   @Output() keysChanged = new EventEmitter<void>();
 
   private teamService = inject(TeamManagementService);
   private modelService = inject(ModelManagementService);
+  private theme = inject(ThemeService);
   private diagramsDirty = false;
   private mermaidReady: Promise<typeof import('mermaid')> | null = null;
+  /** Avoid wiping diagrams on the first theme effect before load() paints them. */
+  private themeWatchStarted = false;
+  /** Bumped on theme toggle so Angular re-runs AfterViewChecked to re-paint Mermaid. */
+  private readonly diagramEpoch = signal(0);
 
   loading = signal(true);
   loadError = signal('');
   actionError = signal('');
   data = signal<TeamWorkflowsResponse | null>(null);
   reviewingId = signal<number | null>(null);
-  overrideSla = signal<Record<number, KeySla>>({});
+  overrideSlo = signal<Record<number, KeySlo>>({});
   overridePriority = signal<Record<number, ObjectiveKey[]>>({});
   /** The key Accept / Override apply to; null until the owner picks one (then the default applies). */
   private reviewKeyPick = signal<number | '' | null>(null);
   savingModelId = signal<number | null>(null);
+  /** Workflow id currently being edited in the Mermaid textarea. */
+  editingDiagramId = signal<number | null>(null);
+  /** Draft Mermaid while editing; keyed by workflow id. */
+  diagramDraft = signal<Record<number, string>>({});
+  savingDiagramId = signal<number | null>(null);
+  reviewingProposalId = signal<number | null>(null);
   /** name/alias (lower) → model, for spider charts beside detected models */
   private modelsByName = signal<Map<string, Model>>(new Map());
 
-  readonly slaOptions = SLA_OPTIONS;
+  readonly sloOptions = SLO_OPTIONS;
   readonly recCols = [
     'File',
     'Model',
@@ -120,7 +133,20 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   // No `auto` track: every row is its own grid, so a content-sized column
   // would size differently per row and drift away from the header.
   readonly recGrid =
-    'minmax(10rem, 1.6fr) minmax(9rem, 1fr) minmax(9rem, 1fr) 6.5rem 7.5rem 21rem';
+    'minmax(10rem, 1.6fr) minmax(12rem, 1fr) minmax(9rem, 1fr) 6.5rem 7.5rem 21rem';
+
+  constructor() {
+    // Mermaid paints node fills/text at initialize time; follow Logos theme.
+    effect(() => {
+      this.theme.isDark();
+      if (!this.themeWatchStarted) {
+        this.themeWatchStarted = true;
+        return;
+      }
+      this.diagramsDirty = true;
+      this.diagramEpoch.update((n) => n + 1);
+    });
+  }
 
   ngOnChanges(): void {
     if (this.teamId) {
@@ -131,6 +157,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   ngAfterViewChecked(): void {
     if (!this.diagramsDirty) return;
     this.diagramsDirty = false;
+    this.resetProcessedDiagrams();
     void this.renderDiagrams();
   }
 
@@ -165,9 +192,9 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     const edited = this.overridePriority()[rec.id];
     if (edited) return edited;
     if (rec.review_status !== 'pending' && rec.confirmed_objective_priority?.length) {
-      return normalizePriority(rec.confirmed_objective_priority, rec.confirmed_sla ?? rec.recommended_sla);
+      return normalizePriority(rec.confirmed_objective_priority, rec.confirmed_slo ?? rec.recommended_slo);
     }
-    return normalizePriority(rec.objective_priority, rec.recommended_sla);
+    return normalizePriority(rec.objective_priority, rec.recommended_slo);
   }
 
   movePriority(recId: number, index: number, dir: -1 | 1): void {
@@ -241,6 +268,71 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return quoteFlowchartLabels(wf.diagram_mermaid ?? '');
   }
 
+  proposedDiagramSource(wf: AiWorkflow): string {
+    return quoteFlowchartLabels(wf.proposed_diagram_mermaid ?? '');
+  }
+
+  isEditingDiagram(wf: AiWorkflow): boolean {
+    return this.editingDiagramId() === wf.id;
+  }
+
+  startEditDiagram(wf: AiWorkflow): void {
+    this.editingDiagramId.set(wf.id);
+    this.diagramDraft.update((m) => ({ ...m, [wf.id]: wf.diagram_mermaid ?? '' }));
+    // Switching from another editor brings that workflow's <pre> back as source.
+    this.diagramsDirty = true;
+  }
+
+  cancelEditDiagram(): void {
+    this.editingDiagramId.set(null);
+    // The restored <pre> holds Mermaid source until the next render pass.
+    this.diagramsDirty = true;
+  }
+
+  setDiagramDraft(workflowId: number, value: string): void {
+    this.diagramDraft.update((m) => ({ ...m, [workflowId]: value }));
+  }
+
+  async saveDiagram(wf: AiWorkflow): Promise<void> {
+    if (this.savingDiagramId() != null) return;
+    const draft = (this.diagramDraft()[wf.id] ?? '').trim();
+    if (!draft) {
+      this.actionError.set('Diagram Mermaid cannot be empty.');
+      return;
+    }
+    this.savingDiagramId.set(wf.id);
+    this.actionError.set('');
+    try {
+      const saved = await this.teamService.setWorkflowDiagram(this.teamId, wf.id, draft);
+      this.applyWorkflow(saved);
+      this.editingDiagramId.set(null);
+      this.diagramsDirty = true;
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
+      this.actionError.set(typeof detail === 'string' ? detail : 'Failed to save the diagram.');
+    } finally {
+      this.savingDiagramId.set(null);
+    }
+  }
+
+  async reviewDiagramProposal(wf: AiWorkflow, action: 'accept' | 'dismiss'): Promise<void> {
+    if (this.reviewingProposalId() != null) return;
+    this.reviewingProposalId.set(wf.id);
+    this.actionError.set('');
+    try {
+      const saved = await this.teamService.reviewWorkflowDiagramProposal(this.teamId, wf.id, action);
+      this.applyWorkflow(saved);
+      this.diagramsDirty = true;
+    } catch (err: unknown) {
+      const detail = (err as { error?: { detail?: string } } | null)?.error?.detail;
+      this.actionError.set(
+        typeof detail === 'string' ? detail : 'Failed to review the diagram proposal.',
+      );
+    } finally {
+      this.reviewingProposalId.set(null);
+    }
+  }
+
   async accept(rec: AiLlmCallRecommendation): Promise<void> {
     await this.review(rec, {
       action: 'accept',
@@ -250,10 +342,10 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   }
 
   async override(rec: AiLlmCallRecommendation): Promise<void> {
-    const sla = this.overrideSla()[rec.id] ?? rec.recommended_sla;
+    const slo = this.overrideSlo()[rec.id] ?? rec.recommended_slo;
     await this.review(rec, {
       action: 'override',
-      confirmed_sla: sla,
+      confirmed_slo: slo,
       confirmed_objective_priority: this.priorityFor(rec),
       ...this.keyPayload(),
     });
@@ -263,8 +355,8 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     await this.review(rec, { action: 'reject' });
   }
 
-  setOverrideSla(recId: number, value: string): void {
-    this.overrideSla.update((m) => ({ ...m, [recId]: value as KeySla }));
+  setOverrideSlo(recId: number, value: string): void {
+    this.overrideSlo.update((m) => ({ ...m, [recId]: value as KeySlo }));
   }
 
   /**
@@ -288,6 +380,19 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return this.allRecs().find((r) => r.id === recId);
   }
 
+  private applyWorkflow(saved: AiWorkflow): void {
+    const data = this.data();
+    if (!data) return;
+    for (const repo of data.repositories) {
+      const idx = repo.workflows.findIndex((w) => w.id === saved.id);
+      if (idx >= 0) {
+        repo.workflows[idx] = { ...repo.workflows[idx], ...saved };
+        this.data.set({ ...data });
+        return;
+      }
+    }
+  }
+
   private indexModels(models: Model[]): Map<string, Model> {
     const map = new Map<string, Model>();
     for (const m of models) {
@@ -304,7 +409,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     rec: AiLlmCallRecommendation,
     payload: {
       action: 'accept' | 'override' | 'reject';
-      confirmed_sla?: RecommendedSla;
+      confirmed_slo?: RecommendedSlo;
       confirmed_objective_priority?: ObjectiveKey[];
       api_key_id?: number;
       no_api_key?: boolean;
@@ -340,10 +445,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
       const mod = await this.mermaidReady;
       const mermaid = mod.default;
       // No "Syntax error" bomb in place of a diagram that does not parse.
+      // `dark` keeps node text/fills readable on the app's dark theme; `neutral`
+      // matches light. Re-initialize whenever we paint so a theme toggle sticks.
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: 'strict',
-        theme: 'neutral',
+        theme: this.theme.isDark() ? 'dark' : 'neutral',
         suppressErrorRendering: true,
       });
       // One at a time: a diagram that still fails to parse keeps its source
@@ -359,5 +466,20 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     } catch {
       // Leave <pre class="mermaid"> source visible if render fails or mermaid is unavailable.
     }
+  }
+
+  /**
+   * Mermaid replaces each <pre> with an SVG and marks it processed. To switch
+   * themes we restore the source from data-diagram-source and clear the flag.
+   */
+  private resetProcessedDiagrams(): void {
+    document.querySelectorAll<HTMLElement>('.workflows-tab .mermaid[data-processed]').forEach((node) => {
+      const source = node.getAttribute('data-diagram-source');
+      if (source == null) return;
+      node.removeAttribute('data-processed');
+      // Drop Mermaid's generated id so the next run does not collide.
+      node.removeAttribute('id');
+      node.textContent = source;
+    });
   }
 }

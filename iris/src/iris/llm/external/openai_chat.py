@@ -324,35 +324,58 @@ def get_tool_names(tools) -> list[str]:
     return names
 
 
-def create_token_usage(usage: Optional[CompletionUsage], model: str) -> TokenUsageDTO:
+def _usage_field(source: Any, name: str) -> int:
+    """Read a token count from an SDK usage object or a plain dict."""
+    if source is None:
+        return 0
+    value = (
+        source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+    )
+    return value if isinstance(value, int) else 0
+
+
+def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
     """
-    Create a TokenUsageDTO from CompletionUsage data.
+    Create a TokenUsageDTO from Chat Completions or Responses usage data.
+
+    Chat Completions reports ``prompt_tokens`` with ``prompt_tokens_details``;
+    the Responses API reports ``input_tokens`` with ``input_tokens_details``.
+    Both details objects carry ``cached_tokens`` and, on models that bill cache
+    writes, ``cache_write_tokens``. Missing fields count as zero.
 
     Args:
-        usage: Optional CompletionUsage containing token counts
+        usage: Optional usage object (or dict) from either API
         model: The model name used for the completion
 
     Returns:
         TokenUsageDTO with the token usage information
     """
+    is_responses_usage = (
+        "input_tokens" in usage
+        if isinstance(usage, dict)
+        else getattr(usage, "input_tokens", None) is not None
+    )
+    if is_responses_usage:
+        input_tokens = _usage_field(usage, "input_tokens")
+        output_tokens = _usage_field(usage, "output_tokens")
+        details_name = "input_tokens_details"
+    else:
+        input_tokens = _usage_field(usage, "prompt_tokens")
+        output_tokens = _usage_field(usage, "completion_tokens")
+        details_name = "prompt_tokens_details"
+    details = None
+    if usage is not None:
+        details = (
+            usage.get(details_name)
+            if isinstance(usage, dict)
+            else getattr(usage, details_name, None)
+        )
     return TokenUsageDTO(
         model=model,
-        numInputTokens=getattr(usage, "prompt_tokens", 0),
-        numOutputTokens=getattr(usage, "completion_tokens", 0),
-    )
-
-
-def create_completion_usage_from_responses_usage(usage) -> Optional[CompletionUsage]:
-    """Create CompletionUsage from Responses usage data."""
-    if usage is None:
-        return None
-
-    input_tokens = getattr(usage, "input_tokens", 0)
-    output_tokens = getattr(usage, "output_tokens", 0)
-    return CompletionUsage(
-        prompt_tokens=input_tokens,
-        completion_tokens=output_tokens,
-        total_tokens=input_tokens + output_tokens,
+        numInputTokens=input_tokens,
+        numOutputTokens=output_tokens,
+        numCachedInputTokens=_usage_field(details, "cached_tokens"),
+        numCacheWriteInputTokens=_usage_field(details, "cache_write_tokens"),
     )
 
 
@@ -539,10 +562,7 @@ def convert_responses_to_iris_message(
     if status is not None and status != "completed":
         logger.warning("Responses API returned non-completed status: %s", status)
 
-    token_usage = create_token_usage(
-        create_completion_usage_from_responses_usage(getattr(response, "usage", None)),
-        model,
-    )
+    token_usage = create_token_usage(getattr(response, "usage", None), model)
     current_time = datetime.now()
     output_text = extract_response_output_text(response) or fallback_output_text
     tool_calls = create_iris_tool_calls_from_responses(output_items)
@@ -827,6 +847,8 @@ class OpenAIChatModel(ChatModel):
         if tools:
             params["tools"] = [convert_to_responses_tool(tool) for tool in tools]
             logger.debug("Using tools: %s", get_tool_names(tools))
+            if arguments.tool_choice is not None:
+                params["tool_choice"] = arguments.tool_choice
 
         return params
 
@@ -1007,6 +1029,8 @@ class OpenAIChatModel(ChatModel):
                 if tools:
                     params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
                     logger.debug("Using tools: %s", get_tool_names(tools))
+                    if arguments.tool_choice is not None:
+                        params["tool_choice"] = arguments.tool_choice
 
                 if arguments.stream_handler is not None:
                     return self._create_streamed_chat_completion(

@@ -2,11 +2,12 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import {
+  AnalyzeAllResult,
   Team, AdminUser, TeamDetail, TeamMember, TeamApiKey,
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
   ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
   TeamRepositoryPayload, TeamWorkflowsResponse, ReviewRecommendationPayload,
-  StoreDeployKeyPayload, AiLlmCallRecommendation,
+  StoreDeployKeyPayload, AiLlmCallRecommendation, AiWorkflow,
 } from '../../shared/models/team.model';
 
 export interface TeamMembersResponse {
@@ -95,6 +96,11 @@ export class TeamManagementService {
     );
   }
 
+  /** Queue an agent analysis of every linked repository (Logos Admins). */
+  analyzeAllRepositories(): Promise<AnalyzeAllResult> {
+    return firstValueFrom(this.http.post<AnalyzeAllResult>('/api/admin/repositories/analyze', {}));
+  }
+
   /** Record which model a recommended call site uses; null clears it. */
   setRecommendationModel(
     teamId: number,
@@ -105,6 +111,33 @@ export class TeamManagementService {
       this.http.put<AiLlmCallRecommendation>(
         `/api/admin/teams/${teamId}/recommendations/${recId}/model`,
         { model },
+      ),
+    );
+  }
+
+  /** Save an owner-edited Mermaid activity diagram. */
+  setWorkflowDiagram(
+    teamId: number,
+    workflowId: number,
+    diagramMermaid: string,
+  ): Promise<AiWorkflow> {
+    return firstValueFrom(
+      this.http.put<AiWorkflow>(`/api/admin/teams/${teamId}/workflows/${workflowId}/diagram`, {
+        diagram_mermaid: diagramMermaid,
+      }),
+    );
+  }
+
+  /** Accept or dismiss an agent diagram proposal on an owner-edited workflow. */
+  reviewWorkflowDiagramProposal(
+    teamId: number,
+    workflowId: number,
+    action: 'accept' | 'dismiss',
+  ): Promise<AiWorkflow> {
+    return firstValueFrom(
+      this.http.post<AiWorkflow>(
+        `/api/admin/teams/${teamId}/workflows/${workflowId}/diagram/proposal`,
+        { action },
       ),
     );
   }
