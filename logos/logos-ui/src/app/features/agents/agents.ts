@@ -171,13 +171,18 @@ export class Agents implements OnInit {
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   async ngOnInit(): Promise<void> {
-    await this.refresh();
-    const timer = setInterval(() => void this.tick(), POLL_MS);
+    // Register cleanup before the awaited refresh: navigating away while the
+    // initial HTTP requests are pending would otherwise resume on a destroyed
+    // component, create the polling interval, then fail to register onDestroy.
+    let timer: ReturnType<typeof setInterval> | undefined;
     this.destroyRef.onDestroy(() => {
-      clearInterval(timer);
+      if (timer !== undefined) clearInterval(timer);
       this.stopStream();
       this.resetScreenshots();
     });
+    await this.refresh();
+    if (this.destroyRef.destroyed) return;
+    timer = setInterval(() => void this.tick(), POLL_MS);
   }
 
   private async tick(): Promise<void> {
