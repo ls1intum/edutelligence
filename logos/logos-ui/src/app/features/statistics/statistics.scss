@@ -112,8 +112,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  // The four filters must stay on one line — wrapping them into a 2×2 grid
-  // (especially once provider + outcome joined the row) was the regression.
+  // All six selectors stay on one line — wrapping them into a 2×3 grid was the
+  // regression this row was fixed against.
   flex-wrap: nowrap;
   flex: 0 0 auto;
   min-width: 0;
@@ -126,13 +126,6 @@
   width: max-content;
   max-width: 200px;
   min-width: 0;
-}
-
-// The feed's state filter, in the recent-requests panel header. Its entries are
-// short, so a cap only guards against the title wrapping on a narrow panel.
-.stats-feed-status {
-  min-width: 0;
-  max-width: 160px;
 }
 
 .stats-scope__note {
@@ -488,8 +481,10 @@
   }
 }
 
-@media (max-width: 900px) {
-  // Time range drops under the filter row; the four filters stay on one line.
+// The six scope selectors plus the time-range bar only sit on one line from
+// about 1500px up; below that the time range drops under the filter row
+// instead of squeezing it. The filters themselves stay on one line.
+@media (max-width: 1500px) {
   .stats-header__controls {
     flex-wrap: wrap;
     align-items: flex-start;
@@ -519,6 +514,16 @@
     padding: 24px 16px 32px;
   }
 
+  // Six compact selectors on one phone-width row clip their labels; wrap to
+  // two columns so the request filters stay usable without changing tablet+.
+  .stats-scope {
+    flex-wrap: wrap;
+  }
+
+  .stats-scope__select {
+    flex: 1 1 calc(50% - 8px);
+  }
+
   .stats-kpi-strip > * {
     flex-basis: 100%;
   }
@@ -534,5 +539,3 @@
     }
   }
 }
-
-.stats-feed-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
