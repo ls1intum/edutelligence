@@ -207,6 +207,10 @@ async def test_a_token_with_little_life_left_is_reminted(monkeypatch, rsa_key):
     def iso(moment):
         return moment.isoformat().replace("+00:00", "Z")
 
+    # Bind the lock to this test's event loop before seeding the cache:
+    # installation_token's first call otherwise clears _cache when it
+    # notices a new loop, and the remint path would never see this entry.
+    github_tokens._lock_for_current_loop()
     # Seed a cached token that has already fallen below the refresh margin —
     # a freshly minted answer that short is refused, so the remint path is
     # exercised from the cache boundary.
