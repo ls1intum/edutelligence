@@ -36,7 +36,7 @@
 # emulating a foreign image just to copy files out of it.
 # =============================================================================
 
-FROM alpine:3.22
+FROM alpine:3.24
 
 # Alpine rather than scratch purely so the image can be opened and inspected
 # (`docker run --rm -it <image> sh`) when a bootstrap goes wrong.

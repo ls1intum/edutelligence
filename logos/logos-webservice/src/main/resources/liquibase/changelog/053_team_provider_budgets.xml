@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Per-provider monthly budget overrides for a team.
+
+         teams.team_monthly_budget_micro_cents remains the default bucket for
+         developer-key cloud spend. A row here takes that provider out of the
+         default bucket and applies its own cap (NULL = unlimited / sponsored).
+         Application-key budgets are unchanged. -->
+    <changeSet id="053-team-provider-budgets" author="wasnertobias">
+        <sql><![CDATA[
+            CREATE TABLE IF NOT EXISTS team_provider_budgets (
+                team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+                monthly_budget_micro_cents BIGINT NULL,
+                PRIMARY KEY (team_id, provider_id)
+            );
+        ]]></sql>
+    </changeSet>
+
+</databaseChangeLog>
