@@ -133,7 +133,7 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
                 "file_path": "src/llm.py",
                 "start_line": 10,
                 "end_line": 40,
-                "recommended_sla": "ux-critical",
+                "recommended_slo": "ux-critical",
                 "confidence": 0.9,
                 "justification": "interactive",
                 "traffic_flags": {"night_heavy": False},
@@ -159,7 +159,7 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
     assert any("FOR UPDATE" in sql for sql in kinds)
     rec = next(p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql)
     assert rec["file_path"] == "src/llm.py"
-    assert rec["sla"] == "ux-critical"
+    assert rec["slo"] == "ux-critical"
     assert rec["workflow_id"] == 100
     assert rec["team_id"] == 7
     assert json.loads(rec["flags"]) == {"night_heavy": False}
@@ -169,6 +169,29 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn2))
     await analysis_ingest.ingest_session({"id": 5, "team_repository_id": 11, "repo_slug": "acme/repo"})
     assert any("INSERT INTO ai_workflows" in sql for sql, _ in conn2.statements)
+
+
+async def test_upsert_honours_the_legacy_sla_key_of_older_sessions(tmp_path, monkeypatch):
+    # A session queued before the analysis task asked for recommended_slo
+    # still writes recommended_sla; its tier must be kept, not defaulted.
+    _patch_artifact_root(monkeypatch, tmp_path)
+    session_dir = tmp_path / "6"
+    session_dir.mkdir()
+    payload = {
+        "commit_sha": "abc123",
+        "workflows": [],
+        "recommendations": [
+            {"file_path": "src/llm.py", "start_line": 10, "end_line": 40, "recommended_sla": "ux-critical"}
+        ],
+    }
+    (session_dir / "analysis.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    conn = _Conn()
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    await analysis_ingest.upsert_analysis(session_id=6, team_repository_id=11, payload=payload)
+    rec = next(p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql)
+    assert rec["slo"] == "ux-critical"
+    assert json.loads(rec["priority"]) == ["latency", "quality", "price"]
 
 
 async def test_upsert_rejects_obsolete_slug_after_link_edit(tmp_path, monkeypatch, caplog):
@@ -263,9 +286,9 @@ def _previous(**overrides):
         "start_line": 12,
         "workflow_name": "chat",
         "review_status": "accepted",
-        "recommended_sla": "ux-critical",
+        "recommended_slo": "ux-critical",
         "objective_priority": json.dumps(["latency", "quality", "price"]),
-        "confirmed_sla": "ux-critical",
+        "confirmed_slo": "ux-critical",
         "confirmed_objective_priority": json.dumps(["latency", "quality", "price"]),
         "api_key_id": 33,
         "reviewed_by": 4,
@@ -288,7 +311,7 @@ def _one_rec_payload(**rec):
                 "workflow": "chat",
                 "file_path": "src/llm.py",
                 "start_line": 10,
-                "recommended_sla": "ux-critical",
+                "recommended_slo": "ux-critical",
                 "detected_model": "gpt-guess",
                 **rec,
             }
@@ -318,16 +341,16 @@ async def test_reanalysis_keeps_an_unchanged_decision(monkeypatch):
 
 
 async def test_reanalysis_proposes_a_change_instead_of_overwriting(monkeypatch):
-    rec = await _ingest_with_previous(monkeypatch, [_previous()], _one_rec_payload(recommended_sla="ux-background"))
+    rec = await _ingest_with_previous(monkeypatch, [_previous()], _one_rec_payload(recommended_slo="ux-background"))
     assert rec["review_status"] == "pending"
-    assert rec["confirmed_sla"] is None
+    assert rec["confirmed_slo"] is None
     assert rec["api_key_id"] is None
     assert rec["previous_id"] == 501  # the UI shows the previous decision beside the proposal
     assert rec["carried_over"] is False
 
 
 async def test_reanalysis_keeps_a_rejection_of_the_same_proposal(monkeypatch):
-    previous = _previous(review_status="rejected", confirmed_sla=None, confirmed_objective_priority=None)
+    previous = _previous(review_status="rejected", confirmed_slo=None, confirmed_objective_priority=None)
     rec = await _ingest_with_previous(monkeypatch, [previous], _one_rec_payload())
     assert rec["review_status"] == "rejected"
 
@@ -377,7 +400,7 @@ async def test_an_added_call_site_in_the_same_file_does_not_take_the_existing_re
     payload["workflows"].append({"name": "summary", "diagram_mermaid": "flowchart TD\n  A", "sort_order": 1})
     # The new workflow is listed first and sits nearer the old line.
     payload["recommendations"].insert(
-        0, {"workflow": "summary", "file_path": "src/llm.py", "start_line": 12, "recommended_sla": "ux-critical"}
+        0, {"workflow": "summary", "file_path": "src/llm.py", "start_line": 12, "recommended_slo": "ux-critical"}
     )
     conn = await _ingest_all(monkeypatch, [_previous()], payload)
     summary, chat = [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql]
@@ -387,7 +410,7 @@ async def test_an_added_call_site_in_the_same_file_does_not_take_the_existing_re
 
 async def test_ambiguous_rows_in_one_file_stay_pending(monkeypatch):
     payload = _one_rec_payload(workflow="")
-    payload["recommendations"].append({"file_path": "src/llm.py", "start_line": 90, "recommended_sla": "ux-critical"})
+    payload["recommendations"].append({"file_path": "src/llm.py", "start_line": 90, "recommended_slo": "ux-critical"})
     previous = [_previous(workflow_name=None), _previous(id=502, start_line=95, workflow_name=None)]
     conn = await _ingest_all(monkeypatch, previous, payload)
     recs = [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql]
@@ -398,7 +421,7 @@ async def test_ambiguous_rows_in_one_file_stay_pending(monkeypatch):
 async def test_the_decision_before_an_unreviewed_proposal_still_counts(monkeypatch):
     # A accepted ux-critical; B proposed ux-background and is still pending; the new
     # analysis proposes ux-critical again -> A's review comes back.
-    b_row = _previous(id=601, review_status="pending", confirmed_sla=None, confirmed_objective_priority=None)
+    b_row = _previous(id=601, review_status="pending", confirmed_slo=None, confirmed_objective_priority=None)
     a_decision = {k: v for k, v in _previous(id=600).items() if k not in ("file_path", "start_line", "workflow_name")}
     rec = await _ingest_with_previous(monkeypatch, [b_row], _one_rec_payload(), decisions={601: a_decision})
     assert rec["previous_id"] == 601

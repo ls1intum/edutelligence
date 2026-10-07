@@ -22,18 +22,18 @@ import {
   AiLlmCallRecommendation,
   AiWorkflow,
   ObjectiveKey,
-  RecommendedSla,
+  RecommendedSlo,
   TeamApiKey,
   TeamWorkflowsResponse,
 } from '../../../../shared/models/team.model';
 import { Model } from '../../../../shared/models/model.model';
-import { KeySla, SLA_OPTIONS } from '../key-sla';
+import { KeySlo, SLO_OPTIONS } from '../key-slo';
 import { quoteFlowchartLabels } from './mermaid-labels';
 
 const OBJECTIVE_KEYS: ObjectiveKey[] = ['latency', 'quality', 'price'];
 
-function defaultPriorityForSla(sla: string | null | undefined): ObjectiveKey[] {
-  switch ((sla ?? '').trim()) {
+function defaultPriorityForSlo(slo: string | null | undefined): ObjectiveKey[] {
+  switch ((slo ?? '').trim()) {
     case 'ux-critical':
       return ['latency', 'quality', 'price'];
     case 'ux-background':
@@ -43,7 +43,7 @@ function defaultPriorityForSla(sla: string | null | undefined): ObjectiveKey[] {
   }
 }
 
-function normalizePriority(raw: string[] | null | undefined, sla?: string): ObjectiveKey[] {
+function normalizePriority(raw: string[] | null | undefined, slo?: string): ObjectiveKey[] {
   const seen = new Set<string>();
   const ordered: ObjectiveKey[] = [];
   for (const item of raw ?? []) {
@@ -54,7 +54,7 @@ function normalizePriority(raw: string[] | null | undefined, sla?: string): Obje
     }
   }
   if (ordered.length === 0) {
-    return defaultPriorityForSla(sla);
+    return defaultPriorityForSlo(slo);
   }
   for (const key of OBJECTIVE_KEYS) {
     if (!seen.has(key)) ordered.push(key);
@@ -66,7 +66,7 @@ function normalizePriority(raw: string[] | null | undefined, sla?: string): Obje
  * Team → Workflows.
  *
  * Latest AI-workflow analyses for linked repositories: Mermaid diagrams and
- * SLA / objective-priority recommendations that owners can accept, override,
+ * SLO / objective-priority recommendations that owners can accept, override,
  * or reject.
  */
 @Component({
@@ -89,7 +89,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   @Input() teamId!: number;
   @Input() canEdit = false;
   @Input() apiKeys: TeamApiKey[] = [];
-  /** Fired when a review updates an application key's SLA priority. */
+  /** Fired when a review updates an application key's SLO priority. */
   @Output() keysChanged = new EventEmitter<void>();
 
   private teamService = inject(TeamManagementService);
@@ -107,7 +107,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   actionError = signal('');
   data = signal<TeamWorkflowsResponse | null>(null);
   reviewingId = signal<number | null>(null);
-  overrideSla = signal<Record<number, KeySla>>({});
+  overrideSlo = signal<Record<number, KeySlo>>({});
   overridePriority = signal<Record<number, ObjectiveKey[]>>({});
   /** The key Accept / Override apply to; null until the owner picks one (then the default applies). */
   private reviewKeyPick = signal<number | '' | null>(null);
@@ -121,7 +121,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   /** name/alias (lower) → model, for spider charts beside detected models */
   private modelsByName = signal<Map<string, Model>>(new Map());
 
-  readonly slaOptions = SLA_OPTIONS;
+  readonly sloOptions = SLO_OPTIONS;
   readonly recCols = [
     'File',
     'Model',
@@ -192,9 +192,9 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     const edited = this.overridePriority()[rec.id];
     if (edited) return edited;
     if (rec.review_status !== 'pending' && rec.confirmed_objective_priority?.length) {
-      return normalizePriority(rec.confirmed_objective_priority, rec.confirmed_sla ?? rec.recommended_sla);
+      return normalizePriority(rec.confirmed_objective_priority, rec.confirmed_slo ?? rec.recommended_slo);
     }
-    return normalizePriority(rec.objective_priority, rec.recommended_sla);
+    return normalizePriority(rec.objective_priority, rec.recommended_slo);
   }
 
   movePriority(recId: number, index: number, dir: -1 | 1): void {
@@ -342,10 +342,10 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   }
 
   async override(rec: AiLlmCallRecommendation): Promise<void> {
-    const sla = this.overrideSla()[rec.id] ?? rec.recommended_sla;
+    const slo = this.overrideSlo()[rec.id] ?? rec.recommended_slo;
     await this.review(rec, {
       action: 'override',
-      confirmed_sla: sla,
+      confirmed_slo: slo,
       confirmed_objective_priority: this.priorityFor(rec),
       ...this.keyPayload(),
     });
@@ -355,8 +355,8 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     await this.review(rec, { action: 'reject' });
   }
 
-  setOverrideSla(recId: number, value: string): void {
-    this.overrideSla.update((m) => ({ ...m, [recId]: value as KeySla }));
+  setOverrideSlo(recId: number, value: string): void {
+    this.overrideSlo.update((m) => ({ ...m, [recId]: value as KeySlo }));
   }
 
   /**
@@ -409,7 +409,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     rec: AiLlmCallRecommendation,
     payload: {
       action: 'accept' | 'override' | 'reject';
-      confirmed_sla?: RecommendedSla;
+      confirmed_slo?: RecommendedSlo;
       confirmed_objective_priority?: ObjectiveKey[];
       api_key_id?: number;
       no_api_key?: boolean;

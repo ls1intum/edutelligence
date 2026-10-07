@@ -105,4 +105,31 @@ class TeamMembershipServiceAuditTest {
 
         verify(audit).record(eq("team.ownership_revoked"), eq("team_member"), eq("3/7"), eq(3), any(), any());
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void keycloakTakingOverAManualMembershipKeepsItsBeforeState() {
+        User user = mock(User.class);
+        when(user.getUsername()).thenReturn("alice");
+        Team team = mock(Team.class);
+        when(team.getName()).thenReturn("T");
+        when(users.findById(7)).thenReturn(Optional.of(user));
+        when(teams.findById(3)).thenReturn(Optional.of(team));
+        when(members.findById(new TeamMemberId(7, 3)))
+            .thenReturn(Optional.of(member(7, 3, false, TeamMemberSource.MANUAL)));
+        ApiKey existingKey = new ApiKey();
+        existingKey.setKeyValue("lg-test");
+        ApiKeyRepository keys = mock(ApiKeyRepository.class);
+        when(keys.findByUserIdAndTeamIdAndKeyType(any(), any(), any())).thenReturn(List.of(existingKey));
+        service = new TeamMembershipService(members, keys, users, teams, keyFactory, audit);
+
+        service.join(7, 3, false, TeamMemberSource.KEYCLOAK);
+
+        ArgumentCaptor<Map<String, Object>> before = ArgumentCaptor.forClass(Map.class);
+        ArgumentCaptor<Map<String, Object>> after = ArgumentCaptor.forClass(Map.class);
+        verify(audit).record(eq("team.member_joined"), eq("team_member"), eq("3/7"), eq(3),
+            before.capture(), after.capture());
+        assertThat(before.getValue()).containsEntry("source", "MANUAL");
+        assertThat(after.getValue()).containsEntry("source", "KEYCLOAK");
+    }
 }

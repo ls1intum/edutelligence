@@ -60,6 +60,10 @@ public class TeamMembershipService {
         Optional<TeamMember> existingMember = memberRepository.findById(memberId);
         boolean alreadyMember = existingMember.isPresent();
 
+        // Taken before the entity is changed: an existing membership is mutated in
+        // place, so a snapshot read afterwards would equal the new state.
+        Map<String, Object> before = existingMember.map(TeamMembershipService::snapshot).orElseGet(() -> absent());
+
         TeamMember member = existingMember.orElseGet(TeamMember::new);
         member.setId(memberId);
         if (!alreadyMember) {
@@ -70,7 +74,7 @@ public class TeamMembershipService {
         }
         memberRepository.save(member);
         auditLog.record("team.member_joined", "team_member", teamId + "/" + userId, teamId,
-            existingMember.map(TeamMembershipService::snapshot).orElseGet(() -> absent()), snapshot(member));
+            before, snapshot(member));
 
         List<ApiKey> existing = apiKeyRepository.findByUserIdAndTeamIdAndKeyType(userId, teamId, ApiKeyType.developer);
         if (!existing.isEmpty()) {

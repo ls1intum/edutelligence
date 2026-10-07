@@ -157,6 +157,20 @@ session's behaviour drift between builds.
 > failing. That is how the gateway once came up with nginx's stock
 > configuration and failed its health check forever.
 
+## Web search
+
+Claude Code's own `WebSearch` works in sessions. It is a server-side tool:
+Claude Code asks the API to run the searches, and the orchestrator does,
+on DuckDuckGo (see "Web search" in `docs/context-windows.md`). The request
+reaches it through the session gateway like any model call, so nothing is
+installed or configured in the session.
+
+Searches leave from the orchestrator, which honors the standard
+`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` environment variables for a server or
+CIT proxy, and result pages are never fetched. Queries are sent to
+DuckDuckGo, so agents should avoid putting credentials or private repository
+content in them. Search results are untrusted external data.
+
 ## What a session may and may not do
 
 **May:** read and change the working copy, run tests and linters, push a branch

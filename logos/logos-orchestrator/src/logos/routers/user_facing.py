@@ -5,24 +5,31 @@ last — a router included after the catch-all would be unreachable for any
 /v1/* path.
 """
 
+import asyncio
+import json
 import logging
+import secrets
 import time
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import logos.main as _main
+from logos.anthropic_compat import translate_error
+from logos.anthropic_compat import web_search as server_web_search
 from logos.auth import authenticate_api_key
 from logos.batch_api import handle_batch_api_request
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
+from logos.dbutils.dbrequest import WebSearchRequest
 from logos.errors import coerce_upstream_error
 from logos.jobs.job_service import JobService
 from logos.logosnode_snapshot import _resolve_requested_model_name, claude_visible_id
 from logos.main import _model_context_fields, _served_context_window_stats, handle_sync_request, submit_job_request
 from logos.responses import get_client_ip
+from logos.web_search import SearchUnavailable, search_web
 
 logger = logging.getLogger("LogosLogger")
 
@@ -485,6 +492,120 @@ for _batch_prefix in ("v1", "openai", "jobs/v1", "jobs/openai"):
         )
 
 
+@router.post("/v1/web-search", tags=["user-facing"])
+async def web_search(body: WebSearchRequest, request: Request):
+    """Return DuckDuckGo results through the existing API-key gateway."""
+    authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
+    try:
+        results = await search_web(body.query, body.max_results)
+    except SearchUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"query": body.query, "source": "DuckDuckGo", "results": results}
+
+
+_ERROR_TYPES = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    413: "request_too_large",
+    429: "rate_limit_error",
+    529: "overloaded_error",
+}
+
+
+async def _messages_turn(request: Request, payload: dict) -> tuple[int, dict]:
+    """One non-streaming Messages request through the normal pipeline, in process.
+
+    The client's own request with a different body: same headers, so the same
+    key, client IP and routing hints; a fresh request id and log entry, so the
+    turn is accounted like any other. The body stream ends after the payload
+    and then waits instead of reporting a disconnect — a client that leaves
+    cancels the task running this turn instead.
+    """
+    raw = json.dumps(payload).encode()
+    headers = [(k, v) for k, v in request.scope["headers"] if k.lower() != b"content-length"]
+    headers.append((b"content-length", str(len(raw)).encode()))
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": raw, "more_body": False}
+        await asyncio.Event().wait()
+
+    turn = Request({**request.scope, "headers": headers}, receive)
+    try:
+        response = await handle_sync_request("v1/messages", turn)
+    except HTTPException as exc:
+        status = exc.status_code
+        return status, {
+            "type": "error",
+            "error": {"type": _ERROR_TYPES.get(status, "api_error"), "message": str(exc.detail)},
+        }
+    if isinstance(response, StreamingResponse):
+        body = b"".join(
+            [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
+        )
+    else:
+        body = response.body
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return 502, {
+            "type": "error",
+            "error": {"type": "api_error", "message": "The model returned an unreadable response."},
+        }
+    if response.status_code != 200:
+        return response.status_code, translate_error(data)
+    return 200, data
+
+
+async def _serve_server_web_search(request: Request, payload: dict, tool: dict):
+    """Answer a Messages request that carries Anthropic's web search server tool."""
+    # Rejected up front: a stream, once open, can only report it as an error
+    # event, and a bad key deserves its 401.
+    authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
+
+    async def turn(body: dict) -> tuple[int, dict]:
+        return await _messages_turn(request, body)
+
+    if not payload.get("stream"):
+        status, body = await server_web_search.run(payload, tool, turn)
+        return JSONResponse(body, status_code=status)
+
+    async def events():
+        message_id = f"msg_{secrets.token_hex(12)}"
+        yield server_web_search.stream_start(message_id, payload.get("model"))
+        work = asyncio.create_task(server_web_search.run(payload, tool, turn))
+        try:
+            # Model turns and searches add up to minutes on a cold model;
+            # pings keep proxies and the client from timing the stream out.
+            while True:
+                done, _ = await asyncio.wait({work}, timeout=10)
+                if done:
+                    break
+                yield server_web_search.stream_ping()
+            try:
+                status, message = work.result()
+            except Exception:  # The stream is open: report it there, not as a cut-off.
+                logger.exception("Web search for a Messages request failed")
+                status, message = 500, {
+                    "type": "error",
+                    "error": {"type": "api_error", "message": "Web search failed."},
+                }
+        finally:
+            work.cancel()
+        if status != 200:
+            yield server_web_search.stream_error(status, message)
+            return
+        for event in server_web_search.stream_rest({**message, "id": message_id}):
+            yield event
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
 @router.post("/v1/{path:path}", tags=["user-facing"])
 async def logos_service_sync(path: str, request: Request):
     """
@@ -496,6 +617,16 @@ async def logos_service_sync(path: str, request: Request):
     get a proper 405 from the router instead of the misleading
     "400 Invalid JSON body" the body parser used to raise on body-less GETs.
     """
+    if path == "messages":
+        raw = await request.body()
+        if b'"web_search_' in raw:
+            try:
+                payload = json.loads(raw)
+            except ValueError:
+                payload = None
+            tool = server_web_search.server_web_search_tool(payload)
+            if tool is not None:
+                return await _serve_server_web_search(request, payload, tool)
     return await handle_sync_request(f"v1/{path}", request)
 
 

@@ -13,7 +13,7 @@
          is about. actor_username and actor_role are copied at write time for
          the same reason. before_state / after_state hold only the fields
          that changed; secrets (provider API keys) are never stored. -->
-    <changeSet id="053-audit-log" author="wasnertobias">
+    <changeSet id="054-audit-log" author="wasnertobias">
         <sql><![CDATA[
             CREATE TABLE IF NOT EXISTS audit_log (
                 id BIGSERIAL PRIMARY KEY,

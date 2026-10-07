@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.admin.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -41,22 +42,48 @@ class ExportImportServiceNormalizeTest {
     }
 
     @Test
-    void normalizeRecommendationsFillsObjectivePriorityFromSla() {
+    void normalizeRecommendationsFillsObjectivePriorityFromSlo() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", 9);
+        row.put("recommended_slo", "ux-background");
+        List<Map<String, Object>> out =
+            service.normalizeImportRows("ai_llm_call_recommendations", List.of(row));
+        assertEquals(
+            ObjectivePriority.forSlo("ux-background"),
+            out.get(0).get("objective_priority"));
+    }
+
+    @Test
+    void normalizeRecommendationsRenamesSlaColumnsOfOlderDumps() {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", 9);
+        row.put("recommended_sla", "ux-critical");
+        row.put("confirmed_sla", "ux-high-prio");
+        List<Map<String, Object>> out =
+            service.normalizeImportRows("ai_llm_call_recommendations", List.of(row));
+        Map<String, Object> normalized = out.get(0);
+        assertEquals("ux-critical", normalized.get("recommended_slo"));
+        assertEquals("ux-high-prio", normalized.get("confirmed_slo"));
+        assertFalse(normalized.containsKey("recommended_sla"));
+        assertFalse(normalized.containsKey("confirmed_sla"));
+    }
+
+    @Test
+    void normalizeRecommendationsFillsObjectivePriorityFromLegacySlaKey() {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("id", 9);
         row.put("recommended_sla", "ux-background");
         List<Map<String, Object>> out =
             service.normalizeImportRows("ai_llm_call_recommendations", List.of(row));
-        assertEquals(
-            ObjectivePriority.forSla("ux-background"),
-            out.get(0).get("objective_priority"));
+        assertEquals("ux-background", out.get(0).get("recommended_slo"));
+        assertEquals(ObjectivePriority.forSlo("ux-background"), out.get(0).get("objective_priority"));
     }
 
     @Test
     void normalizeRecommendationsKeepsExistingObjectivePriority() {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("id", 9);
-        row.put("recommended_sla", "ux-critical");
+        row.put("recommended_slo", "ux-critical");
         row.put("objective_priority", List.of("quality", "price", "latency"));
         List<Map<String, Object>> out =
             service.normalizeImportRows("ai_llm_call_recommendations", List.of(row));
@@ -67,7 +94,7 @@ class ExportImportServiceNormalizeTest {
     void normalizeRecommendationsDefaultsModelSetByOwnerForOlderDumps() {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("id", 9);
-        row.put("recommended_sla", "ux-critical");
+        row.put("recommended_slo", "ux-critical");
         List<Map<String, Object>> out =
             service.normalizeImportRows("ai_llm_call_recommendations", List.of(row));
         assertEquals(false, out.get(0).get("model_set_by_owner"));

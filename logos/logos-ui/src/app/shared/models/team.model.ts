@@ -139,7 +139,7 @@ export interface TeamProviderBudget {
   monthly_budget_micro_cents: number | null;
 }
 
-/** GitHub repository linked to a team for later AI-workflow / SLA analysis. */
+/** GitHub repository linked to a team for later AI-workflow / SLO analysis. */
 export interface TeamRepository {
   id: number;
   team_id: number;
@@ -182,7 +182,7 @@ export interface AiWorkflow {
   proposed_diagram_mermaid?: string | null;
 }
 
-export type RecommendedSla = 'ux-critical' | 'ux-high-prio' | 'ux-background';
+export type RecommendedSlo = 'ux-critical' | 'ux-high-prio' | 'ux-background';
 
 export type RecommendationReviewStatus = 'pending' | 'accepted' | 'overridden' | 'rejected';
 
@@ -200,14 +200,14 @@ export interface AiLlmCallRecommendation {
   code_url?: string | null;
   detected_model?: string | null;
   api_key_id?: number | null;
-  recommended_sla: RecommendedSla;
+  recommended_slo: RecommendedSlo;
   /** Ranking of latency / quality / price (most important first). */
   objective_priority?: ObjectiveKey[];
   confidence: number;
   justification: string;
   traffic_flags?: Record<string, unknown> | null;
   review_status: RecommendationReviewStatus;
-  confirmed_sla?: RecommendedSla | null;
+  confirmed_slo?: RecommendedSlo | null;
   confirmed_objective_priority?: ObjectiveKey[] | null;
   reviewed_by?: number | null;
   reviewed_at?: string | null;
@@ -223,7 +223,7 @@ export interface AiLlmCallRecommendation {
 export interface PreviousDecision {
   id: number;
   review_status: Exclude<RecommendationReviewStatus, 'pending'>;
-  sla: RecommendedSla;
+  slo: RecommendedSlo;
   objective_priority: ObjectiveKey[];
   reviewed_at?: string | null;
 }
@@ -251,7 +251,7 @@ export interface TeamWorkflowsResponse {
 
 export interface ReviewRecommendationPayload {
   action: 'accept' | 'override' | 'reject';
-  confirmed_sla?: RecommendedSla;
+  confirmed_slo?: RecommendedSlo;
   confirmed_objective_priority?: ObjectiveKey[];
   api_key_id?: number;
   /** "No key": bind and re-prioritise no key, not even the one linked before. */
