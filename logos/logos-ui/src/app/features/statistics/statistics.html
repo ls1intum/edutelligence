@@ -215,7 +215,9 @@
         title="Recent requests"
         subtitle="Latest activity from the request log."
       >
-        <span panelRight>
+        <span panelRight class="stats-feed-filters">
+          <app-multi-select label="Models" [options]="feedModelOptions()" [values]="feedModelIds()" (valuesChange)="setFeedModelFilter($event)" />
+          <app-multi-select label="Providers" [options]="feedProviderOptions()" [values]="feedProviderIds()" (valuesChange)="setFeedProviderFilter($event)" />
           <!-- State filter for this list only — it sits with the feed, not in the
                page scope, because it must not narrow the KPI cards and charts. -->
           <app-select
@@ -226,6 +228,9 @@
             ariaLabel="Filter requests by state"
             (valueChange)="setFeedStatusFilter($event)"
           />
+          @if (feedFilterActive()) {
+            <button type="button" class="stats-scope__clear" aria-label="Clear request filters" (click)="clearFeedFilters()">Clear</button>
+          }
         </span>
         <app-stats-recent-requests
           [liveRequests]="latestRequests()"
@@ -237,6 +242,8 @@
           [filterProviderId]="filterProviderId()"
           [filterErrorsOnly]="errorsOnly()"
           [filterStatus]="feedStatus()"
+          [filterModelIds]="feedModelIds()"
+          [filterProviderIds]="feedProviderIds()"
         />
       </app-stats-chart-panel>
 
@@ -370,6 +377,12 @@
             <div class="stats-glass-row">
               <div class="stats-glass-row__header">
                 <span class="stats-glass-row__label">{{ row.name }}</span>
+                @if (row.versionChip; as chip) {
+                  <span class="stats-panel-badge">
+                    <span class="stats-panel-badge__mono">{{ chip.label }}</span>
+                    <app-stats-version-hint [hint]="chip.hint" [commit]="chip.commit" />
+                  </span>
+                }
                 @if (!row.online) {
                   <span class="stats-provider-badge stats-provider-badge--offline">offline</span>
                 }

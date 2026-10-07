@@ -242,6 +242,9 @@ async def internal_provider_status(request: Request):
         worker_started_at = (
             (runtime_snapshot.get("runtime") or {}).get("process_started_at") if runtime_snapshot else None
         )
+        # The commit the worker's image was built from, as the worker reports it
+        # ("unknown" for a build without one, absent from workers that predate it).
+        version_checksum = (runtime_snapshot.get("runtime") or {}).get("version_checksum") if runtime_snapshot else None
         providers.append(
             {
                 "provider_id": provider_id,
@@ -252,6 +255,7 @@ async def internal_provider_status(request: Request):
                 "last_heartbeat": last_heartbeat if isinstance(last_heartbeat, str) else None,
                 "connected_at": connected_at if isinstance(connected_at, str) else None,
                 "worker_started_at": worker_started_at if isinstance(worker_started_at, str) else None,
+                "worker_version_checksum": version_checksum if isinstance(version_checksum, str) else None,
                 "calibrating": _main._logosnode_registry.is_calibrating(provider_id),
             }
         )

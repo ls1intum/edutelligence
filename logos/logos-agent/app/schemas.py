@@ -158,6 +158,11 @@ class SessionSummary(BaseModel):
     # ('<event-kind>'). Null for sessions a person created.
     trigger_kind: str | None = None
     trigger_ref: str | None = None
+    # For a repository analysis: which linked repository and whose team it
+    # is, so the session list says what is being analysed. The slug stays
+    # after the link is removed; the team name does not.
+    repo_slug: str | None = None
+    team_name: str | None = None
     # How urgent this work is, and the sentence explaining it.
     priority: int = 50
     priority_reason: str | None = None

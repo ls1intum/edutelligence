@@ -71,7 +71,7 @@ ARG BASE_IMAGE=ubuntu:24.04
 # package is needed.) Extras must precede the version specifier (PEP 508):
 # vllm[audio]==vX.Y.Z parses, vllm==vX.Y.Z[audio] does not. The hourly
 # "Logos - Update vLLM" workflow carries the extra over when it bumps the pin.
-ARG VLLM_PIP_SPEC="vllm[audio]==v0.30.0"
+ARG VLLM_PIP_SPEC="vllm[audio]==v0.31.0"
 # TORCH_INDEX_URL — leave empty (default) to use the PyPI torch that vLLM
 # installs, which already includes CUDA support matching its nvidia-* deps.
 # Only set this to override with a specific CUDA wheel index (e.g.
@@ -283,6 +283,13 @@ RUN /opt/venv/bin/python -c "from vllm.model_executor.layers.quantization import
 COPY logos_worker_node/ /app/logos_worker_node/
 COPY tools/ /app/tools/
 RUN mkdir -p /app/certs /app/data
+
+# The commit this image was built from; the worker reads it and reports it to
+# Logos. Declared down here on purpose: a changed ARG value rebuilds every RUN
+# below it, and the commit changes on every build, so it must sit after the
+# heavy vLLM layers to keep them cached.
+ARG GIT_SHA=unknown
+RUN printf '%s' "$GIT_SHA" > /app/BUILD_COMMIT
 
 # ---------------------------------------------------------------------------
 # Runtime environment

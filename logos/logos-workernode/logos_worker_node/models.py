@@ -961,6 +961,10 @@ class WorkerRuntimeStatus(BaseModel):
     # Fixed for the process lifetime — distinct from transport.last_connected_at,
     # which moves on every bridge reconnect.
     process_started_at: datetime
+    # Commit this worker's image was built from, stamped by CI. "unknown" for a
+    # build without one (local build, source checkout); None only from workers
+    # that predate the field.
+    version_checksum: str | None = None
     transport: WorkerTransportStatus
     devices: DeviceSummary
     gpu_devices: str = "all"

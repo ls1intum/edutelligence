@@ -1,0 +1,82 @@
+:host {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.multi-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 200px;
+  padding: 6px 12px;
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  border-radius: 8px;
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  color: rgb(var(--color-typography-0));
+  font: inherit;
+  cursor: pointer;
+
+  span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  i {
+    flex-shrink: 0;
+    font-size: 10px;
+  }
+}
+
+.multi-select-menu {
+  width: min(320px, calc(100vw - 16px));
+  padding: 12px;
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  border-radius: 8px;
+  background: rgb(var(--color-surface-0));
+  color: rgb(var(--color-typography-0));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+
+  input[type='search'] {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 8px;
+    border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+    border-radius: 6px;
+    background: rgb(var(--input-fill) / var(--input-fill-opacity));
+    color: inherit;
+    font: inherit;
+  }
+}
+
+.multi-select-clear {
+  margin: 8px 0;
+  background: transparent;
+  border: 0;
+  color: rgb(var(--color-text-accent));
+  font: inherit;
+  cursor: pointer;
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: default;
+  }
+}
+
+.multi-select-options {
+  max-height: min(260px, 50vh);
+  overflow-y: auto;
+}
+.multi-select-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+  cursor: pointer;
+  input {
+    flex-shrink: 0;
+    margin-top: 3px;
+  }
+  span {
+    overflow-wrap: anywhere;
+  }
+}

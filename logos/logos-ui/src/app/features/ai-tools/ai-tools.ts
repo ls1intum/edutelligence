@@ -107,23 +107,48 @@ export class AiTools implements OnInit, OnDestroy {
   readonly toolChosen = computed(() => this.activeTool() !== null);
   readonly teamChosen = computed(() => this.selectedKey() !== null);
   readonly modelChosen = computed(() => this.selected() !== null);
-  readonly ready = computed(() => this.teamChosen() && this.modelUsable());
+  /**
+   * Claude Code can start without a pinned model — List Models + /model cover
+   * discovery. OpenCode still needs a default model in its config.
+   */
+  readonly ready = computed(() => {
+    if (!this.teamChosen()) return false;
+    if (this.activeTool() === 'claudecode') {
+      // Unpinned is fine, but only once Logos has listed at least one model
+      // this key can reach — otherwise the install cannot make a request.
+      if (this.modelsLoading() || this.modelsError() || this.models().length === 0) {
+        return false;
+      }
+      return !this.modelChosen() || this.modelUsable();
+    }
+    return this.modelUsable();
+  });
 
   /**
    * A step that holds no decision is not a step. With one team there is nothing
-   * to pick in step 2; with one model, nothing in step 3. Asking anyway is a
-   * click that can only be answered one way.
+   * to pick in step 2; with one model under OpenCode, nothing in step 3. Asking
+   * anyway is a click that can only be answered one way.
    *
    * Only while the list is loaded and holds exactly one entry. An empty list is
    * *not* skipped — that step is where "no keys for your account" is said, and
    * silently jumping over it would leave the user in a later step wondering why
    * nothing is generated. Neither is a single model the chosen tool cannot use:
    * step 3 is where that is explained, and skipping it would drop the user into
-   * the install step with no idea why nothing continues.
+   * the install step with no idea why nothing continues. Claude Code always
+   * keeps step 3: the model pin is optional.
    */
   isSkipped(step: number): boolean {
     if (step === 2) return !this.keysLoading() && this.keys().length === 1;
-    if (step === 3) return !this.modelsLoading() && this.models().length === 1 && this.modelUsable();
+    // Claude Code can leave the model blank (wrapper lists /v1/models; /model
+    // switches later). Always show step 3 there. OpenCode still needs a pin.
+    if (step === 3) {
+      return (
+        this.activeTool() === 'opencode' &&
+        !this.modelsLoading() &&
+        this.models().length === 1 &&
+        this.modelUsable()
+      );
+    }
     return false;
   }
 
@@ -146,7 +171,7 @@ export class AiTools implements OnInit, OnDestroy {
     if (step === 2) return true;
     if (!this.teamChosen()) return false;
     if (step === 3) return true;
-    return this.modelUsable();
+    return this.ready();
   }
 
   stepState(step: number): 'done' | 'current' | 'locked' | 'upcoming' {
@@ -263,8 +288,15 @@ export class AiTools implements OnInit, OnDestroy {
     // newly chosen tool cannot host is not a choice worth keeping, and moving
     // off it is what lets the wizard continue. It stays put when nothing fits,
     // so step 3 can say why.
+    //
+    // Claude Code may leave the model blank (optional LOGOS_MODEL pin). Do not
+    // invent a pin when nothing is selected. OpenCode always needs one.
     const models = this.models();
-    if (models.length > 0 && !this.modelUsable()) this.selected.set(this.preferredModel(models));
+    if (models.length > 0 && !this.modelUsable()) {
+      if (tool === 'opencode' || this.selected() !== null) {
+        this.selected.set(this.preferredModel(models));
+      }
+    }
     // Land on the next step that actually asks something — with one team and
     // one model that is the install.
     const target = this.firstOpenFrom(2);
@@ -299,7 +331,7 @@ export class AiTools implements OnInit, OnDestroy {
    */
   readonly modelOptions = computed<AppSelectOption[]>(() => {
     const forClaudeCode = this.activeTool() === 'claudecode';
-    return this.models().map((m) => {
+    const options = this.models().map((m) => {
       const blocked = forClaudeCode && claudeCodeFitFor(m) === 'unusable';
       return {
         value: m.model_name,
@@ -309,6 +341,12 @@ export class AiTools implements OnInit, OnDestroy {
         disabled: blocked,
       };
     });
+    // Leading blank: leave LOGOS_MODEL unset so Claude Code lists Logos models
+    // and the user picks with /model. OpenCode always needs an explicit pin.
+    if (forClaudeCode) {
+      return [{ value: '', label: 'Claude Code picks (recommended)' }, ...options];
+    }
+    return options;
   });
 
   // ── Context windows ───────────────────────────────────────────────────────
@@ -528,32 +566,32 @@ export class AiTools implements OnInit, OnDestroy {
   private claudeCodePosixInstall(): string {
     const key = this.selectedKey()?.key_value ?? '';
     const model = this.selected()?.model_name ?? '';
-    return [
+    const lines = [
       `curl -fsSL ${this.wrapperUrl()} -o ~/.claude-logos-install.sh \\`,
       // Quoted delimiter: an unquoted heredoc would let the shell expand a `$`
       // or a backtick inside the key before the wrapper ever sees it.
       "  && bash ~/.claude-logos-install.sh --install <<'LOGOS'",
       `LOGOS_URL=${this.baseUrl()}`,
-      `LOGOS_MODEL=${model}`,
-      `LOGOS_KEY=${key}`,
-      'LOGOS',
-      'rm -f ~/.claude-logos-install.sh',
-    ].join('\n');
+    ];
+    // Omitting LOGOS_MODEL lets Claude Code list Logos models and switch with
+    // /model. A selected model remains an optional default pin.
+    if (model) lines.push(`LOGOS_MODEL=${model}`);
+    lines.push(`LOGOS_KEY=${key}`, 'LOGOS', 'rm -f ~/.claude-logos-install.sh');
+    return lines.join('\n');
   }
 
   private claudeCodeWindowsInstall(): string {
     const key = this.selectedKey()?.key_value ?? '';
     const model = this.selected()?.model_name ?? '';
-    return [
+    const lines = [
       "$p = Join-Path $env:TEMP 'claude-logos-install.ps1'",
       `Invoke-WebRequest -UseBasicParsing '${this.wrapperUrl()}' -OutFile $p`,
       "& $p -Install -LogosConfig @'",
       `LOGOS_URL=${this.baseUrl()}`,
-      `LOGOS_MODEL=${model}`,
-      `LOGOS_KEY=${key}`,
-      "'@",
-      'Remove-Item $p',
-    ].join('\n');
+    ];
+    if (model) lines.push(`LOGOS_MODEL=${model}`);
+    lines.push(`LOGOS_KEY=${key}`, "'@", 'Remove-Item $p');
+    return lines.join('\n');
   }
 
   readonly claudeCodeUninstallCommand = computed(() =>
@@ -692,7 +730,10 @@ export class AiTools implements OnInit, OnDestroy {
       }
       const unique = [...byName.values()];
       this.models.set(unique);
-      if (unique.length > 0) this.selected.set(this.preferredModel(unique));
+      // OpenCode needs a pin; Claude Code leaves the choice optional.
+      if (unique.length > 0 && this.activeTool() === 'opencode') {
+        this.selected.set(this.preferredModel(unique));
+      }
     } catch {
       if (requestId === this.modelsRequestId) this.modelsError.set(true);
     } finally {
@@ -701,6 +742,10 @@ export class AiTools implements OnInit, OnDestroy {
   }
 
   selectModel(name: string) {
+    if (!name) {
+      this.selected.set(null);
+      return;
+    }
     this.selected.set(this.models().find((m) => m.model_name === name) ?? null);
   }
 

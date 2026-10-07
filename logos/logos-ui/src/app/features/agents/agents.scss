@@ -76,8 +76,9 @@
 /* ── Toolbar and buttons ──────────────────────────────────────────────────── */
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  margin-bottom: 1rem;
+  margin: 0.75rem 0 1rem;
 }
 
 .btn {
@@ -242,7 +243,7 @@
 
 .session__head {
   display: grid;
-  grid-template-columns: 10rem 1fr auto;
+  grid-template-columns: 10rem minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.75rem;
   width: 100%;
@@ -269,9 +270,33 @@
 
 .session__meta {
   display: flex;
+  align-items: center;
   gap: 0.75rem;
   font-size: var(--font-size-xs);
   color: rgb(var(--color-typography-300));
+}
+
+.session__timings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.session__timing {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .session__head {
+    grid-template-columns: 10rem minmax(0, 1fr);
+  }
+
+  .session__meta {
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+  }
 }
 
 .status {
@@ -295,6 +320,7 @@
   &--running {
     color: rgb(var(--color-primary-600));
     border-color: rgb(var(--color-primary-400));
+    animation: running-pulse 2s ease-in-out infinite;
   }
 
   &--paused {
@@ -311,6 +337,19 @@
   &--cancelled {
     color: rgb(var(--color-error));
     border-color: rgb(var(--color-error));
+  }
+}
+
+@keyframes running-pulse {
+  50% {
+    background-color: rgb(var(--color-primary-400) / 0.15);
+    border-color: rgb(var(--color-primary-400) / 0.5);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status--running {
+    animation: none;
   }
 }
 
@@ -547,4 +586,62 @@
   min-width: 0;
   accent-color: rgb(var(--color-primary-500));
   cursor: pointer;
+}
+
+// Team repository analysis: hint and the manual "analyze everything" action.
+.repo-analysis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin: 0 0 1.5rem;
+
+  .page-subtitle {
+    margin: 0;
+    flex: 1 1 32ch;
+  }
+}
+
+// Narrow screens: the session row and the runner controls were laid out for
+// a desktop width. At 375px the status column and the meta left no room for
+// the task text, and the controls card was pushed wider than itself by its
+// buttons, slider and input.
+@media (max-width: 640px) {
+  .session__head {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0.4rem;
+  }
+
+  .session__task {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+
+  .session__meta {
+    justify-self: end;
+    flex-wrap: wrap;
+  }
+
+  .controls {
+    grid-template-columns: minmax(0, 1fr);
+
+    &__actions {
+      flex-wrap: wrap;
+      justify-content: flex-start;
+    }
+
+    &__state {
+      flex-wrap: wrap;
+    }
+
+    .input,
+    .slider {
+      min-width: 0;
+      max-width: 100%;
+    }
+  }
 }

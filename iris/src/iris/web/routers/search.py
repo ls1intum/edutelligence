@@ -45,6 +45,7 @@ def _traced_lecture_search(
     return LectureGlobalSearchRetrieval(client).search(
         dto.query,
         dto.limit,
+        base_url=dto.artemis_base_url,
         course_ids=dto.course_ids,
         exclude_course_ids=dto.exclude_course_ids,
         access_context=dto.access_context,

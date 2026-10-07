@@ -283,3 +283,41 @@ describe('caller chips', () => {
     expect(component.keyChipOf(app)).toBe('docs-role-logos-app-key');
   });
 });
+
+describe('model and provider selections across request pages', () => {
+  let fixture: ComponentFixture<RecentRequests>;
+  afterEach(() => fixture?.destroy());
+
+  it('passes both selections to older pages and discards an in-flight page when they change', async () => {
+    let resolvePage!: (value: import('../../services/statistics.service').LatestRequestsPage) => void;
+    const calls: unknown[][] = [];
+    const getLatestRequests = (...args: unknown[]) => {
+      calls.push(args);
+      return new Promise<import('../../services/statistics.service').LatestRequestsPage>(resolve => resolvePage = resolve);
+    };
+    await TestBed.configureTestingModule({
+      imports: [RecentRequests], providers: [{ provide: StatisticsService, useValue: { getLatestRequests } }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(RecentRequests);
+    const rows = Array.from({ length: 10 }, (_, index) => ({
+      request_id: `request-${index}`, model_name: 'model', provider_name: 'worker',
+      status: 'success', timestamp: '2026-09-01T12:00:00Z', enqueue_ts: '2026-09-01T12:00:00Z',
+      scheduled_ts: '2026-09-01T12:00:01Z', request_complete_ts: '2026-09-01T12:00:02Z',
+    } as RequestItem));
+    fixture.componentRef.setInput('liveRequests', rows);
+    fixture.componentRef.setInput('range', { startIso: '2026-09-01T00:00:00Z', endIso: '2026-09-02T00:00:00Z' });
+    fixture.componentRef.setInput('filterModelIds', ['1', '2']);
+    fixture.componentRef.setInput('filterProviderIds', ['3', '4']);
+    fixture.detectChanges();
+    const next = fixture.componentInstance.nextPage();
+    expect(calls[0][3]).toMatchObject({ modelIds: [1, 2], providerIds: [3, 4] });
+    fixture.componentRef.setInput('filterModelIds', ['2']);
+    fixture.detectChanges();
+    resolvePage({ requests: [rows[0]], total: 11, limit: 10, has_more: false, next_cursor: null });
+    await next;
+    expect(fixture.componentInstance.pageIndex()).toBe(0);
+    expect(fixture.componentInstance.displayItems()).toEqual(rows);
+    expect(fixture.componentInstance.loading()).toBe(false);
+    expect(fixture.componentInstance.filterActive()).toBe(true);
+  });
+});
