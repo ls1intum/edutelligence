@@ -152,6 +152,7 @@ def test_eligible_provider_set_scopes_cold_entry_visibility():
     assert mgr.has_cold_queued_entries(5, 1) is False
     assert mgr.has_cold_queued_entries(5, 2) is True
 
+
 def test_role_rank_orders_within_equal_priority():
     """Within one priority, application keys (rank 2) dequeue before admin
     keys (rank 1), which dequeue before developer traffic (rank 0) — the

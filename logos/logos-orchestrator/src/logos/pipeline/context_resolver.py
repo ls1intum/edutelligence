@@ -220,7 +220,6 @@ class ContextResolver:
         lane_engine: Optional[str] = None
         azure_body_deployment: Optional[str] = None
 
-
         if provider_type == "logosnode":
             prepared_lane: Optional[Dict[str, Any]] = None
             if self._lane_preparer is not None:
