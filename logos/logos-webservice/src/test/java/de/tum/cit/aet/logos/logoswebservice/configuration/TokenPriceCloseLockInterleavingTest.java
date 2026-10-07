@@ -143,11 +143,13 @@ class TokenPriceCloseLockInterleavingTest {
 
     @Test
     void priceCloseWaitingForCatalogueWriteKeepsCommittedRowBillable() throws Exception {
-        // The provider type change side, mirroring the statement order of
-        // ProviderService.updateProvider: the findById starts the
-        // transaction (and with it fixes its NOW()), the advisory lock
-        // serializes the change with the in-flight catalogue writes, and the
-        // price close runs only after the lock is taken.
+        // The provider type-change side of the price-close race: start a
+        // transaction (findById fixes its NOW()), wait so a catalogue write
+        // can take the provider lock and insert a row whose valid_from is
+        // later than that NOW(), then take the lock and close. Production
+        // updateProvider locks before the load; this test deliberately
+        // opens the transaction first so the NOW()-vs-statement_timestamp
+        // interleaving is observable.
         TransactionTemplate providerTx = new TransactionTemplate(transactionManager);
         CountDownLatch providerStarted = new CountDownLatch(1);
         CountDownLatch releaseProvider = new CountDownLatch(1);

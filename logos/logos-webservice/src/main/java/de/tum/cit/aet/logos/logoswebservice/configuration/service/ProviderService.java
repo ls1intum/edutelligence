@@ -116,6 +116,14 @@ public class ProviderService {
 
     @Transactional
     public Map<String, Object> updateProvider(UpdateProviderRequestDTO req) {
+        // Provider has neither @Version nor @DynamicUpdate: a name/key edit that
+        // loaded the row before a concurrent type change would flush the stale
+        // cloud_provider_type back and skip the invalidation branch below
+        // (loaded type still matched the request). Take the provider lock
+        // before any read so every edit serializes with type changes and
+        // in-flight cost derivations, then load.
+        providerRepository.lockProviderDerivation(
+            ModelMetricsService.providerDerivationLockKey(req.providerId()));
         Provider p = providerRepository.findById(req.providerId())
             .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + req.providerId()));
         if (req.providerName() != null) p.setName(req.providerName());
@@ -140,15 +148,9 @@ public class ProviderService {
             // transaction: a ranking that runs before the re-derivation sees
             // NULL and can never read an old-unit value as the new one. The
             // pairs are then re-derived (catalogue price refresh first) and
-            // the fleet re-ranked, after the commit.
+            // the fleet re-ranked, after the commit. The provider lock is
+            // already held from the start of this edit.
             //
-            // The provider's advisory lock is taken before the invalidation:
-            // the in-flight derivations hold it across their type read, cost
-            // computation, and metrics write, so acquiring it first
-            // serializes the change with every such window - either the
-            // derivation committed before the invalidation (and is
-            // overwritten) or it will read the new type.
-            providerRepository.lockProviderDerivation(ModelMetricsService.providerDerivationLockKey(p.getId()));
             // The catalogue price rows opened under the previous type are
             // closed, not deleted: billing of requests made before the change
             // still matches them, but the re-derivation can only read prices

@@ -10,7 +10,11 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Delayed;
 import java.util.concurrent.ExecutorService;
@@ -56,11 +60,14 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderServic
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 /**
- * Concurrency coverage for three derived-metrics races: price selection that
+ * Concurrency coverage for derived-metrics races: price selection that
  * waited behind a provider-type change, a weight-phase snapshot that mixes
- * an old cloud classification with a new local cost, and a delayed pair
- * endpoint/key edit that would flush stale derived columns over a committed
- * derivation or invalidation. Runs against the real Postgres container.
+ * an old cloud classification with a new local cost, a delayed pair
+ * endpoint/key edit that would flush stale derived columns, a delayed
+ * ordinary provider edit that would restore a stale cloud type over a
+ * concurrent local switch, and discovery's direct type write that must
+ * close prices and invalidate costs under the same lock. Runs against the
+ * real Postgres container.
  */
 @SpringBootTest
 @Import({TestContainersConfig.class, DerivedMetricsConcurrencyTest.SchedulingDisabled.class})
@@ -283,6 +290,234 @@ class DerivedMetricsConcurrencyTest {
             .filter(row -> row.getCloudProviderType() != null)
             .filter(row -> row.getDerivedCostUsd() != null)
             .toList()).isEmpty();
+    }
+
+    /**
+     * Parking only before both legacy weight-phase reads does not detect the
+     * mixed-read defect: a switch that finishes before either query still
+     * yields a consistent local population. This regression forces the type
+     * change between a provider-type read and a pair-cost read (the old
+     * two-query shape), asserts that combination ranks the new USD/request
+     * cost as cloud, and checks that the production joined snapshot on the
+     * same final state leaves cost weights at the default. Reverting
+     * {@code applyDerivedWeights} to those separate reads reintroduces the
+     * mixed population into the weight phase.
+     */
+    @Test
+    void weightPhase_typeChangeBetweenLegacyReads_joinedSnapshotDoesNotRankLocalAsCloud()
+            throws Exception {
+        reset(priceUpdaterService);
+        jdbc.update("UPDATE providers SET total_vram_mb = 8000 WHERE id = 6101");
+        modelMetricsService.deriveAllMetrics();
+        assertThat(weightCost(5101)).isEqualTo(4);
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.015"));
+
+        TransactionTemplate legacyTx = new TransactionTemplate(transactionManager);
+        CountDownLatch afterProviderTypeRead = new CountDownLatch(1);
+        CountDownLatch releasePairCostRead = new CountDownLatch(1);
+
+        try (ExecutorService legacyPool = Executors.newSingleThreadExecutor();
+             ExecutorService switchPool = Executors.newSingleThreadExecutor()) {
+            Future<Map<Integer, Double>> legacyCosts = legacyPool.submit(() -> legacyTx.execute(status -> {
+                // Old weight-phase shape: cloud ids, then pair costs, as two
+                // statements under READ COMMITTED.
+                Set<Integer> cloudProviderIds = new HashSet<>(jdbc.queryForList(
+                    "SELECT id FROM providers WHERE cloud_provider_type IS NOT NULL",
+                    Integer.class));
+                afterProviderTypeRead.countDown();
+                try {
+                    if (!releasePairCostRead.await(60, TimeUnit.SECONDS)) {
+                        status.setRollbackOnly();
+                        return Map.of();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    status.setRollbackOnly();
+                    return Map.of();
+                }
+                Map<Integer, Double> costValues = new HashMap<>();
+                jdbc.query(
+                    "SELECT model_id, provider_id, derived_cost_usd FROM model_provider "
+                        + "WHERE derived_cost_usd IS NOT NULL",
+                    rs -> {
+                        int providerId = rs.getInt("provider_id");
+                        if (!cloudProviderIds.contains(providerId)) {
+                            return;
+                        }
+                        costValues.merge(
+                            rs.getInt("model_id"),
+                            rs.getBigDecimal("derived_cost_usd").doubleValue(),
+                            Double::min);
+                    });
+                return costValues;
+            }));
+
+            assertThat(afterProviderTypeRead.await(10, TimeUnit.SECONDS))
+                .as("legacy simulation parked after its provider-type read")
+                .isTrue();
+
+            Future<Integer> typeSwitch = switchPool.submit(() -> {
+                providerService.updateProvider(
+                    new UpdateProviderRequestDTO(6101, null, null, null, null, null, null, "none", null));
+                awaitUntil(() -> {
+                    BigDecimal c = costOf(5101, 6101);
+                    return c != null && c.compareTo(new BigDecimal("0.001")) < 0;
+                });
+                return 1;
+            });
+            assertThat(typeSwitch.get(60, TimeUnit.SECONDS)).isEqualTo(1);
+
+            releasePairCostRead.countDown();
+            Map<Integer, Double> mixed = legacyCosts.get(60, TimeUnit.SECONDS);
+
+            // Separate reads in this window treat the new USD/request figure
+            // as a cloud USD/M-token cost — the defect the joined query closed.
+            assertThat(mixed.get(5101))
+                .as("legacy separate reads mix cloud classification with local cost")
+                .isNotNull();
+            assertThat(mixed.get(5101)).isLessThan(0.001);
+        }
+
+        // Production joined snapshot on the same final state: no cloud pair
+        // remains, so cost weights fall back to the default.
+        modelMetricsService.deriveAllMetrics();
+        assertThat(costOf(5101, 6101)).isLessThan(new BigDecimal("0.001"));
+        assertThat(weightCost(5101)).isZero();
+        assertThat(weightCost(5102)).isZero();
+
+        List<ModelPairMetricsProjection> snapshot = modelProviderRepository.findPairMetrics(null);
+        assertThat(snapshot.stream()
+            .filter(row -> row.getCloudProviderType() != null)
+            .filter(row -> row.getDerivedCostUsd() != null)
+            .toList()).isEmpty();
+    }
+
+    /**
+     * An ordinary name/key edit used to load the provider before taking the
+     * derivation lock. A concurrent cloud-to-local switch could then commit
+     * (and derive USD/request costs) while the edit still held a stale
+     * OpenAI-typed entity; the unversioned flush restored the cloud type
+     * without entering the invalidation branch, so ranking treated the
+     * surviving local cost as USD/M tokens. Locking before the load makes
+     * the edit wait for the switch and then persist the type it reloads.
+     */
+    @Test
+    void delayedProviderNameEdit_waitsForTypeSwitchAndKeepsLocalType() throws Exception {
+        reset(priceUpdaterService);
+        jdbc.update("UPDATE providers SET total_vram_mb = 8000 WHERE id = 6101");
+        modelMetricsService.deriveAllMetrics();
+        assertThat(costOf(5101, 6101)).isEqualByComparingTo(new BigDecimal("0.015"));
+
+        TransactionTemplate typeChangeTx = new TransactionTemplate(transactionManager);
+        CountDownLatch typeChangeHoldsLock = new CountDownLatch(1);
+        CountDownLatch releaseTypeChange = new CountDownLatch(1);
+
+        try (ExecutorService typeChangePool = Executors.newSingleThreadExecutor();
+             ExecutorService editPool = Executors.newSingleThreadExecutor()) {
+            Future<Integer> typeChange = typeChangePool.submit(() -> typeChangeTx.execute(status -> {
+                // Holds the same lock updateProvider now takes before load.
+                providerRepository.lockProviderDerivation(
+                    ModelMetricsService.providerDerivationLockKey(6101));
+                tokenPriceRepository.closeCurrentPricesByProviderId(6101);
+                jdbc.update("UPDATE providers SET cloud_provider_type = NULL WHERE id = 6101");
+                modelProviderRepository.invalidateDerivedCostByProviderId(6101);
+                typeChangeHoldsLock.countDown();
+                try {
+                    if (!releaseTypeChange.await(30, TimeUnit.SECONDS)) {
+                        status.setRollbackOnly();
+                        return 0;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    status.setRollbackOnly();
+                    return 0;
+                }
+                return 1;
+            }));
+
+            assertThat(typeChangeHoldsLock.await(10, TimeUnit.SECONDS)).isTrue();
+
+            Future<Integer> nameEdit = editPool.submit(() -> {
+                providerService.updateProvider(
+                    new UpdateProviderRequestDTO(
+                        6101, "renamed-under-lock", null, null, null, null, null, null, null));
+                return 1;
+            });
+
+            assertThat(awaitLockWaiter())
+                .as("the name edit waited on the type change's provider lock")
+                .isTrue();
+
+            releaseTypeChange.countDown();
+            assertThat(typeChange.get(30, TimeUnit.SECONDS)).isEqualTo(1);
+            assertThat(nameEdit.get(30, TimeUnit.SECONDS)).isEqualTo(1);
+        }
+
+        assertThat(jdbc.queryForObject(
+            "SELECT cloud_provider_type::text FROM providers WHERE id = 6101",
+            String.class)).isNull();
+        assertThat(jdbc.queryForObject(
+            "SELECT name FROM providers WHERE id = 6101", String.class))
+            .isEqualTo("renamed-under-lock");
+        assertThat(costOf(5101, 6101)).isNull();
+        assertThat(costOf(5102, 6101)).isNull();
+
+        modelMetricsService.deriveAllMetrics();
+        assertThat(costOf(5101, 6101)).isLessThan(new BigDecimal("0.001"));
+        assertThat(weightCost(5101)).isZero();
+        assertThat(weightCost(5102)).isZero();
+    }
+
+    /**
+     * Discovery's {@code set_cloud_provider_type} used to flip an unset type
+     * to a named cloud type without the provider lock, price close, or cost
+     * invalidation. A provider that still carried local USD/request costs
+     * (and hardware) then became eligible for cloud ranking. Mirror the
+     * locked discovery write and require costs to be cleared before any
+     * re-derivation.
+     */
+    @Test
+    void discoveryCloudTypeWrite_closesPricesAndInvalidatesCostsUnderLock() throws Exception {
+        reset(priceUpdaterService);
+        // Untyped cloud provider with local-style costs still on the pairs
+        // (the state automatic Logos detection would promote to 'logos').
+        jdbc.update("UPDATE providers SET cloud_provider_type = NULL, total_vram_mb = 8000 WHERE id = 6101");
+        jdbc.update("UPDATE model_provider SET derived_cost_usd = 0.000111 "
+            + "WHERE provider_id = 6101 AND model_id = 5101");
+        jdbc.update("UPDATE model_provider SET derived_cost_usd = 0.000667 "
+            + "WHERE provider_id = 6101 AND model_id = 5102");
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM token_prices WHERE provider_id = 6101 AND valid_to IS NULL",
+            Integer.class)).isEqualTo(4);
+
+        TransactionTemplate discoveryTx = new TransactionTemplate(transactionManager);
+        discoveryTx.execute(status -> {
+            // Same statement order as DBManager.set_cloud_provider_type.
+            providerRepository.lockProviderDerivation(
+                ModelMetricsService.providerDerivationLockKey(6101));
+            String current = jdbc.queryForObject(
+                "SELECT cloud_provider_type::text FROM providers WHERE id = 6101", String.class);
+            assertThat(current).isNull();
+            tokenPriceRepository.closeCurrentPricesByProviderId(6101);
+            modelProviderRepository.invalidateDerivedCostByProviderId(6101);
+            jdbc.update("UPDATE providers SET cloud_provider_type = 'logos', "
+                + "updated_at = CURRENT_TIMESTAMP WHERE id = 6101 AND cloud_provider_type IS NULL");
+            return null;
+        });
+
+        assertThat(jdbc.queryForObject(
+            "SELECT cloud_provider_type::text FROM providers WHERE id = 6101",
+            String.class)).isEqualTo("logos");
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM token_prices WHERE provider_id = 6101 AND valid_to IS NULL",
+            Integer.class)).isZero();
+        assertThat(costOf(5101, 6101)).isNull();
+        assertThat(costOf(5102, 6101)).isNull();
+
+        // Ranking must not treat the cleared old-unit values as cloud USD/M.
+        modelMetricsService.deriveAllMetrics();
+        assertThat(weightCost(5101)).isZero();
+        assertThat(weightCost(5102)).isZero();
     }
 
     /**
