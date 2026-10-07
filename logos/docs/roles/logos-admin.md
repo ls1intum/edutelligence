@@ -73,7 +73,7 @@ roles. An App Admin can manage only App Developers.
 
 ![Users page](/img/roles/logos-admin-user-management.png)
 
-## Teams {#teams}
+## Teams
 
 This page shows the teams, their owners and their members.
 
