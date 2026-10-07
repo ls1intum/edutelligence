@@ -132,6 +132,8 @@ public class RequestLogStatsService {
             toScopeOptions(logEntryRepository.findRequestersWithTraffic(startTs, endTs, teamId, providerId, errorsOnly)));
         payload.put("providers",
             toScopeOptions(logEntryRepository.findProvidersWithTraffic(startTs, endTs, teamId, userId, errorsOnly)));
+        payload.put("models",
+            toScopeOptions(logEntryRepository.findModelsWithTraffic(startTs, endTs, teamId, userId, providerId, errorsOnly)));
         return payload;
     }
 

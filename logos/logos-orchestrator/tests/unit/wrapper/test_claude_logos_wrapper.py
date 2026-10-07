@@ -395,6 +395,36 @@ def test_launch_survives_an_empty_settings_and_effort_argument_list(gateway, tmp
     assert invocation["argv"].count("--effort") == 1
 
 
+def test_launch_lifts_the_old_websearch_deny(gateway, tmp_path, fake_claude):
+    """Revisions before 6 denied WebSearch; Logos answers it now, so that layer goes."""
+    record = tmp_path / "record.json"
+    env = _env(gateway, tmp_path, fake_claude_dir=fake_claude, record=record)
+    settings = tmp_path / "config" / "settings.json"
+    settings.write_text('{\n  "permissions": {\n    "deny": ["WebSearch"]\n  }\n}\n')
+
+    result = _run(env, "-p", "hi")
+    assert result.returncode == 0, result.stderr
+    assert not settings.exists()
+    assert "--settings" not in json.loads(record.read_text())["argv"]
+
+
+def test_launch_lifts_only_the_websearch_deny(gateway, tmp_path, fake_claude):
+    """Whatever else the user put into the wrapper's layer stays, and is still passed."""
+    record = tmp_path / "record.json"
+    env = _env(gateway, tmp_path, fake_claude_dir=fake_claude, record=record)
+    settings = tmp_path / "config" / "settings.json"
+    settings.write_text('{"permissions": {"defaultMode": "bypassPermissions", "deny": ["WebSearch", "Bash(rm:*)"]}}')
+
+    result = _run(env, "-p", "hi")
+    assert result.returncode == 0, result.stderr
+    assert json.loads(settings.read_text()) == {
+        "permissions": {"defaultMode": "bypassPermissions", "deny": ["Bash(rm:*)"]}
+    }
+    assert settings.stat().st_mode & 0o777 == 0o600
+    argv = json.loads(record.read_text())["argv"]
+    assert argv[argv.index("--settings") + 1] == str(settings)
+
+
 def test_wrapper_guards_every_array_expansion(tmp_path):
     """No unguarded ``"${arr[@]}"`` anywhere in the wrapper.
 

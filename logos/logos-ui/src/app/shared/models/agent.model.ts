@@ -45,6 +45,10 @@ export interface AgentSession {
   trigger_kind: string | null;
   /** Which event it reacted to, e.g. 'issue'.*/
   trigger_ref: string | null;
+  /** For a repository analysis: the linked repository (owner/name). */
+  repo_slug?: string | null;
+  /** For a repository analysis: the team that linked the repository. */
+  team_name?: string | null;
   /** How urgent the work is (higher runs first), and why. */
   priority: number;
   priority_reason: string | null;

@@ -9,7 +9,9 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
@@ -396,7 +400,13 @@ public class TeamActivityService {
         Integer cursorId,
         /** The last row the file holds — the cursor the next, older slice continues from. Null when the file is the whole answer. */
         Instant nextCursorTs,
-        Integer nextCursorId
+        Integer nextCursorId,
+        /**
+         * Ordered ids of the capped slice, newest first, frozen at prepare
+         * time. The download streams only these ids so a late commit whose
+         * timestamp falls between two prepared keys cannot enlarge the file.
+         */
+        List<Integer> sliceIds
     ) {
         public String fileName() {
             return "logos-traces-team-" + teamId + "-" + days + "d." + (format == ExportFormat.CSV ? "csv" : "json");
@@ -499,6 +509,7 @@ public class TeamActivityService {
      * {@link IllegalArgumentException} — a forged window must not reach
      * further into the past than a fresh export can.
      */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public ExportPrep prepareExport(int teamId, Integer requestedDays, Integer userId, String format,
                                     String cursorToken) {
         ExportCursor cursor = ExportCursor.parse(cursorToken);
@@ -551,14 +562,26 @@ public class TeamActivityService {
         long totalInWindow = valueOrDefault(
             logEntryRepository.countTracesForExport(teamId, since, end, userId, cursorTs, cursorRowId));
         boolean truncated = totalInWindow > exportMaxRows;
-        long count = Math.min(totalInWindow, exportMaxRows);
+
+        // Freeze membership of the capped slice as ordered ids. Count, consent
+        // note, and continuation cursor all derive from this list so a commit
+        // after prepare cannot enlarge the file past the advertised cap.
+        List<ExportSliceCursorProjection> sliceKeys = logEntryRepository.findExportSliceKeys(
+            teamId, since, end, userId, cursorTs, cursorRowId, exportMaxRows);
+        List<Integer> sliceIds = new ArrayList<>(sliceKeys.size());
+        for (ExportSliceCursorProjection key : sliceKeys) {
+            sliceIds.add(key.getId());
+        }
+        long count = sliceIds.size();
 
         String teamName = teamRepository.findById(teamId).map(Team::getName).orElse(null);
         boolean fullLoggingEnabled = hasFullLoggingKey(teamId);
 
         String note = null;
-        if (valueOrDefault(logEntryRepository.countConsentedInExportSlice(
-                teamId, since, end, userId, cursorTs, cursorRowId, exportMaxRows)) == 0) {
+        long consented = sliceIds.isEmpty()
+            ? 0L
+            : valueOrDefault(logEntryRepository.countConsentedAmongIds(sliceIds));
+        if (consented == 0) {
             // The rows are there but the content is not: name the reason in
             // the file itself, because an administrator opening it later will
             // not remember which keys were consented at export time.
@@ -567,53 +590,47 @@ public class TeamActivityService {
                 : "Full logging is not activated for this team: request and response content was never stored, so it is empty in every row of this export.";
         }
 
-        // The next slice starts behind the last row this file carries. The
-        // header that names it goes out before the first byte, so the tail of
-        // the slice is walked as timestamps-and-ids, not fetched as rows.
+        // The next slice starts behind the last prepared key. The header that
+        // names it goes out before the first byte, and the key is already in
+        // hand from the slice list — no second walk of the window.
         Instant nextCursorTs = null;
         Integer nextCursorId = null;
-        if (truncated) {
-            ExportSliceCursorProjection tail = logEntryRepository
-                .findExportSliceTail(teamId, since, end, userId, cursorTs, cursorRowId, (int) count - 1);
-            if (tail != null) {
-                nextCursorTs = tail.getTimestampRequest();
-                nextCursorId = tail.getId();
-            }
+        if (truncated && !sliceKeys.isEmpty()) {
+            ExportSliceCursorProjection tail = sliceKeys.get(sliceKeys.size() - 1);
+            nextCursorTs = tail.getTimestampRequest();
+            nextCursorId = tail.getId();
         }
 
         return new ExportPrep(teamId, userId, teamName, days, sinceInstant, now, out,
                               totalInWindow, count, truncated, fullLoggingEnabled, note,
                               cursorTs != null ? cursorTs.toInstant() : null, cursorRowId,
-                              nextCursorTs, nextCursorId);
+                              nextCursorTs, nextCursorId, List.copyOf(sliceIds));
     }
 
     /**
      * The file itself, written row by row into the response.
      *
-     * Rows are fetched in chunks and written as they arrive, so the service
-     * holds one chunk of the window in memory rather than the capped slice —
-     * a slice of consented rows is a download, not a data structure. The
-     * order and the cap are the prep's: newest first, the newest
-     * {@code exportMaxRows} rows of the window.
+     * Rows are fetched in chunks of the prepared id list and written as they
+     * arrive, so the service holds one chunk in memory rather than the capped
+     * slice — a slice of consented rows is a download, not a data structure.
+     * Membership is the prepare-time id set: a late commit cannot insert
+     * itself between two prepared keys.
      */
     public void writeExportFile(ExportPrep prep, OutputStream out) throws IOException {
-        Timestamp since = Timestamp.from(prep.since());
-        Timestamp end = Timestamp.from(prep.now());
-
         if (prep.format() == ExportFormat.CSV) {
-            writeCsv(prep, since, end, out);
+            writeCsv(prep, out);
         } else {
-            writeJson(prep, since, end, out);
+            writeJson(prep, out);
         }
     }
 
-    private void writeJson(ExportPrep prep, Timestamp since, Timestamp end, OutputStream out) throws IOException {
+    private void writeJson(ExportPrep prep, OutputStream out) throws IOException {
         try (JsonGenerator gen = objectMapper.getFactory().createGenerator(out)) {
             gen.setCodec(objectMapper);
             gen.writeStartObject();
             writeJsonMeta(gen, prep);
             gen.writeArrayFieldStart("traces");
-            streamRows(prep, since, end, row -> {
+            streamRows(prep, row -> {
                 List<Object> values = traceValues(row);
                 gen.writeStartObject();
                 for (int i = 0; i < TRACE_COLUMNS.length; i++) {
@@ -653,11 +670,11 @@ public class TeamActivityService {
         }
     }
 
-    private void writeCsv(ExportPrep prep, Timestamp since, Timestamp end, OutputStream out) throws IOException {
+    private void writeCsv(ExportPrep prep, OutputStream out) throws IOException {
         Writer writer = new OutputStreamWriter(out, StandardCharsets.UTF_8);
         writer.write(String.join(",", TRACE_COLUMNS));
         writer.write('\n');
-        streamRows(prep, since, end, row -> {
+        streamRows(prep, row -> {
             List<Object> values = traceValues(row);
             StringBuilder line = new StringBuilder();
             for (int i = 0; i < TRACE_COLUMNS.length; i++) {
@@ -673,32 +690,26 @@ public class TeamActivityService {
     }
 
     /**
-     * The shared walk of the export: chunks of rows, newest first, from the
-     * start of the window — or past the rows an earlier slice already
-     * carried — down to the cap or the end of it. The row consumer writes one
+     * The shared walk of the export: chunks of the prepared id list, newest
+     * first. Each chunk is its own short read of exactly those ids; the SQL
+     * result is reordered to the preparation order so a late commit cannot
+     * insert itself between two prepared keys. The row consumer writes one
      * row; the walk is what knows when to stop.
      */
-    private void streamRows(ExportPrep prep, Timestamp since, Timestamp end, RowWriter rowWriter) throws IOException {
-        long written = 0;
-        Timestamp cursorTs = prep.cursorTs() != null ? Timestamp.from(prep.cursorTs()) : null;
-        Integer cursorId = prep.cursorId();
-        while (written < exportMaxRows) {
-            List<LogExportProjection> chunk = logEntryRepository.findTracesForExport(
-                prep.teamId(), since, end, prep.userId(), cursorTs, cursorId, EXPORT_CHUNK_SIZE);
-            if (chunk.isEmpty()) {
-                break;
+    private void streamRows(ExportPrep prep, RowWriter rowWriter) throws IOException {
+        List<Integer> sliceIds = prep.sliceIds();
+        for (int from = 0; from < sliceIds.size(); from += EXPORT_CHUNK_SIZE) {
+            List<Integer> idChunk = sliceIds.subList(from, Math.min(from + EXPORT_CHUNK_SIZE, sliceIds.size()));
+            List<LogExportProjection> fetched = logEntryRepository.findTracesForExportByIds(idChunk);
+            Map<Integer, LogExportProjection> byId = new HashMap<>(fetched.size());
+            for (LogExportProjection row : fetched) {
+                byId.put(row.getId(), row);
             }
-            for (LogExportProjection row : chunk) {
-                if (written >= exportMaxRows) {
-                    break;
+            for (Integer id : idChunk) {
+                LogExportProjection row = byId.get(id);
+                if (row != null) {
+                    rowWriter.write(row);
                 }
-                rowWriter.write(row);
-                written++;
-                cursorTs = Timestamp.from(row.getTimestampRequest());
-                cursorId = row.getId();
-            }
-            if (chunk.size() < EXPORT_CHUNK_SIZE) {
-                break;
             }
         }
     }

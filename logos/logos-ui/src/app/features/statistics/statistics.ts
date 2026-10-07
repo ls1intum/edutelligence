@@ -21,6 +21,7 @@ import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './stat
 import {
   applyTimeSeriesLabels,
   chooseDynamicTargetBuckets,
+  describeWorkerVersion,
   extractProviderHostRamMb,
   extractProviderVramMb,
   formatPercent,
@@ -29,7 +30,6 @@ import {
   isUnifiedMemoryProvider,
   modelSeriesKey,
   normalizeFeedStatus,
-  resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
   BYTES_PER_GIB,
   BYTES_PER_MIB,
@@ -54,6 +54,7 @@ import type {
   VramProviderMeta,
   VramV2Payload,
   VramV2Sample,
+  WorkerVersionChip,
 } from './statistics.models';
 
 // Child components
@@ -62,6 +63,7 @@ import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
 import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
+import { MultiSelectComponent } from '../../shared/components/multi-select/multi-select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
 import { StatisticsService } from './services/statistics.service';
 import { RequestVolumeChartComponent, ChartTooltip } from './components/request-volume-chart/request-volume-chart';
@@ -69,6 +71,7 @@ import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
+import { VersionHint } from './components/version-hint/version-hint';
 import { VramDonutComponent, type DonutSlice } from './components/vram-donut/vram-donut';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
@@ -80,6 +83,7 @@ type ProviderGlassRow = {
   name: string;
   online: boolean;
   calibrating: boolean;
+  versionChip: WorkerVersionChip | null;
   lanes: Record<string, LaneSignalData>;
   hasLanes: boolean;
   laneCount: number;
@@ -113,12 +117,14 @@ type ProviderGlassRow = {
     LaneHealthPanel,
     LaneMemoryPieComponent,
     SelectComponent,
+    MultiSelectComponent,
     RecentRequests,
     RequestVolumeChartComponent,
     SparklineComponent,
     StatKpiCardComponent,
     StatusBars,
     StatsSkeletonComponent,
+    VersionHint,
     VramDonutComponent,
     WorkerGpuPanel,
     TimeRangeBarComponent,
@@ -197,6 +203,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly feedUsers = signal<FeedFilterOption[]>([]);
   readonly feedTeams = signal<FeedFilterOption[]>([]);
   readonly feedProviders = signal<FeedFilterOption[]>([]);
+  readonly feedModels = signal<FeedFilterOption[]>([]);
 
   // ── Scope ─────────────────────────────────────────────────────────────────
   // Null on either side means "everyone". The filter lives on the page rather
@@ -323,6 +330,40 @@ export class Statistics implements OnInit, OnDestroy {
   // makes sense for the list of individual requests, not for the KPI cards and
   // charts above it, which must keep summarising the whole team/user selection.
   readonly feedStatus = signal<string | null>(null);
+  readonly feedModelIds = signal<string[]>([]);
+  readonly feedProviderIds = signal<string[]>([]);
+  readonly feedFilterActive = computed(() =>
+    this.feedStatus() !== null || this.feedModelIds().length > 0 || this.feedProviderIds().length > 0,
+  );
+  readonly feedModelOptions = computed<AppSelectOption[]>(() => this.feedModels().map(model => ({
+    value: String(model.id), label: `${model.label} (${model.requestCount.toLocaleString()})`,
+  })));
+  readonly feedProviderOptions = computed<AppSelectOption[]>(() => this.feedProviders().map(provider => ({
+    value: String(provider.id), label: `${provider.label} (${provider.requestCount.toLocaleString()})`,
+  })));
+
+  setFeedModelFilter(values: string[]): void {
+    this.feedModelIds.set(values);
+    this.applyFeedFilters();
+  }
+
+  setFeedProviderFilter(values: string[]): void {
+    this.feedProviderIds.set(values);
+    this.applyFeedFilters();
+  }
+
+  clearFeedFilters(): void {
+    this.feedStatus.set(null);
+    this.feedModelIds.set([]);
+    this.feedProviderIds.set([]);
+    this.applyFeedFilters();
+  }
+
+  private applyFeedFilters(): void {
+    this.liveFeedTotal.set(null);
+    this.requestsPending.set(true);
+    this.statsWs.setFeedFilters(this.feedStatus(), this.feedModelIds().map(Number), this.feedProviderIds().map(Number));
+  }
 
   readonly feedStatusOptions = computed<AppSelectOption[]>(() => [
     { value: '', label: 'All states' },
@@ -340,7 +381,7 @@ export class Statistics implements OnInit, OnDestroy {
 
   /** Total the feed header shows: the status-filtered count, else the KPI total. */
   readonly requestFeedTotal = computed(() =>
-    resolveFeedTotal(this.feedStatus(), this.liveFeedTotal(), this.totalRequests()),
+    this.feedFilterActive() ? this.liveFeedTotal() : this.totalRequests(),
   );
 
   setFeedStatusFilter(value: string | null): void {
@@ -356,7 +397,7 @@ export class Statistics implements OnInit, OnDestroy {
     // Only the feed changes, so only it is marked loading — the KPI cards and
     // charts keep their current (unaffected) numbers.
     this.requestsPending.set(true);
-    this.statsWs.setFeedStatus(next);
+    this.statsWs.setFeedFilters(next, this.feedModelIds().map(Number), this.feedProviderIds().map(Number));
   }
 
   // ── Raw WS signals ────────────────────────────────────────────────────────────
@@ -593,6 +634,7 @@ export class Statistics implements OnInit, OnDestroy {
         name,
         online: this._isProviderOnline(name),
         calibrating: metaByName[name]?.calibrating === true,
+        versionChip: describeWorkerVersion(metaByName[name]?.worker_version_checksum, this._isProviderOnline(name)),
         lanes,
         hasLanes: Object.keys(lanes).length > 0,
         laneCount: Object.keys(lanes).length,
@@ -932,6 +974,8 @@ export class Statistics implements OnInit, OnDestroy {
       timeline: cfg,
       scope: this.currentScope(),
       feedStatus: this.feedStatus(),
+      feedModelIds: this.feedModelIds().map(Number),
+      feedProviderIds: this.feedProviderIds().map(Number),
       interest: this.activeTab(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
@@ -1051,6 +1095,24 @@ export class Statistics implements OnInit, OnDestroy {
       this.feedTeams.set(options.teams ?? []);
       this.feedUsers.set(options.requesters ?? []);
       this.feedProviders.set(options.providers ?? []);
+      this.feedModels.set(options.models ?? []);
+
+      // Feed multi-selects keep ids that vanish from the new option lists
+      // after a range or team change — the trigger still says "N models" and
+      // those ids keep filtering while they cannot be unchecked. Prune like
+      // the single-value requester/provider scope below.
+      const modelIds = new Set(this.feedModels().map((m) => String(m.id)));
+      const providerIds = new Set(this.feedProviders().map((p) => String(p.id)));
+      const keptModels = this.feedModelIds().filter((id) => modelIds.has(id));
+      const keptProviders = this.feedProviderIds().filter((id) => providerIds.has(id));
+      if (
+        keptModels.length !== this.feedModelIds().length ||
+        keptProviders.length !== this.feedProviderIds().length
+      ) {
+        this.feedModelIds.set(keptModels);
+        this.feedProviderIds.set(keptProviders);
+        this.applyFeedFilters();
+      }
 
       // The selected requester may not be in the new list — a different team, or
       // a range they were quiet in. Leaving them selected would hold the page on
@@ -1092,6 +1154,7 @@ export class Statistics implements OnInit, OnDestroy {
 
   /** Mark every range-scoped panel as loading until the next push resolves it. */
   private markRangeChanged(): void {
+    this.liveFeedTotal.set(null);
     this.statsPending.set(true);
     this.requestsPending.set(true);
   }
@@ -1218,7 +1281,7 @@ export class Statistics implements OnInit, OnDestroy {
     // between. Unfiltered pushes have no total, and switching the filter
     // clears this signal, so the borrowed aggregate is never shown for a
     // set it does not describe.
-    if (this.feedStatus() && typeof payload.total === 'number') {
+    if (this.feedFilterActive() && typeof payload.total === 'number') {
       this.liveFeedTotal.set(payload.total);
     }
   }
@@ -1315,6 +1378,10 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Raw-series updaters ───────────────────────────────────────────────────────
 
+  /**
+   * Replaces everything held per provider (samples, metadata, devices) with a
+   * full-day payload, as the websocket's init message delivers it.
+   */
   private replaceRawVramSeries(providers: any[]): void {
     const next: Record<string, VramV2Sample[]> = {};
     const nextMeta: Record<string, VramProviderMeta> = {};
@@ -1341,6 +1408,7 @@ export class Statistics implements OnInit, OnDestroy {
         last_heartbeat: provider.last_heartbeat,
         connected_at: provider.connected_at,
         worker_started_at: provider.worker_started_at,
+        worker_version_checksum: provider.worker_version_checksum,
         calibrating: Boolean(provider.calibrating),
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
@@ -1353,6 +1421,12 @@ export class Statistics implements OnInit, OnDestroy {
     this.devicesByProvider.set(nextDevices);
   }
 
+  /**
+   * Applies a delta payload: each provider's metadata and devices first, then
+   * its new samples merged into the series already held. A delta can carry no
+   * samples at all (a worker went offline, or reports another version), so the
+   * metadata is taken from it whether or not samples came with it.
+   */
   private appendRawVramSeries(providers: any[]): void {
     if (!providers || providers.length === 0) return;
 
@@ -1370,6 +1444,7 @@ export class Statistics implements OnInit, OnDestroy {
         last_heartbeat: provider.last_heartbeat,
         connected_at: provider.connected_at,
         worker_started_at: provider.worker_started_at,
+        worker_version_checksum: provider.worker_version_checksum,
         calibrating: Boolean(provider.calibrating),
       };
       const current = prevMeta[provider.name];
@@ -1383,6 +1458,7 @@ export class Statistics implements OnInit, OnDestroy {
         current?.last_heartbeat === meta.last_heartbeat &&
         current?.connected_at === meta.connected_at &&
         current?.worker_started_at === meta.worker_started_at &&
+        current?.worker_version_checksum === meta.worker_version_checksum &&
         Boolean(current?.calibrating) === meta.calibrating;
       if (!same) {
         if (nextMeta === prevMeta) nextMeta = { ...prevMeta };
