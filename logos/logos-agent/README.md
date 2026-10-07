@@ -377,6 +377,15 @@ requested. Empty the variable to leave only CODEOWNERS.
 agent by name: GitHub never puts the bot login in `requested_reviewers` for
 a team request, so without this list the gesture was silent.
 
+**A requested review is a review, not a commit.** Being added as a
+reviewer — by name or through a team — never gets the agent the branch:
+the session reads `refs/pull/<n>/head`, may not push, and its findings land
+as one review whose inline comments (`review-comments.json`) sit on the
+lines they are about, with `reply.md` as the summary. A line GitHub cannot
+place turns the remarks into one ordinary comment instead. A change on a
+pull request the agent does not own is asked for in a comment by somebody
+whose word counts (see below).
+
 **It reads the pull request it is asked about.** A question on somebody
 else's pull request used to be answered from a checkout of the default
 branch — the agent was asked about a diff it had never seen, and could only

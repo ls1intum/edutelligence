@@ -16,9 +16,20 @@ export interface CreateUserResult extends PlatformUser {
   logos_keys: string[];
 }
 
+export interface ImportPreview {
+  columns: string[];
+  rows: string[][];
+}
+
+export interface ImportRow {
+  prename: string;
+  name: string;
+  email: string;
+}
+
 export interface ImportResult {
   summary: { created: number; existing: number; failed: number };
-  rows: { email: string; username: string; apiKey: string; team: string; status: string; error?: string }[];
+  rows: { email: string; username: string; status: string; error?: string }[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -45,9 +56,13 @@ export class UserManagementService {
     return firstValueFrom(this.http.delete<void>(`/api/users/${userId}`));
   }
 
-  importUsers(file: File): Promise<ImportResult> {
+  previewImport(file: File): Promise<ImportPreview> {
     const formData = new FormData();
     formData.append('file', file);
-    return firstValueFrom(this.http.post<ImportResult>('/api/users/import', formData));
+    return firstValueFrom(this.http.post<ImportPreview>('/api/users/import/preview', formData));
+  }
+
+  importUsers(rows: ImportRow[]): Promise<ImportResult> {
+    return firstValueFrom(this.http.post<ImportResult>('/api/users/import', { rows }));
   }
 }

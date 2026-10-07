@@ -25,7 +25,10 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  *
  * <p>Mirrors {@code logos.billing.budget.check_monthly_budget}: application keys
  * use the per-key limit; developer/personal keys check the team monthly cap
- * (developer-key spend only) then the personal/key default limit.
+ * (developer-key spend only) then the personal/key default limit. When a
+ * {@code team_provider_budgets} row exists for the resolved cloud provider, that
+ * provider uses its own cap (null = unlimited / sponsored) and its spend does
+ * not draw from the team's default monthly member budget.
  *
  * <h2>In-memory cache and overshoot bound</h2>
  *
@@ -118,6 +121,16 @@ public class GatewayBudgetService {
      * @throws ResponseStatusException 402 when the key/team is over budget
      */
     public void enforceCloudBudget(GatewayKey key) {
+        enforceCloudBudget(key, null);
+    }
+
+    /**
+     * @param providerId cloud provider for this request; when non-null, a
+     *                   {@code team_provider_budgets} row for the team takes
+     *                   that provider out of the default team bucket
+     * @throws ResponseStatusException 402 when the key/team is over budget
+     */
+    public void enforceCloudBudget(GatewayKey key, Integer providerId) {
         String monthStart = YearMonth.from(LocalDate.now(clock.withZone(ZoneOffset.UTC)))
             .atDay(1)
             .toString();
@@ -135,13 +148,38 @@ public class GatewayBudgetService {
         }
 
         if (key.teamId() != null) {
-            Long teamLimit = teamMonthlyBudget(key.teamId());
-            if (teamLimit != null && teamLimit > 0) {
-                long teamUsed = teamBudgetUsage(key.teamId(), monthStart);
-                if (teamUsed >= teamLimit) {
-                    throw new ResponseStatusException(
-                        HttpStatus.PAYMENT_REQUIRED,
-                        "Team monthly budget exceeded. Contact your admin.");
+            if (providerId != null) {
+                ProviderBudgetOverride override = teamProviderBudget(key.teamId(), providerId);
+                if (override.exists()) {
+                    // Dedicated / sponsored bucket for this provider only.
+                    if (override.limitMicroCents() != null) {
+                        long used = teamProviderBudgetUsage(key.teamId(), providerId, monthStart);
+                        if (used >= override.limitMicroCents()) {
+                            throw new ResponseStatusException(
+                                HttpStatus.PAYMENT_REQUIRED,
+                                "Team monthly budget exceeded for this provider. Contact your admin.");
+                        }
+                    }
+                } else {
+                    Long teamLimit = teamMonthlyBudget(key.teamId());
+                    if (teamLimit != null && teamLimit > 0) {
+                        long teamUsed = teamDefaultBudgetUsage(key.teamId(), monthStart);
+                        if (teamUsed >= teamLimit) {
+                            throw new ResponseStatusException(
+                                HttpStatus.PAYMENT_REQUIRED,
+                                "Team monthly budget exceeded. Contact your admin.");
+                        }
+                    }
+                }
+            } else {
+                Long teamLimit = teamMonthlyBudget(key.teamId());
+                if (teamLimit != null && teamLimit > 0) {
+                    long teamUsed = teamBudgetUsage(key.teamId(), monthStart);
+                    if (teamUsed >= teamLimit) {
+                        throw new ResponseStatusException(
+                            HttpStatus.PAYMENT_REQUIRED,
+                            "Team monthly budget exceeded. Contact your admin.");
+                    }
                 }
             }
         }
@@ -229,6 +267,33 @@ public class GatewayBudgetService {
         });
     }
 
+    /**
+     * Dedicated per-provider override, if any. {@code exists=false} means the
+     * team default bucket applies; {@code exists=true} with a null limit means
+     * unlimited for that provider.
+     */
+    private ProviderBudgetOverride teamProviderBudget(int teamId, int providerId) {
+        ProviderBudgetOverride cached = cached(
+            "limit:team:" + teamId + ":provider:" + providerId,
+            () -> {
+                MapSqlParameterSource params = new MapSqlParameterSource()
+                    .addValue("tid", teamId)
+                    .addValue("pid", providerId);
+                return jdbc.query("""
+                    SELECT monthly_budget_micro_cents
+                    FROM team_provider_budgets
+                    WHERE team_id = :tid AND provider_id = :pid
+                    """, params, rs -> {
+                    if (!rs.next()) {
+                        return ProviderBudgetOverride.absent();
+                    }
+                    long v = rs.getLong(1);
+                    return ProviderBudgetOverride.present(rs.wasNull() ? null : v);
+                });
+            });
+        return cached == null ? ProviderBudgetOverride.absent() : cached;
+    }
+
     /** Month-to-date developer-key spend for one team; same two parts as {@link #apiKeyBudgetUsage}. */
     private long teamBudgetUsage(int teamId, String monthStart) {
         Long v = cached("usage:team:" + teamId + ":" + monthStart, () -> {
@@ -264,6 +329,89 @@ public class GatewayBudgetService {
     }
 
     /**
+     * Developer-key spend that still draws from the team's default monthly
+     * budget: everything except providers that have a {@code team_provider_budgets}
+     * override row.
+     */
+    private long teamDefaultBudgetUsage(int teamId, String monthStart) {
+        Long v = cached("usage:team:" + teamId + ":default:" + monthStart, () -> {
+            MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("tid", teamId)
+                .addValue("month", monthStart);
+            Long total = jdbc.queryForObject("""
+                SELECT COALESCE((
+                    SELECT SUM(lec.cost_micro_cents)
+                    FROM log_entry_cost lec
+                    JOIN log_entry le ON le.id = lec.log_entry_id
+                    WHERE lec.api_key_id = ANY(
+                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                          )
+                      AND lec.timestamp_request >= CAST(:month AS DATE)
+                      AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                      AND (le.provider_id IS NULL OR le.provider_id NOT IN (
+                            SELECT provider_id FROM team_provider_budgets WHERE team_id = :tid
+                          ))
+                ), 0) + COALESCE((
+                    SELECT SUM(le.settled_cost_micro_cents)
+                    FROM log_entry le
+                    WHERE le.api_key_id = ANY(
+                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                          )
+                      AND le.result_status IS NULL
+                      AND le.request_id LIKE 'gw-%'
+                      AND le.settled_cost_micro_cents IS NOT NULL
+                      AND le.settled_cost_micro_cents > 0
+                      AND le.timestamp_request >= CAST(:month AS DATE)
+                      AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                      AND (le.provider_id IS NULL OR le.provider_id NOT IN (
+                            SELECT provider_id FROM team_provider_budgets WHERE team_id = :tid
+                          ))
+                ), 0)
+                """, params, Long.class);
+            return total == null ? 0L : total;
+        });
+        return v == null ? 0L : v;
+    }
+
+    /** Developer-key spend on one provider for the team (settled + in-flight). */
+    private long teamProviderBudgetUsage(int teamId, int providerId, String monthStart) {
+        Long v = cached("usage:team:" + teamId + ":provider:" + providerId + ":" + monthStart, () -> {
+            MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("tid", teamId)
+                .addValue("pid", providerId)
+                .addValue("month", monthStart);
+            Long total = jdbc.queryForObject("""
+                SELECT COALESCE((
+                    SELECT SUM(lec.cost_micro_cents)
+                    FROM log_entry_cost lec
+                    JOIN log_entry le ON le.id = lec.log_entry_id
+                    WHERE lec.api_key_id = ANY(
+                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                          )
+                      AND le.provider_id = :pid
+                      AND lec.timestamp_request >= CAST(:month AS DATE)
+                      AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                ), 0) + COALESCE((
+                    SELECT SUM(le.settled_cost_micro_cents)
+                    FROM log_entry le
+                    WHERE le.api_key_id = ANY(
+                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                          )
+                      AND le.provider_id = :pid
+                      AND le.result_status IS NULL
+                      AND le.request_id LIKE 'gw-%'
+                      AND le.settled_cost_micro_cents IS NOT NULL
+                      AND le.settled_cost_micro_cents > 0
+                      AND le.timestamp_request >= CAST(:month AS DATE)
+                      AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                ), 0)
+                """, params, Long.class);
+            return total == null ? 0L : total;
+        });
+        return v == null ? 0L : v;
+    }
+
+    /**
      * Add a reservation just written for this key to the cached month-to-date
      * usage, so the next admission on this instance counts it.
      *
@@ -285,8 +433,14 @@ public class GatewayBudgetService {
      * <p>The team snapshot counts developer-key spend only, so only a
      * developer key's reservation is added to it. A snapshot that is not
      * cached needs nothing: its next load reads the row from the database.
+     * When {@code providerId} is set, the bump goes to the provider override
+     * bucket if one exists, otherwise to the team default bucket.
      */
     void noteReservation(GatewayKey key, long microCents) {
+        noteReservation(key, microCents, null);
+    }
+
+    void noteReservation(GatewayKey key, long microCents, Integer providerId) {
         if (key == null || microCents <= 0 || ttlMillis <= 0) {
             return;
         }
@@ -296,6 +450,15 @@ public class GatewayBudgetService {
         addToCachedUsage("usage:key:" + key.id() + ":" + monthStart, microCents);
         if (key.teamId() != null && key.keyType() == ApiKeyType.developer) {
             addToCachedUsage("usage:team:" + key.teamId() + ":" + monthStart, microCents);
+            if (providerId != null && teamProviderBudget(key.teamId(), providerId).exists()) {
+                addToCachedUsage(
+                    "usage:team:" + key.teamId() + ":provider:" + providerId + ":" + monthStart,
+                    microCents);
+            } else {
+                addToCachedUsage(
+                    "usage:team:" + key.teamId() + ":default:" + monthStart,
+                    microCents);
+            }
         }
     }
 
@@ -426,6 +589,21 @@ public class GatewayBudgetService {
     record CacheEntry(Object value, long loadedAtMs, long loadStartedAtMs) {
         CacheEntry(Object value, long loadedAtMs) {
             this(value, loadedAtMs, loadedAtMs);
+        }
+    }
+
+    /**
+     * {@code exists} false → use the team default budget; true with a null
+     * limit → unlimited for that provider; true with any other limit (0
+     * included) → cap.
+     */
+    record ProviderBudgetOverride(boolean exists, Long limitMicroCents) {
+        static ProviderBudgetOverride absent() {
+            return new ProviderBudgetOverride(false, null);
+        }
+
+        static ProviderBudgetOverride present(Long limitMicroCents) {
+            return new ProviderBudgetOverride(true, limitMicroCents);
         }
     }
 
