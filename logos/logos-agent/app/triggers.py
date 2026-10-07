@@ -160,10 +160,13 @@ def max_active_sessions(ceiling: int | None = None) -> int:
 def mentions_agent(body: str) -> bool:
     """Whether a comment addresses the agent by name.
 
-    Matched on a word boundary so `@LogosOSSAgentBot` is not this account,
-    and case-insensitively because GitHub logins are.
+    Matched so a longer login (`@LogosOSSAgentBot`) is not this account, and
+    case-insensitively because GitHub logins are. A trailing ``(?!\\w)`` is
+    used instead of ``\\b``: bot logins end in ``]``, which is not a word
+    character, so a word boundary after ``]`` would miss mentions followed
+    by whitespace or the end of the comment.
     """
-    return re.search(rf"@{re.escape(settings.github_login)}\b", body or "", re.IGNORECASE) is not None
+    return re.search(rf"@{re.escape(settings.github_login)}(?!\w)", body or "", re.IGNORECASE) is not None
 
 
 def is_bot(login: str) -> bool:

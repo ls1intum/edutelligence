@@ -714,6 +714,26 @@ class TestMentionMatching:
     def test_no_mention_is_no_mention(self):
         assert not triggers.mentions_agent("nothing to do with anyone")
 
+    def test_a_bot_login_is_matched_before_whitespace(self, monkeypatch):
+        # Bot logins end in `]`, which is not a word character, so `\b`
+        # after `]` would miss `@LogosOSSAgent[bot] please look`.
+        bot = f"{AGENT}[bot]"
+        monkeypatch.setattr(triggers, "settings", replace(triggers.settings, github_login=bot))
+
+        assert triggers.mentions_agent(f"hey @{bot} please look")
+
+    def test_a_bot_login_is_matched_at_end_of_text(self, monkeypatch):
+        bot = f"{AGENT}[bot]"
+        monkeypatch.setattr(triggers, "settings", replace(triggers.settings, github_login=bot))
+
+        assert triggers.mentions_agent(f"please look @{bot}")
+
+    def test_a_longer_bot_login_is_not_this_account(self, monkeypatch):
+        bot = f"{AGENT}[bot]"
+        monkeypatch.setattr(triggers, "settings", replace(triggers.settings, github_login=bot))
+
+        assert not triggers.mentions_agent(f"@{bot}Extra is a different account")
+
     def test_bots_are_recognised(self):
         assert triggers.is_bot("coderabbitai[bot]")
         assert triggers.is_bot("github-actions")

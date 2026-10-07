@@ -294,14 +294,16 @@ container is a minted token, so a credential that is published by accident
 stops being one within its own lifetime.
 
 Run it: create the app, give it these repository permissions — Contents,
-Pull requests, and Issues *read and write*; Checks *read*; Workflows *read
-and write*; Metadata *read* — plus Organisation members *read* if the
-deployment uses `LOGOS_AGENT_TRUSTED_TEAMS`, install it on the repository,
-and set `LOGOS_AGENT_GITHUB_APP_ID` and `LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY`
-(the installation id is optional — the service resolves it from the
-repository at the first mint). Set `LOGOS_AGENT_GITHUB_LOGIN` to the app's
-bot user, for example `LogosOSSAgent[bot]`; while the app is configured the
-personal tokens are ignored.
+Pull requests, and Issues *read and write*; Checks *read*; Actions *read
+and write* — the runner dispatches the dev deploy and reads its runs, and
+no other permission grants those; Workflows *read and write*; Metadata
+*read* — plus Organisation members *read* if the deployment uses
+`LOGOS_AGENT_TRUSTED_TEAMS`, install it on the repository, and set
+`LOGOS_AGENT_GITHUB_APP_ID` and `LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY` (the
+installation id is optional — the service resolves it from the repository
+at the first mint). Set `LOGOS_AGENT_GITHUB_LOGIN` to the app's bot user,
+for example `LogosOSSAgent[bot]`; while the app is configured the personal
+tokens are ignored.
 
 One difference from the two-token setup: one kind of token then serves every
 phase, and it carries the app's full permissions, including dispatching a
@@ -325,10 +327,11 @@ for it.
 
 The account is not taken on trust. Every credential is checked against it
 when the service starts, and one belonging to somebody else stops the service
-rather than committing agent work under that person's name. With a GitHub
-App that is the minted installation token, checked once — one kind of token
-serves both the runner and the containers. The finalizer checks again inside
-the container, immediately before it pushes.
+rather than committing agent work under that person's name. With personal
+access tokens that is `GET /user`. With a GitHub App the check asks the App
+for its bot user and the minted installation token which App it belongs to —
+installation tokens cannot answer `/user` — and the finalizer re-checks the
+token against the App id inside the container, immediately before it pushes.
 
 **Two tokens if you can.** A second token of the same account *without*
 `workflow` scope, given to session containers, means a session cannot dispatch
