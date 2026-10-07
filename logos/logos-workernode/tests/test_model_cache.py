@@ -19,6 +19,10 @@ from logos_worker_node.model_cache import ModelRamCache, _hf_model_dir_name, cre
 def test_hf_model_dir_name():
     assert _hf_model_dir_name("Qwen/Qwen2.5-Coder-7B") == "models--Qwen--Qwen2.5-Coder-7B"
     assert _hf_model_dir_name("meta-llama/Llama-3.1-8B") == "models--meta-llama--Llama-3.1-8B"
+    # Sibling GGUF quant / file references share the repository directory.
+    assert _hf_model_dir_name("org/model-GGUF:Q4_K_M") == "models--org--model-GGUF"
+    assert _hf_model_dir_name("org/model-GGUF:Q8_0") == "models--org--model-GGUF"
+    assert _hf_model_dir_name("org/model-GGUF/weights-Q4_K_M.gguf") == "models--org--model-GGUF"
 
 
 # ---------------------------------------------------------------------------
@@ -690,6 +694,69 @@ async def test_reclaim_spare_a_reservation_taken_after_the_keep_snapshot(ram_cac
     # the re-check spares live reservations without over-protecting.
     cache.release_cache_use(model)
     assert await cache.reclaim(keep=set()) == [model]
+    assert cache.cached_models() == []
+
+
+@pytest.mark.asyncio
+async def test_reclaim_spares_shared_gguf_directory_protected_by_sibling_quant(tmp_path):
+    """Sibling GGUF quant references share one tmpfs directory.
+
+    After caching ``repo:Q4_K_M``, reclaiming that reference while
+    ``repo:Q8_0`` is protected (live lane or calibration reservation) must
+    not delete the shared tree — otherwise the protected lane's next weight
+    reload loses its cache.
+    """
+    source_hf = tmp_path / "source" / "hub"
+    source_hf.mkdir(parents=True)
+    tmpfs = tmp_path / "ramcache"
+    tmpfs.mkdir()
+
+    repo = "org/model-GGUF"
+    q4 = f"{repo}:Q4_K_M"
+    q8 = f"{repo}:Q8_0"
+    model_dir = source_hf / "models--org--model-GGUF"
+    blobs = model_dir / "blobs"
+    blobs.mkdir(parents=True)
+    blob_path = blobs / "sha256-gguf"
+    with open(blob_path, "wb") as f:
+        f.seek(12 * 1024 * 1024 - 1)
+        f.write(b"\x00")
+    refs = model_dir / "refs"
+    refs.mkdir()
+    (refs / "main").write_text("abc123")
+    snapshots = model_dir / "snapshots" / "abc123"
+    snapshots.mkdir(parents=True)
+    (snapshots / "model-Q4_K_M.gguf").symlink_to("../../blobs/sha256-gguf")
+    (snapshots / "model-Q8_0.gguf").symlink_to("../../blobs/sha256-gguf")
+
+    cache = ModelRamCache(tmpfs_path=str(tmpfs), source_hf_hub_path=str(source_hf))
+    cache._total_tmpfs_bytes = lambda: 0
+
+    await cache.ensure_cached(q4)
+    assert cache.is_cached(q4)
+    assert cache.is_cached(q8)  # same repository identity
+    assert cache.cached_models() == [repo]
+    shared = Path(tmpfs) / "hub" / "models--org--model-GGUF"
+    assert shared.exists()
+
+    # Protect the sibling quant (as a live lane's keep entry would) and ask
+    # reclaim to drop the reference that originally admitted the copy.
+    removed = await cache.reclaim(keep={q8})
+    assert removed == []
+    assert cache.is_cached(q4)
+    assert cache.is_cached(q8)
+    assert shared.exists()
+
+    # A live reservation under either quant form also spares the tree when
+    # keep is empty (stale snapshot), matching the late-reservation path.
+    cache.reserve_cache_use(q8)
+    assert await cache.reclaim(keep=set()) == []
+    assert shared.exists()
+    cache.release_cache_use(q8)
+
+    # Once nothing protects the repository, reclaim may free it.
+    assert await cache.reclaim(keep=set()) == [repo]
+    assert not shared.exists()
     assert cache.cached_models() == []
 
 

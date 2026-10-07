@@ -27,7 +27,7 @@ from logos_worker_node.gpu_watchdog import GpuWatchdog
 from logos_worker_node.lane_manager import LaneManager, _lane_id_from_config
 from logos_worker_node.logos_bridge import LogosBridgeClient
 from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
-from logos_worker_node.model_cache import ModelRamCache, _DisabledModelRamCache, create_model_cache
+from logos_worker_node.model_cache import ModelRamCache, _cache_identity, _DisabledModelRamCache, create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import ProcessState, model_can_sleep
 from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
@@ -656,13 +656,19 @@ def _build_ram_cache_candidates(
     reserve_replicas = dict(reserve_replicas or {})
     candidates: list[CacheCandidate] = []
     uncalibrated: list[str] = []
+    # Repository identity: sibling GGUF quant references share one tmpfs
+    # directory, so the planner must not admit the same tree twice (once per
+    # quant) or miss a resident that was admitted under a different form.
     seen: set[str] = set()
     for m in caps:
         profile = model_profiles.get_profile(m)
         if profile is None or (profile.base_residency_mb or 0) <= 0:
             uncalibrated.append(m)
             continue
-        seen.add(m)
+        identity = _cache_identity(m)
+        if identity in seen:
+            continue
+        seen.add(identity)
         candidates.append(
             _cache_candidate(
                 cfg,
@@ -678,9 +684,10 @@ def _build_ram_cache_candidates(
             )
         )
     for m in sorted(reserve_replicas):
-        if m in seen:
+        identity = _cache_identity(m)
+        if identity in seen:
             continue
-        seen.add(m)
+        seen.add(identity)
         candidates.append(
             _cache_candidate(
                 cfg,
@@ -705,9 +712,10 @@ def _build_ram_cache_candidates(
     # ensure_cached() admits the copy without the host safety margin.
     # Sleep-enabled pending lanes are already reserve-backed (in `seen`).
     for m in sorted(pending_lane_models or set()):
-        if m in seen:
+        identity = _cache_identity(m)
+        if identity in seen:
             continue
-        seen.add(m)
+        seen.add(identity)
         candidates.append(
             CacheCandidate(
                 name=m,
@@ -739,7 +747,11 @@ def _build_ram_cache_candidates(
         | set(model_cache.pending_or_caching())
         | set(model_cache.cache_use_reservations())
     )
-    for m in sorted(residents - seen):
+    for m in sorted(residents):
+        identity = _cache_identity(m)
+        if identity in seen:
+            continue
+        seen.add(identity)
         candidates.append(
             CacheCandidate(
                 name=m,

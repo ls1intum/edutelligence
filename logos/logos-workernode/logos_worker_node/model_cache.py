@@ -52,6 +52,20 @@ _BULK_FILE_THRESHOLD_BYTES = 10 * 1024 * 1024
 SYNC_BACKGROUND_WAIT_TIMEOUT_S = 1800.0
 
 
+def _cache_identity(model_name: str) -> str:
+    """Repository identity for RAM-cache ownership, locking, and protection.
+
+    GGUF references (``repo:quant``, ``repo/file.gguf``) share one physical
+    ``models--org--name/`` directory. Bookkeeping must use that same identity
+    — otherwise reclaiming one quant reference can ``evict()`` the shared
+    tree while another quant of the same repo is still protected by a live
+    lane or calibration reservation.
+    """
+    from logos_worker_node import gguf  # noqa: PLC0415 — lazy: keep gguf out of module import
+
+    return gguf.repo_id_of(model_name)
+
+
 def _hf_model_dir_name(model_name: str) -> str:
     """Convert a model reference to its HF cache dir name (``models--org--name``).
 
@@ -335,9 +349,12 @@ class ModelRamCache:
         double release is a harmless no-op rather than corrupting the count.
         Thread-safe: this runs in executor threads, and the guard also
         serialises the count against reclaim's final eviction decision.
+        Keyed on repository identity so one GGUF quant's reservation protects
+        the shared directory every sibling reference reads.
         """
+        key = _cache_identity(model_name)
         with self._cache_use_guard:
-            self._cache_use_refs[model_name] = self._cache_use_refs.get(model_name, 0) + 1
+            self._cache_use_refs[key] = self._cache_use_refs.get(key, 0) + 1
 
     def release_cache_use(self, model_name: str) -> None:
         """Drop one reservation taken by ``reserve_cache_use``.
@@ -345,12 +362,13 @@ class ModelRamCache:
         A release with no matching reservation is ignored (the count is clamped
         at zero) so an over-release cannot drive the count negative.
         """
+        key = _cache_identity(model_name)
         with self._cache_use_guard:
-            refs = self._cache_use_refs.get(model_name, 0)
+            refs = self._cache_use_refs.get(key, 0)
             if refs <= 1:
-                self._cache_use_refs.pop(model_name, None)
+                self._cache_use_refs.pop(key, None)
             else:
-                self._cache_use_refs[model_name] = refs - 1
+                self._cache_use_refs[key] = refs - 1
 
     def cache_use_reservations(self) -> set[str]:
         """Models with an outstanding ``reserve_cache_use``.
@@ -384,6 +402,7 @@ class ModelRamCache:
         Returns the path to use for loading (tmpfs path if cached, source
         path if not).  Uses ``rsync -a`` (snapshot symlinks stay links).
         """
+        model_name = _cache_identity(model_name)
         lock = await self._get_model_lock(model_name)
         async with lock:
             if model_name in self._cached_models:
@@ -519,6 +538,7 @@ class ModelRamCache:
         copy implementations delete, write and rename that tree); on a
         timed-out or unreachable wait the model is served from the source.
         """
+        model_name = _cache_identity(model_name)
         may_copy, writer_lock = self._writer_lock_for_sync_copy(model_name)
         if not may_copy:
             logger.warning(
@@ -537,6 +557,7 @@ class ModelRamCache:
         """The admission + copy body of ensure_cached_sync, with the
         per-model writer lock held by the wrapper (lock-free when no
         background worker exists to race)."""
+        # Caller (ensure_cached_sync) already canonicalized to repository identity.
         if model_name in self._cached_models:
             cached = self._cache_hub / _hf_model_dir_name(model_name)
             if cached.exists():
@@ -757,6 +778,7 @@ class ModelRamCache:
     def is_cached(self, model_name: str) -> bool:
         """Return True when the model is fully copied into tmpfs and
         the directory still exists. Cheap and lock-free."""
+        model_name = _cache_identity(model_name)
         if model_name not in self._cached_models:
             return False
         return (self._cache_hub / _hf_model_dir_name(model_name)).exists()
@@ -774,7 +796,9 @@ class ModelRamCache:
         to invoke from anywhere once the worker is running.
         """
         # Coerce to a fresh list because the caller may reuse the input.
-        wanted = [m for m in models if isinstance(m, str) and m.strip()]
+        # Repository identity collapses sibling GGUF quant references onto
+        # one queue entry for the shared directory.
+        wanted = [_cache_identity(m) for m in models if isinstance(m, str) and m.strip()]
         try:
             self._worker_loop = asyncio.get_running_loop()
         except RuntimeError:  # pragma: no cover - called from a thread
@@ -793,6 +817,7 @@ class ModelRamCache:
     def _enqueue(self, model_name: str, *, priority: bool) -> asyncio.Event:
         """Internal: place *model_name* on the queue (or bump to front when
         ``priority=True``) and return the completion event."""
+        model_name = _cache_identity(model_name)
         event = self._ensure_completion_event(model_name)
         # Already cached → event is already set; nothing to enqueue.
         if self.is_cached(model_name):
@@ -834,6 +859,7 @@ class ModelRamCache:
         Safe to call before :meth:`start_background_caching` — in that
         case a one-off worker task is started just for this request.
         """
+        model_name = _cache_identity(model_name)
         if self.is_cached(model_name):
             return True
         self._worker_loop = asyncio.get_running_loop()
@@ -904,6 +930,7 @@ class ModelRamCache:
 
     def evict(self, model_name: str) -> None:
         """Remove a model from the cache to free space."""
+        model_name = _cache_identity(model_name)
         target = self._cache_hub / _hf_model_dir_name(model_name)
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
@@ -968,12 +995,19 @@ class ModelRamCache:
           source) instead of reading a half-deleted entry — and a late
           reservation spares the model instead of being torn out from under
           the probe.
+
+        * ``keep`` entries and cached keys are compared by repository
+          identity: a live lane on ``repo:Q8_0`` must spare the shared
+          directory even when the cache entry was admitted under
+          ``repo:Q4_K_M``.
         """
+        keep_ids = {_cache_identity(m) for m in keep}
+        caching_now = _cache_identity(self._caching_now) if self._caching_now else None
         removed: list[str] = []
         for model_name in sorted(self._cached_models):
-            if model_name in keep:
+            if model_name in keep_ids:
                 continue
-            if model_name == self._caching_now:
+            if model_name == caching_now:
                 continue
             lock = await self._get_model_lock(model_name)
             async with lock:
@@ -989,7 +1023,7 @@ class ModelRamCache:
                     self._release_queue_entry(model_name)
                     self.evict(model_name)
                 removed.append(model_name)
-        for model_name in [m for m in self._cache_queue if m not in keep]:
+        for model_name in [m for m in self._cache_queue if m not in keep_ids]:
             self._release_queue_entry(model_name)
         return removed
 
@@ -1000,6 +1034,7 @@ class ModelRamCache:
         is still False, so a waiter proceeds from disk instead of waiting
         out its timeout.
         """
+        model_name = _cache_identity(model_name)
         if model_name in self._cache_queue:
             self._cache_queue.remove(model_name)
         event = self._completion_events.get(model_name)
@@ -1021,6 +1056,7 @@ class ModelRamCache:
 
     def get_effective_hf_home(self, model_name: str) -> str:
         """Return tmpfs-based HF_HOME if cached, else source HF_HOME."""
+        model_name = _cache_identity(model_name)
         if model_name in self._cached_models:
             cached = self._cache_hub / _hf_model_dir_name(model_name)
             if cached.exists():
@@ -1089,6 +1125,7 @@ class ModelRamCache:
         return _has_bulk_file(src)
 
     async def _get_model_lock(self, model_name: str) -> asyncio.Lock:
+        model_name = _cache_identity(model_name)
         async with self._global_lock:
             if model_name not in self._locks:
                 self._locks[model_name] = asyncio.Lock()
