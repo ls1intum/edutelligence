@@ -22,7 +22,7 @@ class UserServicePreviewImportTest {
         // names, so `columns` must be a flat list of strings — a nested list
         // would serialize as an array of arrays and break the preview.
         List<?> columns = (List<?>) result.get("columns");
-        assertThat(columns).containsExactly("First Name", "Last Name", "Email");
+        assertThat(columns).isEqualTo(List.of("First Name", "Last Name", "Email"));
         assertThat(columns.get(0)).isInstanceOf(String.class);
         assertThat(result.get("rows")).isEqualTo(List.of(List.of("Tobias", "Wasner", "tobias.wasner@tum.de")));
     }
@@ -34,7 +34,7 @@ class UserServicePreviewImportTest {
         Map<String, Object> result = service.previewImport(
             new MockMultipartFile("file", "empty.csv", "text/csv", new byte[0]));
 
-        assertThat(result.get("columns")).isEmpty();
-        assertThat(result.get("rows")).isEmpty();
+        assertThat(result.get("columns")).isEqualTo(List.of());
+        assertThat(result.get("rows")).isEqualTo(List.of());
     }
 }
