@@ -654,10 +654,10 @@ WHERE a.commit_sha = 'abc123docsrolescreenshots'
 
 INSERT INTO ai_llm_call_recommendations (
     analysis_id, workflow_id, team_id, file_path, start_line, end_line,
-    detected_model, recommended_sla, objective_priority, confidence, justification, review_status
+    detected_model, recommended_slo, objective_priority, confidence, justification, review_status
 )
 SELECT a.id, w.id, a.team_id, r.file_path, r.start_line, r.end_line,
-       r.detected_model, r.recommended_sla, r.objective_priority::jsonb,
+       r.detected_model, r.recommended_slo, r.objective_priority::jsonb,
        r.confidence, r.justification, 'pending'
 FROM ai_workflow_analyses a
 JOIN ai_workflows w ON w.analysis_id = a.id
@@ -671,7 +671,7 @@ JOIN (VALUES
     ('logos/docs/seed/role-screenshots.sql', 1, 1, NULL,
      'ux-background', '["price","quality","latency"]', 0.66,
      'Offline seed / batch documentation path.')
-) AS r(file_path, start_line, end_line, detected_model, recommended_sla, objective_priority, confidence, justification)
+) AS r(file_path, start_line, end_line, detected_model, recommended_slo, objective_priority, confidence, justification)
   ON true
 WHERE a.commit_sha = 'abc123docsrolescreenshots'
   AND NOT EXISTS (
@@ -694,18 +694,18 @@ WHERE a.commit_sha = 'abc123docsrolescreenshots'
   );
 
 INSERT INTO ai_llm_call_recommendations (
-    analysis_id, team_id, file_path, start_line, end_line, recommended_sla, objective_priority,
-    confidence, justification, review_status, confirmed_sla, confirmed_objective_priority, reviewed_at
+    analysis_id, team_id, file_path, start_line, end_line, recommended_slo, objective_priority,
+    confidence, justification, review_status, confirmed_slo, confirmed_objective_priority, reviewed_at
 )
-SELECT p.id, p.team_id, r.file_path, r.line, r.line, r.sla, r.priority::jsonb, 0.7, r.why,
-       'accepted', r.sla, r.priority::jsonb, now() - interval '20 hours'
+SELECT p.id, p.team_id, r.file_path, r.line, r.line, r.slo, r.priority::jsonb, 0.7, r.why,
+       'accepted', r.slo, r.priority::jsonb, now() - interval '20 hours'
 FROM ai_workflow_analyses p
 JOIN (VALUES
     ('logos/logos-agent/app/sessions.py', 1480, 'ux-high-prio', '["quality","latency","price"]',
      'Async agent helper work.'),
     ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 'ux-high-prio',
      '["quality","latency","price"]', 'Team detail load.')
-) AS r(file_path, line, sla, priority, why) ON true
+) AS r(file_path, line, slo, priority, why) ON true
 WHERE p.commit_sha = 'abc122docsrolescreenshots'
   AND NOT EXISTS (
       SELECT 1 FROM ai_llm_call_recommendations x WHERE x.analysis_id = p.id
@@ -723,12 +723,12 @@ UPDATE ai_llm_call_recommendations cur
 UPDATE ai_llm_call_recommendations cur
    SET review_status = prev.review_status,
        review_carried_over = TRUE,
-       confirmed_sla = prev.confirmed_sla,
+       confirmed_slo = prev.confirmed_slo,
        confirmed_objective_priority = prev.confirmed_objective_priority,
        reviewed_at = prev.reviewed_at
   FROM ai_llm_call_recommendations prev
  WHERE cur.previous_recommendation_id = prev.id
-   AND cur.recommended_sla = prev.confirmed_sla
+   AND cur.recommended_slo = prev.confirmed_slo
    AND cur.objective_priority = prev.confirmed_objective_priority;
 
 COMMIT;

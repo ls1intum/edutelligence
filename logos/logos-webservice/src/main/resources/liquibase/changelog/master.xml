@@ -55,5 +55,6 @@
     <include file="liquibase/changelog/049_team_activity_indexes.xml"/>
     <include file="liquibase/changelog/050_analysis_proposals.xml"/>
     <include file="liquibase/changelog/051_editable_workflow_diagrams.xml"/>
+    <include file="liquibase/changelog/052_rename_recommendation_sla_to_slo.xml"/>
 
 </databaseChangeLog>

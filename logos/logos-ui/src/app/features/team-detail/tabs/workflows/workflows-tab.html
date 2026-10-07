@@ -21,7 +21,7 @@
   </div>
 
   <p class="section-hint">
-    Activity diagrams plus SLA and objective-priority recommendations from the
+    Activity diagrams plus SLO and objective-priority recommendations from the
     latest succeeded analysis of each linked repository. Owners can edit a
     diagram's Mermaid; later analyses keep that edit and propose a newer
     diagram beside it when the agent finds a change. Objective priority is an
@@ -46,7 +46,7 @@
         }
       </select>
       <span class="key-picker-hint">
-        Accept and Override set this key's queue priority from the confirmed SLA.
+        Accept and Override set this key's queue priority from the confirmed SLO.
         Defaults to the highest-priority key.
       </span>
     </div>
@@ -252,7 +252,7 @@
                     }
                   </div>
                   <div class="cell-recommended" role="cell" data-label="Recommended">
-                    <span class="sla-badge">{{ rec.recommended_sla }}</span>
+                    <span class="slo-badge">{{ rec.recommended_slo }}</span>
                     <ol class="priority-list" [attr.aria-label]="'Objective priority for recommendation ' + rec.id">
                       @for (key of priorityFor(rec); track key; let i = $index) {
                         <li class="priority-chip">
@@ -291,15 +291,15 @@
                     <span class="status-badge status-badge--{{ rec.review_status }}">
                       {{ rec.review_status }}
                     </span>
-                    @if (rec.confirmed_sla) {
-                      <span class="sla-badge sla-badge--muted">{{ rec.confirmed_sla }}</span>
+                    @if (rec.confirmed_slo) {
+                      <span class="slo-badge slo-badge--muted">{{ rec.confirmed_slo }}</span>
                     }
                     @if (rec.review_carried_over) {
                       <p class="previous-decision">Kept from the previous analysis</p>
                     } @else if (rec.review_status === 'pending' && rec.previous; as prev) {
                       <!-- A re-analysis proposes; the earlier decision stays until reviewed. -->
                       <p class="previous-decision" title="Last decision on this call site">
-                        Was {{ prev.review_status }}: {{ prev.sla }} ·
+                        Was {{ prev.review_status }}: {{ prev.slo }} ·
                         {{ prev.objective_priority.join(' › ') }}
                       </p>
                     }
@@ -308,12 +308,12 @@
                     @if (canEdit && rec.review_status === 'pending') {
                       <select
                         class="field-select"
-                        [attr.aria-label]="'Override SLA for recommendation ' + rec.id"
-                        [ngModel]="overrideSla()[rec.id] ?? rec.recommended_sla"
-                        (ngModelChange)="setOverrideSla(rec.id, $event)"
+                        [attr.aria-label]="'Override SLO for recommendation ' + rec.id"
+                        [ngModel]="overrideSlo()[rec.id] ?? rec.recommended_slo"
+                        (ngModelChange)="setOverrideSlo(rec.id, $event)"
                         [disabled]="reviewingId() === rec.id"
                       >
-                        @for (opt of slaOptions; track opt.value) {
+                        @for (opt of sloOptions; track opt.value) {
                           <option [value]="opt.value" [title]="opt.hint">{{ opt.label }}</option>
                         }
                       </select>
