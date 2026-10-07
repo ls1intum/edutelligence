@@ -584,6 +584,85 @@ class TestWhoIsKeepingItBusy:
         assert reading.load == 0.5
         assert "model-b" in reading.detail
 
+    def test_keyed_discount_does_not_erase_users_missing_from_the_engine_sample(self):
+        # Ledger: 18 users + 2 of ours = 20. Engine sample still shows only
+        # the 18 users — our two are dispatched but not yet in the sample.
+        # Subtracting the ledger key count from the sample would report 16
+        # and miss the pause threshold; the matching ledger discount keeps 18.
+        model = {
+            "model_name": self.MODEL,
+            "active": 20,
+            "active_by_api_key": {"7": 2},
+            "queue_depth": 0,
+            "max_capacity": 20,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 18.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, own_api_key_id=7)
+
+        assert reading.busy_slots == 18 and reading.load == 0.9
+        assert capacity.pause_decision(reading)[0]
+
+    def test_only_our_queued_request_is_not_a_waiting_user(self):
+        # Running session whose only request sits in the orchestrator queue:
+        # active_by_api_key is empty, queue_depth is 1, and that one entry is
+        # ours. Without a queued-by-key split the in-flight figure cannot
+        # discount it; with the split the backlog clears and we stay running.
+        model = {
+            "model_name": self.MODEL,
+            "active": 0,
+            "active_by_api_key": {},
+            "queued_by_api_key": {"7": 1},
+            "queue_depth": 1,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 0.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 1}, own_api_key_id=7)
+
+        assert reading.queue_total == 0
+        assert not capacity.pause_decision(reading)[0]
+
+    def test_session_estimate_still_clears_our_queued_work_on_older_payloads(self):
+        # No per-key splits at all: the session count still empties a backlog
+        # that can only be ours on this lane.
+        model = {
+            "model_name": self.MODEL,
+            "active": 0,
+            "queue_depth": 1,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 0.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 1})
+
+        assert reading.queue_total == 0
+        assert not capacity.pause_decision(reading)[0]
+
 
 class TestWhichDecisionGetsTheDiscount:
     """Handing capacity back and taking more are different questions.

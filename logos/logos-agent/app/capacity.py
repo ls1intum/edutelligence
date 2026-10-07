@@ -230,12 +230,16 @@ def parse_scheduler_state(
 
     When ``own_api_key_id`` is given and the payload splits a model's
     in-flight requests by caller key (``active_by_api_key``), that split
-    replaces the session count for the discount: a session that has fanned
-    out into several subagents holds several of the model's slots at once,
-    and only the per-key figure sees them. A session count subtracted instead
-    leaves the subagents' share reading as the platform's, which is how a
-    runner pauses for its own work, thaws, and pauses again. An orchestrator
-    that does not report the split falls back to the session count.
+    replaces the session count for the *active* discount: a session that has
+    fanned out into several subagents holds several of the model's slots at
+    once, and only the per-key figure sees them. The discount is taken from
+    the matching ledger ``active`` total — not from the engine sample
+    ``_live`` prefers — because those are different populations and
+    subtracting one from the other understates user load. Queued ownership
+    is a separate split (``queued_by_api_key``); the in-flight figure must
+    not stand in for it, or a runner pauses for its own orchestrator
+    backlog. An orchestrator that does not report a split falls back to the
+    session count for that population.
     """
     mine = {str(name).strip().lower(): int(count) for name, count in (ours or {}).items()}
     if lane is not None and not lane:
@@ -290,6 +294,14 @@ def parse_scheduler_state(
     # the only figure the payload offers, and it is the one to keep.
     per_model_own_key: dict[str, int] = {}
     key_reported: set[str] = set()
+    # Matching ledger totals for the keyed active discount. The engine sample
+    # in slots[0] is a different population; subtracting a ledger key count
+    # from it erases user load that the sample already omitted.
+    per_model_ledger: dict[str, int] = {}
+    # Queued ownership is tracked apart from in-flight: a request waiting in
+    # the orchestrator is not in `active_by_api_key`, and must not be.
+    per_model_own_queued: dict[str, int] = {}
+    queue_key_reported: set[str] = set()
     for provider_id, provider in providers.items():
         deployments = (provider or {}).get("models") or {}
         for model_id, model in deployments.items():
@@ -302,6 +314,15 @@ def parse_scheduler_state(
             name = str(model.get("model_name") or model_id).strip().lower()
             depth, wait = _queue_parts(model)
             model_depth[name] = max(model_depth.get(name, 0), depth)
+            # The backlog is model-wide: two providers reporting the same
+            # queued-by-key split describe one queue, so keep the larger
+            # reading rather than summing them.
+            queued_split = model.get("queued_by_api_key")
+            if own_api_key_id is not None and isinstance(queued_split, dict):
+                queue_key_reported.add(name)
+                qshare = queued_split.get(str(own_api_key_id), 0)
+                if isinstance(qshare, (int, float)):
+                    per_model_own_queued[name] = max(per_model_own_queued.get(name, 0), int(qshare))
             capacity = int(model.get("max_capacity") or 0)
             if not model.get("loaded") or capacity <= 0:
                 # Only loaded models hold capacity. An unloaded one
@@ -317,6 +338,7 @@ def parse_scheduler_state(
                 queue_total += wait
                 continue
             active, waiting, cache = _live(model, capacity)
+            ledger_active = max(0, int(model.get("active") or 0))
             fleet_total += capacity
             fleet_busy += active
             if wanted and (str(provider_id), str(model_id)) not in wanted:
@@ -330,6 +352,7 @@ def parse_scheduler_state(
             slots[1] += waiting
             slots[2] += capacity
             slots[3] = max(slots[3], cache)
+            per_model_ledger[name] = per_model_ledger.get(name, 0) + ledger_active
             # The orchestrator splits this model's in-flight requests by
             # caller key. When the deployment carries the split, the discount
             # below reads this runner's share off it instead of estimating it
@@ -358,20 +381,31 @@ def parse_scheduler_state(
     # Ours come off each model *once*, after its deployments are added up:
     # the same model served by three providers is one lane, and subtracting
     # the same sessions from each of them would erase three times what this
-    # runner is doing. From what is *running* before what is waiting, too —
-    # the other way round empties the queue on the assumption that our
-    # sessions are the ones waiting, and a queue that reads as empty is the
-    # signal that no user is waiting.
+    # runner is doing. Active and waiting are discounted from matching
+    # populations — ledger key counts against ledger totals, queued key
+    # counts against the backlog — never mixed across engine samples.
     for name, slots in per_model.items():
-        # The per-key split, when the payload carried it for this model: it
-        # is zero for a model the key has no request on, and that zero is
-        # the answer — not the session count, which would subtract traffic
-        # that is not here.
-        ours_here = per_model_own_key.get(name, 0) if name in key_reported else mine.get(name.strip().lower(), 0)
-        ours_serving = min(ours_here, slots[0])
-        ours_waiting = min(ours_here - ours_serving, slots[1])
-        slots[0] -= ours_serving
-        slots[1] -= ours_waiting
+        if name in key_reported:
+            own_active = per_model_own_key.get(name, 0)
+            ledger = per_model_ledger.get(name, 0)
+            engine = int(slots[0])
+            # Discount each population against itself, then keep the larger
+            # user load: subtracting a ledger key count from a lagging engine
+            # sample understates users; ignoring the engine when the ledger
+            # is the one behind would do the same the other way.
+            slots[0] = max(max(0, engine - own_active), max(0, ledger - own_active))
+            if name in queue_key_reported:
+                slots[1] = max(0, int(slots[1]) - per_model_own_queued.get(name, 0))
+            else:
+                # Active split present but no queued split yet: keep the
+                # session estimate for the waiting population only.
+                slots[1] = max(0, int(slots[1]) - min(mine.get(name.strip().lower(), 0), int(slots[1])))
+        else:
+            ours_here = mine.get(name.strip().lower(), 0)
+            ours_serving = min(ours_here, int(slots[0]))
+            ours_waiting = min(ours_here - ours_serving, int(slots[1]))
+            slots[0] -= ours_serving
+            slots[1] -= ours_waiting
         busy += slots[0]
         queue_total += slots[1]
 
@@ -397,6 +431,11 @@ def parse_scheduler_state(
             reclaimable=False,
         )
 
+    def _clamped_load(model_busy: float, model_total: float) -> float:
+        if not model_total:
+            return 0.0
+        return min(1.0, max(0.0, model_busy / model_total))
+
     if wanted and not fell_back and per_model:
         # The busiest of them decides. Being kept out of an idle model
         # because another is full costs this runner some capacity; letting a
@@ -416,9 +455,9 @@ def parse_scheduler_state(
         if cache:
             detail += f", {cache:.0%} of a KV cache in use"
         return Reading(
-            load=(model_busy / model_total) if model_total else 0.0,
-            busy_slots=model_busy,
-            total_slots=model_total,
+            load=_clamped_load(model_busy, model_total),
+            busy_slots=int(model_busy),
+            total_slots=int(model_total),
             queue_total=queue_total,
             cache_pressure=cache,
             ok=True,
@@ -432,8 +471,8 @@ def parse_scheduler_state(
     else:
         lane_note = " on the model this runner uses"
     return Reading(
-        load=busy / total,
-        busy_slots=busy,
+        load=_clamped_load(busy, total),
+        busy_slots=int(busy),
         total_slots=total,
         queue_total=queue_total,
         ok=True,
