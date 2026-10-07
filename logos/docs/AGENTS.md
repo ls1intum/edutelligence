@@ -16,6 +16,47 @@ npm run build      # production build — must succeed before merging docs PRs
 Sidebar and top-nav live in `sidebars.ts` and `docusaurus.config.ts`. Doc ids
 are path-based (`roles/app-developer`, `developer/architecture`, …).
 
+## Writing style (ASD-STE100)
+
+Write all prose in the docs folder in Simplified Technical English
+([ASD-STE100](https://www.asd-ste100.org/), current issue). The goal is text
+that a non-native reader understands the first time. These rules apply to
+`.md` and `.mdx` pages and to image captions. They do not apply to code,
+commands, API paths, config keys or UI labels: copy those exactly.
+
+- **Words.** Use only approved words, in the approved part of speech and
+  meaning. One word has one meaning, and one thing has one name: do not
+  alternate "key", "token" and "credential" for the same object. Names of
+  Logos concepts (team, API key, provider, deployment) and UI labels are
+  technical names. Use them as the product does, and do not invent synonyms.
+- **Sentence length.** Maximum 20 words in a procedure and 25 words in
+  descriptive text. One idea in each sentence.
+- **Paragraph length.** Maximum 6 sentences. Start with the topic sentence.
+- **Procedures.** Write one instruction in each sentence, in the imperative,
+  in the order the reader does the work. Use a numbered list for steps. Put
+  a WARNING (risk of injury or data loss) or a CAUTION (risk of damage)
+  before the step it applies to, never after.
+- **Voice and tense.** Use the active voice. Use only the simple present,
+  past and future tenses. Do not use the perfect or progressive tenses.
+- **Articles and clarity.** Keep "the", "a" and "an". Do not use a noun
+  string of more than three nouns. Use "if ... then" for conditions, and put
+  the condition before the action.
+- **Do not use** contractions, idioms, slang, humor, "-ing" forms as verbs,
+  phrasal verbs with more than one meaning ("set up", "hand over"), or marketing
+  words ("simply", "easily", "powerful"). Write "do not", "start", "send".
+- **Numbers and units.** Use digits for numbers and put a space before the
+  unit (`30 s`, `16 GB`). State a limit or a default as a value, not as
+  "large" or "short".
+- **Lists and tables.** Use a list for 3 or more parallel items. Use a
+  table for comparisons. Write full sentences or noun phrases consistently
+  in one list.
+
+Check a page before you commit: split every sentence over the limit, replace
+every word you cannot find in the STE dictionary with an approved word or a
+defined technical name, and keep the same term for the same thing across the
+page. Rewrite a page in STE when you change a substantial part of it. Do not
+reformat unchanged pages in the same PR.
+
 ## System design diagrams
 
 Structural diagrams for the developer guide live under
