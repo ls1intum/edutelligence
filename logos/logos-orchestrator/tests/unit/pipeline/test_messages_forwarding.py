@@ -198,7 +198,7 @@ async def test_payload_is_translated_for_an_openai_upstream(monkeypatch):
     context = await _resolve(monkeypatch, "v1/messages")
     _, payload = ContextResolver.prepare_headers_and_payload(context, MESSAGES_BODY)
     assert payload["messages"][0] == {"role": "system", "content": "Be brief."}
-    assert payload["max_tokens"] == 32
+    assert payload["max_completion_tokens"] == 32
     assert "system" not in payload
 
 

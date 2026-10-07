@@ -80,22 +80,13 @@ def is_reasoning_model(model_name: Optional[str]) -> bool:
 
     The two families take mutually exclusive parameter sets on
     chat/completions, and getting it wrong is a 400 before the model sees
-    anything: a reasoning model rejects ``max_tokens``, ``temperature`` and
-    ``top_p``, while everything older rejects ``reasoning_effort``. Only the
+    anything: a reasoning model rejects ``temperature`` and ``top_p``, while
+    everything older rejects ``reasoning_effort``. Only the
     name is available to decide — the served name, with any vendor prefix
     stripped.
     """
     name = (model_name or "").rsplit("/", 1)[-1]
     return bool(_REASONING_MODEL_RE.match(name))
-
-
-def wants_max_completion_tokens(model_name: Optional[str]) -> bool:
-    """Whether this model needs ``max_completion_tokens`` on chat/completions.
-
-    Anthropic requires ``max_tokens`` on every request, so the translation
-    always has a value to forward; only its name differs by model family.
-    """
-    return is_reasoning_model(model_name)
 
 
 def new_message_id(upstream_id: Any) -> str:

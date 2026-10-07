@@ -49,12 +49,15 @@ def test_system_blocks_become_a_leading_system_message():
     )
     assert result["messages"][0] == {"role": "system", "content": "You are Claude Code.\n\nBe brief."}
     assert result["messages"][1] == {"role": "user", "content": "hi"}
-    assert result["max_tokens"] == 64
+    assert result["max_completion_tokens"] == 64
 
 
-def test_reasoning_models_get_max_completion_tokens():
-    # OpenAI and Azure reject max_tokens for the o-series and gpt-5 family.
-    result = to_chat_completions({"model": "gpt-5.6-luna", "max_tokens": 64, "messages": []})
+@pytest.mark.parametrize("model", ["gpt-4.1-nano", "gpt-5.6-luna", "an-unreleased-family", None])
+def test_output_cap_is_max_completion_tokens_whatever_the_model(model):
+    # The reasoning families reject the deprecated max_tokens with a 400, and a
+    # new family cannot be recognised by its name; max_completion_tokens is
+    # accepted by every model on chat/completions.
+    result = to_chat_completions({"model": model, "max_tokens": 64, "messages": []})
     assert result["max_completion_tokens"] == 64
     assert "max_tokens" not in result
 
@@ -205,7 +208,7 @@ def test_the_two_openai_families_get_mutually_exclusive_parameters():
 
     older = to_chat_completions({**request, "model": "gpt-4.1-nano"})
     assert older["temperature"] == 0.3 and older["top_p"] == 0.9
-    assert older["max_tokens"] == 8
+    assert older["max_completion_tokens"] == 8
     assert older["stop"] == ["END"]
     assert older["messages"][0] == {"role": "system", "content": "Be brief."}
     assert "reasoning_effort" not in older

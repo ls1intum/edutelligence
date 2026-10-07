@@ -47,7 +47,7 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
     """
     # The two OpenAI families take mutually exclusive parameter sets, and the
     # wrong one is a 400 before the model sees anything: a reasoning model
-    # rejects max_tokens, temperature, top_p, stop and the system role, while
+    # rejects temperature, top_p, stop and the system role, while
     # everything older rejects reasoning_effort and knows no developer role.
     # Anthropic clients supply max_tokens always, a system prompt on every
     # Claude Code turn, and a temperature and an effort routinely — so this
@@ -72,9 +72,13 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         "messages": messages,
     }
 
+    # max_completion_tokens is the chat/completions output cap for every
+    # model; max_tokens is its deprecated predecessor, which the reasoning
+    # families reject with a 400. So the cap goes under the one name that the
+    # surface itself accepts, whatever the model is called.
     max_tokens = payload.get("max_tokens")
     if max_tokens is not None:
-        result["max_completion_tokens" if reasoning else "max_tokens"] = max_tokens
+        result["max_completion_tokens"] = max_tokens
 
     if not reasoning:
         for name in _PASSTHROUGH_PARAMS:
