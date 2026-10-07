@@ -10,6 +10,16 @@ class LogosKeyModel(BaseModel):
     logos_key: str
 
 
+class WebSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    max_results: int = Field(default=5, ge=1, le=10, strict=True)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def _strip_query(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
 class LogosNodeAuthRequest(BaseModel):
     shared_key: str
     capabilities_models: list[str] = Field(default_factory=list)

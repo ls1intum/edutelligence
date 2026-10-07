@@ -27,7 +27,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewRecommendationRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewWorkflowDiagramProposalRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetRecommendationModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetWorkflowDiagramRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.StoreDeployKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateApiKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.AiLlmCallRecommendation;
@@ -47,18 +49,20 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepositoryCr
 @Service
 public class AiWorkflowAnalysisService {
 
-    private static final Set<String> VALID_SLAS = Set.of("ux-critical", "ux-high-prio", "ux-background");
+    private static final Set<String> VALID_SLOS = Set.of("ux-critical", "ux-high-prio", "ux-background");
     private static final int MAX_MODEL_NAME_LENGTH = 200;
+    private static final int MAX_DIAGRAM_MERMAID_LENGTH = 100_000;
     private static final int MAX_ANCESTOR_HOPS = 50;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Set<String> REVIEW_ACTIONS = Set.of("accept", "override", "reject");
+    private static final Set<String> DIAGRAM_PROPOSAL_ACTIONS = Set.of("accept", "dismiss");
 
     /**
      * Same contract as logos-agent {@code analysis_triggers.ANALYSIS_TASK}.
      */
     static final String ANALYSIS_TASK_TEMPLATE = """
         Analyse this linked application repository for AI / LLM call sites and produce
-        workflow diagrams plus SLA recommendations.
+        workflow diagrams plus SLO recommendations.
 
         Write structured results ONLY to `/artifacts/analysis.json` (UTF-8 JSON).
         Do not push commits, open pull requests, or modify the remote.
@@ -82,10 +86,10 @@ public class AiWorkflowAnalysisService {
               "end_line": 20,
               "code_url": "optional permalink to the call site, or null",
               "detected_model": "optional model name or null",
-              "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+              "recommended_slo": "ux-critical" | "ux-high-prio" | "ux-background",
               "objective_priority": ["latency" | "quality" | "price", "..."],
               "confidence": 0.0,
-              "justification": "why this SLA and objective order",
+              "justification": "why this SLO and objective order",
               "traffic_flags": {"night_heavy": false}
             }
           ]
@@ -97,7 +101,7 @@ public class AiWorkflowAnalysisService {
         unquoted label are syntax errors and the diagram will not render.
 
         `objective_priority` is a full ranking of latency, quality, and price (most
-        important first). It complements SLA: SLA is urgency/interactivity; the ranking
+        important first). It complements SLO: SLO is urgency/interactivity; the ranking
         says what to optimize for when choosing a model. If omitted, defaults are:
         ux-critical → [latency, quality, price]; ux-high-prio → [quality, latency, price];
         ux-background → [price, quality, latency].
@@ -222,6 +226,66 @@ public class AiWorkflowAnalysisService {
         return recommendationToMap(rec);
     }
 
+    /**
+     * Saves an owner-edited Mermaid activity diagram. The next analysis keeps
+     * this source and, when it differs, stores the agent's version as a
+     * proposal instead of overwriting.
+     */
+    @Transactional
+    public Map<String, Object> setWorkflowDiagram(int teamId, int workflowId,
+                                                  SetWorkflowDiagramRequestDTO body) {
+        AiWorkflow workflow = lockCurrentWorkflow(teamId, workflowId);
+        if (body == null || body.diagramMermaid() == null || body.diagramMermaid().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "diagram_mermaid is required");
+        }
+        String diagram = body.diagramMermaid().strip();
+        if (diagram.length() > MAX_DIAGRAM_MERMAID_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "diagram_mermaid must be at most " + MAX_DIAGRAM_MERMAID_LENGTH + " characters");
+        }
+        workflow.setDiagramMermaid(diagram);
+        workflow.setDiagramSetByOwner(true);
+        // The owner's save is the confirmed diagram; drop any pending agent proposal.
+        workflow.setProposedDiagramMermaid(null);
+        workflowRepository.save(workflow);
+        return workflowToMap(workflow);
+    }
+
+    /**
+     * Accept the agent's proposed Mermaid (replace the owner's) or dismiss it
+     * and keep the current diagram.
+     */
+    @Transactional
+    public Map<String, Object> reviewWorkflowDiagramProposal(
+            int teamId, int workflowId, ReviewWorkflowDiagramProposalRequestDTO body) {
+        if (body == null || body.action() == null || body.action().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "action is required");
+        }
+        String action = body.action().trim().toLowerCase(Locale.ROOT);
+        if (!DIAGRAM_PROPOSAL_ACTIONS.contains(action)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "action must be accept or dismiss");
+        }
+        AiWorkflow workflow = lockCurrentWorkflow(teamId, workflowId);
+        String proposed = workflow.getProposedDiagramMermaid();
+        if (proposed == null || proposed.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "No agent diagram proposal is pending for this workflow");
+        }
+        if ("accept".equals(action)) {
+            workflow.setDiagramMermaid(proposed.strip());
+            // Back under agent control: later analyses may update freely again.
+            workflow.setDiagramSetByOwner(false);
+            workflow.setDismissedDiagramMermaid(null);
+        } else {
+            // Keep mine: re-analyses drawing this same Mermaid do not propose it again.
+            workflow.setDismissedDiagramMermaid(proposed);
+        }
+        workflow.setProposedDiagramMermaid(null);
+        workflowRepository.save(workflow);
+        return workflowToMap(workflow);
+    }
+
     @Transactional
     public Map<String, Object> reviewRecommendation(int teamId, int recId,
                                                     ReviewRecommendationRequestDTO body,
@@ -244,18 +308,18 @@ public class AiWorkflowAnalysisService {
 
         if ("reject".equals(action)) {
             rec.setReviewStatus("rejected");
-            rec.setConfirmedSla(null);
+            rec.setConfirmedSlo(null);
             rec.setConfirmedObjectivePriority(null);
             recommendationRepository.save(rec);
             return recommendationToMap(rec);
         }
 
-        String confirmedSla;
+        String confirmedSlo;
         List<Object> confirmedPriority;
         if ("accept".equals(action)) {
-            confirmedSla = rec.getRecommendedSla();
-            if (body.confirmedSla() != null && !body.confirmedSla().isBlank()) {
-                confirmedSla = body.confirmedSla().trim();
+            confirmedSlo = rec.getRecommendedSlo();
+            if (body.confirmedSlo() != null && !body.confirmedSlo().isBlank()) {
+                confirmedSlo = body.confirmedSlo().trim();
             }
             confirmedPriority = ObjectivePriority.asJsonList(
                 body.confirmedObjectivePriority() != null
@@ -264,22 +328,22 @@ public class AiWorkflowAnalysisService {
             rec.setReviewStatus("accepted");
         }
         else {
-            if (body.confirmedSla() == null || body.confirmedSla().isBlank()) {
+            if (body.confirmedSlo() == null || body.confirmedSlo().isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "confirmed_sla is required for override");
+                    "confirmed_slo is required for override");
             }
-            confirmedSla = body.confirmedSla().trim();
+            confirmedSlo = body.confirmedSlo().trim();
             confirmedPriority = ObjectivePriority.asJsonList(
                 body.confirmedObjectivePriority() != null
                     ? body.confirmedObjectivePriority()
                     : ObjectivePriority.asStringList(rec.getObjectivePriority()));
             rec.setReviewStatus("overridden");
         }
-        if (!VALID_SLAS.contains(confirmedSla)) {
+        if (!VALID_SLOS.contains(confirmedSlo)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "confirmed_sla must be ux-critical, ux-high-prio, or ux-background");
+                "confirmed_slo must be ux-critical, ux-high-prio, or ux-background");
         }
-        rec.setConfirmedSla(confirmedSla);
+        rec.setConfirmedSlo(confirmedSlo);
         rec.setConfirmedObjectivePriority(confirmedPriority);
 
         boolean noKey = Boolean.TRUE.equals(body.noApiKey());
@@ -296,7 +360,7 @@ public class AiWorkflowAnalysisService {
                     "API key does not belong to this team");
             }
             rec.setApiKeyId(apiKeyId);
-            int priority = slaToPriority(confirmedSla);
+            int priority = sloToPriority(confirmedSlo);
             apiKeyAdminService.updateKey(apiKeyId, new UpdateApiKeyRequestDTO(
                 null, priority, null, null, null, null, null, null, null));
         }
@@ -497,8 +561,8 @@ public class AiWorkflowAnalysisService {
                 "Repository link not found"));
     }
 
-    static int slaToPriority(String sla) {
-        return switch (sla) {
+    static int sloToPriority(String slo) {
+        return switch (slo) {
             case "ux-critical" -> 10;
             case "ux-background" -> 1;
             default -> 5;
@@ -528,6 +592,8 @@ public class AiWorkflowAnalysisService {
         m.put("trigger_summary", workflow.getTriggerSummary());
         m.put("diagram_mermaid", workflow.getDiagramMermaid());
         m.put("sort_order", workflow.getSortOrder());
+        m.put("diagram_set_by_owner", workflow.isDiagramSetByOwner());
+        m.put("proposed_diagram_mermaid", workflow.getProposedDiagramMermaid());
         return m;
     }
 
@@ -547,13 +613,13 @@ public class AiWorkflowAnalysisService {
         m.put("code_url", rec.getCodeUrl());
         m.put("detected_model", rec.getDetectedModel());
         m.put("api_key_id", rec.getApiKeyId());
-        m.put("recommended_sla", rec.getRecommendedSla());
+        m.put("recommended_slo", rec.getRecommendedSlo());
         m.put("objective_priority", ObjectivePriority.asStringList(rec.getObjectivePriority()));
         m.put("confidence", rec.getConfidence());
         m.put("justification", rec.getJustification());
         m.put("traffic_flags", rec.getTrafficFlags());
         m.put("review_status", rec.getReviewStatus());
-        m.put("confirmed_sla", rec.getConfirmedSla());
+        m.put("confirmed_slo", rec.getConfirmedSlo());
         m.put("confirmed_objective_priority",
             rec.getConfirmedObjectivePriority() != null
                 ? ObjectivePriority.asStringList(rec.getConfirmedObjectivePriority())
@@ -596,6 +662,33 @@ public class AiWorkflowAnalysisService {
     }
 
     /**
+     * Same repository-then-row lock as recommendations: ingest copies
+     * owner-edited diagrams from the previous analysis under the repository
+     * lock, so an edit either lands first or waits for the new analysis. An
+     * edit on a workflow a newer analysis superseded is refused.
+     */
+    private AiWorkflow lockCurrentWorkflow(int teamId, int workflowId) {
+        Integer repoId = jdbc.query("""
+            SELECT a.team_repository_id FROM ai_workflows w
+              JOIN ai_workflow_analyses a ON a.id = w.analysis_id
+             WHERE w.id = ? AND a.team_id = ?
+            """, rs -> rs.next() ? (Integer) rs.getObject(1) : null, workflowId, teamId);
+        if (repoId == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Workflow not found");
+        }
+        jdbc.query("SELECT id FROM team_repositories WHERE id = ? FOR UPDATE", rs -> null, repoId);
+        AiWorkflow workflow = workflowRepository.lockById(workflowId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "Workflow not found"));
+        Integer latest = analysisRepository.findLatestSucceeded(repoId).map(AiWorkflowAnalysis::getId).orElse(null);
+        if (latest != null && !latest.equals(workflow.getAnalysisId())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "A newer analysis replaced this workflow; reload the Workflows tab");
+        }
+        return workflow;
+    }
+
+    /**
      * For each recommendation, the nearest predecessor the owner reviewed —
      * what a changed proposal is shown next to. Unreviewed analyses in between
      * are passed over, so an earlier decision is not lost because a proposal
@@ -623,7 +716,7 @@ public class AiWorkflowAnalysisService {
                      WHERE c.review_status = 'pending' AND c.depth < ?
                 )
                 SELECT DISTINCT ON (c.start_id) c.start_id, d.id, d.review_status,
-                       COALESCE(d.confirmed_sla, d.recommended_sla) AS sla,
+                       COALESCE(d.confirmed_slo, d.recommended_slo) AS slo,
                        COALESCE(d.confirmed_objective_priority, d.objective_priority)::text AS priority,
                        d.reviewed_at
                   FROM chain c
@@ -638,7 +731,7 @@ public class AiWorkflowAnalysisService {
             Map<String, Object> p = new LinkedHashMap<>();
             p.put("id", rs.getInt("id"));
             p.put("review_status", rs.getString("review_status"));
-            p.put("sla", rs.getString("sla"));
+            p.put("slo", rs.getString("slo"));
             p.put("objective_priority", ObjectivePriority.asStringList(parseJsonList(rs.getString("priority"))));
             var reviewedAt = rs.getTimestamp("reviewed_at");
             p.put("reviewed_at", reviewedAt != null ? reviewedAt.toInstant().toString() : null);

@@ -1103,6 +1103,7 @@ class TestHowAPullRequestIsOpened:
         monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
         # A clean default: each test that wants a closing issue sets it.
         monkeypatch.delenv("LOGOS_SESSION_CLOSES", raising=False)
+        monkeypatch.delenv("LOGOS_SESSION_PR_REVIEWERS", raising=False)
         monkeypatch.setattr(run_session, "run", fake_run)
         return calls
 
@@ -1177,6 +1178,7 @@ class TestHowAPullRequestIsOpened:
         monkeypatch.setenv("LOGOS_REPO_SLUG", "x/y")
         monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(tmp_path))
         monkeypatch.delenv("LOGOS_SESSION_CLOSES", raising=False)
+        monkeypatch.delenv("LOGOS_SESSION_PR_REVIEWERS", raising=False)
         if commit_subject is not None:
             (tmp_path / "commit.txt").write_text(commit_subject)
         monkeypatch.setattr(run_session, "run", fake_run)
@@ -1245,6 +1247,41 @@ class TestHowAPullRequestIsOpened:
         out = capsys.readouterr().out
         assert "could not refresh its title" in out
         assert "and refreshed its title" not in out
+
+    def test_a_fresh_pull_request_asks_the_configured_reviewers(self, monkeypatch, tmp_path):
+        calls = self.capture(monkeypatch, tmp_path)
+        monkeypatch.setenv("LOGOS_SESSION_PR_REVIEWERS", "Claudia-Anthropica")
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        create = calls[0]
+        assert create[create.index("--reviewer") + 1] == "Claudia-Anthropica"
+
+    def test_nobody_configured_means_no_reviewer_flag(self, monkeypatch, tmp_path):
+        # CODEOWNERS still applies on its own; the harness just does not
+        # add a named reviewer on top.
+        calls = self.capture(monkeypatch, tmp_path)
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        assert "--reviewer" not in calls[0]
+
+    def test_a_reused_pull_request_asks_the_configured_reviewers_again(self, monkeypatch, tmp_path):
+        # Asking again is a no-op when they are already requested — which
+        # is what makes a second finalize of the same branch safe.
+        calls = self.reuse_capture(
+            monkeypatch,
+            tmp_path,
+            number=933,
+            url="https://github.com/x/y/pull/933",
+            commit_subject="Serve the paths",
+        )
+        monkeypatch.setenv("LOGOS_SESSION_PR_REVIEWERS", "Claudia-Anthropica")
+
+        run_session.open_pull_request("logos/agent/x", "main", "do the thing")
+
+        edit = next(cmd for cmd in calls if cmd[:3] == ["gh", "pr", "edit"])
+        assert edit[edit.index("--add-reviewer") + 1] == "Claudia-Anthropica"
 
 
 class TestWhatTheAgentIsTold:

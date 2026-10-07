@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity;
 
 import static org.hamcrest.Matchers.containsString;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -231,7 +232,7 @@ class TeamRepoLinkControllerTest {
             """, Integer.class, linkId);
         Integer recId = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla)
+                (analysis_id, team_id, file_path, recommended_slo)
             VALUES (?, 2001, 'app/chat.py', 'ux-critical')
             RETURNING id
             """, Integer.class, analysisId);
@@ -275,6 +276,87 @@ class TeamRepoLinkControllerTest {
     }
 
     @Test
+    void setWorkflowDiagram_storesOwnerEditAndProposalReview() throws Exception {
+        MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"repo_url\":\"https://github.com/ls1intum/diagram-edit\"}"))
+           .andExpect(status().isOk())
+           .andReturn();
+        int linkId = mapper.readTree(created.getResponse().getContentAsString()).get("id").asInt();
+        Integer analysisId = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_analyses
+                (team_id, team_repository_id, commit_sha, status, source, finished_at)
+            VALUES (2001, ?, 'abc', 'succeeded', 'agent', now())
+            RETURNING id
+            """, Integer.class, linkId);
+        Integer workflowId = jdbc.queryForObject("""
+            INSERT INTO ai_workflows
+                (analysis_id, name, trigger_summary, diagram_mermaid, sort_order)
+            VALUES (?, 'chat', 'user message', 'flowchart TD\n  A-->B', 0)
+            RETURNING id
+            """, Integer.class, analysisId);
+
+        mvc.perform(put("/admin/teams/2001/workflows/" + workflowId + "/diagram")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"diagram_mermaid\":\"flowchart TD\\n  Owner-->Edit\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.diagram_mermaid").value("flowchart TD\n  Owner-->Edit"))
+           .andExpect(jsonPath("$.diagram_set_by_owner").value(true))
+           .andExpect(jsonPath("$.proposed_diagram_mermaid").doesNotExist());
+
+        jdbc.update("""
+            UPDATE ai_workflows
+               SET proposed_diagram_mermaid = 'flowchart TD\n  Agent-->New'
+             WHERE id = ?
+            """, workflowId);
+
+        mvc.perform(post("/admin/teams/2001/workflows/" + workflowId + "/diagram/proposal")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"accept\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.diagram_mermaid").value("flowchart TD\n  Agent-->New"))
+           .andExpect(jsonPath("$.diagram_set_by_owner").value(false))
+           .andExpect(jsonPath("$.proposed_diagram_mermaid").doesNotExist());
+
+        mvc.perform(put("/admin/teams/2001/workflows/" + workflowId + "/diagram")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"diagram_mermaid\":\"flowchart TD\\n  Owner-->Again\"}"))
+           .andExpect(status().isOk());
+        jdbc.update("""
+            UPDATE ai_workflows
+               SET proposed_diagram_mermaid = 'flowchart TD\n  Agent-->Other'
+             WHERE id = ?
+            """, workflowId);
+        mvc.perform(post("/admin/teams/2001/workflows/" + workflowId + "/diagram/proposal")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"action\":\"dismiss\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.diagram_mermaid").value("flowchart TD\n  Owner-->Again"))
+           .andExpect(jsonPath("$.diagram_set_by_owner").value(true))
+           .andExpect(jsonPath("$.proposed_diagram_mermaid").doesNotExist());
+        // Keep mine is remembered so the next ingest does not re-propose it.
+        assertEquals("flowchart TD\n  Agent-->Other", jdbc.queryForObject(
+            "SELECT dismissed_diagram_mermaid FROM ai_workflows WHERE id = ?", String.class, workflowId));
+
+        mvc.perform(put("/admin/teams/2001/workflows/999999/diagram")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"diagram_mermaid\":\"flowchart TD\\n  A\"}"))
+           .andExpect(status().isNotFound());
+
+        mvc.perform(put("/admin/teams/2001/workflows/" + workflowId + "/diagram")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"diagram_mermaid\":\"flowchart TD\\n  A\"}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
     void review_noApiKeyLeavesThePreviouslyLinkedKeyAlone() throws Exception {
         MvcResult created = mvc.perform(post("/admin/teams/2001/repositories")
                 .with(TestJwt.logosAdmin())
@@ -292,7 +374,7 @@ class TeamRepoLinkControllerTest {
         jdbc.update("UPDATE api_keys SET default_priority = 7 WHERE id = 3001");
         Integer recId = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla, api_key_id)
+                (analysis_id, team_id, file_path, recommended_slo, api_key_id)
             VALUES (?, 2001, 'app/batch.py', 'ux-background', 3001)
             RETURNING id
             """, Integer.class, analysisId);
@@ -374,19 +456,19 @@ class TeamRepoLinkControllerTest {
         }
         Integer a = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla, review_status, confirmed_sla, reviewed_at)
+                (analysis_id, team_id, file_path, recommended_slo, review_status, confirmed_slo, reviewed_at)
             VALUES (?, 2001, 'app/chat.py', 'ux-critical', 'accepted', 'ux-critical', now())
             RETURNING id
             """, Integer.class, analyses[0]);
         Integer b = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla, previous_recommendation_id)
+                (analysis_id, team_id, file_path, recommended_slo, previous_recommendation_id)
             VALUES (?, 2001, 'app/chat.py', 'ux-background', ?)
             RETURNING id
             """, Integer.class, analyses[1], a);
         Integer c = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla, previous_recommendation_id)
+                (analysis_id, team_id, file_path, recommended_slo, previous_recommendation_id)
             VALUES (?, 2001, 'app/chat.py', 'ux-high-prio', ?)
             RETURNING id
             """, Integer.class, analyses[2], b);
@@ -396,7 +478,7 @@ class TeamRepoLinkControllerTest {
            // Only the latest analysis is up for review, and it shows A's decision.
            .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + b + ")]").isEmpty())
            .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + c + ")].previous.id").value(a))
-           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + c + ")].previous.sla").value("ux-critical"));
+           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + c + ")].previous.slo").value("ux-critical"));
 
         mvc.perform(put("/admin/teams/2001/recommendations/" + b + "/model")
                 .with(TestJwt.logosAdmin())
@@ -437,7 +519,7 @@ class TeamRepoLinkControllerTest {
             VALUES (2001, ?, 'nofinish', 'succeeded', 'agent')
             """, linkId);
         Integer rec = jdbc.queryForObject("""
-            INSERT INTO ai_llm_call_recommendations (analysis_id, team_id, file_path, recommended_sla)
+            INSERT INTO ai_llm_call_recommendations (analysis_id, team_id, file_path, recommended_slo)
             VALUES (?, 2001, 'app/x.py', 'ux-critical') RETURNING id
             """, Integer.class, finished);
 
