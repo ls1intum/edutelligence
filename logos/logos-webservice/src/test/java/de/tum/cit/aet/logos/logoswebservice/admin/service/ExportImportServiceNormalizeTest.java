@@ -2,6 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.admin.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.LinkedHashMap;
@@ -133,5 +134,29 @@ class ExportImportServiceNormalizeTest {
     void normalizeEmptyRowsReturnsEmpty() {
         assertTrue(service.normalizeImportRows("models", null).isEmpty());
         assertTrue(service.normalizeImportRows("models", List.of()).isEmpty());
+    }
+
+    @Test
+    void importAcceptsExportWithoutProviderBudgets() {
+        Map<String, Object> data = allTables();
+        data.remove("team_provider_budgets");
+        ExportImportService.requireTables(data);
+    }
+
+    @Test
+    void importRejectsExportMissingARequiredTable() {
+        Map<String, Object> data = allTables();
+        data.remove("teams");
+        IllegalArgumentException e = assertThrows(
+            IllegalArgumentException.class, () -> ExportImportService.requireTables(data));
+        assertTrue(e.getMessage().contains("teams"));
+    }
+
+    private static Map<String, Object> allTables() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        for (String table : ExportImportService.TABLES) {
+            data.put(table, List.of());
+        }
+        return data;
     }
 }

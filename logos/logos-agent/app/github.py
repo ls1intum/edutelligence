@@ -1553,6 +1553,48 @@ async def reply_to_review_comment(number: int, comment_id: int, body: str) -> st
     return str(response.json().get("html_url") or "")
 
 
+async def create_pull_review(number: int, body: str, comments: list[dict[str, Any]], *, commit_id: str) -> str:
+    """Post a review that only comments: a summary and its inline comments.
+
+    Each comment is ``{"path", "line", "body"}`` on the new side of the
+    diff of ``commit_id`` — the commit that was read, not whatever the head
+    is by now. GitHub refuses the whole review (422) when one of them is not on a
+    line of the diff; the status is kept on the error so the caller can say
+    the same things as plain text instead. Returns the review url.
+    """
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{_API}/repos/{settings.repo_slug}/pulls/{number}/reviews",
+            headers=_headers(),
+            json={
+                "commit_id": commit_id,
+                "event": "COMMENT",
+                "body": body,
+                "comments": [
+                    {"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"]} for c in comments
+                ],
+            },
+        )
+    if response.status_code != 200:
+        raise GitHubError(
+            f"review on #{number} failed ({response.status_code}): {response.text[:200]}",
+            status=response.status_code,
+        )
+    return str(response.json().get("html_url") or "")
+
+
+async def pull_review_contains(number: int, marker: str) -> bool:
+    """Whether one of the runner's own reviews on the pull request carries the marker.
+
+    Like :func:`issue_comment_contains`: a review POST whose confirmation was
+    lost leaves the review posted, and this is how the retry finds it.
+    """
+    reviews, incomplete = await _get_all_bounded(f"/repos/{settings.repo_slug}/pulls/{number}/reviews")
+    if incomplete:
+        raise GitHubError(f"could not finish reading the reviews of #{number}: the listing is incomplete")
+    return any(_is_our_marker(r, marker) for r in reviews)
+
+
 async def request_pull_review(number: int, logins: list[str]) -> None:
     """Ask the named people to review the pull request again.
 

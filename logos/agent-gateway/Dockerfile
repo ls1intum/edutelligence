@@ -14,6 +14,6 @@
 # /etc/nginx/templates at container start, which is what puts
 # ${LOGOS_AGENT_API_KEY} into the live configuration — the key belongs in
 # the running container, not in an image layer.
-FROM nginx:1.28-alpine
+FROM nginx:1.31-alpine
 
 COPY logos/agent-gateway/nginx.conf /etc/nginx/templates/default.conf.template

@@ -20,7 +20,7 @@
 
 services:
   traefik:
-    image: traefik:v3.7.10
+    image: traefik:v3.7.13
     container_name: traefik
     restart: unless-stopped
     command:
@@ -429,7 +429,7 @@ services:
       - internal
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.7
+    image: quay.io/keycloak/keycloak:26.8
     container_name: logos-keycloak
     restart: unless-stopped
     command: ["start-dev", "--import-realm", "--health-enabled=true"]

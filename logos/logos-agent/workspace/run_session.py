@@ -1353,18 +1353,21 @@ def _pr_reviewers() -> list[str]:
     return [name.strip() for name in os.environ.get("LOGOS_SESSION_PR_REVIEWERS", "").split(",") if name.strip()]
 
 
-def run_prepare() -> None:
+def run_prepare(result: Result) -> None:
     """Trusted phase one: bring the working copy to a trusted state.
 
     Runs in a helper container with egress and the scoped push token —
     the agent phase has neither, so whatever the agent later finds under
-    /workspace was created here, by fixed harness code.
+    /workspace was created here, by fixed harness code. The commit it
+    checked out is reported, so a review can be anchored to the code that
+    was actually read.
     """
     repo_url = require_env("LOGOS_REPO_URL")
     base_branch = os.environ.get("LOGOS_SESSION_BASE_BRANCH", "main")
     branch = require_env("LOGOS_SESSION_BRANCH")
     token = os.environ.get("GITHUB_TOKEN", "")
     prepare_checkout(repo_url, base_branch, branch, token)
+    result.data["checkout_sha"] = _ref_sha("HEAD")
 
 
 def run_agent_phase(result: Result) -> None:
@@ -1457,7 +1460,7 @@ def main() -> int:
     result = Result()
     try:
         if phase == "prepare":
-            run_prepare()
+            run_prepare(result)
         elif phase == "finalize":
             run_finalize(result)
         else:
