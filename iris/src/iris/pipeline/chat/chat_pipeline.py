@@ -161,6 +161,38 @@ def _merge_lecture_content(
     )
 
 
+def _effective_chat_mode(
+    state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    chat_mode: IrisChatMode,
+) -> IrisChatMode:
+    """Return the mode the answer is about: the switch target, if the agent switched."""
+    switch = getattr(state, "pending_context_switch", None)
+    return switch.mode if switch is not None else chat_mode
+
+
+def _guide_problem_statement(
+    state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+) -> str:
+    """Return the problem statement the guide checks the answer against.
+
+    After a switch the answer is about the target exercise, so the guide has
+    to check it against that exercise's assignment, not the original one's.
+    """
+    switch = getattr(state, "pending_context_switch", None)
+    if switch is not None:
+        exercise = next(
+            (
+                ex
+                for ex in state.dto.course.exercises or []
+                if ex.id == switch.entity_id
+            ),
+            None,
+        )
+        return (exercise.problem_statement or "") if exercise else ""
+    exercise = state.dto.programming_exercise or state.dto.text_exercise
+    return exercise.problem_statement if exercise else ""
+
+
 def _current_slide_label(chunks: list) -> str:
     """Describe the slide the student is on the way the student sees it.
 
@@ -345,6 +377,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         del state
         return self.chat_mode is not IrisChatMode.EXERCISE
 
+    def should_stream_agent_delta(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> bool:
+        # After a switch into a programming exercise the answer has to pass the
+        # guide first, exactly like in an exercise chat, so the raw draft must not
+        # reach the client. The guide-approved answer arrives with the final result.
+        return _effective_chat_mode(state, self.chat_mode) is not IrisChatMode.EXERCISE
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -362,7 +402,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
-            if self.chat_mode == IrisChatMode.EXERCISE:
+            if _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE:
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
 
@@ -394,6 +434,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     accessed_memories=state.accessed_memory_storage,
                     activities=activities,
                     activity_seq=activity_seq,
+                    suggested_context=state.pending_context_switch,
                 )
             logger.info(
                 "Chat first result delivered | mode=%s elapsed_ms=%.0f",
@@ -871,8 +912,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # currently viewing (stored before the agent ran) with whatever the
             # lecture retrieval tool retrieved, de-duplicating by uuid so the
             # same paragraph is not cited twice. Either source may be absent.
+            # The current view belongs to the original context, so an answer
+            # about the context the agent switched to does not cite it.
+            current_view = (
+                None
+                if getattr(state, "pending_context_switch", None) is not None
+                else state.lecture_content_storage.get("current_view")
+            )
             lecture_content = _merge_lecture_content(
-                state.lecture_content_storage.get("current_view"),
+                current_view,
                 state.lecture_content_storage.get("content"),
             )
             if lecture_content:
@@ -937,11 +985,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             A tuple of the raw guide response and the response to use.
         """
-        exercise = state.dto.programming_exercise or state.dto.text_exercise
-        problem_statement = exercise.problem_statement if exercise else ""
         guide_prompt_rendered = self.guide_prompt_template.render(
             {
-                "problem_statement": problem_statement,
+                "problem_statement": _guide_problem_statement(state),
                 "support_level": _support_level(state.dto),
             }
         )
@@ -1015,11 +1061,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         sender = None
         try:
             # Don't do anything if not programming exercise
-            if self.chat_mode is not IrisChatMode.EXERCISE:
+            if _effective_chat_mode(state, self.chat_mode) is not IrisChatMode.EXERCISE:
                 return state.result
 
             guide_stream_handler = None
-            sender = self._create_partial_result_sender(state)
+            # Only an exercise chat streams the guide output. After a switch into an
+            # exercise the run already streamed (and then held back) the agent's
+            # answer, so the guide result reaches the client with the final result.
+            if self.chat_mode is IrisChatMode.EXERCISE:
+                sender = self._create_partial_result_sender(state)
             if sender is not None:
                 sender.start()
                 guide_stream_handler = _GuideRefinementStreamHandler(sender.on_delta)
