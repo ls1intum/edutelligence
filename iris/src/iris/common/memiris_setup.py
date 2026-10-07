@@ -122,7 +122,9 @@ def _convert_iris_model_to_memiris_llm(
         raise ValueError(f"Model with ID '{model_id}' not found in LlmManager")
 
     if isinstance(model, OllamaModel):
-        return OllamaLanguageModel(model.model, model.host, model.api_key)
+        return OllamaLanguageModel(
+            model.model, model.host, model.api_key, think=model.think
+        )
     elif isinstance(
         model,
         (
@@ -133,6 +135,18 @@ def _convert_iris_model_to_memiris_llm(
         ),
     ):
         is_azure = isinstance(model, (AzureOpenAIChatModel, AzureOpenAIEmbeddingModel))
+        # Only an explicitly-declared flag overrides Memiris's own name-based
+        # temperature default; otherwise forward None so that default stands.
+        # Without this a reasoning model configured with
+        # ``supports_temperature: false`` (e.g. o3) would receive a temperature
+        # its endpoint rejects.
+        supports_temperature = None
+        if isinstance(model, OpenAIChatModel):
+            supports_temperature = (
+                model.supports_temperature
+                if "supports_temperature" in model.model_fields_set
+                else None
+            )
         return OpenAiLanguageModel(
             model=model.model,
             api_key=model.api_key,
@@ -140,6 +154,7 @@ def _convert_iris_model_to_memiris_llm(
             azure=is_azure,
             azure_endpoint=getattr(model, "endpoint", None),
             api_version=getattr(model, "api_version", None),
+            supports_temperature=supports_temperature,
         )
     else:
         raise ValueError(

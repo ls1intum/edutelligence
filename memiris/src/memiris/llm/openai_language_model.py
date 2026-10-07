@@ -37,9 +37,20 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         azure: bool = False,
         azure_endpoint: Optional[str] = None,
         api_version: Optional[str] = None,
+        supports_temperature: Optional[bool] = None,
     ) -> None:
+        """
+        Args:
+            supports_temperature: Whether the model accepts ``temperature``.
+                ``None`` keeps the name-based default (GPT-5 models reject it).
+        """
         self._model = model
         self._azure = azure
+        self._supports_temperature = (
+            supports_temperature
+            if supports_temperature is not None
+            else not model.startswith("gpt-5")
+        )
         self._api_key = (
             api_key
             or os.environ.get("OPENAI_API_KEY")
@@ -196,9 +207,7 @@ class OpenAiLanguageModel(AbstractLanguageModel):
         payload: Dict[str, Any] = {}
         if options:
             payload.update({k: v for k, v in options.items() if k != "temperature"})
-            if options.get("temperature") is not None and not self._model.startswith(
-                "gpt-5"
-            ):
+            if options.get("temperature") is not None and self._supports_temperature:
                 payload["temperature"] = options["temperature"]
         if kwargs:
             payload.update(kwargs)
