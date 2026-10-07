@@ -837,6 +837,7 @@ _SESSION_SELECT = """
            s.reply_target, s.reaction_target,
            s.priority, s.priority_reason, s.environment_notes,
            s.repo_url, s.repo_slug, s.team_repository_id,
+           t.name AS team_name,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,
@@ -844,6 +845,8 @@ _SESSION_SELECT = """
              WHERE e.session_id = s.id AND e.kind = 'screenshot') AS screenshot_count
       FROM agent_sessions s
       JOIN agent_workspaces w ON w.id = s.workspace_id
+      LEFT JOIN team_repositories tr ON tr.id = s.team_repository_id
+      LEFT JOIN teams t ON t.id = tr.team_id
 """
 
 

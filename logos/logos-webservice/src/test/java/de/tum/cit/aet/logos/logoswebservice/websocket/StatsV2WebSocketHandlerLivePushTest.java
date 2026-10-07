@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -64,7 +65,7 @@ class StatsV2WebSocketHandlerLivePushTest {
      */
     @SuppressWarnings("unchecked")
     private static void stubLatestRequests(RequestLogService service, Map<String, Object> template) {
-        when(service.getLatestRequests(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean()))
+        when(service.getLatestRequests(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any()))
             .thenAnswer(inv -> Map.of("requests", List.of(new HashMap<>(template))));
     }
 
@@ -108,12 +109,19 @@ class StatsV2WebSocketHandlerLivePushTest {
         clearInvocations(session);
     }
 
+    /** A payload for one provider without samples, as the stats service sends it between two snapshots. */
     private static Map<String, Object> vramPayload(int lastSnapshotId, String connectionState) {
+        return vramPayload(lastSnapshotId, connectionState, null);
+    }
+
+    /** The same payload with the version the worker reports (null for a worker that reports none). */
+    private static Map<String, Object> vramPayload(int lastSnapshotId, String connectionState, String workerVersion) {
         Map<String, Object> provider = new HashMap<>();
         provider.put("provider_id", 1);
         provider.put("name", "worker-a");
         provider.put("data", List.of());
         provider.put("connection_state", connectionState);
+        provider.put("worker_version_checksum", workerVersion);
         provider.put("calibrating", null);
         Map<String, Object> payload = new HashMap<>();
         payload.put("providers", List.of(provider));
@@ -160,6 +168,38 @@ class StatsV2WebSocketHandlerLivePushTest {
         verify(session, atLeastOnce()).sendMessage(captor.capture());
         assertThat(captor.getAllValues())
             .noneMatch(m -> m.getPayload().contains("\"type\":\"vram_delta\""));
+    }
+
+    /**
+     * A worker restarted on another build changes only the version it reports:
+     * the cursor stays put, no sample comes with it and the connection state is
+     * the same. The viewer still has to hear about it, and only once.
+     */
+    @Test
+    void a_changed_worker_version_alone_pushes_a_delta() throws Exception {
+        // Stop the tick scheduler: the test drives pushVramDelta itself.
+        handler.shutdown();
+
+        String day = "2026-09-01";
+        when(vramService.getVramStats(day, 0)).thenReturn(vramPayload(100, "connected", "aaaaaaa"));
+
+        handler.afterConnectionEstablished(session);
+        handler.handleMessage(session, new TextMessage("{\"action\":\"init\",\"vram_day\":\"" + day + "\"}"));
+        clearInvocations(session);
+
+        when(vramService.getVramStats(day, 100)).thenReturn(vramPayload(100, "connected", "bbbbbbb"));
+
+        StatsV2WebSocketHandler.SessionState state = (StatsV2WebSocketHandler.SessionState)
+            ((Map<?, ?>) ReflectionTestUtils.getField(handler, "states")).get(session.getId());
+        ReflectionTestUtils.invokeMethod(handler, "pushVramDelta", session, state);
+        // Nothing moved since: the same version again is not news.
+        ReflectionTestUtils.invokeMethod(handler, "pushVramDelta", session, state);
+
+        ArgumentCaptor<TextMessage> captor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session, times(1)).sendMessage(captor.capture());
+        assertThat(captor.getValue().getPayload())
+            .contains("\"type\":\"vram_delta\"")
+            .contains("\"worker_version_checksum\":\"bbbbbbb\"");
     }
 
     @Test

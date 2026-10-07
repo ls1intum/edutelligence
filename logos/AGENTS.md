@@ -65,7 +65,7 @@ This section is a behavioral rule, not a technical control — the repository ca
 ### Conventions
 
 - Avoid the imprecise terms `frontend` and `backend` in comments and documentation — name the actual component (user interface, web application, application server, feature service, data service, infrastructure service).
-- Keep comments focused on current behavior and implementation constraints; no issue/PR history or local provider names.
+- Keep comments, docstrings, and test names focused on current behavior and implementation constraints; no issue/PR history or local provider names. A reference belongs in the commit message or the pull request, not in code that outlives it.
 - Pre-commit hooks (autoflake, isort, black 120 cols, flake8) gate Python code — see `logos/README.md` for setup and manual runs.
 
 ### Shared sibling

@@ -64,4 +64,10 @@ RUN test -f ./logos_worker_node/main.py \
     && test -f ./scripts/install-macos.sh \
     && test -f ./requirements.txt
 
+# The commit this payload was built from. bootstrap-macos.sh syncs the payload
+# into the install directory, so this travels with the code; an ENV would never
+# reach a worker that is not started in a container.
+ARG GIT_SHA=unknown
+RUN printf '%s' "$GIT_SHA" > ./BUILD_COMMIT
+
 CMD ["/bin/sh", "-c", "echo 'This image is a distribution artifact, not a runtime. Extract it with scripts/bootstrap-macos.sh on an Apple Silicon Mac — Metal is not available inside containers.' >&2; exit 1"]

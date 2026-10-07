@@ -442,7 +442,7 @@
   }
 }
 
-// ── SLA tier & drag-and-drop ordering ─────────────────────────────────────
+// ── SLO tier & drag-and-drop ordering ─────────────────────────────────────
 // Each row plus its expanded permissions panel is wrapped in one draggable
 // element, so the row is no longer the table card's own last child and has to
 // carry its separator itself.
@@ -458,7 +458,7 @@
   }
 }
 
-// First row of an SLA tier: a stronger rule marks the group boundary.
+// First row of an SLO tier: a stronger rule marks the group boundary.
 .table-row--tier-start {
   border-top: 1px solid rgb(var(--color-primary-400) / var(--nav-active-stroke-opacity));
 }
@@ -500,14 +500,14 @@
   }
 }
 
-.cell-sla {
+.cell-slo {
   display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
 }
 
-.sla-dot {
+.slo-dot {
   flex-shrink: 0;
   width: 8px;
   height: 8px;
@@ -530,21 +530,21 @@
   &--inherited {
     background: transparent;
 
-    &.sla-dot--critical {
+    &.slo-dot--critical {
       border: 2px solid rgb(var(--color-error));
     }
 
-    &.sla-dot--high-prio {
+    &.slo-dot--high-prio {
       border: 2px solid rgb(var(--color-primary-500));
     }
 
-    &.sla-dot--background {
+    &.slo-dot--background {
       border: 2px solid rgb(var(--color-typography-700));
     }
   }
 }
 
-.sla-select {
+.slo-select {
   min-width: 0;
   height: 30px;
   padding: 0 4px;
@@ -552,7 +552,7 @@
   cursor: pointer;
 }
 
-.sla-static {
+.slo-static {
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-300));
   white-space: nowrap;

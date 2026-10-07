@@ -122,6 +122,17 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration052_recommendationTierColumnsRenamedToSlo() {
+        // Postgres rejects combining RENAME COLUMN operations in one
+        // ALTER TABLE, so 052 issues one rename per statement; on a fresh
+        // database the SLO names must exist and the SLA names be gone.
+        assertThat(columnExists("ai_llm_call_recommendations", "recommended_slo")).isTrue();
+        assertThat(columnExists("ai_llm_call_recommendations", "confirmed_slo")).isTrue();
+        assertThat(columnExists("ai_llm_call_recommendations", "recommended_sla")).isFalse();
+        assertThat(columnExists("ai_llm_call_recommendations", "confirmed_sla")).isFalse();
+    }
+
+    @Test
     void migration029_providerSnapshotsTableRenamed() {
         // The physical table carries the engine-neutral name now...
         assertThat(tableType("provider_snapshots")).isEqualTo("BASE TABLE");
