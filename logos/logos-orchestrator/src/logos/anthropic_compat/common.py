@@ -39,6 +39,12 @@ CHAT_COMPLETIONS_PATH = "v1/chat/completions"
 # parameter set on chat/completions than every older model.
 _REASONING_MODEL_RE = re.compile(r"^(?:o\d|gpt-5)", re.IGNORECASE)
 
+# Families that reject the deprecated ``max_tokens`` on chat/completions with a
+# 400. Broader than the reasoning set: gpt-6 is served on chat/completions and
+# rejects ``max_tokens``, but is not a reasoning model for temperature / effort.
+# Older Azure deployments (GPT-4 Turbo) still require ``max_tokens``.
+_MAX_COMPLETION_TOKENS_MODEL_RE = re.compile(r"^(?:o\d|gpt-5|gpt-6)", re.IGNORECASE)
+
 
 class UpstreamDialect(str, Enum):
     """Which API surface the resolved upstream actually serves.
@@ -87,6 +93,18 @@ def is_reasoning_model(model_name: Optional[str]) -> bool:
     """
     name = (model_name or "").rsplit("/", 1)[-1]
     return bool(_REASONING_MODEL_RE.match(name))
+
+
+def wants_max_completion_tokens(model_name: Optional[str]) -> bool:
+    """Whether this model needs ``max_completion_tokens`` on chat/completions.
+
+    Anthropic requires ``max_tokens`` on every request, so the translation
+    always has a value to forward; only its name differs by model family.
+    Reasoning families and gpt-6 reject ``max_tokens``; Azure GPT-4 Turbo
+    deployments still require the older name.
+    """
+    name = (model_name or "").rsplit("/", 1)[-1]
+    return bool(_MAX_COMPLETION_TOKENS_MODEL_RE.match(name))
 
 
 def new_message_id(upstream_id: Any) -> str:

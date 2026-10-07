@@ -29,6 +29,7 @@ from logos.anthropic_compat.common import (
     tool_result_text,
     usage_block,
     usage_extras,
+    wants_max_completion_tokens,
 )
 
 # Sampling parameters that carry over to a non-reasoning model. ``top_k`` is
@@ -52,7 +53,8 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
     # Anthropic clients supply max_tokens always, a system prompt on every
     # Claude Code turn, and a temperature and an effort routinely — so this
     # cannot be left to the client to get right.
-    reasoning = is_reasoning_model(model_name or payload.get("model"))
+    served_model = model_name or payload.get("model")
+    reasoning = is_reasoning_model(served_model)
 
     messages: List[Dict[str, Any]] = []
 
@@ -72,13 +74,13 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         "messages": messages,
     }
 
-    # max_completion_tokens is the chat/completions output cap for every
-    # model; max_tokens is its deprecated predecessor, which the reasoning
-    # families reject with a 400. So the cap goes under the one name that the
-    # surface itself accepts, whatever the model is called.
+    # The output-cap name is selected by model family, not by is_reasoning_model:
+    # gpt-6 rejects max_tokens on chat/completions, while Azure GPT-4 Turbo
+    # still requires it and rejects max_completion_tokens.
     max_tokens = payload.get("max_tokens")
     if max_tokens is not None:
-        result["max_completion_tokens"] = max_tokens
+        cap = "max_completion_tokens" if wants_max_completion_tokens(served_model) else "max_tokens"
+        result[cap] = max_tokens
 
     if not reasoning:
         for name in _PASSTHROUGH_PARAMS:

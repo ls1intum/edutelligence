@@ -49,17 +49,27 @@ def test_system_blocks_become_a_leading_system_message():
     )
     assert result["messages"][0] == {"role": "system", "content": "You are Claude Code.\n\nBe brief."}
     assert result["messages"][1] == {"role": "user", "content": "hi"}
-    assert result["max_completion_tokens"] == 64
+    assert result["max_tokens"] == 64
 
 
-@pytest.mark.parametrize("model", ["gpt-4.1-nano", "gpt-5.6-luna", "an-unreleased-family", None])
-def test_output_cap_is_max_completion_tokens_whatever_the_model(model):
-    # The reasoning families reject the deprecated max_tokens with a 400, and a
-    # new family cannot be recognised by its name; max_completion_tokens is
-    # accepted by every model on chat/completions.
+@pytest.mark.parametrize(
+    "model,cap",
+    [
+        # gpt-6 rejects max_tokens on chat/completions; Azure GPT-4 Turbo still
+        # requires it and rejects max_completion_tokens. The cap is selected by
+        # family, not by is_reasoning_model (which does not match gpt-6).
+        ("gpt-6-luna", "max_completion_tokens"),
+        ("openai/gpt-6-luna", "max_completion_tokens"),
+        ("gpt-5.6-luna", "max_completion_tokens"),
+        ("gpt-4-turbo-2024-04-09", "max_tokens"),
+        ("gpt-4.1-nano", "max_tokens"),
+    ],
+)
+def test_output_cap_follows_model_family(model, cap):
     result = to_chat_completions({"model": model, "max_tokens": 64, "messages": []})
-    assert result["max_completion_tokens"] == 64
-    assert "max_tokens" not in result
+    assert result[cap] == 64
+    other = "max_tokens" if cap == "max_completion_tokens" else "max_completion_tokens"
+    assert other not in result
 
 
 def test_top_k_and_metadata_are_dropped():
@@ -208,7 +218,7 @@ def test_the_two_openai_families_get_mutually_exclusive_parameters():
 
     older = to_chat_completions({**request, "model": "gpt-4.1-nano"})
     assert older["temperature"] == 0.3 and older["top_p"] == 0.9
-    assert older["max_completion_tokens"] == 8
+    assert older["max_tokens"] == 8
     assert older["stop"] == ["END"]
     assert older["messages"][0] == {"role": "system", "content": "Be brief."}
     assert "reasoning_effort" not in older
