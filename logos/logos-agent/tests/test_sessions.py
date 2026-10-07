@@ -5855,12 +5855,18 @@ class TestASessionThatRanOutOfTime:
         async def add_event(*_args, **_kwargs):
             return None
 
+        async def get_session(_session_id):
+            # Supervision polls the row for an external cancel; a live
+            # session is not cancelled, so the budget path can finish.
+            return {"status": "running", "error": None}
+
         async def settle(_self, session_id, *, exit_code, error):
             settled.append((session_id, exit_code, error))
 
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
 
@@ -5902,9 +5908,13 @@ class TestNoClockUnlessSomebodyAsksForOne:
         async def nothing(*_args, **_kwargs):
             return None
 
+        async def get_session(_session_id):
+            return {"status": "running", "error": None}
+
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", nothing)
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
         real_sleep = asyncio.sleep
