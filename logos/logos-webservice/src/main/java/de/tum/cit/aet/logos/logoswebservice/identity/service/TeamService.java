@@ -124,6 +124,11 @@ public class TeamService {
         Team team = new Team();
         team.setName(body.name());
         team = teamRepository.save(team);
+        Map<String, Object> created = new LinkedHashMap<>();
+        created.put("exists", true);
+        created.put("name", team.getName());
+        auditLog.record("team.created", "team", team.getId(), team.getId(),
+            Map.of("exists", false), created);
         List<Integer> ownerIds = (body.owner_ids() != null && !body.owner_ids().isEmpty())
             ? body.owner_ids()
             : List.of(callerId);
@@ -142,11 +147,16 @@ public class TeamService {
         return memberRepository.isMember(teamId, userId);
     }
 
+    @Transactional
     public boolean deleteTeam(Integer teamId) {
         Optional<Team> teamOpt = teamRepository.findById(teamId);
         if (teamOpt.isEmpty()) return false;
         requireUnmanaged(teamOpt.get(), "deleted");
+        Map<String, Object> gone = new LinkedHashMap<>();
+        gone.put("exists", true);
+        gone.put("name", teamOpt.get().getName());
         teamRepository.deleteById(teamId);
+        auditLog.record("team.deleted", "team", teamId, teamId, gone, Map.of("exists", false));
         return true;
     }
 
@@ -333,8 +343,11 @@ public class TeamService {
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
         return memberRepository.findById(memberId).map(m -> {
             if (Boolean.TRUE.equals(body.is_owner())) requireOwnerCapableRole(userId);
+            Map<String, Object> before = TeamMembershipService.snapshot(m);
             if (body.is_owner() != null) m.setIsOwner(body.is_owner());
             memberRepository.save(m);
+            auditLog.record("team.member_updated", "team_member", teamId + "/" + userId, teamId,
+                before, TeamMembershipService.snapshot(m));
             return true;
         }).orElse(false);
     }
