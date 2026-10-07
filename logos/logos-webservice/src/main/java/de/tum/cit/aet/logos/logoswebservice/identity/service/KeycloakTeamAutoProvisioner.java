@@ -21,16 +21,21 @@ class KeycloakTeamAutoProvisioner {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Team findOrCreate(String roleName, List<String> teamRoleSuffixes) {
+        Optional<Team> linked = teamRepository.findByKeycloakGroup(roleName);
+        if (linked.isPresent()) return linked.get();
+
+        String derivedName = KeycloakUserSyncService.deriveTeamName(roleName, teamRoleSuffixes);
+        // Adopt an existing unlinked team with the same name rather than creating
+        // a duplicate — but claim it with a conditional update, so a link an
+        // admin commits in between wins instead of being silently replaced.
+        Optional<Integer> adopted = teamRepository.findFirstByName(derivedName)
+            .map(Team::getId)
+            .filter(id -> teamRepository.adoptIfUnlinked(id, roleName) == 1);
+        if (adopted.isPresent()) return teamRepository.findById(adopted.get()).orElseThrow();
+
+        // The same-named team was taken; this group may meanwhile have a team of
+        // its own, and otherwise gets a fresh one.
         return teamRepository.findByKeycloakGroup(roleName).orElseGet(() -> {
-            String derivedName = KeycloakUserSyncService.deriveTeamName(roleName, teamRoleSuffixes);
-            // Adopt an existing unlinked team with the same name rather than creating a duplicate.
-            Optional<Team> byName = teamRepository.findFirstByName(derivedName)
-                .filter(t -> t.getKeycloakGroup() == null);
-            if (byName.isPresent()) {
-                Team existing = byName.get();
-                existing.setKeycloakGroup(roleName);
-                return teamRepository.save(existing);
-            }
             Team team = new Team();
             team.setKeycloakGroup(roleName);
             team.setName(derivedName);

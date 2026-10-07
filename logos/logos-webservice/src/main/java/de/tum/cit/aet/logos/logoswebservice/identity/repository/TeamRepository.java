@@ -7,6 +7,7 @@ import jakarta.persistence.LockModeType;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -57,4 +58,18 @@ public interface TeamRepository extends JpaRepository<Team, Integer> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT t.keycloakGroup FROM Team t WHERE t.id = :id")
     Optional<String> lockAndReadKeycloakGroup(@Param("id") Integer id);
+
+    /**
+     * Claims a still-unlinked team for a Keycloak group, as auto-provisioning
+     * does when it adopts a same-named team instead of creating a duplicate.
+     *
+     * <p>A conditional update rather than a read, a check and a save: the read
+     * would go stale the moment an admin links that team, and saving the whole
+     * entity afterwards would overwrite their link. Returns 0 when the team was
+     * linked (or renamed away) in the meantime, which the caller treats as
+     * "not adoptable".
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE Team t SET t.keycloakGroup = :group WHERE t.id = :id AND t.keycloakGroup IS NULL")
+    int adoptIfUnlinked(@Param("id") Integer id, @Param("group") String group);
 }

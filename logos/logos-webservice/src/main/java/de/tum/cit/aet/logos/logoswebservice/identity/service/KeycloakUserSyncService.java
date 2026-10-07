@@ -184,8 +184,20 @@ public class KeycloakUserSyncService {
         return base + UUID.randomUUID().toString().replace("-", "").substring(0, 6);
     }
 
+    /**
+     * Switches the user's keys back on when Keycloak re-enables their account —
+     * except the ones bound to a team they are no longer in.
+     *
+     * <p>A team key carries that team's model permissions and budget, and
+     * nothing on the inference path re-checks membership, so reviving one for a
+     * team the user has since left (their group was unlinked, or they were
+     * taken out of it while deactivated) would hand back access that was
+     * deliberately removed. Membership they still hold revives its key here;
+     * membership this very sync restores is handled by the join that follows.
+     */
     private void reactivateUserKeys(User user) {
         apiKeyRepository.findByUserId(user.getId()).forEach(k -> {
+            if (k.getTeamId() != null && !memberRepository.isMember(k.getTeamId(), user.getId())) return;
             k.setIsActive(true);
             apiKeyRepository.save(k);
         });
