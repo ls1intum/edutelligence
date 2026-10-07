@@ -187,6 +187,10 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
      * specificity as the billing queries. Rows whose validity was closed (by
      * a provider type change) are not eligible, so the cost is only derived
      * from a price generation opened for the provider's current type.
+     * Validity uses {@code statement_timestamp()}, not transaction-start
+     * {@code NOW()}: derivation takes the provider lock as its first
+     * statement, so {@code NOW()} would be fixed before any lock wait and
+     * could still admit prices closed while it waited.
      */
     @Query(value = """
         SELECT
@@ -195,8 +199,8 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
              WHERE (tp.model_id = :modelId OR tp.model_id IS NULL)
                AND (tp.provider_id = :providerId OR tp.provider_id IS NULL)
                AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
-               AND tp.valid_from <= NOW()
-               AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
+               AND tp.valid_from <= statement_timestamp()
+               AND (tp.valid_to IS NULL OR tp.valid_to > statement_timestamp())
              ORDER BY (tp.model_id = :modelId) DESC NULLS LAST,
                       (tp.provider_id = :providerId) DESC NULLS LAST,
                       tp.valid_from DESC,
@@ -207,8 +211,8 @@ public interface ModelProviderRepository extends JpaRepository<ModelProvider, In
              WHERE (tp.model_id = :modelId OR tp.model_id IS NULL)
                AND (tp.provider_id = :providerId OR tp.provider_id IS NULL)
                AND tp.unit = 'token' AND tp.service_tier = 'default' AND tp.min_context_tokens = 0
-               AND tp.valid_from <= NOW()
-               AND (tp.valid_to IS NULL OR tp.valid_to > NOW())
+               AND tp.valid_from <= statement_timestamp()
+               AND (tp.valid_to IS NULL OR tp.valid_to > statement_timestamp())
              ORDER BY (tp.model_id = :modelId) DESC NULLS LAST,
                       (tp.provider_id = :providerId) DESC NULLS LAST,
                       tp.valid_from DESC,

@@ -34,12 +34,22 @@ public class ModelProvider {
     // cloud pairs (catalogue blend), USD per request for local pairs
     // (VRAM x latency proxy). Only the cloud unit is commensurable across
     // pairs, so the model-level cost ranking uses cloud pairs only.
-    // Populated by ModelMetricsService; NULL until enough data has been observed.
+    // Populated by ModelMetricsService via native UPDATE; updatable=false so
+    // an ordinary JPA flush of a stale pair entity (e.g. connectModelProvider
+    // editing key/endpoint) cannot restore derived values overwritten by a
+    // concurrent derivation or provider-type invalidation.
+    // NULL until enough data has been observed.
+    @Column(updatable = false)
     private Integer derivedTtftMs;
+    @Column(updatable = false)
     private Integer derivedTotalLatencyMs;
+    @Column(updatable = false)
     private Integer derivedTpotMs;
+    @Column(updatable = false)
     private BigDecimal derivedCostUsd;
+    @Column(updatable = false)
     private Integer derivedSamples = 0;
+    @Column(updatable = false)
     private Instant derivedUpdatedAt;
 
     public Integer getId() { return id; }

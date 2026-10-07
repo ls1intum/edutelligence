@@ -11,8 +11,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -23,6 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Model;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ModelProvider;
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.Provider;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelPairMetricsProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProviderRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.PairLatencyStatsProjection;
@@ -111,6 +110,13 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * makes a save that started before a derivation wait for it, and a
  * derivation that started before a save commit after it, so neither side can
  * revert the other's committed weights.
+ *
+ * The weight phase builds its cloud/local populations and derived values
+ * from one joined SQL snapshot of pairs with their providers: separate
+ * provider-type and pair-cost reads under READ COMMITTED could otherwise
+ * combine an old cloud classification with a newly written local
+ * USD/request cost (the model-weights lock does not serialize provider
+ * changes), and rank that cost as USD per million tokens.
  */
 @Service
 public class ModelMetricsService {
@@ -338,18 +344,19 @@ public class ModelMetricsService {
     boolean applyDerivedWeights() {
         Boolean changed = transactionTemplate.execute(status -> {
             modelRepository.lockModelWeights(MODEL_WEIGHTS_LOCK_KEY);
-            // Build the per-dimension populations from the pairs table:
-            // latency = all pairs, but cost ranking = only cloud pairs.
+            // Build the per-dimension populations from one joined snapshot of
+            // pairs with their providers: latency = all pairs, cost ranking
+            // = only cloud pairs. A single statement keeps the cloud/local
+            // classification and the pair's derived cost consistent under
+            // READ COMMITTED (see class javadoc).
             Set<Integer> pairedModelIds = new HashSet<>();
             Set<Integer> cloudPairedModelIds = new HashSet<>();
-            Set<Integer> cloudProviderIds = providerRepository.findAll().stream()
-                .filter(p -> p.getCloudProviderType() != null)
-                .map(Provider::getId).collect(Collectors.toSet());
             Map<Integer, Double> latencyValues = new HashMap<>();
             Map<Integer, Double> costValues = new HashMap<>();
-            for (ModelProvider pair : modelProviderRepository.findAll()) {
+            for (ModelPairMetricsProjection pair : modelProviderRepository.findPairMetrics(null)) {
                 pairedModelIds.add(pair.getModelId());
-                if (cloudProviderIds.contains(pair.getProviderId())) cloudPairedModelIds.add(pair.getModelId());
+                boolean cloud = pair.getCloudProviderType() != null;
+                if (cloud) cloudPairedModelIds.add(pair.getModelId());
 
                 if (pair.getDerivedSamples() != null && pair.getDerivedSamples() >= MIN_LATENCY_SAMPLES
                         && pair.getDerivedTotalLatencyMs() != null) {
@@ -358,7 +365,7 @@ public class ModelMetricsService {
                 // Only the cloud cost in $/M tokens is commensurable across pairs,
                 // so only it feeds the model-level cost ranking; the local $/request
                 // proxy stays display-only on the pair row.
-                if (pair.getDerivedCostUsd() != null && cloudProviderIds.contains(pair.getProviderId())) {
+                if (pair.getDerivedCostUsd() != null && cloud) {
                     costValues.merge(pair.getModelId(), pair.getDerivedCostUsd().doubleValue(), Double::min);
                 }
             }
