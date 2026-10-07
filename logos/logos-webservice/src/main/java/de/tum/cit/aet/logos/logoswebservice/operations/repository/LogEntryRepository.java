@@ -641,6 +641,27 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     Long countConsentedAmongIds(@Param("ids") List<Integer> ids);
 
     /**
+     * Whether any request in the selected window was stored at FULL privacy.
+     *
+     * <p>Derived from stored rows rather than the team's current key defaults:
+     * a BILLING key can still produce FULL rows via a per-request logging
+     * header, and that is what the activity export hint must reflect.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1
+            FROM log_entry le
+            WHERE le.team_id = :teamId
+              AND le.privacy_level = 'FULL'
+              AND le.timestamp_request BETWEEN :startTs AND :endTs
+        )
+        """, nativeQuery = true)
+    boolean existsFullPrivacyInWindow(@Param("teamId") int teamId,
+                                      @Param("startTs") Timestamp startTs,
+                                      @Param("endTs") Timestamp endTs);
+
+    /**
      * How many requests the export window holds under the same narrowing the
      * export itself applies — the number the download's truncation notice is
      * measured against. Ranged on timestamp_request with the team as the

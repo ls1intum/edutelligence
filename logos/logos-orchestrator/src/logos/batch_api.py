@@ -45,7 +45,7 @@ import httpx
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from logos.auth import AuthContext, authenticate_batch_api_key
+from logos.auth import AuthContext, authenticate_batch_api_key, explicit_log_level, resolve_log_level
 from logos.batch_local import local_batch_object, local_file_object, new_object_id, parse_request_lines, run_local_batch
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.billing.budget import check_monthly_budget
@@ -877,6 +877,13 @@ async def settle_batch(provider: Dict[str, Any], owner: Dict[str, Any], batch_bo
             if owner.get("api_key_id")
             else {"log_level": "BILLING"}
         )
+        # A creating request that set logos-logging recorded the consent on
+        # the batch row; settlement must honour it over the key's living level.
+        recorded = owner.get("log_level")
+        if recorded:
+            if hasattr(recorded, "value"):
+                recorded = recorded.value
+            logging_context = {**logging_context, "log_level": recorded}
         model_index = _model_index(db, provider)
 
     if not output_file_id:
@@ -1422,7 +1429,9 @@ def _local_batch_contract(content: bytes, json_body: Dict[str, Any]) -> str:
     return f"/v1/{wanted}"
 
 
-async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, db: DBManager):
+async def _handle_batch_creation(
+    json_body: Dict[str, Any], auth: AuthContext, db: DBManager, consent_level: Optional[str] = None
+):
     """Authorise a batch and either create it here or hand it to the provider."""
     input_file_id = json_body.get("input_file_id")
     if not isinstance(input_file_id, str) or not input_file_id:
@@ -1453,6 +1462,7 @@ async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, d
         api_key_id=auth.api_key_id,
         team_id=auth.team_id,
         user_id=auth.user_id,
+        log_level=consent_level,
     )
     created = db.get_local_batch(batch_id)
     _start_local_batch(created)
@@ -1460,7 +1470,10 @@ async def _handle_batch_creation(json_body: Dict[str, Any], auth: AuthContext, d
 
 
 async def _rerun_refused_creation_locally(
-    provider: Dict[str, Any], json_body: Dict[str, Any], auth: AuthContext
+    provider: Dict[str, Any],
+    json_body: Dict[str, Any],
+    auth: AuthContext,
+    consent_level: Optional[str] = None,
 ) -> Optional[JSONResponse]:
     """Run a refused batch creation here, from the file the provider holds.
 
@@ -1526,6 +1539,7 @@ async def _rerun_refused_creation_locally(
             api_key_id=auth.api_key_id,
             team_id=auth.team_id,
             user_id=auth.user_id,
+            log_level=consent_level,
         )
         created = db.get_local_batch(batch_id)
     if created is None:
@@ -1547,6 +1561,8 @@ async def handle_batch_api_request(request: Request) -> Response:
     # The Batch API — and only it — resolves the scoped credential; every
     # other route authenticates with key values alone.
     auth = authenticate_batch_api_key(headers)
+    log_level = resolve_log_level(headers, auth.log_level)
+    consent_level = explicit_log_level(headers)
 
     request_id = secrets.token_urlsafe(16)
     log_id: Optional[int] = None
@@ -1572,7 +1588,7 @@ async def handle_batch_api_request(request: Request) -> Response:
             elif operation.is_batch_creation:
                 json_body = await _read_json_body(request)
                 log_payload = dict(json_body)
-                response, provider = await _handle_batch_creation(json_body, auth, db)
+                response, provider = await _handle_batch_creation(json_body, auth, db, consent_level)
             elif operation.is_listing:
                 response = _listing_response(db, auth, operation)
             elif owner is not None and owner.get("execution") == "logos":
@@ -1603,7 +1619,7 @@ async def handle_batch_api_request(request: Request) -> Response:
                 team_id=auth.team_id,
                 user_id=auth.user_id,
                 environment=auth.environment,
-                log_level=auth.log_level,
+                log_level=log_level,
                 client_ip=get_client_ip(request),
                 input_payload=log_payload,
                 headers=sanitized_headers_for_persistence(headers),
@@ -1614,7 +1630,13 @@ async def handle_batch_api_request(request: Request) -> Response:
         if response is None:
             response = await forward_batch_operation(provider, operation, upload, json_body)
             response = await _register_upstream_object(
-                response, operation, provider, auth, owner, file_models=log_payload.get("models")
+                response,
+                operation,
+                provider,
+                auth,
+                owner,
+                file_models=log_payload.get("models"),
+                consent_level=consent_level,
             )
             # A mapped result file was addressed upstream by the provider's
             # id; the object answer comes back named by it, so it is
@@ -1685,7 +1707,7 @@ async def handle_batch_api_request(request: Request) -> Response:
                 and execution not in {"provider", "logos"}
                 and not _header(headers, BATCH_PROVIDER_HEADER)
             ):
-                rerun = await _rerun_refused_creation_locally(provider, json_body, auth)
+                rerun = await _rerun_refused_creation_locally(provider, json_body, auth, consent_level)
                 if rerun is not None:
                     return rerun
     return response
@@ -1825,6 +1847,7 @@ async def _register_upstream_object(
     auth: AuthContext,
     owner: Optional[Dict[str, Any]],
     file_models: Optional[List[str]] = None,
+    consent_level: Optional[str] = None,
 ) -> Response:
     """Record what the provider just minted, and settle a batch that finished.
 
@@ -1876,6 +1899,7 @@ async def _register_upstream_object(
             user_id=auth.user_id,
             input_file_id=payload.get("input_file_id"),
             status=payload.get("status"),
+            log_level=consent_level,
         )
         try:
             with DBManager() as db:

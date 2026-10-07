@@ -284,3 +284,28 @@ async def test_log_level_header_case_insensitive_on_the_request_path(_profile_au
     )
 
     assert db.log_usage_kwargs["log_level"] == "FULL"
+
+
+@pytest.mark.asyncio
+async def test_log_level_header_yes_opts_in_on_a_billing_key(_profile_auth):
+    db, _ = _profile_auth()
+    await main.auth_parse_log(
+        _request({"model": "m"}, headers={"logos-logging": "yes"}),
+        use_profile_auth=True,
+        request_id="req-1",
+    )
+
+    assert db.log_usage_kwargs["log_level"] == "FULL"
+
+
+@pytest.mark.asyncio
+async def test_log_level_header_no_opts_out_on_a_full_key(_profile_auth):
+    db, auth = _profile_auth()
+    auth.log_level = "FULL"
+    await main.auth_parse_log(
+        _request({"model": "m"}, headers={"logos-logging": "no"}),
+        use_profile_auth=True,
+        request_id="req-1",
+    )
+
+    assert db.log_usage_kwargs["log_level"] == "BILLING"

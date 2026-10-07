@@ -133,6 +133,13 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration053_batchObjectsLogLevelExists() {
+        // Per-request logging consent for batches that outlive their creating
+        // request; NULL means the create sent no logos-logging header.
+        assertThat(columnExists("batch_objects", "log_level")).isTrue();
+    }
+
+    @Test
     void migration029_providerSnapshotsTableRenamed() {
         // The physical table carries the engine-neutral name now...
         assertThat(tableType("provider_snapshots")).isEqualTo("BASE TABLE");
