@@ -163,8 +163,8 @@ public class ModelController {
                 // the rename produced, and the client does not have to keep the
                 // flags of the old name on screen until the next full reload.
                 // When the same request also set a manual override, the sync
-                // sees manual_override=true and skips — the override from the
-                // transactional update wins.
+                // keeps those flags and only refreshes the catalog window for
+                // the new name — the override from the transactional update wins.
                 modelCapabilitiesUpdaterService.updateCapabilitiesForModel(req.modelId(), req.name());
                 result.put("capabilities", modelService.capabilitiesState(req.modelId()));
             }

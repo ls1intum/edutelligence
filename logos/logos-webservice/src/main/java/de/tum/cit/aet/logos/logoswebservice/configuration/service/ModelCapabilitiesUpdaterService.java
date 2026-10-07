@@ -105,12 +105,10 @@ public class ModelCapabilitiesUpdaterService {
             Map<String, Object> catalog,
             int modelId,
             String modelName) {
-        // Cheap short-circuit that spares the catalog scan; the binding check
-        // runs again inside applyCatalogCapabilities, under the row lock.
-        if (modelCapabilitiesPersistenceService.isManualOverride(modelId)) {
-            log.debug("capabilities_updater: skipping model '{}' (id={}): manual override is active", modelName, modelId);
-            return false;
-        }
+        // Always resolve against the catalog: a manual override pins only the
+        // three boolean flags. The context window must still track the registry
+        // so a rename cannot leave /v1/models advertising the previous limit.
+        // applyCatalogCapabilities re-checks the override under the row lock.
         String normalizedModelName = normalizeModelName(modelName);
         boolean found = false;
         boolean supportsFunctionCalling = false;

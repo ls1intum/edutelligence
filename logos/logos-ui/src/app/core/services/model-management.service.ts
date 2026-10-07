@@ -127,9 +127,9 @@ export class ModelManagementService {
 
   /**
    * Manually override the capability flags for a model. While `manual_override`
-   * is set, the automatic LiteLLM catalog sync never touches the row again
-   * (no overwrite on match, no delete on no-match). The backend replies with
-   * the new state (`ModelCapabilityState`).
+   * is set, the automatic LiteLLM catalog sync never overwrites those three
+   * flags or deletes the row; the catalog context window still follows the
+   * registry. The backend replies with the new state (`ModelCapabilityState`).
    */
   setModelCapabilities(
     modelId: number,

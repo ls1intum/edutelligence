@@ -913,9 +913,9 @@ class ModelControllerTest {
 
     @Test
     void scheduledRefresh_keepsManualOverride() throws Exception {
-        // Core persistence requirement: once an admin overrides the capabilities,
-        // the catalog refresh must not touch the row (neither overwrite on match
-        // nor delete on no-match)
+        // Core persistence requirement: once an admin overrides the capability
+        // flags, the catalog refresh must not overwrite those flags or delete
+        // the row (the catalog window may still be refreshed).
         mvc.perform(post("/logosdb/set_model_capabilities")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
@@ -936,5 +936,63 @@ class ModelControllerTest {
            .andExpect(jsonPath("$.5001.supports_vision").value(true))
            .andExpect(jsonPath("$.5001.supports_reasoning").value(true))
            .andExpect(jsonPath("$.5001.manual_override").value(true));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, "
+            + "supports_reasoning, max_input_tokens, manual_override) "
+            + "VALUES (5001, false, true, true, 8192, true)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void updateModelInfo_renameWithManualOverrideUpdatesCatalogWindow() throws Exception {
+        // Model 5001 is gpt-4 with a manual override and a small window. Renaming
+        // it to gpt-4o must keep the admin flags and refresh the window from the
+        // gpt-4o catalog entries (smallest matching positive window).
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"name\":\"gpt-4o\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Model updated"))
+           .andExpect(jsonPath("$.capabilities.supports_function_calling").value(false))
+           .andExpect(jsonPath("$.capabilities.supports_vision").value(true))
+           .andExpect(jsonPath("$.capabilities.supports_reasoning").value(true))
+           .andExpect(jsonPath("$.capabilities.manual_override").value(true));
+
+        ModelCapabilities caps = modelCapabilitiesRepository.findByModelId(5001).orElseThrow();
+        assertThat(caps.getSupportsFunctionCalling()).isFalse();
+        assertThat(caps.getSupportsVision()).isTrue();
+        assertThat(caps.getSupportsReasoning()).isTrue();
+        assertThat(caps.getManualOverride()).isTrue();
+        // github_copilot/gpt-4o publishes 64000 — the smallest matching window
+        assertThat(caps.getMaxInputTokens()).isEqualTo(64000);
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(statements = {
+        "INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, "
+            + "supports_reasoning, max_input_tokens, manual_override) "
+            + "VALUES (5001, true, false, true, 128000, true)"
+    }, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void updateModelInfo_renameUnknownWithManualOverrideClearsWindowKeepsRow() throws Exception {
+        mvc.perform(post("/logosdb/update_model_info")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"model_id\":5001,\"name\":\"renamed-unknown-under-override\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Model updated"))
+           .andExpect(jsonPath("$.capabilities.supports_function_calling").value(true))
+           .andExpect(jsonPath("$.capabilities.supports_vision").value(false))
+           .andExpect(jsonPath("$.capabilities.supports_reasoning").value(true))
+           .andExpect(jsonPath("$.capabilities.manual_override").value(true));
+
+        ModelCapabilities caps = modelCapabilitiesRepository.findByModelId(5001).orElseThrow();
+        assertThat(caps.getManualOverride()).isTrue();
+        assertThat(caps.getSupportsFunctionCalling()).isTrue();
+        assertThat(caps.getSupportsVision()).isFalse();
+        assertThat(caps.getSupportsReasoning()).isTrue();
+        assertThat(caps.getMaxInputTokens()).isNull();
     }
 }

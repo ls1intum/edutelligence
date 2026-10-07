@@ -267,39 +267,93 @@ class ModelCapabilitiesUpdaterServiceUnitTest {
     }
 
     @Test
-    void extractAndStore_manualOverrideIsNotOverwrittenOnCatalogMatch() {
-        // Even though the catalog matches, an active manual override must keep the row untouched
+    void extractAndStore_manualOverrideKeepsFlagsButUpdatesWindowOnCatalogMatch() {
+        // Manual override pins the three boolean flags, but the catalog window
+        // must still follow the registry — otherwise a rename leaves /v1/models
+        // advertising the previous model's limit.
         Map<String, Object> catalog = Map.of(
             "openai/gpt-4", Map.of(
                 "supports_function_calling", false,
                 "supports_vision", true,
-                "supports_reasoning", true
+                "supports_reasoning", true,
+                "max_input_tokens", 8192
             )
         );
         ModelCapabilities manual = new ModelCapabilities(5001, true, false, true);
         manual.setManualOverride(true);
+        manual.setMaxInputTokens(128000);
         when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(manual));
+        givenModelNamed("gpt-4");
 
-        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
+        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
 
-        verify(capabilitiesRepository, never()).save(any());
+        verify(capabilitiesRepository).save(argThat((ModelCapabilities c) ->
+            c.getModelId() == 5001
+                && c.getSupportsFunctionCalling()
+                && !c.getSupportsVision()
+                && c.getSupportsReasoning()
+                && c.getManualOverride()
+                && Integer.valueOf(8192).equals(c.getMaxInputTokens())
+        ));
         verify(capabilitiesRepository, never()).delete(any());
     }
 
     @Test
-    void extractAndStore_manualOverrideSurvivesCatalogNoMatch() {
-        // The guard sits before the no-match delete: a manual row outlives a catalog
-        // that no longer knows the (renamed) model name
+    void extractAndStore_manualOverrideSurvivesCatalogNoMatchButClearsWindow() {
+        // A manual row outlives a catalog that no longer knows the (renamed)
+        // model name; only the stale catalog window is cleared.
         Map<String, Object> catalog = Map.of(
-            "gpt-4o", Map.of("supports_function_calling", true)
+            "gpt-4o", Map.of("supports_function_calling", true, "max_input_tokens", 128000)
         );
         ModelCapabilities manual = new ModelCapabilities(5001, true, false, false);
         manual.setManualOverride(true);
+        manual.setMaxInputTokens(128000);
         when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(manual));
+        givenModelNamed("gpt-4");
 
         assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isFalse();
 
-        verify(capabilitiesRepository, never()).save(any());
+        verify(capabilitiesRepository).save(argThat((ModelCapabilities c) ->
+            c.getModelId() == 5001
+                && c.getSupportsFunctionCalling()
+                && !c.getSupportsVision()
+                && !c.getSupportsReasoning()
+                && c.getManualOverride()
+                && c.getMaxInputTokens() == null
+        ));
+        verify(capabilitiesRepository, never()).delete(any());
+    }
+
+    @Test
+    void extractAndStore_manualOverrideRenameUpdatesWindowToNewCatalogMatch() {
+        // gpt-4o (128k) renamed to gpt-4 (8k) with an active override: flags stay,
+        // window becomes the new name's catalog limit.
+        Map<String, Object> catalog = new LinkedHashMap<>();
+        catalog.put("gpt-4o", Map.of(
+            "supports_function_calling", true,
+            "supports_vision", true,
+            "max_input_tokens", 128000
+        ));
+        catalog.put("gpt-4", Map.of(
+            "supports_function_calling", true,
+            "supports_vision", false,
+            "max_input_tokens", 8192
+        ));
+        ModelCapabilities manual = new ModelCapabilities(5001, false, true, true);
+        manual.setManualOverride(true);
+        manual.setMaxInputTokens(128000);
+        when(capabilitiesRepository.findByModelId(5001)).thenReturn(Optional.of(manual));
+        givenModelNamed("gpt-4");
+
+        assertThat(svc.testExtractAndStoreCapabilities(catalog, 5001, "gpt-4")).isTrue();
+
+        verify(capabilitiesRepository).save(argThat((ModelCapabilities c) ->
+            !c.getSupportsFunctionCalling()
+                && c.getSupportsVision()
+                && c.getSupportsReasoning()
+                && c.getManualOverride()
+                && Integer.valueOf(8192).equals(c.getMaxInputTokens())
+        ));
         verify(capabilitiesRepository, never()).delete(any());
     }
 }
