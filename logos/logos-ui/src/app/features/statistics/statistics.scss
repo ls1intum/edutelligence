@@ -271,6 +271,8 @@
 }
 
 .stats-glass-row__header {
+  // The version card hangs off this on a phone (see version-hint.scss).
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -310,6 +312,11 @@
   .pi {
     font-size: var(--font-size-xs);
   }
+}
+
+// The commit a worker was built from reads like a hash, so it is set in monospace.
+.stats-panel-badge__mono {
+  font-family: var(--font-family-mono, monospace);
 }
 
 // ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────

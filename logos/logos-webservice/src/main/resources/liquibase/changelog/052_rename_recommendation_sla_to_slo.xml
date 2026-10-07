@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- The tier a call site (or application key) is served under is an
+         objective the platform schedules against, not an agreement with the
+         key owner: rename the columns from SLA to SLO to match the capacity
+         terminology. Postgres rewrites the check constraints that reference
+         the renamed columns and keeps their names; the tier values are
+         untouched. Each RENAME COLUMN is its own ALTER TABLE statement:
+         Postgres rejects combining rename operations in one. -->
+    <changeSet id="052-rename-recommendation-sla-to-slo" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="ai_llm_call_recommendations" columnName="recommended_slo"/></not>
+        </preConditions>
+        <sql>
+            ALTER TABLE ai_llm_call_recommendations
+                RENAME COLUMN recommended_sla TO recommended_slo;
+        </sql>
+        <sql>
+            ALTER TABLE ai_llm_call_recommendations
+                RENAME COLUMN confirmed_sla TO confirmed_slo;
+        </sql>
+        <rollback>
+            <sql>
+                ALTER TABLE ai_llm_call_recommendations
+                    RENAME COLUMN recommended_slo TO recommended_sla;
+            </sql>
+            <sql>
+                ALTER TABLE ai_llm_call_recommendations
+                    RENAME COLUMN confirmed_slo TO confirmed_sla;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

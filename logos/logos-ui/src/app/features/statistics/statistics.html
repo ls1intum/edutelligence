@@ -377,6 +377,12 @@
             <div class="stats-glass-row">
               <div class="stats-glass-row__header">
                 <span class="stats-glass-row__label">{{ row.name }}</span>
+                @if (row.versionChip; as chip) {
+                  <span class="stats-panel-badge">
+                    <span class="stats-panel-badge__mono">{{ chip.label }}</span>
+                    <app-stats-version-hint [hint]="chip.hint" [commit]="chip.commit" />
+                  </span>
+                }
                 @if (!row.online) {
                   <span class="stats-provider-badge stats-provider-badge--offline">offline</span>
                 }

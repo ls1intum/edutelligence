@@ -1,5 +1,7 @@
+import { vi } from 'vitest';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
+import { TeamManagementService } from '../../core/services/team-management.service';
 import { AgentService } from '../../core/services/agent.service';
 import {
   ACTIVE_SESSION_STATUSES,
@@ -145,12 +147,16 @@ describe('Agents', () => {
   let fixture: ComponentFixture<Agents>;
   let component: Agents;
   let agentService: FakeAgentService;
+  const teamService = { analyzeAllRepositories: vi.fn() };
 
   beforeEach(async () => {
     agentService = new FakeAgentService();
     await TestBed.configureTestingModule({
       imports: [Agents],
-      providers: [{ provide: AgentService, useValue: agentService }],
+      providers: [
+        { provide: AgentService, useValue: agentService },
+        { provide: TeamManagementService, useValue: teamService },
+      ],
     }).compileComponents();
     fixture = TestBed.createComponent(Agents);
     component = fixture.componentInstance;
@@ -283,6 +289,27 @@ describe('Agents', () => {
 
       expect(component.activeSessions().map((s) => s.id)).toEqual([1]);
       expect(component.finishedSessions().map((s) => s.id)).toEqual([2]);
+    });
+  });
+
+  describe('analyze all repositories', () => {
+    it('queues every repository and says how many', async () => {
+      teamService.analyzeAllRepositories.mockResolvedValue({
+        queued: 14,
+        already_in_flight: 1,
+        message: '14 analyses queued, 1 already in flight',
+      });
+      await component.analyzeAllRepositories();
+      expect(teamService.analyzeAllRepositories).toHaveBeenCalledTimes(1);
+      expect(component.analyzeAllMessage()).toBe('14 analyses queued, 1 already in flight');
+      expect(component.analyzingAll()).toBe(false);
+    });
+
+    it('reports a failure instead of a count', async () => {
+      teamService.analyzeAllRepositories.mockRejectedValue(new Error('boom'));
+      await component.analyzeAllRepositories();
+      expect(component.analyzeAllMessage()).toBeNull();
+      expect(component.error()).toBeTruthy();
     });
   });
 
