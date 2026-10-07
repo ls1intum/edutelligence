@@ -4,26 +4,30 @@ title: Operations and Troubleshooting
 
 # Operations and troubleshooting
 
-Inspect service logs with:
+To read the service logs, use these commands:
 
 ```bash
 docker compose --env-file .env logs -f logos-orchestrator
 docker compose --env-file .env logs -f logos-webservice
 ```
 
-The UI, Swagger API, and completion API share the HTTPS endpoint. A `404`
-from `GET /v1` is expected; use `/docs` for Swagger. If browser POST or
-WebSocket requests fail while GET requests work, check
+The UI, the Swagger API, and the completion API use the same HTTPS endpoint.
+A `404` from `GET /v1` is normal. Use `/docs` for Swagger. If browser POST or
+WebSocket requests fail but GET requests work, check
 `LOGOS_CORS_ALLOWED_ORIGINS`.
 
-For worker connection failures, confirm that `LOGOS_URL` uses `https://`, the
-shared key matches the registered provider, and the worker can resolve and
-reach the orchestrator. For model failures, check provider permissions,
-available lanes, and the worker's runtime status in the Logos UI or via the
-orchestrator's `POST /logosdb/providers/logosnode/status` endpoint (see the
-worker node guide).
+If a worker cannot connect, make sure of these items:
 
-Disable the capacity planner only when diagnosing scheduling behavior:
+- `LOGOS_URL` uses `https://`.
+- The shared key is the same as the key of the registered provider.
+- The worker can resolve the name of the orchestrator and can reach it.
+
+If a model fails, check the provider permissions and the available lanes.
+Also check the runtime status of the worker. Use the Logos UI, or use the
+`POST /logosdb/providers/logosnode/status` endpoint of the orchestrator (see
+the worker node guide).
+
+Disable the capacity planner only to find the cause of a scheduling problem:
 
 ```yaml
 LOGOS_CAPACITY_PLANNER_ENABLED: "false"
