@@ -57,5 +57,6 @@
     <include file="liquibase/changelog/051_editable_workflow_diagrams.xml"/>
     <include file="liquibase/changelog/052_rename_recommendation_sla_to_slo.xml"/>
     <include file="liquibase/changelog/053_batch_objects_log_level.xml"/>
+    <include file="liquibase/changelog/054_log_entry_team_full_privacy_index.xml"/>
 
 </databaseChangeLog>
