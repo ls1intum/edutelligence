@@ -297,23 +297,22 @@ describe('Statistics scope options', () => {
   });
 });
 
-describe('recent request model and provider filters', () => {
+describe('recent request model and state filters', () => {
   let fixture: ComponentFixture<Statistics>;
   afterEach(() => {
     fixture?.destroy();
     vi.useRealTimers();
   });
 
-  it('combines feed selections and status while keeping the page scope intact', async () => {
+  it('combines the model selection and status while keeping the page scope intact', async () => {
     const page = await pageAt();
     fixture = page.fx;
     page.component.statsPending.set(false);
     page.component.liveFeedTotal.set(12);
     page.component.setFeedModelFilter(['5001', '5002']);
     expect(page.component.requestFeedTotal()).toBeNull();
-    page.component.setFeedProviderFilter(['6001', '6002']);
     page.component.setFeedStatusFilter('running');
-    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith('running', [5001, 5002], [6001, 6002]);
+    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith('running', [5001, 5002], []);
     expect(page.ws.setScope).not.toHaveBeenCalled();
     expect(page.component.statsPending()).toBe(false);
     expect(page.component.requestsPending()).toBe(true);
@@ -324,12 +323,12 @@ describe('recent request model and provider filters', () => {
     expect(page.component.requestFeedTotal()).toBe(4);
     page.component.setPreset('day');
     expect(page.component.requestFeedTotal()).toBeNull();
-    page.component.clearFeedFilters();
+    page.component.clearFilters();
     expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith(null, [], []);
     expect(page.component.feedFilterActive()).toBe(false);
   });
 
-  it('offers models and providers from scope options', async () => {
+  it('offers models from scope options', async () => {
     const page = await pageAt(vi.fn().mockResolvedValue({
       teams: [], requesters: [],
       models: [{ id: 5001, label: 'org/long-model', requestCount: 8 }],
@@ -338,10 +337,9 @@ describe('recent request model and provider filters', () => {
     fixture = page.fx;
     await Promise.resolve();
     expect(page.component.feedModelOptions()).toEqual([{ value: '5001', label: 'org/long-model (8)' }]);
-    expect(page.component.feedProviderOptions()).toEqual([{ value: '6001', label: 'worker-with-a-long-name (8)' }]);
   });
 
-  it('prunes feed model and provider selections that vanish from scope options', async () => {
+  it('prunes feed model selections that vanish from scope options', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 6, 23, 50, 0, 0));
 
@@ -383,10 +381,9 @@ describe('recent request model and provider filters', () => {
     await Promise.resolve();
 
     page.component.setFeedModelFilter(['5001', '5002']);
-    page.component.setFeedProviderFilter(['6001', '6002']);
     page.ws.setFeedFilters.mockClear();
 
-    // Narrower range: only one model and provider remain.
+    // Narrower range: only one model remains.
     page.component.setPreset('day');
     await Promise.resolve();
     resolveOptions({
@@ -399,7 +396,39 @@ describe('recent request model and provider filters', () => {
     await Promise.resolve();
 
     expect(page.component.feedModelIds()).toEqual(['5001']);
-    expect(page.component.feedProviderIds()).toEqual(['6001']);
-    expect(page.ws.setFeedFilters).toHaveBeenCalledWith(null, [5001], [6001]);
+    expect(page.ws.setFeedFilters).toHaveBeenCalledWith(null, [5001], []);
+  });
+});
+
+describe('selector placement on the requests tab', () => {
+  let fixture: ComponentFixture<Statistics>;
+  afterEach(() => {
+    fixture?.destroy();
+    vi.useRealTimers();
+  });
+
+  it('keeps every selector in the page-top row and none in the recent-requests panel', async () => {
+    const page = await pageAt();
+    fixture = page.fx;
+    // The filter row only renders on the requests tab; the route parameter is
+    // what drives the tab in the browser, the signal is what drives the
+    // template, so the test sets the signal directly.
+    page.component.activeTab.set('requests');
+    page.fx.detectChanges();
+    const el = page.fx.nativeElement as HTMLElement;
+    const scope = el.querySelector('.stats-scope') as HTMLElement;
+    // The feed's model and state selectors sit in the page-top row with the
+    // page scope ...
+    expect(scope.querySelector('app-multi-select')).not.toBeNull();
+    expect(scope.querySelector('select[aria-label="Filter requests by state"]')).not.toBeNull();
+    // ... the provider filter appears exactly once on the page (the row's
+    // single-select, not a second multi-select beside the feed) ...
+    expect(el.querySelectorAll('select[aria-label="Filter by provider"]')).toHaveLength(1);
+    // ... and the recent-requests panel carries no selectors of its own.
+    const feedPanel = Array.from(el.querySelectorAll('app-stats-chart-panel')).find(
+      (p) => p.textContent?.includes('Recent requests'),
+    );
+    expect(feedPanel).toBeDefined();
+    expect(feedPanel?.querySelectorAll('app-select, app-multi-select')).toHaveLength(0);
   });
 });
