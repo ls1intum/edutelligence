@@ -127,12 +127,98 @@ async def _check_one(label: str, token: str, expected: str) -> list[str]:
     return [f"{label} authenticates as {login}"]
 
 
+async def _check_app(app_id: str, private_key: str, installation_id: str, expected: str) -> list[str]:
+    """Check a GitHub App credential against the configured agent account.
+
+    Installation tokens cannot answer ``GET /user``. The check therefore asks
+    the two endpoints the credential is made for: ``GET /app``, signed with
+    the configured key as the configured app id (a key that does not sign for
+    that app fails at the API), whose ``slug`` yields the bot user; and
+    ``GET /installation`` with the minted token, whose ``app_id`` pins the
+    token to the configured app. A different bot user or a different app
+    raises :class:`IdentityError` and stops the service; a failed mint or an
+    unreachable API is a note, the same degraded-start convention as the
+    personal-token path.
+    """
+    global _verified_login
+    label = "GitHub App installation token"
+    try:
+        token = await github_tokens.installation_token(
+            app_id=app_id,
+            private_key=private_key,
+            installation_id=installation_id,
+            repo_slug=settings.repo_slug,
+            ttl_s=settings.github_token_ttl_s,
+        )
+    except github_tokens.CredentialError as exc:
+        return [f"{label} could not be verified: {exc}"]
+    try:
+        key = github_tokens.parse_private_key(private_key)
+        signed = github_tokens.app_jwt(app_id, key)
+    except github_tokens.CredentialError as exc:
+        return [f"{label} could not be verified: {exc}"]
+    jwt_headers = {
+        "Authorization": f"Bearer {signed}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token_headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            app_response = await client.get(f"{_API}/app", headers=jwt_headers)
+            installation_response = await client.get(f"{_API}/installation", headers=token_headers)
+    except Exception as exc:
+        return [f"{label} could not be verified: could not reach the GitHub API: {exc}"]
+    if app_response.status_code != 200:
+        return [
+            f"{label} could not be verified: app lookup failed "
+            f"({app_response.status_code}): {app_response.text[:200]}"
+        ]
+    if installation_response.status_code != 200:
+        return [
+            f"{label} could not be verified: installation lookup failed "
+            f"({installation_response.status_code}): {installation_response.text[:200]}"
+        ]
+    app_payload = app_response.json() or {}
+    installation_payload = installation_response.json() or {}
+    answered_app_id = app_payload.get("id")
+    slug = app_payload.get("slug")
+    token_app_id = installation_payload.get("app_id")
+    if not isinstance(slug, str) or not slug:
+        return [f"{label} could not be verified: the GitHub API returned no app slug"]
+    bot_login = f"{slug}[bot]"
+    configured_app_id = int(app_id) if app_id.strip().isdigit() else app_id
+    if answered_app_id != configured_app_id:
+        raise IdentityError(
+            f"{label} authenticates as app id '{answered_app_id}', not as the configured "
+            f"GitHub App id '{app_id}'. Agent work must run under that app only."
+        )
+    if bot_login.strip().lower() != expected:
+        raise IdentityError(
+            f"{label} authenticates as '{bot_login}', not as the configured agent "
+            f"account '{settings.github_login}'. Agent work must run under that "
+            f"account only — set LOGOS_AGENT_GITHUB_LOGIN to the app's bot user."
+        )
+    if token_app_id != configured_app_id:
+        raise IdentityError(
+            f"{label} belongs to app id '{token_app_id}', not the configured "
+            f"GitHub App id '{app_id}'. Agent work must run under that app only."
+        )
+    _verified_login = bot_login
+    return [f"{label} authenticates as {bot_login}"]
+
+
 async def verify_identities() -> list[str]:
     """Check every configured token belongs to the agent account.
 
     With a GitHub App there is one credential kind — a minted installation
     token, and the account it authenticates as is the app's bot user — so
     one check covers both the runner's calls and the containers' work.
+    Installation tokens cannot answer ``GET /user``; see :func:`_check_app`.
 
     Returns the notes worth logging (which token resolved to what, or why a
     check could not be made). See :func:`_check_one` for the two failure
@@ -142,12 +228,7 @@ async def verify_identities() -> list[str]:
     expected = settings.github_login.strip().lower()
     app = _app_credentials()
     if app is not None:
-        label = "GitHub App installation token"
-        try:
-            token = await _github_token()
-        except github_tokens.CredentialError as exc:
-            return [f"{label} could not be verified: {exc}"]
-        return await _check_one(label, token, expected)
+        return await _check_app(app[0], app[1], app[2], expected)
     notes: list[str] = []
     for label, token in (
         ("LOGOS_AGENT_GITHUB_TOKEN", settings.github_token),

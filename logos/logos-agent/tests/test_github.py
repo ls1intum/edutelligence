@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import jwt
 import pytest
 from app import github, github_tokens
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 
 @pytest.fixture(autouse=True)
@@ -24,14 +25,21 @@ def _clean_verified_login(monkeypatch):
 
 
 @pytest.fixture()
-def app_pem():
-    """A generated app private key, the way an environment would carry it."""
-    key = Ed25519PrivateKey.generate()
-    return key.private_bytes(
+def app_key():
+    """A generated App RSA keypair: the private PEM is the credential."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     ).decode()
+    return key, pem
+
+
+@pytest.fixture()
+def app_pem(app_key):
+    """A generated app private key, the way an environment would carry it."""
+    return app_key[1]
 
 
 class FakeResponse:
@@ -508,10 +516,12 @@ class TestAppIdentity:
     all: one credential kind — the minted installation token — serves both
     the runner and the containers, and the account it authenticates as is
     the app's bot user, so the configured login is that spelling.
+    Installation tokens cannot answer GET /user; the check asks /app and
+    /installation instead.
     """
 
     @staticmethod
-    def _app(monkeypatch, pem, *, login="LogosOSSAgent[bot]", mint="ghs-minted"):
+    def _app(monkeypatch, pem, *, login="LogosOSSAgent[bot]", mint="ghs-minted", app_id="41234"):
         monkeypatch.setattr(
             github,
             "settings",
@@ -520,7 +530,7 @@ class TestAppIdentity:
                 github_login=login,
                 github_token="",
                 session_github_token="",
-                github_app_id="41234",
+                github_app_id=app_id,
                 github_app_private_key=pem,
             ),
         )
@@ -531,22 +541,93 @@ class TestAppIdentity:
         monkeypatch.setattr(github.github_tokens, "installation_token", minted_token)
         return mint
 
-    async def test_the_minted_token_is_checked_against_the_bot_account(self, monkeypatch, app_pem):
-        mint = self._app(monkeypatch, app_pem)
-        seen = TestAgentIdentity._identity_client(monkeypatch, {mint: "LogosOSSAgent[bot]"})
+    @staticmethod
+    def _app_identity_client(
+        monkeypatch,
+        *,
+        app_id=41234,
+        slug="LogosOSSAgent",
+        token_app_id=41234,
+        mint="ghs-minted",
+        app_error=None,
+        installation_error=None,
+    ):
+        """Stub /app (JWT) and /installation (minted token); never /user."""
+        seen: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None, params=None):
+                token = (headers or {}).get("Authorization", "").removeprefix("Bearer ")
+                seen.append((url, token))
+                if url.endswith("/app"):
+                    if isinstance(app_error, Exception):
+                        raise app_error
+                    if app_error is not None:
+                        return FakeResponse(app_error, {}, text="app lookup failed")
+                    return FakeResponse(200, {"id": app_id, "slug": slug})
+                if url.endswith("/installation"):
+                    if isinstance(installation_error, Exception):
+                        raise installation_error
+                    if installation_error is not None:
+                        return FakeResponse(installation_error, {}, text="installation lookup failed")
+                    return FakeResponse(200, {"app_id": token_app_id, "id": 815})
+                return FakeResponse(401, {}, text="Bad credentials")
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+        return seen
+
+    async def test_the_minted_token_is_checked_against_the_bot_account(self, monkeypatch, app_key):
+        key, pem = app_key
+        mint = self._app(monkeypatch, pem)
+        seen = self._app_identity_client(monkeypatch, mint=mint)
 
         notes = await github.verify_identities()
 
-        # One credential kind, one check — and it is the minted token that
-        # is asked about, nothing the operator configured by hand.
-        assert seen == [("https://api.github.com/user", mint)]
+        # /app with the App JWT, then /installation with the minted token —
+        # never the user-only /user endpoint.
+        assert [url for url, _ in seen] == [
+            "https://api.github.com/app",
+            "https://api.github.com/installation",
+        ]
+        claims = jwt.decode(
+            seen[0][1],
+            key.public_key(),
+            algorithms=["RS256"],
+            options={"verify_exp": False, "verify_iat": False},
+        )
+        assert claims["iss"] == "41234"
+        assert seen[1][1] == mint
         assert notes == ["GitHub App installation token authenticates as LogosOSSAgent[bot]"]
+        assert github._verified_login == "LogosOSSAgent[bot]"
 
-    async def test_a_minted_token_of_another_account_stops_the_service(self, monkeypatch, app_pem):
-        mint = self._app(monkeypatch, app_pem)
-        TestAgentIdentity._identity_client(monkeypatch, {mint: "wasnertobias"})
+    async def test_a_bot_user_that_is_not_the_configured_account_stops_the_service(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem, login="LogosOSSAgent[bot]")
+        self._app_identity_client(monkeypatch, slug="SomeOtherApp")
 
-        with pytest.raises(github.IdentityError, match="wasnertobias"):
+        with pytest.raises(github.IdentityError, match="SomeOtherApp\\[bot\\]"):
+            await github.verify_identities()
+
+    async def test_a_token_of_another_apps_installation_stops_the_service(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem)
+        self._app_identity_client(monkeypatch, token_app_id=99999)
+
+        with pytest.raises(github.IdentityError, match="99999"):
+            await github.verify_identities()
+
+    async def test_a_key_signing_for_another_app_stops_the_service(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem, app_id="41234")
+        self._app_identity_client(monkeypatch, app_id=55555)
+
+        with pytest.raises(github.IdentityError, match="55555"):
             await github.verify_identities()
 
     async def test_a_mint_failure_is_a_note_not_a_stop(self, monkeypatch, app_pem):
@@ -559,7 +640,15 @@ class TestAppIdentity:
             raise github_tokens.CredentialError("could not reach the GitHub API")
 
         monkeypatch.setattr(github.github_tokens, "installation_token", broken)
-        TestAgentIdentity._identity_client(monkeypatch, {})
+        self._app_identity_client(monkeypatch)
+
+        notes = await github.verify_identities()
+
+        assert any("could not be verified" in note for note in notes)
+
+    async def test_an_unreachable_api_is_a_note_not_a_stop(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem)
+        self._app_identity_client(monkeypatch, app_error=RuntimeError("no route to host"))
 
         notes = await github.verify_identities()
 
@@ -571,11 +660,12 @@ class TestAppIdentity:
         # somebody calls with it.
         mint = self._app(monkeypatch, app_pem)
         monkeypatch.setattr(github, "settings", replace(github.settings, github_token="stale-pat"))
-        seen = TestAgentIdentity._identity_client(monkeypatch, {mint: "LogosOSSAgent[bot]"})
+        seen = self._app_identity_client(monkeypatch, mint=mint)
 
         await github.verify_identities()
 
-        assert [token for _, token in seen] == [mint]
+        assert [token for _, token in seen] == [seen[0][1], mint]
+        assert all("/user" not in url for url, _ in seen)
 
     async def test_the_runner_acts_with_the_minted_token(self, monkeypatch, app_pem):
         mint = self._app(monkeypatch, app_pem)

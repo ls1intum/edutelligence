@@ -522,10 +522,21 @@ def verify_token_identity(token: str) -> None:
     token swapped in the environment, or a runner that started before the
     token was rotated, would otherwise commit and open pull requests under
     a human contributor's name.
+
+    With a GitHub App the runner passes ``LOGOS_AGENT_GITHUB_APP_ID`` and the
+    check pins the installation token to that app via ``GET /installation`` —
+    installation tokens cannot answer ``GET /user``. The bot-login half of
+    the identity check stays with the runner: deriving the bot login needs
+    the app's private key, which this container does not hold. With personal
+    access tokens the variable is empty and the ``/user`` login check runs.
     """
-    expected = agent_login().lower()
+    app_id = (os.environ.get("LOGOS_AGENT_GITHUB_APP_ID") or "").strip()
+    if app_id:
+        endpoint, field, expected = "installation", ".app_id", app_id
+    else:
+        endpoint, field, expected = "user", ".login", agent_login().lower()
     result = subprocess.run(
-        ["gh", "api", "user", "--jq", ".login"],
+        ["gh", "api", endpoint, "--jq", field],
         cwd=str(CHECKOUT) if CHECKOUT.is_dir() else None,
         capture_output=True,
         text=True,
@@ -534,13 +545,21 @@ def verify_token_identity(token: str) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"could not establish the identity of the push token: {result.stderr.strip()[:200]}")
-    login = (result.stdout or "").strip()
-    if login.lower() != expected:
+    answered = (result.stdout or "").strip()
+    if app_id:
+        if answered != expected:
+            raise RuntimeError(
+                f"the push token belongs to app id '{answered}', not the configured "
+                f"GitHub App id '{expected}'; refusing to push agent work under another identity"
+            )
+        log(f"push token verified as installation of app {answered}")
+        return
+    if answered.lower() != expected:
         raise RuntimeError(
-            f"the push token authenticates as '{login}', not as the agent account "
+            f"the push token authenticates as '{answered}', not as the agent account "
             f"'{agent_login()}'; refusing to push agent work under another identity"
         )
-    log(f"push token verified as {login}")
+    log(f"push token verified as {answered}")
 
 
 def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> bool:

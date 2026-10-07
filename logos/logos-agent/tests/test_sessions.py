@@ -1439,7 +1439,62 @@ class TestAgentPhaseIsolation:
         assert helper["env"]["GITHUB_TOKEN"] == "ghs-minted"
         assert helper["env"]["GH_TOKEN"] == "ghs-minted"
         assert helper["env"]["LOGOS_AGENT_WORKFLOW_CHANGES"] == "deny"
+        assert helper["env"]["LOGOS_AGENT_GITHUB_APP_ID"] == "41234"
         assert len(mints) == 1
+
+    async def test_a_failed_remint_during_finalization_settles_the_session_failed(self, monkeypatch, tmp_path):
+        # By the time finalization mints, the row already claims FINALIZING.
+        # A CredentialError that escapes would kill the supervisor with the
+        # row finalizing forever and its workspace occupied. The mint must
+        # fail through the ordinary path instead.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        app_settings = replace(
+            patched, github_app_id="41234", github_app_private_key="an-app-key", session_github_token=""
+        )
+        monkeypatch.setattr(sessions, "settings", app_settings)
+        created: list = []
+        transitions: list = []
+        events: list = []
+
+        async def broken_mint(**_kwargs):
+            raise sessions.github_tokens.CredentialError("could not reach the GitHub API")
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_transition(_sid, target, **fields):
+            transitions.append((target, fields))
+            return True
+
+        async def fake_event(_sid, _kind, payload):
+            events.append(payload)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.github_tokens, "installation_token", broken_mint)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert created == []
+        assert transitions[0][0] is SessionStatus.FINALIZING
+        target, fields = transitions[1]
+        assert target is SessionStatus.FAILED
+        assert "finalization failed" in fields["error"]
+        assert "could not obtain a GitHub credential" in fields["error"]
+        assert "could not reach the GitHub API" in fields["error"]
+        assert events[0]["status"] == "failed"
 
     async def test_a_successful_settlement_runs_the_trusted_finalizer(self, monkeypatch, tmp_path):
         # The agent phase pushed nothing: with a clean agent exit, settlement
@@ -1497,6 +1552,7 @@ class TestAgentPhaseIsolation:
         assert helper["name"] == "logos-agent-finalize-7"
         assert helper["env"]["LOGOS_SESSION_PHASE"] == "finalize"
         assert helper["env"]["GITHUB_TOKEN"] == "ghp-session-token"
+        assert helper["env"]["LOGOS_AGENT_GITHUB_APP_ID"] == ""
         assert helper["env"]["GH_TOKEN"] == "ghp-session-token"
         assert helper["env"]["LOGOS_REPO_URL"] == patched.repo_url
         assert helper["env"]["LOGOS_SESSION_OPEN_PR"] == "1"

@@ -27,7 +27,6 @@ from datetime import datetime, timezone
 import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 _API = "https://api.github.com"
@@ -88,11 +87,14 @@ def parse_private_key(raw: str):
 
 
 def _algorithm(key) -> str:
-    if isinstance(key, Ed25519PrivateKey):
-        return "ES256"
+    # GitHub verifies App JWTs against the App's RSA public key with RS256.
+    # Anything else fails at the API; refuse it here so a wrong key never
+    # reaches the signer under a mismatched algorithm name.
     if isinstance(key, RSAPrivateKey):
         return "RS256"
-    raise CredentialError(f"unsupported GitHub App key type: {type(key).__name__}")
+    raise CredentialError(
+        f"the GitHub App key must be the app's RSA private key (signed with RS256), " f"not a {type(key).__name__}"
+    )
 
 
 def app_jwt(app_id: str, key, now: datetime | None = None) -> str:
@@ -119,21 +121,23 @@ def _headers_for(signed: str) -> dict[str, str]:
 
 
 def _installation_id_of(response, repo_slug: str) -> str:
-    if response.status_code not in (200, 204):
+    # GET /repos/{owner}/{repo}/installation returns the installation object
+    # itself (id at the top level) on 200, or an empty 204 when the app is
+    # not installed on that repository.
+    if response.status_code == 204:
+        raise CredentialError(f"the app is not installed on {repo_slug}")
+    if response.status_code != 200:
         raise CredentialError(
             f"could not find the app's installation on {repo_slug} ({response.status_code}): {response.text[:200]}"
         )
-    header = response.headers.get("X-GitHub-Installation-Id", "")
-    if header:
-        return str(header)
-    if response.status_code == 200:
-        try:
-            installation = (response.json() or {}).get("installation") or {}
-        except Exception:
-            installation = {}
-        if isinstance(installation, dict) and installation.get("id"):
-            return str(installation["id"])
-    raise CredentialError(f"GitHub named no installation for {repo_slug}")
+    try:
+        payload = response.json() or {}
+    except Exception:
+        payload = {}
+    installation_id = payload.get("id") if isinstance(payload, dict) else None
+    if not isinstance(installation_id, int) or installation_id < 1:
+        raise CredentialError(f"GitHub named no installation for {repo_slug}")
+    return str(installation_id)
 
 
 def _epoch(stamp: object) -> float | None:

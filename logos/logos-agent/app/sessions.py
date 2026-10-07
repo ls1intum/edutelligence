@@ -1711,8 +1711,23 @@ class SessionManager:
             # sentence about the request beats a commit titled after the
             # first line of its task.
             "LOGOS_SESSION_SUBJECT": _fallback_subject(session),
+            # When set, the finalizer pins the push token to this App via
+            # GET /installation instead of the user-only GET /user — an
+            # installation token cannot answer the latter.
+            "LOGOS_AGENT_GITHUB_APP_ID": (
+                settings.github_app_id if settings.github_app_id and settings.github_app_private_key else ""
+            ),
         }
-        token = await _session_github_token()
+        try:
+            token = await _session_github_token()
+        except github_tokens.CredentialError as exc:
+            # The row already holds the finalizing state, and this
+            # settlement is the one that would clear it: a mint failure that
+            # escapes here leaves the session finalizing forever and its
+            # workspace occupied. Fail through the ordinary path instead.
+            logger.warning("could not obtain a push token for session %s: %s", session_id, exc)
+            self._last_helper_output[session_id] = f"could not obtain a GitHub credential: {exc}"
+            return False
         if token:
             env["GITHUB_TOKEN"] = token
             env["GH_TOKEN"] = token
