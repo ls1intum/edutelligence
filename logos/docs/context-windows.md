@@ -1,59 +1,36 @@
 # Context windows
 
-A model's context window on Logos is not a property of the model. It is a
-property of the lane serving it: the capacity planner sizes a lane's KV cache
-from the VRAM free on the node it lands on, and the window follows from that.
-The same model can therefore be served at 262,144 tokens on one worker and a
-fraction of that on another, and a re-calibration moves it again without the
-model changing.
+The context window of a model on Logos is not a property of the model. It is a property of the lane that serves the model. The capacity planner sizes the KV cache of a lane from the free VRAM on the node where the lane starts. The window follows from the KV cache size. The same model can have 262,144 tokens on one worker and a fraction of that on another worker. A re-calibration can also change the window while the model stays the same.
 
-That has one consequence that shapes everything below: **a single number cannot
-be both safe and useful.** A request may be routed to any deployment serving the
-model, so the only window that always holds is the smallest one — and
-advertising that turns a 262k model into a 33k model for every client that sizes
-its conversation from what it is told.
+This has one result that shapes the rest of this page: **a single number cannot be both safe and useful.** Logos can route a request to any deployment that serves the model. Only the smallest window is always valid. If Logos advertises the smallest window, a 262k model becomes a 33k model for each client that sizes its conversation from the advertised value.
 
-This document covers the four places that fact shows up.
+This page describes the four places where this fact has an effect.
 
 ## 1. What the API reports
 
-`GET /v1/models` (and `/v1/models/{id}`) carry up to four fields per model. Each
-is omitted when unknown, so a model whose window no source knows keeps the
-object it had before any of this existed. The sources, in the order they are
-folded in: the workernode runtime snapshots (what is served), the windows a
-cloud upstream publishes on its own `/v1/models` (measured), the historic
-maximum the database keeps per model, and — for a model no measured source
-knows at all, the Azure family first among them — the input context window the
-upstream registry publishes for the model. The webservice refreshes
-`model_capabilities` from that registry once a day; the orchestrator folds the
-value in only for models nothing else reports, so it never widens a window a
-source measured. And only for models a cloud provider is associated with: a
-cloud upstream serves a catalog model at its published size, but a local
-model's window is a property of the calibrated lane, so a local-only model
-with no lane up must not be reported as serving the registry's figure.
+`GET /v1/models` (and `/v1/models/{id}`) return up to four fields for each model. Logos omits a field when the value is unknown. A model with no known window keeps the same object as before. Logos combines these sources in this order:
+
+1. The workernode runtime snapshots. They show what the workers serve now.
+2. The windows that a cloud upstream publishes on its own `/v1/models`. These values are measured.
+3. The historic maximum that the database keeps for each model.
+4. The input context window that the upstream registry publishes for the model. Logos uses this source only for a model that no measured source knows. The Azure family is the main example.
+
+The webservice refreshes `model_capabilities` from the registry once a day. The orchestrator uses the registry value only for models that no other source reports. Thus the registry value never makes a measured window wider. The orchestrator also uses it only for models that have an associated cloud provider. A cloud upstream serves a catalog model at its published size. The window of a local model is a property of the calibrated lane. Thus Logos must not report the registry value for a local-only model that has no lane running.
 
 | Field                       | Meaning                                                                    |
 | --------------------------- | -------------------------------------------------------------------------- |
-| `max_model_len_current_min` | Smallest window being served right now. Holds whichever deployment answers, so a client that never wants a rejected request sizes itself from this. |
-| `max_model_len_current_max` | Largest window being served right now. Reachable because of the routing in §3. |
-| `max_model_len_overall`     | The widest this model is ever served with — what a lane runs at once it gets all the KV cache it asks for. Independent of what is loaded at the moment, so it is known even for a model with no live lane, and it is the number to write into a config file that is only read at startup. The live snapshots only say this while a workernode is connected, so the number is topped up from the historic maximum Logos persists per model in `model_profiles` (`max_reported_context_length`, a high-water mark the profile upsert maintains): it is still known when **every** workernode is offline, and that — not a client-side guess — is what the claude-logos wrapper sizes a session from in that state. |
-| `max_model_len`             | Repeats `max_model_len_current_min` under the name vLLM itself uses, so an OpenAI-compatible client that already reads that field keeps working. |
+| `max_model_len_current_min` | The smallest window that Logos serves now. It is valid for each deployment that can answer. A client that must never get a rejected request sizes itself from this value. |
+| `max_model_len_current_max` | The largest window that Logos serves now. A request can reach it because of the routing in §3. |
+| `max_model_len_overall`     | The widest window that Logos ever serves for this model. It is the window of a lane that gets all the KV cache it asks for. It does not depend on what is loaded now. Thus it is known for a model that has no live lane. Use this value in a config file that the client reads only at startup. The live snapshots show this value only while a workernode is connected. Therefore Logos adds the historic maximum that it stores for each model in `model_profiles` (`max_reported_context_length`). The profile upsert maintains this value as a high-water mark. The value is known when **all** workernodes are offline. In that state the claude-logos wrapper sizes a session from this value, not from a client-side guess. |
+| `max_model_len`             | A copy of `max_model_len_current_min` under the name that vLLM uses. An OpenAI-compatible client that already reads this field continues to work. |
 
-The same three are exposed to the Spring webservice on
-`GET /internal/model_context_windows` as `stats` (`current_min`, `current_max`,
-`overall`), alongside the original flat `windows` map (model → smallest window)
-that predates them. From there they reach the UI as
-`context_window_current_min`, `context_window_current_max` and
-`context_window_overall` on `GET /me/keys/{id}/models`.
+The webservice (Spring) gets the first three values on `GET /internal/model_context_windows` as `stats` (`current_min`, `current_max`, `overall`). The original flat `windows` map (model to smallest window) is also in the response. It is older than `stats`. The UI gets the values as `context_window_current_min`, `context_window_current_max` and `context_window_overall` on `GET /me/keys/{id}/models`.
 
 Source: `_served_context_window_stats()` in `logos/main.py`.
 
-## 2. Placement floor — don't create a narrow lane at all
+## 2. Placement floor: do not create a narrow lane
 
-Since the narrowest lane defines what every client is told, a worker can refuse
-to host a model below a share of its own context length. The floor is set **per
-model in the worker's `config.yml`**, because the worker's hardware is what
-decides which windows are reachable there:
+The narrowest lane sets the window that Logos tells each client. Thus a worker can refuse to host a model below a share of the context length of the model. Set the floor **for each model in the `config.yml` of the worker**. The hardware of the worker decides which windows the worker can reach.
 
 ```yaml
 logos:
@@ -70,227 +47,106 @@ logos:
     - some-org/small-chat-model
 ```
 
-The value travels with the model profile in the worker's runtime snapshot, so
-the server picks it up without a restart of its own. It is enforced in two
-places:
+The value is part of the model profile in the runtime snapshot of the worker. Thus the server uses the new value without a restart. Logos enforces the floor in two places:
 
-- `_passes_minimum_load_feasibility` — the planner does not *propose* a load
-  that cannot reach the floor.
-- `_select_kv_mb_max_model_len_pair` — the pair actually chosen at load time is
-  constrained too, so a load path that bypasses the gate (contention,
-  eviction-backed cold load, request-time cold load) cannot quietly place a
-  below-floor lane either. When such a path has to place something anyway — a
-  request is already waiting — it takes the **widest** fitting pair rather than
-  the narrowest, and logs that it went below the floor.
+- `_passes_minimum_load_feasibility`: the planner does not *propose* a load that cannot reach the floor.
+- `_select_kv_mb_max_model_len_pair`: this function also limits the pair that Logos chooses at load time. Some load paths bypass the gate: contention, eviction-backed cold load and request-time cold load. These paths cannot place a below-floor lane without a log entry. Sometimes such a path must place a lane because a request is already waiting. Then it takes the **widest** pair that fits, not the narrowest. It also writes a log line that says the lane is below the floor.
 
-Two log lines to look for when a model is not being placed:
+Look for these two log lines when Logos does not place a model:
 
 ```text
 Feasibility FAILED for <model>: smallest calibrated KV pair serving >=N context tokens needs …
 Feasibility FAILED for <model>: no calibrated KV point serves the required minimum of N context tokens (widest is M)
 ```
 
-The first is temporary — it clears when VRAM frees up. The second will not: no
-calibrated point on that node reaches the floor at any KV size, so either lower
-`min_context_fraction` for that model or re-calibrate it.
+The first line is temporary. It goes away when VRAM becomes free. The second line does not go away. No calibrated point on that node reaches the floor at any KV size. Do one of these actions: decrease `min_context_fraction` for that model, or re-calibrate the model.
 
-A model whose context length is unknown is never blocked by the floor itself —
-it exists to stop the planner *choosing* a narrow window, not to gate on
-calibration. That gate is separate: `_passes_minimum_load_feasibility` refuses
-to load any model that has never been calibrated on that node, unless the
-provider is Metal/MLX (which runs on operator-provided override profiles
-instead — calibration is impossible there by design).
+The floor never blocks a model with an unknown context length. The floor stops the planner from *choosing* a narrow window. It is not a gate on calibration. A separate gate does that: `_passes_minimum_load_feasibility` refuses to load a model that was never calibrated on that node. The exception is a Metal/MLX provider. A Metal/MLX provider uses override profiles from the operator, because calibration is not possible there by design.
 
-## 3. Context-aware routing — send long requests where they fit
+## 3. Context-aware routing: send long requests where they fit
 
-`_prefer_deployments_with_context_room` (`logos/main.py`) estimates what a
-request needs and drops the deployments that cannot serve it:
+`_prefer_deployments_with_context_room` (`logos/main.py`) estimates what a request needs. It removes the deployments that cannot serve the request.
 
 ```text
 needed = prompt tokens + the output the request reserved + 3000 tokens of margin
 ```
 
-**Where "the output the request reserved" comes from:** the request says so.
-`max_tokens` (Anthropic Messages, chat completions), `max_completion_tokens` or
-`max_output_tokens` (Responses API) — whichever is present. A request that names
-none is assumed to reserve 20,000, because an uncapped request can generate
-until it hits the window, and 20,000 is the largest default among the clients
-Logos serves. This matters because vLLM charges input and output against one
-budget: a prompt that fits on its own can still overflow once the reply it asked
-for is reserved.
+**Source of "the output the request reserved":** the request states it. The field is `max_tokens` (Anthropic Messages, chat completions), `max_completion_tokens` or `max_output_tokens` (Responses API), whichever is present. If a request names none of these fields, Logos assumes that the request reserves 20,000 tokens. An uncapped request can generate until it reaches the window. The value 20,000 is the largest default among the clients that Logos serves. This is important because vLLM counts input and output against one budget. A prompt that fits alone can overflow when the requested reply is reserved.
 
-**Where the 3000 comes from:** it is the margin Claude Code keeps between its own
-hard stop and the limit it was told. Using the same number means a session that
-Claude Code considers safe is one this filter also considers safe. It absorbs the
-difference between the estimate and what the worker's tokenizer really counts —
-the estimate (`logos/context_budget.py`) counts characters and divides by 3,
-skipping base64 attachments, and rounds against itself at every step, because
-overestimating costs a roomier deployment while underestimating costs a 400.
+**Source of the 3000:** it is the margin that Claude Code keeps between its own hard stop and the limit that it received. If Logos uses the same number, then a session that Claude Code considers safe is also safe for this filter. The margin absorbs the difference between the estimate and the real count of the tokenizer of the worker. The estimate (`logos/context_budget.py`) counts characters and divides by 3. It skips base64 attachments. It rounds against itself at each step. An estimate that is too high costs a deployment with more room. An estimate that is too low costs a 400 error.
 
-The margin is part of `needed`, not something the lane has to hold in addition:
-a lane serving 33,000 tokens is asked to fit `prompt + output + 3000 ≤ 33000`.
-So a lane never has to "first make room" for the margin — it is simply expected
-to have 3000 tokens more than the request strictly needs.
+The margin is part of `needed`. The lane does not need to hold it in addition. For example, a lane that serves 33,000 tokens must fit `prompt + output + 3000 ≤ 33000`. Thus the lane never has to "first make room" for the margin. The lane only needs 3000 tokens more than the request strictly needs.
 
-Two deliberate escape hatches:
+There are two deliberate exceptions:
 
-- **A deployment whose window is unknown is always kept.** Cloud providers, and
-  lanes that have not reported a window yet, have none; that is missing
-  information, not evidence of a narrow window. It does mean
-  `max_model_len_current_min` is only a promise across the deployments whose
-  window is known — a request sized from it can still reach an unknown one.
-- **When nothing fits, the widest deployments are returned** rather than
-  nothing. The request then fails upstream with the limit spelled out, exactly
-  as before this filter existed, instead of turning into a 404 that names no
-  model.
+- **Logos always keeps a deployment with an unknown window.** Cloud providers have no window. Lanes that did not report a window yet also have none. This is missing information, not evidence of a narrow window. Thus `max_model_len_current_min` is a promise only across the deployments with a known window. A request sized from it can still reach a deployment with an unknown window.
+- **If nothing fits, Logos returns the widest deployments** and not an empty list. The request then fails upstream with the limit in the error message. This is the behavior from before the filter existed. The alternative is a 404 that names no model.
 
-Audio uploads are left alone: a transcription hint is a few words and says
-nothing about how much context the request needs.
+Logos does not filter audio uploads. A transcription hint has a few words. It does not show how much context the request needs.
 
 ## 4. Clients
 
-### Claude Code — the `claude-logos` wrapper
+### Claude Code: the `claude-logos` wrapper
 
-`logos-ui/public/claude-logos.sh` (and `.ps1` for Windows) is served at
-`<logos-url>/claude-logos.sh` and installed by the AI Tools page. At every start
-it asks `GET /v1/models`, prints the window it got, and exports the result into
-its own child process — nothing outside the wrapper is touched, so plain
-`claude` keeps using an Anthropic subscription unchanged.
+`logos-ui/public/claude-logos.sh` (and `.ps1` for Windows) is available at `<logos-url>/claude-logos.sh`. The AI Tools page installs it. At each start, the wrapper sends `GET /v1/models`, prints the window that it got, and exports the result into its own child process. The wrapper does not change anything outside itself. Thus plain `claude` continues to use an Anthropic subscription with no change.
 
-`LOGOS_MODEL` is optional. When unset, Claude Code discovers Logos models from
-that listing and you switch with `/model`. When set, every Claude Code model
-slot (`opus`, `sonnet`, `haiku`, …) is pinned to that id — useful as a default,
-not required for the setup flow.
+`LOGOS_MODEL` is optional. If it is not set, Claude Code finds the Logos models from the listing, and you change the model with `/model`. If it is set, Logos pins each Claude Code model slot (`opus`, `sonnet`, `haiku`, …) to that id. This is a useful default. The setup flow does not need it.
 
-Claude Code only lists a gateway model in `/model` when its id contains `claude`
-or `anthropic`. The Anthropic-shaped `GET /v1/models` therefore lists each model
-once, as `claude-<id>` (`claude-Qwen/Qwen3.8-27B`), with the plain name as display
-name and no aliases. An id that already contains `claude` or `anthropic` is listed
-unchanged (`my-Anthropic-proxy`, not `claude-my-Anthropic-proxy`), and so is an id
-whose `claude-` form would resolve to another model. A request for `claude-<id>` resolves to `<id>` unless a model
-with exactly that name exists; the plain name and aliases keep working in requests.
-The OpenAI-shaped listing is unchanged.
+Claude Code shows a gateway model in `/model` only when the id contains `claude` or `anthropic`. Thus the Anthropic-shaped `GET /v1/models` lists each model once, as `claude-<id>` (`claude-Qwen/Qwen3.8-27B`). The display name is the plain name. There are no aliases. Logos lists an id unchanged in two cases. In the first case, the id already contains `claude` or `anthropic` (`my-Anthropic-proxy`, not `claude-my-Anthropic-proxy`). In the second case, the `claude-` form of the id resolves to another model. A request for `claude-<id>` resolves to `<id>`, unless a model with exactly that name exists. The plain name and the aliases continue to work in requests. The OpenAI-shaped listing does not change.
 
-It also does two things with the listing it already has in hand:
+The wrapper also does two more things with the listing that it already has:
 
-- **Warms the model up.** `POST /v1/models/{model}/warmup` tells the planner the
-  model is about to be used and returns immediately. It records the same latent
-  demand the scheduler records when classification prefers a model it did not
-  get, and wakes the planner cycle early — so the cold load can overlap with the
-  seconds a developer spends reading the startup line. It is a hint, not a
-  reservation: the planner still decides using its own fairness rules, a warmup
-  can never evict a lane real traffic is using, and no inference request is ever
-  sent on the caller's behalf. Warming a model the key has no access to is a 404.
-  Warmup runs only when `LOGOS_MODEL` is pinned.
-- **Names models that are new to you.** The id list is compared against the one
-  from the last run (`~/.config/claude-logos/known-models`); additions are
-  printed. The first run records the baseline silently rather than announcing
-  everything as new.
+- **It warms the model up.** `POST /v1/models/{model}/warmup` tells the planner that the model is about to be used. It returns immediately. It records the same latent demand that the scheduler records when classification prefers a model that it did not get. It also starts the planner cycle early. Thus the cold load can overlap with the seconds that a developer needs to read the startup line. The warmup is a hint, not a reservation. The planner still decides with its own fairness rules. A warmup can never evict a lane that real traffic uses. Logos never sends an inference request for the caller. Warming a model that the key cannot access returns a 404. Warmup runs only when `LOGOS_MODEL` is pinned.
+- **It names models that are new to you.** The wrapper compares the id list with the list from the last run (`~/.config/claude-logos/known-models`). It prints the additions. The first run records the baseline silently. It does not announce all models as new.
 
-**Web search.** Claude Code's `WebSearch` is a server-side Anthropic tool: the
-model's call turns into a Messages request carrying
-`{"type": "web_search_20250305", ...}`, and the API is expected to run the
-searches and answer with `server_tool_use` / `web_search_tool_result` blocks. Logos
-plays that part (`logos/anthropic_compat/web_search.py`): the server tool becomes a
-function tool for the model, each call is searched on DuckDuckGo by the
-orchestrator (through the server's proxy settings; result pages are never fetched),
-and the turns come back folded into one Anthropic-shaped message. Every model turn
-runs through the normal pipeline, so routing, permissions and billing are those of
-any other request. Up to 5 searches per request; `allowed_domains` /
-`blocked_domains` filter the results. Revisions of the wrapper before 6 denied
-`WebSearch` in their settings layer; revision 6 lifts that deny on start. To keep it
-off for a run, pass `--disallowedTools WebSearch`.
+**Web search.** The `WebSearch` tool of Claude Code is a server-side Anthropic tool. The model call becomes a Messages request that carries `{"type": "web_search_20250305", ...}`. The API must run the searches and answer with `server_tool_use` / `web_search_tool_result` blocks. Logos does this task (`logos/anthropic_compat/web_search.py`). The server tool becomes a function tool for the model. The orchestrator searches each call on DuckDuckGo, through the proxy settings of the server. It never fetches the result pages. Logos then returns the turns folded into one Anthropic-shaped message. Each model turn goes through the normal pipeline. Thus routing, permissions and billing are the same as for any other request. A request can have up to 5 searches. `allowed_domains` and `blocked_domains` filter the results. Wrapper revisions before 6 denied `WebSearch` in their settings layer. Revision 6 removes that deny on start. To keep `WebSearch` off for a run, use `--disallowedTools WebSearch`.
 
-`LOGOS_CONTEXT_SOURCE` picks which figure to size the session from: `available`
-(default, `max_model_len_current_max`), `guaranteed`
-(`max_model_len_current_min`) or `max` (`max_model_len_overall`).
+`LOGOS_CONTEXT_SOURCE` selects the figure that sizes the session: `available` (default, `max_model_len_current_max`), `guaranteed` (`max_model_len_current_min`) or `max` (`max_model_len_overall`).
 
-**The arithmetic matters, and it is not obvious.** Claude Code takes
-`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, subtracts `min(CLAUDE_CODE_MAX_OUTPUT_TOKENS,
-20000)` from it, and auto-compacts 13,000 tokens below that. So:
+**The arithmetic is important, and it is not obvious.** Claude Code takes `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and subtracts `min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000)` from it. It auto-compacts 13,000 tokens below that result. Thus:
 
 ```text
 compacts at  = window − headroom − min(max_output, 20000) − 13000
 hard stop at = window − headroom − min(max_output, 20000) − 3000
 ```
 
-Two things follow:
+Two results follow:
 
-1. **Do not subtract the output reservation yourself.** Claude Code already
-   does. Subtracting it again — which is what this wrapper and the AI Tools page
-   used to do — throws away 20,000 tokens of context for nothing. On a
-   111,200-token window, the old wrapper (which also reserved 32,768 for output
-   and took 8,192 of headroom) compacted at 37,240 tokens; the same window now
-   compacts at 75,976.
-2. **`CLAUDE_CODE_MAX_OUTPUT_TOKENS` above 20,000 buys nothing.** The
-   reservation is capped there regardless, so a larger value only inflates the
-   `max_tokens` on the wire. The wrapper sets exactly 20,000.
+1. **Do not subtract the output reservation yourself.** Claude Code already does this. A second subtraction loses 20,000 tokens of context for no reason. The old wrapper and the AI Tools page did this second subtraction. Example: the window is 111,200 tokens. The old wrapper also reserved 32,768 tokens for output and took 8,192 tokens of headroom. It compacted at 37,240 tokens. The same window now compacts at 75,976 tokens.
+2. **A `CLAUDE_CODE_MAX_OUTPUT_TOKENS` value above 20,000 gives no benefit.** The reservation has a cap at 20,000 in all cases. A larger value only increases the `max_tokens` on the wire. The wrapper sets exactly 20,000.
 
-**What happens when a session hits the limit?** In order: at
-`window − reserve − 13000` Claude Code compacts the conversation by itself and
-carries on. If a single turn grows past `window − reserve − 3000` it refuses to
-send and asks for a `/compact` instead. Neither is an error the user has to
-recover from — the failure mode this replaces was a 400 from vLLM mid-turn.
+**What happens when a session reaches the limit?** There are two steps, in this order. At `window − reserve − 13000`, Claude Code compacts the conversation by itself and continues. If a single turn grows past `window − reserve − 3000`, Claude Code does not send it. It asks for a `/compact` instead. Neither case is an error that the user must correct. The failure mode that these steps replace was a 400 from vLLM in the middle of a turn.
 
 #### The floor: 37,024 tokens
 
-The deductions above are fixed, so there is a window below which Claude Code
-cannot run **at all** — and it is much higher than it looks. Its own opening
-prompt (system prompt plus the schemas of every tool it carries) is around
-13,000 tokens before the user has typed anything, and none of it is compactable:
+The deductions above are fixed. Thus there is a window size below which Claude Code cannot run **at all**. This size is much higher than it seems. The opening prompt of Claude Code has the system prompt and the schemas of all its tools. It is approximately 13,000 tokens before the user types anything. Claude Code cannot compact it.
 
 ```text
 floor       = 13000 opening prompt + 20000 reservation + 3000 hard stop + 1024 headroom  = 37024
 comfortable = 13000 opening prompt + 20000 reservation + 13000 auto-compact + 1024        = 47024
 ```
 
-A 32,768-token lane leaves `32768 − 20000 = 12768` tokens of input — one token
-short of the opening prompt. The session's **first** message comes back as
+A 32,768-token lane leaves `32768 − 20000 = 12768` tokens of input. This is one token less than the opening prompt. The **first** message of the session returns this error:
 
 ```text
 This model's maximum context length is 32768 tokens. However, you requested
 20000 output tokens and your prompt contains at least 12769 input tokens
 ```
 
-and there is nothing to compact, so it never recovers. Between the floor and
-47,024 the session runs but auto-compaction fires from the first message on.
+There is nothing to compact. Thus the session never recovers. If the window is between the floor and 47,024 tokens, the session runs, but auto-compaction starts from the first message.
 
-Two places enforce this, because a model can be chosen in either:
+Two places enforce this, because the user can choose a model in either place:
 
-- **The AI Tools page** disables such a model for Claude Code (`claudeCodeFitFor`
-  in `ai-tools.ts`), names the window in the option label and blocks the wizard
-  on the model step with the arithmetic spelled out. OpenCode is unaffected — it
-  is told what to reserve (`min(8192, context/2)`), so a narrow window costs it
-  reply length, not the session. The figure judged is
-  `max_model_len_current_min` — the one a request meets whichever deployment
-  answers — falling through to the wider figures only when it is absent, and a
-  model no lane serves is never judged.
-- **The wrapper** refuses to start and prints what is left, what it costs and
-  the `LOGOS_MAX_OUTPUT_TOKENS` value that would fit — measured against the
-  auto-compact point rather than the hard stop, since a reservation that only
-  clears the hard stop leaves a session compacting on every turn. `--check`
-  prints all of it without refusing anything, which is what makes it the thing
-  to run when a session will not start.
+- **The AI Tools page** disables such a model for Claude Code (`claudeCodeFitFor` in `ai-tools.ts`). It shows the window in the option label. It blocks the wizard on the model step and shows the arithmetic. OpenCode is not affected. OpenCode receives the value to reserve (`min(8192, context/2)`). Thus a narrow window costs OpenCode reply length, not the session. The page judges `max_model_len_current_min`. This is the figure that a request meets for each deployment that can answer. The page uses the wider figures only when `max_model_len_current_min` is absent. The page never judges a model that no lane serves.
+- **The wrapper** refuses to start. It prints what is left, what it costs, and the `LOGOS_MAX_OUTPUT_TOKENS` value that fits. It measures against the auto-compact point, not the hard stop. A reservation that clears only the hard stop causes compaction on each turn. `--check` prints all of this and does not refuse anything. Run it when a session does not start.
 
-Lowering the reservation is the only lever on the client side: at 32,768 tokens
-`LOGOS_MAX_OUTPUT_TOKENS=5744` makes the model usable with shorter replies. The
-better lever is the window — §2 and §3.
+The only client-side action is to decrease the reservation. At 32,768 tokens, `LOGOS_MAX_OUTPUT_TOKENS=5744` makes the model usable with shorter replies. The better action is to increase the window. See §2 and §3.
 
-The check the wrapper used to have (`headroom + reservation >= window`) only
-caught the arithmetic going negative, which a 32,768-token window passes
-comfortably while being unusable.
+The old wrapper check (`headroom + reservation >= window`) found only a negative result. A 32,768-token window passes this check easily, but it is not usable.
 
-The "auto-compact fires at ~60%" effect that started this work is these two
-fixed deductions — 33,000 tokens in total — as a share of a window that was
-already too small. It is not a percentage, and there is no knob to raise it:
-`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` exists but is clamped by
-`min(window × pct, window − 13000)`, so it can only compact *earlier*. The only
-lever is the window itself, which is what §2 and §3 are for.
+The "auto-compact starts at ~60%" effect that started this work comes from the two fixed deductions. They are 33,000 tokens in total. They are a share of a window that was already too small. It is not a percentage, and no setting increases it. `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` exists, but `min(window × pct, window − 13000)` limits it. Thus it can only compact *earlier*. The only action is to increase the window. This is the purpose of §2 and §3.
 
-One caveat the wrapper warns about: a model id starting with `claude-` or
-containing `[1m]` is resolved to one of Claude Code's own models, and
-`CLAUDE_CODE_MAX_CONTEXT_TOKENS` is ignored for it. `DISABLE_COMPACT=1` forces
-the window through, at the cost of auto-compaction.
+The wrapper gives a warning for one more case. If a model id starts with `claude-` or contains `[1m]`, Claude Code resolves it to one of its own models. Claude Code then ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for it. `DISABLE_COMPACT=1` forces the window through, but auto-compaction is then off.
 
 Useful commands:
 
@@ -303,42 +159,23 @@ claude-logos --help        this, then claude's own help
 
 #### Revisions
 
-`CLAUDE_LOGOS_VERSION` near the top of the script is a monotonic integer — bump it
-in the same commit as any change installed copies should pick up, and keep the
-`$ClaudeLogosVersion` in `claude-logos.ps1` in step. It is the only place the
-revision lives: Logos serves the current wrapper at the same URL an installed copy
-came from, so there is no second file to keep in sync and no way for the two to
-disagree.
+`CLAUDE_LOGOS_VERSION` near the top of the script is a monotonic integer. Increase it in the same commit as each change that installed copies must receive. Keep `$ClaudeLogosVersion` in `claude-logos.ps1` at the same value. The revision exists only in this place. Logos serves the current wrapper at the same URL that an installed copy came from. Thus there is no second file to keep in sync, and the two cannot disagree.
 
-Installed copies **never update themselves.** At most once a day the wrapper
-fetches that URL in the background and records the revision it found; the next
-start compares it and, if a newer one exists, prints the one command that replaces
-it. So the notice costs no startup time and appears one start after a release —
-soon enough for something the user then has to type anyway.
+Installed copies **never update themselves.** At most once a day, the wrapper fetches that URL in the background and records the revision that it found. At the next start, the wrapper compares the revision. If a newer revision exists, the wrapper prints the one command that replaces the script. Thus the notice costs no startup time. It appears one start after a release. This is soon enough, because the user must type the command anyway.
 
-`--update` replaces the script and nothing else. The key, config and settings
-layer stay as they are, so an update is not a re-setup and the AI Tools page does
-not have to be visited again. It validates before replacing: the download has to
-contain a revision line and has to parse, because otherwise a captive portal or a
-proxy error page would leave a working wrapper overwritten with HTML — and that
-file is the next thing the user runs. The replacement is a rename within one
-directory, so a still-running copy keeps reading the old inode and finishes
-normally.
+`--update` replaces the script and nothing else. The key, the config and the settings layer stay the same. Thus an update is not a new setup, and the user does not need to visit the AI Tools page again. `--update` validates the download before it replaces the script. The download must contain a revision line, and it must parse. Without this check, a captive portal or a proxy error page can overwrite a working wrapper with HTML. The user runs that file next. The replacement is a rename in one directory. Thus a copy that still runs continues to read the old inode and ends normally.
 
 ### OpenCode
 
-OpenCode reads its config once at startup and cannot re-read it, so the
-generated `opencode.json` states `max_model_len_overall` — the ceiling rather
-than a number that goes stale. Long conversations may be turned down when
-capacity is tight; the routing in §3 gives them the best available shot.
+OpenCode reads its config once at startup and cannot read it again. Thus the generated `opencode.json` states `max_model_len_overall`. This is the ceiling, not a number that becomes old. Logos can reject long conversations when capacity is low. The routing in §3 gives them the best chance.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 | --- | --- |
-| Claude Code compacts far earlier than the window suggests | The output reservation is being subtracted twice, or the session is running on `guaranteed` while `available` is much larger. Check `claude-logos --check`. |
-| `claude-logos` refuses to start with `BLOCKED` | The window is below the 37,024-token floor, so the session's first request would be rejected. Pick a wider model, or take the `LOGOS_MAX_OUTPUT_TOKENS` value the message names. |
-| The very first message of a session 400s with `you requested 20000 output tokens` | The lane came up narrower than the window the session was sized from — the cold-start case: with no lane up, only `max_model_len_overall` is known, and that is the widest window the model has *ever* been calibrated for, not what the planner will give a new lane from the capacity free right now. The next start sizes itself against the lane that is now up. |
-| `maximum context length is N tokens` 400s | The request landed on a deployment narrower than the estimate expected — most likely one that reports no window. Switch that wrapper to `LOGOS_CONTEXT_SOURCE=guaranteed`. |
-| A model is never placed on a node | The placement floor cannot be met there. Look for the "no calibrated KV point serves the required minimum" line and lower `min_context_fraction` for that model in the worker's config.yml. |
-| `max_model_len` absent from `/v1/models` | Nothing reports a window that always holds: a cloud model whose upstream publishes no window and whose registry entry names none, a vLLM lane running at the model's native maximum (which the worker does not report), or every workernode offline. In the last case `max_model_len_overall` still carries the model's historic maximum, and the claude-logos wrapper sizes the session from it (startup line says "no lane is up yet"). |
+| Claude Code compacts much earlier than the window suggests | The output reservation is subtracted twice, or the session runs on `guaranteed` while `available` is much larger. Check `claude-logos --check`. |
+| `claude-logos` refuses to start with `BLOCKED` | The window is below the 37,024-token floor, so the first request of the session is rejected. Choose a wider model, or use the `LOGOS_MAX_OUTPUT_TOKENS` value that the message names. |
+| The first message of a session returns a 400 with `you requested 20000 output tokens` | The lane started narrower than the window that sized the session. This is the cold-start case. If no lane is up, only `max_model_len_overall` is known. That value is the widest window for which the model was ever calibrated. It is not what the planner gives to a new lane from the capacity that is free now. The next start sizes the session against the lane that is now up. |
+| `maximum context length is N tokens` returns 400 | The request reached a deployment that is narrower than the estimate expected. Most likely this deployment reports no window. Change that wrapper to `LOGOS_CONTEXT_SOURCE=guaranteed`. |
+| A model is never placed on a node | The node cannot meet the placement floor. Look for the "no calibrated KV point serves the required minimum" line. Decrease `min_context_fraction` for that model in the config.yml of the worker. |
+| `max_model_len` is absent from `/v1/models` | No source reports a window that always holds. The cases are: a cloud model whose upstream publishes no window and whose registry entry names none; a vLLM lane at the native maximum of the model (the worker does not report this); or all workernodes are offline. In the last case, `max_model_len_overall` still has the historic maximum of the model. The claude-logos wrapper sizes the session from it (the startup line says "no lane is up yet"). |
