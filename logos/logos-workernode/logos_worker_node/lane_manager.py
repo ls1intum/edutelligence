@@ -766,7 +766,13 @@ class LaneManager:
                 to_check = current_ids & desired_ids
                 for lid in to_check:
                     handle = self._handles[lid]
-                    desired_lc = desired_map[lid]
+                    # Worker-local overrides (gguf_quant / gguf_tokenizer / …)
+                    # are already baked into the stored config by
+                    # _add_lane_unlocked. Compare against the same merged view
+                    # so repeating a request with raw defaults does not look
+                    # like a GGUF serve-setting change.
+                    desired_lc = self._apply_model_vllm_overrides(desired_map[lid])
+                    desired_map[lid] = desired_lc
                     current_lc = handle.lane_config
 
                     if current_lc is not None and _lane_needs_restart(current_lc, desired_lc):
@@ -2713,6 +2719,10 @@ class LaneManager:
         starting_model = new_config.model
         self.reserve_model_startup(starting_model)
         try:
+            # Apply worker-local overrides before spawn so a restart from a
+            # raw incoming config (apply_lanes / reconfigure) keeps the same
+            # pinned GGUF quant and tokenizer the original add applied.
+            new_config = self._apply_model_vllm_overrides(new_config)
             new_config = self._auto_tensor_parallel(new_config)
             old_handle = self._handles[lane_id]
             port = self._port_alloc.get_port(lane_id)

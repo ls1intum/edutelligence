@@ -3240,6 +3240,50 @@ def test_lane_needs_restart_when_gguf_quant_changes() -> None:
     assert _lane_needs_restart(current, current) is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"gguf_quant": "Q4_K_M"},
+        {"gguf_tokenizer": "Qwen/Qwen3-8B"},
+        {"gguf_quant": "Q4_K_M", "gguf_tokenizer": "Qwen/Qwen3-8B"},
+    ],
+)
+async def test_apply_lanes_repeat_preserves_gguf_overrides(override) -> None:
+    """Repeating a lane request must not restart or drop worker-local GGUF pins.
+
+    _add_lane_unlocked stores the overridden config; apply_lanes must merge the
+    same overrides onto the raw incoming defaults before comparing, and a
+    restart (if one were needed) must re-apply them before spawn.
+    """
+    model = "org/model-GGUF"
+    manager = LaneManager(
+        WorkerConfig(),
+        VllmEngineConfig(model_overrides={model: dict(override)}),
+        lane_port_start=15300,
+        lane_port_end=15310,
+    )
+    raw = LaneConfig(model=model, vllm=True, vllm_config=VllmConfig())
+    overridden = manager._apply_model_vllm_overrides(raw)  # noqa: SLF001
+    for key, value in override.items():
+        assert getattr(overridden.vllm_config, key) == value
+
+    manager._handles["org_model-GGUF"] = _StubHandle(overridden)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    manager._collect_statuses_unlocked = AsyncMock(return_value=[])
+
+    result = await manager.apply_lanes([raw])
+
+    manager._restart_lane_unlocked.assert_not_awaited()
+    assert any(a.action == "unchanged" and a.lane_id == "org_model-GGUF" for a in result.actions)
+
+    # Restart path must also re-apply the same pins onto a raw config.
+    restarted = manager._apply_model_vllm_overrides(raw)  # noqa: SLF001
+    for key, value in override.items():
+        assert getattr(restarted.vllm_config, key) == value
+
+
 def test_lane_needs_restart_when_gguf_tokenizer_changes() -> None:
     current = LaneConfig(
         model="org/model-GGUF",
@@ -3253,6 +3297,52 @@ def test_lane_needs_restart_when_gguf_tokenizer_changes() -> None:
     )
     assert _lane_needs_restart(current, desired) is True
     assert _lane_needs_restart(current, current) is False
+
+
+@pytest.mark.asyncio
+async def test_restart_lane_unlocked_reapplies_gguf_overrides(monkeypatch) -> None:
+    """A restart from a raw incoming config must re-apply worker-local GGUF pins."""
+    model = "org/model-GGUF"
+    manager = LaneManager(
+        WorkerConfig(),
+        VllmEngineConfig(model_overrides={model: {"gguf_quant": "Q4_K_M", "gguf_tokenizer": "Qwen/Qwen3-8B"}}),
+        lane_port_start=15320,
+        lane_port_end=15330,
+    )
+    current = LaneConfig(
+        model=model,
+        vllm=True,
+        vllm_config=VllmConfig(gguf_quant="Q4_K_M", gguf_tokenizer="Qwen/Qwen3-8B"),
+    )
+    old = _StubHandle(current)
+    manager._handles["lane"] = old
+    manager._port_alloc._used["lane"] = 15321  # noqa: SLF001
+    captured: list[LaneConfig] = []
+
+    class _CaptureHandle(_StubHandle):
+        def __init__(self, lane_config: LaneConfig) -> None:
+            super().__init__(lane_config)
+            captured.append(lane_config)
+
+        async def init(self) -> None:
+            return None
+
+        async def spawn(self, lane_config: LaneConfig) -> ProcessStatus:
+            self.lane_config = lane_config
+            return ProcessStatus(state=ProcessState.RUNNING, return_code=None)
+
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *a, **k: _CaptureHandle(a[4]))
+    monkeypatch.setattr(manager, "_wait_for_vram_headroom", AsyncMock())
+    monkeypatch.setattr(manager, "_auto_place_gpu_devices", AsyncMock(side_effect=lambda _lid, lc: lc))
+    monkeypatch.setattr(manager, "_notify_lane_added", AsyncMock())
+
+    raw = LaneConfig(model=model, vllm=True, vllm_config=VllmConfig())
+    await manager._restart_lane_unlocked("lane", raw)  # noqa: SLF001
+
+    assert len(captured) == 1
+    assert captured[0].vllm_config.gguf_quant == "Q4_K_M"
+    assert captured[0].vllm_config.gguf_tokenizer == "Qwen/Qwen3-8B"
+    assert manager._handles["lane"].lane_config.vllm_config.gguf_quant == "Q4_K_M"  # noqa: SLF001
 
 
 @pytest.mark.asyncio
