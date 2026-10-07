@@ -63,9 +63,11 @@ public class AuditLogService {
         Map<String, Object> changedFrom = new LinkedHashMap<>();
         Map<String, Object> changedTo = new LinkedHashMap<>();
         for (String key : union(from, to)) {
-            if (!Objects.equals(from.get(key), to.get(key))) {
-                changedFrom.put(key, from.get(key));
-                changedTo.put(key, to.get(key));
+            Object was = normalize(from.get(key));
+            Object is = normalize(to.get(key));
+            if (!Objects.equals(was, is)) {
+                changedFrom.put(key, was);
+                changedTo.put(key, is);
             }
         }
         if (changedTo.isEmpty()) {
@@ -128,6 +130,16 @@ public class AuditLogService {
                 return m;
             })
             .toList();
+    }
+
+    /**
+     * Jackson reads a small JSON integer as Integer while a limit written from a
+     * request is a Long; both mean the same number, so they must compare equal.
+     */
+    private static Object normalize(Object value) {
+        return value instanceof Integer || value instanceof Short || value instanceof Byte
+            ? Long.valueOf(((Number) value).longValue())
+            : value;
     }
 
     private static java.util.Set<String> union(Map<String, Object> a, Map<String, Object> b) {

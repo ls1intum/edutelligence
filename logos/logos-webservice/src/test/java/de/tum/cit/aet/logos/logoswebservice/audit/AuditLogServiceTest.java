@@ -111,4 +111,11 @@ class AuditLogServiceTest {
         assertThat(params.getValue().getValue("size")).isEqualTo(AuditLogService.MAX_PAGE);
         assertThat(params.getValue().getValue("teamId")).isEqualTo(5);
     }
+
+    @Test
+    void anIntegerAndALongOfTheSameValueAreNotAChange() {
+        service.record("api_key.updated", "api_key", 1, 1, map("cloud_rpm_limit", 10), map("cloud_rpm_limit", 10L));
+
+        verify(jdbc, never()).update(anyString(), any(MapSqlParameterSource.class));
+    }
 }

@@ -120,14 +120,19 @@ public class ApiKeyAdminService {
                       "api_key", newKey.getKeyValue());
     }
 
+    @Transactional
     public Map<String, Object> setLog(int keyId, String level) {
         if (!"BILLING".equals(level) && !"FULL".equals(level)) {
             throw new IllegalArgumentException("set_log must be BILLING or FULL");
         }
         ApiKey k = apiKeyRepository.findById(keyId)
             .orElseThrow(() -> new IllegalArgumentException("API key not found: " + keyId));
+        String previous = k.getLog() == null ? null : k.getLog().name();
         k.setLog(LogLevel.valueOf(level));
         apiKeyRepository.save(k);
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("log", previous);
+        auditLog.record("api_key.log_level_changed", "api_key", keyId, k.getTeamId(), before, Map.of("log", level));
         return Map.of("result", "Updated log level to " + level);
     }
 
