@@ -42,6 +42,8 @@ export interface RequestFilter {
   errorsOnly: boolean;
   /** One lifecycle bucket (queued/running/error/finished), or null for all. */
   status: string | null;
+  modelIds?: number[];
+  providerIds?: number[];
 }
 
 /** One entry of a filter dropdown, with how much picking it would select. */
@@ -56,6 +58,7 @@ export interface ScopeOptions {
   teams: ScopeOption[];
   requesters: ScopeOption[];
   providers: ScopeOption[];
+  models: ScopeOption[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -130,6 +133,8 @@ export class StatisticsService {
         provider_id: filter.providerId,
         errors_only: filter.errorsOnly || null,
         status: filter.status,
+        model_ids: filter.modelIds ?? [],
+        provider_ids: filter.providerIds ?? [],
         cursor_ts: cursor?.ts ?? null,
         cursor_id: cursor?.request_id ?? null,
       }),

@@ -13,7 +13,7 @@
          derivation) can read them as current afterwards. A failed or empty
          catalogue refresh after the change therefore derives no cost from
          the previous provider type's prices. -->
-    <changeSet id="051-token-price-valid-to" author="wasnertobias">
+    <changeSet id="054-token-price-valid-to" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="token_prices" columnName="valid_to"/></not>
         </preConditions>
@@ -22,7 +22,7 @@
         </addColumn>
     </changeSet>
 
-    <changeSet id="051-resolve-unit-price-valid-to" author="wasnertobias">
+    <changeSet id="054-resolve-unit-price-valid-to" author="wasnertobias">
         <comment>
             Re-replaces the logos_resolve_unit_price of changelog 023
             (changeSet 022-2-resolve-unit-price) with the valid_to-aware

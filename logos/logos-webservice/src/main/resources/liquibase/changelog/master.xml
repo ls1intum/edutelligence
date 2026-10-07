@@ -53,7 +53,10 @@
     <include file="liquibase/changelog/047_objective_priority_model_ratings.xml"/>
     <include file="liquibase/changelog/048_log_entry_timestamp_provider_call.xml"/>
     <include file="liquibase/changelog/049_team_activity_indexes.xml"/>
-    <include file="liquibase/changelog/050_derived_model_provider_metrics.xml"/>
-    <include file="liquibase/changelog/051_token_price_valid_to.xml"/>
+    <include file="liquibase/changelog/050_analysis_proposals.xml"/>
+    <include file="liquibase/changelog/051_editable_workflow_diagrams.xml"/>
+    <include file="liquibase/changelog/052_rename_recommendation_sla_to_slo.xml"/>
+    <include file="liquibase/changelog/053_derived_model_provider_metrics.xml"/>
+    <include file="liquibase/changelog/054_token_price_valid_to.xml"/>
 
 </databaseChangeLog>

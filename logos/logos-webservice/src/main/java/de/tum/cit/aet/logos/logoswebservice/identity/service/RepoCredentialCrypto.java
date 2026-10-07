@@ -24,6 +24,9 @@ import org.springframework.stereotype.Component;
  * standard Base64 of exactly 32 bytes). A development fallback is only used when
  * {@code LOGOS_REPO_CREDENTIALS_DEV_FALLBACK=true} is set explicitly — never by
  * default, including in production.
+ *
+ * <p>When neither is set, the bean still starts so linking public repositories
+ * keeps working; only {@link #encrypt} and {@link #decrypt} fail.
  */
 @Component
 public class RepoCredentialCrypto {
@@ -45,16 +48,25 @@ public class RepoCredentialCrypto {
 
     public RepoCredentialCrypto() {
         this(resolveKey());
+        if (secretKey == null) {
+            log.warn("{} is unset; storing private repository deploy keys is disabled.", ENV_KEY);
+        }
     }
 
     RepoCredentialCrypto(SecretKey secretKey) {
         this.secretKey = secretKey;
     }
 
+    /** Whether a key is available, i.e. deploy keys can be stored and read. */
+    public boolean isConfigured() {
+        return secretKey != null;
+    }
+
     public String encrypt(String plaintext) {
         if (plaintext == null) {
             throw new IllegalArgumentException("plaintext must not be null");
         }
+        requireKey();
         try {
             byte[] iv = new byte[IV_BYTES];
             new SecureRandom().nextBytes(iv);
@@ -75,6 +87,7 @@ public class RepoCredentialCrypto {
         if (encoded == null || encoded.isBlank()) {
             throw new IllegalArgumentException("ciphertext must not be blank");
         }
+        requireKey();
         try {
             byte[] all = Base64.getDecoder().decode(encoded);
             if (all.length <= IV_BYTES) {
@@ -94,6 +107,15 @@ public class RepoCredentialCrypto {
         }
     }
 
+    private void requireKey() {
+        if (secretKey == null) {
+            throw new IllegalStateException(
+                ENV_KEY + " must be set (Base64 of 32 random bytes) before storing "
+                    + "repository credentials. For local development only, set "
+                    + ENV_DEV_FALLBACK + "=true to use the documented fallback key.");
+        }
+    }
+
     /** SHA-256 hex fingerprint of the stored PEM (or any string payload). */
     public static String fingerprint(String pem) {
         try {
@@ -110,6 +132,7 @@ public class RepoCredentialCrypto {
         }
     }
 
+    /** Returns {@code null} when no key is configured and the dev fallback is off. */
     static SecretKey resolveKey() {
         String env = System.getenv(ENV_KEY);
         if (env != null && !env.isBlank()) {
@@ -128,10 +151,7 @@ public class RepoCredentialCrypto {
         }
         String allowDev = System.getenv(ENV_DEV_FALLBACK);
         if (allowDev == null || !allowDev.equalsIgnoreCase("true")) {
-            throw new IllegalStateException(
-                ENV_KEY + " must be set (Base64 of 32 random bytes) before storing "
-                    + "repository credentials. For local development only, set "
-                    + ENV_DEV_FALLBACK + "=true to use the documented fallback key.");
+            return null;
         }
         if (DEV_WARNED.compareAndSet(false, true)) {
             log.warn(

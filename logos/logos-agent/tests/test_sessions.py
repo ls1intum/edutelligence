@@ -1394,6 +1394,9 @@ class TestAgentPhaseIsolation:
         # This row opens a pull request but is not an issue session, so there
         # is no assigned issue to close: the body stays empty.
         assert helper["env"]["LOGOS_SESSION_CLOSES"] == ""
+        # Fresh pull requests ask Claudia by default; the finalizer reads
+        # the list rather than hard-coding a login in the session image.
+        assert helper["env"]["LOGOS_SESSION_PR_REVIEWERS"] == "Claudia-Anthropica"
         assert helper["network"] == patched.session_egress_network
         assert helper["labels"] == {"logos.agent.helper": "finalize"}
         # The helper is a one-shot: created, waited on, removed.

@@ -157,6 +157,20 @@ it asks `GET /v1/models`, prints the window it got, and exports the result into
 its own child process — nothing outside the wrapper is touched, so plain
 `claude` keeps using an Anthropic subscription unchanged.
 
+`LOGOS_MODEL` is optional. When unset, Claude Code discovers Logos models from
+that listing and you switch with `/model`. When set, every Claude Code model
+slot (`opus`, `sonnet`, `haiku`, …) is pinned to that id — useful as a default,
+not required for the setup flow.
+
+Claude Code only lists a gateway model in `/model` when its id contains `claude`
+or `anthropic`. The Anthropic-shaped `GET /v1/models` therefore lists each model
+once, as `claude-<id>` (`claude-Qwen/Qwen3.8-27B`), with the plain name as display
+name and no aliases. An id that already contains `claude` or `anthropic` is listed
+unchanged (`my-Anthropic-proxy`, not `claude-my-Anthropic-proxy`), and so is an id
+whose `claude-` form would resolve to another model. A request for `claude-<id>` resolves to `<id>` unless a model
+with exactly that name exists; the plain name and aliases keep working in requests.
+The OpenAI-shaped listing is unchanged.
+
 It also does two things with the listing it already has in hand:
 
 - **Warms the model up.** `POST /v1/models/{model}/warmup` tells the planner the
@@ -167,10 +181,25 @@ It also does two things with the listing it already has in hand:
   reservation: the planner still decides using its own fairness rules, a warmup
   can never evict a lane real traffic is using, and no inference request is ever
   sent on the caller's behalf. Warming a model the key has no access to is a 404.
+  Warmup runs only when `LOGOS_MODEL` is pinned.
 - **Names models that are new to you.** The id list is compared against the one
   from the last run (`~/.config/claude-logos/known-models`); additions are
   printed. The first run records the baseline silently rather than announcing
   everything as new.
+
+**Web search.** Claude Code's `WebSearch` is a server-side Anthropic tool: the
+model's call turns into a Messages request carrying
+`{"type": "web_search_20250305", ...}`, and the API is expected to run the
+searches and answer with `server_tool_use` / `web_search_tool_result` blocks. Logos
+plays that part (`logos/anthropic_compat/web_search.py`): the server tool becomes a
+function tool for the model, each call is searched on DuckDuckGo by the
+orchestrator (through the server's proxy settings; result pages are never fetched),
+and the turns come back folded into one Anthropic-shaped message. Every model turn
+runs through the normal pipeline, so routing, permissions and billing are those of
+any other request. Up to 5 searches per request; `allowed_domains` /
+`blocked_domains` filter the results. Revisions of the wrapper before 6 denied
+`WebSearch` in their settings layer; revision 6 lifts that deny on start. To keep it
+off for a run, pass `--disallowedTools WebSearch`.
 
 `LOGOS_CONTEXT_SOURCE` picks which figure to size the session from: `available`
 (default, `max_model_len_current_max`), `guaranteed`

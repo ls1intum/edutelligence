@@ -99,7 +99,40 @@
   # GPT-5.5 rejects reasoning_effort+tools on chat completions; /responses is supported.
   use_responses_api: true
   cost_per_million_input_token: 5.00
+  cost_per_million_cached_input_token: 0.50
   cost_per_million_output_token: 30.00
+
+# ── GPT-6 example (prompt-cache prices) ──────────────────────────────────────
+# Token usage reports which part of the input the provider read from its prompt
+# cache (`cost_per_million_cached_input_token`) and, on GPT-5.6 and later, which
+# part it wrote to the cache (`cost_per_million_cache_write_input_token`). The
+# rest of the input is billed at `cost_per_million_input_token`. A cache rate
+# that is not set falls back to `cost_per_million_input_token`; set it to 0
+# only when the provider really doesn't bill those tokens (e.g. local models).
+# `long_context_threshold_tokens` plus the two multipliers model a long-context
+# price tier: above the threshold the whole request uses the multiplied rates.
+# `max_input_tokens` turns on auto-compaction for the chat: Iris sends the whole
+# history and, once a prompt is above `compaction_threshold_tokens` (default:
+# half of `max_input_tokens`), it summarizes the older messages. Keep the
+# threshold below the long-context tier. Without `max_input_tokens`, the chat
+# keeps its window of the last 15 messages.
+- id: oai-gpt-6-luna
+  type: openai_chat
+  model: gpt-6-luna
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: medium
+  use_responses_api: true
+  cost_per_million_input_token: 0.10
+  cost_per_million_cached_input_token: 0.01
+  cost_per_million_cache_write_input_token: 0.125
+  cost_per_million_output_token: 0.50
+  long_context_threshold_tokens: 272000
+  long_context_input_cost_multiplier: 2.0
+  long_context_output_cost_multiplier: 1.5
+  max_input_tokens: 922000
+  compaction_threshold_tokens: 245000
 
 # ── Azure example (GPT 5 Mini) ──────────────────────────────────────────────
 - id: azure-gpt-5-mini
@@ -211,6 +244,38 @@
 # any other value is a hard 400. For an OpenAI-compatible gpt-oss entry, use:
 # type: openai_chat, base_url: <logos-url>, supports_reasoning_effort: true,
 # reasoning_effort: medium, reasoning_effort_values: [low, medium, high].
+
+# ── Logos/vLLM models (local, OpenAI-compatible) ────────────────────────────
+# Qwen3.8 is a reasoning model: keep thinking on. Logos disables it unless a
+# request asks for it; `extra_body` enables it explicitly. The chat template
+# accepts only low|medium|xhigh as reasoning_effort (xhigh is its default, far
+# too slow for chat), so pin an explicit level. Thinking mode should not run
+# with the low temperatures Iris pipelines request, hence
+# supports_temperature: false (the model's own sampling defaults apply). Its
+# template rejects system messages after the first message (Iris uses them for
+# context switches) and conversations without a user message (several
+# pipelines send only a system prompt), hence leading_system_message_only.
+- id: qwen3.8-27b
+  type: openai_chat
+  model: Qwen/Qwen3.8-27B
+  base_url: https://your-logos-instance/v1
+  api_key:
+  supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: medium
+  reasoning_effort_values: [low, medium, xhigh]
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: true
+  leading_system_message_only: true
+  # Added to every pipeline's max_tokens: the output limit covers reasoning too.
+  reasoning_token_allowance: 4096
+  cost_per_million_input_token: 0
+  cost_per_million_output_token: 0
+# Logos queues requests by the priority of the calling API key. To let
+# interactive chat overtake background work (Memiris, ingestion), add a copy
+# of this entry with another id (e.g. qwen3.8-27b-background) and a second,
+# lower-priority Logos key, and reference that id from the background slots.
 - id: mxbai-embed-large
   type: ollama
   model: mxbai-embed-large:latest

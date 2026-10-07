@@ -10,6 +10,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AgentService } from '../../core/services/agent.service';
+import { TeamManagementService } from '../../core/services/team-management.service';
 import {
   AgentCapacity,
   AgentControls,
@@ -38,7 +39,10 @@ const POLL_MS = 4000;
 })
 export class Agents implements OnInit {
   private agentService = inject(AgentService);
+  private teamService = inject(TeamManagementService);
   private destroyRef = inject(DestroyRef);
+  /** Local clock: elapsed timings keep moving even when session polling stops. */
+  private now = signal(Date.now());
 
   /** The template binds a numeric workspace id to the select's string value. */
   readonly String = String;
@@ -53,6 +57,8 @@ export class Agents implements OnInit {
   controlBusy = signal(false);
   loading = signal(true);
   error = signal<string | null>(null);
+  analyzingAll = signal(false);
+  analyzeAllMessage = signal<string | null>(null);
 
   // ── selected session ─────────────────────────────────────────────────────
   selectedId = signal<number | null>(null);
@@ -167,13 +173,16 @@ export class Agents implements OnInit {
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   async ngOnInit(): Promise<void> {
-    await this.refresh();
+    this.now.set(Date.now());
+    const clock = setInterval(() => this.now.set(Date.now()), 1000);
     const timer = setInterval(() => void this.tick(), POLL_MS);
     this.destroyRef.onDestroy(() => {
+      clearInterval(clock);
       clearInterval(timer);
       this.stopStream();
       this.resetScreenshots();
     });
+    await this.refresh();
   }
 
   private async tick(): Promise<void> {
@@ -718,11 +727,34 @@ export class Agents implements OnInit {
     this.formModel.set(name || null);
   }
 
+  /** Queue an analysis of every linked team repository, regardless of commit. */
+  async analyzeAllRepositories(): Promise<void> {
+    if (this.analyzingAll()) return;
+    this.analyzingAll.set(true);
+    this.analyzeAllMessage.set(null);
+    try {
+      const result = await this.teamService.analyzeAllRepositories();
+      this.analyzeAllMessage.set(result.message);
+      await this.refresh({ quiet: true });
+    } catch (err: unknown) {
+      this.error.set(this.messageOf(err, 'Could not queue the repository analyses.'));
+    } finally {
+      this.analyzingAll.set(false);
+    }
+  }
+
   /** Where a session came from, for the list. */
   originOf(session: AgentSession): string {
     if (session.trigger_kind === 'issue') return 'from an issue';
     if (session.trigger_kind === 'review') return 'from a review';
+    if (session.trigger_kind === 'analysis') return 'repository analysis';
     return session.created_by;
+  }
+
+  /** "team · owner/repo" for a repository analysis, null for other sessions. */
+  analysisTarget(session: AgentSession): string | null {
+    if (session.trigger_kind !== 'analysis' || !session.repo_slug) return null;
+    return session.team_name ? `${session.team_name} · ${session.repo_slug}` : session.repo_slug;
   }
 
   // ── presentation helpers ─────────────────────────────────────────────────
@@ -745,10 +777,24 @@ export class Agents implements OnInit {
 
   duration(session: AgentSession): string {
     if (!session.started_at) return '—';
-    const end = session.finished_at ? new Date(session.finished_at) : new Date();
-    const seconds = Math.max(0, (end.getTime() - new Date(session.started_at).getTime()) / 1000);
-    if (seconds < 60) return `${Math.round(seconds)}s`;
-    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+    return this.elapsed(session.started_at, session.finished_at);
+  }
+
+  queueDuration(session: AgentSession): string {
+    // A cancellation before starting ends the wait without a runtime.
+    return this.elapsed(session.created_at, session.started_at ?? session.finished_at);
+  }
+
+  finishedAgo(session: AgentSession): string {
+    return session.finished_at ? this.elapsed(session.finished_at) : '—';
+  }
+
+  private elapsed(start: string, end: string | null = null): string {
+    const milliseconds = (end ? Date.parse(end) : this.now()) - Date.parse(start);
+    if (!Number.isFinite(milliseconds)) return '—';
+    const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
   }
 

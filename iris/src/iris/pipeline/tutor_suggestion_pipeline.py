@@ -193,6 +193,16 @@ class TutorSuggestionPipeline(
         )
         return tool_list
 
+    def build_turn_context_message(
+        self,
+        state: AgentPipelineExecutionState[
+            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
+        ],
+    ) -> str:
+        """Return the current date; it goes after the history to keep the prefix cacheable."""
+        del state
+        return f"Current Date: {get_current_utc_datetime_string()}"
+
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
@@ -207,10 +217,8 @@ class TutorSuggestionPipeline(
         discussion = format_post_discussion(state.dto.post, include_user_ids=True)
         regeneration_requested = self.is_regeneration_by_user_requested(state)
         template_context = {
-            "current_date": get_current_utc_datetime_string(),
             "allow_lecture_tool": allow_lecture_tool,
             "allow_faq_tool": allow_faq_tool,
-            "has_chat_history": bool(state.message_history),
             "is_programming_exercise": is_programming_exercise,
             "is_text_exercise": is_text_exercise,
             "tutor_query": tutor_query,
