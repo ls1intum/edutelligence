@@ -406,6 +406,35 @@ def quant_from_filename(filename: str) -> str | None:
     return None
 
 
+def _filename_matches_requested_quant(filename: str, quant: str) -> bool:
+    """Whether *filename* carries the concrete *quant* an explicit target named.
+
+    Standard quants match via :func:`quant_from_filename`. Nonstandard /
+    custom quants such as ``UD-Q4_K_XL`` do not: that helper returns only the
+    trailing vocabulary token (``Q4_K_XL``), which never equals the full
+    requested suffix. For those, match the complete custom token as a
+    trailing ``-`` / ``.`` segment of the stem (shard suffix already dropped
+    by the same rule as :func:`quant_from_filename`) so a fully prefetched
+    ``…-UD-Q4_K_XL.gguf`` satisfies ``repo:UD-Q4_K_XL``.
+    """
+    quant = (quant or "").strip().upper()
+    if not quant:
+        return False
+    base = (filename or "").rsplit("/", 1)[-1]
+    if quant_from_filename(base) == quant:
+        return True
+    if not is_nonstandard_gguf_quant_type(quant):
+        return False
+    if not base.lower().endswith(".gguf"):
+        return False
+    stem = base[: -len(".gguf")]
+    shard = _SHARD_SUFFIX_RE.search(stem)
+    if shard:
+        stem = stem[: shard.start()]
+    stem_u = stem.upper()
+    return any(stem_u.endswith(f"{sep}{quant}") for sep in ("-", "."))
+
+
 def candidate_quants(filenames: list[tuple[str, int]]) -> list[tuple[str, int]]:
     """(quant, total_size) pairs available across *filenames*, de-duplicated.
 
@@ -631,7 +660,7 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
         indices_by_family: dict[tuple[str, str, int], set[int]] = {}
         for name, _ in listing:
             base = name.rsplit("/", 1)[-1]
-            if "mmproj" in base.lower() or quant_from_filename(base) != quant:
+            if "mmproj" in base.lower() or not _filename_matches_requested_quant(base, quant):
                 continue
             shard = _SHARD_INDEX_RE.search(base)
             if shard is None:

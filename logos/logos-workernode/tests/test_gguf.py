@@ -463,6 +463,38 @@ def test_is_gguf_ref_cached_partial_snapshot_flags_other_quant(tmp_path: Path) -
     assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:q4_k_m") is True
 
 
+def test_is_gguf_ref_cached_nonstandard_quant_matches_full_suffix(tmp_path: Path) -> None:
+    # quant_from_filename returns only the trailing vocabulary token
+    # (Q4_K_XL) for custom names like UD-Q4_K_XL. An explicit/pinned target
+    # must still recognize the complete custom suffix on a prefetched file —
+    # otherwise every boot treats a complete snapshot as missing.
+    _write_gguf(tmp_path, "bartowski/Llama-3.1-8B-Instruct-GGUF", ["Llama-3.1-8B-Instruct-UD-Q4_K_XL.gguf"])
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "bartowski/Llama-3.1-8B-Instruct-GGUF:UD-Q4_K_XL") is True
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "bartowski/Llama-3.1-8B-Instruct-GGUF:ud-q4_k_xl") is True
+    # A different custom prefix on the same trailing token is not a match.
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "bartowski/Llama-3.1-8B-Instruct-GGUF:IQ-Q4_K_XL") is False
+    # The extracted standard token alone must not satisfy the custom target
+    # via a coincidental standard file of that name.
+    _write_gguf(tmp_path, "org/other-GGUF", ["model-Q4_K_XL.gguf"])
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "org/other-GGUF:UD-Q4_K_XL") is False
+
+
+def test_is_gguf_ref_cached_nonstandard_sharded_quant_needs_whole_family(tmp_path: Path) -> None:
+    repo = "bartowski/Llama-3.1-8B-Instruct-GGUF"
+    ref = f"{repo}:UD-Q4_K_XL"
+    _write_gguf(tmp_path, repo, ["Llama-UD-Q4_K_XL-00001-of-00002.gguf"])
+    assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is False
+    _write_gguf(
+        tmp_path,
+        repo,
+        [
+            "Llama-UD-Q4_K_XL-00001-of-00002.gguf",
+            "Llama-UD-Q4_K_XL-00002-of-00002.gguf",
+        ],
+    )
+    assert gguf.is_gguf_ref_cached(str(tmp_path), ref) is True
+
+
 def test_is_gguf_ref_cached_lowercase_cached_file_satisfies_quant(tmp_path: Path) -> None:
     # The download patterns match both cases, so a cache built from a
     # lowercase file name satisfies the canonical (uppercase) reference.
