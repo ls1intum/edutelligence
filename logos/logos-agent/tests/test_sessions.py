@@ -5655,6 +5655,9 @@ class TestASessionThatRanOutOfTime:
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(
+            sessions.db, "get_session", lambda *_a, **_k: asyncio.sleep(0, result={"status": "running", "error": None})
+        )
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
 
@@ -5699,6 +5702,9 @@ class TestNoClockUnlessSomebodyAsksForOne:
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", nothing)
+        monkeypatch.setattr(
+            sessions.db, "get_session", lambda *_a, **_k: asyncio.sleep(0, result={"status": "running", "error": None})
+        )
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
         real_sleep = asyncio.sleep

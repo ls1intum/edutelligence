@@ -355,7 +355,9 @@ class SessionManager:
         # The platform id of this runner's key, resolved once: the
         # orchestrator splits a model's in-flight requests by that id, and
         # the discounted readings subtract this runner's share of them.
-        self._own_api_key_id: int | None = None
+        # Distinct from `_own_api_key_id()` below — caching on the method name
+        # would shadow the coroutine and crash every scheduler pass.
+        self._cached_own_api_key_id: int | None = None
         # Set once the session image has been seen on this host.
         self._image_present = False
 
@@ -705,9 +707,9 @@ class SessionManager:
         lookup that failed, not a key that is missing, and the readings
         fall back to counting sessions while it is.
         """
-        if self._own_api_key_id is None:
-            self._own_api_key_id = await db.agent_key_id(settings.agent_api_key)
-        return self._own_api_key_id
+        if self._cached_own_api_key_id is None:
+            self._cached_own_api_key_id = await db.agent_key_id(settings.agent_api_key)
+        return self._cached_own_api_key_id
 
     async def scheduler_pass(self) -> None:
         # Permissions first, then the measurement they describe: a key moved
