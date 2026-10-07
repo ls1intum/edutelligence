@@ -7,18 +7,15 @@ import pytest
 from memiris.llm.ollama_language_model import OllamaLanguageModel
 from memiris.llm.openai_language_model import OpenAiLanguageModel
 
+QWEN_THINKING = {"chat_template_kwargs": {"enable_thinking": True}}
 
-def _openai_model(model: str, **kwargs) -> OpenAiLanguageModel:
-    return OpenAiLanguageModel(
-        model=model,
+
+def _openai_model(**kwargs) -> tuple[OpenAiLanguageModel, MagicMock]:
+    model = OpenAiLanguageModel(
         api_key="sk-test",  # pragma: allowlist secret
         base_url="https://logos.example/v1",
         **kwargs,
     )
-
-
-def _sent(model: OpenAiLanguageModel) -> dict:
-    """Run a chat with a temperature set and return the request kwargs."""
     client = MagicMock()
     client.chat.completions.create.return_value = SimpleNamespace(
         choices=[
@@ -26,32 +23,50 @@ def _sent(model: OpenAiLanguageModel) -> dict:
                 message=SimpleNamespace(role="assistant", content="[]", tool_calls=None)
             )
         ],
-        model=model.model,
+        model=kwargs["model"],
     )
     model._client = client
+    return model, client
+
+
+def _sent(model_and_client: tuple[OpenAiLanguageModel, MagicMock]) -> dict:
+    model, client = model_and_client
     model.chat([{"role": "user", "content": "hi"}], options={"temperature": 0.05})
     return client.chat.completions.create.call_args.kwargs
 
 
-def test_explicit_supports_temperature_false_drops_temperature():
-    # A reasoning model such as o3 has no gpt-5 name prefix but rejects
-    # temperature; the explicit Iris flag must override the name-based default.
-    assert "temperature" not in _sent(_openai_model("o3", supports_temperature=False))
+def test_reasoning_settings_are_sent_with_every_chat_request():
+    sent = _sent(
+        _openai_model(
+            model="Qwen/Qwen3.8-27B",
+            reasoning_effort="medium",
+            extra_body=QWEN_THINKING,
+            supports_temperature=False,
+        )
+    )
+    assert sent["reasoning_effort"] == "medium"
+    assert sent["extra_body"] == QWEN_THINKING
+    assert "temperature" not in sent
 
 
-def test_explicit_supports_temperature_true_sends_temperature():
-    assert _sent(_openai_model("o3", supports_temperature=True))["temperature"] == 0.05
+def test_defaults_keep_previous_request_shape():
+    sent = _sent(_openai_model(model="openai/gpt-oss-120b"))
+    assert sent["temperature"] == 0.05
+    assert "reasoning_effort" not in sent
+    assert "extra_body" not in sent
 
 
-def test_gpt5_name_default_still_drops_temperature():
-    # No explicit flag: the name-based default keeps GPT-5 models from sending
-    # a parameter their endpoint rejects.
-    assert "temperature" not in _sent(_openai_model("gpt-5-mini"))
+def test_gpt5_models_still_drop_temperature_without_explicit_flag():
+    assert "temperature" not in _sent(_openai_model(model="gpt-5-mini"))
 
 
-def test_non_gpt5_name_default_sends_temperature():
-    # No explicit flag on a non-gpt-5 model keeps the previous behaviour.
-    assert _sent(_openai_model("openai/gpt-oss-120b"))["temperature"] == 0.05
+def test_langchain_client_carries_reasoning_settings():
+    model, _ = _openai_model(
+        model="Qwen/Qwen3.8-27B", reasoning_effort="medium", extra_body=QWEN_THINKING
+    )
+    client = model.langchain_client()
+    assert client.reasoning_effort == "medium"
+    assert client.extra_body == QWEN_THINKING
 
 
 @pytest.mark.parametrize(
@@ -76,14 +91,3 @@ def test_ollama_explicit_think_overrides_family_default():
     )
     assert model._think == "low"
     assert model.langchain_client().reasoning == "low"
-
-
-def test_ollama_direct_chat_uses_configured_think():
-    # The direct (non-LangChain) client must honour the same setting.
-    model = OllamaLanguageModel(
-        "gpt-oss:120b", host="http://ollama.example", think="low"
-    )
-    model._client = MagicMock()
-    model._langfuse = MagicMock()
-    model.chat([{"role": "user", "content": "hi"}])
-    assert model._client.chat.call_args.kwargs["think"] == "low"

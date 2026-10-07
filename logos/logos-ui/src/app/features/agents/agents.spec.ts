@@ -169,6 +169,108 @@ describe('Agents', () => {
     // ngOnInit opened a polling interval; dropping it here keeps the event
     // loop empty for the next test.
     fixture.destroy();
+    vi.useRealTimers();
+  });
+
+  describe('session timings', () => {
+    beforeEach(async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+      vi.setSystemTime(new Date('2026-09-02T10:02:09Z'));
+      fixture.detectChanges();
+      await component.refresh();
+    });
+
+    const timings = (): string[] =>
+      Array.from(
+        fixture.nativeElement.querySelectorAll('.session__timing') as NodeListOf<HTMLElement>,
+      ).map((element) => element.textContent!.trim());
+
+    it('updates queue waits and running durations every second between server polls', async () => {
+      agentService.sessions = [
+        makeSession({
+          id: 1,
+          status: 'queued',
+          created_at: '2026-09-02T10:02:00Z',
+          started_at: null,
+        }),
+        makeSession({ id: 2, status: 'running', started_at: '2026-09-02T10:02:00Z' }),
+      ];
+      await component.refresh();
+      fixture.detectChanges();
+      expect(timings()).toEqual(['Queued 9s', 'Queued 2m 0s', 'Run 9s']);
+      agentService.sessionCalls = 0;
+
+      await vi.advanceTimersByTimeAsync(1000);
+      fixture.detectChanges();
+
+      expect(timings()).toEqual(['Queued 10s', 'Queued 2m 0s', 'Run 10s']);
+      expect(agentService.sessionCalls).toBe(0);
+      expect(fixture.nativeElement.querySelector('.status--running')).toBeTruthy();
+    });
+
+    it.each(['succeeded', 'failed', 'cancelled'] as const)(
+      'updates the finish age of a %s session while queue and runtime stay fixed',
+      async (status) => {
+        agentService.sessions = [makeSession({ status, finished_at: '2026-09-02T10:02:00Z' })];
+        await component.refresh();
+        fixture.detectChanges();
+        expect(timings()).toEqual(['Queued 1m 0s', 'Run 1m 0s', 'Finished 9s ago']);
+        expect(
+          fixture.nativeElement.querySelector('.session__timing[title^="Finished "]'),
+        ).toBeTruthy();
+        agentService.sessionCalls = 0;
+
+        await vi.advanceTimersByTimeAsync(1000);
+        fixture.detectChanges();
+
+        expect(timings()).toEqual(['Queued 1m 0s', 'Run 1m 0s', 'Finished 10s ago']);
+        expect(agentService.sessionCalls).toBe(0);
+      },
+    );
+
+    it('freezes the queue wait when a session is cancelled before it starts', async () => {
+      const session = makeSession({
+        status: 'cancelled',
+        started_at: null,
+        finished_at: '2026-09-02T10:01:00Z',
+      });
+      agentService.sessions = [session];
+      await component.refresh();
+      fixture.detectChanges();
+      expect(timings()).toEqual(['Queued 1m 0s', 'Finished 1m 9s ago']);
+      expect(component.duration(session)).toBe('—');
+
+      await vi.advanceTimersByTimeAsync(1000);
+      fixture.detectChanges();
+
+      expect(timings()).toEqual(['Queued 1m 0s', 'Finished 1m 10s ago']);
+    });
+
+    it.each([
+      ['2026-09-02T10:01:09.001Z', '59s'],
+      ['2026-09-02T10:01:09Z', '1m 0s'],
+      ['2026-09-02T09:02:09.001Z', '59m 59s'],
+      ['2026-09-02T09:02:09Z', '1h 0m'],
+      ['2026-09-02T10:02:10Z', '0s'],
+      ['invalid', '—'],
+    ])('formats a start at %s as %s without overflowing seconds', (started_at, expected) => {
+      expect(component.duration(makeSession({ started_at }))).toBe(expected);
+    });
+
+    it('stops both local timing updates and polling when the page is destroyed', async () => {
+      const session = makeSession({ status: 'running', started_at: '2026-09-02T10:02:00Z' });
+      const elapsed = component.duration(session);
+      fixture.destroy();
+      agentService.sessionCalls = 0;
+      agentService.capacityCalls = 0;
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(component.duration(session)).toBe(elapsed);
+      expect(agentService.sessionCalls).toBe(0);
+      expect(agentService.capacityCalls).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
   });
 
   describe('grouping', () => {

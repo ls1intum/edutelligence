@@ -1,9 +1,9 @@
 # pylint: disable=protected-access
 from unittest.mock import MagicMock, patch
+from uuid import UUID
 
-# Bootstrap the iris package: importing iris.llm directly hits a pre-existing
-# circular import between iris.common.pyris_message and iris.domain. Loading
-# iris.pipeline.pipeline first establishes the right module init order.
+from memiris.domain.memory import Memory
+
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common import memiris_setup  # noqa: E402
 from iris.llm import OllamaModel  # noqa: E402
@@ -11,6 +11,9 @@ from iris.llm.external.openai_chat import (  # noqa: E402
     AzureOpenAIChatModel,
     DirectOpenAIChatModel,
 )
+from iris.pipeline.shared.confidence_scoring import is_large_model  # noqa: E402
+
+QWEN_THINKING = {"chat_template_kwargs": {"enable_thinking": True}}
 
 
 def _convert(model):
@@ -20,65 +23,63 @@ def _convert(model):
         return memiris_setup._convert_iris_model_to_memiris_llm(model.id)
 
 
-def test_openai_supports_temperature_false_reaches_memiris():
-    # A reasoning model such as o3 has no gpt-5 name prefix; the explicit flag
-    # must override Memiris's name-based default so its endpoint is not sent a
-    # parameter it rejects.
+def test_openai_chat_request_settings_reach_memiris():
     converted = _convert(
         DirectOpenAIChatModel(
-            id="o3",
+            id="Qwen/Qwen3.8-27B",
             type="openai_chat",
-            model="o3",
+            model="Qwen/Qwen3.8-27B",
             api_key="sk-test",  # pragma: allowlist secret
             base_url="https://logos.example/v1",
             supports_temperature=False,
+            supports_reasoning_effort=True,
+            reasoning_effort="medium",
+            reasoning_effort_values=["low", "medium", "xhigh"],
+            extra_body=QWEN_THINKING,
         )
     )
+    assert converted._reasoning_effort == "medium"
+    assert converted._extra_body == QWEN_THINKING
     assert converted._supports_temperature is False
 
 
-def test_openai_supports_temperature_true_reaches_memiris():
+def test_gpt_oss_entry_without_extra_body_keeps_its_effort():
     converted = _convert(
         DirectOpenAIChatModel(
-            id="o3-temps",
+            id="openai/gpt-oss-120b",
             type="openai_chat",
-            model="o3",
+            model="openai/gpt-oss-120b",
             api_key="sk-test",  # pragma: allowlist secret
             base_url="https://logos.example/v1",
-            supports_temperature=True,
+            supports_reasoning_effort=True,
+            reasoning_effort="medium",
         )
     )
+    assert converted._reasoning_effort == "medium"
+    assert converted._extra_body is None
     assert converted._supports_temperature is True
 
 
-def test_entry_without_temperature_flag_keeps_memiris_name_default():
-    # No explicit flag: forward None so Memiris falls back to its own
-    # name-based default (gpt-5* reject temperature, everything else accepts).
-    assert (
-        _convert(
-            DirectOpenAIChatModel(
-                id="gpt-5-mini",
-                type="openai_chat",
-                model="gpt-5-mini",
-                api_key="sk-test",  # pragma: allowlist secret
-            )
-        )._supports_temperature
-        is False
+def test_ollama_think_setting_reaches_memiris():
+    converted = _convert(
+        OllamaModel(
+            id="qwen-ollama",
+            type="ollama",
+            model="qwen3.8:27b",
+            host="http://ollama.example",
+            think=False,
+        )
     )
-    assert (
-        _convert(
-            DirectOpenAIChatModel(
-                id="o3-default",
-                type="openai_chat",
-                model="o3",
-                api_key="sk-test",  # pragma: allowlist secret
-            )
-        )._supports_temperature
-        is True
-    )
+    assert converted._think is False
 
 
-def test_responses_api_model_forwards_explicit_supports_temperature():
+def test_qwen38_uses_the_large_model_confidence_prompt():
+    assert is_large_model("Qwen/Qwen3.8-27B")
+    assert is_large_model("openai/gpt-oss-120b")
+    assert not is_large_model("google/gemma-3-12b-it")
+
+
+def test_responses_api_models_keep_provider_default_effort_in_memiris():
     converted = _convert(
         AzureOpenAIChatModel(
             id="gpt-5.5",
@@ -89,33 +90,50 @@ def test_responses_api_model_forwards_explicit_supports_temperature():
             azure_deployment="gpt-5.5",
             api_version="2025-04-01-preview",
             supports_temperature=False,
+            supports_reasoning_effort=True,
+            reasoning_effort="medium",
             use_responses_api=True,
+        )
+    )
+    assert converted._reasoning_effort is None
+    assert converted._supports_temperature is False
+
+
+def test_gpt5_entry_without_temperature_flag_keeps_memiris_default():
+    converted = _convert(
+        DirectOpenAIChatModel(
+            id="gpt-5-mini",
+            type="openai_chat",
+            model="gpt-5-mini",
+            api_key="sk-test",  # pragma: allowlist secret
         )
     )
     assert converted._supports_temperature is False
 
 
-def test_ollama_think_setting_reaches_memiris():
-    converted = _convert(
-        OllamaModel(
-            id="gpt-oss-ollama",
-            type="ollama",
-            model="gpt-oss:120b",
-            host="http://ollama.example",
-            think="low",
-        )
+def test_memory_tools_return_no_embedding_vectors():
+    memory = Memory(
+        uid=UUID("00000000-0000-0000-0000-000000000001"),
+        title="Learning style",
+        content="Prefers short code examples.",
+        learnings=[UUID("00000000-0000-0000-0000-000000000002")],
+        vectors={"qwen3-embedding": [0.123456789] * 4096},
     )
-    assert converted._think == "low"
+    wrapper = memiris_setup.MemirisWrapper.__new__(memiris_setup.MemirisWrapper)
+    wrapper.tenant = "artemis-user-1"
+    wrapper.vectorizer = MagicMock()
+    wrapper.memory_service = MagicMock()
+    wrapper.memory_service.semantic_search.return_value = [memory]
+    accessed: list = []
 
+    output = wrapper.create_tool_memory_search(accessed)("learning style")
 
-def test_ollama_without_think_uses_family_default():
-    converted = _convert(
-        OllamaModel(
-            id="gpt-oss-default",
-            type="ollama",
-            model="gpt-oss:120b",
-            host="http://ollama.example",
-        )
-    )
-    # gpt-oss only accepts effort levels; the family default is "high".
-    assert converted._think == "high"
+    assert output == [
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "title": "Learning style",
+            "content": "Prefers short code examples.",
+        }
+    ]
+    assert len(str(output)) < 200
+    assert accessed == [memory]
