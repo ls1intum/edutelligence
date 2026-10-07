@@ -26,9 +26,9 @@ function stats(overrides: Partial<PublicStats> = {}): PublicStats {
   };
 }
 
-// L x1 y1 A r r largeArc sweep x2 y2 Z — groups 1-2 the start point, 5 the
-// large-arc flag, 7-8 the end point.
-const WEDGE = /L ([^ ]+) ([^ ]+) A ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) Z/;
+// L x1 y1 A r r 0 largeArc sweep x2 y2 Z — groups 1-2 the start point, 5 the
+// large-arc flag, 7-8 the end point. The literal 0 is the SVG arc rotation.
+const WEDGE = /L ([^ ]+) ([^ ]+) A ([^ ]+) ([^ ]+) 0 ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) Z/;
 
 describe('pieSlicePath', () => {
   it('starts at the top and sweeps clockwise', () => {
@@ -69,7 +69,9 @@ describe('buildPieGeometry', () => {
   });
 
   it('drops hidden and zero-value slices and re-partitions the rest', () => {
-    const hidden: ChartSlice[] = [...slices, { key: 'c', label: 'C', value: 0, color: 'x', hidden: false }];
+    const hidden: ChartSlice[] = [...slices, { key: 'c', label: 'C', value: 0, color: 'x', hidden: false }].map(
+      (s) => ({ ...s })
+    );
     hidden[0].hidden = true;
     const geometry = buildPieGeometry(hidden);
     expect(geometry.map((g) => g.slice.key)).toEqual(['b']);
@@ -159,12 +161,39 @@ describe('keyTypeSlices and laneSlices', () => {
     ]);
   });
 
+  it('adds an unknown key-type slice only when deleted keys contribute', () => {
+    expect(keyTypeSlices(stats({ requests_by_key_type: { developer: 1, application: 0, service: 0, unknown: 0 } }))).toHaveLength(
+      3
+    );
+    const withUnknown = keyTypeSlices(
+      stats({ requests_by_key_type: { developer: 1, application: 0, service: 0, unknown: 2 } })
+    );
+    expect(withUnknown[withUnknown.length - 1]).toEqual({
+      key: 'unknown',
+      label: 'Unknown key',
+      value: 2,
+      color: OTHER_SLICE_COLOR,
+      hidden: false,
+    });
+  });
+
   it('maps the lanes with local first', () => {
     const slices = laneSlices(stats());
     expect(slices.map((s) => [s.key, s.value, s.color])).toEqual([
       ['local', 1, 'var(--series-1)'],
       ['cloud', 4, 'var(--series-2)'],
     ]);
+  });
+
+  it('adds an unknown lane slice only when deleted providers contribute', () => {
+    const withUnknown = laneSlices(stats({ local_cloud_requests: { local: 1, cloud: 1, unknown: 3 } }));
+    expect(withUnknown[withUnknown.length - 1]).toEqual({
+      key: 'unknown',
+      label: 'Unknown lane',
+      value: 3,
+      color: OTHER_SLICE_COLOR,
+      hidden: false,
+    });
   });
 });
 

@@ -112,20 +112,42 @@ export function teamSlices(teams: PublicTeamStats[]): ChartSlice[] {
 /** Successful requests by key type as segments: members' personal keys first. */
 export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
   const kt = stats.requests_by_key_type;
-  return [
+  const slices: ChartSlice[] = [
     { key: 'developer', label: 'Member keys', value: kt.developer ?? 0, color: 'var(--series-1)', hidden: false },
     { key: 'application', label: 'Application keys', value: kt.application ?? 0, color: 'var(--series-2)', hidden: false },
     { key: 'service', label: 'Service keys', value: kt.service ?? 0, color: 'var(--series-3)', hidden: false },
   ];
+  // Only show the unknown row when deleted keys actually contribute — a zero
+  // unknown would pad every empty chart with a meaningless legend entry.
+  if ((kt.unknown ?? 0) > 0) {
+    slices.push({
+      key: 'unknown',
+      label: 'Unknown key',
+      value: kt.unknown!,
+      color: OTHER_SLICE_COLOR,
+      hidden: false,
+    });
+  }
+  return slices;
 }
 
 /** Local vs. cloud as segments: the self-hosted lane first. */
 export function laneSlices(stats: PublicStats): ChartSlice[] {
   const lc = stats.local_cloud_requests;
-  return [
+  const slices: ChartSlice[] = [
     { key: 'local', label: 'Local', value: lc.local ?? 0, color: 'var(--series-1)', hidden: false },
     { key: 'cloud', label: 'Cloud', value: lc.cloud ?? 0, color: 'var(--series-2)', hidden: false },
   ];
+  if ((lc.unknown ?? 0) > 0) {
+    slices.push({
+      key: 'unknown',
+      label: 'Unknown lane',
+      value: lc.unknown!,
+      color: OTHER_SLICE_COLOR,
+      hidden: false,
+    });
+  }
+  return slices;
 }
 
 export function formatCount(value: number): string {

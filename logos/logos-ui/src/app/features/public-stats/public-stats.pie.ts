@@ -33,8 +33,14 @@ export class PublicStatsPie {
     return this.slices.filter((s) => !s.hidden).reduce((sum, s) => sum + s.value, 0);
   }
 
-  isEmpty(): boolean {
-    return this.visibleTotal === 0;
+  /** True when there is nothing to chart — not when the reader hid every slice. */
+  hasNoData(): boolean {
+    return this.slices.every((s) => s.value === 0);
+  }
+
+  /** True when slices exist but none are drawn (all hidden or zeroed out of view). */
+  allHidden(): boolean {
+    return !this.hasNoData() && this.visibleTotal === 0;
   }
 
   percentOf(slice: ChartSlice): string {

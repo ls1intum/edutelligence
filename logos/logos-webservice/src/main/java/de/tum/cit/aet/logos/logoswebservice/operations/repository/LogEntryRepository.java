@@ -63,27 +63,38 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         """, nativeQuery = true)
     List<TeamRequestCountProjection> countSuccessfulByTeam();
 
-    /** Successful requests by API key type, for the public stats page. */
+    /**
+     * Successful requests by API key type, for the public stats page.
+     *
+     * <p>Left join so a success whose key was later deleted (api_key_id SET
+     * NULL) still counts, under the explicit {@code unknown} category, instead
+     * of vanishing from the key-type split while remaining in the headline.
+     */
     @Transactional(readOnly = true)
     @Query(value = """
-        SELECT ak.key_type::text AS keyType,
-               COUNT(*)          AS requests
+        SELECT COALESCE(ak.key_type::text, 'unknown') AS keyType,
+               COUNT(*)                               AS requests
         FROM log_entry le
-        JOIN api_keys ak ON ak.id = le.api_key_id
+        LEFT JOIN api_keys ak ON ak.id = le.api_key_id
         WHERE le.result_status = 'success'
-        GROUP BY ak.key_type
+        GROUP BY COALESCE(ak.key_type::text, 'unknown')
         """, nativeQuery = true)
     List<KeyTypeRequestCountProjection> countSuccessfulByKeyType();
 
-    /** Successful requests by provider type, for the public stats page. */
+    /**
+     * Successful requests by provider type, for the public stats page.
+     *
+     * <p>Left join so a success whose provider was later deleted (provider_id
+     * SET NULL) still counts, under the explicit {@code unknown} category.
+     */
     @Transactional(readOnly = true)
     @Query(value = """
-        SELECT p.provider_type::text AS providerType,
-               COUNT(*)              AS requests
+        SELECT COALESCE(p.provider_type::text, 'unknown') AS providerType,
+               COUNT(*)                                   AS requests
         FROM log_entry le
-        JOIN providers p ON p.id = le.provider_id
+        LEFT JOIN providers p ON p.id = le.provider_id
         WHERE le.result_status = 'success'
-        GROUP BY p.provider_type
+        GROUP BY COALESCE(p.provider_type::text, 'unknown')
         """, nativeQuery = true)
     List<ProviderTypeRequestCountProjection> countSuccessfulByProviderType();
 

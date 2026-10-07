@@ -1,20 +1,24 @@
-@if (isEmpty()) {
+@if (hasNoData()) {
   <p class="pie-empty">No successful requests yet.</p>
 } @else {
   <div class="pie-body">
-    <svg class="pie-svg" [class.has-hover]="hovered() !== null" viewBox="0 0 200 200" role="img" [attr.aria-label]="title">
-      @for (g of geometry; track trackByKey($index, g.slice)) {
-        <path
-          [attr.d]="g.path"
-          [style.fill]="g.slice.color"
-          [class.highlighted]="isHighlighted(g.slice.key)"
-          (mouseenter)="hovered.set(g.slice.key)"
-          (mouseleave)="hovered.set(null)"
-        >
-          <title>{{ g.slice.label }}: {{ formatCount(g.slice.value) }} ({{ g.percent }}%)</title>
-        </path>
-      }
-    </svg>
+    @if (allHidden()) {
+      <p class="pie-empty">All teams are hidden. Tick one back in to see the chart.</p>
+    } @else {
+      <svg class="pie-svg" [class.has-hover]="hovered() !== null" viewBox="0 0 200 200" role="img" [attr.aria-label]="title">
+        @for (g of geometry; track trackByKey($index, g.slice)) {
+          <path
+            [attr.d]="g.path"
+            [style.fill]="g.slice.color"
+            [class.highlighted]="isHighlighted(g.slice.key)"
+            (mouseenter)="hovered.set(g.slice.key)"
+            (mouseleave)="hovered.set(null)"
+          >
+            <title>{{ g.slice.label }}: {{ formatCount(g.slice.value) }} ({{ g.percent }}%)</title>
+          </path>
+        }
+      </svg>
+    }
 
     <ul class="pie-legend" role="list">
       @for (s of slices; track trackByKey($index, s)) {

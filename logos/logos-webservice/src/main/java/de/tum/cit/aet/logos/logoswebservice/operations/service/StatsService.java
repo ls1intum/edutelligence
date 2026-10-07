@@ -90,17 +90,32 @@ public class StatsService {
         for (ApiKeyType type : ApiKeyType.values()) {
             requestsByKeyType.put(type.name(), 0L);
         }
+        // Rows whose API key was deleted land here so the key-type split still
+        // adds up to successful_requests.
+        requestsByKeyType.put("unknown", 0L);
         for (KeyTypeRequestCountProjection row : logEntryRepository.countSuccessfulByKeyType()) {
-            requestsByKeyType.merge(row.getKeyType(), row.getRequests(), Long::sum);
+            String keyType = row.getKeyType() == null ? "unknown" : row.getKeyType();
+            requestsByKeyType.merge(keyType, row.getRequests(), Long::sum);
         }
 
-        // ProviderType.logosnode is the self-hosted lane; everything else is a
-        // forwarded cloud deployment.
+        // ProviderType.logosnode is the self-hosted lane; everything else with
+        // a known provider is a forwarded cloud deployment. Deleted providers
+        // (provider_id SET NULL) keep an explicit unknown bucket so the lane
+        // chart still matches the headline total.
         Map<String, Long> localCloud = new LinkedHashMap<>();
         localCloud.put("local", 0L);
         localCloud.put("cloud", 0L);
+        localCloud.put("unknown", 0L);
         for (ProviderTypeRequestCountProjection row : logEntryRepository.countSuccessfulByProviderType()) {
-            String lane = ProviderType.logosnode.name().equals(row.getProviderType()) ? "local" : "cloud";
+            String providerType = row.getProviderType();
+            String lane;
+            if (providerType == null || "unknown".equals(providerType)) {
+                lane = "unknown";
+            } else if (ProviderType.logosnode.name().equals(providerType)) {
+                lane = "local";
+            } else {
+                lane = "cloud";
+            }
             localCloud.merge(lane, row.getRequests(), Long::sum);
         }
 

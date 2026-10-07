@@ -20,16 +20,18 @@ export interface PublicStats {
   successful_requests: number;
   average_requests_per_user: number;
   requests_per_team: PublicTeamStats[];
-  /** Successful requests by API key type. */
+  /** Successful requests by API key type (unknown = deleted key). */
   requests_by_key_type: {
     developer: number;
     application: number;
     service: number;
+    unknown?: number;
   };
-  /** Successful requests by serving lane. */
+  /** Successful requests by serving lane (unknown = deleted provider). */
   local_cloud_requests: {
     local: number;
     cloud: number;
+    unknown?: number;
   };
 }
 

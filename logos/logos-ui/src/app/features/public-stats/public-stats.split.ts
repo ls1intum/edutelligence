@@ -34,7 +34,7 @@ export class PublicStatsSplit {
   }
 
   percentOf(segment: ChartSlice): number {
-    return this.total() === 0 ? 0 : Math.round((segment.value / this.total()) * 100);
+    return this.total === 0 ? 0 : Math.round((segment.value / this.total) * 100);
   }
 
   isHighlighted(key: string): boolean {

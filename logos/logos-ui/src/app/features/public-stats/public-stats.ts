@@ -1,11 +1,11 @@
 import { Component, OnInit, inject, ChangeDetectionStrategy, signal } from '@angular/core';
-import { Router, RouterLink } from '@angular/router';
+import { Router } from '@angular/router';
 import { Logo } from '../../shared/components/logo/logo';
 import { ThemeToggle } from '../../shared/components/theme-toggle/theme-toggle';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { PublicStatsPie } from './public-stats.pie';
 import { PublicStatsSplit } from './public-stats.split';
-import { PublicStatsService, PublicStats } from './public-stats.service';
+import { PublicStatsService, PublicStats as PublicStatsData } from './public-stats.service';
 import {
   ChartSlice,
   formatAverage,
@@ -23,7 +23,7 @@ import {
 @Component({
   selector: 'app-public-stats',
   standalone: true,
-  imports: [RouterLink, Logo, ThemeToggle, ErrorMessageComponent, PublicStatsPie, PublicStatsSplit],
+  imports: [Logo, ThemeToggle, ErrorMessageComponent, PublicStatsPie, PublicStatsSplit],
   templateUrl: './public-stats.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './public-stats.scss',
@@ -32,7 +32,7 @@ export class PublicStats implements OnInit {
   private service = inject(PublicStatsService);
   private router = inject(Router);
 
-  stats = signal<PublicStats | null>(null);
+  stats = signal<PublicStatsData | null>(null);
   error = signal('');
   teamSlices = signal<ChartSlice[]>([]);
   keySlices = signal<ChartSlice[]>([]);

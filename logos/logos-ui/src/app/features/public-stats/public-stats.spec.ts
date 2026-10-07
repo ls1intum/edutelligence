@@ -42,12 +42,11 @@ describe('PublicStats page', () => {
     const fixture = createPage(() => Promise.resolve(stats()));
     await fixture.whenStable();
     fixture.detectChanges();
-    const values = Array.from(fixture.nativeElement.querySelectorAll('.kpi-value')).map((el) =>
-      el.textContent!.trim()
-    );
+    const root = fixture.nativeElement as HTMLElement;
+    const values = Array.from(root.querySelectorAll('.kpi-value')).map((el) => el.textContent!.trim());
     expect(values).toEqual(['5', '2', '5', '1.2']);
     // Every pie legend row carries its count, so no number rides on color alone.
-    expect(fixture.nativeElement.querySelectorAll('.pie-legend .legend-item')).toHaveLength(2);
+    expect(root.querySelectorAll('.pie-legend .legend-item')).toHaveLength(2);
   });
 
   it('shows the loading state until the endpoint answers', () => {
@@ -59,7 +58,8 @@ describe('PublicStats page', () => {
         })
     );
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('.loading')!.textContent).toContain('Loading the platform numbers');
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('.loading')!.textContent).toContain('Loading the platform numbers');
     // Unblock after the assertion so the settled promise cannot fail the run.
     resolveStats(stats());
   });
@@ -68,19 +68,21 @@ describe('PublicStats page', () => {
     const fixture = createPage(() => Promise.reject(new Error('boom')));
     await fixture.whenStable();
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('[role="alert"]')!.textContent).toContain('could not be loaded');
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[role="alert"]')!.textContent).toContain('could not be loaded');
   });
 
   it('hides a team from the pie when its legend box is unticked', async () => {
     const fixture = createPage(() => Promise.resolve(stats()));
     await fixture.whenStable();
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelectorAll('.pie-svg path')).toHaveLength(2);
-    fixture.nativeElement.querySelector<HTMLInputElement>('.pie-legend input[type="checkbox"]')!.click();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelectorAll('.pie-svg path')).toHaveLength(2);
+    root.querySelector<HTMLInputElement>('.pie-legend input[type="checkbox"]')!.click();
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelectorAll('.pie-svg path')).toHaveLength(1);
+    expect(root.querySelectorAll('.pie-svg path')).toHaveLength(1);
     // The hidden team keeps its dimmed legend row, still tickable back in.
-    expect(fixture.nativeElement.querySelector('.pie-legend .legend-item.off')).not.toBeNull();
+    expect(root.querySelector('.pie-legend .legend-item.off')).not.toBeNull();
   });
 });
 

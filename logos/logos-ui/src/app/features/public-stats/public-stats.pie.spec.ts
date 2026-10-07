@@ -1,5 +1,5 @@
-import { Component, ComponentRef } from '@angular/core';
-import { TestBed } from '@angular/core/testing';
+import { Component } from '@angular/core';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, expect, it } from 'vitest';
 import { PublicStatsPie } from './public-stats.pie';
 import { ChartSlice } from './public-stats.utils';
@@ -10,21 +10,25 @@ const slices: ChartSlice[] = [
   { key: 'c', label: 'Gamma', value: 2, color: 'var(--series-3)', hidden: true },
 ];
 
-function pie(): { fixture: ComponentRef<HostComponent>; host: HostComponent } {
+function pie(): { fixture: ComponentFixture<HostComponent>; host: HostComponent } {
   const fixture = TestBed.createComponent(HostComponent);
   fixture.detectChanges();
   return { fixture, host: fixture.componentInstance };
 }
 
-function paths(root: Element): Element[] {
+function rootOf(fixture: ComponentFixture<HostComponent>): HTMLElement {
+  return fixture.nativeElement as HTMLElement;
+}
+
+function paths(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll('path'));
 }
 
-function legendItems(root: Element): Element[] {
+function legendItems(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll<HTMLElement>('.legend-item'));
 }
 
-function checkboxes(root: Element): HTMLInputElement[] {
+function checkboxes(root: HTMLElement): HTMLInputElement[] {
   return Array.from(root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
 }
 
@@ -33,8 +37,9 @@ describe('PublicStatsPie', () => {
     const { fixture, host } = pie();
     host.slice = [...slices];
     fixture.detectChanges();
-    expect(paths(fixture.nativeElement)).toHaveLength(2); // Gamma is hidden
-    const wedges = paths(fixture.nativeElement).map((p) => p.getAttribute('d'));
+    const root = rootOf(fixture);
+    expect(paths(root)).toHaveLength(2); // Gamma is hidden
+    const wedges = paths(root).map((p) => p.getAttribute('d'));
     expect(wedges.every((d) => d?.startsWith('M 100 100 L '))).toBe(true);
   });
 
@@ -43,41 +48,50 @@ describe('PublicStatsPie', () => {
     host.slice = [...slices];
     fixture.detectChanges();
     // Alpha shows its share of the visible total (3 of 4).
-    expect(fixture.nativeElement.querySelector('.legend-item .value')!.textContent).toContain('75%');
+    expect(rootOf(fixture).querySelector('.legend-item .value')!.textContent).toContain('75%');
   });
 
   it('dims a hidden legend row but keeps it tickable', () => {
     const { fixture } = pie();
-    const rows = legendItems(fixture.nativeElement);
+    const rows = legendItems(rootOf(fixture));
     expect(rows).toHaveLength(3);
     expect(rows[2].classList.contains('off')).toBe(true);
-    expect(checkboxes(fixture.nativeElement)[2].checked).toBe(false);
+    expect(checkboxes(rootOf(fixture))[2].checked).toBe(false);
     // The swatch color is still shown: hiding is not erasing.
     expect(rows[2].querySelector('.swatch')).not.toBeNull();
   });
 
   it('emits the slice key when a legend checkbox is ticked', () => {
     const { fixture } = pie();
-    checkboxes(fixture.nativeElement)[0].click();
+    checkboxes(rootOf(fixture))[0].click();
     expect(fixture.componentInstance.toggled).toEqual(['a']);
   });
 
-  it('shows the empty state when every slice is hidden or zero', () => {
+  it('keeps the legend when every slice is hidden so teams can be restored', () => {
     const { fixture, host } = pie();
-    host.slice = [...slices, { key: 'z', label: 'Idle', value: 0, color: 'x', hidden: true }].map((s) => ({
-      ...s,
-      hidden: true,
-    }));
+    host.slice = slices.map((s) => ({ ...s, hidden: true }));
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('.pie-empty')!.textContent).toContain('No successful requests yet');
-    expect(paths(fixture.nativeElement)).toHaveLength(0);
+    const root = rootOf(fixture);
+    expect(root.querySelector('.pie-empty')!.textContent).toContain('All teams are hidden');
+    expect(paths(root)).toHaveLength(0);
+    expect(legendItems(root)).toHaveLength(3);
+    expect(checkboxes(root)).toHaveLength(3);
+  });
+
+  it('shows the no-data state when every slice is zero', () => {
+    const { fixture, host } = pie();
+    host.slice = slices.map((s) => ({ ...s, value: 0, hidden: false }));
+    fixture.detectChanges();
+    const root = rootOf(fixture);
+    expect(root.querySelector('.pie-empty')!.textContent).toContain('No successful requests yet');
+    expect(legendItems(root)).toHaveLength(0);
   });
 
   it('names the pie for assistive technology via the title input', () => {
     const { fixture, host } = pie();
     host.title = 'Requests per team';
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('svg')!.getAttribute('aria-label')).toBe('Requests per team');
+    expect(rootOf(fixture).querySelector('svg')!.getAttribute('aria-label')).toBe('Requests per team');
   });
 });
 

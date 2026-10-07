@@ -69,8 +69,10 @@ class PublicStatsControllerTest {
            .andExpect(jsonPath("$.requests_by_key_type.developer").value(3))
            .andExpect(jsonPath("$.requests_by_key_type.application").value(2))
            .andExpect(jsonPath("$.requests_by_key_type.service").value(0))
+           .andExpect(jsonPath("$.requests_by_key_type.unknown").value(0))
            .andExpect(jsonPath("$.local_cloud_requests.local").value(1))
-           .andExpect(jsonPath("$.local_cloud_requests.cloud").value(4));
+           .andExpect(jsonPath("$.local_cloud_requests.cloud").value(4))
+           .andExpect(jsonPath("$.local_cloud_requests.unknown").value(0));
     }
 
     @Test
@@ -93,7 +95,9 @@ class PublicStatsControllerTest {
            .andExpect(jsonPath("$.requests_by_key_type.developer").value(0))
            .andExpect(jsonPath("$.requests_by_key_type.application").value(0))
            .andExpect(jsonPath("$.requests_by_key_type.service").value(0))
+           .andExpect(jsonPath("$.requests_by_key_type.unknown").value(0))
            .andExpect(jsonPath("$.local_cloud_requests.local").value(0))
-           .andExpect(jsonPath("$.local_cloud_requests.cloud").value(0));
+           .andExpect(jsonPath("$.local_cloud_requests.cloud").value(0))
+           .andExpect(jsonPath("$.local_cloud_requests.unknown").value(0));
     }
 }
