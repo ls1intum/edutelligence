@@ -241,6 +241,9 @@ async def _session_github_token() -> str:
     agent account as a GitHub App — a token minted for this run. A container
     must never hold the account's standing credential, and a minted one
     stops being a credential a little while after the container is gone.
+    The minted token must outlive the helper's wall-clock budget: the
+    credential is fixed in the container environment and cannot be refreshed
+    from the runner's cache while the helper runs.
     """
     if settings.github_app_id and settings.github_app_private_key:
         return await github_tokens.installation_token(
@@ -249,6 +252,7 @@ async def _session_github_token() -> str:
             installation_id=settings.github_app_installation_id,
             repo_slug=settings.repo_slug,
             ttl_s=settings.github_token_ttl_s,
+            min_remaining_s=settings.helper_timeout_s + github_tokens.HELPER_STARTUP_OVERHEAD_S,
         )
     return settings.session_github_token
 

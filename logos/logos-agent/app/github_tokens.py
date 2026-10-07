@@ -40,9 +40,13 @@ DEFAULT_TTL_S = 1800
 # Below this the refresh margin below would be a large share of the
 # lifetime itself, and every call would end up re-minting.
 MIN_TTL_S = 600
-# A helper container must not start with a credential that lapses while it
-# is pushing: re-mint once this much lifetime is left.
+# Default remaining-lifetime floor for short runner API calls: re-mint once
+# this much lifetime is left.
 _REFRESH_MARGIN_S = 300
+# Headroom beyond a helper's wall-clock budget for container start and the
+# first authenticated call. Helpers receive a fixed token in their
+# environment; refreshing the runner cache cannot refresh it mid-run.
+HELPER_STARTUP_OVERHEAD_S = 60
 # GitHub allows ten minutes for the app's JWT; five keeps the clock-skew
 # allowance small.
 _JWT_LIFETIME_S = 300
@@ -180,19 +184,34 @@ async def installation_token(
     installation_id: str = "",
     repo_slug: str,
     ttl_s: int = DEFAULT_TTL_S,
+    min_remaining_s: int = 0,
 ) -> str:
     """A usable installation token of the app on this repository.
 
-    The cached one is returned while it has more than the refresh margin of
+    The cached one is returned while it has more than the required remaining
     lifetime left; otherwise a fresh one is minted and remembered.
-    ``installation_id`` may be empty — it is then resolved from the
-    repository — and ``ttl_s`` is clamped to what GitHub accepts.
+    ``min_remaining_s`` raises that floor above the default refresh margin —
+    helpers that may run for ``helper_timeout_s`` must ask for at least that
+    long plus :data:`HELPER_STARTUP_OVERHEAD_S`, because their token is fixed
+    in the container environment. ``installation_id`` may be empty — it is
+    then resolved from the repository — and ``ttl_s`` is clamped to what
+    GitHub accepts. A freshly minted token that still cannot cover the
+    requirement raises :class:`CredentialError`.
     """
     if not (app_id and private_key):
         raise CredentialError("a GitHub App needs both its id and its private key")
     if not app_id.strip().isdigit():
         raise CredentialError(f"the GitHub App id '{app_id}' is not a number")
-    ttl = _clamp_ttl(ttl_s)
+    try:
+        needed = int(min_remaining_s)
+    except (TypeError, ValueError):
+        needed = 0
+    required = max(_REFRESH_MARGIN_S, needed)
+    if required > MAX_TTL_S:
+        raise CredentialError(
+            f"need more than {required}s of installation-token lifetime, but GitHub mints at most {MAX_TTL_S}s"
+        )
+    ttl = max(_clamp_ttl(ttl_s), required)
     identity = (
         app_id.strip(),
         installation_id.strip() or repo_slug,
@@ -201,7 +220,7 @@ async def installation_token(
     async with _lock_for_current_loop():
         cached = _cache.get(identity)
         now = time.time()
-        if cached is not None and cached[1] - now > _REFRESH_MARGIN_S:
+        if cached is not None and cached[1] - now > required:
             return cached[0]
         token, expires_at = await _mint(
             app_id=app_id.strip(),
@@ -210,6 +229,12 @@ async def installation_token(
             repo_slug=repo_slug,
             ttl_s=ttl,
         )
+        remaining = expires_at - time.time()
+        if remaining <= required:
+            raise CredentialError(
+                f"minted installation token has only {int(remaining)}s remaining; "
+                f"need more than {required}s for the caller"
+            )
         _cache[identity] = (token, expires_at)
         return token
 

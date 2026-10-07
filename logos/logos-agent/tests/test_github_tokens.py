@@ -199,26 +199,61 @@ async def test_a_configured_installation_skips_the_lookup(monkeypatch, rsa_key):
 
 
 async def test_a_token_with_little_life_left_is_reminted(monkeypatch, rsa_key):
+    import hashlib
+    import time
+
     _, pem = rsa_key
 
     def iso(moment):
         return moment.isoformat().replace("+00:00", "Z")
 
+    # Seed a cached token that has already fallen below the refresh margin —
+    # a freshly minted answer that short is refused, so the remint path is
+    # exercised from the cache boundary.
+    identity = (_APP_ID, _REPO, hashlib.sha256(pem.encode("utf-8")).digest())
+    github_tokens._cache[identity] = ("ghs-first", time.time() + 60)
     calls = fake_github(
         monkeypatch,
         post_payloads=[
-            {"token": "ghs-first", "expires_at": iso(datetime.now(timezone.utc) + timedelta(seconds=60))},
             {"token": "ghs-second", "expires_at": iso(datetime.now(timezone.utc) + timedelta(seconds=1800))},
         ],
     )
 
-    first = await github_tokens.installation_token(app_id=_APP_ID, private_key=pem, repo_slug=_REPO)
     second = await github_tokens.installation_token(app_id=_APP_ID, private_key=pem, repo_slug=_REPO)
 
-    # Sixty seconds of life are less than the refresh margin: the helper a
-    # first token went into might still be pushing when it lapses.
-    assert (first, second) == ("ghs-first", "ghs-second")
+    assert second == "ghs-second"
+    assert len([c for c in calls if c["method"] == "POST"]) == 1
+
+
+async def test_a_cached_token_that_cannot_cover_the_helper_timeout_is_reminted(monkeypatch, rsa_key):
+    # 301 seconds clears the default 300-second refresh margin, but a helper
+    # that may run for 600 seconds needs more than that left when it starts.
+    _, pem = rsa_key
+
+    def iso(moment):
+        return moment.isoformat().replace("+00:00", "Z")
+
+    helper_needed = 600 + github_tokens.HELPER_STARTUP_OVERHEAD_S
+    calls = fake_github(
+        monkeypatch,
+        post_payloads=[
+            {"token": "ghs-short", "expires_at": iso(datetime.now(timezone.utc) + timedelta(seconds=301))},
+            {"token": "ghs-long", "expires_at": iso(datetime.now(timezone.utc) + timedelta(seconds=1800))},
+        ],
+    )
+
+    first = await github_tokens.installation_token(app_id=_APP_ID, private_key=pem, repo_slug=_REPO)
+    reused = await github_tokens.installation_token(app_id=_APP_ID, private_key=pem, repo_slug=_REPO)
+    for_helper = await github_tokens.installation_token(
+        app_id=_APP_ID,
+        private_key=pem,
+        repo_slug=_REPO,
+        min_remaining_s=helper_needed,
+    )
+
+    assert (first, reused, for_helper) == ("ghs-short", "ghs-short", "ghs-long")
     assert len([c for c in calls if c["method"] == "POST"]) == 2
+    assert calls[-1]["json"]["expires_in"] >= helper_needed
 
 
 async def test_other_credentials_do_not_inherit_the_cached_token(monkeypatch, rsa_key):

@@ -1383,12 +1383,16 @@ class TestAgentPhaseIsolation:
         assert "GITHUB_TOKEN" not in agent["env"]
         assert "GH_TOKEN" not in agent["env"]
         # The mint is asked for this repository, with the configured
-        # lifetime — the standing session token, though it could still be
-        # set, is not in the picture at all.
+        # lifetime and enough remaining life for the helper's timeout —
+        # the standing session token, though it could still be set, is not
+        # in the picture at all.
         assert len(mints) == 1
         assert mints[0]["app_id"] == "41234"
         assert mints[0]["repo_slug"] == app_settings.repo_slug
         assert mints[0]["ttl_s"] == app_settings.github_token_ttl_s
+        assert mints[0]["min_remaining_s"] == (
+            app_settings.helper_timeout_s + sessions.github_tokens.HELPER_STARTUP_OVERHEAD_S
+        )
 
     async def test_the_finalizer_receives_a_minted_token_in_app_mode(self, monkeypatch, tmp_path):
         # One token kind serves every phase, so it carries the app's full
@@ -1441,6 +1445,9 @@ class TestAgentPhaseIsolation:
         assert helper["env"]["LOGOS_AGENT_WORKFLOW_CHANGES"] == "deny"
         assert helper["env"]["LOGOS_AGENT_GITHUB_APP_ID"] == "41234"
         assert len(mints) == 1
+        assert mints[0]["min_remaining_s"] == (
+            app_settings.helper_timeout_s + sessions.github_tokens.HELPER_STARTUP_OVERHEAD_S
+        )
 
     async def test_a_failed_remint_during_finalization_settles_the_session_failed(self, monkeypatch, tmp_path):
         # By the time finalization mints, the row already claims FINALIZING.
