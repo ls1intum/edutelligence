@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="
+        http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Manual capability overrides for Logos Admin (issue #768): once an admin
+         sets the three boolean capability flags by hand, the LiteLLM catalog
+         sync must never overwrite those flags or delete the row until the
+         override is explicitly cleared. Catalog context windows
+         (max_input_tokens) continue to follow the registry. Existing rows
+         default to false (automatic). -->
+    <changeSet id="053-model-capabilities-manual-override" author="Malte">
+        <addColumn tableName="model_capabilities">
+            <column name="manual_override" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

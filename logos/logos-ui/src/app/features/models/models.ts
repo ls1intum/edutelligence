@@ -10,7 +10,11 @@ import { FormsModule } from '@angular/forms';
 import { TitleCasePipe } from '@angular/common';
 import { ModalFormComponent } from '../../shared/components/modal/modal-form/modal-form';
 import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
-import { ModelManagementService, ModelCapability } from '../../core/services/model-management.service';
+import {
+  ModelManagementService,
+  ModelCapability,
+  ModelCapabilityState,
+} from '../../core/services/model-management.service';
 import { Model, AddModelPayload, UpdateModelPayload } from '../../shared/models/model.model';
 import { SearchInputComponent } from '../../shared/components/search-input/search-input';
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
@@ -100,6 +104,9 @@ export class Models implements OnInit {
   editWtAccuracy = signal('');
   editWtCost = signal('');
   editWtQuality = signal('');
+  editCapFunctionCalling = signal(false);
+  editCapVision = signal(false);
+  editCapReasoning = signal(false);
   editProfile = signal<Record<string, number>>({});
   editLoading = signal(false);
   editError = signal('');
@@ -128,6 +135,13 @@ export class Models implements OnInit {
   });
 
   addValid = computed(() => this.addName().trim().length > 0);
+
+  /** True while the model being edited has a manual capability override. */
+  editTargetManualOverride = computed(() => {
+    const target = this.editTarget();
+    if (!target) return false;
+    return this.getCapabilities(target.id)?.manual_override ?? false;
+  });
 
   profileValue(profile: Record<string, number>, axis: string): number | '' {
     const v = profile[axis];
@@ -329,6 +343,10 @@ export class Models implements OnInit {
     this.editWtAccuracy.set(model.weight_accuracy != null ? String(model.weight_accuracy) : '');
     this.editWtCost.set(model.weight_cost != null ? String(model.weight_cost) : '');
     this.editWtQuality.set(model.weight_quality != null ? String(model.weight_quality) : '');
+    const caps = this.getCapabilities(model.id);
+    this.editCapFunctionCalling.set(caps?.supports_function_calling ?? false);
+    this.editCapVision.set(caps?.supports_vision ?? false);
+    this.editCapReasoning.set(caps?.supports_reasoning ?? false);
     this.editProfile.set({ ...(model.profile_ratings ?? {}) });
     this.editError.set('');
   }
@@ -344,6 +362,11 @@ export class Models implements OnInit {
     this.editLoading.set(true);
     this.editError.set('');
     const profile = this.editProfile();
+    const storedCaps = this.getCapabilities(target.id);
+    const capsChanged =
+      this.editCapFunctionCalling() !== (storedCaps?.supports_function_calling ?? false) ||
+      this.editCapVision() !== (storedCaps?.supports_vision ?? false) ||
+      this.editCapReasoning() !== (storedCaps?.supports_reasoning ?? false);
     const payload: UpdateModelPayload = {
       model_id: target.id,
       name: this.editName().trim() || undefined,
@@ -355,9 +378,21 @@ export class Models implements OnInit {
       weight_cost: this.editWtCost() ? Number(this.editWtCost()) : undefined,
       weight_quality: this.editWtQuality() ? Number(this.editWtQuality()) : undefined,
       profile_ratings: profile,
+      // Capability override rides the same update_model_info transaction as
+      // the name/alias write, so a duplicate-name rejection rolls both back.
+      ...(capsChanged
+        ? {
+            supports_function_calling: this.editCapFunctionCalling(),
+            supports_vision: this.editCapVision(),
+            supports_reasoning: this.editCapReasoning(),
+          }
+        : {}),
     };
     try {
-      await this.modelService.updateModel(payload);
+      const res = await this.modelService.updateModel(payload);
+      // Rename re-sync and/or an inline capability override both report state
+      // here so the chips never keep showing a stale or partially-saved row.
+      if (res.capabilities) this.applyCapabilityState(res.capabilities);
       this.models.update((list) =>
         list.map((m) =>
           m.id === target.id
@@ -382,5 +417,55 @@ export class Models implements OnInit {
     } finally {
       this.editLoading.set(false);
     }
+  }
+
+  // Checkbox change handlers (the [checked] binding and the toggle keep the
+  // signal in sync with the input; same idiom as the api-key permission rows).
+  toggleCapFunctionCalling(): void {
+    this.editCapFunctionCalling.update((v) => !v);
+  }
+
+  toggleCapVision(): void {
+    this.editCapVision.update((v) => !v);
+  }
+
+  toggleCapReasoning(): void {
+    this.editCapReasoning.update((v) => !v);
+  }
+
+  /** Clear the manual capability override and re-sync from the catalog. */
+  async resetCapabilities(): Promise<void> {
+    const target = this.editTarget();
+    if (!target || this.editLoading()) return;
+    this.editLoading.set(true);
+    this.editError.set('');
+    try {
+      const state = await this.modelService.resetModelCapabilities(target.id);
+      this.applyCapabilityState(state);
+      // Mirror the re-synced catalog values into the dialog; with
+      // manual_override now false the badge and the reset button disappear.
+      this.editCapFunctionCalling.set(state.supports_function_calling);
+      this.editCapVision.set(state.supports_vision);
+      this.editCapReasoning.set(state.supports_reasoning);
+    } catch {
+      this.editError.set('Failed to reset capabilities, please try again.');
+    } finally {
+      this.editLoading.set(false);
+    }
+  }
+
+  /** Merge a set/reset state map into the local capabilities record. */
+  private applyCapabilityState(state: ModelCapabilityState): void {
+    this.capabilities.update((all) => ({
+      ...all,
+      [state.model_id]: {
+        id: all[state.model_id]?.id ?? 0,
+        model_id: state.model_id,
+        supports_function_calling: state.supports_function_calling,
+        supports_vision: state.supports_vision,
+        supports_reasoning: state.supports_reasoning,
+        manual_override: state.manual_override,
+      },
+    }));
   }
 }
