@@ -2044,6 +2044,7 @@ class _SsePreCommitGate:
             return bool(part.get("text"))
         return True
 
+
 _STREAM_END = object()
 
 # Upper bound on pulled-but-undelivered chunks buffered for a slow client. The
@@ -2691,6 +2692,15 @@ async def _streaming_response(
                                             )
                                             error_message = f"Stream resume failed: {resumed_error}"
                         if not resume_opened:
+                            # Stamp the failure instant the arrival pump
+                            # captured upstream (annotated on the exception),
+                            # not the last chunk's arrival — a stream that
+                            # produced chunks and then stalled waiting for
+                            # stream_end must count that wait as provider run
+                            # time, which last_chunk_at would omit.
+                            if request_id:
+                                _pipeline.record_provider_response(request_id, at=getattr(e, _STREAM_FAILURE_AT, None))
+                                provider_response_stamped = True
                             # Once bytes have reached the client, only SSE can
                             # carry the synthetic error frame without
                             # corrupting its protocol — in the dialect the

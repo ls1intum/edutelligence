@@ -206,6 +206,53 @@ async def test_retryable_scheduling_failure_is_retried_and_succeeds(retry_env):
     assert retry_req.context_resolve_timeout_s is not None
 
 
+async def test_retry_preserves_team_priority_and_role_rank(retry_env):
+    """A key with no explicit priority and a HIGH team priority must retry at
+    that team priority, and an application caller's role_rank must survive
+    the rebuild — otherwise the retry loses its queue scheduling metadata.
+    """
+    pipeline = _run_sync_response(
+        retry_env,
+        results=[
+            _fail_result(
+                "All candidate models unavailable (rate-limited or no capacity)",
+                model_id=27,
+                provider_id=None,
+            ),
+            _ok_result(provider_id=2),
+        ],
+        sync_responses=[JSONResponse(content={"ok": True}, status_code=200)],
+    )
+    auth = SimpleNamespace(
+        key_value="lg-key",
+        default_priority=0,
+        team_priority=10,
+        key_type="application",
+        user_role=None,
+        api_key_id=None,
+        cloud_rl=None,
+        local_rl=None,
+    )
+
+    response = await main._execute_resource_mode(
+        deployments=DEPLOYMENTS,
+        body={"messages": [{"role": "user", "content": "hi"}]},
+        headers={},
+        auth=auth,
+        log_id=None,
+        is_async_job=False,
+        request_id="req-meta",
+    )
+
+    assert response.status_code == 200
+    assert len(pipeline.requests) == 2
+    first_req, retry_req = pipeline.requests
+    assert first_req.team_priority == 10
+    assert first_req.role_rank == 2
+    assert retry_req.team_priority == 10
+    assert retry_req.role_rank == 2
+
+
 async def test_non_retryable_scheduling_failure_fails_immediately(retry_env):
     pipeline = _run_sync_response(
         retry_env,
@@ -861,6 +908,43 @@ async def test_schedule_stream_resume_returns_logosnode_context(retry_env):
     assert budget.failed_provider_ids == [1]
 
 
+async def test_schedule_stream_resume_clamps_queue_timeout_to_remaining_budget(retry_env):
+    """A resume admitted with seconds left must not wait the default 1200s
+    queue timeout when eligible peers are busy — payload timeout_s is what
+    RequestPipeline.process hands the scheduler as the queue wait bound.
+    """
+    ctx = SimpleNamespace(model_id=27, provider_id=2, provider_type="logosnode", lane_id="lane-2", engine="vllm")
+    pipeline = _resume_pipeline(_result_with_context(ctx))
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+
+    clock_t = [1000.0]
+    budget = main.RetryBudget(max_attempts=3, deadline_s=10.0, now=lambda: clock_t[0])
+    # Five seconds of the budget already spent (e.g. the failed attempt).
+    clock_t[0] = 1005.0
+
+    out = await main._schedule_stream_resume(
+        request_id="req-1",
+        model_id=27,
+        failed_provider_id=1,
+        deployments=DEPLOYMENTS,
+        resume_payload={
+            "messages": [{"role": "assistant", "content": "partial"}],
+            "stream": True,
+            "timeout_s": 1200,
+        },
+        request_path="v1/chat/completions",
+        policy=None,
+        default_priority=0,
+        api_key_id=None,
+        budget=budget,
+    )
+
+    assert out is ctx
+    req = pipeline.requests[0]
+    assert req.payload["timeout_s"] == 5.0
+    assert req.context_resolve_timeout_s == 5.0
+
+
 async def test_schedule_stream_resume_none_when_budget_exhausted(retry_env):
     pipeline = _resume_pipeline(_ok_result())
     retry_env.setattr(main, "_pipeline", pipeline, raising=False)
@@ -1206,7 +1290,9 @@ async def test_logosnode_pre_token_failure_comes_back_as_json_error(retry_env):
     retry_env.setattr(main, "_pipeline", _FakePipeline([_fail_result("unused")]), raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -1262,7 +1348,9 @@ async def test_pre_token_deadline_is_not_retried_on_the_same_lane(retry_env):
     retry_env.setattr(main, "_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S", 1.0)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -1322,7 +1410,9 @@ async def _pre_token_streaming_response(budget):
     # log_id=0: the fake DB has no persistence methods, and the test
     # consumes the body, which runs the streamer's logging finally.
     return await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         0,
         12,
@@ -1539,7 +1629,8 @@ def _ok_cloud_result(provider_id=1, request_id="req-1"):
             provider_type="cloud",
             forward_url="https://cloud.test/v1/chat/completions",
             lane_id=None,
-            anthropic_dialect=None, messages_upstream=False,
+            anthropic_dialect=None,
+            messages_upstream=False,
         ),
         classification_stats={},
         scheduling_stats={
@@ -1641,7 +1732,8 @@ async def test_logosnode_retry_execution_clamps_the_infer_window(retry_env):
                     model_name="stub-model",
                     provider_type="logosnode",
                     lane_id="lane-1",
-                    anthropic_dialect=None, messages_upstream=False,
+                    anthropic_dialect=None,
+                    messages_upstream=False,
                 ),
                 classification_stats={},
                 scheduling_stats={
@@ -1660,7 +1752,8 @@ async def test_logosnode_retry_execution_clamps_the_infer_window(retry_env):
                     model_name="stub-model",
                     provider_type="logosnode",
                     lane_id="lane-2",
-                    anthropic_dialect=None, messages_upstream=False,
+                    anthropic_dialect=None,
+                    messages_upstream=False,
                 ),
                 classification_stats={},
                 scheduling_stats={
@@ -1741,7 +1834,12 @@ async def test_a_retry_stream_passes_the_absolute_deadline_to_the_node(retry_env
 
     response = await main._streaming_response(
         SimpleNamespace(
-            provider_id=1, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False, model_name="stub-model"
+            provider_id=1,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+            model_name="stub-model",
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
         None,
@@ -1802,7 +1900,8 @@ async def test_a_retry_stream_passes_the_absolute_deadline_to_the_cloud(retry_en
             provider_id=1,
             provider_type="cloud",
             forward_url="https://provider.test/v1/chat/completions",
-            anthropic_dialect=None, messages_upstream=False,
+            anthropic_dialect=None,
+            messages_upstream=False,
             model_name="stub-model",
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
@@ -1863,7 +1962,8 @@ async def test_a_retry_sync_call_passes_the_absolute_deadline_to_the_cloud(retry
             provider_id=1,
             provider_type="cloud",
             forward_url="https://provider.test/v1/chat/completions",
-            anthropic_dialect=None, messages_upstream=False,
+            anthropic_dialect=None,
+            messages_upstream=False,
             model_name="stub-model",
         ),
         {"messages": [{"role": "user", "content": "hi"}]},
@@ -1942,7 +2042,8 @@ async def test_cloud_responses_deadline_ends_the_stream_in_a_failed_event(retry_
             provider_id=1,
             provider_type="cloud",
             forward_url="https://provider.test/v1/responses",
-            anthropic_dialect=None, messages_upstream=False,
+            anthropic_dialect=None,
+            messages_upstream=False,
             model_name="stub-model",
         ),
         {"model": "test-model", "input": "hi"},

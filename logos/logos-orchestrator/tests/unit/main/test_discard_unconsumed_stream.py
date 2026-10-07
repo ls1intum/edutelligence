@@ -8,6 +8,7 @@ slot would leak without an explicit cleanup path.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +24,9 @@ async def test_discard_of_unconsumed_streaming_response_closes_upstream_and_rele
     upstream_closed = False
 
     class Executor:
-        async def execute_streaming(self, url, headers, payload, on_headers=None, status=None):
+        async def execute_streaming(
+            self, url, headers, payload, on_headers=None, status=None, **kwargs
+        ):  # noqa: ARG002
             nonlocal upstream_closed
             if status is not None:
                 status.dispatch_at = main.datetime.datetime.now(main.datetime.timezone.utc)
@@ -80,8 +83,19 @@ async def test_discard_of_unconsumed_streaming_response_closes_upstream_and_rele
 
 @pytest.mark.asyncio
 async def test_discard_of_unconsumed_logosnode_response_releases_slot(monkeypatch):
-    """LogosNode streams do not prefetch, but the scheduler slot is already
-    reserved when the response is built — discard must still free it."""
+    """LogosNode streams prefetch the first content token before committing
+    the response — discard of a never-started body must still close the open
+    iterator and free the reserved slot."""
+
+    upstream_closed = False
+
+    async def fake_send_stream_command(**kwargs):  # noqa: ARG001
+        nonlocal upstream_closed
+        try:
+            yield b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+        finally:
+            upstream_closed = True
 
     pipeline, _completion, release_calls = _make_pipeline()
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
@@ -93,20 +107,16 @@ async def test_discard_of_unconsumed_logosnode_response_releases_slot(monkeypatc
         raising=False,
     )
     monkeypatch.setattr(main, "model_name_cache", {}, raising=False)
-    # Body must not start — if send_stream_command is touched, the test is wrong.
     monkeypatch.setattr(
         main,
         "_logosnode_registry",
-        SimpleNamespace(
-            send_stream_command=lambda **kwargs: (_ for _ in ()).throw(
-                AssertionError("unconsumed LogosNode body must not dispatch")
-            )
-        ),
+        SimpleNamespace(send_stream_command=fake_send_stream_command),
         raising=False,
     )
 
     response = await main._streaming_response(
         SimpleNamespace(
+            provider_id=12,
             provider_type="logosnode",
             lane_id="lane-1",
             anthropic_dialect=None,
@@ -130,7 +140,77 @@ async def test_discard_of_unconsumed_logosnode_response_releases_slot(monkeypatc
     assert getattr(response, "_logos_unconsumed_cleanup", None) is not None
     await main._discard_response(response)
 
+    assert upstream_closed, "prefetched logosnode iterator was not closed"
     assert release_calls, "scheduler slot was not released"
+    assert release_calls[0][0:3] == (27, 12, "logosnode")
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_logosnode_precommit_open_releases_reservation(monkeypatch):
+    """A client disconnect during the initial pre-commit pull raises
+    CancelledError before logosnode_streamer starts, so its finally never
+    runs. The reservation must still be released so a queued waiter can run.
+    """
+    opened = asyncio.Event()
+    upstream_closed = False
+
+    async def hanging_send_stream_command(**kwargs):  # noqa: ARG001
+        nonlocal upstream_closed
+        opened.set()
+        try:
+            await asyncio.sleep(3600)
+            yield b"never"  # pragma: no cover
+        finally:
+            upstream_closed = True
+
+    pipeline, _completion, release_calls = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "model_name_cache", {}, raising=False)
+    monkeypatch.setattr(
+        main,
+        "_logosnode_registry",
+        SimpleNamespace(send_stream_command=hanging_send_stream_command),
+        raising=False,
+    )
+
+    task = asyncio.create_task(
+        main._streaming_response(
+            SimpleNamespace(
+                provider_id=12,
+                provider_type="logosnode",
+                lane_id="lane-1",
+                anthropic_dialect=None,
+                messages_upstream=False,
+            ),
+            {"messages": [{"role": "user", "content": "hi"}], "stream": True},
+            42,
+            12,
+            27,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-precommit-cancel",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 1,
+                "is_cold_start": False,
+            },
+        )
+    )
+    await asyncio.wait_for(opened.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert upstream_closed, "precommit open did not close the worker iterator"
+    assert release_calls, "precommit cancel leaked the scheduler reservation"
     assert release_calls[0][0:3] == (27, 12, "logosnode")
 
 
@@ -139,14 +219,14 @@ async def test_cancel_at_scheduling_comment_discards_prefetched_http_stream(monk
     """Cancel while the scheduling comment is yielded must run unconsumed
     cleanup — closing only the never-started body leaves the peeked upstream
     and the reserved slot behind."""
-    import asyncio
-
     from fastapi.responses import StreamingResponse
 
     upstream_closed = False
 
     class Executor:
-        async def execute_streaming(self, url, headers, payload, on_headers=None, status=None):
+        async def execute_streaming(
+            self, url, headers, payload, on_headers=None, status=None, **kwargs
+        ):  # noqa: ARG002
             nonlocal upstream_closed
             if status is not None:
                 status.dispatch_at = main.datetime.datetime.now(main.datetime.timezone.utc)
@@ -193,7 +273,7 @@ async def test_cancel_at_scheduling_comment_discards_prefetched_http_stream(monk
                 "queue_depth_at_arrival": 0,
                 "utilization_at_arrival": 1,
                 "is_cold_start": False,
-                "estimated_ttft_ms": 50,
+                "ettft_estimate_ms": 50,
                 "warmth_state": 1,
             },
         )

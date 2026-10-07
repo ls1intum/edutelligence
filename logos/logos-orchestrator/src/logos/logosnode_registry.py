@@ -1149,6 +1149,34 @@ class LogosNodeRuntimeRegistry:
                 }
             )
 
+    @staticmethod
+    async def _send_json_under_deadline(session, message: dict[str, Any], deadline_at: float | None) -> None:
+        """Acquire the shared send lock and write ``message``, honouring ``deadline_at``.
+
+        The WebSocket is shared by every command to the node, so a contended
+        send lock can hold the dispatch past a retry budget's wall. Waiting
+        for the lock itself is therefore clamped to the time left, and the
+        wall is re-checked once the lock is held — right before the bytes go
+        out — so a command written past the deadline cannot start a generation
+        the caller has already stopped waiting for.
+        """
+        if deadline_at is None:
+            async with session.send_lock:
+                await session.websocket.send_json(message)
+            return
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise RetryDeadlineExceeded("execution passed its retry deadline")
+        try:
+            async with asyncio.timeout(remaining):
+                async with session.send_lock:
+                    if time.monotonic() >= deadline_at:
+                        raise RetryDeadlineExceeded("execution passed its retry deadline")
+                    await session.websocket.send_json(message)
+        except TimeoutError as exc:
+            # asyncio.TimeoutError is an alias of builtin TimeoutError on 3.11+.
+            raise RetryDeadlineExceeded("execution passed its retry deadline") from exc
+
     async def send_command(
         self,
         provider_id: int,
@@ -1156,8 +1184,15 @@ class LogosNodeRuntimeRegistry:
         params: dict[str, Any] | None = None,
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
+        deadline_at: float | None = None,
         on_sent: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
+        # The absolute deadline covers the complete RPC: session lookup, the
+        # send-lock wait, the send, and the response wait. A relative
+        # ``timeout_seconds`` alone starts only after dispatch and would let a
+        # contended lock push a near-expiry retry past the overall budget.
+        if deadline_at is not None and time.monotonic() >= deadline_at:
+            raise RetryDeadlineExceeded("execution passed its retry deadline")
         session = await self._get_active_session(provider_id, stale_after_seconds)
         loop = asyncio.get_running_loop()
         cmd_id = str(uuid.uuid4())
@@ -1198,11 +1233,12 @@ class LogosNodeRuntimeRegistry:
                 self._set_calibrating(session, was_calibrating, "start_calibration_session refused")
 
         try:
-            async with session.send_lock:
-                await session.websocket.send_json(message)
+            await self._send_json_under_deadline(session, message, deadline_at)
         except Exception as exc:  # noqa: BLE001
             session.pending_commands.pop(cmd_id, None)
             _undo_optimistic_calibration_mark()
+            if isinstance(exc, RetryDeadlineExceeded):
+                raise
             raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
 
         # The command is on the wire; session acquisition and the send lock no
@@ -1210,8 +1246,18 @@ class LogosNodeRuntimeRegistry:
         if on_sent is not None:
             on_sent()
 
+        response_timeout = max(1, timeout_seconds)
+        if deadline_at is not None:
+            remaining = deadline_at - time.monotonic()
+            if remaining <= 0:
+                session.pending_commands.pop(cmd_id, None)
+                if action != CANCEL_COMMAND_ACTION:
+                    self._request_command_cancellation(session, cmd_id)
+                raise RetryDeadlineExceeded("execution passed its retry deadline")
+            response_timeout = min(response_timeout, remaining)
+
         try:
-            result = await asyncio.wait_for(fut, timeout=max(1, timeout_seconds))
+            result = await asyncio.wait_for(fut, timeout=response_timeout)
         except asyncio.CancelledError:
             # The caller went away — typically a client that disconnected
             # mid-request. Dropping the future only stops us from reading the
@@ -1224,6 +1270,10 @@ class LogosNodeRuntimeRegistry:
             raise
         except asyncio.TimeoutError as exc:
             session.pending_commands.pop(cmd_id, None)
+            if deadline_at is not None and time.monotonic() >= deadline_at:
+                if action != CANCEL_COMMAND_ACTION:
+                    self._request_command_cancellation(session, cmd_id)
+                raise RetryDeadlineExceeded("execution passed its retry deadline") from exc
             self._emit_session_diagnostic(
                 kind="command-timeout",
                 session=session,
@@ -1274,8 +1324,7 @@ class LogosNodeRuntimeRegistry:
         # the send — can cross the budget's wall on a near-expiry call,
         # handing the worker a command it starts generating one read before
         # we tear it down. So the wall is enforced before the session is even
-        # fetched, and again once the send lock is held, right before the
-        # bytes go out.
+        # fetched, and again across the send-lock wait / send.
         if deadline_at is not None and time.monotonic() >= deadline_at:
             raise RetryDeadlineExceeded("stream execution passed its retry deadline")
         session = await self._get_active_session(provider_id, stale_after_seconds)
@@ -1290,14 +1339,7 @@ class LogosNodeRuntimeRegistry:
             "params": params or {},
         }
         try:
-            async with session.send_lock:
-                # Re-check once the lock is held: a contended send_lock can
-                # hold us past the wall, and a command written past it would
-                # start a generation the caller has already stopped waiting
-                # for.
-                if deadline_at is not None and time.monotonic() >= deadline_at:
-                    raise RetryDeadlineExceeded("stream execution passed its retry deadline")
-                await session.websocket.send_json(message)
+            await self._send_json_under_deadline(session, message, deadline_at)
         except Exception as exc:  # noqa: BLE001
             session.pending_streams.pop(cmd_id, None)
             if isinstance(exc, RetryDeadlineExceeded):

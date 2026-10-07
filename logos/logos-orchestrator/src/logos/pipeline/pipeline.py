@@ -74,8 +74,9 @@ def resolve_queue_priority(
     policy-only behaviour for untouched teams.
 
     All values use the same 1/5/10 scale consumed by ``Priority.from_int``
-    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL).
-    ``RESUME`` (20) is an internal level reached only through
+    (1=LOW, 5=NORMAL, 10=HIGH; other values normalise to NORMAL). The
+    normalisation happens here, at the boundary where caller values enter
+    the queue: ``RESUME`` (20) is an internal level reached only through
     ``PipelineRequest.priority_override``, never through a key, team, or
     policy priority.
 
@@ -95,11 +96,11 @@ def resolve_queue_priority(
         role-rank tiebreak would never apply between the two.
     """
     if default_priority:
-        return int(default_priority)
+        return Priority.from_int(int(default_priority)).value
     if team_priority:
-        return int(team_priority)
+        return Priority.from_int(int(team_priority)).value
     if policy_priority:
-        return int(policy_priority)
+        return Priority.from_int(int(policy_priority)).value
     return int(Priority.NORMAL)
 
 

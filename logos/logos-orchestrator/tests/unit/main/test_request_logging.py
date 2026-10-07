@@ -307,7 +307,13 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -383,7 +389,13 @@ async def test_a_stream_read_to_the_end_stamps_the_last_chunk_arrival(monkeypatc
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -445,7 +457,13 @@ async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -460,8 +478,11 @@ async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk
             "is_cold_start": False,
         },
     )
-    with pytest.raises(RuntimeError, match="died mid-stream"):
-        await _read_stream_response(response)
+    # Mid-stream logosnode failures are recovered into dialect error frames
+    # rather than re-raised out of the body iterator, so the client sees a
+    # terminal error event; the stamp still lands at the failure instant.
+    body = await _read_stream_response(response)
+    assert "died mid-stream" in body
 
     # The failure is stamped at the failure instant the pump captured upstream:
     # a real instant, at/after the last chunk's arrival (the stalled interval
@@ -825,7 +846,13 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         43,
         12,
@@ -954,7 +981,12 @@ async def test_sync_response_settles_cost_on_the_queued_write(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="local-model",
+            anthropic_dialect=None,
+        ),
         {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
         45,
         12,
