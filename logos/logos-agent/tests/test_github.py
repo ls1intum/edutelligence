@@ -517,11 +517,11 @@ class TestAppIdentity:
     the runner and the containers, and the account it authenticates as is
     the app's bot user, so the configured login is that spelling.
     Installation tokens cannot answer GET /user; the check asks /app and
-    /installation instead.
+    /app/installations/{id} with the App JWT instead.
     """
 
     @staticmethod
-    def _app(monkeypatch, pem, *, login="LogosOSSAgent[bot]", mint="ghs-minted", app_id="41234"):
+    def _app(monkeypatch, pem, *, login="LogosOSSAgent[bot]", mint="ghs-minted", app_id="41234", installation_id="815"):
         monkeypatch.setattr(
             github,
             "settings",
@@ -532,6 +532,7 @@ class TestAppIdentity:
                 session_github_token="",
                 github_app_id=app_id,
                 github_app_private_key=pem,
+                github_app_installation_id=installation_id,
             ),
         )
 
@@ -547,12 +548,13 @@ class TestAppIdentity:
         *,
         app_id=41234,
         slug="LogosOSSAgent",
-        token_app_id=41234,
+        installation_app_id=41234,
+        installation_id=815,
         mint="ghs-minted",
         app_error=None,
         installation_error=None,
     ):
-        """Stub /app (JWT) and /installation (minted token); never /user."""
+        """Stub /app and /app/installations/{id} (both App JWT); never /user."""
         seen: list = []
 
         class FakeClient:
@@ -574,12 +576,14 @@ class TestAppIdentity:
                     if app_error is not None:
                         return FakeResponse(app_error, {}, text="app lookup failed")
                     return FakeResponse(200, {"id": app_id, "slug": slug})
-                if url.endswith("/installation"):
+                if "/repos/" in url and url.endswith("/installation"):
+                    return FakeResponse(200, {"id": installation_id, "app_id": installation_app_id})
+                if f"/app/installations/{installation_id}" in url and not url.endswith("/access_tokens"):
                     if isinstance(installation_error, Exception):
                         raise installation_error
                     if installation_error is not None:
                         return FakeResponse(installation_error, {}, text="installation lookup failed")
-                    return FakeResponse(200, {"app_id": token_app_id, "id": 815})
+                    return FakeResponse(200, {"app_id": installation_app_id, "id": installation_id})
                 return FakeResponse(401, {}, text="Bad credentials")
 
         monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
@@ -592,20 +596,20 @@ class TestAppIdentity:
 
         notes = await github.verify_identities()
 
-        # /app with the App JWT, then /installation with the minted token —
-        # never the user-only /user endpoint.
+        # /app and /app/installations/{id} with the App JWT — never the
+        # user-only /user endpoint, and never the nonexistent /installation.
         assert [url for url, _ in seen] == [
             "https://api.github.com/app",
-            "https://api.github.com/installation",
+            "https://api.github.com/app/installations/815",
         ]
-        claims = jwt.decode(
-            seen[0][1],
-            key.public_key(),
-            algorithms=["RS256"],
-            options={"verify_exp": False, "verify_iat": False},
-        )
-        assert claims["iss"] == "41234"
-        assert seen[1][1] == mint
+        for _, bearer in seen:
+            claims = jwt.decode(
+                bearer,
+                key.public_key(),
+                algorithms=["RS256"],
+                options={"verify_exp": False, "verify_iat": False},
+            )
+            assert claims["iss"] == "41234"
         assert notes == ["GitHub App installation token authenticates as LogosOSSAgent[bot]"]
         assert github._verified_login == "LogosOSSAgent[bot]"
 
@@ -618,7 +622,7 @@ class TestAppIdentity:
 
     async def test_a_token_of_another_apps_installation_stops_the_service(self, monkeypatch, app_pem):
         self._app(monkeypatch, app_pem)
-        self._app_identity_client(monkeypatch, token_app_id=99999)
+        self._app_identity_client(monkeypatch, installation_app_id=99999)
 
         with pytest.raises(github.IdentityError, match="99999"):
             await github.verify_identities()
@@ -664,8 +668,10 @@ class TestAppIdentity:
 
         await github.verify_identities()
 
-        assert [token for _, token in seen] == [seen[0][1], mint]
+        assert len(seen) == 2
+        assert seen[0][1] == seen[1][1]  # both authenticated with the App JWT
         assert all("/user" not in url for url, _ in seen)
+        assert all(not url.endswith("/installation") or "/app/installations/" in url for url, _ in seen)
 
     async def test_the_runner_acts_with_the_minted_token(self, monkeypatch, app_pem):
         mint = self._app(monkeypatch, app_pem)

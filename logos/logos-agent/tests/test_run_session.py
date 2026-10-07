@@ -743,29 +743,30 @@ class TestPushIdentity:
 
         run_session.verify_token_identity("ghp-token")
 
-    def test_an_installation_token_is_pinned_to_the_app(self, monkeypatch):
+    def test_an_installation_token_is_checked_via_repositories(self, monkeypatch):
         # Installation tokens cannot answer GET /user (401). With the App
-        # id set, the check asks /installation and never the user endpoint.
+        # id set, the check asks /installation/repositories and never the
+        # user endpoint. App identity is pinned by the runner with its JWT.
         import run_session
 
         monkeypatch.setenv("LOGOS_AGENT_GITHUB_APP_ID", "41234")
-        calls = self._stub_gh(monkeypatch, login="41234")
+        calls = self._stub_gh(monkeypatch, login="3")
 
         run_session.verify_token_identity("ghs-installation")
 
         cmd, kwargs = calls[0]
-        assert cmd == ["gh", "api", "installation", "--jq", ".app_id"]
+        assert cmd == ["gh", "api", "installation/repositories", "--jq", ".total_count"]
         assert kwargs["env"]["GH_TOKEN"] == "ghs-installation"
         assert "ghs-installation" not in " ".join(cmd)
         assert all(c[0][2] != "user" for c in calls)
 
-    def test_an_installation_token_of_another_app_is_refused(self, monkeypatch):
+    def test_an_installation_token_with_a_confused_answer_is_refused(self, monkeypatch):
         import run_session
 
         monkeypatch.setenv("LOGOS_AGENT_GITHUB_APP_ID", "41234")
-        self._stub_gh(monkeypatch, login="99999")
+        self._stub_gh(monkeypatch, login="not-a-count")
 
-        with pytest.raises(RuntimeError, match="99999"):
+        with pytest.raises(RuntimeError, match="installation/repositories"):
             run_session.verify_token_identity("ghs-installation")
 
     def test_an_installation_token_its_endpoint_refuses_is_refused(self, monkeypatch):

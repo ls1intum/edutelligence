@@ -1711,9 +1711,10 @@ class SessionManager:
             # sentence about the request beats a commit titled after the
             # first line of its task.
             "LOGOS_SESSION_SUBJECT": _fallback_subject(session),
-            # When set, the finalizer pins the push token to this App via
-            # GET /installation instead of the user-only GET /user — an
-            # installation token cannot answer the latter.
+            # When set, the finalizer proves the push token still works as
+            # an installation credential via GET /installation/repositories
+            # instead of the user-only GET /user — an installation token
+            # cannot answer the latter. App identity is pinned by the runner.
             "LOGOS_AGENT_GITHUB_APP_ID": (
                 settings.github_app_id if settings.github_app_id and settings.github_app_private_key else ""
             ),

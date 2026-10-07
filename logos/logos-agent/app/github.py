@@ -131,19 +131,22 @@ async def _check_app(app_id: str, private_key: str, installation_id: str, expect
     """Check a GitHub App credential against the configured agent account.
 
     Installation tokens cannot answer ``GET /user``. The check therefore asks
-    the two endpoints the credential is made for: ``GET /app``, signed with
-    the configured key as the configured app id (a key that does not sign for
-    that app fails at the API), whose ``slug`` yields the bot user; and
-    ``GET /installation`` with the minted token, whose ``app_id`` pins the
-    token to the configured app. A different bot user or a different app
-    raises :class:`IdentityError` and stops the service; a failed mint or an
+    the App-JWT endpoints that carry the identity: ``GET /app`` (slug yields
+    the bot user; a key that does not sign for the configured app fails at
+    the API) and ``GET /app/installations/{installation_id}`` (``app_id``
+    pins the installation to that app). There is no ``GET /installation``
+    REST endpoint — an installation token can only list repositories via
+    ``GET /installation/repositories``, which does not return ``app_id``, so
+    App identity is verified here before a minted token is handed to a
+    helper. A different bot user or a different app raises
+    :class:`IdentityError` and stops the service; a failed mint or an
     unreachable API is a note, the same degraded-start convention as the
     personal-token path.
     """
     global _verified_login
     label = "GitHub App installation token"
     try:
-        token = await github_tokens.installation_token(
+        await github_tokens.installation_token(
             app_id=app_id,
             private_key=private_key,
             installation_id=installation_id,
@@ -162,15 +165,31 @@ async def _check_app(app_id: str, private_key: str, installation_id: str, expect
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token_headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             app_response = await client.get(f"{_API}/app", headers=jwt_headers)
-            installation_response = await client.get(f"{_API}/installation", headers=token_headers)
+            resolved_installation_id = installation_id.strip()
+            if not resolved_installation_id:
+                lookup = await client.get(
+                    f"{_API}/repos/{settings.repo_slug}/installation",
+                    headers=jwt_headers,
+                )
+                if lookup.status_code == 204:
+                    return [f"{label} could not be verified: the app is not installed on {settings.repo_slug}"]
+                if lookup.status_code != 200:
+                    return [
+                        f"{label} could not be verified: installation lookup failed "
+                        f"({lookup.status_code}): {lookup.text[:200]}"
+                    ]
+                lookup_payload = lookup.json() or {}
+                looked_up = lookup_payload.get("id")
+                if not isinstance(looked_up, int) or looked_up < 1:
+                    return [f"{label} could not be verified: GitHub named no installation for {settings.repo_slug}"]
+                resolved_installation_id = str(looked_up)
+            installation_response = await client.get(
+                f"{_API}/app/installations/{resolved_installation_id}",
+                headers=jwt_headers,
+            )
     except Exception as exc:
         return [f"{label} could not be verified: could not reach the GitHub API: {exc}"]
     if app_response.status_code != 200:
@@ -187,7 +206,7 @@ async def _check_app(app_id: str, private_key: str, installation_id: str, expect
     installation_payload = installation_response.json() or {}
     answered_app_id = app_payload.get("id")
     slug = app_payload.get("slug")
-    token_app_id = installation_payload.get("app_id")
+    installation_app_id = installation_payload.get("app_id")
     if not isinstance(slug, str) or not slug:
         return [f"{label} could not be verified: the GitHub API returned no app slug"]
     bot_login = f"{slug}[bot]"
@@ -203,9 +222,9 @@ async def _check_app(app_id: str, private_key: str, installation_id: str, expect
             f"account '{settings.github_login}'. Agent work must run under that "
             f"account only — set LOGOS_AGENT_GITHUB_LOGIN to the app's bot user."
         )
-    if token_app_id != configured_app_id:
+    if installation_app_id != configured_app_id:
         raise IdentityError(
-            f"{label} belongs to app id '{token_app_id}', not the configured "
+            f"{label} belongs to app id '{installation_app_id}', not the configured "
             f"GitHub App id '{app_id}'. Agent work must run under that app only."
         )
     _verified_login = bot_login

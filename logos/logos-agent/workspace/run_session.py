@@ -524,15 +524,18 @@ def verify_token_identity(token: str) -> None:
     a human contributor's name.
 
     With a GitHub App the runner passes ``LOGOS_AGENT_GITHUB_APP_ID`` and the
-    check pins the installation token to that app via ``GET /installation`` —
-    installation tokens cannot answer ``GET /user``. The bot-login half of
-    the identity check stays with the runner: deriving the bot login needs
-    the app's private key, which this container does not hold. With personal
-    access tokens the variable is empty and the ``/user`` login check runs.
+    check proves the installation token still works via
+    ``GET /installation/repositories`` — the documented endpoint for
+    installation tokens. There is no ``GET /installation`` REST endpoint, and
+    that repositories listing does not return ``app_id``; App and bot
+    identity are verified by the runner with the App JWT before this token
+    is handed over (this container does not hold the private key). With
+    personal access tokens the variable is empty and the ``/user`` login
+    check runs.
     """
     app_id = (os.environ.get("LOGOS_AGENT_GITHUB_APP_ID") or "").strip()
     if app_id:
-        endpoint, field, expected = "installation", ".app_id", app_id
+        endpoint, field = "installation/repositories", ".total_count"
     else:
         endpoint, field, expected = "user", ".login", agent_login().lower()
     result = subprocess.run(
@@ -547,12 +550,15 @@ def verify_token_identity(token: str) -> None:
         raise RuntimeError(f"could not establish the identity of the push token: {result.stderr.strip()[:200]}")
     answered = (result.stdout or "").strip()
     if app_id:
-        if answered != expected:
+        # A successful listing is enough: the runner already pinned the App
+        # with its JWT. Refuse an empty or non-numeric answer so a confused
+        # endpoint cannot pass silently.
+        if not answered.isdigit():
             raise RuntimeError(
-                f"the push token belongs to app id '{answered}', not the configured "
-                f"GitHub App id '{expected}'; refusing to push agent work under another identity"
+                f"could not establish the identity of the push token: "
+                f"installation/repositories returned {answered!r}"
             )
-        log(f"push token verified as installation of app {answered}")
+        log("push token verified as a GitHub App installation token")
         return
     if answered.lower() != expected:
         raise RuntimeError(
