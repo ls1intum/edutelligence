@@ -3218,7 +3218,11 @@ async def _execute_resource_mode(
         with DBManager() if provider_type != "logosnode" else nullcontext() as db:
             try:
                 _check_budget_if_cloud(
-                    db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
+                    db,
+                    auth,
+                    provider_type != "logosnode",
+                    datetime.date.today().replace(day=1).isoformat(),
+                    provider_id=result.provider_id if provider_type != "logosnode" else None,
                 )
             except Exception as e:
                 try:
