@@ -1605,12 +1605,11 @@ class VllmProcessHandle:
             logger.debug("[%s] gguf module import failed", self.lane_id, exc_info=True)
             return
 
-        # Respect the inherited HF_HOME (and the explicit override) before
-        # falling back to the resolved default, so the local listing is
-        # consulted in the same directory the lane actually loads from.
-        hf_home = gguf.effective_hf_home(self.hf_home_override)
-        if not hf_home:
-            hf_home = self._resolve_hf_home(self._resolve_persistent_cache_root(self._global_config))
+        # Consult the same HF_HOME the child will receive (RAM-cache /
+        # handle override, lane env_overrides['HF_HOME'], inherited HF_HOME,
+        # or the resolved persistent default) so an offline cache under a
+        # lane-specific root is found before any Hub fallback.
+        hf_home = self._effective_hf_home_for_lane(lane_config)
         file_names: list[tuple[str, int]] | None = None
         non_gguf_weights: list[str] | None = None
         if not gguf.is_explicit_gguf_ref(model):
@@ -1751,12 +1750,9 @@ class VllmProcessHandle:
             return
 
         # The conversion must write where the spawned lane reads from — the
-        # exact HF_HOME _build_env will give the child (the override, else
-        # the inherited value with blank counting as unset, else the
-        # resolved root).
-        from logos_worker_node import gguf  # noqa: PLC0415
-
-        hf_home = gguf.effective_hf_home(self.hf_home_override) or self._resolve_hf_home(cache_root)
+        # exact HF_HOME _build_env will give the child (lane env override,
+        # handle override, inherited value, or resolved root).
+        hf_home = self._effective_hf_home_for_lane(lane_config)
         gpu_devices = lane_config.gpu_devices or self._global_config.gpu_devices
         log_path = (
             Path(cache_root) / ".cache" / "vllm" / "sharded_logs" / f"{lane_config.model.replace('/', '__')}_tp{tp}.log"
@@ -2175,20 +2171,13 @@ class VllmProcessHandle:
         # via LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
         cache_root_dir = self._resolve_persistent_cache_root(gc)
 
-        # HuggingFace cache — write into the persistent root.  A blank or
-        # whitespace-only HF_HOME counts as unset (the same rule
-        # gguf.effective_hf_home applies when the lane resolves model
-        # references), so the child always loads from the root the
-        # resolution above consulted instead of inheriting a blank value
-        # that Hugging Face would resolve to a different default location.
-        hf_home = (self.hf_home_override or "").strip() or os.environ.get("HF_HOME", "").strip()
-        if not hf_home:
-            hf_home = self._resolve_hf_home(cache_root_dir)
-        env["HF_HOME"] = hf_home
-
+        # HuggingFace cache — same root GGUF resolution consulted (lane
+        # env_overrides['HF_HOME'], handle override, inherited HF_HOME with
+        # blank counting as unset, or the resolved persistent default).
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
         vc = lane_config.vllm_config
+        env["HF_HOME"] = self._effective_hf_home_for_lane(lane_config)
         # Sleep endpoints (/sleep, /wake_up, /is_sleeping) require
         # VLLM_SERVER_DEV_MODE.  Auto-enable it when sleep mode is active
         # so operators don't need to set both flags.
@@ -2348,6 +2337,26 @@ class VllmProcessHandle:
         if cache_path:
             return cache_path
         return getattr(gc, "models_path", "") or ""
+
+    def _effective_hf_home_for_lane(self, lane_config: LaneConfig) -> str:
+        """HF_HOME the child receives — GGUF resolution must use the same root.
+
+        Precedence matches ``_build_env`` after per-lane ``env_overrides``:
+
+        1. non-blank ``vllm_config.env_overrides['HF_HOME']`` (lane-specific)
+        2. handle ``hf_home_override`` (RAM cache / spawn-time pin)
+        3. inherited ``HF_HOME`` (blank/whitespace counts as unset)
+        4. resolved persistent ``<cache_root>/.hf_cache``
+        """
+        from logos_worker_node import gguf  # noqa: PLC0415
+
+        vc = lane_config.vllm_config
+        if vc is not None and vc.env_overrides:
+            lane_hf = (vc.env_overrides.get("HF_HOME") or "").strip()
+            if lane_hf:
+                return lane_hf
+        cache_root_dir = self._resolve_persistent_cache_root(self._global_config)
+        return gguf.effective_hf_home(self.hf_home_override) or self._resolve_hf_home(cache_root_dir)
 
     def _resolve_hf_home(self, cache_root_dir: str) -> str:
         """Pick a writable HuggingFace cache path for vLLM downloads.

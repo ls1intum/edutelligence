@@ -2863,6 +2863,48 @@ async def test_resolve_gguf_spec_from_local_hf_cache(monkeypatch, tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_resolve_gguf_spec_honors_lane_env_override_hf_home(monkeypatch, tmp_path: Path) -> None:
+    """GGUF resolution must consult vllm_config.env_overrides['HF_HOME'].
+
+    With RAM caching disabled, weights may live only under a lane-specific
+    cache root. Resolution previously ignored that override (while _build_env
+    applied it to the child), so an offline unpinned bare GGUF repo failed
+    before spawn even though the child would have found the cache.
+    """
+    from logos_worker_node import gguf as gguf_module
+
+    lane_hf = tmp_path / "lane-hf"
+    lane_hf.mkdir()
+    _hf_cache_with_gguf(
+        lane_hf,
+        "unsloth/Qwen3-8B-GGUF",
+        ["Qwen3-8B-Q4_K_M.gguf"],
+    )
+    # Default / inherited roots are empty — only the lane override has weights.
+    empty = tmp_path / "empty-default"
+    empty.mkdir()
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setattr(
+        gguf_module, "fetch_repo_gguf_files", lambda _repo: (_ for _ in ()).throw(RuntimeError("offline"))
+    )
+
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(models_path=str(empty)))
+    assert handle.hf_home_override is None
+
+    lane = LaneConfig(
+        model="unsloth/Qwen3-8B-GGUF",
+        vllm=True,
+        vllm_config=VllmConfig(env_overrides={"HF_HOME": str(lane_hf)}),
+    )
+    await handle._resolve_gguf_spec(lane)
+    assert handle._gguf_spec is not None
+    assert handle._gguf_spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    # Child env must receive the same root resolution consulted.
+    assert handle._build_env(lane)["HF_HOME"] == str(lane_hf)
+    assert handle._effective_hf_home_for_lane(lane) == str(lane_hf)
+
+
+@pytest.mark.asyncio
 async def test_resolve_gguf_spec_honors_operator_pin(monkeypatch, tmp_path: Path) -> None:
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
     handle.hf_home_override = str(tmp_path)
