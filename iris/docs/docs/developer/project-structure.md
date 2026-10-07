@@ -74,18 +74,19 @@ domain/
 ├── pipeline_execution_settings_dto.py     # Settings (Artemis URL, auth token, variant)
 ├── feature_dto.py                         # Feature/variant description for Artemis
 ├── chat/                                  # Chat-specific DTOs
-│   ├── chat_pipeline_execution_dto.py     # Base chat DTO (history, user, session)
-│   ├── lecture_chat/                      # Lecture chat DTOs
-│   └── text_exercise_chat/               # Text exercise chat DTOs
+│   ├── chat_pipeline_execution_dto.py     # The chat request DTO (mode, course, entities, history)
+│   └── interaction_suggestion_dto.py      # Follow-up suggestion DTO
 ├── data/                                  # Shared data models
 │   ├── course_dto.py, exercise DTOs, ...
 │   └── metrics/                           # Student performance metrics
 ├── variant/                               # Variant configurations
-│   ├── abstract_variant.py                # AbstractVariant, AbstractAgentVariant
-│   └── exercise_chat_variant.py, ...      # Pipeline-specific variants
+│   ├── abstract_variant.py                # AbstractVariant
+│   └── variant.py                         # Variant, Dep
 ├── ingestion/                             # Ingestion pipeline DTOs
 ├── retrieval/                             # Retrieval result DTOs
 ├── status/                                # Stage/status DTOs
+│   ├── chat_status_update_dto.py          # Chat result, suggestions, memories, activities
+│   └── suggested_context_dto.py           # Context switch requested by the agent
 ├── event/                                 # Event DTOs
 └── communication/                         # Communication pipeline DTOs
 ```
@@ -99,11 +100,10 @@ pipeline/
 ├── pipeline.py                            # Pipeline base class
 ├── sub_pipeline.py                        # SubPipeline base class
 ├── abstract_agent_pipeline.py             # AbstractAgentPipeline (agent loop)
-├── chat/                                  # Chat pipelines
-│   ├── exercise_chat_agent_pipeline.py    # Programming exercise chat
-│   ├── course_chat_pipeline.py            # General course chat
-│   ├── lecture_chat_pipeline.py           # Lecture-specific chat
-│   ├── text_exercise_chat_pipeline.py     # Text exercise chat
+├── chat/                                  # The chat pipeline
+│   ├── chat_pipeline.py                   # ChatPipeline — every student chat, every mode
+│   ├── iris_chat_mode.py                  # IrisChatMode enum (the active context kind)
+│   ├── mcq_chat_mixin.py                  # MCQ generation mixin
 │   ├── code_feedback_pipeline.py          # Internal code feedback analysis
 │   └── interaction_suggestion_pipeline.py # Suggested follow-up questions
 ├── competency_extraction_pipeline.py      # Extract competencies from course content
@@ -130,6 +130,7 @@ Functions that agents can call during execution. See [Tools](./tools.md) for the
 
 ```
 tools/
+├── chat_tool_providers.py                 # Per-request tool selection for ChatPipeline
 ├── lecture_content_retrieval.py            # RAG retrieval from lecture content
 ├── faq_content_retrieval.py               # RAG retrieval from FAQs
 ├── repository_files.py                    # List student repository files
@@ -141,12 +142,18 @@ tools/
 ├── exercise_list.py                       # List course exercises
 ├── exercise_example_solution.py           # Get exercise example solutions
 ├── additional_exercise_details.py         # Get additional exercise details
+├── lecture_list.py                        # List course lectures with their IDs
+├── switch_chat_context.py                 # Move the chat to another context
 ├── student_exercise_metrics.py            # Get student performance metrics
 ├── competency_list.py                     # List course competencies
 ├── course_details.py                      # Get course details
 ├── course_simple_details.py               # Get simplified course details
+├── mcq_generation.py                      # Generate multiple-choice questions
+├── activity_metadata.py                   # Tool activity names for the UI
 └── last_artifact.py                       # Get last CI/CD artifact
 ```
+
+`chat_tool_providers.py` is the entry point of this directory for chat work. It maps the request to a tool set, while the other modules only know how to build one tool each. See [Tools](./tools.md).
 
 ### `llm/` — LLM Client Layer
 
