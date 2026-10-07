@@ -54,8 +54,8 @@ commands, API paths, config keys or UI labels: copy those exactly.
 Check a page before you commit: split every sentence over the limit, replace
 every word you cannot find in the STE dictionary with an approved word or a
 defined technical name, and keep the same term for the same thing across the
-page. Rewrite a page in STE when you change a substantial part of it. Do not
-reformat unchanged pages in the same PR.
+page. All pages are in STE. Write every new or changed text in STE, and keep
+the heading anchors that other pages link to.
 
 ## System design diagrams
 
