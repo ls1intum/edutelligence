@@ -2571,18 +2571,32 @@ class LaneManager:
             # Safe under self._lock: the re-plan's lane inspection takes no
             # lock of its own (as in the apply_lanes add loop).
             await self._notify_lane_added()
+            # Local overrides (including gguf_quant) must land before RAM-cache
+            # admission: a bare GGUF repository with an operator pin serves that
+            # concrete quant, and admission must validate those weights — not
+            # reuse a sibling-quant snapshot by repository identity alone.
+            lane_config = self._apply_model_vllm_overrides(lane_config)
             # Ensure model is in RAM cache if available
             hf_home_override: str | None = None
             launched_from_ram_cache = False
             if self._model_cache is not None and getattr(self._model_cache, "enabled", False):
+                from logos_worker_node import gguf  # noqa: PLC0415 — lazy: keep gguf out of module import
+
+                pinned_quant = ""
+                if lane_config.vllm_config is not None:
+                    pinned_quant = str(lane_config.vllm_config.gguf_quant or "")
+                source_hf: str | None = None
+                if hasattr(self._model_cache, "_source_hub"):
+                    source_hf = str(self._model_cache._source_hub.parent)
+                admission_ref = gguf.cache_admission_ref(source_hf, lane_config.model, pinned_quant)
                 # Startup pre-population runs in the background — if the model
                 # is already being copied (or queued behind others), bump it to
                 # the front and block this lane add until the copy finishes.
                 # Falls through to ensure_cached anyway so on-demand caching
                 # still works for models the startup planner didn't pick.
                 if hasattr(self._model_cache, "wait_for_cached"):
-                    await self._model_cache.wait_for_cached(lane_config.model)
-                effective = await self._model_cache.ensure_cached(lane_config.model)
+                    await self._model_cache.wait_for_cached(admission_ref)
+                effective = await self._model_cache.ensure_cached(admission_ref)
                 if effective:
                     hf_home_override = effective
                     is_tmpfs = hasattr(self._model_cache, "_cache_hub") and effective == str(
@@ -2599,7 +2613,6 @@ class LaneManager:
                         effective,
                         "tmpfs RAM cache" if is_tmpfs else "source filesystem",
                     )
-            lane_config = self._apply_model_vllm_overrides(lane_config)
             lane_config = self._auto_tensor_parallel(lane_config)
             lane_config = await self._auto_place_gpu_devices(lane_id, lane_config)
             # Last line of defence at the resource itself: an operator-explicit

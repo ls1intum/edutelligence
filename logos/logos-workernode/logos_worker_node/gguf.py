@@ -818,6 +818,20 @@ def gguf_capability_target(
     return model
 
 
+def cache_admission_ref(hf_home: str | None, model: str, gguf_quant: str = "") -> str:
+    """Reference to pass into ModelRamCache admission for weight coverage.
+
+    Sibling GGUF quants share one ``models--org--name/`` tmpfs directory. A
+    bare repository with an operator pin (or an auto-selected serve quant)
+    must admit against that concrete ``repo:quant`` target — otherwise a
+    Q4-only RAM snapshot looks complete for a Q8 pin and the lane loads from
+    a cache that lacks its weights. Returns the concrete serve target when
+    one can be determined; otherwise *model* unchanged.
+    """
+    concrete = gguf_capability_target(hf_home, model, gguf_quant)
+    return concrete if concrete else model
+
+
 def effective_hf_home(explicit: str | None, default: str = "") -> str:
     """HF cache root to consult for a local GGUF listing.
 

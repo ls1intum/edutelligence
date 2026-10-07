@@ -72,6 +72,7 @@ except ImportError:
 
 from logos_worker_node.gguf import (
     GgufServeSpec,
+    cache_admission_ref,
     effective_hf_home,
     fetch_repo_gguf_files,
     is_explicit_gguf_ref,
@@ -2730,9 +2731,15 @@ def _calibrate_model_probe(
         # Lazy RAM cache: copy model into tmpfs on first probe.
         if not _ram_cached and model_cache is not None:
             logger.info("  [RAM cache] Caching %s into tmpfs before first probe...", model)
+            # Admit against the concrete serve target (bare repo + gguf_quant
+            # pin → repo:quant) so a sibling-quant RAM snapshot is not reused.
+            source_hf: str | None = None
+            if hasattr(model_cache, "_source_hub"):
+                source_hf = str(model_cache._source_hub.parent)
+            admission_ref = cache_admission_ref(source_hf, model, str(plan.get("gguf_quant") or ""))
             _tmpfs_hf, _host_ram_block = _reserve_and_admit_calibration_copy(
                 model_cache,
-                model,
+                admission_ref,
                 cache_use_reserved=cache_use_reserved,
                 establish_host_ram_floor=establish_host_ram_floor,
             )

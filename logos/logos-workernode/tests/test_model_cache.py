@@ -822,6 +822,47 @@ async def test_ensure_cached_rejects_incomplete_gguf_quant_in_shared_entry(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_ensure_cached_rejects_incomplete_quant_for_bare_repo_with_pin(tmp_path):
+    """Bare ``org/model-GGUF`` + ``gguf_quant=Q8_0`` must not reuse a Q4-only RAM entry.
+
+    Lane startup and calibration pass only the bare model name unless the
+    call site resolves the concrete serve target first. Admission must then
+    validate that target's complete weights — the same fall-back as an
+    explicit ``repo:Q8_0`` request — when Q8 exists only in persistent storage.
+    """
+    from logos_worker_node import gguf
+
+    source_hf = tmp_path / "source" / "hub"
+    source_hf.mkdir(parents=True)
+    tmpfs = tmp_path / "ramcache"
+    tmpfs.mkdir()
+
+    repo = "org/model-GGUF"
+    q4 = f"{repo}:Q4_K_M"
+    # Persistent storage has both quants; the RAM snapshot will hold only Q4.
+    _gguf_hub_tree(source_hf, repo, ["model-Q4_K_M.gguf", "model-Q8_0.gguf"])
+
+    cache = ModelRamCache(tmpfs_path=str(tmpfs), source_hf_hub_path=str(source_hf))
+    cache._total_tmpfs_bytes = lambda: 0
+
+    await cache.ensure_cached(q4)
+    cached_snap = Path(tmpfs) / "hub" / "models--org--model-GGUF" / "snapshots" / "abc123"
+    (cached_snap / "model-Q8_0.gguf").unlink()
+    assert not (cached_snap / "model-Q8_0.gguf").exists()
+
+    source_home = str(Path(source_hf).parent)
+    # Call-site resolution used by lane startup / calibration.
+    admission_ref = gguf.cache_admission_ref(source_home, repo, "Q8_0")
+    assert admission_ref == f"{repo}:Q8_0"
+    # Bare admission still looks complete (is_gguf_ref_cached returns None).
+    assert await cache.ensure_cached(repo) == str(tmpfs)
+    # Concrete target falls back to persistent storage.
+    assert await cache.ensure_cached(admission_ref) == source_home
+    assert cache.ensure_cached_sync(admission_ref) == source_home
+    assert (cached_snap / "model-Q4_K_M.gguf").exists()
+
+
+@pytest.mark.asyncio
 async def test_the_cache_refuses_to_grow_into_the_sleep_reserve(ram_cache_env, monkeypatch):
     """The tmpfs mount is a fixed 400G of a 503G host, so tmpfs free space is
     no bound at all. What bounds the cache is live host RAM against the RAM

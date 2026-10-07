@@ -711,6 +711,16 @@ def test_is_gguf_ref_cached_local_dir_ref_checks_the_directory(tmp_path: Path) -
 # ---------------------------------------------------------------------------
 
 
+def test_cache_admission_ref_uses_concrete_serve_target(tmp_path: Path) -> None:
+    """RAM-cache admission must see the operator pin, not only the bare repo."""
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf"])
+    assert gguf.cache_admission_ref(str(tmp_path), "unsloth/Qwen3-8B-GGUF", "Q8_0") == "unsloth/Qwen3-8B-GGUF:Q8_0"
+    # Auto-selected quant when unpinned …
+    assert gguf.cache_admission_ref(str(tmp_path), "unsloth/Qwen3-8B-GGUF") == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    # … plain models pass through unchanged.
+    assert gguf.cache_admission_ref(str(tmp_path), "Qwen/Qwen3-8B") == "Qwen/Qwen3-8B"
+
+
 def test_gguf_capability_target_shapes(tmp_path: Path) -> None:
     _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf"])
     # Explicit references validate themselves …
