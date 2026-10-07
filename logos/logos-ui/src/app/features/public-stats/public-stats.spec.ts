@@ -1,25 +1,10 @@
-import { Component } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { ThemeService } from '../../core/services/theme.service';
 import { PublicStats as PublicStatsPage } from './public-stats';
 import { PublicStats, PublicStatsService } from './public-stats.service';
-
-// The header's theme toggle asks the platform for the preferred color scheme
-// on first render; jsdom has no matchMedia, so give it one that answers light.
-if (!window.matchMedia) {
-  window.matchMedia = (query: string) =>
-    ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener: () => undefined,
-      removeEventListener: () => undefined,
-      addListener: () => undefined,
-      removeListener: () => undefined,
-      dispatchEvent: () => false,
-    }) as MediaQueryList;
-}
 
 function stats(overrides: Partial<PublicStats> = {}): PublicStats {
   return {
@@ -66,7 +51,10 @@ describe('PublicStats page', () => {
 
   it('reports a load failure instead of a blank page', async () => {
     const fixture = createPage(() => Promise.reject(new Error('boom')));
-    await fixture.whenStable();
+    // Rejected promises settle outside whenStable's happy path — flush the
+    // catch that sets the error signal, then re-render.
+    await Promise.resolve();
+    await Promise.resolve();
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
     expect(root.querySelector('[role="alert"]')!.textContent).toContain('could not be loaded');
@@ -89,7 +77,13 @@ describe('PublicStats page', () => {
 function createPage(getStats: () => Promise<PublicStats>) {
   TestBed.configureTestingModule({
     imports: [HostComponent],
-    providers: [provideRouter([]), { provide: PublicStatsService, useValue: { getStats } }],
+    providers: [
+      provideRouter([]),
+      { provide: PublicStatsService, useValue: { getStats } },
+      // The header's theme toggle reads localStorage/matchMedia; stub the
+      // preference so the page can render under jsdom without a storage polyfill.
+      { provide: ThemeService, useValue: { isDark: signal(false), toggle: vi.fn() } },
+    ],
   });
   const fixture = TestBed.createComponent(HostComponent);
   fixture.detectChanges();
