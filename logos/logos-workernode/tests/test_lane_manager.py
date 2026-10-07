@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from pydantic import ValidationError
 
-from logos_worker_node.lane_manager import LaneManager, PortAllocator
+from logos_worker_node.lane_manager import LaneManager, PortAllocator, _lane_needs_restart
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import (
     DeviceInfo,
@@ -3221,6 +3221,61 @@ async def test_benchmark_restarts_for_spawn_time_vllm_settings(override) -> None
     manager._validate_vllm_runtime_requirements = MagicMock()
     await manager.reconfigure_lane(
         "benchmark-lane", {"vllm_config": {**current.vllm_config.model_dump(), **override}}, require_idle=True
+    )
+    manager._restart_lane_unlocked.assert_awaited_once()
+
+
+def test_lane_needs_restart_when_gguf_quant_changes() -> None:
+    current = LaneConfig(
+        model="org/model-GGUF",
+        vllm=True,
+        vllm_config=VllmConfig(gguf_quant="Q4_K_M"),
+    )
+    desired = LaneConfig(
+        model="org/model-GGUF",
+        vllm=True,
+        vllm_config=VllmConfig(gguf_quant="Q8_0"),
+    )
+    assert _lane_needs_restart(current, desired) is True
+    assert _lane_needs_restart(current, current) is False
+
+
+def test_lane_needs_restart_when_gguf_tokenizer_changes() -> None:
+    current = LaneConfig(
+        model="org/model-GGUF",
+        vllm=True,
+        vllm_config=VllmConfig(gguf_tokenizer="Qwen/Qwen3-8B"),
+    )
+    desired = LaneConfig(
+        model="org/model-GGUF",
+        vllm=True,
+        vllm_config=VllmConfig(gguf_tokenizer="Qwen/Qwen3-8B-Instruct"),
+    )
+    assert _lane_needs_restart(current, desired) is True
+    assert _lane_needs_restart(current, current) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override",
+    [{"gguf_quant": "Q8_0"}, {"gguf_tokenizer": "Qwen/Qwen3-8B"}],
+)
+async def test_reconfigure_restarts_for_gguf_serve_settings(override) -> None:
+    """Ordinary reconfigure (not require_idle) must restart when GGUF serve settings change."""
+    manager = LaneManager(WorkerConfig())
+    current = LaneConfig(
+        model="org/model-GGUF",
+        vllm=True,
+        vllm_config=VllmConfig(gguf_quant="Q4_K_M", gguf_tokenizer=""),
+    )
+    manager._handles["lane"] = _StubHandle(current)
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    await manager.reconfigure_lane(
+        "lane",
+        {"vllm_config": {**current.vllm_config.model_dump(), **override}},
+        require_idle=False,
     )
     manager._restart_lane_unlocked.assert_awaited_once()
 

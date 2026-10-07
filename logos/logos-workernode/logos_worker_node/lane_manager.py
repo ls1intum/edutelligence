@@ -222,6 +222,10 @@ def _lane_needs_restart(current: LaneConfig, desired: LaneConfig) -> bool:
         or cv.tool_call_parser != dv.tool_call_parser
         or cv.reasoning_parser != dv.reasoning_parser
         or cv.extra_args != dv.extra_args
+        # GGUF serve settings change the launch command (selected quant file /
+        # --tokenizer) and cannot be applied to a running process.
+        or cv.gguf_quant != dv.gguf_quant
+        or cv.gguf_tokenizer != dv.gguf_tokenizer
         or current.gpu_devices != desired.gpu_devices
     )
 
