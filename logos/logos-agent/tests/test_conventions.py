@@ -128,5 +128,54 @@ class TestAReadThatWasOvertaken:
         assert (await conventions.current()).house_rules == "the new text"
 
 
+class TestThePromptDoesNotDuplicateTheRepositoryConventions:
+    """The standing text is the source of truth for *how an unattended agent
+    works in the sandbox*. The repository's own conventions — which linters it
+    runs, how comments are written — live in its AGENTS.md, which the agent
+    reads for itself. The two must not restate the same fact: a fact told in
+    two places drifts apart, and an agent handed two versions has to guess
+    which one to follow.
+
+    These guard the division of labour: the prompt keeps its agent-specific
+    instructions and stops re-listing what AGENTS.md already owns.
+    """
+
+    def test_the_notes_explain_how_to_lint_without_relisting_the_hooks(self):
+        notes = conventions.ENVIRONMENT_NOTES
+
+        # The sandbox instructions that make linting possible offline stay.
+        assert "pre-commit run --files" in notes
+        assert "reformat in place" in notes
+
+        # The list of linters is the repository's convention (AGENTS.md, the
+        # pre-commit config), not the prompt's to repeat.
+        for linter in ("black", "isort", "autoflake", "flake8", "pylint", "mypy"):
+            assert linter not in notes
+
+    def test_the_notes_do_not_name_the_services_that_need_a_network(self):
+        # "pylint and mypy under iris/ and memiris/ run through poetry" was a
+        # fact about this repository's layout, not about the sandbox the agent
+        # runs in. The prompt says a hook that cannot run offline must be
+        # reported, without reciting which services are affected.
+        notes = conventions.ENVIRONMENT_NOTES
+
+        assert "poetry" not in notes
+        assert "iris/" not in notes
+        assert "memiris/" not in notes
+
+    def test_the_rules_do_not_restate_the_comment_convention(self):
+        rules = conventions.HOUSE_RULES
+
+        # The agent-specific working agreement stays.
+        assert "Never merge a pull request" in rules
+
+        # "No issue/PR references in code" is a repository convention owned by
+        # AGENTS.md. The rules keep the agent's own agreements (the commit
+        # subject it writes carries no issue number), but do not restate the
+        # repo's comment style.
+        assert "issue or pull-request numbers in code comments" not in rules
+        assert "docstrings, or test names" not in rules
+
+
 async def _answer(row):
     return row

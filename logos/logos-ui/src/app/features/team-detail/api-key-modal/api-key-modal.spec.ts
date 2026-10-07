@@ -72,7 +72,7 @@ describe('ApiKeyModalComponent', () => {
     expect(teamService.setApiKeyModelPermissions).toHaveBeenCalledWith(42, [20]);
   });
 
-  describe('developer SLA inheritance reset', () => {
+  describe('developer SLO inheritance reset', () => {
     it('offers a reset action that saves default_priority 0 for developer keys', async () => {
       const developerKey: TeamApiKey = {
         ...key,
@@ -86,15 +86,15 @@ describe('ApiKeyModalComponent', () => {
       });
       await fixture.whenStable();
 
-      expect(component.fSla()).toBe('ux-background');
+      expect(component.fSlo()).toBe('ux-background');
       // Placeholder must reflect team inheritance (10 → critical), not the
       // key's current explicit background tier.
-      expect(component.inheritedEffectiveSla()).toBe('ux-critical');
-      expect(component.canResetDeveloperSla()).toBe(true);
+      expect(component.inheritedEffectiveSlo()).toBe('ux-critical');
+      expect(component.canResetDeveloperSlo()).toBe(true);
 
-      component.resetDeveloperSlaToInherited();
-      expect(component.fSla()).toBe('');
-      expect(component.canResetDeveloperSla()).toBe(false);
+      component.resetDeveloperSloToInherited();
+      expect(component.fSlo()).toBe('');
+      expect(component.canResetDeveloperSlo()).toBe(false);
 
       await component.save();
 
@@ -117,8 +117,8 @@ describe('ApiKeyModalComponent', () => {
       });
       await fixture.whenStable();
 
-      expect(component.fSla()).toBe('ux-high-prio');
-      expect(component.canResetDeveloperSla()).toBe(false);
+      expect(component.fSlo()).toBe('ux-high-prio');
+      expect(component.canResetDeveloperSlo()).toBe(false);
     });
   });
 

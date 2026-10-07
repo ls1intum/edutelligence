@@ -21,7 +21,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.TeamRepoLinkService;
 
 /**
- * Team-scoped GitHub repository links used later for AI-workflow / SLA analysis.
+ * Team-scoped GitHub repository links used later for AI-workflow / SLO analysis.
  * Same ownership gate as application keys: logos admins, or an app admin who owns
  * the team.
  */
