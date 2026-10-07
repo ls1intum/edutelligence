@@ -407,21 +407,38 @@ class _VisibilityPolicy:
     now: datetime | None
     unrestricted: bool
     staff_course_ids: frozenset[int]
+    base_url: str
+
+    def owns(self, properties: dict[str, Any]) -> bool:
+        """Word-tokenized Weaviate filters cannot enforce instance identity."""
+        value = properties.get("base_url")
+        return isinstance(value, str) and value == self.base_url
 
     @classmethod
-    def from_context(cls, ctx: AccessContext | None) -> "_VisibilityPolicy":
+    def from_context(
+        cls, ctx: AccessContext | None, *, base_url: str
+    ) -> "_VisibilityPolicy":
+        if not isinstance(base_url, str) or not base_url.strip():
+            raise ValueError("base_url must be a nonblank string")
         if ctx is None:
-            return cls(now=None, unrestricted=False, staff_course_ids=frozenset())
+            return cls(
+                now=None,
+                unrestricted=False,
+                staff_course_ids=frozenset(),
+                base_url=base_url,
+            )
         return cls(
             now=ctx.effective_now_dt(),
             unrestricted=ctx.unrestricted,
             staff_course_ids=frozenset(ctx.staff_course_ids),
+            base_url=base_url,
         )
 
-    def release_bypassed(self, course_id: Any) -> bool:
+    def release_bypassed(self, course_id: Any, properties: dict[str, Any]) -> bool:
         """Whether the unit-level release-date gate is waived for this course."""
-        return self.unrestricted or (
-            course_id is not None and course_id in self.staff_course_ids
+        return self.owns(properties) and (
+            self.unrestricted
+            or (course_id is not None and course_id in self.staff_course_ids)
         )
 
 
@@ -494,12 +511,17 @@ class LectureGlobalSearchRetrieval:
         access_context: AccessContext | None = None,
         entity_sources: list[EntitySourceDTO] | None = None,
         on_phase: Callable[[str], None] | None = None,
+        *,
+        base_url: str,
     ) -> list[LectureSearchResultDTO | EntitySourceDTO]:
         """
         Search for lecture content based on a query.
 
         :param query: The search query (embedded with the retrieval instruction).
         :param limit: The maximum number of results to return.
+        :param base_url: Required raw server identity supplied by Artemis. Missing or
+                         blank identity fails before embedding or retrieval. It is
+                         compared exactly with existing stored base_url tags.
         :param alpha: Hybrid search weight (1.0 = pure semantic, 0.0 = pure keyword).
         :param course_ids: Optional list of course IDs to restrict the search scope.
                            When None, searches all ingested courses (global search).
@@ -517,6 +539,7 @@ class LectureGlobalSearchRetrieval:
                          just does not get the signal, same as before this parameter existed.
         :return: Segments sorted by relevance.
         """
+        policy = _VisibilityPolicy.from_context(access_context, base_url=base_url)
         effective_course_ids = resolve_effective_course_ids(course_ids, access_context)
         no_accessible_courses = (
             effective_course_ids is not None and not effective_course_ids
@@ -543,7 +566,7 @@ class LectureGlobalSearchRetrieval:
             course_ids=effective_course_ids,
             exclude_course_ids=exclude_course_ids,
             auto_cut=auto_cut,
-            policy=_VisibilityPolicy.from_context(access_context),
+            policy=policy,
             entity_sources=entity_sources,
             skip_content_lanes=no_accessible_courses,
             on_phase=on_phase,
@@ -573,7 +596,7 @@ class LectureGlobalSearchRetrieval:
         still lets them reach the rerank/gate pipeline below.
         """
         if policy is None:
-            policy = _VisibilityPolicy.from_context(None)
+            raise ValueError("An instance-scoped visibility policy is required")
         telemetry = _SearchTelemetry()
         deduped = (
             []
@@ -625,6 +648,12 @@ class LectureGlobalSearchRetrieval:
         """Fetch lanes and map+filter to visible candidates, expanding the lane
         depth on retry until there are enough or the lanes are exhausted.
 
+        URL Equal filters are coarse narrowing on the existing word-tokenized
+        property. Exact raw ownership checks run before metadata joins and any
+        text processing. Token-matching foreign rows may still consume the lane
+        depth cap and metadata/expansion fetch caps, so these bounded queries do
+        not promise complete recall beyond those caps. No stored data is changed.
+
         Release-date and slide-visibility filtering happens AFTER retrieval
         (in _segment_to_dto/_transcription_to_dto), so a fixed-depth fetch can
         be entirely consumed by unreleased or hidden rows while a visible,
@@ -664,6 +693,7 @@ class LectureGlobalSearchRetrieval:
                 exclude_course_ids,
                 use_autocut,
                 telemetry,
+                base_url=policy.base_url,
             )
             # Only a fixed-limit lane returning short of what it asked for means
             # that lane is genuinely exhausted; an autocut-shortened result says
@@ -672,8 +702,12 @@ class LectureGlobalSearchRetrieval:
             trans_exhausted = not use_autocut and len(trans_objects) < lane_depth
             telemetry.drop_counts = Counter()
             telemetry.drop_details = []
+            # Retain RAW lane lengths above for exhaustion and adaptive depth.
+            # Reject foreign text before metadata joins, deduplication or ranking.
+            seg_objects = self._owned_objects(seg_objects, policy, telemetry)
+            trans_objects = self._owned_objects(trans_objects, policy, telemetry)
             units_by_id, start_times, slides_by_display_page = self._fetch_metadata(
-                seg_objects, trans_objects, telemetry
+                seg_objects, trans_objects, telemetry, base_url=policy.base_url
             )
             scored = self._map_candidates(
                 seg_objects,
@@ -708,6 +742,8 @@ class LectureGlobalSearchRetrieval:
         exclude_course_ids: list[int] | None,
         auto_cut: bool,
         telemetry: "_SearchTelemetry",
+        *,
+        base_url: str,
     ) -> tuple[list[Any], list[Any]]:
         """Query both collection lanes in parallel at the given candidate depth.
 
@@ -726,6 +762,7 @@ class LectureGlobalSearchRetrieval:
                 course_ids,
                 exclude_course_ids,
                 auto_limit,
+                base_url=base_url,
             )
             trans_future = executor.submit(
                 self._search_video_transcriptions,
@@ -736,6 +773,7 @@ class LectureGlobalSearchRetrieval:
                 course_ids,
                 exclude_course_ids,
                 auto_limit,
+                base_url=base_url,
             )
         seg_objects = seg_future.result()
         trans_objects = trans_future.result()
@@ -744,11 +782,25 @@ class LectureGlobalSearchRetrieval:
         telemetry.trans_hits = len(trans_objects)
         return seg_objects, trans_objects
 
+    @staticmethod
+    def _owned_objects(
+        objects: list[Any], policy: "_VisibilityPolicy", telemetry: "_SearchTelemetry"
+    ) -> list[Any]:
+        owned = []
+        for obj in objects:
+            if policy.owns(obj.properties):
+                owned.append(obj)
+            else:
+                telemetry.record_drop("content", "foreign_instance", obj.properties)
+        return owned
+
     def _fetch_metadata(
         self,
         seg_objects: list[Any],
         trans_objects: list[Any],
         telemetry: "_SearchTelemetry",
+        *,
+        base_url: str,
     ) -> tuple[
         dict[tuple[str, int], Any],
         dict[tuple[str, int, int], float],
@@ -774,13 +826,17 @@ class LectureGlobalSearchRetrieval:
         t_meta = time.perf_counter()
         with TracedThreadPoolExecutor(max_workers=3) as executor:
             lecture_unit_future = executor.submit(
-                self._fetch_lecture_units, all_unit_ids
+                self._fetch_lecture_units, all_unit_ids, base_url=base_url
             )
             ts_future = executor.submit(
-                self._fetch_transcription_start_times, unit_page_pairs
+                self._fetch_transcription_start_times,
+                unit_page_pairs,
+                base_url=base_url,
             )
             slide_future = executor.submit(
-                self._fetch_slides_by_display_page, list(trans_unit_ids)
+                self._fetch_slides_by_display_page,
+                list(trans_unit_ids),
+                base_url=base_url,
             )
         units_by_id = lecture_unit_future.result()
         start_times = ts_future.result()
@@ -1003,6 +1059,7 @@ class LectureGlobalSearchRetrieval:
                 self.collection,
                 LectureUnitSegmentSchema,
                 unit_keys,
+                base_url=policy.base_url,
             )
             trans_future = executor.submit(
                 self._fetch_unit_objects,
@@ -1016,22 +1073,27 @@ class LectureGlobalSearchRetrieval:
                 Filter.by_property(LectureTranscriptionSchema.PAGE_NUMBER.value).equal(
                     -1
                 ),
+                base_url=policy.base_url,
             )
         # Only objects whose FULL key matches an anchor: a bare unit-id match can
         # belong to a different Artemis instance sharing this Weaviate.
         wanted = set(unit_keys)
         seg_objects = [
-            o for o in seg_future.result() if _unit_key(o.properties) in wanted
+            o
+            for o in seg_future.result()
+            if policy.owns(o.properties) and _unit_key(o.properties) in wanted
         ]
         trans_objects = [
-            o for o in trans_future.result() if _unit_key(o.properties) in wanted
+            o
+            for o in trans_future.result()
+            if policy.owns(o.properties) and _unit_key(o.properties) in wanted
         ]
         if not seg_objects and not trans_objects:
             telemetry.expand_ms = (time.perf_counter() - t_expand) * 1000
             return kept
 
         units_by_id, start_times, slides_by_display_page = self._fetch_metadata(
-            seg_objects, trans_objects, telemetry
+            seg_objects, trans_objects, telemetry, base_url=policy.base_url
         )
         siblings = self._map_candidates(
             seg_objects,
@@ -1076,15 +1138,18 @@ class LectureGlobalSearchRetrieval:
         schema: Any,
         unit_keys: list[tuple[Any, Any, Any]],
         extra_filter: Any | None = None,
+        *,
+        base_url: str,
     ) -> list[Any]:
         """Fetch in anchor order under one raw-row budget for this collection.
 
-        A capped ID-union query chooses in storage order, so a lower-ranked
-        unit that returns many rows can starve higher-ranked anchors of their
-        siblings. Structural-key queries preserve the existing ``kept`` order
-        instead. An incomplete key consumes no rows.
+        A capped ID-union query chooses in storage order, so adding another
+        surviving anchor can starve the highest-priority anchor's siblings.
+        Structural-key queries preserve the existing ``kept`` order instead.
+        Foreign token matches still consume the raw budget and are rejected by
+        the caller's exact ownership guard; an empty anchor consumes no rows.
         """
-        objects: list[Any] = []
+        objects = []
         queries = 0
         remaining = settings.global_search_expand_fetch_limit
         started = time.perf_counter()
@@ -1092,10 +1157,10 @@ class LectureGlobalSearchRetrieval:
             for owner, course_id, unit_id in unit_keys:
                 if remaining <= 0:
                     break
-                if owner is None or course_id is None or unit_id is None:
+                if owner != base_url or course_id is None or unit_id is None:
                     continue
                 filters = [
-                    Filter.by_property(schema.BASE_URL.value).equal(owner),
+                    Filter.by_property(schema.BASE_URL.value).equal(base_url),
                     Filter.by_property(schema.COURSE_ID.value).equal(course_id),
                     Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(unit_id),
                 ]
@@ -1258,9 +1323,19 @@ class LectureGlobalSearchRetrieval:
         course_ids: list[int] | None = None,
         exclude_course_ids: list[int] | None = None,
         auto_limit: int | None = None,
+        *,
+        base_url: str,
     ) -> list[Any]:
         filters = _course_scope_filter(
             LectureUnitSegmentSchema.COURSE_ID.value, course_ids, exclude_course_ids
+        )
+        instance_filter = Filter.by_property(
+            LectureUnitSegmentSchema.BASE_URL.value
+        ).equal(base_url)
+        filters = (
+            Filter.all_of([instance_filter, filters])
+            if filters is not None
+            else instance_filter
         )
         return self.collection.query.hybrid(
             query=query,
@@ -1281,6 +1356,8 @@ class LectureGlobalSearchRetrieval:
         course_ids: list[int] | None = None,
         exclude_course_ids: list[int] | None = None,
         auto_limit: int | None = None,
+        *,
+        base_url: str,
     ) -> list[Any]:
         """Search LectureTranscriptions restricted to segments with no associated slide
         (page_number == -1). These are video-only moments not captured in any segment.
@@ -1291,23 +1368,26 @@ class LectureGlobalSearchRetrieval:
         course_filter = _course_scope_filter(
             LectureTranscriptionSchema.COURSE_ID.value, course_ids, exclude_course_ids
         )
-        filters = (
-            Filter.all_of([page_filter, course_filter])
-            if course_filter is not None
-            else page_filter
-        )
+        filters = [
+            page_filter,
+            Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
+                base_url
+            ),
+        ]
+        if course_filter is not None:
+            filters.append(course_filter)
         return self.transcription_collection.query.hybrid(
             query=query,
             alpha=alpha,
             vector=vector,
-            filters=filters,
+            filters=Filter.all_of(filters),
             limit=limit,
             auto_limit=auto_limit,
             return_metadata=MetadataQuery(score=True),
         ).objects
 
     def _fetch_transcription_start_times(
-        self, unit_page_pairs: list[tuple[int, int]]
+        self, unit_page_pairs: list[tuple[int, int]], *, base_url: str
     ) -> dict[tuple[str, int, int], float]:
         """Batch-fetch min start_time per (base_url, unit_id, page_number) for slide-sync
         detection. base_url is part of the key for the same reason as _fetch_lecture_units:
@@ -1317,15 +1397,23 @@ class LectureGlobalSearchRetrieval:
             return {}
         unit_ids = list({uid for uid, _ in unit_page_pairs})
         transcriptions = self.transcription_collection.query.fetch_objects(
-            filters=Filter.by_property(
-                LectureTranscriptionSchema.LECTURE_UNIT_ID.value
-            ).contains_any(unit_ids),
+            filters=Filter.all_of(
+                [
+                    Filter.by_property(
+                        LectureTranscriptionSchema.LECTURE_UNIT_ID.value
+                    ).contains_any(unit_ids),
+                    Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
+                        base_url
+                    ),
+                ]
+            ),
             limit=10_000,
         ).objects
         result: dict[tuple[str, int, int], float] = {}
         for t in transcriptions:
             props = t.properties
-            base_url = props.get(LectureTranscriptionSchema.BASE_URL.value)
+            if props.get(LectureTranscriptionSchema.BASE_URL.value) != base_url:
+                continue
             uid = props.get(LectureTranscriptionSchema.LECTURE_UNIT_ID.value)
             page = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
             start = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
@@ -1336,7 +1424,9 @@ class LectureGlobalSearchRetrieval:
                 result[key] = float(start)
         return result
 
-    def _fetch_lecture_units(self, unit_ids: list[int]) -> dict[tuple[str, int], Any]:
+    def _fetch_lecture_units(
+        self, unit_ids: list[int], *, base_url: str
+    ) -> dict[tuple[str, int], Any]:
         """Fetch lecture unit metadata for the given IDs in a single Weaviate query.
 
         Keyed by (base_url, unit_id), not the bare id: multiple Artemis instances can
@@ -1350,9 +1440,16 @@ class LectureGlobalSearchRetrieval:
         if not unit_ids:
             return {}
         lecture_units = self.lecture_unit_collection.query.fetch_objects(
-            filters=Filter.by_property(
-                LectureUnitSchema.LECTURE_UNIT_ID.value
-            ).contains_any(unit_ids),
+            filters=Filter.all_of(
+                [
+                    Filter.by_property(
+                        LectureUnitSchema.LECTURE_UNIT_ID.value
+                    ).contains_any(unit_ids),
+                    Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
+                        base_url
+                    ),
+                ]
+            ),
             limit=max(100, len(unit_ids) * 10),
         ).objects
         result = {
@@ -1361,6 +1458,7 @@ class LectureGlobalSearchRetrieval:
                 lecture_unit.properties[LectureUnitSchema.LECTURE_UNIT_ID.value],
             ): lecture_unit.properties
             for lecture_unit in lecture_units
+            if lecture_unit.properties.get(LectureUnitSchema.BASE_URL.value) == base_url
         }
         found_ids = {key[1] for key in result}
         missing = set(unit_ids) - found_ids
@@ -1377,7 +1475,7 @@ class LectureGlobalSearchRetrieval:
         return result
 
     def _fetch_slides_by_display_page(
-        self, unit_ids: list[int]
+        self, unit_ids: list[int], *, base_url: str
     ) -> dict[tuple[str, int, int], list[Any]]:
         """Group each unit's slides by the display page they are shown on.
 
@@ -1390,9 +1488,16 @@ class LectureGlobalSearchRetrieval:
         if not unit_ids:
             return {}
         chunks = self.page_chunk_collection.query.fetch_objects(
-            filters=Filter.by_property(
-                LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
-            ).contains_any(unit_ids),
+            filters=Filter.all_of(
+                [
+                    Filter.by_property(
+                        LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
+                    ).contains_any(unit_ids),
+                    Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
+                        base_url
+                    ),
+                ]
+            ),
             limit=10_000,
             return_properties=[
                 LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value,
@@ -1405,7 +1510,8 @@ class LectureGlobalSearchRetrieval:
         by_physical_page: dict[tuple[str, int, int], dict[int, Any]] = {}
         for chunk in chunks:
             properties = chunk.properties
-            base_url = properties.get(LectureUnitPageChunkSchema.BASE_URL.value)
+            if properties.get(LectureUnitPageChunkSchema.BASE_URL.value) != base_url:
+                continue
             unit_id = properties.get(LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value)
             physical_page = properties.get(LectureUnitPageChunkSchema.PAGE_NUMBER.value)
             display_page = properties.get(
@@ -1426,7 +1532,9 @@ class LectureGlobalSearchRetrieval:
     ) -> tuple[LectureSearchResultDTO | None, str | None]:
         """Map a segment hit to a DTO; on failure return (None, drop_reason)."""
         if policy is None:
-            policy = _VisibilityPolicy.from_context(None)
+            return None, "missing_instance_scope"
+        if not policy.owns(props):
+            return None, "foreign_instance"
         snippet = props.get(LectureUnitSegmentSchema.SEGMENT_SUMMARY.value)
         if not snippet:
             return None, "no_snippet"
@@ -1443,9 +1551,11 @@ class LectureGlobalSearchRetrieval:
         )
         if lecture_unit is None:
             return None, "missing_unit_metadata"
-        if not policy.release_bypassed(course_id) and not is_unit_released(
-            lecture_unit, policy.now
-        ):
+        if not policy.owns(lecture_unit):
+            return None, "foreign_instance"
+        if not policy.release_bypassed(
+            course_id, lecture_unit
+        ) and not is_unit_released(lecture_unit, policy.now):
             return None, "unit_unreleased"
 
         lecture_id = props.get(LectureUnitSegmentSchema.LECTURE_ID.value)
@@ -1508,7 +1618,9 @@ class LectureGlobalSearchRetrieval:
     ) -> tuple[LectureSearchResultDTO | None, str | None]:
         """Map a transcription hit to a DTO; on failure return (None, drop_reason)."""
         if policy is None:
-            policy = _VisibilityPolicy.from_context(None)
+            return None, "missing_instance_scope"
+        if not policy.owns(props):
+            return None, "foreign_instance"
         snippet = props.get(
             LectureTranscriptionSchema.SEGMENT_SUMMARY.value
         ) or props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value)
@@ -1523,6 +1635,8 @@ class LectureGlobalSearchRetrieval:
         )
         if lecture_unit is None:
             return None, "missing_unit_metadata"
+        if not policy.owns(lecture_unit):
+            return None, "foreign_instance"
         # A transcription segment inherits the visibility of the slide shown
         # over it: an unhidden segment on a hidden overlay slide must stay
         # hidden, so the associated slides are part of the check.
@@ -1541,7 +1655,7 @@ class LectureGlobalSearchRetrieval:
             lecture_unit,
             associated_slides,
             now=policy.now,
-            bypass_release=policy.release_bypassed(course_id),
+            bypass_release=policy.release_bypassed(course_id, lecture_unit),
         ):
             return None, "transcription_hidden"
         if _is_low_information(snippet):
