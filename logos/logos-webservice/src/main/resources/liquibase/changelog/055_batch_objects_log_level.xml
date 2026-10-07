@@ -9,7 +9,7 @@
          request. NULL means the create request sent no logos-logging header,
          so local line execution and provider settlement keep using the key's
          living level. No backfill: existing rows behave as before. -->
-    <changeSet id="053-batch-objects-log-level" author="logos">
+    <changeSet id="055-batch-objects-log-level" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="batch_objects" columnName="log_level"/></not>
         </preConditions>

@@ -133,14 +133,14 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void migration053_batchObjectsLogLevelExists() {
+    void migration055_batchObjectsLogLevelExists() {
         // Per-request logging consent for batches that outlive their creating
         // request; NULL means the create sent no logos-logging header.
         assertThat(columnExists("batch_objects", "log_level")).isTrue();
     }
 
     @Test
-    void migration054_teamFullPrivacyIndexServesActivityExists() {
+    void migration056_teamFullPrivacyIndexServesActivityExists() {
         // The activity-tab FULL-privacy EXISTS must seek the partial
         // (team_id, timestamp_request) index rather than walk every BILLING
         // row in the selected window via idx_log_entry_team_ts_request.

@@ -20,7 +20,7 @@
 
          Runs outside a transaction so CONCURRENTLY does not lock log_entry
          against writers (same rationale as 012/014/027/028/035/036/043/049). -->
-    <changeSet id="054-log-entry-team-full-privacy-index" author="logos" runInTransaction="false">
+    <changeSet id="056-log-entry-team-full-privacy-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_full_privacy"/></not>
         </preConditions>

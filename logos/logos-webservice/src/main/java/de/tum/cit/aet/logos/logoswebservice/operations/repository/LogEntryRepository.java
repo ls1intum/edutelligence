@@ -648,7 +648,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * header, and that is what the activity export hint must reflect.
      *
      * <p>Ranged on {@code (team_id, timestamp_request)} under the partial
-     * {@code idx_log_entry_team_full_privacy} (054), so an empty consented
+     * {@code idx_log_entry_team_full_privacy} (056), so an empty consented
      * window stays an index miss rather than a walk of every BILLING row in
      * the selected period.
      */

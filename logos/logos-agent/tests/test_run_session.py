@@ -398,6 +398,22 @@ class TestPreparingTheRefTheTaskPointsAt:
         diff = _git("diff", "--stat", "origin/main...HEAD", cwd=checkout)
         assert "file.txt" in diff.stdout
 
+    def test_the_preparation_reports_the_commit_it_checked_out(self, tmp_path, monkeypatch):
+        # A requested review anchors its inline comments to the commit that
+        # was read; the trusted preparation is what says which one that is.
+        bare, tip = _remote_with_a_feature(tmp_path)
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        _patch_workspace(monkeypatch, workspace)
+        monkeypatch.setenv("LOGOS_REPO_URL", str(bare))
+        monkeypatch.setenv("LOGOS_SESSION_BASE_BRANCH", "refs/pull/1/head")
+        monkeypatch.setenv("LOGOS_SESSION_BRANCH", "agent/review-5")
+        result = run_session.Result()
+
+        run_session.run_prepare(result)
+
+        assert result.data["checkout_sha"] == tip
+
     def test_a_merge_base_beyond_the_shallow_history_is_deepened_into_view(self, tmp_path, monkeypatch):
         # A pull request that branched from an old main and has sat since is
         # older than the shallow history the preparation starts from: its
