@@ -235,11 +235,15 @@ def parse_scheduler_state(
     once, and only the per-key figure sees them. The discount is taken from
     the matching ledger ``active`` total — not from the engine sample
     ``_live`` prefers — because those are different populations and
-    subtracting one from the other understates user load. Queued ownership
-    is a separate split (``queued_by_api_key``); the in-flight figure must
-    not stand in for it, or a runner pauses for its own orchestrator
-    backlog. An orchestrator that does not report a split falls back to the
-    session count for that population.
+    subtracting one from the other understates user load. Engine-side
+    waiting is a third population: ledger actives the engine has accepted
+    but not started sit in ``queue_waiting_current``, so the residual of
+    the keyed active count after matching the engine running sample comes
+    off that wait list. Orchestrator backlog ownership is yet another
+    split (``queued_by_api_key``); the in-flight figure must not stand in
+    for it, or a runner pauses for its own orchestrator backlog. An
+    orchestrator that does not report a split falls back to the session
+    count for that population.
     """
     mine = {str(name).strip().lower(): int(count) for name, count in (ours or {}).items()}
     if lane is not None and not lane:
@@ -347,6 +351,9 @@ def parse_scheduler_state(
                 queue_total += waiting
                 continue
             total += capacity
+            # slots: engine-active, engine-waiting, capacity, cache.
+            # Orchestrator backlog stays in `model_depth` until the discount
+            # below — the two queue stages are different populations.
             slots = per_model.setdefault(name, [0, 0, 0, 0.0])
             slots[0] += active
             slots[1] += waiting
@@ -365,47 +372,57 @@ def parse_scheduler_state(
                 if isinstance(share, (int, float)):
                     per_model_own_key[name] = per_model_own_key.get(name, 0) + int(share)
 
-    # The ledger's backlog folds into the model it belongs to. For a model
-    # this lane serves that puts it in front of the subtraction of our own
-    # sessions below, which must be able to empty it exactly as before — a
-    # queue that reads as empty is the signal that no user is waiting, and
-    # on our lane the requests it can hold are our own. For a model the
-    # lane does not serve it goes straight to the total, where the queue is
-    # not narrowed either.
+    # Off-lane (or unloaded) models contribute their orchestrator backlog
+    # straight to the total — the queue is not narrowed for them either.
+    # Lane models keep depth aside so each queue stage can be discounted
+    # on its own population below.
     for name, depth in model_depth.items():
-        if name in per_model:
-            per_model[name][1] += depth
-        else:
+        if name not in per_model:
             queue_total += depth
 
     # Ours come off each model *once*, after its deployments are added up:
     # the same model served by three providers is one lane, and subtracting
     # the same sessions from each of them would erase three times what this
-    # runner is doing. Active and waiting are discounted from matching
-    # populations — ledger key counts against ledger totals, queued key
-    # counts against the backlog — never mixed across engine samples.
+    # runner is doing. Active, engine-waiting and orchestrator-backlog are
+    # discounted from matching populations — ledger key counts against
+    # ledger totals and the engine wait list they still occupy, queued key
+    # counts against the backlog — never mixed across stages.
     for name, slots in per_model.items():
+        engine = int(slots[0])
+        engine_waiting = int(slots[1])
+        depth = model_depth.get(name, 0)
         if name in key_reported:
             own_active = per_model_own_key.get(name, 0)
             ledger = per_model_ledger.get(name, 0)
-            engine = int(slots[0])
             # Discount each population against itself, then keep the larger
             # user load: subtracting a ledger key count from a lagging engine
             # sample understates users; ignoring the engine when the ledger
             # is the one behind would do the same the other way.
             slots[0] = max(max(0, engine - own_active), max(0, ledger - own_active))
+            # Ledger `active` includes requests the engine has accepted but
+            # not yet started — those show up in `queue_waiting_current`,
+            # not in `queued_by_api_key`. Own keyed actives not explained by
+            # the engine running sample are that residual; cap by the wait
+            # list so a real user behind us is preserved.
+            own_engine_waiting = min(engine_waiting, max(0, own_active - engine))
+            engine_waiting = max(0, engine_waiting - own_engine_waiting)
             if name in queue_key_reported:
-                slots[1] = max(0, int(slots[1]) - per_model_own_queued.get(name, 0))
+                depth = max(0, depth - per_model_own_queued.get(name, 0))
             else:
                 # Active split present but no queued split yet: keep the
-                # session estimate for the waiting population only.
-                slots[1] = max(0, int(slots[1]) - min(mine.get(name.strip().lower(), 0), int(slots[1])))
+                # session estimate for the orchestrator backlog only.
+                depth = max(0, depth - min(mine.get(name.strip().lower(), 0), depth))
         else:
             ours_here = mine.get(name.strip().lower(), 0)
-            ours_serving = min(ours_here, int(slots[0]))
-            ours_waiting = min(ours_here - ours_serving, int(slots[1]))
-            slots[0] -= ours_serving
-            slots[1] -= ours_waiting
+            ours_serving = min(ours_here, engine)
+            remainder = ours_here - ours_serving
+            ours_engine_waiting = min(remainder, engine_waiting)
+            remainder -= ours_engine_waiting
+            ours_depth = min(remainder, depth)
+            slots[0] = engine - ours_serving
+            engine_waiting -= ours_engine_waiting
+            depth -= ours_depth
+        slots[1] = engine_waiting + depth
         busy += slots[0]
         queue_total += slots[1]
 

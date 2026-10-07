@@ -639,6 +639,62 @@ class TestWhoIsKeepingItBusy:
         assert reading.queue_total == 0
         assert not capacity.pause_decision(reading)[0]
 
+    def test_our_own_engine_waiting_is_not_a_user_waiting(self):
+        # Two of ours in the ledger: one running on the engine, one waiting
+        # behind it. Empty orchestrator backlog. The waiting request is still
+        # in active_by_api_key, not queued_by_api_key — discounting only the
+        # backlog would leave queue_total at 1 and pause both sessions.
+        model = {
+            "model_name": self.MODEL,
+            "active": 2,
+            "active_by_api_key": {"7": 2},
+            "queued_by_api_key": {},
+            "queue_depth": 0,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 1.0,
+                "queue_waiting_current": 1.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 2}, own_api_key_id=7)
+
+        assert reading.busy_slots == 0 and reading.queue_total == 0
+        assert not reading.saturated
+        assert not capacity.pause_decision(reading)[0]
+
+    def test_a_user_waiting_in_the_engine_still_counts(self):
+        # Two of ours running; a stranger sits in the engine wait list.
+        # Residual keyed actives are zero after matching the running sample,
+        # so the waiter stays and we pause.
+        model = {
+            "model_name": self.MODEL,
+            "active": 3,
+            "active_by_api_key": {"7": 2, "9": 1},
+            "queued_by_api_key": {},
+            "queue_depth": 0,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 2.0,
+                "queue_waiting_current": 1.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 2}, own_api_key_id=7)
+
+        assert reading.queue_total == 1 and reading.saturated
+        assert capacity.pause_decision(reading)[0]
+
     def test_session_estimate_still_clears_our_queued_work_on_older_payloads(self):
         # No per-key splits at all: the session count still empties a backlog
         # that can only be ours on this lane.
