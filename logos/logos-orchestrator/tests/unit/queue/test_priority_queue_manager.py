@@ -205,6 +205,62 @@ class TestBackgroundAppOrdering:
         assert mgr.dequeue(5).get_id() == "plain-high"
         assert mgr.dequeue(5).get_id() == "bg-normal"
 
+    def test_flag_cannot_jump_a_higher_raw_priority(self):
+        """The interleave only reorders entries tied on (raw_priority,
+        role_rank): a flagged entry at raw 5 must not dispatch ahead of a
+        regular entry at raw 7, even though the flagged slot is owed on a
+        fresh level."""
+        mgr = PriorityQueueManager()
+        mgr.enqueue(DummyTask("regular-7"), model_id=5, priority=Priority.NORMAL, raw_priority=7, role_rank=0)
+        mgr.enqueue(
+            DummyTask("flagged-5"),
+            model_id=5,
+            priority=Priority.NORMAL,
+            raw_priority=5,
+            role_rank=0,
+            background_app=True,
+        )
+        assert mgr.dequeue(5).get_id() == "regular-7"
+        assert mgr.dequeue(5).get_id() == "flagged-5"
+
+    def test_flag_cannot_jump_a_higher_role_rank(self):
+        """Same, for the role-rank tiebreak: a flagged developer request
+        (rank 0) must not dispatch ahead of a regular application request
+        (rank 2) at the same raw priority — the flag cannot override the
+        application > app admin > developer ordering."""
+        mgr = PriorityQueueManager()
+        mgr.enqueue(
+            DummyTask("flagged-dev"),
+            model_id=5,
+            priority=Priority.NORMAL,
+            raw_priority=5,
+            role_rank=0,
+            background_app=True,
+        )
+        mgr.enqueue(DummyTask("regular-app"), model_id=5, priority=Priority.NORMAL, raw_priority=5, role_rank=2)
+        assert mgr.dequeue(5).get_id() == "regular-app"
+        assert mgr.dequeue(5).get_id() == "flagged-dev"
+
+    def test_interleave_still_applies_within_the_tied_group(self):
+        """The restriction is scoped to the tied group: entries sharing the
+        highest (raw_priority, role_rank) pair still dispatch in the bounded
+        interleave, and lower-priority regular traffic only advances once
+        that group is drained."""
+        mgr = PriorityQueueManager()
+        mgr.enqueue(
+            DummyTask("flagged-7"),
+            model_id=5,
+            priority=Priority.NORMAL,
+            raw_priority=7,
+            role_rank=0,
+            background_app=True,
+        )
+        mgr.enqueue(DummyTask("regular-7"), model_id=5, priority=Priority.NORMAL, raw_priority=7, role_rank=0)
+        mgr.enqueue(DummyTask("regular-5"), model_id=5, priority=Priority.NORMAL, raw_priority=5, role_rank=0)
+        # Tied group (7, 0) first: the flagged slot is owed on a fresh
+        # level, then its regular entry; only then does the raw-5 go.
+        assert [mgr.dequeue(5).get_id() for _ in range(3)] == ["flagged-7", "regular-7", "regular-5"]
+
     def test_move_priority_keeps_the_flag(self):
         mgr = PriorityQueueManager()
         mgr.enqueue(DummyTask("plain-high"), model_id=5, priority=Priority.HIGH)

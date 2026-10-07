@@ -12,16 +12,20 @@ it. The kwarg pattern lets callers be migrated gradually. Enqueue and
 aggregate metrics ignore it; dequeue uses it only to keep provider-affine
 entries on their required worker.
 
-Within one priority level flagged ``background_app`` entries and regular
-entries dispatch in a bounded interleave — one flagged, then two regular,
-repeating (see ``_select_dispatch_head``) — each class ordered by
-``raw_priority``, ``role_rank``, then arrival. The flag marks background
-app traffic — an agent's background calls, e.g. its auto-permission
-classifier — that a full queue of interactive traffic would otherwise
-starve for the whole wait window; the interleave gives it a fast lane
-without letting a steady flagged stream starve ordinary same-priority
-traffic in return. Unflagged traffic keeps exactly its old relative
-order, so the reordering only touches the flagged entries.
+Within one priority level the entries tied on the highest
+``(raw_priority, role_rank)`` pair dispatch in a bounded interleave of
+flagged ``background_app`` entries and regular entries — one flagged,
+then two regular, repeating (see ``_select_dispatch_head``) — each class
+in arrival order. Raw priority and role rank always dominate the flag:
+the interleave only reorders entries that would otherwise tie, so a
+flagged entry can never jump a higher-priority or higher-ranked regular
+entry. The flag marks background app traffic — an agent's background
+calls, e.g. its auto-permission classifier — that a full queue of
+interactive traffic would otherwise starve for the whole wait window; the
+interleave gives it a fast lane without letting a steady flagged stream
+starve ordinary same-priority traffic in return. Unflagged traffic keeps
+exactly its old relative order, so the reordering only touches the
+flagged entries.
 """
 
 import heapq
@@ -75,9 +79,11 @@ class PriorityQueueManager:
       provider without splitting the model-wide queue.
     - Backward-compatible: every method that previously accepted
       ``provider_id`` still accepts it; unpinned behavior stays model-wide.
-    - Within a priority level: bounded interleave of background-app and
-      regular entries, each class ordered by raw priority / role rank /
-      arrival (see ``_select_dispatch_head``).
+    - Within a priority level: the entries tied on the highest
+      (raw_priority, role_rank) pair dispatch in a bounded interleave of
+      background-app and regular entries, each class in arrival order; raw
+      priority and role rank dominate the flag (see
+      ``_select_dispatch_head``).
     """
 
     def __init__(self):
@@ -104,7 +110,8 @@ class PriorityQueueManager:
         # manager's lifetime no matter how long a class idled: a flagged
         # burst arriving after a long regular-only stretch still gets at
         # most 1 of every 3 dispatch slots. A fresh flagged arrival may
-        # jump the regular entries waiting ahead of it only while the
+        # jump the regular entries waiting ahead of it — among entries
+        # tied on the top (raw_priority, role_rank) pair — only while the
         # flagged slot is owed (fresh level, or a regular-only stretch);
         # mid-cycle it waits for the owed regular pair.
         self._regular_since_flagged: Dict[int, Dict[Priority, int]] = defaultdict(
@@ -133,8 +140,10 @@ class PriorityQueueManager:
 
         ``background_app`` marks background app traffic (see
         ``logos.pipeline.pipeline.is_background_app``): the entry takes its
-        place in the bounded interleave — a fast lane while the flagged
-        slot is owed, never a monopoly (see ``_select_dispatch_head``).
+        place in the bounded interleave among the entries tied on its
+        (raw_priority, role_rank) pair — a fast lane while the flagged
+        slot is owed, never a monopoly, and never ahead of a higher raw
+        priority or role rank (see ``_select_dispatch_head``).
 
         ``raw_priority`` is the full-precision priority the request resolved
         to (1..10 scale); it refines the ordering inside the bucket that
@@ -223,25 +232,33 @@ class PriorityQueueManager:
         """Index of the entry the interleave rule dispatches next in
         ``self._queues[model_id][priority]``, or None if none is eligible.
 
-        The flagged head dispatches when no regular entry is eligible or
-        when ``_REGULAR_PER_CYCLE`` regular dispatches followed the last
+        The eligible entries are first restricted to the group tied on the
+        highest ``(raw_priority, role_rank)`` pair: raw priority and role
+        rank always dominate the flag, so a flagged entry can never jump a
+        higher-priority or higher-ranked regular entry. Within that group
+        the flagged head dispatches when no regular entry is in the group
+        or when ``_REGULAR_PER_CYCLE`` regular dispatches followed the last
         flagged one (the ``_regular_since_flagged`` cursor); otherwise the
-        regular head dispatches. Within a class, ``(-raw_priority,
-        -role_rank, ts, entry_id)`` decides. Pinned entries only match their
-        required provider. Caller must hold ``_lock``.
+        regular head dispatches. Within a class, ``(ts, entry_id)``
+        decides. Pinned entries only match their required provider. Caller
+        must hold ``_lock``.
         """
         queue = self._queues[model_id][priority]
         eligible = [item for item in queue if provider_id is None or item[4].provider_affinity in (None, provider_id)]
         if not eligible:
             return None
+        # Highest (raw_priority, role_rank) pair among the eligible entries;
+        # the interleave may only reorder entries tied on it.
+        top_rank = min(item[:2] for item in eligible)
+        group = [item for item in eligible if item[:2] == top_rank]
         flagged_head = min(
-            (item for item in eligible if item[4].background_app),
-            key=lambda item: item[:4],
+            (item for item in group if item[4].background_app),
+            key=lambda item: item[2:4],
             default=None,
         )
         regular_head = min(
-            (item for item in eligible if not item[4].background_app),
-            key=lambda item: item[:4],
+            (item for item in group if not item[4].background_app),
+            key=lambda item: item[2:4],
             default=None,
         )
         cursor = self._regular_since_flagged[model_id][priority]
@@ -262,12 +279,13 @@ class PriorityQueueManager:
         if not queue:
             return None, None
 
-        # Dispatch order within this priority level: bounded interleave of
-        # background-app and regular entries (``_select_dispatch_head``),
-        # each class ordered by raw priority / role rank / arrival. The
-        # cursor advances on actual dequeues, so a dispatched entry's slot
-        # stays burned and the interleave state cannot drift across
-        # quiescent periods.
+        # Dispatch order within this priority level: the entries tied on
+        # the highest (raw_priority, role_rank) pair dispatch in a bounded
+        # interleave of background-app and regular entries, each class in
+        # arrival order (``_select_dispatch_head``); raw priority and role
+        # rank dominate the flag. The cursor advances on actual dequeues,
+        # so a dispatched entry's slot stays burned and the interleave
+        # state cannot drift across quiescent periods.
         eligible_index = self._select_dispatch_head(model_id, priority, provider_id)
         if eligible_index is None:
             return None, None
