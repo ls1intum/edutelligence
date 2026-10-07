@@ -514,6 +514,16 @@
     padding: 24px 16px 32px;
   }
 
+  // Six compact selectors on one phone-width row clip their labels; wrap to
+  // two columns so the request filters stay usable without changing tablet+.
+  .stats-scope {
+    flex-wrap: wrap;
+  }
+
+  .stats-scope__select {
+    flex: 1 1 calc(50% - 8px);
+  }
+
   .stats-kpi-strip > * {
     flex-basis: 100%;
   }
