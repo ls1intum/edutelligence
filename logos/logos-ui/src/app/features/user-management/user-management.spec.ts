@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { HttpClient } from '@angular/common/http';
@@ -191,4 +194,71 @@ describe('UserManagement CSV import', () => {
     // One checkbox per data row.
     expect(document.querySelectorAll('.import-preview-row .import-row-cb').length).toBe(ROWS.length);
   });
+
+  it('floors every preview column at 120px so a wide sheet scrolls instead of squashing', async () => {
+    await create();
+    component.importColumns.set(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']);
+    // The 120px floor per column is what the stylesheet's content-width
+    // floor on the table card is built around (48px + 120px per column + 96px).
+    expect(component.importPreviewGrid()).toBe('48px repeat(8, minmax(120px, 1fr)) 96px');
+  });
 });
+
+/**
+ * The layout contract of the import preview's stylesheet.
+ *
+ * The unit-test environment applies no layout, so the declarations that keep
+ * a wide preview readable are pinned here as text instead.
+ */
+describe('import preview stylesheet', () => {
+  const styles = readStyleSheet();
+
+  it('lets a wide preview scroll sideways instead of clipping its columns', () => {
+    const block = ruleBlock(styles, '.import-preview-scroll');
+    // .table-card belongs to the data table component, so the floor has to
+    // reach it through ::ng-deep.
+    expect(block).toMatch(/::ng-deep\s+\.table-card/);
+    expect(block).toMatch(/min-width:\s*fit-content/);
+  });
+
+  it('keeps the floating Include checkbox clear of the row content on mobile', () => {
+    const mobile = ruleBlock(styles, '@media (max-width: 768px)');
+    // The data table reserves 44px at the top of a mobile row for the control
+    // that floats into the card corner; the preview row's checkbox floats
+    // there, so it must keep the reservation instead of the 12px top padding
+    // the main table's rows use.
+    expect(mobile).toMatch(/\.table-row:not\(\.import-preview-row\)\s*\{\s*padding-top:\s*12px/);
+    expect(mobile).not.toMatch(/\.table-row\s*\{\s*padding-top:/);
+  });
+});
+
+/**
+ * Reads the component's stylesheet from the spec's directory as raw text. The
+ * unit-test builder's pipeline cannot resolve `?raw` imports, and the
+ * environment applies no layout — the specs pin CSS declarations as text
+ * instead.
+ */
+function readStyleSheet(): string {
+  return readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'user-management.scss'), 'utf8');
+}
+
+/**
+ * The full text of a rule, nested rules included: from the opening brace to
+ * the matching closing one, so an `@media` block stays whole for the
+ * assertions above.
+ */
+function ruleBlock(source: string, selector: string): string {
+  const start = source.indexOf(selector);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const open = source.indexOf('{', start);
+  expect(open).toBeGreaterThan(start);
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source.charAt(i) === '{') depth++;
+    if (source.charAt(i) === '}') {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  throw new Error(`Unbalanced rule for ${selector}`);
+}

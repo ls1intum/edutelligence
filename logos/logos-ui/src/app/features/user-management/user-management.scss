@@ -432,8 +432,21 @@
   overflow: auto;
   border-radius: 8px;
 
+  // .table-card belongs to the data table component (global styles), so the
+  // rules need ::ng-deep to reach it from this scoped stylesheet.
   // The data table carries its own margin-top; drop it inside the scroll box.
-  .table-card { margin-top: 0; }
+  ::ng-deep .table-card { margin-top: 0; }
+
+  // A wide CSV's minimum track widths (48px + 120px per column + 96px) can
+  // exceed the scroll box. Without a floor the card keeps the box's width,
+  // the grid overflows it, and the card's overflow:hidden clips every column
+  // beyond it. Floored at its content size, the card grows past the box
+  // instead and the box gets a horizontal scrollbar.
+  // Desktop only: below 769px the rows stack and the cells clip with an
+  // ellipsis, where a content-sized card would only add sideways scroll.
+  @media (min-width: 769px) {
+    ::ng-deep .table-card { min-width: fit-content; }
+  }
 }
 
 .import-preview-row {
@@ -506,5 +519,9 @@
     flex-shrink: 0;
   }
 
-  .table-row { padding-top: 12px; }
+  // The data table's mobile rows reserve 44px above the content for the
+  // control that floats into the card's top corner; the preview row's Include
+  // checkbox floats into exactly that space, so it keeps the reservation.
+  // Only the main table's rows, which float nothing, drop to the tighter 12px.
+  .table-row:not(.import-preview-row) { padding-top: 12px; }
 }

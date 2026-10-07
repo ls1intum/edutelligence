@@ -133,7 +133,7 @@ public class UserService {
      */
     public Map<String, Object> previewImport(MultipartFile file) throws IOException {
         List<String[]> records = Csv.parse(new String(file.getBytes()));
-        List<List<String>> columns = new ArrayList<>();
+        List<String> columns = new ArrayList<>();
         List<List<String>> rows = new ArrayList<>();
         for (int i = 0; i < records.size(); i++) {
             if (i == 0) {
