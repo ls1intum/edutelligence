@@ -1052,9 +1052,11 @@ async def test_a_native_messages_mid_stream_failure_emits_an_anthropic_error_eve
     await _drain_pending_tasks()
 
     # The held envelope is replayed ahead of the content, then the failure
-    # arrives as an Anthropic error event — and nothing after it.
+    # arrives as an Anthropic error event on a clean event boundary — any
+    # unfinished upstream remnant was discarded, so there is no ``\\n\\n``
+    # closer ahead of it — and nothing after it.
     assert body == (
-        _MESSAGES_START + _MESSAGES_BLOCK_START + delta + b"\n\n" + b"event: error\n"
+        _MESSAGES_START + _MESSAGES_BLOCK_START + delta + b"event: error\n"
         b'data: {"type": "error", "error": {"type": "api_error", "message": "lane died"}}\n\n'
     )
     assert b"[DONE]" not in body
@@ -1216,7 +1218,9 @@ class _ResumeCtxResolver:
     """The pipeline's context resolver for the scenario: every
     (model, provider) resolves to that provider's vLLM lane."""
 
-    async def resolve_context(self, *, model_id: int, provider_id: int, request_path: str | None = None, request_id=None, deployment_info=None):
+    async def resolve_context(
+        self, *, model_id: int, provider_id: int, request_path: str | None = None, request_id=None, deployment_info=None
+    ):
         return _resume_context(model_id, provider_id)
 
 
@@ -1229,7 +1233,9 @@ class _BlockingResumeCtxResolver:
         self.calls = 0
         self.block = asyncio.Event()
 
-    async def resolve_context(self, *, model_id: int, provider_id: int, request_path: str | None = None, request_id=None, deployment_info=None):
+    async def resolve_context(
+        self, *, model_id: int, provider_id: int, request_path: str | None = None, request_id=None, deployment_info=None
+    ):
         self.calls += 1
         if self.calls == 2:
             await self.block.wait()
@@ -2034,11 +2040,12 @@ async def test_a_responses_mid_stream_failure_emits_a_responses_failed_event(mon
     await _drain_pending_tasks()
 
     # The held envelope is replayed ahead of the content, then the failure
-    # arrives as the Responses terminal event: the announced response
-    # envelope with its status flipped, the error attached, and the next
-    # sequence number — and nothing after it.
+    # arrives as the Responses terminal event on a clean event boundary
+    # (unfinished upstream remnants are discarded, not closed with ``\\n\\n``):
+    # the announced response envelope with its status flipped, the error
+    # attached, and the next sequence number — and nothing after it.
     assert body == (
-        _RESPONSES_CREATED + _RESPONSES_DELTA + b"\n\n" + b"event: response.failed\n"
+        _RESPONSES_CREATED + _RESPONSES_DELTA + b"event: response.failed\n"
         b'data: {"type": "response.failed", "response": {"id": "resp_1", "status": "failed", '
         b'"model": "test-model", "output": [], "error": {"code": "server_error", '
         b'"message": "lane died"}}, "sequence_number": 2}\n\n'
@@ -2165,7 +2172,9 @@ async def test_closing_the_response_closes_the_worker_stream_at_once(monkeypatch
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -2370,7 +2379,9 @@ async def _run_streamer(
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12, provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -2655,3 +2666,91 @@ async def test_a_no_space_first_frame_still_resumes_when_the_lane_then_fails(mon
     assert facade._providers[_FAILED_PROVIDER_ID]._active_request_ids == {}
     assert facade._providers[PROVIDER_ID]._active_request_ids == {}
     assert facade._request_tracking == {}
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_stream_discards_an_incomplete_sse_fragment(monkeypatch):
+    """A lane that fails halfway through the next ``data:`` line must not
+    forward that remnant to the client or concatenate it with the takeover's
+    first event — the incomplete event is discarded and the log parser's
+    pending state is cleared before resume."""
+    from fastapi.responses import StreamingResponse
+
+    import logos as main
+
+    registry, websockets, facade, pipeline = _resume_env(monkeypatch, provider_ids=(_FAILED_PROVIDER_ID, PROVIDER_ID))
+    failed_ws = websockets[_FAILED_PROVIDER_ID]
+    peer_ws = websockets[PROVIDER_ID]
+
+    ctx = await _dispatch_initial(pipeline, (_FAILED_PROVIDER_ID, PROVIDER_ID), "req-fragment-resume")
+    assert ctx.provider_id == _FAILED_PROVIDER_ID
+
+    first_frame = _chat_frame("Hello")
+    # Complete content event, then a half-written next ``data:`` line.
+    incomplete = b'data: {"id": "chatcmpl-1", "choices": [{"delta": {"content": " th'
+    response_task = asyncio.ensure_future(
+        main._streaming_response(
+            ctx,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            42,
+            _FAILED_PROVIDER_ID,
+            _RESUME_MODEL_ID,
+            -1,
+            {"policy": "ok"},
+            {
+                "request_id": "req-fragment-resume",
+                "provider_type": "logosnode",
+                "queue_depth_at_arrival": 0,
+                "utilization_at_arrival": 0,
+                "is_cold_start": False,
+            },
+            request_path="v1/chat/completions",
+            deployments=[_deployment(_FAILED_PROVIDER_ID), _deployment(PROVIDER_ID)],
+            retry_budget=main.RetryBudget(max_attempts=3, deadline_s=100.0),
+        )
+    )
+    await asyncio.wait_for(failed_ws.stream_command_sent.wait(), timeout=1)
+    cmd = _sent_stream_cmd_id(failed_ws)
+    await _feed_pid(registry, _FAILED_PROVIDER_ID, cmd, {"type": "stream_start", "status_code": 200})
+    await _feed_pid(registry, _FAILED_PROVIDER_ID, cmd, {"type": "stream_chunk", "chunk": first_frame})
+    await _feed_pid(registry, _FAILED_PROVIDER_ID, cmd, {"type": "stream_chunk", "chunk": incomplete})
+
+    response = await asyncio.wait_for(response_task, timeout=2)
+    assert isinstance(response, StreamingResponse)
+
+    body = response.body_iterator
+    assert await body.__anext__() == first_frame
+    # The incomplete remnant is withheld — the next read waits for a complete
+    # event (the takeover) rather than delivering the fragment.
+    consumer = asyncio.ensure_future(body.__anext__())
+    await _feed_pid(
+        registry,
+        _FAILED_PROVIDER_ID,
+        cmd,
+        {"type": "stream_end", "success": False, "error": "lane died"},
+    )
+    try:
+        await _wait_for_stream_cmd_count(peer_ws, 1, timeout=2)
+        takeover_cmd = _stream_cmd_ids(peer_ws)[0]
+        resumed_frame = _chat_frame(" there")
+        done_frame = b"data: [DONE]\n\n"
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_start", "status_code": 200})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": resumed_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_chunk", "chunk": done_frame})
+        await _feed_pid(registry, PROVIDER_ID, takeover_cmd, {"type": "stream_end", "success": True})
+
+        # The takeover's first event arrives intact — not glued to the remnant.
+        assert await asyncio.wait_for(consumer, timeout=2) == resumed_frame
+        rest = b"".join([chunk async for chunk in body])
+        assert rest == done_frame
+        assert incomplete not in (first_frame + resumed_frame + rest)
+        # Resume prefix is only the complete content, not the discarded fragment.
+        takeover = next(m["params"] for m in peer_ws.sent if m.get("action") == "infer_stream")
+        assert takeover["payload"]["messages"][-1] == {"role": "assistant", "content": "Hello"}
+    finally:
+        if not consumer.done():
+            consumer.cancel()
+        await _drain_pending_tasks()
+
+    assert facade._providers[_FAILED_PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0
+    assert facade._providers[PROVIDER_ID].get_active_count(_RESUME_MODEL_ID) == 0

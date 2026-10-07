@@ -1512,9 +1512,11 @@ async def test_http_sse_response_delimits_recovery_after_partial_first_chunk(mon
     body = await _read_stream_response(response)
 
     assert response.headers["content-type"] == "text/event-stream"
-    assert body.startswith(partial.decode() + "\n\ndata: ")
-    recovery_frames = body[len(partial) + 2 :]
-    error_frame, terminal_frame, trailing = recovery_frames.split("\n\n")
+    # The incomplete upstream remnant is discarded, not forwarded ahead of
+    # the synthetic recovery frames — concatenating it with the error event
+    # would corrupt the client's SSE parse.
+    assert partial.decode() not in body
+    error_frame, terminal_frame, trailing = body.split("\n\n")
     error_payload = json.loads(error_frame.removeprefix("data: "))
     assert error_payload["error"]["message"] == "failed to record first token"
     assert terminal_frame == "data: [DONE]"

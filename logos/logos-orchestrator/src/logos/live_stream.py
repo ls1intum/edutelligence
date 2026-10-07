@@ -242,6 +242,17 @@ class _StreamingLogAccumulator:
         for line in remainder.splitlines():
             self._consume_line(line.rstrip("\r"))
 
+    def discard_pending(self) -> None:
+        """Drop an unfinished SSE fragment without parsing it.
+
+        A mid-flight failure can leave a transport chunk that ends inside a
+        ``data:`` line in the buffer. Feeding the takeover's first event on
+        top of that remnant would concatenate the two on the parser and drop
+        the continuation from logging — clear the remnant instead.
+        """
+        self.buffer = ""
+        self._decoder.reset()
+
     def streamed_tokens(self) -> Dict[str, int]:
         """Best current view of this request's tokens, mid-stream.
 

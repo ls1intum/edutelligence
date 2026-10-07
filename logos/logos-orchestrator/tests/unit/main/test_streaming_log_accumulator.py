@@ -37,6 +37,22 @@ def test_chat_completions_stream_accumulates_text_and_usage():
     assert payload["usage"]["total_tokens"] == 5
 
 
+def test_discard_pending_drops_an_unfinished_sse_fragment():
+    """A mid-flight failure can leave a half-written ``data:`` line in the
+    buffer. Discarding it before a takeover feed keeps the continuation from
+    concatenating with the remnant."""
+    acc = _StreamingLogAccumulator()
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":"Hello"}}]}\n\n')
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":" th')
+    assert acc.buffer.startswith('data: {"id":"c1"')
+    assert acc.full_text == "Hello"
+
+    acc.discard_pending()
+    assert acc.buffer == ""
+    acc.feed(b'data: {"id":"c1","choices":[{"delta":{"content":" there"}}]}\n\n')
+    assert acc.full_text == "Hello there"
+
+
 def test_settled_completion_tokens_is_none_until_the_usage_arrives():
     """A failed stream never delivers the terminal usage event, so the exact
     completion count is unknown. The resume path relies on being able to tell

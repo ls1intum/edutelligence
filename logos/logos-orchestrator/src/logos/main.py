@@ -577,6 +577,16 @@ class _StreamingCostEnricher:
         self.buffer = b""
         return [remainder]
 
+    def discard(self) -> None:
+        """Drop an unfinished SSE fragment without forwarding it.
+
+        A mid-stream failure can leave a partial ``data:`` line in the buffer.
+        Flushing it ahead of a synthetic recovery event (``response.failed``,
+        an error frame) would concatenate the remnant with the recovery and
+        corrupt the client's SSE parse — clear it instead.
+        """
+        self.buffer = b""
+
     @staticmethod
     def _frame_usage_is_settled(target: dict) -> bool:
         """True when this frame carries a *complete* usage picture, not a running
@@ -2451,6 +2461,11 @@ async def _streaming_response(
             if unconsumed_cleanup is not None:
                 unconsumed_cleanup.claim_for_streamer()
             stream_log = _StreamingLogAccumulator()
+            # Text streams withhold incomplete SSE events so a mid-flight
+            # failure cannot leave a half-written ``data:`` line on the wire
+            # (or in the log buffer) ahead of a takeover / recovery frame.
+            # Binary (audio-upload) streams are not SSE — every byte passes.
+            sse_events = None if is_audio_upload_path(request_path or "") else _SseEventBuffer()
             error_message = None
             ttft_recorded = False
             resumed = False
@@ -2477,6 +2492,17 @@ async def _streaming_response(
             # post-loop stamp. Track whether we stamped so finally can persist
             # the captured arrival before record_completion when needed.
             provider_response_stamped = False
+
+            def _discard_incomplete_sse() -> None:
+                if sse_events is not None:
+                    sse_events.discard()
+                stream_log.discard_pending()
+
+            def _outgoing_events(chunk) -> list:
+                if sse_events is None:
+                    return [chunk] if chunk else []
+                return sse_events.feed(chunk)
+
             try:
                 for first_chunk in first_chunks:
                     # The first chunks were pulled before the response was
@@ -2490,12 +2516,13 @@ async def _streaming_response(
                     # Feed before yielding so a stream that terminates in its
                     # very first chunk is already marked complete when the
                     # engine tears the connection down right after [DONE].
-                    stream_log.feed(first_chunk)
-                    if stream_log.terminal_event_received:
-                        stream_completed = True
-                    last_chunk_at = datetime.datetime.now(datetime.timezone.utc)
-                    _live_streams.update(request_id, stream_log.streamed_tokens())
-                    yield first_chunk
+                    for event in _outgoing_events(first_chunk):
+                        stream_log.feed(event)
+                        if stream_log.terminal_event_received:
+                            stream_completed = True
+                        last_chunk_at = datetime.datetime.now(datetime.timezone.utc)
+                        _live_streams.update(request_id, stream_log.streamed_tokens())
+                        yield event
                 while True:
                     try:
                         # Closing `open_iter` in the finally below is what
@@ -2516,17 +2543,18 @@ async def _streaming_response(
                                 # stream as soon as it receives [DONE]. If the
                                 # completion flag were set afterwards, that normal
                                 # close would be misreported as a disconnect.
-                                stream_log.feed(chunk)
-                                if stream_log.terminal_event_received:
-                                    stream_completed = True
-                                if chunk and not ttft_recorded:
-                                    if log_id:
-                                        with DBManager() as db:
-                                            db.set_time_at_first_token(log_id)
-                                    _record_ettft_accuracy(scheduling_stats)
-                                    ttft_recorded = True
-                                _live_streams.update(request_id, stream_log.streamed_tokens())
-                                yield chunk
+                                for event in _outgoing_events(chunk):
+                                    stream_log.feed(event)
+                                    if stream_log.terminal_event_received:
+                                        stream_completed = True
+                                    if event and not ttft_recorded:
+                                        if log_id:
+                                            with DBManager() as db:
+                                                db.set_time_at_first_token(log_id)
+                                        _record_ettft_accuracy(scheduling_stats)
+                                        ttft_recorded = True
+                                    _live_streams.update(request_id, stream_log.streamed_tokens())
+                                    yield event
                         stream_completed = True
                         break  # stream completed without raising
                     except Exception as e:
@@ -2539,6 +2567,10 @@ async def _streaming_response(
                         if stream_log.terminal_event_received:
                             stream_completed = True
                             break
+                        # An unfinished SSE remnant must not ride into the
+                        # takeover or the synthetic error frame — discard it
+                        # and clear the log parser before either recovery path.
+                        _discard_incomplete_sse()
                         # Mid-flight failure: tokens already reached the
                         # client, so the only recovery is continuing the
                         # generation after the partial answer on a node that
@@ -2671,11 +2703,12 @@ async def _streaming_response(
                                             resumed = True
                                             resume_opened = True
                                             for resumed_chunk in resumed_first_chunks:
-                                                stream_log.feed(resumed_chunk)
-                                                if stream_log.terminal_event_received:
-                                                    stream_completed = True
-                                                _live_streams.update(request_id, stream_log.streamed_tokens())
-                                                yield resumed_chunk
+                                                for event in _outgoing_events(resumed_chunk):
+                                                    stream_log.feed(event)
+                                                    if stream_log.terminal_event_received:
+                                                        stream_completed = True
+                                                    _live_streams.update(request_id, stream_log.streamed_tokens())
+                                                    yield event
                                         else:
                                             # The takeover could not open a
                                             # stream either: release its slot
@@ -2704,13 +2737,10 @@ async def _streaming_response(
                             # Once bytes have reached the client, only SSE can
                             # carry the synthetic error frame without
                             # corrupting its protocol — in the dialect the
-                            # client is reading.
+                            # client is reading. Incomplete upstream remnants
+                            # were discarded above, so recovery starts on an
+                            # event boundary.
                             if not is_audio_upload_path(request_path or ""):
-                                # The last upstream chunk may have ended
-                                # inside an SSE event. Close it before
-                                # emitting recovery frames so clients can
-                                # parse the synthetic error independently.
-                                yield b"\n\n"
                                 if context.anthropic_dialect == UpstreamDialect.NATIVE:
                                     # A native Messages client reads Anthropic
                                     # events verbatim: its failure is an
@@ -3050,9 +3080,17 @@ async def _streaming_response(
                     _pipeline.record_provider_response(request_id, at=last_chunk_at)
                 provider_response_stamped = True
             if cost_enricher:
-                for outgoing_chunk in cost_enricher.finish():
-                    for client_chunk in client_chunks(outgoing_chunk):
-                        yield client_chunk
+                # A mid-stream transport failure the executor swallowed ends
+                # here with stream_status.error set: discard any unfinished
+                # SSE remnant rather than flushing it ahead of the recovery
+                # terminal the translator emits below.
+                if stream_status.error is not None:
+                    cost_enricher.discard()
+                    stream_log.discard_pending()
+                else:
+                    for outgoing_chunk in cost_enricher.finish():
+                        for client_chunk in client_chunks(outgoing_chunk):
+                            yield client_chunk
             if translated_stream:
                 # A mid-stream failure the executor caught after the first byte
                 # ends the iterator without raising, so it reaches here rather
@@ -3084,10 +3122,12 @@ async def _streaming_response(
             if request_id:
                 _pipeline.record_provider_response(request_id, at=getattr(exc, _STREAM_FAILURE_AT, None))
                 provider_response_stamped = True
+            # An unfinished SSE remnant must not ride into the synthetic
+            # recovery event — discard it (and the log parser's matching
+            # fragment) so ``response.failed`` / the error frame starts clean.
             if cost_enricher:
-                for outgoing_chunk in cost_enricher.finish():
-                    for client_chunk in client_chunks(outgoing_chunk):
-                        yield client_chunk
+                cost_enricher.discard()
+            stream_log.discard_pending()
             # Once bytes have reached the client, only SSE can carry the
             # synthetic error frame without corrupting its protocol — and it
             # has to be in the dialect the client is reading, which the
@@ -3117,10 +3157,6 @@ async def _streaming_response(
                 import json as _json
 
                 _, error_body = coerce_upstream_error(500, {"error": str(exc)})
-                # The last upstream chunk may have ended inside an SSE event.
-                # Close it before emitting recovery frames so clients can parse
-                # the synthetic error independently.
-                yield b"\n\n"
                 yield f"data: {_json.dumps(error_body)}\n\n".encode()
                 yield b"data: [DONE]\n\n"
         finally:
@@ -3382,6 +3418,23 @@ async def _sync_response(
                     headers=rpc_headers,
                     raw_body=rpc_raw_body,
                     content_type=rpc_content_type,
+                )
+            except RetryDeadlineExceeded as exc:
+                # Absolute retry-deadline expiry during dispatch or the
+                # response wait: a terminal timeout, not a generic 500. The
+                # same bookkeeping path as other 504s records completion as
+                # ``timeout``.
+                timed_out = True
+                status_override = 504
+                error_message = str(exc)
+                _, coerced_body = coerce_upstream_error(status_override, {"error": str(exc)})
+                exec_result = ExecutionResult(
+                    success=False,
+                    response=coerced_body,
+                    error=str(exc),
+                    usage={},
+                    is_streaming=False,
+                    headers=None,
                 )
             except LogosNodeOfflineError as exc:
                 timed_out = _is_timeout_failure(error=str(exc))
@@ -3710,9 +3763,10 @@ def _proxy_streaming_response(
                 stream_log.feed(outgoing_chunk)
         except Exception as exc:  # noqa: BLE001
             error_message = str(exc)
-            for outgoing_chunk in cost_enricher.finish():
-                yield outgoing_chunk
-                stream_log.feed(outgoing_chunk)
+            # Do not flush an unfinished SSE remnant into the client / log
+            # ahead of the exception the caller turns into recovery frames.
+            cost_enricher.discard()
+            stream_log.discard_pending()
             raise
         finally:
             if error_message is None:
@@ -4849,6 +4903,37 @@ def _sse_event_end(buf: bytearray) -> int:
     if crlf < lf:
         return crlf + 4
     return lf + 2
+
+
+class _SseEventBuffer:
+    """Withhold incomplete SSE events until their blank-line terminator.
+
+    Transport chunks can end halfway through a ``data:`` line. Forwarding that
+    remnant to the client (or into the log accumulator) and then splicing a
+    takeover or synthetic recovery event after it concatenates the two and
+    corrupts the stream. Complete events are released; an unfinished remnant
+    is discarded on failure rather than flushed.
+    """
+
+    def __init__(self) -> None:
+        self._pending = bytearray()
+
+    def feed(self, chunk: bytes | str) -> list[bytes]:
+        data = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
+        if not data:
+            return []
+        self._pending.extend(data)
+        events: list[bytes] = []
+        while True:
+            end = _sse_event_end(self._pending)
+            if end < 0:
+                break
+            events.append(bytes(self._pending[:end]))
+            del self._pending[:end]
+        return events
+
+    def discard(self) -> None:
+        self._pending.clear()
 
 
 def _error_frames(path: str, status: int, body: Any) -> list:

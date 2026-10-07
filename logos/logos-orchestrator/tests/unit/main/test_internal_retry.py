@@ -2077,3 +2077,199 @@ async def test_cloud_responses_deadline_ends_the_stream_in_a_failed_event(retry_
     assert resp["model"] == "m-test"
     assert resp["status"] == "failed"
     assert resp["error"]["message"] == "stream execution passed its retry deadline"
+
+
+@pytest.mark.asyncio
+async def test_cloud_responses_discards_incomplete_sse_before_failed_event(retry_env):
+    """A /v1/responses cloud stream that fails halfway through the next
+    ``data:`` line must not flush that remnant ahead of ``response.failed`` —
+    concatenating the fragment with the recovery event corrupts the client's
+    SSE parse and drops the unfinished delta from logging."""
+    import json
+
+    from logos.errors import RetryDeadlineExceeded
+
+    created = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {"id": "resp_1", "status": "in_progress", "model": "m-test", "output": []},
+    }
+    delta = {"type": "response.output_text.delta", "sequence_number": 1, "delta": "Hi"}
+    created_chunk = b"event: response.created\n" + b"data: " + json.dumps(created).encode() + b"\n\n"
+    delta_chunk = b"event: response.output_text.delta\n" + b"data: " + json.dumps(delta).encode() + b"\n\n"
+    # Complete content, then a half-written next event — the remnant that used
+    # to ride into response.failed via cost_enricher.finish().
+    incomplete = b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":" there'
+
+    class _FragmentedDeadlineExecutor:
+        async def execute_streaming(
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
+        ):  # noqa: ARG002
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            yield created_chunk
+            yield delta_chunk
+            yield incomplete
+            raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _FragmentedDeadlineExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_id=1,
+            provider_type="cloud",
+            forward_url="https://provider.test/v1/responses",
+            anthropic_dialect=None,
+            messages_upstream=False,
+            model_name="stub-model",
+        ),
+        {"model": "test-model", "input": "hi"},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-responses-fragment", "provider_type": "cloud"},
+        request_path="/v1/responses",
+    )
+    body = b"".join([part async for part in response.body_iterator])
+
+    assert b'"delta": "Hi"' in body
+    # The unfinished event must not appear, alone or glued to the recovery.
+    assert b'"delta":" there' not in body
+    assert incomplete not in body
+    frames = [frame for frame in body.split(b"\n\n") if frame.startswith(b"event: response.failed")]
+    assert len(frames) == 1
+    # response.failed must be a clean event, not a remnant prefixed onto it.
+    assert frames[0].startswith(b"event: response.failed\n")
+    data_line = next(line for line in frames[0].split(b"\n") if line.startswith(b"data:"))
+    failed = json.loads(data_line[len(b"data: ") :])
+    assert failed["type"] == "response.failed"
+    assert failed["sequence_number"] == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_logosnode_deadline_returns_504_timeout(retry_env):
+    """``send_command`` raising ``RetryDeadlineExceeded`` must settle as a
+    terminal 504 timeout through the normal bookkeeping — not escape
+    ``_sync_response`` as a generic 500."""
+    from logos.errors import RetryDeadlineExceeded
+
+    settled = []
+
+    class _TimeoutPipeline(_FakePipeline):
+        def settle_completion(self, **kwargs):
+            settled.append(kwargs)
+            return {}
+
+        def write_completion(self, *args, **kwargs):  # noqa: ARG002
+            return None
+
+        def record_provider_call(self, *args, **kwargs):  # noqa: ARG002
+            return None
+
+        def record_provider_response(self, *args, **kwargs):  # noqa: ARG002
+            return None
+
+    async def deadline_send_command(**kwargs):  # noqa: ARG002
+        raise RetryDeadlineExceeded("execution passed its retry deadline")
+
+    pipeline = _TimeoutPipeline([_ok_cloud_result()])
+    _wire_real_sync_path(retry_env, pipeline)
+    retry_env.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=deadline_send_command), raising=False)
+    retry_env.setattr(main, "_response_with_cost", lambda payload, *a, **k: (payload, False))
+
+    budget = main.RetryBudget(max_attempts=3, deadline_s=10.0)
+    response = await main._sync_response(
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+            model_name="stub-model",
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {},
+        {"request_id": "req-sync-deadline", "provider_type": "logosnode"},
+        retry_budget=budget,
+    )
+
+    assert response.status_code == 504
+    assert settled and settled[0]["result_status"] == "timeout"
+    assert "retry deadline" in (settled[0].get("error_message") or "")
+
+
+@pytest.mark.asyncio
+async def test_async_job_logosnode_deadline_records_timeout(retry_env):
+    """Async jobs must classify deadline expiry as timeout (not error) and
+    surface HTTP 504 in the job result."""
+    from logos.errors import RetryDeadlineExceeded
+
+    settled = []
+
+    class _TimeoutPipeline(_FakePipeline):
+        def settle_completion(self, **kwargs):
+            settled.append(kwargs)
+            return {}
+
+        def write_completion(self, *args, **kwargs):  # noqa: ARG002
+            return None
+
+        def record_provider_call(self, *args, **kwargs):  # noqa: ARG002
+            return None
+
+        def record_provider_response(self, *args, **kwargs):  # noqa: ARG002
+            return None
+
+    async def deadline_send_command(**kwargs):  # noqa: ARG002
+        raise RetryDeadlineExceeded("execution passed its retry deadline")
+
+    pipeline = _TimeoutPipeline([_ok_cloud_result()])
+    _wire_real_sync_path(retry_env, pipeline)
+    retry_env.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=deadline_send_command), raising=False)
+
+    budget = main.RetryBudget(max_attempts=3, deadline_s=10.0)
+    result = await main._sync_response(
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+            model_name="stub-model",
+        ),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        12,
+        27,
+        -1,
+        {},
+        {"request_id": "req-async-deadline", "provider_type": "logosnode"},
+        is_async_job=True,
+        retry_budget=budget,
+    )
+
+    assert isinstance(result, dict)
+    assert result["status_code"] == 504
+    assert settled and settled[0]["result_status"] == "timeout"
