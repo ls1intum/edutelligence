@@ -102,6 +102,7 @@ class FcfScheduler(BaseScheduler):
             provider_affinity=request.required_provider_id,
             raw_priority=priority_int,
             role_rank=request.role_rank,
+            api_key_id=request.api_key_id,
         )
         logger.info(
             "Request %s queued for model %s provider %s (weight=%.2f, depth=%s)",

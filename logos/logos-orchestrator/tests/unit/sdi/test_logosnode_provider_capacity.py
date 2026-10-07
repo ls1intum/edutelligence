@@ -240,6 +240,40 @@ def test_track_active_request_counts_the_key_only_when_it_said_to(monkeypatch):
     assert state["active_by_api_key"] == {"7": 1}
 
 
+def test_a_reserved_request_still_attributes_its_caller_key(monkeypatch):
+    """Reservation books the model total before the key is known.
+
+    ``track_active_request`` must still record the key without bumping the
+    total again — otherwise the runner discounts none of its in-flight load.
+    """
+    provider = _provider(monkeypatch, [_lane("m", 8)])
+    assert provider.try_reserve_capacity(1, "r1") is True
+    assert provider.get_active_count(1) == 1
+    assert provider.get_debug_state()[1]["active_by_api_key"] == {}
+
+    provider.track_active_request("r1", 1, increment_active=False, api_key_id=7)
+
+    state = provider.get_debug_state()[1]
+    assert state["active"] == 1
+    assert state["active_by_api_key"] == {"7": 1}
+
+    provider.decrement_active(1, request_id="r1")
+    assert provider.get_active_count(1) == 0
+    assert provider.get_debug_state()[1]["active_by_api_key"] == {}
+
+
+def test_queued_ownership_is_split_by_caller_key(monkeypatch):
+    provider = _provider(monkeypatch, [_lane("m", 8)])
+    provider.queue_manager.enqueue(object(), model_id=1, api_key_id=7)
+    provider.queue_manager.enqueue(object(), model_id=1, api_key_id=7)
+    provider.queue_manager.enqueue(object(), model_id=1, api_key_id=9)
+    provider.queue_manager.enqueue(object(), model_id=1)  # unknown caller
+
+    state = provider.get_debug_state()[1]
+    assert state["queue_depth"] == 4
+    assert state["queued_by_api_key"] == {"7": 2, "9": 1}
+
+
 def test_removing_a_model_drops_its_split(monkeypatch):
     provider = _provider(monkeypatch, [_lane("m", 8)], model_ids=[1, 2])
     provider.increment_active(1, request_id="r1", api_key_id=7)

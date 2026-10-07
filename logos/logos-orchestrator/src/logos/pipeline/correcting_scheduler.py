@@ -956,6 +956,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             provider_affinity=request.required_provider_id,
             raw_priority=priority_int,
             role_rank=request.role_rank,
+            api_key_id=request.api_key_id,
         )
         # Start the hold timer immediately after enqueue so that logging,
         # queue-depth reads, and the capacity-task setup are included in the

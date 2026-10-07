@@ -1130,6 +1130,14 @@ class LogosNodeDataProvider:
     ) -> None:
         with self._lock:
             if request_id in self._active_request_ids:
+                # Already reserved on the immediate path: the model total was
+                # booked then, before the caller key was known. Attribute the
+                # key now without moving the model total again — otherwise the
+                # runner reads zero for its own share and discounts nothing.
+                if api_key_id is not None and request_id not in self._active_request_keys:
+                    self._active_request_keys[request_id] = api_key_id
+                    by_key = self._model_active_by_key.setdefault(model_id, {})
+                    by_key[api_key_id] = by_key.get(api_key_id, 0) + 1
                 return
             self._active_request_ids[request_id] = model_id
             self._active_request_keys[request_id] = api_key_id
@@ -1146,6 +1154,7 @@ class LogosNodeDataProvider:
             for model_id, model_name in self._model_id_to_name.items():
                 max_capacity, capacity_source = self.get_parallel_capacity(model_id)
                 queue_state = self.queue_manager.get_state(model_id, self.provider_id)
+                queued_by_key = self.queue_manager.get_queued_by_api_key(model_id)
                 recent_signals = self._get_recent_model_scheduler_signals(model_id)
                 models[model_id] = {
                     "model_name": model_name,
@@ -1159,6 +1168,12 @@ class LogosNodeDataProvider:
                         str(api_key_id): count
                         for api_key_id, count in sorted(self._model_active_by_key.get(model_id, {}).items())
                         if count
+                    },
+                    # Same split for the orchestrator backlog: in-flight and
+                    # waiting are different populations, and a runner that
+                    # discounts only the former pauses for its own queued work.
+                    "queued_by_api_key": {
+                        str(api_key_id): count for api_key_id, count in sorted(queued_by_key.items()) if count
                     },
                     "max_capacity": max_capacity,
                     "capacity_source": capacity_source,
