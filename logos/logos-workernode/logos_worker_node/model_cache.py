@@ -396,18 +396,45 @@ class ModelRamCache:
             return 0
         return _tree_size_bytes(src)
 
+    def _tmpfs_covers_reference(self, requested: str, cached_dir: Path) -> bool:
+        """Whether the shared tmpfs repository entry has *requested*'s weights.
+
+        Sibling GGUF quant references share one ``models--org--name/``
+        directory. A Q4-only snapshot must not satisfy a later ``repo:Q8_0``
+        request — the lane would load from a cache that lacks its quant and
+        either fail offline or download into tmpfs outside admission checks.
+        Non-explicit references treat directory presence as sufficient
+        (``is_gguf_ref_cached`` returns None for them).
+        """
+        if not cached_dir.exists():
+            return False
+        from logos_worker_node import gguf  # noqa: PLC0415 — lazy: keep gguf out of module import
+
+        covered = gguf.is_gguf_ref_cached(str(self._cache_hub.parent), requested)
+        if covered is None:
+            return True
+        return covered is True
+
     async def ensure_cached(self, model_name: str) -> str:
         """Copy model into tmpfs if not already cached and space permits.
 
         Returns the path to use for loading (tmpfs path if cached, source
         path if not).  Uses ``rsync -a`` (snapshot symlinks stay links).
         """
-        model_name = _cache_identity(model_name)
-        lock = await self._get_model_lock(model_name)
+        requested = model_name
+        identity = _cache_identity(model_name)
+        lock = await self._get_model_lock(identity)
         async with lock:
-            if model_name in self._cached_models:
-                cached = self._cache_hub / _hf_model_dir_name(model_name)
+            if identity in self._cached_models:
+                cached = self._cache_hub / _hf_model_dir_name(identity)
                 if cached.exists():
+                    if not self._tmpfs_covers_reference(requested, cached):
+                        logger.warning(
+                            "Model %s: shared RAM-cache entry lacks this "
+                            "reference's weights — loading from source HF_HOME",
+                            requested,
+                        )
+                        return str(self._source_hub.parent)
                     # The copy path below re-checks the floor before admitting
                     # NEW bytes, but this entry is already resident in tmpfs —
                     # it was cached under an earlier, smaller floor (or its
@@ -427,29 +454,29 @@ class ModelRamCache:
                             "Model %s: already cached but host RAM (%d MB) is below the "
                             "%d MB sleep reserve — loading from disk so the lane's "
                             "first sleep has planned host RAM",
-                            model_name,
+                            identity,
                             host_available // (1024 * 1024),
                             self._host_ram_floor_bytes // (1024 * 1024),
                         )
                         return str(self._source_hub.parent)
-                    logger.info("Model %s: loading from tmpfs RAM cache", model_name)
+                    logger.info("Model %s: loading from tmpfs RAM cache", requested)
                     return str(self._cache_hub.parent)
-                self._cached_models.discard(model_name)
+                self._cached_models.discard(identity)
 
-            if not await asyncio.to_thread(self._source_has_bulk_weights, model_name):
+            if not await asyncio.to_thread(self._source_has_bulk_weights, identity):
                 logger.warning(
                     "Model %s: source filesystem has no bulk weights (manifest-only / "
                     "xet-backed not yet downloaded) — loading from source HF_HOME so "
                     "downloads do not flood tmpfs",
-                    model_name,
+                    identity,
                 )
                 return str(self._source_hub.parent)
 
-            size = await asyncio.to_thread(self.model_size_bytes, model_name)
+            size = await asyncio.to_thread(self.model_size_bytes, identity)
             if size <= 0:
                 logger.warning(
                     "Model %s not found on source filesystem — loading from disk",
-                    model_name,
+                    identity,
                 )
                 return str(self._source_hub.parent)
 
@@ -461,7 +488,7 @@ class ModelRamCache:
                 logger.warning(
                     "Skipping RAM cache for %s: need %d MB, available %d MB "
                     "(safety floor %d MB) — loading from disk",
-                    model_name,
+                    identity,
                     size // (1024 * 1024),
                     available // (1024 * 1024),
                     safety_floor // (1024 * 1024),
@@ -474,16 +501,27 @@ class ModelRamCache:
                     "Skipping RAM cache for %s: need %d MB but only %d MB of host RAM "
                     "is available above the %d MB reserved for sleeping lanes — "
                     "loading from disk",
-                    model_name,
+                    identity,
                     size // (1024 * 1024),
                     host_available // (1024 * 1024),
                     self._host_ram_floor_bytes // (1024 * 1024),
                 )
                 return str(self._source_hub.parent)
 
-            ok = await self._copy_model(model_name)
+            ok = await self._copy_model(identity)
             if ok:
-                self._cached_models.add(model_name)
+                self._cached_models.add(identity)
+                if not self._tmpfs_covers_reference(requested, self._cache_hub / _hf_model_dir_name(identity)):
+                    # Copied the shared tree, but the concrete quant/file this
+                    # request needs is still missing (source was incomplete for
+                    # it). Leave the sibling quants' cache entry in place and
+                    # serve this lane from the persistent HF_HOME.
+                    logger.warning(
+                        "Model %s: RAM-cache copy finished but lacks this "
+                        "reference's weights — loading from source HF_HOME",
+                        requested,
+                    )
+                    return str(self._source_hub.parent)
                 # The pre-copy check above is a snapshot: the re-plan runs on
                 # a tick and after every lane sleep, so the floor may have
                 # risen while this copy ran. Re-check the live floor with the
@@ -508,21 +546,21 @@ class ModelRamCache:
                     # reclaim — the next re-plan pass drops it when the
                     # session ends).
                     with self._cache_use_guard:
-                        if self._cache_use_refs.get(model_name, 0) == 0:
-                            self.evict(model_name)
+                        if self._cache_use_refs.get(identity, 0) == 0:
+                            self.evict(identity)
                     logger.warning(
                         "Model %s: copy finished but host RAM (%d MB) is below "
                         "the %d MB sleep reserve — evicting the just-cached "
                         "copy and loading from disk so the lane's first sleep "
                         "has planned host RAM",
-                        model_name,
+                        identity,
                         host_available // (1024 * 1024),
                         self._host_ram_floor_bytes // (1024 * 1024),
                     )
                     return str(self._source_hub.parent)
-                logger.info("Model %s: loading from tmpfs RAM cache", model_name)
+                logger.info("Model %s: loading from tmpfs RAM cache", requested)
                 return str(self._cache_hub.parent)
-            logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
+            logger.warning("Model %s: copy to RAM cache failed — loading from disk", identity)
             return str(self._source_hub.parent)
 
     def ensure_cached_sync(self, model_name: str) -> str:
@@ -538,29 +576,42 @@ class ModelRamCache:
         copy implementations delete, write and rename that tree); on a
         timed-out or unreachable wait the model is served from the source.
         """
-        model_name = _cache_identity(model_name)
-        may_copy, writer_lock = self._writer_lock_for_sync_copy(model_name)
+        requested = model_name
+        identity = _cache_identity(model_name)
+        may_copy, writer_lock = self._writer_lock_for_sync_copy(identity)
         if not may_copy:
             logger.warning(
                 "Model %s: the background cache attempt owns the model — "
                 "loading from source instead of starting a competing copy",
-                model_name,
+                identity,
             )
             return str(self._source_hub.parent)
         try:
-            return self._ensure_cached_sync(model_name)
+            return self._ensure_cached_sync(requested, identity)
         finally:
             if writer_lock is not None:
                 self._release_writer_lock_sync(writer_lock)
 
-    def _ensure_cached_sync(self, model_name: str) -> str:
+    def _ensure_cached_sync(self, requested: str, identity: str) -> str:
         """The admission + copy body of ensure_cached_sync, with the
         per-model writer lock held by the wrapper (lock-free when no
-        background worker exists to race)."""
-        # Caller (ensure_cached_sync) already canonicalized to repository identity.
-        if model_name in self._cached_models:
-            cached = self._cache_hub / _hf_model_dir_name(model_name)
+        background worker exists to race).
+
+        ``requested`` is the caller's original reference (may be a GGUF
+        ``repo:quant``); ``identity`` is the repository key used for
+        bookkeeping. The shared tmpfs entry is only reused when it covers
+        the concrete requested weights.
+        """
+        if identity in self._cached_models:
+            cached = self._cache_hub / _hf_model_dir_name(identity)
             if cached.exists():
+                if not self._tmpfs_covers_reference(requested, cached):
+                    logger.warning(
+                        "Model %s: shared RAM-cache entry lacks this "
+                        "reference's weights — loading from source HF_HOME",
+                        requested,
+                    )
+                    return str(self._source_hub.parent)
                 # Same floor re-check as the async path: an entry resident
                 # under an earlier, smaller floor must not be served once the
                 # re-plan has raised the sleep reserve past it (see
@@ -571,29 +622,29 @@ class ModelRamCache:
                         "Model %s: already cached but host RAM (%d MB) is below the "
                         "%d MB sleep reserve — loading from disk so the lane's "
                         "first sleep has planned host RAM",
-                        model_name,
+                        identity,
                         host_available // (1024 * 1024),
                         self._host_ram_floor_bytes // (1024 * 1024),
                     )
                     return str(self._source_hub.parent)
-                logger.info("Model %s: already in tmpfs RAM cache", model_name)
+                logger.info("Model %s: already in tmpfs RAM cache", requested)
                 return str(self._cache_hub.parent)
-            self._cached_models.discard(model_name)
+            self._cached_models.discard(identity)
 
-        if not self._source_has_bulk_weights(model_name):
+        if not self._source_has_bulk_weights(identity):
             logger.warning(
                 "Model %s: source filesystem has no bulk weights (manifest-only / "
                 "xet-backed not yet downloaded) — loading from source HF_HOME so "
                 "downloads do not flood tmpfs",
-                model_name,
+                identity,
             )
             return str(self._source_hub.parent)
 
-        size = self.model_size_bytes(model_name)
+        size = self.model_size_bytes(identity)
         if size <= 0:
             logger.warning(
                 "Model %s not found on source filesystem — loading from disk",
-                model_name,
+                identity,
             )
             return str(self._source_hub.parent)
 
@@ -604,7 +655,7 @@ class ModelRamCache:
         if available - size < safety_floor:
             logger.warning(
                 "Skipping RAM cache for %s: need %d MB, available %d MB " "(safety floor %d MB) — loading from disk",
-                model_name,
+                identity,
                 size // (1024 * 1024),
                 available // (1024 * 1024),
                 safety_floor // (1024 * 1024),
@@ -617,16 +668,23 @@ class ModelRamCache:
                 "Skipping RAM cache for %s: need %d MB but only %d MB of host RAM "
                 "is available above the %d MB reserved for sleeping lanes — "
                 "loading from disk",
-                model_name,
+                identity,
                 size // (1024 * 1024),
                 host_available // (1024 * 1024),
                 self._host_ram_floor_bytes // (1024 * 1024),
             )
             return str(self._source_hub.parent)
 
-        ok = self._copy_model_sync(model_name)
+        ok = self._copy_model_sync(identity)
         if ok:
-            self._cached_models.add(model_name)
+            self._cached_models.add(identity)
+            if not self._tmpfs_covers_reference(requested, self._cache_hub / _hf_model_dir_name(identity)):
+                logger.warning(
+                    "Model %s: RAM-cache copy finished but lacks this "
+                    "reference's weights — loading from source HF_HOME",
+                    requested,
+                )
+                return str(self._source_hub.parent)
             # Same post-copy re-check as the async path: the reserve may have
             # risen while the copy ran (see ensure_cached). The evict is
             # unconditional here — the only reservation that can be live on a
@@ -636,20 +694,20 @@ class ModelRamCache:
             # remove.
             starves, host_available = self._would_starve_host(0)
             if starves:
-                self.evict(model_name)
+                self.evict(identity)
                 logger.warning(
                     "Model %s: copy finished but host RAM (%d MB) is below "
                     "the %d MB sleep reserve — evicting the just-cached copy "
                     "and loading from disk so the sleep reserve is free at "
                     "once",
-                    model_name,
+                    identity,
                     host_available // (1024 * 1024),
                     self._host_ram_floor_bytes // (1024 * 1024),
                 )
                 return str(self._source_hub.parent)
-            logger.info("Model %s: cached to tmpfs RAM cache (sync)", model_name)
+            logger.info("Model %s: cached to tmpfs RAM cache (sync)", requested)
             return str(self._cache_hub.parent)
-        logger.warning("Model %s: copy to RAM cache failed — loading from disk", model_name)
+        logger.warning("Model %s: copy to RAM cache failed — loading from disk", identity)
         return str(self._source_hub.parent)
 
     def _copy_model_sync(self, model_name: str) -> bool:

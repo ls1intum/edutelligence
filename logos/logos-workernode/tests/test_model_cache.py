@@ -760,6 +760,67 @@ async def test_reclaim_spares_shared_gguf_directory_protected_by_sibling_quant(t
     assert cache.cached_models() == []
 
 
+def _gguf_hub_tree(hub: Path, repo: str, filenames: list[str], *, blob_bytes: int = 12 * 1024 * 1024) -> None:
+    """Populate an HF hub directory with a GGUF snapshot (blob + snapshot links)."""
+    model_dir = hub / ("models--" + repo.replace("/", "--"))
+    blobs = model_dir / "blobs"
+    blobs.mkdir(parents=True, exist_ok=True)
+    blob_path = blobs / "sha256-gguf"
+    if not blob_path.exists():
+        with open(blob_path, "wb") as f:
+            f.seek(blob_bytes - 1)
+            f.write(b"\x00")
+    refs = model_dir / "refs"
+    refs.mkdir(exist_ok=True)
+    (refs / "main").write_text("abc123")
+    snapshots = model_dir / "snapshots" / "abc123"
+    snapshots.mkdir(parents=True, exist_ok=True)
+    for name in filenames:
+        link = snapshots / name
+        if not link.exists():
+            link.symlink_to("../../blobs/sha256-gguf")
+
+
+@pytest.mark.asyncio
+async def test_ensure_cached_rejects_incomplete_gguf_quant_in_shared_entry(tmp_path):
+    """A Q4-only tmpfs snapshot must not satisfy a later ``repo:Q8_0`` request.
+
+    Even when Q8_0 is present in persistent storage, reusing the shared RAM
+    entry by repository identity alone would hand the lane a cache that lacks
+    its quant. Both admission paths must preserve the requested reference and
+    fall back to the source HF_HOME when the concrete weights are missing.
+    """
+    source_hf = tmp_path / "source" / "hub"
+    source_hf.mkdir(parents=True)
+    tmpfs = tmp_path / "ramcache"
+    tmpfs.mkdir()
+
+    repo = "org/model-GGUF"
+    q4 = f"{repo}:Q4_K_M"
+    q8 = f"{repo}:Q8_0"
+    # Persistent storage has both quants; the RAM snapshot will hold only Q4.
+    _gguf_hub_tree(source_hf, repo, ["model-Q4_K_M.gguf", "model-Q8_0.gguf"])
+
+    cache = ModelRamCache(tmpfs_path=str(tmpfs), source_hf_hub_path=str(source_hf))
+    cache._total_tmpfs_bytes = lambda: 0
+
+    await cache.ensure_cached(q4)
+    assert cache.is_cached(q4)
+    # Simulate an earlier Q4-only RAM snapshot: drop the Q8 link from tmpfs
+    # while leaving the shared repository entry marked cached.
+    cached_snap = Path(tmpfs) / "hub" / "models--org--model-GGUF" / "snapshots" / "abc123"
+    (cached_snap / "model-Q8_0.gguf").unlink()
+    assert not (cached_snap / "model-Q8_0.gguf").exists()
+    assert (cached_snap / "model-Q4_K_M.gguf").exists()
+
+    source_home = str(Path(source_hf).parent)
+    assert await cache.ensure_cached(q8) == source_home
+    assert cache.ensure_cached_sync(q8) == source_home
+    # The Q4 resident remains; only the incomplete request was redirected.
+    assert cache.is_cached(q4)
+    assert (cached_snap / "model-Q4_K_M.gguf").exists()
+
+
 @pytest.mark.asyncio
 async def test_the_cache_refuses_to_grow_into_the_sleep_reserve(ram_cache_env, monkeypatch):
     """The tmpfs mount is a fixed 400G of a 503G host, so tmpfs free space is
