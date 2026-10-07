@@ -135,6 +135,9 @@ class Settings:
 
     # --- container execution ---------------------------------------------
     docker_socket: str = os.getenv("LOGOS_AGENT_DOCKER_SOCKET", "/var/run/docker.sock")
+    # Compose passes ${REGISTRY}/logos-agent-workspace:${IMAGE_TAG}; the
+    # fallback matches the compose default, the public GHCR mirror, so a
+    # runner started outside compose reaches the same image.
     workspace_image: str = os.getenv(
         "LOGOS_AGENT_WORKSPACE_IMAGE",
         "ghcr.io/ls1intum/edutelligence/logos-agent-workspace:latest",
@@ -166,25 +169,38 @@ class Settings:
         for team in os.getenv("LOGOS_AGENT_TRUSTED_TEAMS", "logos-developers,logos-maintainers").split(",")
         if team.strip()
     )
-    # The review apps this repository runs on its own pull requests. They may
-    # not direct anything — no review of theirs starts a session, no comment
-    # of theirs steers one — but what they wrote travels with a task that
-    # somebody trusted has already directed.
+    # The review apps this repository runs on its own pull requests. What
+    # they wrote travels with a task somebody trusted has already directed
+    # — without that, a handover dropped the review itself. On a pull
+    # request this runner already owns they may also direct: a
+    # CHANGES_REQUESTED or @mention from one of them is the ordinary next
+    # step after the agent opened the work, not a stranger injecting
+    # direction. Strangers still cannot.
     #
-    # Without this the agent takes over its own pull request to address a
-    # review and is handed the pull request without the review: on prod,
-    # every handover dropped between six and seventeen comments, and on the
-    # busy ones those were the entire review. An agent given a diff and told
-    # "start from what is still open" reconstructs a review from the diff,
-    # which is guesswork dressed up as work.
-    #
-    # Named accounts rather than "any bot": this is a list of two apps that
-    # this repository chose, and it is emptied by setting the variable to
+    # Named accounts rather than "any bot": this is a list of apps this
+    # repository chose, and it is emptied by setting the variable to
     # nothing.
     review_bots: tuple[str, ...] = tuple(
         name.strip().lower()
         for name in os.getenv("LOGOS_AGENT_REVIEW_BOTS", "coderabbitai[bot],Claudia-Anthropica").split(",")
         if name.strip()
+    )
+    # Who is asked to review a pull request this runner just opened. Separate
+    # from ``review_bots``: that list is who may *direct* the agent on its
+    # own work; this one is who GitHub is asked to review it. Default is
+    # Claudia alone — CodeRabbit reviews via its own app installation and
+    # does not need a review request.
+    pr_reviewers: tuple[str, ...] = tuple(
+        name.strip() for name in os.getenv("LOGOS_AGENT_PR_REVIEWERS", "Claudia-Anthropica").split(",") if name.strip()
+    )
+    # Team review requests that mean this account. GitHub lists teams and
+    # people separately on a pull request; asking ``logos-maintainers`` does
+    # not put ``LogosOSSAgent`` in ``requested_reviewers``, so the runner
+    # never saw the request until this list existed.
+    review_teams: tuple[str, ...] = tuple(
+        slug.strip().lower()
+        for slug in os.getenv("LOGOS_AGENT_REVIEW_TEAMS", "logos-maintainers,logos-developers").split(",")
+        if slug.strip()
     )
     # Wall-clock ceiling for one session, or 0 for none — which is the
     # default. A clock is the wrong thing to stop an agent with: a session
@@ -279,6 +295,10 @@ class Settings:
     # restarted runner looks, how many self-queued sessions may be active —
     # is a constant in `triggers.py`, derived where it depends on anything.
     triggers_enabled: bool = _bool("LOGOS_AGENT_TRIGGERS_ENABLED", True)
+    # UTC hour of the nightly re-analysis of linked team repositories; -1
+    # turns it off. A repository whose branch head is still the commit its
+    # latest analysis described is not analysed again.
+    analysis_nightly_hour_utc: int = _int("LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC", 0)
 
     # --- storage ----------------------------------------------------------
     # Where session artefacts (logs, screenshots) are kept, on a volume shared

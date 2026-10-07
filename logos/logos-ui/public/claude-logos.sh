@@ -9,16 +9,23 @@
 #   claude-logos -p "..."             headless / one-shot
 #   claude-logos --resume             every claude flag is passed through unchanged
 #
-#   claude-logos --check              show the connection, the model and how much
-#                                     context this session would get, then exit
+#   claude-logos --check              show the connection, the model (if pinned) and
+#                                     how much context this session would get, then exit
+#
+# WebSearch works as in plain `claude`: Logos runs the searches itself, on
+# DuckDuckGo, so no Anthropic account is involved.
+#
+# LOGOS_MODEL is optional. When set, every Claude Code model slot is pinned to it
+# (previous behaviour). When unset, Claude Code discovers Logos models via
+# GET /v1/models (Anthropic shape) and can switch with /model.
 #   claude-logos --install            install to ~/.local/bin (reads config from stdin)
 #   claude-logos --update             replace this wrapper with the current one
 #   claude-logos --uninstall          remove the wrapper, its config and its key
 #   claude-logos --help               this text, then claude's own
 #
 # NOTHING OUTSIDE THIS WRAPPER IS TOUCHED. The Logos credential, base URL and model are
-# exported into the child process only, and the extra Claude Code settings live in this
-# wrapper's own directory and are handed over with --settings. Your shell profile,
+# exported into the child process only, and extra Claude Code settings, if any, live in
+# this wrapper's own directory and are handed over with --settings. Your shell profile,
 # ~/.claude/settings.json and your claude.ai login are left exactly as they are, so plain
 # `claude` keeps using your Anthropic subscription with no reconfiguration.
 #
@@ -34,7 +41,7 @@ set -euo pipefail
 # version string: the comparison is a single `-gt` that cannot misread anything,
 # where sorting "1.10" against "1.9" needs care to get right. The date is here for
 # people; only the number is compared.
-CLAUDE_LOGOS_VERSION=3          # 2026-09-07
+CLAUDE_LOGOS_VERSION=6          # 2026-10-06
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -52,7 +59,7 @@ VERSION_STATE_FILE="$CONFIG_DIR/latest-revision"
 # KEY=value lines. Environment variables win over it so a single invocation can be
 # redirected without editing anything:
 #
-#   LOGOS_MODEL=openai/gpt-oss-120b claude-logos
+#   LOGOS_MODEL=openai/gpt-oss-120b claude-logos   # optional pin; omit to pick in Claude Code
 #
 if [[ -r "$CONFIG_FILE" ]]; then
   # Read as data, not as shell: a stray backtick or $(...) in a value must not run.
@@ -253,27 +260,10 @@ logos_install() {
   } > "$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE"
 
-  # WebSearch is a server-side Anthropic tool: when the model invokes it, Claude Code
-  # sends a request whose tools array holds {"type":"web_search_20250305"} with no
-  # input_schema. vLLM on the Logos worker nodes requires input_schema on every tool
-  # and rejects that with 400, which Claude Code then retries in a loop. Denying the
-  # tool keeps it out of the request entirely. A separate settings layer rather than
-  # --disallowedTools, so it does not clash with that flag when you pass it yourself,
-  # and a separate FILE so ~/.claude/settings.json stays untouched.
-  cat > "$SETTINGS_FILE_DEFAULT" <<'SETTINGS'
-{
-  "permissions": {
-    "deny": ["WebSearch"]
-  }
-}
-SETTINGS
-  chmod 600 "$SETTINGS_FILE_DEFAULT"
-
   printf 'Installed:\n'
   printf '  %s\n' "$INSTALL_PATH"
   printf '  %s (key, mode 600)\n' "$LOGOS_KEY_FILE"
   printf '  %s\n' "$CONFIG_FILE"
-  printf '  %s\n' "$SETTINGS_FILE_DEFAULT"
   printf '\nNothing else on this machine was modified — plain `claude` still uses your\n'
   printf 'Anthropic subscription.\n\n'
 
@@ -558,13 +548,22 @@ LOGOS_CONTEXT_MAX=0
 CONTEXT_ORIGIN="estimate"
 KNOWN_MODEL_IDS=""
 
-if [[ -z "$LOGOS_MODEL" ]]; then
-  die "no model configured
-  Set one in $CONFIG_FILE (LOGOS_MODEL=…), or per invocation:
-    LOGOS_MODEL=<model> claude-logos"
+# A pinned model is optional. With one, size the session against that model and
+# force every Claude Code alias at it. Without one, Claude Code lists Logos
+# models (Anthropic GET /v1/models) and the user switches with /model.
+HAS_PINNED_MODEL=0
+[[ -n "$LOGOS_MODEL" ]] && HAS_PINNED_MODEL=1
+
+probe_result=""
+if (( HAS_PINNED_MODEL )); then
+  probe_result="$(context_probe)"
+else
+  # Still learn the key's model ids for the "new model" notice and --check.
+  _ids="$(model_ids_probe | tr '\n' '\t')"
+  probe_result=$'ids\t'"${_ids}"
 fi
 
-probe_result="$(context_probe)"
+if (( HAS_PINNED_MODEL )); then
 case "$probe_result" in
   window*)
     IFS=$'\t' read -r _ LOGOS_CONTEXT_TOKENS LOGOS_CONTEXT_GUARANTEED LOGOS_CONTEXT_AVAILABLE \
@@ -641,6 +640,21 @@ AFFORDABLE_OUTPUT_TOKENS=$(( LOGOS_CONTEXT_TOKENS - LOGOS_CONTEXT_HEADROOM - 130
 if (( HARD_STOP_AT < CLAUDE_CODE_BASE_PROMPT_TOKENS )); then
   CONTEXT_TOO_SMALL=1
 fi
+else
+  # No pin: Claude Code sizes each model from List Models (`max_input_tokens`).
+  CONTEXT_TOO_SMALL=0
+  CONTEXT_FOR_CLI=0
+  COMPACT_AT=0
+  HARD_STOP_AT=0
+  LOGOS_CONTEXT_HEADROOM="${LOGOS_CONTEXT_HEADROOM:-0}"
+  case "$probe_result" in
+    ids*)
+      KNOWN_MODEL_IDS="${probe_result#ids}"
+      KNOWN_MODEL_IDS="${KNOWN_MODEL_IDS//$'\t'/ }"
+      KNOWN_MODEL_IDS="${KNOWN_MODEL_IDS# }"
+      ;;
+  esac
+fi
 
 # Group digits in threes. printf "%'d" would do this, but only under a locale
 # that defines a thousands separator — under LANG=C, which is what a login shell
@@ -658,8 +672,18 @@ thousands() {
 }
 
 context_report() {
-  printf 'model    : %s\n' "$LOGOS_MODEL"
+  if (( HAS_PINNED_MODEL )); then
+    printf 'model    : %s\n' "$LOGOS_MODEL"
+  else
+    printf 'model    : (Claude Code picks via GET /v1/models — set LOGOS_MODEL to pin a default)\n'
+  fi
   printf 'logos    : %s\n' "$LOGOS_URL"
+  if (( ! HAS_PINNED_MODEL )); then
+    if [[ -n "$KNOWN_MODEL_IDS" ]]; then
+      printf 'available : %s\n' "$KNOWN_MODEL_IDS"
+    fi
+    return 0
+  fi
   if [[ "$CONTEXT_ORIGIN" == "estimate" ]]; then
     printf 'context  : %s tokens (an estimate — Logos reports no size for this model)\n' \
       "$(thousands "$LOGOS_CONTEXT_TOKENS")"
@@ -733,16 +757,31 @@ export ANTHROPIC_BASE_URL="$LOGOS_URL"
 export ANTHROPIC_AUTH_TOKEN="$LOGOS_KEY"
 unset ANTHROPIC_API_KEY
 
-# Point every model slot at the same Logos model: the primary one, the small/fast slot
-# used for background tasks, and the aliases behind /model.
-export ANTHROPIC_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_DEFAULT_FABLE_MODEL="$LOGOS_MODEL"
-export ANTHROPIC_SMALL_FAST_MODEL="$LOGOS_MODEL"   # pre-2.x name, harmless if ignored
-
-export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CONTEXT_FOR_CLI"
+# When a model is pinned, force every Claude Code slot at it (previous behaviour).
+# When it is not, clear any inherited pin/context so Claude Code discovers Logos
+# models via GET /v1/models and can switch with /model — an inherited
+# ANTHROPIC_MODEL would otherwise still select that id.
+if (( HAS_PINNED_MODEL )); then
+  export ANTHROPIC_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_DEFAULT_SONNET_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_DEFAULT_OPUS_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_DEFAULT_FABLE_MODEL="$LOGOS_MODEL"
+  export ANTHROPIC_SMALL_FAST_MODEL="$LOGOS_MODEL"   # pre-2.x name, harmless if ignored
+  export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CONTEXT_FOR_CLI"
+else
+  unset ANTHROPIC_MODEL \
+    ANTHROPIC_DEFAULT_HAIKU_MODEL \
+    ANTHROPIC_DEFAULT_SONNET_MODEL \
+    ANTHROPIC_DEFAULT_OPUS_MODEL \
+    ANTHROPIC_DEFAULT_FABLE_MODEL \
+    ANTHROPIC_SMALL_FAST_MODEL \
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS
+  # Opt into gateway List Models -> /model. Requires Claude Code >= 2.1.257 when
+  # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set (older builds suppress
+  # discovery under that flag).
+  export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
+fi
 export CLAUDE_CODE_MAX_OUTPUT_TOKENS="$LOGOS_MAX_OUTPUT_TOKENS"
 # Keep telemetry, model discovery and other non-inference calls off api.anthropic.com,
 # so the only traffic leaving this machine goes to Logos.
@@ -757,6 +796,7 @@ if [[ "${1:-}" == "--check" ]]; then
   context_report
   printf 'key      : %s (%s chars)\n' "$LOGOS_KEY_FILE" "${#LOGOS_KEY}"
   printf 'effort   : %s\n' "${LOGOS_EFFORT:-<not set by this wrapper>}"
+  printf 'search   : WebSearch, answered by Logos with DuckDuckGo results\n'
   report_new_models "$(model_ids_probe)"
   report_new_revision
   refresh_latest_revision
@@ -779,7 +819,9 @@ command -v claude >/dev/null 2>&1 || die "claude is not on your PATH — install
 # Ask Logos to get the model ready before handing over. Backgrounded and
 # best-effort: the session must not wait on it, and a warm-up that fails changes
 # nothing except that the first request pays for the load itself.
-trigger_warmup &
+if (( HAS_PINNED_MODEL )); then
+  trigger_warmup &
+fi
 
 # Say how much room this session got. It changes between runs without anything the
 # user having changed, so printing it is the difference between "Claude Code
@@ -789,6 +831,42 @@ report_new_models "$(model_ids_probe)" >&2
 report_new_revision >&2
 refresh_latest_revision
 printf '\n' >&2
+
+# Revisions before 6 wrote a settings layer denying WebSearch: the tool sent a request
+# vLLM rejects. Logos answers that request itself now, so the deny is lifted from
+# this wrapper's own layer on every start; whatever else is in it stays, and a layer
+# left empty goes. Keep WebSearch off for a run with --disallowedTools WebSearch.
+lift_websearch_deny() {
+  [[ -r "$SETTINGS_FILE_DEFAULT" ]] && grep -q '"WebSearch"' "$SETTINGS_FILE_DEFAULT" || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - "$SETTINGS_FILE_DEFAULT" <<'PY' || true
+import json, os, sys
+path = sys.argv[1]
+try:
+    with open(path) as fh:
+        cfg = json.load(fh)
+except Exception:
+    sys.exit(0)
+perms = cfg.get("permissions") if isinstance(cfg, dict) else None
+deny = perms.get("deny") if isinstance(perms, dict) else None
+if not isinstance(deny, list) or "WebSearch" not in deny:
+    sys.exit(0)
+perms["deny"] = [t for t in deny if t != "WebSearch"]
+if not perms["deny"]:
+    perms.pop("deny")
+if not perms:
+    cfg.pop("permissions")
+if not cfg:
+    os.remove(path)
+    sys.exit(0)
+with open(path + ".tmp", "w") as fh:
+    json.dump(cfg, fh, indent=2)
+    fh.write("\n")
+os.chmod(path + ".tmp", 0o600)
+os.replace(path + ".tmp", path)
+PY
+}
+lift_websearch_deny
 
 settings_args=()
 if [[ -n "$LOGOS_SETTINGS" && -r "$LOGOS_SETTINGS" ]]; then

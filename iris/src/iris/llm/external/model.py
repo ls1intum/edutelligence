@@ -34,6 +34,25 @@ class ChatModel(LanguageModel, metaclass=ABCMeta):
 
     cost_per_million_input_token: float = 0
     cost_per_million_output_token: float = 0
+    # Rates for the parts of the input the provider read from or wrote to its
+    # prompt cache. Reads are discounted; writes cost extra on models that bill
+    # them (GPT-5.6 and later). Unset means "not configured": those tokens are
+    # then billed at the normal input rate, so no paid token is ever recorded as
+    # free. Set 0 explicitly for providers that don't bill them (local models).
+    cost_per_million_cached_input_token: Optional[float] = None
+    cost_per_million_cache_write_input_token: Optional[float] = None
+    # Long-context price tier: above this many input tokens the provider bills
+    # the whole request at multiplied rates (GPT-6: 2x input and cache rates,
+    # 1.5x output). None means the model has no such tier.
+    long_context_threshold_tokens: Optional[int] = None
+    long_context_input_cost_multiplier: float = 1.0
+    long_context_output_cost_multiplier: float = 1.0
+    # Context size of the model. When set, the chat sends its whole history and
+    # summarizes the older part once a prompt goes above
+    # compaction_threshold_tokens (default: half of max_input_tokens). When not
+    # set, the chat keeps its fixed window of recent messages.
+    max_input_tokens: Optional[int] = None
+    compaction_threshold_tokens: Optional[int] = None
     # Whether the model exposes token-level log-probabilities. When True, a
     # pipeline can request them via CompletionArguments.logprobs and derive a
     # confidence score from the returned values. Defaults to False so models
@@ -79,6 +98,48 @@ class EmbeddingModel(LanguageModel, metaclass=ABCMeta):
     def embed(self, text: str) -> list[float]:
         """Create an embedding from the text"""
         raise NotImplementedError(f"The LLM {str(self)} does not support embeddings")
+
+
+class RerankItem(BaseModel):
+    """One scored document, identified by its index into the ``documents`` list
+    that was passed to :meth:`RerankModel.rerank`."""
+
+    index: int
+    relevance_score: float
+
+
+class RerankResponse(BaseModel):
+    """Provider-neutral rerank result.
+
+    Every reranker normalises its provider's response to this shape, so the
+    model configured behind a reranker role can be swapped (Cohere <-> a
+    vLLM-served cross-encoder) without touching any call site.
+    """
+
+    results: list[RerankItem]
+
+
+class RerankModel(LanguageModel, metaclass=ABCMeta):
+    """Abstract class for the llm reranker wrappers"""
+
+    cost_per_1k_requests: float = 0
+    # Whether THIS configured model's score distribution matches
+    # settings.global_search_rerank_floor's calibration (Qwen3-Reranker-8B; see
+    # that field's own description). Defaults to False: a transport wrapper
+    # like VllmRerankModel can serve ANY vLLM-hosted cross-encoder, so
+    # calibration is a property of the specific model behind a config entry,
+    # not of the client class, and must be declared explicitly per entry
+    # rather than inferred from isinstance.
+    rerank_floor_calibrated: bool = False
+
+    @classmethod
+    def __subclasshook__(cls, subclass) -> bool:
+        return hasattr(subclass, "rerank") and callable(subclass.rerank)
+
+    @abstractmethod
+    def rerank(self, query: str, documents: list[str], top_n: int) -> RerankResponse:
+        """Score the documents against the query"""
+        raise NotImplementedError(f"The LLM {str(self)} does not support reranking")
 
 
 class ImageGenerationModel(LanguageModel, metaclass=ABCMeta):

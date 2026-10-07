@@ -35,8 +35,8 @@ CI (GitHub Actions)                    Mac (native)
 │    no runtime          │            │   → ~/logos-workernode-mlx      │
 │                        │            │  install-macos.sh               │
 │ ghcr.io/ls1intum/      │            │   → ~/.venv-vllm-metal          │
-│  logos-workernode-mlx  │            │  launchctl bootstrap            │
-│                        │            │                                 │
+│  edutelligence/        │            │  launchctl bootstrap            │
+│  logos-workernode-mlx  │            │                                 │
 └────────────────────────┘            │ logos_worker_node.main          │
                                       │  ├── outbound WS → orchestrator │
                                       │  └── subprocess: vllm serve     │
@@ -146,7 +146,7 @@ Environment variables set by the plist or your shell override the file.
 | Variable | Default | Purpose |
 |---|---|---|
 | `LOGOS_MLX_HOME` | `~/logos-workernode-mlx` | install root |
-| `LOGOS_MLX_IMAGE` | `ghcr.io/ls1intum/logos-workernode-mlx:latest` | image to pull |
+| `LOGOS_MLX_IMAGE` | `ghcr.io/ls1intum/edutelligence/logos-workernode-mlx:latest` | image to pull |
 | `LOGOS_METAL_VENV` | `~/.venv-vllm-metal` | vllm-metal venv — read by the installer *and* the runtime resolvers (vllm binary, telemetry interpreter); bootstrap passes it to the launchd agent. Upstream's installer always creates `~/.venv-vllm-metal`, so a custom path must be populated by you (e.g. upstream's editable install) |
 | `LOGOS_METAL_PYTHON` | resolved from the venv | interpreter for the MLX telemetry probe |
 | `LOGOS_WORKER_BACKEND` | auto (`darwin` → metal) | force `metal` or `cuda` |
@@ -539,7 +539,7 @@ quantization, or raise `iogpu.wired_limit_mb`.
 pulls anonymously, which only works while the GHCR package is public (Package
 settings → Change visibility). For a private package, fetch the token with
 credentials instead:
-`curl -u <user>:$GITHUB_TOKEN "https://ghcr.io/token?scope=repository:ls1intum/logos-workernode-mlx:pull"`
+`curl -u <user>:$GITHUB_TOKEN "https://ghcr.io/token?scope=repository:ls1intum/edutelligence/logos-workernode-mlx:pull"`
 
 ---
 

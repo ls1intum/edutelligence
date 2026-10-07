@@ -98,10 +98,11 @@ Connection settings for the Weaviate vector database:
 
 Settings for the Memiris memory system:
 
-| Field           | Type | Default | Description                                       |
-| --------------- | ---- | ------- | ------------------------------------------------- |
-| `enabled`       | bool | `true`  | Whether Memiris memory creation is active         |
-| `sleep_enabled` | bool | `true`  | Whether the nightly memory consolidation job runs |
+| Field               | Type | Default | Description                                                                                 |
+| ------------------- | ---- | ------- | ------------------------------------------------------------------------------------------- |
+| `enabled`           | bool | `true`  | Whether Memiris memory creation is active                                                   |
+| `sleep_enabled`     | bool | `true`  | Whether the nightly memory consolidation job runs                                           |
+| `sleep_max_threads` | int  | `20`    | Memory groups the sleep job processes in parallel; keep below the local model's parallelism |
 
 #### `langfuse`
 
@@ -179,39 +180,52 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
   endpoint: "<your-endpoint>"
   api_key: "<your-key>"
   cost_per_1k_requests: 2
+
+# Or use a local no-network fallback when no reranking service is available
+- id: passthrough-reranker
+  name: Passthrough reranker
+  description: Preserve vector-search order
+  type: passthrough_reranker
+  model: passthrough
+  cost_per_1k_requests: 0
 ```
 
 ### Parameter Reference
 
-| Parameter                       | Required     | Description                                                        |
-| ------------------------------- | ------------ | ------------------------------------------------------------------ |
-| `id`                            | Yes          | Unique identifier across all models                                |
-| `name`                          | Yes          | Human-readable display name                                        |
-| `description`                   | Yes          | Additional description                                             |
-| `type`                          | Yes          | Model type (see below)                                             |
-| `model`                         | Yes          | Vendor model name — used for version matching (e.g., `gpt-5-mini`) |
-| `api_key`                       | Yes          | API key for the provider                                           |
-| `endpoint`                      | Azure/Cohere | Provider endpoint URL                                              |
-| `host`                          | Ollama       | Ollama server host URL                                             |
-| `api_version`                   | Azure        | Azure API version                                                  |
-| `azure_deployment`              | Azure        | Azure deployment name                                              |
-| `tools`                         | No           | Supported tool types (default: `[]`)                               |
-| `cost_per_million_input_token`  | No           | Cost tracking: input token price                                   |
-| `cost_per_million_output_token` | No           | Cost tracking: output token price                                  |
-| `cost_per_1k_requests`          | No           | Cost tracking: per-request price (rerankers)                       |
+| Parameter                       | Required     | Description                                                                     |
+| ------------------------------- | ------------ | ------------------------------------------------------------------------------- |
+| `id`                            | Yes          | Unique identifier across all models                                             |
+| `name`                          | Yes          | Human-readable display name                                                     |
+| `description`                   | Yes          | Additional description                                                          |
+| `type`                          | Yes          | Model type (see below)                                                          |
+| `model`                         | Yes          | Vendor model name — used for version matching (e.g., `gpt-5-mini`)              |
+| `api_key`                       | Provider     | API key for external providers; omit for passthrough                            |
+| `endpoint`                      | Azure/Cohere | Provider endpoint URL                                                           |
+| `host`                          | Ollama       | Ollama server host URL                                                          |
+| `base_url`                      | No           | OpenAI-compatible endpoint for `openai_chat` (e.g. Logos, vLLM)                 |
+| `extra_body`                    | No           | Provider-specific request fields, e.g. Qwen3 `chat_template_kwargs`             |
+| `leading_system_message_only`   | No           | Rewrite later system messages for templates that reject them (Qwen3.x)          |
+| `reasoning_token_allowance`     | No           | Tokens added to each pipeline's `max_tokens` for reasoning models (default `0`) |
+| `api_version`                   | Azure        | Azure API version                                                               |
+| `azure_deployment`              | Azure        | Azure deployment name                                                           |
+| `tools`                         | No           | Supported tool types (default: `[]`)                                            |
+| `cost_per_million_input_token`  | No           | Cost tracking: input token price                                                |
+| `cost_per_million_output_token` | No           | Cost tracking: output token price                                               |
+| `cost_per_1k_requests`          | No           | Cost tracking: per-request price (rerankers)                                    |
 
 ### Model Types
 
-| Type                | Provider       | Class                                                     |
-| ------------------- | -------------- | --------------------------------------------------------- |
-| `openai_chat`       | OpenAI         | `DirectOpenAIChatModel` — Chat completions                |
-| `azure_chat`        | Azure OpenAI   | `AzureOpenAIChatModel` — Chat completions via Azure       |
-| `openai_embedding`  | OpenAI         | `DirectOpenAIEmbeddingModel` — Text embeddings            |
-| `azure_embedding`   | Azure OpenAI   | `AzureOpenAIEmbeddingModel` — Text embeddings via Azure   |
-| `openai_completion` | OpenAI         | `DirectOpenAICompletionModel` — Text completions          |
-| `azure_completion`  | Azure OpenAI   | `AzureOpenAICompletionModel` — Text completions via Azure |
-| `ollama`            | Ollama         | `OllamaModel` — Local model inference                     |
-| `cohere_azure`      | Cohere (Azure) | `CohereAzureClient` — Reranking                           |
+| Type                   | Provider       | Class                                                     |
+| ---------------------- | -------------- | --------------------------------------------------------- |
+| `openai_chat`          | OpenAI         | `DirectOpenAIChatModel` — Chat completions                |
+| `azure_chat`           | Azure OpenAI   | `AzureOpenAIChatModel` — Chat completions via Azure       |
+| `openai_embedding`     | OpenAI         | `DirectOpenAIEmbeddingModel` — Text embeddings            |
+| `azure_embedding`      | Azure OpenAI   | `AzureOpenAIEmbeddingModel` — Text embeddings via Azure   |
+| `openai_completion`    | OpenAI         | `DirectOpenAICompletionModel` — Text completions          |
+| `azure_completion`     | Azure OpenAI   | `AzureOpenAICompletionModel` — Text completions via Azure |
+| `ollama`               | Ollama         | `OllamaModel` — Local model inference                     |
+| `cohere_azure`         | Cohere (Azure) | `CohereAzureClient` — Reranking                           |
+| `passthrough_reranker` | Local          | `PassthroughReranker` — Preserve vector-search order      |
 
 ### How Models Are Selected
 

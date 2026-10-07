@@ -14,6 +14,7 @@ import { formatUsd } from '../../../../shared/utils/currency';
 import {
   LatestRequestsPage,
   RequestCursor,
+  RequestPayloads,
   StatisticsService,
 } from '../../services/statistics.service';
 import { RequestItem } from '../../statistics.models';
@@ -75,6 +76,63 @@ export function tokenLabel(
 export class RecentRequests implements OnChanges, OnDestroy {
   private statisticsService = inject(StatisticsService);
 
+  readonly expandedRequestId = signal<string | null>(null);
+  readonly payloadTab = signal<'request' | 'response'>('request');
+  readonly payloads = signal<RequestPayloads | null>(null);
+  readonly payloadLoading = signal(false);
+  readonly payloadError = signal<string | null>(null);
+  private payloadRequestId: string | null = null;
+  private payloadGeneration = 0;
+  private payloadAwaitingCompletion = false;
+
+  readonly payloadText = computed(() => {
+    const data = this.payloads();
+    const value = this.payloadTab() === 'request' ? data?.input_payload : data?.response_payload;
+    if (value == null) return null;
+    return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  });
+
+  togglePayloads(item: RequestItem): void {
+    if (this.expandedRequestId() === item.request_id) {
+      this.expandedRequestId.set(null);
+      return;
+    }
+    this.expandedRequestId.set(item.request_id);
+    this.payloadTab.set('request');
+    if (this.payloadRequestId !== item.request_id || this.payloadAwaitingCompletion || (!this.payloads() && !this.payloadLoading())) {
+      this.payloadAwaitingCompletion = deriveStage(item) !== 'complete';
+      void this.loadPayloads(item.request_id);
+    }
+  }
+
+  async loadPayloads(requestId: string): Promise<void> {
+    const generation = ++this.payloadGeneration;
+    this.payloadRequestId = requestId;
+    this.payloads.set(null);
+    this.payloadLoading.set(true);
+    this.payloadError.set(null);
+    try {
+      const payloads = await this.statisticsService.getRequestPayloads(requestId);
+      if (generation === this.payloadGeneration) this.payloads.set(payloads);
+    } catch {
+      if (generation === this.payloadGeneration) {
+        this.payloadError.set('Could not load request content. Close and reopen to try again.');
+      }
+    } finally {
+      if (generation === this.payloadGeneration) this.payloadLoading.set(false);
+    }
+  }
+
+  private clearPayloads(): void {
+    ++this.payloadGeneration;
+    this.expandedRequestId.set(null);
+    this.payloadRequestId = null;
+    this.payloadAwaitingCompletion = false;
+    this.payloads.set(null);
+    this.payloadError.set(null);
+    this.payloadLoading.set(false);
+  }
+
   /**
    * Live rows pushed by the stats WS — the newest page, already narrowed to the
    * page's scope, since the server applies it to the push itself.
@@ -115,6 +173,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
    * by the page — the live push and every fetched page must agree on it.
    */
   @Input() filterStatus: string | null = null;
+  @Input() filterModelIds: string[] = [];
+  @Input() filterProviderIds: string[] = [];
 
   /** Shared ticker: ms since epoch, updated by setInterval. */
   now = signal(Date.now());
@@ -146,6 +206,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
   private readonly _filterTeamId = signal<number | null>(null);
   private readonly _filterProviderId = signal<number | null>(null);
   private readonly _filterErrorsOnly = signal(false);
+  private readonly _filterModelIds = signal<string[]>([]);
+  private readonly _filterProviderIds = signal<string[]>([]);
   private readonly _filterStatus = signal<string | null>(null);
 
   /** Only for the empty state, which reads differently once a filter is on. */
@@ -154,7 +216,9 @@ export class RecentRequests implements OnChanges, OnDestroy {
       this._filterUserId() !== null ||
       this._filterTeamId() !== null ||
       this._filterProviderId() !== null ||
-      this._filterErrorsOnly(),
+      this._filterErrorsOnly() ||
+      this._filterModelIds().length > 0 ||
+      this._filterProviderIds().length > 0,
   );
 
   /**
@@ -261,6 +325,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
     if (changes['filterTeamId']) this._filterTeamId.set(this.filterTeamId);
     if (changes['filterProviderId']) this._filterProviderId.set(this.filterProviderId);
     if (changes['filterErrorsOnly']) this._filterErrorsOnly.set(this.filterErrorsOnly);
+    if (changes['filterModelIds']) this._filterModelIds.set(this.filterModelIds);
+    if (changes['filterProviderIds']) this._filterProviderIds.set(this.filterProviderIds);
     if (changes['filterStatus']) this._filterStatus.set(this.filterStatus);
     // A new range or a new scope invalidates every page cut out of the previous
     // one. No fetch follows: page 0 is the live feed either way, and the
@@ -270,22 +336,34 @@ export class RecentRequests implements OnChanges, OnDestroy {
       (changes['filterTeamId'] && !changes['filterTeamId'].firstChange) ||
       (changes['filterProviderId'] && !changes['filterProviderId'].firstChange) ||
       (changes['filterErrorsOnly'] && !changes['filterErrorsOnly'].firstChange) ||
-      (changes['filterStatus'] && !changes['filterStatus'].firstChange);
+      (changes['filterStatus'] && !changes['filterStatus'].firstChange) ||
+      (changes['filterModelIds'] && !changes['filterModelIds'].firstChange) ||
+      (changes['filterProviderIds'] && !changes['filterProviderIds'].firstChange);
     if ((changes['range'] && !changes['range'].firstChange) || scopeChanged) {
       this.resetToFirstPage();
     }
     // Re-schedule ticker whenever inputs change so cadence stays correct.
     this.scheduleTicker();
     // A new push is where the chase gets new ground to cover.
-    if (changes['liveRequests']) this.startChase();
+    if (changes['liveRequests']) {
+      this.startChase();
+      const expanded = this.liveRequests?.find(item => item.request_id === this.expandedRequestId());
+      if (expanded && this.payloadAwaitingCompletion && deriveStage(expanded) === 'complete') {
+        this.payloadAwaitingCompletion = false;
+        // Supersede even an in-flight fetch: it may contain the unfinished response.
+        void this.loadPayloads(expanded.request_id);
+      }
+    }
   }
 
   ngOnDestroy(): void {
+    this.clearPayloads();
     this.clearTicker();
     this.clearChase();
   }
 
   private resetToFirstPage(): void {
+    this.clearPayloads();
     this.pageFetchGeneration++;
     this.pageIndex.set(0);
     this.cursorForPage = [null];
@@ -349,7 +427,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
         PAGE_SIZE,
         { userId: this._filterUserId(), teamId: this._filterTeamId(),
           providerId: this._filterProviderId(), errorsOnly: this._filterErrorsOnly(),
-          status: this._filterStatus() },
+          status: this._filterStatus(), modelIds: this._filterModelIds().map(Number),
+          providerIds: this._filterProviderIds().map(Number) },
         cursor,
       );
       // Scope or range moved on while we waited — drop the stale page.
@@ -483,6 +562,43 @@ export class RecentRequests implements OnChanges, OnDestroy {
     return item.full_name || item.username || '';
   }
 
+  /**
+   * Whether this row was made with an application (service) key.
+   * Those are team credentials labelled by environment, not by a person.
+   */
+  isApplicationKey(item: RequestItem): boolean {
+    return item.api_key_type === 'application';
+  }
+
+  /**
+   * Real environment name for an application-key row, or empty when the
+   * database placeholder ("-") / a blank value would only add noise.
+   */
+  environmentOf(item: RequestItem): string {
+    const env = item.environment?.trim();
+    return env && env !== '-' ? env : '';
+  }
+
+  /**
+   * Whether the personal requester chip belongs on this row.
+   * Application keys have no person behind them — only team + environment.
+   */
+  showRequester(item: RequestItem): boolean {
+    return !this.isApplicationKey(item) && !!this.requesterOf(item);
+  }
+
+  /**
+   * Label for the key chip, or empty when the chip should not render.
+   *
+   * Application keys: the environment (falling back to the key name when no
+   * environment was set). Developer keys: omitted — the key name repeats the
+   * user (e.g. `tobias.wasner-Logos-key`) and is obsolete next to the user chip.
+   */
+  keyChipOf(item: RequestItem): string {
+    if (!this.isApplicationKey(item)) return '';
+    return this.environmentOf(item) || item.api_key_name?.trim() || '';
+  }
+
   /** Cloud cost in USD; null when no price is on record for the model. */
   costLabelOf(item: RequestItem): string | null {
     if (item.cost_microcents == null) return null;
@@ -542,11 +658,6 @@ export class RecentRequests implements OnChanges, OnDestroy {
   elapsedOf(item: RequestItem): string {
     if (!item.scheduled_ts) return '0.0s';
     return formatElapsed((this.now() - new Date(item.scheduled_ts).getTime()) / 1000);
-  }
-
-  errorSnippet(msg: string | null): string {
-    if (!msg) return '';
-    return msg.length > 60 ? msg.slice(0, 60) + '...' : msg;
   }
 
   formatCount(v: number): string {

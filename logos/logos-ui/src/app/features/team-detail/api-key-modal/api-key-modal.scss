@@ -33,14 +33,18 @@
   @include glass-surface;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding: 12px 14px;
   margin-bottom: 14px;
   margin-top: 4px;
 }
 
-.key-value-left { min-width: 0; }
+// The value side grows into the free space so the action buttons stay
+// grouped at the right edge instead of being spread across the row.
+.key-value-left {
+  flex: 1;
+  min-width: 0;
+}
 
 .kv-label {
   font-size: var(--font-size-2xs);
@@ -202,6 +206,30 @@
   font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-100));
   margin-bottom: 5px;
+}
+
+.field-hint {
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-typography-500));
+  line-height: 1.35;
+}
+
+.slo-reset {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgb(var(--color-text-accent));
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
 }
 
 .field-input {

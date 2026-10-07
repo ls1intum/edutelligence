@@ -28,6 +28,11 @@ export interface LatestRequestsPage {
   next_cursor: RequestCursor | null;
 }
 
+export interface RequestPayloads {
+  input_payload: unknown;
+  response_payload: unknown;
+}
+
 /** Narrowing of the request feed. `null` on a field means "do not narrow by it". */
 export interface RequestFilter {
   userId: number | null;
@@ -37,6 +42,8 @@ export interface RequestFilter {
   errorsOnly: boolean;
   /** One lifecycle bucket (queued/running/error/finished), or null for all. */
   status: string | null;
+  modelIds?: number[];
+  providerIds?: number[];
 }
 
 /** One entry of a filter dropdown, with how much picking it would select. */
@@ -51,11 +58,18 @@ export interface ScopeOptions {
   teams: ScopeOption[];
   requesters: ScopeOption[];
   providers: ScopeOption[];
+  models: ScopeOption[];
 }
 
 @Injectable({ providedIn: 'root' })
 export class StatisticsService {
   private http = inject(HttpClient);
+
+  getRequestPayloads(requestId: string): Promise<RequestPayloads> {
+    return firstValueFrom(this.http.post<RequestPayloads>('/api/logosdb/request_payloads', {
+      request_id: requestId,
+    }));
+  }
 
   getVramStats(day: string): Promise<VramV2Payload> {
     return firstValueFrom(this.http.post<VramV2Payload>('/api/logosdb/get_ollama_vram_stats', {
@@ -119,6 +133,8 @@ export class StatisticsService {
         provider_id: filter.providerId,
         errors_only: filter.errorsOnly || null,
         status: filter.status,
+        model_ids: filter.modelIds ?? [],
+        provider_ids: filter.providerIds ?? [],
         cursor_ts: cursor?.ts ?? null,
         cursor_id: cursor?.request_id ?? null,
       }),
@@ -180,6 +196,22 @@ export class StatisticsService {
    */
   sleepLane(providerId: number, laneId: string): Promise<unknown> {
     return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/sleep', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  /**
+   * Take a busy lane offline without dropping its in-flight requests. The
+   * server marks the lane out of the rotation, waits for the in-flight
+   * requests to finish, then sleeps the lane — or unloads it when the host
+   * cannot hold a resident sleeper. The call can take as long as the last
+   * request runs (plus the sleep), so the panel shows "Draining…" for the
+   * whole ride. A lane that does not drain in time answers an error and
+   * keeps serving, so the click can simply be retried.
+   */
+  drainLane(providerId: number, laneId: string): Promise<unknown> {
+    return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/drain', {
       provider_id: providerId,
       lane_id: laneId,
     }));

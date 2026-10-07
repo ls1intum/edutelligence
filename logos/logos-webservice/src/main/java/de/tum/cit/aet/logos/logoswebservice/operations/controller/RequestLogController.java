@@ -64,7 +64,18 @@ public class RequestLogController {
         int limit = body.get("limit") instanceof Number n
             ? n.intValue() : RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
         return ResponseEntity.ok(requestLogService.getLatestRequests(
-            start, end, userId, teamId, providerId, errorsOnly, status, cursorTs, cursorId, limit, true));
+            start, end, userId, teamId, providerId, errorsOnly, status, cursorTs, cursorId, limit, true,
+            RequestLogService.readFeedIds(body, "model_ids"), RequestLogService.readFeedIds(body, "provider_ids")));
+    }
+
+    /** Payloads are excluded from the feed and fetched explicitly for one row. */
+    @PostMapping("/request_payloads")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> requestPayloads(@RequestBody Map<String, Object> body) {
+        if (!(body.get("request_id") instanceof String requestId) || requestId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "request_id must be a non-empty string"));
+        }
+        return ResponseEntity.ok(requestLogService.getRequestPayloads(requestId));
     }
 
     @PostMapping("/request_logs")

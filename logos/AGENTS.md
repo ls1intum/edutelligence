@@ -9,7 +9,7 @@
 | Directory | Stack | Role |
 |-----------|-------|------|
 | `logos-orchestrator/` | Python 3.13, FastAPI, `uv` | Core proxy: auth, classification, scheduling, provider routing, request logging. See its own `AGENTS.md`. |
-| `logos-webservice/` | Java 25, Spring Boot, Maven | Admin/management REST API. **Owns the Postgres schema** via Liquibase. See its own `AGENTS.md`. |
+| `logos-webservice/` | Java 25, Spring Boot, Maven | Admin/management REST API **and** public inference gateway (`/v1`, `/openai`, `/jobs`). **Owns the Postgres schema** via Liquibase. See its own `AGENTS.md`. |
 | `logos-ui/` | Angular 22, npm | Web application for teams, keys, models, stats. See its own `AGENTS.md`. |
 | `logos-workernode/` | Python | GPU worker-node control plane: vLLM lane lifecycle, calibration, websocket bridge to the orchestrator. See its own `AGENTS.md`. |
 | `logos-agent/` | Python, FastAPI | Runs coding agents in isolated containers on spare serving capacity. See its own `AGENTS.md` and `README.md`. |
@@ -17,8 +17,9 @@
 | `agent-gateway/`, `rate-limit-gateway/` | nginx | Edge proxies around the agent runner and the orchestrator. |
 | `keycloak/` | — | Dev realm seed (`tum-realm.json`); all seeded dev users have password `password`. |
 | `db/` | — | Plain `postgres:17` + pg_cron Dockerfile — **no schema here**. |
-| `docs/` | Docusaurus | User/admin/developer documentation site. |
+| `docs/` | Docusaurus | User/admin/developer documentation site. Role-guide screenshot refresh + demo seed: see `docs/AGENTS.md`. |
 | `benchmarks/` | Python | Scheduler/throughput benchmarking scripts. |
+| `scripts/` | bash | Core-node ops scripts, e.g. `gateway-failover-demo.sh` (see [deployment](docs/deployment.md#failover-verification)). |
 
 ## Cross-Cutting Rules (Not Inferable From the Code)
 
@@ -46,11 +47,25 @@ The older Process/Profile hierarchy (`process`, `profiles`, `profile_model_permi
 - **Branch names**: `feature/logos/description` or `logos/description`.
 - Never merge to `main` without a PR. After opening a PR, check `gh pr checks` and fix failures immediately.
 - **Every PR that changes the UI must include full-page desktop AND mobile screenshots** in the PR description (never committed to the repo). The exact capture/hosting procedure is the `ui-screenshots` skill (see below).
+- **Every PR that changes how a documented page looks** must also refresh the matching committed role-guide PNGs under `docs/static/img/roles/` in that same PR (layout, chrome, empty/error states, sidebar — anything a reader would notice). Follow `docs/AGENTS.md`: one shot per distinct UI state (tabs / steps / modals), no near-duplicate per-role pages, every PNG explained in the flow with UI-consistent names.
+
+### Shared branches (MANDATORY)
+
+A branch that another active session (human or agent) is using to resolve open review findings is **frozen for you**:
+
+- No reverts, no "restore" or "answer the question" commits, no rebases of the branch.
+- No force pushes, no branch deletion.
+- If a change on that branch is needed: do not push it — comment on the PR or the tracking issue and wait for the active session to apply it.
+- The authoritative state is always the latest commit of the active session. When in doubt whether a commit is wanted: do nothing.
+
+Conflicting pushes force manual merge/revert cycles and full CI re-runs, and can leave the PR head in exactly the state a reviewer just rejected.
+
+This section is a behavioral rule, not a technical control — the repository cannot block force pushes or branch deletions on its own. The matching technical enforcement (force pushes and deletion disabled, optionally push access via the rule's `restrictions` field) must be set per branch in the branch-protection settings.
 
 ### Conventions
 
 - Avoid the imprecise terms `frontend` and `backend` in comments and documentation — name the actual component (user interface, web application, application server, feature service, data service, infrastructure service).
-- Keep comments focused on current behavior and implementation constraints; no issue/PR history or local provider names.
+- Keep comments, docstrings, and test names focused on current behavior and implementation constraints; no issue/PR history or local provider names. A reference belongs in the commit message or the pull request, not in code that outlives it.
 - Pre-commit hooks (autoflake, isort, black 120 cols, flake8) gate Python code — see `logos/README.md` for setup and manual runs.
 
 ### Shared sibling
@@ -73,3 +88,4 @@ Task-specific playbooks live in `.agents/skills/<name>/SKILL.md`, in the [Agent 
 | Skill | Use it for |
 |-------|------------|
 | [`ui-screenshots`](.agents/skills/ui-screenshots/SKILL.md) | Full-page desktop + mobile screenshots of the web application for PRs and documentation. |
+| [`docs/AGENTS.md`](docs/AGENTS.md) | Role-guide PNGs under `docs/static/img/roles/` (committed): principles (no near-duplicate per-role shots; capture tabs/steps/modals; explain every shot), seed, and shot matrix. |

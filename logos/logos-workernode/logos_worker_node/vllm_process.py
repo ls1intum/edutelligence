@@ -21,6 +21,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -34,6 +35,7 @@ from typing import Any, AsyncIterator, Callable, ClassVar
 
 import httpx
 
+from logos_worker_node.model_profiles import ModelProfileRegistry, reconfigured_vram_mb
 from logos_worker_node.models import (
     _DEFAULT_LANE_CONTEXT_LENGTH,
     LaneConfig,
@@ -1517,9 +1519,12 @@ class VllmProcessHandle:
         # so gmu must divide by the TP the lane actually runs at. Using the profile's
         # TP=1 for a TP=2 lane over-reserves (gmu 0.95 instead of 0.5) and fails the
         # co-residence memory floor check when another lane is already resident.
-        tp = vc.tensor_parallel_size or getattr(profile, "tensor_parallel_size", None)
+        tp = vc.parallel_gpu_count
         if not loaded or not tp or tp <= 0:
             return None
+        loaded = reconfigured_vram_mb(
+            profile, float(loaded), tp, ModelProfileRegistry._parse_kv_cache_to_mb(vc.kv_cache_memory_bytes)
+        )
         per_gpu_total = self._per_gpu_total_mb()
         if per_gpu_total <= 0:
             return None
@@ -2532,6 +2537,24 @@ class VllmProcessHandle:
         """Public wrapper for persisting recent vLLM logs after runtime failures."""
         self._persist_failure_logs(reason)
 
+    def _startup_root_cause(self) -> str:
+        """Keep the useful exception before generic engine shutdown messages bury it."""
+        causes = []
+        for line in self._recent_logs:
+            match = re.search(r"(?:[\w.]*Error|[\w.]*Exception):\s*.+|Reason:\s*.+", line)
+            if match and not any(
+                text in match.group(0).lower()
+                for text in (
+                    "engine core initialization failed",
+                    "worker failed to initialize",
+                    "see root cause above",
+                )
+            ):
+                cause = match.group(0).strip()
+                if cause not in causes:
+                    causes.append(cause)
+        return " | ".join(causes[:3])[:1200]
+
     def _format_startup_failure(self, timeout_s: int) -> str:
         status = self.status()
         if status.state == ProcessState.STOPPED and status.return_code is not None:
@@ -2543,6 +2566,9 @@ class VllmProcessHandle:
                 f"[{self.lane_id}] vLLM did not become ready within {timeout_s}s "
                 f"(port={self.port}, state={status.state.value}, return_code={status.return_code})"
             )
+        cause = self._startup_root_cause()
+        if cause:
+            base = f"{base}. Cause: {cause}"
         hint = self._startup_hint()
         tail = self._recent_log_tail()
         if hint and tail:

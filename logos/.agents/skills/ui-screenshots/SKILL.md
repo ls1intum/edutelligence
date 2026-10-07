@@ -1,6 +1,6 @@
 ---
 name: ui-screenshots
-description: Capture full-page desktop and mobile screenshots of the Logos Angular web application and host them so they render in a pull request or in the documentation. Use whenever a change touches logos-ui/, when a PR needs UI screenshots, or when adding UI imagery to docs — covers localhost-vs-127.0.0.1 CORS, unlocking shell scroll containers, waiting for real data (not skeletons), and the gist hosting gotcha that otherwise serves images as text.
+description: Capture full-page desktop and mobile screenshots of the Logos Angular web application and host them so they render in a pull request or in the documentation. Use whenever a change touches logos-ui/, when a PR needs UI screenshots, or when adding UI imagery to docs — covers localhost-vs-127.0.0.1 CORS, unlocking shell scroll containers, waiting for real data (not skeletons), and the gist hosting gotcha that otherwise serves images as text. For committed role-guide PNGs under docs/static/img/roles/, also read logos/docs/AGENTS.md (principles: one shot per distinct tab/step/modal, no near-duplicate per-role pages, every PNG explained; plus seed + shot matrix).
 compatibility: Requires the Logos dev stack (Docker Compose), the GitHub CLI (`gh`) authenticated, and a browser automation tool such as Playwright.
 ---
 
@@ -13,7 +13,7 @@ Reviewers must be able to see the result without running the stack; a UI PR with
 - At least one **desktop** screenshot of the changed view.
 - At least one **mobile** screenshot (375px viewport) of the same view — the shared data tables drop their header below 768px and fall back to per-cell `data-label`s, so a mobile shot is the only way to see how a table actually renders there.
 - **Every screenshot must show the FULL page** — page header, tab bar, and the entire scrollable content. A shot that starts mid-view or cuts off the last table row is not acceptable.
-- Screenshots go into the PR description (or docs) only — **never commit them to the repository**.
+- Screenshots go into the PR description only — **never commit them to the repository**, except the role-guide PNGs under `docs/static/img/roles/` (see `docs/AGENTS.md`).
 
 ## 1. Run the stack and open the UI on `localhost` (not `127.0.0.1`)
 
@@ -69,12 +69,17 @@ Before shooting:
 
 The Logos UI scrolls inside `.main-content` (shell), not the document — a plain `fullPage` screenshot only captures the first viewport. Unlock, then `fullPage: true`:
 
-- set `height: auto`, `max-height: none`, and `overflow` / `overflow-y: visible` (all `!important`) on `<html>`, `<body>`, `.shell-layout`, `.main-content`, and ancestors of the page root (e.g. `.stats-page`) up to `<html>`
-- also unlock every element whose computed `overflow-y` is `auto` or `scroll`
+- set `height: auto`, `max-height: none`, and `overflow` / `overflow-y: visible` (all `!important`) on `<html>`, `<body>`, and `.main-content`
+- on `.shell-layout`: keep **`min-height: 100vh` / `100dvh`**, set `height: auto`, `overflow: visible`, and `align-items: stretch` so the shell grows with tall pages **without** collapsing shorter than the viewport
+- on `.sidebar`: `align-self: stretch` and `min-height: 100%` so the glass sidebar stays full height (never a short floating card with empty lavender under it)
+- unlock ancestors of the page root (e.g. `.stats-page`) up to `<html>` the same way as `.main-content`
+- also unlock every element **inside `.main-content`** whose computed `overflow-y` is `auto` or `scroll`
+
+**Do not** set `height: auto` on `.shell-layout` without `min-height: 100vh` — that shrinks the flex shell to content height and leaves a short sidebar on sparse pages.
 
 **Do not** blanket-unlock every `overflow: hidden` node on the page (cards, chips, text ellipsis) — that breaks clipping and makes the shot look washed-out / “wrong theme”.
 
-Verify: when the page overflows, image height must be **greater than** the viewport (e.g. desktop 1440×900 → height ≫ 900).
+Verify: sidebar glass reaches the bottom of the image (tiny border-radius gap only). When the page overflows, image height must be **greater than** the viewport (e.g. desktop 1440×900 → height ≫ 900).
 
 ## 3. Host the images in a gist (do it this way or they won't render)
 
@@ -107,3 +112,7 @@ If it says `text/plain`, the "image" is text — re-push via git as above. If `c
 ## 4. Embed in the PR description
 
 Add a `## Screenshots` section with the raw gist URLs (commit-pinned), labelled desktop/mobile.
+
+## 5. Role-guide documentation shots (committed PNGs)
+
+When refreshing `docs/static/img/roles/*.png` or priming demo data so those pages are not empty, follow [`docs/AGENTS.md`](../../../docs/AGENTS.md) instead of gist-hosting: login users, apply `docs/seed/role-screenshots.sql`, capture desktop shots of **each distinct UI state** (tabs, wizard steps, modals — not near-identical per-role pages), embed and explain every PNG in the role guide with UI-consistent names, and commit them with the docs change.

@@ -18,10 +18,13 @@
     claude-logos -Update             replace this wrapper with the current one
     claude-logos -Uninstall          remove the wrapper, its config and its key
 
+  WebSearch works as in plain `claude`: Logos runs the searches itself, on
+  DuckDuckGo, so no Anthropic account is involved.
+
   NOTHING OUTSIDE THIS WRAPPER IS TOUCHED. The Logos credential, base URL and model are
   set on this process only - never with [Environment]::SetEnvironmentVariable at User or
-  Machine scope - and the extra Claude Code settings live in this wrapper's own folder
-  and are handed over with --settings. Your PowerShell profile,
+  Machine scope - and extra Claude Code settings, if any, live in this wrapper's own
+  folder and are handed over with --settings. Your PowerShell profile,
   %USERPROFILE%\.claude\settings.json and your claude.ai login are left exactly as they
   are, so plain `claude` keeps using your Anthropic subscription.
 
@@ -51,7 +54,7 @@ $ErrorActionPreference = 'Stop'
 # Bump on every change installed copies should pick up. Keep in step with the same
 # constant in claude-logos.sh - the two wrappers are one tool with two front ends.
 # A monotonic integer, not a version string: the comparison cannot misread anything.
-$ClaudeLogosVersion = 3          # 2026-09-07
+$ClaudeLogosVersion = 6          # 2026-10-06
 
 $ConfigDir = if ($env:LOGOS_CONFIG_DIR) { $env:LOGOS_CONFIG_DIR }
              else { Join-Path $env:USERPROFILE '.config\claude-logos' }
@@ -73,7 +76,7 @@ function Stop-WithError([string]$Message) { Write-Error "claude-logos: $Message"
 # KEY=value lines. Environment variables win over it, so a single invocation can be
 # redirected without editing anything:
 #
-#   $env:LOGOS_MODEL = 'openai/gpt-oss-120b'; claude-logos
+#   $env:LOGOS_MODEL = 'openai/gpt-oss-120b'; claude-logos   # optional pin; omit to pick in Claude Code
 #
 $Config = @{}
 if (Test-Path -LiteralPath $ConfigFile) {
@@ -237,19 +240,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0claude-logos.ps1" %*
     if ($model) { $configLines += "LOGOS_MODEL=$model" }
     Set-Content -LiteralPath $ConfigFile -Value $configLines -Encoding UTF8
 
-    # WebSearch is a server-side Anthropic tool: Claude Code sends it as a tool with no
-    # input_schema, which vLLM on the Logos worker nodes rejects with 400 and Claude
-    # Code then retries in a loop. Denying it keeps it out of the request. A separate
-    # settings FILE, so %USERPROFILE%\.claude\settings.json stays untouched.
-    '{ "permissions": { "deny": ["WebSearch"] } }' |
-        Set-Content -LiteralPath $SettingsFile -Encoding UTF8
-
     Write-Host 'Installed:'
     Write-Host "  $ShimPath"
     Write-Host "  $InstallPath"
     Write-Host "  $KeyFile (key, readable by you only)"
     Write-Host "  $ConfigFile"
-    Write-Host "  $SettingsFile"
     Write-Host ''
     Write-Host 'Nothing else on this machine was modified - plain `claude` still uses your'
     Write-Host 'Anthropic subscription.'
@@ -375,9 +370,9 @@ if (-not (Test-Path -LiteralPath $KeyFile)) {
 }
 $LogosKey = (Get-Content -Raw -LiteralPath $KeyFile).Trim()
 if (-not $LogosKey) { Stop-WithError "the key file $KeyFile is empty" }
-if (-not $LogosModel) {
-    Stop-WithError "no model configured. Set LOGOS_MODEL in $ConfigFile, or per invocation."
-}
+# Optional pin: with LOGOS_MODEL set, every Claude Code slot is forced at it.
+# Without one, Claude Code discovers Logos models via GET /v1/models and /model.
+$HasPinnedModel = -not [string]::IsNullOrWhiteSpace($LogosModel)
 
 # -- Context window, from the gateway --------------------------------------------
 # The window is a property of the lane serving the model, not of the model: the
@@ -463,7 +458,8 @@ $HardStopAt = $ContextForCli - $MaxOutputTokens - 3000
 # Recorded rather than acted on immediately: -Check exists to diagnose exactly
 # this, so it prints the arithmetic and only a real start refuses to run.
 $ClaudeCodeBasePromptTokens = 13000
-$ContextTooSmall = $HardStopAt -lt $ClaudeCodeBasePromptTokens
+$ContextTooSmall = $HasPinnedModel -and ($HardStopAt -lt $ClaudeCodeBasePromptTokens)
+if (-not $HasPinnedModel) { $ContextForCli = 0; $CompactAt = 0; $HardStopAt = 0 }
 # What the reservation would have to be for the opening prompt to fit - measured
 # against the auto-compact point (13000) rather than the hard stop (3000), because
 # a value that only clears the hard stop leaves auto-compaction firing on every
@@ -506,8 +502,18 @@ function Invoke-Warmup {
 }
 
 function Write-ContextReport {
-    Write-Host ("model    : {0}" -f $LogosModel)
+    if ($HasPinnedModel) {
+        Write-Host ("model    : {0}" -f $LogosModel)
+    } else {
+        Write-Host 'model    : (Claude Code picks via GET /v1/models - set LOGOS_MODEL to pin a default)'
+    }
     Write-Host ("logos    : {0}" -f $LogosUrl)
+    if (-not $HasPinnedModel) {
+        if ($AllModelIds.Count -gt 0) {
+            Write-Host ("available : {0}" -f ($AllModelIds -join ' '))
+        }
+        return
+    }
     if ($ContextOrigin -eq 'estimate') {
         Write-Host ("context  : {0:N0} tokens (an estimate - Logos reports no size for this model)" -f $ContextTokens)
     } elseif ($ContextOrigin -eq 'cold') {
@@ -566,12 +572,25 @@ function Write-ContextReport {
 $env:ANTHROPIC_BASE_URL = $LogosUrl
 $env:ANTHROPIC_AUTH_TOKEN = $LogosKey
 $env:ANTHROPIC_API_KEY = ''
-foreach ($slot in @('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-                    'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
-                    'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL')) {
-    Set-Item -Path "env:$slot" -Value $LogosModel
+if ($HasPinnedModel) {
+    foreach ($slot in @('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+                        'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+                        'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL')) {
+        Set-Item -Path "env:$slot" -Value $LogosModel
+    }
+    $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = "$ContextForCli"
+} else {
+    # Drop inherited pins/context so /model discovery is not overridden.
+    foreach ($slot in @('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+                        'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+                        'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL',
+                        'CLAUDE_CODE_MAX_CONTEXT_TOKENS')) {
+        Remove-Item -Path "env:$slot" -ErrorAction SilentlyContinue
+    }
+    # Opt into gateway List Models -> /model. Requires Claude Code >= 2.1.257 when
+    # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set.
+    $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
 }
-$env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = "$ContextForCli"
 $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = "$MaxOutputTokens"
 # Keep telemetry, model discovery and other non-inference calls off api.anthropic.com.
 $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
@@ -583,6 +602,7 @@ if ($Check) {
     Write-ContextReport
     Write-Host ("key      : {0} ({1} chars)" -f $KeyFile, $LogosKey.Length)
     Write-Host ("effort   : {0}" -f $(if ($Effort) { $Effort } else { '<not set by this wrapper>' }))
+    Write-Host 'search   : WebSearch, answered by Logos with DuckDuckGo results'
     Report-NewModels $AllModelIds
     Report-NewRevision
     Update-CachedRevision
@@ -607,7 +627,7 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 # immediately (it records a hint rather than doing the work inline), so this is a
 # round trip and not a wait - no background job needed, and a failure changes
 # nothing except that the first request pays for the load itself.
-Invoke-Warmup
+if ($HasPinnedModel) { Invoke-Warmup }
 
 # Say how much room this session got. It changes between runs without anything the
 # user having changed, so printing it is the difference between "Claude Code
@@ -617,6 +637,29 @@ Report-NewModels $AllModelIds
 Report-NewRevision
 Update-CachedRevision
 Write-Host ''
+
+# Revisions before 6 wrote a settings file denying WebSearch: the tool sent a request
+# vLLM rejects. Logos answers that request itself now, so the deny is lifted from
+# this wrapper's own file on every start; whatever else is in it stays, and a file
+# left empty goes. Keep WebSearch off for a run with --disallowedTools WebSearch.
+if (Test-Path -LiteralPath $SettingsFile) {
+    try {
+        $cfg = Get-Content -Raw -LiteralPath $SettingsFile | ConvertFrom-Json
+        if ($cfg.permissions -and (@($cfg.permissions.deny) -contains 'WebSearch')) {
+            $kept = @($cfg.permissions.deny | Where-Object { $_ -ne 'WebSearch' })
+            if ($kept.Count) { $cfg.permissions.deny = $kept }
+            else { $cfg.permissions.PSObject.Properties.Remove('deny') }
+            if (-not @($cfg.permissions.PSObject.Properties).Count) { $cfg.PSObject.Properties.Remove('permissions') }
+            if (@($cfg.PSObject.Properties).Count) {
+                $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
+            } else {
+                Remove-Item -LiteralPath $SettingsFile -Force
+            }
+        }
+    } catch {
+        Write-Note "could not lift the WebSearch deny in $SettingsFile ($($_.Exception.Message))"
+    }
+}
 
 $passThrough = @()
 if (Test-Path -LiteralPath $SettingsFile) { $passThrough += @('--settings', $SettingsFile) }

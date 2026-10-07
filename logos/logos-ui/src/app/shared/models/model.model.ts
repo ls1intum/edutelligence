@@ -1,3 +1,6 @@
+/** Likert 1–5 axes for spider charts (extensible; v1 = latency/quality/price). */
+export type ModelProfileRatings = Record<string, number>;
+
 export interface Model {
   id: number;
   name: string;
@@ -9,6 +12,8 @@ export interface Model {
   weight_accuracy: number | null;
   weight_cost: number | null;
   weight_quality: number | null;
+  /** Likert 1–5 profile for spider charts (latency / quality / price, …). */
+  profile_ratings?: ModelProfileRatings | null;
   /** Only present for logos_admin (the endpoint is open to all roles). */
   last_used_at?: string | null;
 }
@@ -35,4 +40,6 @@ export interface UpdateModelPayload {
   weight_accuracy?: number;
   weight_cost?: number;
   weight_quality?: number;
+  /** Full replacement map of Likert 1–5 ratings (empty object clears). */
+  profile_ratings?: ModelProfileRatings;
 }

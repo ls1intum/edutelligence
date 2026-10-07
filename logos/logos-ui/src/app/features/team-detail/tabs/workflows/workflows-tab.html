@@ -1,0 +1,360 @@
+<div class="workflows-tab">
+  <div class="section-header">
+    <div class="section-title">
+      Workflows
+      @if (pendingRecs().length > 0) {
+        <span class="section-count" title="Pending recommendations">
+          {{ pendingRecs().length }} pending
+        </span>
+      }
+    </div>
+    <button type="button" class="btn-secondary" (click)="load()" [disabled]="loading()">
+      <i
+        class="pi"
+        [class.pi-spin]="loading()"
+        [class.pi-spinner]="loading()"
+        [class.pi-refresh]="!loading()"
+        aria-hidden="true"
+      ></i>
+      Refresh
+    </button>
+  </div>
+
+  <p class="section-hint">
+    Activity diagrams plus SLO and objective-priority recommendations from the
+    latest succeeded analysis of each linked repository. Owners can edit a
+    diagram's Mermaid; later analyses keep that edit and propose a newer
+    diagram beside it when the agent finds a change. Objective priority is an
+    ordered list of latency, quality, and price (most important first).
+    Confirmations can update an application key's queue priority;
+    recommendations never take effect until you review them.
+  </p>
+
+  @if (canEdit && apiKeys.length > 0) {
+    <div class="key-picker">
+      <label class="key-picker-label" for="workflows-review-key">Application key</label>
+      <select
+        id="workflows-review-key"
+        class="field-select"
+        [ngModel]="reviewKeyValue()"
+        (ngModelChange)="setReviewKey($event)"
+        [disabled]="reviewingId() != null"
+      >
+        <option value="">No key</option>
+        @for (key of keysByPriority(); track key.id) {
+          <option [value]="key.id">{{ key.name }} · priority {{ key.default_priority ?? 0 }}</option>
+        }
+      </select>
+      <span class="key-picker-hint">
+        Accept and Override set this key's queue priority from the confirmed SLO.
+        Defaults to the highest-priority key.
+      </span>
+    </div>
+  }
+
+  @if (loadError()) {
+    <app-error-message variant="banner" [message]="loadError()" />
+  }
+  @if (actionError()) {
+    <app-error-message variant="banner" [message]="actionError()" />
+  }
+
+  @if (loading()) {
+    <div class="loading-state">
+      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      <span>Loading workflows…</span>
+    </div>
+  } @else if (!data() || data()!.repositories.length === 0) {
+    <div class="empty-state">
+      No repositories linked yet. Add one under the Repositories tab; LogosOSSAgent analyses it within a few minutes.
+    </div>
+  } @else {
+    @for (repo of data()!.repositories; track repo.id) {
+      <section class="repo-block">
+        <header class="repo-header">
+          <div class="repo-title">
+            <i class="pi pi-github" aria-hidden="true"></i>
+            <a class="repo-slug" [href]="repo.repo_url" target="_blank" rel="noopener noreferrer">
+              {{ repo.repo_slug }}
+            </a>
+            <span class="branch-badge">{{ repo.branch }}</span>
+          </div>
+          @if (repo.latest_analysis; as analysis) {
+            <div class="analysis-meta">
+              <span class="status-badge status-badge--{{ analysis.status }}">{{ analysis.status }}</span>
+              @if (analysis.source) {
+                <span class="meta-chip">{{ analysis.source }}</span>
+              }
+              @if (analysis.commit_sha) {
+                <span class="meta-chip" title="Analyzed commit">{{ analysis.commit_sha | slice: 0:7 }}</span>
+              }
+            </div>
+          } @else {
+            <span class="meta-muted">No succeeded analysis yet — LogosOSSAgent picks it up on its own, or queue one on the Repositories tab.</span>
+          }
+        </header>
+
+        @for (wf of workflowsForRepo(repo); track wf.id) {
+          <article class="workflow-card">
+            <div class="workflow-head">
+              <div class="workflow-title-row">
+                <h3 class="workflow-name">{{ wf.name }}</h3>
+                <div class="workflow-badges">
+                  @if (wf.diagram_set_by_owner) {
+                    <span class="meta-chip" title="You edited this diagram; re-analyses keep it">Edited</span>
+                  }
+                  @if (wf.proposed_diagram_mermaid) {
+                    <span class="flag-badge" title="The latest analysis proposed a different diagram">
+                      Agent update
+                    </span>
+                  }
+                </div>
+                @if (canEdit && !isEditingDiagram(wf)) {
+                  <button
+                    type="button"
+                    class="btn-secondary btn-sm"
+                    [disabled]="savingDiagramId() != null || reviewingProposalId() != null"
+                    (click)="startEditDiagram(wf)"
+                  >
+                    Edit diagram
+                  </button>
+                }
+              </div>
+              @if (wf.trigger_summary) {
+                <p class="trigger-summary">{{ wf.trigger_summary }}</p>
+              }
+            </div>
+
+            @if (isEditingDiagram(wf)) {
+              <div class="diagram-editor">
+                <label class="diagram-editor-label" [attr.for]="'diagram-edit-' + wf.id">
+                  Mermaid source
+                </label>
+                <textarea
+                  class="diagram-editor-input"
+                  [id]="'diagram-edit-' + wf.id"
+                  rows="10"
+                  [ngModel]="diagramDraft()[wf.id] ?? ''"
+                  (ngModelChange)="setDiagramDraft(wf.id, $event)"
+                  [disabled]="savingDiagramId() === wf.id"
+                ></textarea>
+                <div class="diagram-editor-actions">
+                  <button
+                    type="button"
+                    class="btn-primary btn-sm"
+                    [disabled]="savingDiagramId() != null"
+                    (click)="saveDiagram(wf)"
+                  >
+                    @if (savingDiagramId() === wf.id) {
+                      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                    }
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-secondary btn-sm"
+                    [disabled]="savingDiagramId() === wf.id"
+                    (click)="cancelEditDiagram()"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            } @else if (wf.diagram_mermaid) {
+              <pre class="mermaid" [attr.data-diagram-source]="diagramSource(wf)">{{ diagramSource(wf) }}</pre>
+            }
+
+            @if (wf.proposed_diagram_mermaid && !isEditingDiagram(wf)) {
+              <div class="diagram-proposal">
+                <div class="diagram-proposal-head">
+                  <p class="diagram-proposal-title">Agent proposed update</p>
+                  @if (canEdit) {
+                    <div class="diagram-proposal-actions">
+                      <button
+                        type="button"
+                        class="btn-primary btn-sm"
+                        [disabled]="reviewingProposalId() != null || savingDiagramId() != null"
+                        (click)="reviewDiagramProposal(wf, 'accept')"
+                      >
+                        @if (reviewingProposalId() === wf.id) {
+                          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                        }
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-secondary btn-sm"
+                        [disabled]="reviewingProposalId() != null || savingDiagramId() != null"
+                        (click)="reviewDiagramProposal(wf, 'dismiss')"
+                      >
+                        Keep mine
+                      </button>
+                    </div>
+                  }
+                </div>
+                <pre
+                  class="mermaid mermaid--proposal"
+                  [attr.data-diagram-source]="proposedDiagramSource(wf)"
+                >{{ proposedDiagramSource(wf) }}</pre>
+              </div>
+            }
+          </article>
+        }
+
+        @if (repo.recommendations.length > 0) {
+          <div class="recs-section">
+            <h4 class="recs-title">Recommendations</h4>
+            <!-- The review controls need the full grid width; scroll rather than clip. -->
+            <div class="recs-scroll">
+            <app-data-table
+              [columns]="recCols"
+              [gridCols]="recGrid"
+              [empty]="false"
+            >
+              @for (rec of repo.recommendations; track rec.id) {
+                <div class="table-row" role="row" [class.table-row--pending]="rec.review_status === 'pending'">
+                  <div class="cell-file" role="cell" data-label="File">
+                    @if (rec.code_url) {
+                      <a [href]="rec.code_url" target="_blank" rel="noopener noreferrer">
+                        {{ rec.file_path }}@if (rec.start_line != null) { :{{ rec.start_line }} }
+                      </a>
+                    } @else {
+                      <span>{{ rec.file_path }}</span>
+                    }
+                    @if (rec.justification) {
+                      <p class="rec-justification">{{ rec.justification }}</p>
+                    }
+                    @if (rec.traffic_flags?.['night_heavy'] === true) {
+                      <span class="flag-badge" title="Marked ux-critical but most traffic is at night (00–05 UTC)">
+                        night-heavy
+                      </span>
+                    }
+                  </div>
+                  <div class="cell-model" role="cell" data-label="Model">
+                    @if (canEdit) {
+                      <select
+                        class="field-select"
+                        [attr.aria-label]="'Model used by recommendation ' + rec.id"
+                        [ngModel]="rec.detected_model ?? ''"
+                        (ngModelChange)="setModel(rec, $event)"
+                        [disabled]="savingModelId() != null"
+                      >
+                        <option value="">Unknown</option>
+                        @for (name of modelOptions(rec); track name) {
+                          <option [value]="name">{{ name }}</option>
+                        }
+                      </select>
+                    } @else {
+                      <span>{{ rec.detected_model || '—' }}</span>
+                    }
+                    @if (ratingsForDetectedModel(rec.detected_model); as ratings) {
+                      <app-model-profile-radar [ratings]="ratings" [size]="96" />
+                    }
+                  </div>
+                  <div class="cell-recommended" role="cell" data-label="Recommended">
+                    <span class="slo-badge">{{ rec.recommended_slo }}</span>
+                    <ol class="priority-list" [attr.aria-label]="'Objective priority for recommendation ' + rec.id">
+                      @for (key of priorityFor(rec); track key; let i = $index) {
+                        <li class="priority-chip">
+                          <span class="priority-rank">{{ i + 1 }}.</span>
+                          {{ key | titlecase }}
+                          @if (canEdit && rec.review_status === 'pending') {
+                            <span class="priority-move">
+                              <button
+                                type="button"
+                                class="btn-icon btn-icon--xs"
+                                [disabled]="i === 0 || reviewingId() === rec.id"
+                                [attr.aria-label]="'Move ' + key + ' up'"
+                                (click)="movePriority(rec.id, i, -1)"
+                              >
+                                <i class="pi pi-arrow-up" aria-hidden="true"></i>
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-icon btn-icon--xs"
+                                [disabled]="i === priorityFor(rec).length - 1 || reviewingId() === rec.id"
+                                [attr.aria-label]="'Move ' + key + ' down'"
+                                (click)="movePriority(rec.id, i, 1)"
+                              >
+                                <i class="pi pi-arrow-down" aria-hidden="true"></i>
+                              </button>
+                            </span>
+                          }
+                        </li>
+                      }
+                    </ol>
+                  </div>
+                  <div class="cell-confidence" role="cell" data-label="Confidence">
+                    {{ (rec.confidence * 100) | number: '1.0-0' }}%
+                  </div>
+                  <div role="cell" data-label="Status">
+                    <span class="status-badge status-badge--{{ rec.review_status }}">
+                      {{ rec.review_status }}
+                    </span>
+                    @if (rec.confirmed_slo) {
+                      <span class="slo-badge slo-badge--muted">{{ rec.confirmed_slo }}</span>
+                    }
+                    @if (rec.review_carried_over) {
+                      <p class="previous-decision">Kept from the previous analysis</p>
+                    } @else if (rec.review_status === 'pending' && rec.previous; as prev) {
+                      <!-- A re-analysis proposes; the earlier decision stays until reviewed. -->
+                      <p class="previous-decision" title="Last decision on this call site">
+                        Was {{ prev.review_status }}: {{ prev.slo }} ·
+                        {{ prev.objective_priority.join(' › ') }}
+                      </p>
+                    }
+                  </div>
+                  <div class="cell-actions" role="cell" data-label="">
+                    @if (canEdit && rec.review_status === 'pending') {
+                      <select
+                        class="field-select"
+                        [attr.aria-label]="'Override SLO for recommendation ' + rec.id"
+                        [ngModel]="overrideSlo()[rec.id] ?? rec.recommended_slo"
+                        (ngModelChange)="setOverrideSlo(rec.id, $event)"
+                        [disabled]="reviewingId() === rec.id"
+                      >
+                        @for (opt of sloOptions; track opt.value) {
+                          <option [value]="opt.value" [title]="opt.hint">{{ opt.label }}</option>
+                        }
+                      </select>
+                      <button
+                        type="button"
+                        class="btn-primary btn-sm"
+                        [disabled]="reviewingId() != null"
+                        (click)="accept(rec)"
+                      >
+                        @if (reviewingId() === rec.id) {
+                          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                        }
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-secondary btn-sm"
+                        [disabled]="reviewingId() != null"
+                        (click)="override(rec)"
+                      >
+                        Override
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-secondary btn-sm btn-danger"
+                        [disabled]="reviewingId() != null"
+                        (click)="reject(rec)"
+                      >
+                        Reject
+                      </button>
+                    }
+                  </div>
+                </div>
+              }
+            </app-data-table>
+            </div>
+          </div>
+        } @else if (repo.latest_analysis) {
+          <p class="repo-empty">No LLM-call recommendations in this analysis.</p>
+        }
+      </section>
+    }
+  }
+</div>

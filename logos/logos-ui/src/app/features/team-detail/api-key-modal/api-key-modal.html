@@ -205,16 +205,37 @@
 
         <div class="form-row-2">
           <div class="form-field">
-            <label class="field-label" for="km-priority">Queue Priority</label>
-            <input
-              id="km-priority"
+            <label class="field-label" for="km-slo">SLO</label>
+            <select
+              id="km-slo"
               class="field-input"
-              type="number"
-              min="0"
-              [value]="fPriority()"
-              (input)="fPriority.set($any($event.target).value)"
+              [title]="sloFieldHint()"
+              [value]="fSlo()"
+              (change)="fSlo.set($any($event.target).value)"
               [disabled]="saveLoading()"
-            />
+            >
+              @if (fSlo() === '') {
+                <option value="" disabled selected>
+                  inherited ({{ sloLabel(inheritedEffectiveSlo()) }})
+                </option>
+              }
+              @for (option of sloOptions; track option.value) {
+                <option [value]="option.value" [selected]="option.value === fSlo()">
+                  {{ option.label }}
+                </option>
+              }
+            </select>
+            <span class="field-hint">{{ sloFieldHint() }}</span>
+            @if (canResetDeveloperSlo()) {
+              <button
+                type="button"
+                class="slo-reset"
+                (click)="resetDeveloperSloToInherited()"
+                [disabled]="saveLoading()"
+              >
+                Reset to inherited
+              </button>
+            }
           </div>
           <div class="form-field">
             <label class="field-label">Log Level</label>

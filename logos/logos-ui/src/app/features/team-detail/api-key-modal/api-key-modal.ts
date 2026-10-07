@@ -16,6 +16,17 @@ import { TeamApiKey, TeamDetail, ApiKeyUpdatePayload } from '../../../shared/mod
 import { TeamManagementService } from '../../../core/services/team-management.service';
 import { SearchInputComponent } from '../../../shared/components/search-input/search-input';
 import { ErrorMessageComponent } from '../../../shared/components/error-message/error-message';
+import {
+  KeySlo,
+  SLO_OPTIONS,
+  SLO_PRIORITY,
+  INHERITED_SLO_HINT,
+  effectiveSlo,
+  isUnsetPriority,
+  sloHint,
+  sloLabel,
+  sloOfPriority,
+} from '../tabs/key-slo';
 
 const MICRO = 100_000_000;
 
@@ -61,7 +72,18 @@ export class ApiKeyModalComponent implements OnChanges {
   fLocalRpm = signal('');
   fLocalTpm = signal('');
   fEnv = signal('');
-  fPriority = signal('0');
+  /**
+   * Selected SLO, or `''` when the key still inherits team/policy priority.
+   * Keeping inherited as a distinct empty value means picking any of the three
+   * real tiers — including the one that matches the effective inherited tier —
+   * is a real change that can pin the key.
+   */
+  fSlo = signal<KeySlo | ''>('');
+  /** The selection when the dialog opened. Unset stays `''` so a budget-only
+   *  save does not convert an inherited priority into an explicit one. */
+  private initialSlo: KeySlo | '' = '';
+  /** Effective inherited tier for the placeholder label (team → default). */
+  inheritedEffectiveSlo = signal<KeySlo>(sloOfPriority(0));
   fLog = signal<'BILLING' | 'FULL'>('BILLING');
   fCustom = signal(false);
 
@@ -123,7 +145,14 @@ export class ApiKeyModalComponent implements OnChanges {
     this.fLocalRpm.set(s.local_rpm_limit && s.local_rpm_limit > 0 ? String(s.local_rpm_limit) : '');
     this.fLocalTpm.set(s.local_tpm_limit && s.local_tpm_limit > 0 ? String(s.local_tpm_limit) : '');
     this.fEnv.set(key.environment ?? '');
-    this.fPriority.set(String(key.default_priority ?? 0));
+    this.inheritedEffectiveSlo.set(effectiveSlo(0, this.team?.priority));
+    if (isUnsetPriority(key.default_priority)) {
+      this.initialSlo = '';
+      this.fSlo.set('');
+    } else {
+      this.initialSlo = sloOfPriority(key.default_priority);
+      this.fSlo.set(this.initialSlo);
+    }
     this.fLog.set(key.log ?? 'BILLING');
     this.fCustom.set(!!key.use_custom_permissions);
     this.saveError.set('');
@@ -267,6 +296,30 @@ export class ApiKeyModalComponent implements OnChanges {
     );
   }
 
+  readonly sloOptions = SLO_OPTIONS;
+  readonly sloLabel = sloLabel;
+  readonly inheritedSloHint = INHERITED_SLO_HINT;
+
+  sloFieldHint(): string {
+    const slo = this.fSlo();
+    return slo === '' ? INHERITED_SLO_HINT : sloHint(slo);
+  }
+
+  /**
+   * Developer keys historically used priority `0` for team/policy inheritance
+   * (and changelog `039` left many of them at legacy `1`). The SLO select only
+   * offers the three tiers, so owners need a separate action to write `0` again
+   * after pinning — application keys keep an explicit SLO once chosen.
+   */
+  canResetDeveloperSlo(): boolean {
+    return this.key?.key_type === 'developer' && this.fSlo() !== '';
+  }
+
+  resetDeveloperSloToInherited(): void {
+    if (!this.canResetDeveloperSlo() || this.saveLoading()) return;
+    this.fSlo.set('');
+  }
+
   dollarsToMc = dollarsToMc;
 
   get dialogHeader(): string {
@@ -287,7 +340,6 @@ export class ApiKeyModalComponent implements OnChanges {
 
     const payload: ApiKeyUpdatePayload = {
       environment: key.key_type === 'developer' ? '' : this.fEnv().trim(),
-      default_priority: parseInt(this.fPriority(), 10) || 0,
       log: this.fLog(),
       use_custom_permissions: this.fCustom(),
       budget_limit_micro_cents: this.fBudget().trim() ? (dollarsToMc(this.fBudget()) ?? -1) : -1,
@@ -296,6 +348,17 @@ export class ApiKeyModalComponent implements OnChanges {
       local_rpm_limit: intOrMinus1(this.fLocalRpm()),
       local_tpm_limit: intOrMinus1(this.fLocalTpm()),
     };
+
+    const selectedSlo = this.fSlo();
+    if (selectedSlo !== this.initialSlo) {
+      if (selectedSlo === '') {
+        // Developer-key reset-to-inherited (see canResetDeveloperSlo). Application
+        // keys cannot reach '' from an explicit tier through the UI.
+        payload.default_priority = 0;
+      } else {
+        payload.default_priority = SLO_PRIORITY[selectedSlo];
+      }
+    }
 
     const ops: Promise<unknown>[] = [this.svc.updateApiKey(key.id, payload)];
 

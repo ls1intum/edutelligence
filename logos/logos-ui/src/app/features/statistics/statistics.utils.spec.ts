@@ -1,9 +1,12 @@
 import {
+  describeWorkerVersion,
   extractProviderHostRamMb,
   formatBucketRange,
   formatPercent,
   formatTokenCount,
   formatUptime,
+  isUnifiedMemoryProvider,
+  modelSeriesKey,
   normalizeFeedStatus,
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
@@ -204,6 +207,45 @@ describe('extractProviderHostRamMb', () => {
 });
 
 /**
+ * A provider's memory is a single pool (not a VRAM pool beside a RAM pool)
+ * when its device reports unified memory. The page decides on this alone, so
+ * the answer has to be exactly "Metal", never anything that merely looks
+ * like it.
+ */
+describe('isUnifiedMemoryProvider', () => {
+  it('reads the device mode off the provider signals', () => {
+    const sample = {
+      timestamp: 't',
+      scheduler_signals: {
+        provider: { device_mode: 'metal' },
+      },
+    };
+    expect(isUnifiedMemoryProvider(sample)).toBe(true);
+  });
+
+  it('is false for every other device mode', () => {
+    for (const mode of ['cuda', 'none', 'unknown', '']) {
+      expect(
+        isUnifiedMemoryProvider({
+          timestamp: 't',
+          scheduler_signals: { provider: { device_mode: mode } },
+        }),
+      ).toBe(false);
+    }
+    expect(isUnifiedMemoryProvider({ timestamp: 't', scheduler_signals: { provider: {} } })).toBe(
+      false,
+    );
+  });
+
+  it('is false when the sample or its signals are missing', () => {
+    expect(isUnifiedMemoryProvider({ timestamp: 't' })).toBe(false);
+    expect(isUnifiedMemoryProvider({ timestamp: 't', scheduler_signals: {} })).toBe(false);
+    expect(isUnifiedMemoryProvider(null)).toBe(false);
+    expect(isUnifiedMemoryProvider(undefined)).toBe(false);
+  });
+});
+
+/**
  * The share of a part in a total, as the cold-start KPI card shows it.
  *
  * The point is the small end: a share that integer rounding collapses to
@@ -297,6 +339,79 @@ describe('formatUptime', () => {
 });
 
 /**
+ * The "version: <commit>" chip next to a worker's name. A worker that cannot
+ * name its commit still shows a chip, so the gap reads as a known limit
+ * rather than a missing feature.
+ */
+describe('describeWorkerVersion', () => {
+  const commit = 'a3f9c21e0b7d4f65a1c2d3e4f5061728394a5b6c';
+
+  it('shows the first 8 characters and hands the full commit to the card separately', () => {
+    expect(describeWorkerVersion(commit, true)).toEqual({
+      label: 'version: a3f9c21e',
+      hint: "Commit this worker's image was built from:",
+      commit,
+    });
+  });
+
+  it('keeps the whole commit, unshortened, out of the sentence', () => {
+    const chip = describeWorkerVersion(commit, true);
+    expect(chip?.commit).toBe(commit);
+    expect(chip?.hint).not.toContain(commit);
+  });
+
+  it('says "unknown" for a worker that reports it was built outside CI', () => {
+    const chip = describeWorkerVersion('unknown', true);
+    expect(chip?.label).toBe('version: unknown');
+    expect(chip?.hint).toContain('outside CI');
+    expect(chip?.commit).toBeNull();
+  });
+
+  it('says "unknown" for a worker that reports nothing', () => {
+    for (const missing of [null, undefined, '']) {
+      const chip = describeWorkerVersion(missing, true);
+      expect(chip?.label).toBe('version: unknown');
+      expect(chip?.hint).toContain('predate');
+      expect(chip?.commit).toBeNull();
+    }
+  });
+
+  it('says "unknown" for a version that is not a commit id', () => {
+    // The orchestrator passes on whatever string a worker sends, so the
+    // worker's own check cannot be assumed to have run.
+    const malformed = [
+      'not-a-commit',
+      'A3F9C21E', // uppercase
+      'a3f9c2', // 6 characters: shorter than any abbreviation
+      `${commit}0`, // 41 characters: longer than any commit id
+      `${commit}\n`, // a trailing newline does not pass either
+      ' a3f9c21e',
+      '<b>a3f9c21</b>',
+    ];
+    for (const value of malformed) {
+      expect(describeWorkerVersion(value, true), JSON.stringify(value)).toEqual({
+        label: 'version: unknown',
+        hint: 'Worker did not report a valid commit.',
+        commit: null,
+      });
+    }
+  });
+
+  it('accepts an abbreviated commit id', () => {
+    expect(describeWorkerVersion('a3f9c21', true)).toEqual({
+      label: 'version: a3f9c21',
+      hint: "Commit this worker's image was built from:",
+      commit: 'a3f9c21',
+    });
+  });
+
+  it('shows nothing for an offline worker', () => {
+    expect(describeWorkerVersion(commit, false)).toBeNull();
+    expect(describeWorkerVersion(null, false)).toBeNull();
+  });
+});
+
+/**
  * Explicit volume-bucket ranges for chart tooltips.
  */
 describe('formatBucketRange', () => {
@@ -309,5 +424,43 @@ describe('formatBucketRange', () => {
   it('formats a daily bucket as a single calendar day', () => {
     const start = new Date(2026, 8, 1, 0, 0, 0).getTime();
     expect(formatBucketRange(start, 86_400_000)).toBe('Sep 1');
+  });
+});
+
+/**
+ * The per-model chart series are keyed by this, not by the model id alone:
+ * a deleted model's id is gone from the feed, so its usage would otherwise
+ * lose its series (and its legend entry) along with it.
+ */
+describe('modelSeriesKey', () => {
+  it('keys a live model by its id, ignoring the name', () => {
+    expect(modelSeriesKey(42, 'gpt-4')).toBe('model-42');
+  });
+
+  it('keys a deleted model by its captured name', () => {
+    expect(modelSeriesKey(null, 'gpt-4')).toBe('deleted-gpt-4');
+  });
+
+  it('keeps a deleted model that re-took a live id out of the live series', () => {
+    // Without the distinct prefixes a deleted model named "42" would share
+    // its key with live model id 42 and merge into its usage.
+    expect(modelSeriesKey(null, '42')).not.toBe(modelSeriesKey(42, '42'));
+  });
+
+  it('never yields a key that resolves to an inherited object property', () => {
+    // The chart keeps its series in plain objects; a raw name like
+    // "constructor" would read an inherited property instead of the entry.
+    for (const name of ['constructor', '__proto__', 'toString']) {
+      const key = modelSeriesKey(null, name);
+      const map: Record<string, number> = {};
+      map[key] = 1;
+      expect(Object.hasOwn(map, key)).toBe(true);
+      expect(map[key]).toBe(1);
+    }
+  });
+
+  it('falls back to a single shared bucket when neither id nor name survived', () => {
+    expect(modelSeriesKey(null, null)).toBe('deleted-unknown');
+    expect(modelSeriesKey(null, '   ')).toBe('deleted-unknown');
   });
 });

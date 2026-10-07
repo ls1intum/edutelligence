@@ -1394,6 +1394,9 @@ class TestAgentPhaseIsolation:
         # This row opens a pull request but is not an issue session, so there
         # is no assigned issue to close: the body stays empty.
         assert helper["env"]["LOGOS_SESSION_CLOSES"] == ""
+        # Fresh pull requests ask Claudia by default; the finalizer reads
+        # the list rather than hard-coding a login in the session image.
+        assert helper["env"]["LOGOS_SESSION_PR_REVIEWERS"] == "Claudia-Anthropica"
         assert helper["network"] == patched.session_egress_network
         assert helper["labels"] == {"logos.agent.helper": "finalize"}
         # The helper is a one-shot: created, waited on, removed.
@@ -6249,3 +6252,189 @@ class TestAFailureThatSaysWhy:
         # the reason is, and the rest is noise.
         assert "line 39" in str(failure.value)
         assert "line 0" not in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_orphaned_analysis_prepare_omits_shared_github_token(monkeypatch, tmp_path):
+    """Unlinked analysis sessions must not fall back to the bot token."""
+    from dataclasses import replace
+
+    from app import sessions
+
+    captured = {}
+
+    async def fake_run_helper(**kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(sessions.manager, "_run_helper", fake_run_helper)
+    monkeypatch.setattr(
+        sessions,
+        "settings",
+        replace(sessions.settings, artifact_root=str(tmp_path), session_github_token="ghp-secret"),
+    )
+
+    await sessions.manager._prepare_checkout(
+        {
+            "id": 99,
+            "trigger_kind": "analysis",
+            "team_repository_id": None,
+            "repo_url": "https://github.com/acme/private.git",
+            "repo_slug": "acme/private",
+        },
+        {"base_branch": "main", "volume_name": "vol"},
+        "logos/agent/x",
+        str(tmp_path / "99"),
+    )
+    assert "GITHUB_TOKEN" not in captured["env"]
+
+
+@pytest.mark.asyncio
+async def test_analysis_launch_skips_attachment_collection(monkeypatch, tmp_path):
+    """Analysis tasks must not call authenticated attachment collection."""
+    from dataclasses import replace
+
+    from app import sessions
+
+    collected = []
+
+    async def spy_collect(session_id, task):
+        collected.append((session_id, task))
+        return []
+
+    async def fake_volume_mountpoint(_name):
+        return str(tmp_path)
+
+    async def fake_still_ours(_sid):
+        return False
+
+    async def fake_get_workspace(_wid):
+        return {"id": 1, "name": "ws", "base_branch": "main", "volume_name": "vol"}
+
+    async def noop(*_a, **_k):
+        return None
+
+    class _AllowAll:
+        def allows(self, _model):
+            return True
+
+        def resolve(self, model):
+            return model or "local"
+
+    monkeypatch.setattr(sessions.manager, "_collect_attachments", spy_collect)
+    monkeypatch.setattr(sessions.docker_engine, "volume_mountpoint", fake_volume_mountpoint)
+    monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+    monkeypatch.setattr(sessions.manager, "_still_ours", fake_still_ours)
+
+    async def _async_true():
+        return True
+
+    monkeypatch.setattr(sessions.manager, "_workspace_image_present", _async_true)
+    monkeypatch.setattr(sessions.db, "get_workspace", fake_get_workspace)
+    monkeypatch.setattr(sessions.model_policy, "current", lambda: _AllowAll())
+    monkeypatch.setattr(
+        sessions,
+        "settings",
+        replace(
+            sessions.settings,
+            artifact_root=str(tmp_path),
+            github_token="ghp-bot",
+            branch_prefix="logos/agent/",
+            protected_branches=frozenset({"main", "master"}),
+        ),
+    )
+
+    session = {
+        "id": 77,
+        "status": "starting",
+        "workspace_id": 1,
+        "task": "paths: ![img](https://github.com/other-team/private/assets/1)",
+        "trigger_kind": "analysis",
+        "team_repository_id": 5,
+        "repo_url": "https://github.com/acme/app.git",
+        "repo_slug": "acme/app",
+        "no_push": True,
+        "model": None,
+        "branch_name": None,
+    }
+
+    await sessions.manager._launch(session)
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_honor_cancel_requests_invokes_runner_cancel(monkeypatch):
+    from app import sessions
+    from app.schemas import SessionStatus
+
+    cancelled = []
+
+    async def fake_sessions_in_status(status):
+        if status is SessionStatus.RUNNING:
+            return [
+                {
+                    "id": 42,
+                    "status": "running",
+                    "error": "cancel_requested: repository link removed or retargeted",
+                }
+            ]
+        return []
+
+    async def fake_cancel(session_id):
+        cancelled.append(session_id)
+        return True
+
+    monkeypatch.setattr(sessions.db, "sessions_in_status", fake_sessions_in_status)
+    monkeypatch.setattr(sessions.manager, "cancel", fake_cancel)
+
+    await sessions.manager._honor_cancel_requests()
+    assert cancelled == [42]
+
+
+@pytest.mark.asyncio
+async def test_cancel_from_supervisor_task_still_removes_container(monkeypatch):
+    """Supervisor-initiated cancel must not CancelledError itself before remove."""
+    import asyncio
+
+    from app import sessions
+    from app.schemas import SessionStatus
+
+    removed: list[str] = []
+    session = {
+        "id": 9,
+        "status": SessionStatus.RUNNING.value,
+        "container_id": "ctr-9",
+        "error": "cancel_requested: repository link removed or retargeted",
+    }
+
+    async def get_session(sid):
+        return dict(session) if sid == 9 else None
+
+    async def transition(sid, target, **fields):
+        session["status"] = target.value
+        return True
+
+    async def noop(*_a, **_k):
+        return None
+
+    async def remove(cid):
+        removed.append(cid)
+
+    monkeypatch.setattr(sessions.db, "get_session", get_session)
+    monkeypatch.setattr(sessions.db, "transition_session", transition)
+    monkeypatch.setattr(sessions.db, "add_event", noop)
+    monkeypatch.setattr(sessions.docker_engine, "unpause_container", noop)
+    monkeypatch.setattr(sessions.docker_engine, "stop_container", noop)
+    monkeypatch.setattr(sessions.docker_engine, "remove_container", remove)
+
+    outcome: dict[str, object] = {}
+
+    async def as_supervisor():
+        sessions.manager._supervisors[9] = asyncio.current_task()
+        outcome["ok"] = await sessions.manager.cancel(9)
+        outcome["removed"] = list(removed)
+
+    await asyncio.create_task(as_supervisor())
+    assert outcome["ok"] is True
+    assert outcome["removed"] == ["ctr-9"]
+    assert 9 not in sessions.manager._supervisors

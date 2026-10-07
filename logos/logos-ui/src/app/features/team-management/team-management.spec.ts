@@ -139,6 +139,41 @@ describe('TeamManagement', () => {
     expect(component.priorityLabel(component.teams()[0])).toBe('7');
   });
 
+  it('shows the stored priority on a fresh render (page reload), not Default', async () => {
+    await createFor('logos_admin');
+
+    // Drop the row, then render a team that already carries a stored priority
+    // — the fresh-render path a page reload takes. A [value] binding on the
+    // <select> is applied before the <option>s exist, so the browser drops it
+    // and the select reverts to the first option (Default); the selection has
+    // to be expressed on the <option> instead.
+    component.teams.set([]);
+    fixture.detectChanges();
+    component.teams.set([team({ priority: 7 })]);
+    fixture.detectChanges();
+
+    const select: HTMLSelectElement | null = fixture.nativeElement.querySelector('.priority-cell select');
+    expect(select).toBeTruthy();
+    if (!select) return;
+    const selected = Array.from(select.options).find((o) => o.selected);
+    expect(selected?.value).toBe('7');
+  });
+
+  it('shows the Default option for a team without a stored priority', async () => {
+    await createFor('logos_admin');
+
+    component.teams.set([]);
+    fixture.detectChanges();
+    component.teams.set([team({ priority: null })]);
+    fixture.detectChanges();
+
+    const select: HTMLSelectElement | null = fixture.nativeElement.querySelector('.priority-cell select');
+    expect(select).toBeTruthy();
+    if (!select) return;
+    const selected = Array.from(select.options).find((o) => o.selected);
+    expect(selected?.value).toBe('');
+  });
+
   it('treats the empty option as unsetting the priority', async () => {
     await createFor('logos_admin');
     component.teams.set([team({ priority: 10 })]);

@@ -158,6 +158,7 @@ describe('totalCount for a filtered feed without a bucket total yet', () => {
     full_name: 'The Operator',
     api_key_name: 'dev key',
     api_key_type: 'developer',
+    environment: null,
     prompt_tokens: 1200,
     completion_tokens: 42,
     total_tokens: 1242,
@@ -195,5 +196,128 @@ describe('totalCount for a filtered feed without a bucket total yet', () => {
 
   it('shows the bucket total once the first push for it lands', async () => {
     expect((await createComponent(7)).totalCount()).toBe(7);
+  });
+});
+
+/**
+ * Caller chips on a recent-request row.
+ *
+ * Developer keys already name the person; the key name repeats them and is
+ * dropped. Application keys are team credentials — show the environment with
+ * the key icon instead of a user chip.
+ */
+describe('caller chips', () => {
+  const base: RequestItem = {
+    request_id: 'req-caller',
+    model_name: 'model-a',
+    provider_name: 'gpu-01',
+    is_cloud: false,
+    status: 'success',
+    timestamp: '2026-08-29T10:00:00Z',
+    duration: 1,
+    cold_start: false,
+    enqueue_ts: '2026-08-29T10:00:00Z',
+    scheduled_ts: '2026-08-29T10:00:01Z',
+    request_complete_ts: '2026-08-29T10:00:02Z',
+    queue_seconds: 0,
+    total_seconds: 1,
+    initial_priority: null,
+    priority_when_scheduled: null,
+    queue_depth_at_enqueue: null,
+    error_message: null,
+    team_name: 'Logos',
+    username: 'tobias.wasner',
+    full_name: 'Tobias Wasner',
+    api_key_name: 'tobias.wasner-Logos-key',
+    api_key_type: 'developer',
+    environment: null,
+    prompt_tokens: null,
+    completion_tokens: null,
+    total_tokens: null,
+    cost_microcents: null,
+  };
+
+  let component: RecentRequests;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [RecentRequests],
+      providers: [{ provide: StatisticsService, useValue: {} }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(RecentRequests);
+    component = fixture.componentInstance;
+  });
+
+  afterEach(() => {
+    component.ngOnDestroy();
+  });
+
+  it('hides the key chip for developer keys so the user is not repeated', () => {
+    expect(component.showRequester(base)).toBe(true);
+    expect(component.keyChipOf(base)).toBe('');
+  });
+
+  it('shows the environment with the key chip for application keys', () => {
+    const app: RequestItem = {
+      ...base,
+      api_key_type: 'application',
+      api_key_name: 'docs-role-logos-app-key',
+      username: null,
+      full_name: null,
+      environment: 'production',
+    };
+    expect(component.showRequester(app)).toBe(false);
+    expect(component.keyChipOf(app)).toBe('production');
+  });
+
+  it('drops the "-" environment placeholder and falls back to the key name', () => {
+    const app: RequestItem = {
+      ...base,
+      api_key_type: 'application',
+      api_key_name: 'docs-role-logos-app-key',
+      username: null,
+      full_name: null,
+      environment: '-',
+    };
+    expect(component.environmentOf(app)).toBe('');
+    expect(component.keyChipOf(app)).toBe('docs-role-logos-app-key');
+  });
+});
+
+describe('model and provider selections across request pages', () => {
+  let fixture: ComponentFixture<RecentRequests>;
+  afterEach(() => fixture?.destroy());
+
+  it('passes both selections to older pages and discards an in-flight page when they change', async () => {
+    let resolvePage!: (value: import('../../services/statistics.service').LatestRequestsPage) => void;
+    const calls: unknown[][] = [];
+    const getLatestRequests = (...args: unknown[]) => {
+      calls.push(args);
+      return new Promise<import('../../services/statistics.service').LatestRequestsPage>(resolve => resolvePage = resolve);
+    };
+    await TestBed.configureTestingModule({
+      imports: [RecentRequests], providers: [{ provide: StatisticsService, useValue: { getLatestRequests } }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(RecentRequests);
+    const rows = Array.from({ length: 10 }, (_, index) => ({
+      request_id: `request-${index}`, model_name: 'model', provider_name: 'worker',
+      status: 'success', timestamp: '2026-09-01T12:00:00Z', enqueue_ts: '2026-09-01T12:00:00Z',
+      scheduled_ts: '2026-09-01T12:00:01Z', request_complete_ts: '2026-09-01T12:00:02Z',
+    } as RequestItem));
+    fixture.componentRef.setInput('liveRequests', rows);
+    fixture.componentRef.setInput('range', { startIso: '2026-09-01T00:00:00Z', endIso: '2026-09-02T00:00:00Z' });
+    fixture.componentRef.setInput('filterModelIds', ['1', '2']);
+    fixture.componentRef.setInput('filterProviderIds', ['3', '4']);
+    fixture.detectChanges();
+    const next = fixture.componentInstance.nextPage();
+    expect(calls[0][3]).toMatchObject({ modelIds: [1, 2], providerIds: [3, 4] });
+    fixture.componentRef.setInput('filterModelIds', ['2']);
+    fixture.detectChanges();
+    resolvePage({ requests: [rows[0]], total: 11, limit: 10, has_more: false, next_cursor: null });
+    await next;
+    expect(fixture.componentInstance.pageIndex()).toBe(0);
+    expect(fixture.componentInstance.displayItems()).toEqual(rows);
+    expect(fixture.componentInstance.loading()).toBe(false);
+    expect(fixture.componentInstance.filterActive()).toBe(true);
   });
 });

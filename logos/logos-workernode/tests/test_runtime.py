@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from logos_worker_node.models import (
+    AppConfig,
     DeviceInfo,
     DeviceSummary,
     LaneConfig,
@@ -14,7 +15,7 @@ from logos_worker_node.models import (
     ProcessStatus,
     WorkerTransportStatus,
 )
-from logos_worker_node.runtime import build_runtime_status
+from logos_worker_node.runtime import _read_version_checksum, build_runtime_status
 
 
 class _LaneManager:
@@ -124,17 +125,9 @@ class _Bridge:
         )
 
 
-def _make_app(lanes, collector=None):
-    worker_cfg = SimpleNamespace(
-        name="logos-workernode",
-        max_lanes=0,
-        gpu_performance_score=100,
-    )
-    # build_runtime_status reads engines.vllm.disable_sleep_mode for the
-    # worker-wide sleep-mode kill switch reported in WorkerRuntimeStatus.
-    engines_cfg = SimpleNamespace(vllm=SimpleNamespace(disable_sleep_mode=False))
+def _make_app(lanes, collector=None, *, config=None):
     state = SimpleNamespace(
-        config=SimpleNamespace(worker=worker_cfg, engines=engines_cfg),
+        config=config if config is not None else AppConfig(),
         lane_manager=_LaneManager(lanes),
         gpu_collector=collector or _GpuCollector(),
         logos_bridge=_Bridge(),
@@ -243,3 +236,64 @@ async def test_build_runtime_status_preserves_measured_nvidia_telemetry(monkeypa
     assert runtime.devices.nvidia_smi_available is True
     assert runtime.devices.total_memory_mb == 8192.0
     assert runtime.capacity.free_memory_mb == 7168.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_config,expected",
+    [
+        ({}, "all"),
+        ({"worker": {"gpu_devices": "1,2"}}, "1,2"),
+        ({"worker": {"gpu_devices": "none"}}, "none"),
+        ({"engines": {"ollama": {"gpu_devices": "0,1"}}}, "0,1"),
+        ({"worker": {"gpu_devices": "2"}, "engines": {"ollama": {"gpu_devices": "0,1"}}}, "2"),
+    ],
+)
+async def test_runtime_reports_worker_gpu_selection(raw_config, expected):
+    config = AppConfig.model_validate(raw_config)
+    runtime = await build_runtime_status(_make_app([], _NvidiaCollector(), config=config))
+    assert runtime.gpu_devices == expected
+
+
+_COMMIT = "a3f9c21e0b7d4f65a1c2d3e4f5061728394a5b6c"
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        (f"{_COMMIT}\n", _COMMIT),  # a trailing newline is tolerated
+        ("a3f9c21", "a3f9c21"),  # short form
+        ("unknown", "unknown"),  # the Dockerfile default for a build without GIT_SHA
+        ("", "unknown"),
+        ("not a commit", "unknown"),
+        (f"{_COMMIT}0", "unknown"),  # longer than any commit id
+    ],
+)
+def test_read_version_checksum(tmp_path, content, expected):
+    """The worker only ever reports a plausible commit id or "unknown" — a
+    garbled BUILD_COMMIT file must not put arbitrary text on the statistics page."""
+    path = tmp_path / "BUILD_COMMIT"
+    path.write_text(content, encoding="utf-8")
+    assert _read_version_checksum(path) == expected
+
+
+def test_read_version_checksum_without_a_file(tmp_path):
+    """A run from a source checkout has no BUILD_COMMIT file, and the worker reports "unknown" for it."""
+    assert _read_version_checksum(tmp_path / "BUILD_COMMIT") == "unknown"
+
+
+def test_read_version_checksum_with_unreadable_content(tmp_path):
+    """A BUILD_COMMIT file that is not valid UTF-8 counts as no commit instead of raising."""
+    path = tmp_path / "BUILD_COMMIT"
+    path.write_bytes(b"\xff\xfe\x00")
+    assert _read_version_checksum(path) == "unknown"
+
+
+@pytest.mark.asyncio
+async def test_runtime_reports_version_checksum(monkeypatch):
+    """The runtime status carries the commit that was read at startup."""
+    monkeypatch.setattr("logos_worker_node.runtime._VERSION_CHECKSUM", _COMMIT)
+
+    runtime = await build_runtime_status(_make_app([], _NvidiaCollector()))
+
+    assert runtime.version_checksum == _COMMIT

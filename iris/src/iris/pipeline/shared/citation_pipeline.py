@@ -144,6 +144,8 @@ class CitationPipeline(SubPipeline):
         Target format:
         `[cite:L:<lecture_unit_id>:<page_number>:<start_time_sec>:<end_time_sec>!<citation_sequence_number>]`
 
+        `page_number` is the slide's index in the deck and is only set for a slide citation.
+
         The `citation_sequence_number` is the per-request running number that links a
         citation in the final answer back to its original source text.
         """
@@ -217,7 +219,7 @@ class CitationPipeline(SubPipeline):
                 {
                     "id": self._build_lecture_citation_id(
                         paragraph.lecture_unit_id,
-                        paragraph.page_number,
+                        None,
                         start_time_sec,
                         end_time_sec,
                         citation_sequence_number,

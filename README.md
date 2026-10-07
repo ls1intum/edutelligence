@@ -25,7 +25,8 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 | 9.4.x           | 2.4.x                 | ✅ Stable |
 | 9.5.x           | 2.5.x                 | ✅ Stable |
 | 9.6.x           | 2.6.x                 | ✅ Stable |
-| 9.7.x           | 2.7.x                 | ✅ Stable |
+| 9.7.x - 9.9.x   | 2.7.x                 | ✅ Stable |
+| 10.0.x          | 3.0.x                 | ✅ Stable |
 
 > **Note:** Always ensure you're using compatible versions for optimal integration and functionality.
 
@@ -49,7 +50,7 @@ EduTelligence maintains compatibility with different versions of [Artemis](https
 - **Course Content Support**: Uses RAG (Retrieval-Augmented Generation) for detailed course content explanations
 - **Competency Generation**: Automates the creation of course competencies
 
-**Technology Stack:** Python 3.12, Poetry, FastAPI, Weaviate (Vector DB)
+**Technology Stack:** Python 3.13, Poetry, FastAPI, Weaviate (Vector DB)
 
 ### 🏛️ [Athena](./athena/) - Automated Assessment System
 
@@ -96,7 +97,7 @@ A comprehensive LLM Engineering Platform that provides centralized management an
 
 ### Prerequisites
 
-- **Python 3.12+** (3.13 recommended for newer services)
+- **Python 3.13** for Iris, Memiris, Atlas and Logos; **Python 3.11** for Athena
 - **Poetry** for dependency management
 - **Docker & Docker Compose** for containerization
 - **Git** for version control

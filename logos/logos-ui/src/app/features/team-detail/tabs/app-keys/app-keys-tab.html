@@ -11,11 +11,25 @@
     }
   </div>
 
+  @if (canEdit) {
+    <p class="section-hint">
+      <i class="pi pi-bars" aria-hidden="true"></i>
+      Drag a key by its handle to reorder it — dropping it on a row of another
+      SLO moves it to that SLO.
+    </p>
+  }
+
+  @if (sloError()) {
+    <app-error-message variant="banner" [message]="sloError()" />
+  }
+
   <app-data-table
     [columns]="[
       '',
+      '',
       'Key Name',
       'Environment',
+      'SLO',
       'Budget',
       'Cloud RPM',
       'Cloud TPM',
@@ -23,131 +37,209 @@
       'Local TPM',
       '',
     ]"
-    gridCols="40px 1fr 120px 160px 90px 90px 90px 90px 72px"
+    [gridCols]="gridCols"
     [empty]="appKeys().length === 0"
     emptyMessage="No application keys found."
   >
-    @for (key of appKeys(); track key.id) {
-      <!-- Main row -->
-      <div
-        class="table-row table-row--clickable"
-        [class.table-row--expanded]="isExpanded(key.id)"
-        role="row"
-        (click)="onRowClick($event, key)"
-      >
-        <div class="col-chevron" role="cell">
-          <button
-            class="btn-chevron"
-            type="button"
-            [class.btn-chevron--open]="isExpanded(key.id)"
-            (click)="toggleExpand(key)"
-            aria-label="Show permissions"
+    <!-- Rows are ordered by SLO first, then by the manual drag order within a
+         tier; dragging a row past a tier boundary changes its SLO. -->
+    <div cdkDropList [cdkDropListDisabled]="!canEdit" (cdkDropListDropped)="onDrop($event)">
+      @for (key of orderedKeys(); track key.id) {
+        <!-- The row and its expanded panel share one draggable wrapper, so an
+             open row keeps its permissions visible while being moved. -->
+        <div
+          class="key-drag"
+          cdkDrag
+          [cdkDragDisabled]="!canEdit"
+          [style.--data-table-grid]="gridCols"
+        >
+          <!-- Main row -->
+          <div
+            class="table-row table-row--clickable"
+            [class.table-row--expanded]="isExpanded(key.id)"
+            [class.table-row--tier-start]="startsTier($index)"
+            role="row"
+            (click)="onRowClick($event, key)"
           >
-            <i class="pi pi-chevron-right" aria-hidden="true"></i>
-          </button>
-        </div>
+            <div class="col-drag" role="cell">
+              @if (canEdit) {
+                <button
+                  cdkDragHandle
+                  class="btn-drag"
+                  type="button"
+                  [attr.aria-label]="'Reorder ' + key.name"
+                  title="Drag or use the up/down arrows to reorder. Moving a key into another SLO group changes its SLO."
+                  (keydown)="onHandleKeydown($event, $index)"
+                >
+                  <i class="pi pi-bars" aria-hidden="true"></i>
+                </button>
+              }
+            </div>
 
-        <div class="cell-name" role="cell">
-          <span class="key-icon"><i class="pi pi-key" aria-hidden="true"></i></span>
-          <span class="key-name">{{ key.name }}</span>
-          @if (key.use_custom_permissions) {
-            <span class="badge-custom">custom</span>
-          }
-        </div>
-        <div class="cell-env" role="cell">
-          <div class="env-row">
-            <span class="key-env">{{ key.environment }}</span>
-            @if (key.use_custom_permissions) {
-              <span class="badge-custom badge-custom--env">custom</span>
-            }
-          </div>
-        </div>
-        <div class="cell-num" role="cell" data-label="Budget">
-          <div class="budget-cell">
-            @if (hasBudgetLimit(key)) {
-              <div class="budget-bar-track">
-                <div
-                  class="budget-bar-fill"
-                  [style.width.%]="budgetPct(key)"
-                  [style.background]="budgetBarColor(key)"
-                ></div>
-              </div>
-              <span class="budget-nums">
-                {{ formatBudget(budgetUsed(key)) }} / {{ formatBudget(effectiveBudget(key)) }}
-              </span>
-            } @else {
-              <span class="budget-nums">{{ formatBudget(budgetUsed(key)) }} / ∞</span>
-            }
-          </div>
-        </div>
-        <div class="cell-num" role="cell" data-label="Cloud RPM">
-          {{ formatLimit(effectiveCloudRpm(key)) }}
-        </div>
-        <div class="cell-num" role="cell" data-label="Cloud TPM">
-          {{ formatLimit(effectiveCloudTpm(key)) }}
-        </div>
-        <div class="cell-num" role="cell" data-label="Local RPM">
-          {{ formatLimit(effectiveLocalRpm(key)) }}
-        </div>
-        <div class="cell-num" role="cell" data-label="Local TPM">
-          {{ formatLimit(effectiveLocalTpm(key)) }}
-        </div>
-        <div class="col-actions" role="cell">
-          <button class="btn-icon" type="button" (click)="openModal(key)" aria-label="Edit key">
-            <i class="pi pi-pencil" aria-hidden="true"></i>
-          </button>
-          @if (canEdit) {
-            <button
-              class="btn-icon btn-icon--danger"
-              type="button"
-              (click)="pendingDeleteKey.set(key)"
-              aria-label="Delete key"
-            >
-              <i class="pi pi-trash" aria-hidden="true"></i>
-            </button>
-          }
-        </div>
-      </div>
+            <div class="col-chevron" role="cell">
+              <button
+                class="btn-chevron"
+                type="button"
+                [class.btn-chevron--open]="isExpanded(key.id)"
+                (click)="toggleExpand(key)"
+                aria-label="Show permissions"
+              >
+                <i class="pi pi-chevron-right" aria-hidden="true"></i>
+              </button>
+            </div>
 
-      <!-- Expanded permissions row -->
-      @if (isExpanded(key.id)) {
-        <div class="expand-row" role="row">
-          <div class="expand-inner" role="cell">
-            @if (isLoadingExpand(key.id) || (!globalDataLoaded && key.use_custom_permissions)) {
-              <div class="expand-loading">
-                <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-                Loading…
+            <div class="cell-name" role="cell">
+              <span class="key-icon"><i class="pi pi-key" aria-hidden="true"></i></span>
+              <span class="key-name">{{ key.name }}</span>
+              @if (key.use_custom_permissions) {
+                <span class="badge-custom">custom</span>
+              }
+            </div>
+            <div class="cell-env" role="cell">
+              <div class="env-row">
+                <span class="key-env">{{ key.environment }}</span>
+                @if (key.use_custom_permissions) {
+                  <span class="badge-custom badge-custom--env">custom</span>
+                }
               </div>
-            } @else {
-              <div class="expand-label">
-                {{ key.use_custom_permissions ? 'Custom Permissions' : 'Team Permissions' }}
-              </div>
-              @if (getModelGroups(key).length === 0) {
-                <span class="expand-empty">No models accessible via this key.</span>
+            </div>
+            <div class="cell-slo" role="cell" data-label="SLO">
+              <span
+                class="slo-dot"
+                [class.slo-dot--critical]="sloOf(key) === 'ux-critical'"
+                [class.slo-dot--high-prio]="sloOf(key) === 'ux-high-prio'"
+                [class.slo-dot--background]="sloOf(key) === 'ux-background'"
+                [class.slo-dot--inherited]="isInherited(key)"
+                aria-hidden="true"
+              ></span>
+              @if (canEdit) {
+                <!-- Inherited keys use an empty selected value so every real
+                     tier — including the one that matches the effective
+                     inherited tier — fires change and can pin the key. -->
+                <select
+                  class="field-input slo-select"
+                  [attr.aria-label]="'SLO for ' + key.name"
+                  [title]="isInherited(key) ? inheritedSloHint : sloHint(sloOf(key))"
+                  [disabled]="sloSaving().has(key.id)"
+                  [value]="isInherited(key) ? '' : sloOf(key)"
+                  (click)="$event.stopPropagation()"
+                  (change)="changeSlo(key, $any($event.target).value)"
+                >
+                  @if (isInherited(key)) {
+                    <option value="" disabled selected>
+                      inherited ({{ sloLabel(sloOf(key)) }})
+                    </option>
+                  }
+                  @for (option of sloOptions; track option.value) {
+                    <option
+                      [value]="option.value"
+                      [selected]="!isInherited(key) && option.value === sloOf(key)"
+                    >
+                      {{ option.label }}
+                    </option>
+                  }
+                </select>
               } @else {
-                <div class="models-list">
-                  @for (group of getModelGroups(key); track group.model_name) {
-                    <div class="model-row">
-                      <div class="model-row__head">
-                        <span class="model-name">{{ group.model_name }}</span>
-                        <span class="model-type-tag">
-                          @if (group.hasCloud) { <span>Cloud</span> }
-                          @if (group.hasCloud && group.hasLocal) {
-                            <span class="model-type-sep">·</span>
-                          }
-                          @if (group.hasLocal) { <span>Local</span> }
-                        </span>
-                      </div>
-                      <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                <span
+                  class="slo-static"
+                  [title]="isInherited(key) ? inheritedSloHint : sloHint(sloOf(key))"
+                >
+                  @if (isInherited(key)) {
+                    inherited ({{ sloLabel(sloOf(key)) }})
+                  } @else {
+                    {{ sloLabel(sloOf(key)) }}
+                  }
+                </span>
+              }
+            </div>
+            <div class="cell-num" role="cell" data-label="Budget">
+              <div class="budget-cell">
+                @if (hasBudgetLimit(key)) {
+                  <div class="budget-bar-track">
+                    <div
+                      class="budget-bar-fill"
+                      [style.width.%]="budgetPct(key)"
+                      [style.background]="budgetBarColor(key)"
+                    ></div>
+                  </div>
+                  <span class="budget-nums">
+                    {{ formatBudget(budgetUsed(key)) }} / {{ formatBudget(effectiveBudget(key)) }}
+                  </span>
+                } @else {
+                  <span class="budget-nums">{{ formatBudget(budgetUsed(key)) }} / ∞</span>
+                }
+              </div>
+            </div>
+            <div class="cell-num" role="cell" data-label="Cloud RPM">
+              {{ formatLimit(effectiveCloudRpm(key)) }}
+            </div>
+            <div class="cell-num" role="cell" data-label="Cloud TPM">
+              {{ formatLimit(effectiveCloudTpm(key)) }}
+            </div>
+            <div class="cell-num" role="cell" data-label="Local RPM">
+              {{ formatLimit(effectiveLocalRpm(key)) }}
+            </div>
+            <div class="cell-num" role="cell" data-label="Local TPM">
+              {{ formatLimit(effectiveLocalTpm(key)) }}
+            </div>
+            <div class="col-actions" role="cell">
+              <button class="btn-icon" type="button" (click)="openModal(key)" aria-label="Edit key">
+                <i class="pi pi-pencil" aria-hidden="true"></i>
+              </button>
+              @if (canEdit) {
+                <button
+                  class="btn-icon btn-icon--danger"
+                  type="button"
+                  (click)="pendingDeleteKey.set(key)"
+                  aria-label="Delete key"
+                >
+                  <i class="pi pi-trash" aria-hidden="true"></i>
+                </button>
+              }
+            </div>
+          </div>
+
+          <!-- Expanded permissions row -->
+          @if (isExpanded(key.id)) {
+            <div class="expand-row" role="row">
+              <div class="expand-inner" role="cell">
+                @if (isLoadingExpand(key.id) || (!globalDataLoaded && key.use_custom_permissions)) {
+                  <div class="expand-loading">
+                    <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                    Loading…
+                  </div>
+                } @else {
+                  <div class="expand-label">
+                    {{ key.use_custom_permissions ? 'Custom Permissions' : 'Team Permissions' }}
+                  </div>
+                  @if (getModelGroups(key).length === 0) {
+                    <span class="expand-empty">No models accessible via this key.</span>
+                  } @else {
+                    <div class="models-list">
+                      @for (group of getModelGroups(key); track group.model_name) {
+                        <div class="model-row">
+                          <div class="model-row__head">
+                            <span class="model-name">{{ group.model_name }}</span>
+                            <span class="model-type-tag">
+                              @if (group.hasCloud) { <span>Cloud</span> }
+                              @if (group.hasCloud && group.hasLocal) {
+                                <span class="model-type-sep">·</span>
+                              }
+                              @if (group.hasLocal) { <span>Local</span> }
+                            </span>
+                          </div>
+                          <span class="model-providers">{{ group.providers.join(' · ') }}</span>
+                        </div>
+                      }
                     </div>
                   }
-                </div>
-              }
-            }
-          </div>
+                }
+              </div>
+            </div>
+          }
         </div>
       }
-    }
+    </div>
   </app-data-table>
 </div>
 
@@ -181,16 +273,22 @@
         />
       </div>
       <div class="form-field">
-        <label class="field-label" for="c-priority">Request Priority</label>
-        <input
-          id="c-priority"
+        <label class="field-label" for="c-slo">SLO</label>
+        <select
+          id="c-slo"
           class="field-input"
-          type="number"
-          min="0"
-          [value]="cPriority()"
-          (input)="cPriority.set($any($event.target).value)"
+          [title]="sloHint(cSlo())"
+          [value]="cSlo()"
+          (change)="cSlo.set($any($event.target).value)"
           [disabled]="createLoading()"
-        />
+        >
+          @for (option of sloOptions; track option.value) {
+            <option [value]="option.value" [selected]="option.value === cSlo()">
+              {{ option.label }}
+            </option>
+          }
+        </select>
+        <span class="field-hint">{{ sloHint(cSlo()) }}</span>
       </div>
     </div>
 

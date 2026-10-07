@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -14,11 +15,31 @@ from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary,
 
 logger = logging.getLogger(__name__)
 
-SERVICE_VERSION = "2.0.0"
+# Tracks the EduTelligence suite version, which is what the release workflow
+# tags this worker's image with. Bump it with the rest of the release metadata.
+SERVICE_VERSION = "3.0"
 
 # Module import happens once at process startup, so this is a good proxy
 # for the worker's process start time.
 _PROCESS_STARTED_AT = datetime.now(timezone.utc)
+
+# Commit this worker was built from. The Dockerfiles write it next to the
+# logos_worker_node/ package; a run from a source checkout has no such file.
+_BUILD_COMMIT_FILE = Path(__file__).parent.parent / "BUILD_COMMIT"
+_COMMIT_SHA = re.compile(r"[0-9a-f]{7,40}")
+
+
+def _read_version_checksum(path: Path = _BUILD_COMMIT_FILE) -> str:
+    """Commit this worker was built from, or "unknown" when none was recorded."""
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return "unknown"
+    return value if _COMMIT_SHA.fullmatch(value) else "unknown"
+
+
+# Fixed for the process lifetime, so it is read once rather than on every status.
+_VERSION_CHECKSUM = _read_version_checksum()
 
 
 def _on_macos() -> bool:
@@ -181,6 +202,11 @@ def _build_derived_device_summary(lanes) -> DeviceSummary:
 
 
 async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
+    """Assemble the runtime status the bridge reports to the orchestrator.
+
+    Covers the lanes, devices, capacity, host memory, node health and calibrated model profiles, plus the process
+    start time and the commit this build came from, which tell one run of a worker from another.
+    """
     cfg = app.state.config
     lane_manager = app.state.lane_manager
     gpu_collector = app.state.gpu_collector
@@ -279,8 +305,10 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         service_version=SERVICE_VERSION,
         timestamp=datetime.now(timezone.utc),
         process_started_at=_PROCESS_STARTED_AT,
+        version_checksum=_VERSION_CHECKSUM,
         transport=bridge.transport_status(),
         devices=devices,
+        gpu_devices=cfg.worker.gpu_devices,
         host_memory=host_memory,
         capacity=capacity,
         lanes=lanes,

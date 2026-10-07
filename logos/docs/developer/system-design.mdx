@@ -1,0 +1,134 @@
+---
+title: System Design
+---
+
+import useBaseUrl from '@docusaurus/useBaseUrl';
+
+# System Design
+
+This page is the structural overview of Logos — how the pieces fit together,
+how a typical deployment looks, what the core data model is, and how an
+inference request travels through the stack. Terminology used here is defined
+in the [Architecture](architecture.mdx) glossary.
+
+Diagrams are SVG exports; editable sources live in
+<a href={useBaseUrl('/img/system-design/system-design.drawio')}>system-design.drawio</a>
+(open in [diagrams.net](https://app.diagrams.net/); one page per diagram).
+
+## Top-Level Design
+
+Logos decomposes into an **application client** (the Angular Logos UI in the
+browser), **API clients** (OpenAI-compatible SDKs and scripts), and an
+**application server** on the **core node**. The server is itself two
+services: the Spring Boot **Webservice** (identity, billing, admin API, and
+the public **inference gateway**) and the FastAPI **Orchestrator** (local /
+mixed scheduling and the worker registry).
+
+Authentication for the UI goes through an external **user management**
+system (Keycloak / the organisation’s IdP). Inference clients authenticate with
+**API keys**. Self-hosted models run on separate **worker nodes**; cloud models
+are served by configured **cloud providers**.
+
+<img
+  src={useBaseUrl('/img/system-design/top-level.svg')}
+  alt="Logos top-level design — clients, core node application server, identity, workers, and cloud providers"
+  style={{width: '100%', height: 'auto', marginTop: '1rem', marginBottom: '0.5rem'}}
+/>
+
+Editable source:
+<a href={useBaseUrl('/img/system-design/system-design.drawio')}>system-design.drawio</a>
+(page *Top-Level*).
+
+## Deployment
+
+A typical deployment puts the entire core stack on one **core node** and zero
+or more **worker nodes** on GPU machines. Students of the Artemis docs will
+recognise the same «device» style: clients on the left, the main server in the
+centre, specialised workers on the right.
+
+<img
+  src={useBaseUrl('/img/system-design/deployment.svg')}
+  alt="Logos deployment overview — user devices, core node services, worker nodes, and external systems"
+  style={{width: '100%', height: 'auto', marginTop: '1rem', marginBottom: '0.5rem'}}
+/>
+
+- **Webservice ×N** — Traefik load-balances replicas. Safe to scale for
+  cloud-heavy traffic; Liquibase takes a DB lock on migrate.
+- **Orchestrator ×1** — holds the live worker registry and schedules local /
+  mixed work; keep a single instance.
+- **Worker nodes** open an **outbound WebSocket** to the orchestrator. The core
+  never dials into a worker, so NAT and locked-down GPU networks work without
+  inbound ports.
+- Production may replace the bundled Keycloak with the organisation’s existing
+  IdP (see [installation](../admin/installation.md)).
+
+Operational detail (compose files, env vars, TLS) lives in
+[deployment](../deployment.md).
+
+## Data Model
+
+The Webservice owns the PostgreSQL schema (Liquibase). The diagram below is a
+**simplified** view of the entities role guides and API clients care about.
+
+<img
+  src={useBaseUrl('/img/system-design/data-model.svg')}
+  alt="Logos simplified data model — User, Team, ApiKey, Model, Provider, Policy, LogEntry, BatchObject"
+  style={{width: '100%', height: 'auto', marginTop: '1rem', marginBottom: '0.5rem'}}
+/>
+
+:::info Simplified on purpose
+The real schema also covers agent sessions, calibration probes, hourly
+statistics, batch line results, and pricing rows. Prefer the Liquibase
+changelogs under `logos-webservice` when you need exact columns.
+:::
+
+Reading the diagram left to right:
+
+1. A **User** belongs to one or more **Teams** (membership).
+2. **ApiKeys** belong to a team (and often a user) and carry rate / budget
+   limits and queue priority.
+3. **Models** are offered to clients; **Providers** are where a model is
+   physically served (`cloud` or `logosnode`).
+4. Team- and key-level **permissions** decide which models a caller may use;
+   **Policies** further constrain privacy / priority / topic.
+5. Every inference attempt becomes a **LogEntry** (usage tokens + settled
+   cost). **BatchObject** rows track OpenAI-compatible batch jobs.
+
+## Inference Request Flow
+
+All public inference enters the **inference gateway** on the Webservice
+(`/v1`, `/openai`, `/jobs`). After API-key auth and budget checks, traffic
+splits:
+
+| Path | When | What happens |
+|---|---|---|
+| **A — Pure cloud** | Named model with only cloud deployments | Webservice forwards HTTP **directly** to the cloud provider and logs the result. The Orchestrator is not involved. |
+| **B — Local / mixed** | Local models, mixed routing, policies, jobs, listings, … | Webservice **proxies** to the Orchestrator, which classifies, schedules, and talks to workers (and optionally cloud). |
+
+<img
+  src={useBaseUrl('/img/system-design/request-flow.svg')}
+  alt="Logos inference request flow — shared entry through rate-limit and Traefik, then pure-cloud vs local/mixed paths"
+  style={{width: '100%', height: 'auto', marginTop: '1rem', marginBottom: '0.5rem'}}
+/>
+
+Two properties fall out of this shape (same as the older architecture
+diagram):
+
+- **Workers are outbound-only** — control (sleep, wake, calibrate, lane
+  changes) and inference RPC travel on the WebSocket the worker opened.
+- **Clients see one domain** — Traefik routes by path: inference and `/api`
+  land on the Webservice; a small set of worker-control routes that need the
+  live registry stay on the Orchestrator; everything else serves the UI.
+
+Scale cloud capacity with `LOGOS_WEBSERVICE_REPLICAS` on the core node
+([deployment — inference gateway replicas](../deployment.md#inference-gateway-replicas)).
+
+## Related reading
+
+| Topic | Document |
+|---|---|
+| Glossary, roles, subsystem directories | [Architecture](./architecture) |
+| Install / compose / TLS / rate limits | [Deployment](../deployment.md) · [Installation](../admin/installation.md) |
+| GPU machines | [Worker Nodes](../admin/worker-node.md) |
+| OpenAI Batch API | [Batch Processing](../batch-processing.md) |
+| Request pipeline (orchestrator internals) | [`logos-orchestrator` pipeline README](https://github.com/ls1intum/edutelligence/blob/main/logos/logos-orchestrator/src/logos/pipeline/README.md) |

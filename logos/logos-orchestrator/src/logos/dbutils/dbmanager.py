@@ -397,6 +397,8 @@ class DBManager:
             "queue_depth_at_schedule",
             "timeout_s",
             "scheduled_ts",
+            "timestamp_provider_call",
+            "timestamp_provider_response",
             "request_complete_ts",
             "rate_limit_admitted",
             "available_vram_mb",
@@ -1810,12 +1812,12 @@ class DBManager:
             INSERT INTO calibration_probe_logs (
                 provider_id, model_name,
                 success, probe_command, error,
-                unsupported_reason, node_unhealthy_reason,
+                unsupported_reason, node_unhealthy_reason, observed_reason,
                 summary, log_text, recorded_at, updated_at
             ) VALUES (
                 :provider_id, :model_name,
                 :success, :probe_command, :error,
-                :unsupported_reason, :node_unhealthy_reason,
+                :unsupported_reason, :node_unhealthy_reason, :observed_reason,
                 :summary, :log_text, :recorded_at, CURRENT_TIMESTAMP
             )
             ON CONFLICT (provider_id, model_name) DO UPDATE SET
@@ -1824,6 +1826,7 @@ class DBManager:
                 error = EXCLUDED.error,
                 unsupported_reason = EXCLUDED.unsupported_reason,
                 node_unhealthy_reason = EXCLUDED.node_unhealthy_reason,
+                observed_reason = EXCLUDED.observed_reason,
                 summary = EXCLUDED.summary,
                 log_text = EXCLUDED.log_text,
                 recorded_at = EXCLUDED.recorded_at,
@@ -1842,6 +1845,7 @@ class DBManager:
                 "error": payload.get("error") or None,
                 "unsupported_reason": payload.get("unsupported_reason"),
                 "node_unhealthy_reason": payload.get("node_unhealthy_reason"),
+                "observed_reason": payload.get("observed_reason"),
                 "summary": _json_for_jsonb(payload),
                 "log_text": log_text or None,
                 "recorded_at": recorded_at,
@@ -1860,6 +1864,8 @@ class DBManager:
         sql = text("""
             SELECT cpl.provider_id, p.name AS provider_name, cpl.success,
                    cpl.probe_command, cpl.error, cpl.summary, cpl.log_text,
+                   cpl.unsupported_reason, cpl.node_unhealthy_reason,
+                   cpl.observed_reason, cpl.summary->'stages' AS stages,
                    cpl.recorded_at, cpl.updated_at
             FROM calibration_probe_logs cpl
             JOIN providers p ON p.id = cpl.provider_id
@@ -1870,8 +1876,9 @@ class DBManager:
         results = []
         for row in rows:
             entry = dict(row._mapping)
-            summary = entry.get("summary")
-            entry["summary"] = json.loads(summary) if isinstance(summary, str) else summary
+            for field in ("summary", "stages"):
+                value = entry.get(field)
+                entry[field] = json.loads(value) if isinstance(value, str) else value
             results.append(entry)
         return results
 
@@ -3451,6 +3458,24 @@ class DBManager:
         rows = self.session.execute(sql, {}).mappings().all()
         return [dict(row) for row in rows]
 
+    def get_all_model_names_with_aliases(self) -> list[Dict[str, Any]]:
+        """Name and aliases of every model, regardless of any key's permissions.
+
+        Only for deciding whether a generated id (``claude-<name>``) could be
+        resolved to another model: ``resolve_proxy_model`` searches every model
+        for administrator keys, so the check has to see them all. Nothing from
+        this list is returned to a caller.
+        """
+        sql = text("""
+            SELECT m.name,
+                   (SELECT string_agg(a.alias, ', ' ORDER BY a.alias)
+                    FROM model_aliases a
+                    WHERE a.model_id = m.id) AS aliases
+            FROM models m
+        """)
+        rows = self.session.execute(sql).mappings().all()
+        return [{"name": row["name"], "aliases": self._split_alias_list(row["aliases"])} for row in rows]
+
     def get_models_for_api_key(self, api_key_id: int) -> list[Dict[str, Any]]:
         """
         Get all models that an api key has access to.
@@ -4009,6 +4034,16 @@ class DBManager:
             return False
         return result.log
 
+    def get_log_id_by_request_id(self, request_id: str) -> Optional[int]:
+        """The log_entry id for a request_id, or None when no row exists yet."""
+        if not request_id:
+            return None
+        row = self.session.execute(
+            text("SELECT id FROM log_entry WHERE request_id = :rid"),
+            {"rid": request_id},
+        ).first()
+        return int(row.id) if row is not None else None
+
     def log_usage(
         self,
         api_key_id: Optional[int],
@@ -4051,6 +4086,54 @@ class DBManager:
         ).fetchone()
         self.session.commit()
         return {"result": "Created log entry.", "log-id": row.id}, 200
+
+    def ensure_log_usage(
+        self,
+        api_key_id: Optional[int],
+        team_id: Optional[int],
+        user_id: Optional[int],
+        environment: Optional[str],
+        log_level: str,
+        client_ip: Optional[str] = None,
+        input_payload=None,
+        headers=None,
+        request_id: Optional[str] = None,
+        timeout_s: Optional[float] = None,
+    ) -> Optional[int]:
+        """Insert a log row, or return the id of an existing one for ``request_id``.
+
+        The live-feed path may insert a deferred PendingLog ahead of
+        completion so queued stats rows already exist; the terminal
+        materialize must then find that row rather than colliding on the
+        unique ``request_id`` index.
+        """
+        if request_id:
+            existing = self.get_log_id_by_request_id(request_id)
+            if existing is not None:
+                return existing
+        try:
+            result, status = self.log_usage(
+                api_key_id=api_key_id,
+                team_id=team_id,
+                user_id=user_id,
+                environment=environment,
+                log_level=log_level,
+                client_ip=client_ip,
+                input_payload=input_payload,
+                headers=headers,
+                request_id=request_id,
+                timeout_s=timeout_s,
+            )
+            return int(result["log-id"]) if status == 200 else None
+        except sqlalchemy.exc.IntegrityError as exc:
+            # Only the unique request_id race is recoverable here. FK failures
+            # (stale team/user after a concurrent delete) must surface so the
+            # caller does not treat a failed insert as a successful duplicate.
+            self.session.rollback()
+            constraint_name = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if request_id and constraint_name == "idx_log_entry_request_id_unique":
+                return self.get_log_id_by_request_id(request_id)
+            raise
 
     def set_time_at_first_token(self, log_id: int):
         sql = text("""

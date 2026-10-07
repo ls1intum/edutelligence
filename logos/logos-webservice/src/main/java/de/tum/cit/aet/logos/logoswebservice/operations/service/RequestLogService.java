@@ -11,6 +11,9 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.RequestLogProjection;
@@ -25,9 +28,51 @@ public class RequestLogService {
     private static final int LATEST_REQUESTS_MAX_PAGE_SIZE = 50;
 
     private final LogEntryRepository logEntryRepository;
+    private final ObjectMapper objectMapper;
 
-    public RequestLogService(LogEntryRepository logEntryRepository) {
+    public RequestLogService(LogEntryRepository logEntryRepository, ObjectMapper objectMapper) {
         this.logEntryRepository = logEntryRepository;
+        this.objectMapper = objectMapper;
+    }
+
+    // Hibernate expands IN collections; keep even an unrestricted query syntactically valid.
+    private static List<Integer> queryIds(List<Integer> ids) {
+        return ids.isEmpty() ? List.of(-1) : ids;
+    }
+
+    /** Parse optional feed selections without silently widening malformed filters. */
+    public static List<Integer> readFeedIds(Map<String, Object> body, String field) {
+        Object value = body.get(field);
+        if (value == null) return List.of();
+        if (!(value instanceof List<?> values)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " must be an array of IDs");
+        }
+        return values.stream().map(item -> {
+            if (!(item instanceof Number number) || number.longValue() <= 0
+                    || number.doubleValue() != number.intValue()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, field + " must contain positive integer IDs");
+            }
+            return ((Number) item).intValue();
+        }).distinct().toList();
+    }
+
+    /** Load stored content for one request, preserving absent payloads as null. */
+    public Map<String, Object> getRequestPayloads(String requestId) {
+        var payload = logEntryRepository.findRequestPayloads(requestId)
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Request not found"));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("input_payload", parsePayload(payload.getInputPayload()));
+        result.put("response_payload", parsePayload(payload.getResponsePayload()));
+        return result;
+    }
+
+    private Object parsePayload(String text) {
+        if (text == null) return null;
+        try {
+            return objectMapper.readValue(text, Object.class);
+        } catch (Exception e) {
+            return text;
+        }
     }
 
     /** Unfiltered newest page of the range, without a row count — the live push. */
@@ -79,6 +124,16 @@ public class RequestLogService {
                                                  String status,
                                                  String cursorTs, String cursorId,
                                                  int limit, boolean withTotal) {
+        return getLatestRequests(startDate, endDate, userId, teamId, providerId, errorsOnly,
+            status, cursorTs, cursorId, limit, withTotal, List.of(), List.of());
+    }
+
+    public Map<String, Object> getLatestRequests(String startDate, String endDate,
+                                                 Integer userId, Integer teamId,
+                                                 Integer providerId, boolean errorsOnly,
+                                                 String status, String cursorTs, String cursorId,
+                                                 int limit, boolean withTotal,
+                                                 List<Integer> modelIds, List<Integer> providerIds) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
         // Same lenient parse as the end: a malformed range must fall back to the
         // default window, not surface as a 500.
@@ -103,6 +158,7 @@ public class RequestLogService {
         // dropped before the rows go out.
         List<Map<String, Object>> fetched = logEntryRepository
             .findLatestRequests(startTs, endTs, userId, teamId, providerId, errorsOnly,
+                                modelIds.isEmpty(), queryIds(modelIds), providerIds.isEmpty(), queryIds(providerIds),
                                 status, cursor, cursorRequestId, pageSize + 1)
             .stream()
             .map(p -> {
@@ -129,6 +185,7 @@ public class RequestLogService {
                 m.put("full_name", p.getFullName());
                 m.put("api_key_name", p.getApiKeyName());
                 m.put("api_key_type", p.getApiKeyType());
+                m.put("environment", p.getEnvironment());
                 m.put("prompt_tokens", p.getPromptTokens());
                 m.put("completion_tokens", p.getCompletionTokens());
                 m.put("total_tokens", p.getTotalTokens());
@@ -156,7 +213,8 @@ public class RequestLogService {
         }
         if (withTotal) {
             Long total = logEntryRepository.countRequestsInRange(
-                startTs, endTs, userId, teamId, providerId, errorsOnly, status);
+                startTs, endTs, userId, teamId, providerId, errorsOnly,
+                modelIds.isEmpty(), queryIds(modelIds), providerIds.isEmpty(), queryIds(providerIds), status);
             // The feed shows a window onto the range, so it has to say how big
             // the range is — "1-10 of 4,312" is the difference between a capped
             // list and a list the operator reads as complete.
@@ -186,6 +244,13 @@ public class RequestLogService {
     public long countFeedRows(String startDate, String endDate,
                               Integer userId, Integer teamId,
                               Integer providerId, boolean errorsOnly, String status) {
+        return countFeedRows(startDate, endDate, userId, teamId, providerId, errorsOnly, status, List.of(), List.of());
+    }
+
+    public long countFeedRows(String startDate, String endDate,
+                              Integer userId, Integer teamId,
+                              Integer providerId, boolean errorsOnly, String status,
+                              List<Integer> modelIds, List<Integer> providerIds) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
         ZonedDateTime startDt = parseInstantOrNull(startDate);
         if (startDt == null || startDt.isAfter(endDt)) {
@@ -194,7 +259,8 @@ public class RequestLogService {
         Timestamp startTs = Timestamp.from(startDt.toInstant());
         Timestamp endTs = Timestamp.from(endDt.toInstant());
         Long total = logEntryRepository.countRequestsInRange(
-            startTs, endTs, userId, teamId, providerId, errorsOnly, status);
+            startTs, endTs, userId, teamId, providerId, errorsOnly,
+            modelIds.isEmpty(), queryIds(modelIds), providerIds.isEmpty(), queryIds(providerIds), status);
         return total != null ? total : 0L;
     }
 

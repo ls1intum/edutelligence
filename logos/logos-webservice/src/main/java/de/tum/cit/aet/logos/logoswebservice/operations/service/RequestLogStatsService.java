@@ -132,6 +132,8 @@ public class RequestLogStatsService {
             toScopeOptions(logEntryRepository.findRequestersWithTraffic(startTs, endTs, teamId, providerId, errorsOnly)));
         payload.put("providers",
             toScopeOptions(logEntryRepository.findProvidersWithTraffic(startTs, endTs, teamId, userId, errorsOnly)));
+        payload.put("models",
+            toScopeOptions(logEntryRepository.findModelsWithTraffic(startTs, endTs, teamId, userId, providerId, errorsOnly)));
         return payload;
     }
 
@@ -179,8 +181,11 @@ public class RequestLogStatsService {
         return logEntryRepository.findModelBreakdown(start, end, userId, teamId, providerId, errorsOnly).stream()
             .map(p -> {
                 Map<String, Object> m = new LinkedHashMap<>();
-                m.put("modelId", p.getModelId() != null ? p.getModelId() : -1);
+                // null modelId is a deleted model: its usage survives under the
+                // captured name, and the UI marks the entry as deleted.
+                m.put("modelId", p.getModelId());
                 m.put("modelName", p.getModelName());
+                m.put("modelDeleted", p.getModelId() == null);
                 m.put("requestCount", p.getRequestCount());
                 m.put("avgQueueSeconds", p.getAvgQueueSeconds());
                 m.put("avgRunSeconds", p.getAvgRunSeconds());

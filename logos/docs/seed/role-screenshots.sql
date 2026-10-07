@@ -1,0 +1,756 @@
+-- Role-guide documentation seed for logos/docs.
+--
+-- Idempotent. Safe to re-run. Tags demo traffic with
+-- environment = 'docs-role-screenshots' so a wipe is precise.
+--
+-- Prefer the throwaway screenshots compose DB (`doks-db`). Against a shared
+-- development database the seed only deletes docs-namespaced providers /
+-- policies and models that are exclusive to those providers — it never
+-- overwrites an existing team's budget/limits just because it is named
+-- "Logos".
+--
+-- Prerequisite: log in once as tobias.wasner, alexandra.szuminska, and
+-- henriette.huhn (password: password) so Keycloak sync has created the
+-- users rows. See logos/docs/AGENTS.md.
+--
+-- Apply (screenshots compose example):
+--   docker exec -i doks-db psql -U postgres -d logosdb < logos/docs/seed/role-screenshots.sql
+
+BEGIN;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM users WHERE username = 'tobias.wasner')
+       OR NOT EXISTS (SELECT 1 FROM users WHERE username = 'alexandra.szuminska')
+       OR NOT EXISTS (SELECT 1 FROM users WHERE username = 'henriette.huhn')
+    THEN
+        RAISE EXCEPTION
+            'required Keycloak users missing — log in once as tobias.wasner, alexandra.szuminska, and henriette.huhn, then re-run (see logos/docs/AGENTS.md)';
+    END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Wipe previous docs-role-screenshots run
+-- ---------------------------------------------------------------------------
+DELETE FROM usage_tokens
+WHERE log_entry_id IN (
+    SELECT id FROM log_entry WHERE environment = 'docs-role-screenshots'
+);
+DELETE FROM log_entry WHERE environment = 'docs-role-screenshots';
+
+DELETE FROM batch_objects
+WHERE upstream_id LIKE 'batch_docs_%'
+   OR filename LIKE 'docs-role-screenshots%';
+
+DELETE FROM agent_sessions
+WHERE created_by = 'docs-role-screenshots';
+DELETE FROM agent_workspaces
+WHERE created_by = 'docs-role-screenshots';
+
+-- Docs AI-workflow demo (commit_sha is the wipe namespace; short form abc123d).
+-- Do not delete team_repositories rows — on a shared DB the Logos team may
+-- already link the same slug for real use; only replace the docs analysis.
+-- abc122d is the earlier analysis whose reviews the current one carries over
+-- or re-proposes.
+DELETE FROM ai_llm_call_recommendations
+WHERE analysis_id IN (
+    SELECT id FROM ai_workflow_analyses
+    WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots')
+);
+DELETE FROM ai_workflows
+WHERE analysis_id IN (
+    SELECT id FROM ai_workflow_analyses
+    WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots')
+);
+DELETE FROM ai_workflow_analyses
+WHERE commit_sha IN ('abc123docsrolescreenshots', 'abc122docsrolescreenshots');
+
+DELETE FROM policies
+WHERE name LIKE 'Docs — %'
+   OR name IN (
+    -- legacy unprefixed names from earlier seed revisions
+    'Local-first routing', 'Cost saver for drafts', 'High-quality answers'
+);
+
+-- Demo models: only remove catalogue rows that are exclusive to the Docs
+-- providers (never delete a pre-existing model that also has other providers).
+DELETE FROM model_aliases
+WHERE model_id IN (
+    SELECT m.id FROM models m
+    WHERE m.name IN (
+        'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+    )
+      AND EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name NOT IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+);
+DELETE FROM model_capabilities
+WHERE model_id IN (
+    SELECT m.id FROM models m
+    WHERE m.name IN (
+        'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+    )
+      AND EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name NOT IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+);
+DELETE FROM token_prices
+WHERE model_id IN (
+    SELECT m.id FROM models m
+    WHERE m.name IN (
+        'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+    )
+      AND EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name NOT IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+);
+DELETE FROM team_model_permissions
+WHERE model_id IN (
+    SELECT m.id FROM models m
+    WHERE m.name IN (
+        'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+    )
+      AND EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM model_provider mp
+          JOIN providers p ON p.id = mp.provider_id
+          WHERE mp.model_id = m.id
+            AND p.name NOT IN ('Docs Cloud (EU)', 'Docs Local Worker')
+      )
+);
+DELETE FROM team_provider_permissions
+WHERE provider_id IN (SELECT id FROM providers WHERE name IN (
+    'Docs Cloud (EU)', 'Docs Local Worker'
+));
+DELETE FROM model_provider
+WHERE provider_id IN (SELECT id FROM providers WHERE name IN (
+    'Docs Cloud (EU)', 'Docs Local Worker'
+));
+DELETE FROM models m
+WHERE m.name IN (
+    'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+)
+  AND NOT EXISTS (SELECT 1 FROM model_provider mp WHERE mp.model_id = m.id);
+DELETE FROM providers WHERE name IN (
+    'Docs Cloud (EU)', 'Docs Local Worker'
+);
+
+DELETE FROM api_keys WHERE name LIKE 'docs-role-%';
+-- Keep an existing "Logos" team (common on long-lived DBs); only remove
+-- memberships we added for the three screenshot users when re-seeding keys
+-- would otherwise leave orphaned docs-role keys. Members stay.
+
+-- Prefer a team named "Logos" if one already exists (matches existing shots);
+-- otherwise create the docs team under that display name for a fresh DB.
+INSERT INTO teams (
+    name,
+    default_cloud_rpm_limit, default_cloud_tpm_limit,
+    default_local_rpm_limit, default_local_tpm_limit,
+    default_monthly_budget_micro_cents, team_monthly_budget_micro_cents
+)
+SELECT
+    'Logos',
+    5, 10000,
+    5, 10000,
+    100000000,   -- $1.00 key default / month
+    500000000    -- $5.00 team member budget / month
+WHERE NOT EXISTS (SELECT 1 FROM teams WHERE name = 'Logos');
+
+-- Members: Alexandra owns; Tobias + Henriette are members.
+-- Do not overwrite budget/limits on a pre-existing "Logos" team — only the
+-- INSERT above sets demo defaults on a freshly created team.
+INSERT INTO team_members (user_id, team_id, is_owner)
+SELECT u.id, t.id, (u.username = 'alexandra.szuminska')
+FROM users u
+CROSS JOIN teams t
+WHERE t.name = 'Logos'
+  AND u.username IN ('tobias.wasner', 'alexandra.szuminska', 'henriette.huhn')
+ON CONFLICT (user_id, team_id) DO UPDATE
+SET is_owner = EXCLUDED.is_owner;
+
+-- Developer keys (one per user) + one application key for the team.
+INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, is_active, log, settings)
+SELECT
+    'lg-docs-' || u.username,
+    'docs-role-' || u.username || '-key',
+    'developer',
+    t.id,
+    u.id,
+    true,
+    'BILLING',
+    jsonb_build_object(
+        'budget_limit_micro_cents', 100000000,
+        'cloud_rpm_limit', 5,
+        'cloud_tpm_limit', 10000,
+        'local_rpm_limit', 5,
+        'local_tpm_limit', 10000
+    )
+FROM users u
+CROSS JOIN teams t
+WHERE t.name = 'Logos'
+  AND u.username IN ('tobias.wasner', 'alexandra.szuminska', 'henriette.huhn')
+  AND NOT EXISTS (
+      SELECT 1 FROM api_keys k
+      WHERE k.name = 'docs-role-' || u.username || '-key'
+  );
+
+INSERT INTO api_keys (key_value, name, key_type, team_id, user_id, environment, is_active, log, settings)
+SELECT
+    'lg-docs-app-logos',
+    'docs-role-logos-app-key',
+    'application',
+    t.id,
+    NULL,
+    'production',
+    true,
+    'BILLING',
+    '{}'::jsonb
+FROM teams t
+WHERE t.name = 'Logos'
+  AND NOT EXISTS (SELECT 1 FROM api_keys WHERE name = 'docs-role-logos-app-key');
+
+-- If the application key already exists from an earlier seed run, keep its
+-- environment aligned with what the statistics caller chips expect to show.
+UPDATE api_keys
+SET environment = 'production'
+WHERE name = 'docs-role-logos-app-key'
+  AND (environment IS NULL OR environment = '-' OR environment = '');
+
+-- Providers + models (names match the committed shots' catalogue style).
+INSERT INTO providers (name, base_url, provider_type, cloud_provider_type, privacy_level, auth_name, auth_format)
+SELECT v.name, v.base_url, v.provider_type, v.cloud_provider_type, v.privacy_level, v.auth_name, v.auth_format
+FROM (VALUES
+    ('Docs Cloud (EU)', 'https://example.invalid/openai', 'cloud'::provider_type_enum,
+     'azure'::cloud_provider_type_enum, 'CLOUD_IN_EU_BY_US_PROVIDER'::threshold_enum, 'api-key', '{}'),
+    ('Docs Local Worker', 'http://logosnode.invalid', 'logosnode'::provider_type_enum,
+     NULL::cloud_provider_type_enum, 'LOCAL'::threshold_enum, 'Authorization', 'Bearer {}')
+) AS v(name, base_url, provider_type, cloud_provider_type, privacy_level, auth_name, auth_format)
+WHERE NOT EXISTS (SELECT 1 FROM providers p WHERE p.name = v.name);
+
+INSERT INTO models (name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
+SELECT v.*
+FROM (VALUES
+    ('llama-3.1-8b-instruct', 8, 8, 8, 8, 'chat,fast',
+     'Small general-purpose chat model for everyday workloads.'),
+    ('qwen-2.5-72b-instruct', 0, 0, 0, 0, 'chat,reasoning',
+     'Large instruction-tuned model with strong reasoning.'),
+    ('mistral-small-3.2-24b', -8, -8, -8, -8, 'chat,cost-efficient',
+     'Balanced model for cost-efficient production traffic.')
+) AS v(name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
+WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = v.name);
+
+UPDATE models SET profile_ratings = v.ratings::jsonb
+FROM (VALUES
+    ('llama-3.1-8b-instruct', '{"latency":5,"quality":3,"price":4}'),
+    ('qwen-2.5-72b-instruct', '{"latency":2,"quality":5,"price":2}'),
+    ('mistral-small-3.2-24b', '{"latency":4,"quality":3,"price":5}')
+) AS v(name, ratings)
+WHERE models.name = v.name
+  AND (models.profile_ratings IS NULL OR models.profile_ratings = '{}'::jsonb);
+
+-- Retired demo model: created here, given usage below, then deleted at the
+-- end of the seed. The delete trigger stamps its name onto the usage rows,
+-- so the statistics page shows the usage as a trash-marked deleted-model
+-- entry. Catalog-only on purpose (no providers, no permissions): it never
+-- appears in the model list or in routing.
+--
+-- The description carries the [docs-role-screenshots] marker. On a shared
+-- development database a real model may already use the name gpt-4o-mini
+-- (perhaps with no provider link yet); the marker is what scopes the usage
+-- insert and the delete below to the row this seed run created, so an
+-- existing model of the same name is neither polluted with demo usage nor
+-- removed.
+INSERT INTO models (name, weight_latency, weight_accuracy, weight_cost, weight_quality, tags, description)
+SELECT 'gpt-4o-mini', 0, 0, 0, 0, 'chat',
+       'Fast general-purpose model. [docs-role-screenshots]'
+WHERE NOT EXISTS (SELECT 1 FROM models m WHERE m.name = 'gpt-4o-mini');
+
+INSERT INTO model_capabilities (model_id, supports_function_calling, supports_vision, supports_reasoning)
+SELECT m.id,
+       true,
+       (m.name LIKE 'mistral%'),
+       (m.name LIKE 'qwen%')
+FROM models m
+WHERE m.name IN ('llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b')
+  AND NOT EXISTS (SELECT 1 FROM model_capabilities c WHERE c.model_id = m.id);
+
+INSERT INTO model_aliases (model_id, alias)
+SELECT m.id, a.alias
+FROM models m
+JOIN (VALUES
+    ('llama-3.1-8b-instruct', 'llama-3.1-8b'),
+    ('qwen-2.5-72b-instruct', 'qwen-72b'),
+    ('mistral-small-3.2-24b', 'mistral-3.2')
+) AS a(model_name, alias) ON a.model_name = m.name
+WHERE NOT EXISTS (
+    SELECT 1 FROM model_aliases ma WHERE lower(ma.alias) = lower(a.alias)
+);
+
+INSERT INTO model_provider (provider_id, model_id)
+SELECT p.id, m.id
+FROM models m
+CROSS JOIN providers p
+WHERE m.name IN ('llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b')
+  AND p.name = 'Docs Local Worker'
+  AND NOT EXISTS (
+      SELECT 1 FROM model_provider mp
+      WHERE mp.model_id = m.id AND mp.provider_id = p.id
+  );
+
+INSERT INTO model_provider (provider_id, model_id)
+SELECT p.id, m.id
+FROM models m
+CROSS JOIN providers p
+WHERE m.name = 'llama-3.1-8b-instruct'
+  AND p.name = 'Docs Cloud (EU)'
+  AND NOT EXISTS (
+      SELECT 1 FROM model_provider mp
+      WHERE mp.model_id = m.id AND mp.provider_id = p.id
+  );
+
+INSERT INTO team_model_permissions (team_id, model_id)
+SELECT t.id, m.id
+FROM teams t
+CROSS JOIN models m
+WHERE t.name = 'Logos'
+  AND m.name IN ('llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO team_provider_permissions (team_id, provider_id)
+SELECT t.id, p.id
+FROM teams t
+CROSS JOIN providers p
+WHERE t.name = 'Logos'
+  AND p.name IN ('Docs Cloud (EU)', 'Docs Local Worker')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO policies (
+    name, description, threshold_privacy,
+    threshold_latency, threshold_accuracy, threshold_cost, threshold_quality,
+    priority, topic, team_id
+)
+SELECT v.name, v.description, v.privacy::threshold_enum,
+       0, 0, 0, 0, v.priority, v.topic, t.id
+FROM teams t
+CROSS JOIN (VALUES
+    ('Docs — Local-first routing', 'Route to self-hosted models when they can answer.', 'LOCAL', 1, 'default'),
+    ('Docs — Cost saver for drafts', 'Prefer the cheapest models for drafting.', 'LOCAL', 2, 'drafting'),
+    ('Docs — High-quality answers', 'Use the most accurate models for customer-facing work.', 'LOCAL', 3, 'customer-facing')
+) AS v(name, description, privacy, priority, topic)
+WHERE t.name = 'Logos'
+  AND NOT EXISTS (SELECT 1 FROM policies p WHERE p.name = v.name);
+
+-- Usage + finalized cost → billing chart, statistics KPIs, My Workspace bars, team budget.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-req-' || g.n,
+    k.id,
+    m.id,
+    p.id,
+    'success',
+    date_trunc('day', now()) - (((g.n % 16) + 1) || ' days')::interval + ((g.n % 5) || ' hours')::interval,
+    date_trunc('day', now()) - (((g.n % 16) + 1) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '1 second',
+    date_trunc('day', now()) - (((g.n % 16) + 1) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '1.2 seconds',
+    date_trunc('day', now()) - (((g.n % 16) + 1) || ' days')::interval + ((g.n % 5) || ' hours')::interval + interval '2 seconds',
+    false,
+    0,
+    k.user_id,
+    k.team_id,
+    'docs-role-screenshots',
+    true,
+    true,
+    100000 + (g.n * 7000)   -- ~$0.10–$0.20-ish micro-cents spread across the month
+FROM generate_series(1, 48) AS g(n)
+JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
+JOIN models m ON m.name = 'llama-3.1-8b-instruct'
+JOIN providers p ON p.name = 'Docs Cloud (EU)';
+
+-- Recent in-window traffic so My Workspace rate-limit bars show used > 0.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-rl-' || u.username || '-' || g.n,
+    k.id,
+    m.id,
+    CASE WHEN g.n % 2 = 0 THEN pc.id ELSE pl.id END,
+    'success',
+    now() - (g.n || ' seconds')::interval,
+    now() - (g.n || ' seconds')::interval + interval '0.2 seconds',
+    now() - (g.n || ' seconds')::interval + interval '0.3 seconds',
+    now() - (g.n || ' seconds')::interval + interval '0.8 seconds',
+    false, 0, u.id, k.team_id, 'docs-role-screenshots',
+    true, true, 50000
+FROM users u
+JOIN api_keys k ON k.user_id = u.id AND k.name = 'docs-role-' || u.username || '-key'
+CROSS JOIN generate_series(1, 3) AS g(n)
+JOIN models m ON m.name = 'qwen-2.5-72b-instruct'
+JOIN providers pc ON pc.name = 'Docs Cloud (EU)'
+JOIN providers pl ON pl.name = 'Docs Local Worker'
+WHERE u.username IN ('tobias.wasner', 'alexandra.szuminska', 'henriette.huhn');
+
+-- A few application-key requests so Statistics Recent requests can show the
+-- environment chip (key icon + "production") next to the team.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-app-' || g.n,
+    k.id,
+    m.id,
+    p.id,
+    'success',
+    now() - ((g.n + 3) || ' seconds')::interval,
+    now() - ((g.n + 3) || ' seconds')::interval + interval '0.2 seconds',
+    now() - ((g.n + 3) || ' seconds')::interval + interval '0.3 seconds',
+    now() - ((g.n + 3) || ' seconds')::interval + interval '0.9 seconds',
+    false, 0, NULL, k.team_id, 'docs-role-screenshots',
+    true, true, 42000
+FROM generate_series(1, 3) AS g(n)
+JOIN api_keys k ON k.name = 'docs-role-logos-app-key'
+JOIN models m ON m.name = 'mistral-small-3.2-24b'
+JOIN providers p ON p.name = 'Docs Cloud (EU)';
+
+-- Older mistral traffic so Model Management Last Used shows a dated row
+-- (date + relative age), not only Never / Today.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-mistral-lu-' || g.n,
+    k.id, m.id, p.id, 'success',
+    now() - interval '2 days' - (g.n || ' hours')::interval,
+    now() - interval '2 days' - (g.n || ' hours')::interval + interval '1 second',
+    now() - interval '2 days' - (g.n || ' hours')::interval + interval '1.2 seconds',
+    now() - interval '2 days' - (g.n || ' hours')::interval + interval '2 seconds',
+    false, 0, k.user_id, k.team_id, 'docs-role-screenshots',
+    true, true, 80000
+FROM generate_series(1, 3) AS g(n)
+JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
+JOIN models m ON m.name = 'mistral-small-3.2-24b'
+JOIN providers p ON p.name = 'Docs Cloud (EU)';
+
+-- Usage on the model this seed retires: spread across the last ten days so
+-- the statistics page's default window shows a deleted-model entry.
+INSERT INTO log_entry (
+    request_id, api_key_id, model_id, provider_id, result_status,
+    timestamp_request, timestamp_forwarding, time_at_first_token, timestamp_response,
+    was_cold_start, queue_depth_at_enqueue, user_id, team_id, environment,
+    rate_limit_admitted, cost_finalized, settled_cost_micro_cents
+)
+SELECT
+    'docs-role-retired-' || g.n,
+    k.id, m.id, p.id, 'success',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval,
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '1 second',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '1.2 seconds',
+    date_trunc('day', now()) - ((g.n % 10) || ' days')::interval - ((g.n % 12) || ' hours')::interval + interval '2 seconds',
+    (g.n % 12 = 0),
+    0,
+    k.user_id,
+    k.team_id,
+    'docs-role-screenshots',
+    true,
+    true,
+    60000 + (g.n * 9000)
+FROM generate_series(1, 12) AS g(n)
+JOIN api_keys k ON k.name = 'docs-role-tobias.wasner-key'
+JOIN models m ON m.name = 'gpt-4o-mini'
+             AND m.description LIKE '%[docs-role-screenshots]'
+JOIN providers p ON p.name = 'Docs Local Worker';
+
+-- Retire the demo model. The BEFORE DELETE trigger stamps the model name onto
+-- every usage row before the foreign key nulls the id, so the statistics
+-- page keeps showing the usage under the model's former name — flagged
+-- deleted. The marker (not just the name, and not just a missing provider
+-- link, which the schema does not guarantee) scopes the delete to the row
+-- this seed run created, so a real model of the same name on a shared
+-- development database is never removed.
+DELETE FROM models m
+WHERE m.name = 'gpt-4o-mini'
+  AND m.description LIKE '%[docs-role-screenshots]';
+
+INSERT INTO usage_tokens (type_id, log_entry_id, token_count)
+SELECT tt.id, le.id, 350 + (le.id % 200)
+FROM log_entry le
+JOIN token_types tt ON tt.name IN ('prompt_tokens', 'completion_tokens', 'billed_output_text')
+WHERE le.environment = 'docs-role-screenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM usage_tokens ut
+      WHERE ut.log_entry_id = le.id AND ut.type_id = tt.id
+  );
+
+-- Batches: one running, one finished.
+INSERT INTO batch_objects (
+    kind, upstream_id, execution, api_key_id, team_id, user_id, status,
+    endpoint, total_requests, completed_requests, failed_requests,
+    created_at, updated_at, started_at, finished_at, settled_at
+)
+SELECT
+    'batch', 'batch_docs_in_progress', 'logos',
+    k.id, k.team_id, k.user_id, 'in_progress',
+    '/v1/chat/completions', 200, 137, 0,
+    now() - interval '15 minutes', now(), now() - interval '14 minutes', NULL, NULL
+FROM api_keys k
+WHERE k.name = 'docs-role-tobias.wasner-key'
+  AND NOT EXISTS (SELECT 1 FROM batch_objects WHERE upstream_id = 'batch_docs_in_progress');
+
+INSERT INTO batch_objects (
+    kind, upstream_id, execution, api_key_id, team_id, user_id, status,
+    endpoint, total_requests, completed_requests, failed_requests,
+    created_at, updated_at, started_at, finished_at, settled_at, output_file_id
+)
+SELECT
+    'batch', 'batch_docs_completed', 'logos',
+    k.id, k.team_id, k.user_id, 'completed',
+    '/v1/chat/completions', 50, 50, 0,
+    now() - interval '2 days', now() - interval '2 days',
+    now() - interval '2 days', now() - interval '2 days' + interval '20 minutes',
+    now() - interval '2 days' + interval '20 minutes',
+    'file_docs_completed_out'
+FROM api_keys k
+WHERE k.name = 'docs-role-tobias.wasner-key'
+  AND NOT EXISTS (SELECT 1 FROM batch_objects WHERE upstream_id = 'batch_docs_completed');
+
+-- Agent sessions page content (no agent stack required).
+INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by)
+SELECT v.name, 'main', 'docs-role-vol-' || v.suffix, 'docs-role-screenshots'
+FROM (VALUES
+    ('edutelligence', 'edu'),
+    ('logos-ui', 'ui')
+) AS v(name, suffix)
+WHERE NOT EXISTS (SELECT 1 FROM agent_workspaces w WHERE w.name = v.name);
+
+UPDATE agent_controls
+SET mode = 'running',
+    mode_reason = 'docs-role-screenshots',
+    max_parallel = 4,
+    updated_by = 'docs-role-screenshots',
+    updated_at = now()
+WHERE id = 1;
+
+INSERT INTO agent_sessions (
+    workspace_id, task, model, status,
+    open_pull_request, created_by, created_at, started_at, finished_at,
+    tokens_in, tokens_out, cost_usd
+)
+SELECT w.id, s.task, 'qwen-2.5-72b-instruct', s.status,
+       true, 'docs-role-screenshots',
+       now() - s.created_ago,
+       CASE WHEN s.status = 'queued' THEN NULL ELSE now() - s.started_ago END,
+       CASE WHEN s.status IN ('succeeded', 'failed') THEN now() - s.finished_ago ELSE NULL END,
+       s.tin, s.tout, s.cost
+FROM agent_workspaces w
+JOIN (VALUES
+    ('edutelligence', 'queued',
+     'Investigate the statistics WebSocket reconnect loop on the requests tab',
+     interval '10 minutes', interval '10 minutes', interval '0', 0, 0, 0::numeric),
+    ('edutelligence', 'running',
+     'Fix the flaky login spec in the e2e suite — it times out on slow runners',
+     interval '2 hours', interval '1 hour 47 minutes', interval '0', 12000, 4000, 0.42),
+    ('edutelligence', 'succeeded',
+     'Add pagination to the request log export endpoint',
+     interval '1 day', interval '1 day', interval '22 hours', 18000, 6000, 0.55),
+    ('logos-ui', 'failed',
+     'Remove the duplicated theme tokens from the data table component',
+     interval '3 days', interval '3 days', interval '2 days 23 hours', 5000, 1200, 0.11)
+) AS s(workspace_name, status, task, created_ago, started_ago, finished_ago, tin, tout, cost)
+  ON s.workspace_name = w.name
+WHERE NOT EXISTS (
+    SELECT 1 FROM agent_sessions a
+    WHERE a.created_by = 'docs-role-screenshots' AND a.task = s.task
+);
+
+-- Team → Repositories / Workflows tabs (role-guide PNGs).
+INSERT INTO team_repositories (team_id, repo_url, repo_slug, branch, paths)
+SELECT t.id,
+       'https://github.com/ls1intum/edutelligence.git',
+       'ls1intum/edutelligence',
+       'main',
+       '["logos/logos-agent/app"]'::jsonb
+FROM teams t
+WHERE t.name = 'Logos'
+  AND NOT EXISTS (
+      SELECT 1 FROM team_repositories tr
+      WHERE tr.team_id = t.id AND tr.repo_slug = 'ls1intum/edutelligence'
+  );
+
+INSERT INTO ai_workflow_analyses (
+    team_id, team_repository_id, commit_sha, status, source, finished_at
+)
+SELECT t.id, tr.id, 'abc123docsrolescreenshots', 'succeeded', 'agent',
+       now() - interval '5 minutes'
+FROM teams t
+JOIN team_repositories tr
+  ON tr.team_id = t.id AND tr.repo_slug = 'ls1intum/edutelligence'
+WHERE t.name = 'Logos'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_workflow_analyses a
+      WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  );
+
+INSERT INTO ai_workflows (analysis_id, name, trigger_summary, diagram_mermaid, sort_order)
+SELECT a.id,
+       'Agent session finalize',
+       'HTTP / agent session completion',
+       $mm$flowchart TD
+  A[Session succeeds] --> B{no_push?}
+  B -->|yes| C[Skip remote push]
+  C --> D[Write analysis.json]
+  D --> E[Ingest recommendations (pending review)]
+  B -->|no| F[Finalize + open PR]$mm$,
+       0
+FROM ai_workflow_analyses a
+WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_workflows w WHERE w.analysis_id = a.id
+  );
+
+INSERT INTO ai_llm_call_recommendations (
+    analysis_id, workflow_id, team_id, file_path, start_line, end_line,
+    detected_model, recommended_slo, objective_priority, confidence, justification, review_status
+)
+SELECT a.id, w.id, a.team_id, r.file_path, r.start_line, r.end_line,
+       r.detected_model, r.recommended_slo, r.objective_priority::jsonb,
+       r.confidence, r.justification, 'pending'
+FROM ai_workflow_analyses a
+JOIN ai_workflows w ON w.analysis_id = a.id
+JOIN (VALUES
+    ('logos/logos-agent/app/sessions.py', 1483, 1483, 'qwen-2.5-72b-instruct',
+     'ux-high-prio', '["quality","latency","price"]', 0.72,
+     'Async agent helper work — user is not blocked on the response.'),
+    ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 115, 'claude-opus',
+     'ux-critical', '["latency","quality","price"]', 0.81,
+     'Interactive team detail load awaited by the signed-in owner.'),
+    ('logos/docs/seed/role-screenshots.sql', 1, 1, NULL,
+     'ux-background', '["price","quality","latency"]', 0.66,
+     'Offline seed / batch documentation path.')
+) AS r(file_path, start_line, end_line, detected_model, recommended_slo, objective_priority, confidence, justification)
+  ON true
+WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_llm_call_recommendations rec
+      WHERE rec.analysis_id = a.id AND rec.file_path = r.file_path
+  );
+
+-- The analysis before it (yesterday), with the owner's reviews: one that the
+-- current analysis proposes again unchanged (kept), one it now proposes
+-- differently (pending, shown next to the earlier decision).
+INSERT INTO ai_workflow_analyses (
+    team_id, team_repository_id, commit_sha, status, source, finished_at
+)
+SELECT a.team_id, a.team_repository_id, 'abc122docsrolescreenshots', 'succeeded', 'agent',
+       now() - interval '1 day'
+FROM ai_workflow_analyses a
+WHERE a.commit_sha = 'abc123docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_workflow_analyses p WHERE p.commit_sha = 'abc122docsrolescreenshots'
+  );
+
+INSERT INTO ai_llm_call_recommendations (
+    analysis_id, team_id, file_path, start_line, end_line, recommended_slo, objective_priority,
+    confidence, justification, review_status, confirmed_slo, confirmed_objective_priority, reviewed_at
+)
+SELECT p.id, p.team_id, r.file_path, r.line, r.line, r.slo, r.priority::jsonb, 0.7, r.why,
+       'accepted', r.slo, r.priority::jsonb, now() - interval '20 hours'
+FROM ai_workflow_analyses p
+JOIN (VALUES
+    ('logos/logos-agent/app/sessions.py', 1480, 'ux-high-prio', '["quality","latency","price"]',
+     'Async agent helper work.'),
+    ('logos/logos-ui/src/app/features/team-detail/team-detail.ts', 115, 'ux-high-prio',
+     '["quality","latency","price"]', 'Team detail load.')
+) AS r(file_path, line, slo, priority, why) ON true
+WHERE p.commit_sha = 'abc122docsrolescreenshots'
+  AND NOT EXISTS (
+      SELECT 1 FROM ai_llm_call_recommendations x WHERE x.analysis_id = p.id
+  );
+
+UPDATE ai_llm_call_recommendations cur
+   SET previous_recommendation_id = prev.id
+  FROM ai_llm_call_recommendations prev
+  JOIN ai_workflow_analyses pa ON pa.id = prev.analysis_id
+ WHERE pa.commit_sha = 'abc122docsrolescreenshots'
+   AND cur.analysis_id = (SELECT id FROM ai_workflow_analyses WHERE commit_sha = 'abc123docsrolescreenshots')
+   AND cur.file_path = prev.file_path;
+
+-- Same proposal as yesterday's accepted one: the review carries over.
+UPDATE ai_llm_call_recommendations cur
+   SET review_status = prev.review_status,
+       review_carried_over = TRUE,
+       confirmed_slo = prev.confirmed_slo,
+       confirmed_objective_priority = prev.confirmed_objective_priority,
+       reviewed_at = prev.reviewed_at
+  FROM ai_llm_call_recommendations prev
+ WHERE cur.previous_recommendation_id = prev.id
+   AND cur.recommended_slo = prev.confirmed_slo
+   AND cur.objective_priority = prev.confirmed_objective_priority;
+
+COMMIT;
+
+SELECT 'docs role-screenshots seed applied' AS status,
+       (SELECT count(*) FROM models WHERE name IN (
+            'llama-3.1-8b-instruct', 'qwen-2.5-72b-instruct', 'mistral-small-3.2-24b'
+       )) AS models,
+       (SELECT count(*) FROM policies WHERE name LIKE 'Docs — %') AS policies,
+       (SELECT count(*) FROM log_entry WHERE environment = 'docs-role-screenshots') AS log_entries,
+       (SELECT count(*) FROM log_entry
+        WHERE environment = 'docs-role-screenshots'
+          AND model_id IS NULL AND model_name = 'gpt-4o-mini') AS deleted_model_entries,
+       (SELECT count(*) FROM batch_objects WHERE upstream_id LIKE 'batch_docs_%') AS batches,
+       (SELECT count(*) FROM agent_sessions WHERE created_by = 'docs-role-screenshots') AS agent_sessions,
+       (SELECT count(*) FROM team_repositories tr
+        JOIN teams t ON t.id = tr.team_id
+        WHERE t.name = 'Logos' AND tr.repo_slug = 'ls1intum/edutelligence') AS team_repos,
+       (SELECT count(*) FROM ai_workflow_analyses
+        WHERE commit_sha = 'abc123docsrolescreenshots') AS ai_analyses,
+       (SELECT count(*) FROM ai_llm_call_recommendations
+        WHERE analysis_id IN (
+            SELECT id FROM ai_workflow_analyses
+            WHERE commit_sha = 'abc123docsrolescreenshots'
+        )) AS ai_recommendations;

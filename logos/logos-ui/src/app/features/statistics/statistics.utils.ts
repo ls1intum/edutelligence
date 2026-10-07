@@ -1,5 +1,34 @@
-import type { RequestLogStats, VramV2Sample, VramSeriesPoint, VramProviderPayload } from './statistics.models';
+import type {
+  RequestLogStats,
+  VramV2Sample,
+  VramSeriesPoint,
+  VramProviderPayload,
+  WorkerVersionChip,
+} from './statistics.models';
 import { cssVar } from './statistics.constants';
+
+/**
+ * The stable identity of a model in the statistics charts.
+ *
+ * Live models are keyed by their database id, so a rename keeps its series.
+ * A deleted model's rows lost that id, so the key falls back to the name the
+ * delete captured. At most one bucket holds that name: the aggregate groups
+ * by (model_id, model_name), and two live models never carry the same name.
+ * Two generations with the same name (delete, re-add under it, delete again)
+ * merge into that one bucket — no finer distinction is left in the data.
+ *
+ * The two shapes carry distinct fixed prefixes. Without them a deleted model
+ * named "42" would share a key with live model id 42 and merge its usage
+ * into the live series, and a raw name could land on an inherited property
+ * of the plain-object maps the chart builds ("constructor", "__proto__", …).
+ */
+export function modelSeriesKey(modelId: number | null | undefined, modelName: string | null | undefined): string {
+  if (modelId != null) return `model-${modelId}`;
+  if (modelName && modelName.trim() !== '') return `deleted-${modelName}`;
+  // Rows with neither id nor name never reach the per-model views (the
+  // queries filter them out); the total key just keeps this function total.
+  return 'deleted-unknown';
+}
 
 // ── Recent-Requests helpers (ported from paginated-request-list.tsx) ──────────
 
@@ -82,6 +111,55 @@ export function formatUptime(ts: string | null | undefined, nowMs: number): stri
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m`;
   return '<1m';
+}
+
+const SHORT_COMMIT_LENGTH = 8;
+
+/**
+ * A commit id as a worker reports it: 7 to 40 lowercase hex characters, the
+ * shape the worker itself accepts when it reads the commit it was built from.
+ */
+const COMMIT_ID = /^[0-9a-f]{7,40}$/;
+
+/**
+ * The "version: <commit>" chip for a worker's header, or null to show none.
+ *
+ * An offline worker has no live status to read a version from, and its
+ * "offline" badge already explains the gap. An online worker without a commit
+ * still gets a chip, so the gap reads as a known limit and not a bug:
+ * "unknown" is either reported explicitly (built outside CI) or implied by
+ * silence (a worker that predates version reporting, or whose first status has
+ * not arrived yet). A value that is not a commit id counts as unknown too: the
+ * worker checks what it reads, but the orchestrator passes on whatever string a
+ * worker sends, so the page does not take it for a commit.
+ *
+ * `hint` is the sentence in the card behind the chip's info icon. For a commit
+ * the full commit travels separately in `commit`, so the card can set it on a
+ * line of its own with a copy button; the "unknown" cases have no commit.
+ */
+export function describeWorkerVersion(
+  checksum: string | null | undefined,
+  online: boolean,
+): WorkerVersionChip | null {
+  if (!online) return null;
+  if (checksum === 'unknown') {
+    return { label: 'version: unknown', hint: 'Built outside CI, so no commit was recorded.', commit: null };
+  }
+  if (!checksum) {
+    return {
+      label: 'version: unknown',
+      hint: 'No version reported yet. Workers that predate version reporting never report one; redeploy to see it.',
+      commit: null,
+    };
+  }
+  if (!COMMIT_ID.test(checksum)) {
+    return { label: 'version: unknown', hint: 'Worker did not report a valid commit.', commit: null };
+  }
+  return {
+    label: `version: ${checksum.slice(0, SHORT_COMMIT_LENGTH)}`,
+    hint: "Commit this worker's image was built from:",
+    commit: checksum,
+  };
 }
 
 // ── Recent-requests state filter ──────────────────────────────────────────────
@@ -648,6 +726,18 @@ export const extractProviderHostRamMb = (
     reported: true,
   };
 };
+
+/**
+ * Whether a provider's device reports a single unified memory pool — Apple
+ * Silicon (Metal) has no separate VRAM at all, GPU and CPU draw from the same
+ * bytes. The statistics page must not show such a worker a "VRAM" pie next to
+ * a "RAM" pie: the two charts would describe the same pool twice, and the
+ * VRAM total is a wired-down budget heuristic rather than a real pool. Gated
+ * on device_mode because it is the flag the worker sets for exactly this
+ * hardware; the page then shows one "Unified memory" chart instead.
+ */
+export const isUnifiedMemoryProvider = (sample: VramV2Sample | null | undefined): boolean =>
+  sample?.scheduler_signals?.provider?.device_mode === 'metal';
 
 export const buildVramSignature = (
   providers: VramProviderPayload[]

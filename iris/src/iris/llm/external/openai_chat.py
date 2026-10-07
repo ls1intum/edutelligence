@@ -1,4 +1,6 @@
+import copy
 import json
+import re
 import time
 from datetime import datetime
 from typing import (
@@ -33,7 +35,7 @@ from openai.types.chat.chat_completion_message_function_tool_call import (
 )
 from openai.types.shared import ReasoningEffort
 from openai.types.shared_params import ResponseFormatJSONObject
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.tracing import observe
@@ -177,6 +179,68 @@ def convert_to_open_ai_messages(
         openai_messages.append(openai_message)
 
     return openai_messages
+
+
+LATE_SYSTEM_MESSAGE_PREFIX = "[System note]"
+
+
+def keep_system_messages_leading(
+    messages: list[ChatCompletionMessageParam],
+) -> list[ChatCompletionMessageParam]:
+    """
+    Rewrite messages for Qwen3.x-style chat templates.
+
+    These templates reject, with a 400, any system message that is not the
+    first message and any conversation without a user message. Iris places
+    system messages inside the history (context switches, command markers,
+    earlier suggestions), and several pipelines send only a system prompt.
+    Leading system messages are merged into one; later ones become user
+    messages at the same position, marked so the model can still tell them
+    apart from what the student wrote. Without any user message, the leading
+    system prompt is sent as the user message instead.
+    """
+    result: list[ChatCompletionMessageParam] = []
+    in_leading_block = True
+    for message in messages:
+        if message.get("role") != "system":
+            in_leading_block = False
+            result.append(message)
+            continue
+        parts = _content_parts(message.get("content"))
+        if in_leading_block:
+            if result:
+                merged = _content_parts(result[0].get("content")) + parts
+                result[0] = cast(
+                    ChatCompletionMessageParam, {"role": "system", "content": merged}
+                )
+            else:
+                result.append(message)
+            continue
+        result.append(
+            cast(
+                ChatCompletionMessageParam,
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": LATE_SYSTEM_MESSAGE_PREFIX}]
+                    + parts,
+                },
+            )
+        )
+    if result and result[0].get("role") == "system":
+        if not any(message.get("role") == "user" for message in result):
+            result[0] = cast(
+                ChatCompletionMessageParam,
+                {"role": "user", "content": result[0].get("content")},
+            )
+    return result
+
+
+def _content_parts(content: Any) -> list[dict[str, Any]]:
+    if content is None:
+        return []
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return list(content)
 
 
 def convert_content_to_responses_format(content):
@@ -324,35 +388,58 @@ def get_tool_names(tools) -> list[str]:
     return names
 
 
-def create_token_usage(usage: Optional[CompletionUsage], model: str) -> TokenUsageDTO:
+def _usage_field(source: Any, name: str) -> int:
+    """Read a token count from an SDK usage object or a plain dict."""
+    if source is None:
+        return 0
+    value = (
+        source.get(name) if isinstance(source, dict) else getattr(source, name, None)
+    )
+    return value if isinstance(value, int) else 0
+
+
+def create_token_usage(usage: Any, model: str) -> TokenUsageDTO:
     """
-    Create a TokenUsageDTO from CompletionUsage data.
+    Create a TokenUsageDTO from Chat Completions or Responses usage data.
+
+    Chat Completions reports ``prompt_tokens`` with ``prompt_tokens_details``;
+    the Responses API reports ``input_tokens`` with ``input_tokens_details``.
+    Both details objects carry ``cached_tokens`` and, on models that bill cache
+    writes, ``cache_write_tokens``. Missing fields count as zero.
 
     Args:
-        usage: Optional CompletionUsage containing token counts
+        usage: Optional usage object (or dict) from either API
         model: The model name used for the completion
 
     Returns:
         TokenUsageDTO with the token usage information
     """
+    is_responses_usage = (
+        "input_tokens" in usage
+        if isinstance(usage, dict)
+        else getattr(usage, "input_tokens", None) is not None
+    )
+    if is_responses_usage:
+        input_tokens = _usage_field(usage, "input_tokens")
+        output_tokens = _usage_field(usage, "output_tokens")
+        details_name = "input_tokens_details"
+    else:
+        input_tokens = _usage_field(usage, "prompt_tokens")
+        output_tokens = _usage_field(usage, "completion_tokens")
+        details_name = "prompt_tokens_details"
+    details = None
+    if usage is not None:
+        details = (
+            usage.get(details_name)
+            if isinstance(usage, dict)
+            else getattr(usage, details_name, None)
+        )
     return TokenUsageDTO(
         model=model,
-        numInputTokens=getattr(usage, "prompt_tokens", 0),
-        numOutputTokens=getattr(usage, "completion_tokens", 0),
-    )
-
-
-def create_completion_usage_from_responses_usage(usage) -> Optional[CompletionUsage]:
-    """Create CompletionUsage from Responses usage data."""
-    if usage is None:
-        return None
-
-    input_tokens = getattr(usage, "input_tokens", 0)
-    output_tokens = getattr(usage, "output_tokens", 0)
-    return CompletionUsage(
-        prompt_tokens=input_tokens,
-        completion_tokens=output_tokens,
-        total_tokens=input_tokens + output_tokens,
+        numInputTokens=input_tokens,
+        numOutputTokens=output_tokens,
+        numCachedInputTokens=_usage_field(details, "cached_tokens"),
+        numCacheWriteInputTokens=_usage_field(details, "cache_write_tokens"),
     )
 
 
@@ -379,27 +466,98 @@ def create_iris_tool_calls(message_tool_calls) -> list[ToolCallDTO]:
     ]
 
 
-def _extract_token_logprobs(logprobs: Any) -> Optional[list[float]]:
-    """Extract the flat list of per-token log-probabilities from a choice's
-    ``logprobs`` payload, or ``None`` if they were not requested/returned."""
-    content = getattr(logprobs, "content", None)
-    if not content:
+# Whole-token control markers such as <|return|>, <|end|>, <|im_end|>.
+_SPECIAL_TOKEN_RE = re.compile(r"<\|[A-Za-z0-9_]+\|>")
+
+
+def _token_bytes(token: Any) -> bytes:
+    raw = getattr(token, "bytes", None)
+    if raw:
+        return bytes(raw)
+    return (getattr(token, "token", "") or "").encode("utf-8")
+
+
+def _content_tokens(logprobs: Any, content: Optional[str]) -> Optional[list[Any]]:
+    """Return the logprob tokens that produced the visible ``content``.
+
+    Reasoning models served by vLLM (gpt-oss, Qwen3) return logprobs for the
+    whole generated stream: reasoning, template markers such as ``</think>``
+    or ``<|channel|>final<|message|>``, the answer, and end tokens. Only the
+    answer tokens may feed confidence scoring. The answer is the last part of
+    the stream, so the tokens are aligned with ``content`` by bytes (a
+    character can span tokens) at its last occurrence that starts and ends on
+    token boundaries; that excludes matches inside a single token, such as an
+    answer "return" inside the end token ``<|return|>``. If the content cannot
+    be located, all tokens are kept, as before, and a warning is logged.
+    """
+    tokens = getattr(logprobs, "content", None)
+    if not tokens:
         return None
-    return [token.logprob for token in content]
+    if not content:
+        return list(tokens)
+
+    spans: list[tuple[int, int]] = []
+    stream = bytearray()
+    for token in tokens:
+        start = len(stream)
+        stream.extend(_token_bytes(token))
+        spans.append((start, len(stream)))
+    boundaries = {0} | {end for _, end in spans}
+
+    # The answer ends before the trailing end-of-turn markers; searching
+    # them could match an answer that spells out a marker.
+    search_end = len(stream)
+    for token, (start, _) in reversed(list(zip(tokens, spans))):
+        if not _SPECIAL_TOKEN_RE.fullmatch(getattr(token, "token", "") or ""):
+            break
+        search_end = start
+
+    target = content.encode("utf-8")
+    haystack = bytes(stream[:search_end])
+    content_start = haystack.rfind(target)
+    while content_start >= 0 and not (
+        content_start in boundaries and content_start + len(target) in boundaries
+    ):
+        content_start = haystack.rfind(target, 0, content_start + len(target) - 1)
+    if content_start < 0:
+        logger.warning(
+            "Could not align %d logprob tokens with the response content; "
+            "using all tokens for confidence scoring.",
+            len(tokens),
+        )
+        return list(tokens)
+    content_end = content_start + len(target)
+    return [
+        token
+        for token, (start, end) in zip(tokens, spans)
+        if start < content_end and end > content_start
+    ]
+
+
+def _extract_token_logprobs(
+    logprobs: Any, content: Optional[str] = None
+) -> Optional[list[float]]:
+    """Extract the per-token log-probabilities of the visible content from a
+    choice's ``logprobs`` payload, or ``None`` if they were not returned."""
+    tokens = _content_tokens(logprobs, content)
+    if not tokens:
+        return None
+    return [token.logprob for token in tokens]
 
 
 def _extract_token_logprob_entries(
-    logprobs: Any,
+    logprobs: Any, content: Optional[str] = None
 ) -> Optional[list[TokenLogprobEntry]]:
-    """Extract rich per-token entries (token string + top-k alternatives) from
-    a choice's ``logprobs`` payload, or ``None`` if it was not returned.
+    """Extract rich per-token entries (token string + top-k alternatives) of the
+    visible content from a choice's ``logprobs`` payload, or ``None`` if it was
+    not returned.
 
     Tolerant of backends that return plain logprobs without ``top_logprobs``:
     those entries get an empty candidate list, which confidence scoring treats
     as "uncertainty method not applicable" and falls back to mean-logprob.
     """
-    content = getattr(logprobs, "content", None)
-    if not content:
+    tokens = _content_tokens(logprobs, content)
+    if not tokens:
         return None
     return [
         TokenLogprobEntry(
@@ -410,7 +568,7 @@ def _extract_token_logprob_entries(
                 for candidate in (getattr(token, "top_logprobs", None) or [])
             ],
         )
-        for token in content
+        for token in tokens
     ]
 
 
@@ -512,8 +670,8 @@ def convert_to_iris_message(
         contents=[TextMessageContentDTO(textContent=content)],
         sendAt=current_time,
         token_usage=token_usage,
-        token_logprobs=_extract_token_logprobs(logprobs),
-        token_logprob_entries=_extract_token_logprob_entries(logprobs),
+        token_logprobs=_extract_token_logprobs(logprobs, content),
+        token_logprob_entries=_extract_token_logprob_entries(logprobs, content),
     )
 
 
@@ -539,10 +697,7 @@ def convert_responses_to_iris_message(
     if status is not None and status != "completed":
         logger.warning("Responses API returned non-completed status: %s", status)
 
-    token_usage = create_token_usage(
-        create_completion_usage_from_responses_usage(getattr(response, "usage", None)),
-        model,
-    )
+    token_usage = create_token_usage(getattr(response, "usage", None), model)
     current_time = datetime.now()
     output_text = extract_response_output_text(response) or fallback_output_text
     tool_calls = create_iris_tool_calls_from_responses(output_items)
@@ -584,6 +739,18 @@ class OpenAIChatModel(ChatModel):
     # Only enable for native OpenAI/Azure endpoints that support /responses.
     # OpenAI-compatible base_url gateways such as vLLM should keep this false.
     use_responses_api: bool = False
+    # Provider-specific request fields merged into every request body, for
+    # settings the OpenAI API has no parameter for. Example: vLLM-served Qwen3
+    # models use `chat_template_kwargs: {enable_thinking: true}` so they keep
+    # reasoning even where the gateway's chat-template default disables it.
+    extra_body: Optional[Dict[str, Any]] = None
+    # Set for models whose chat template accepts a system message only first
+    # and requires a user message (Qwen3.x); see keep_system_messages_leading.
+    leading_system_message_only: bool = False
+    # Tokens added to a pipeline's max_tokens before it is sent. The output
+    # limit also covers reasoning, so a reasoning model would otherwise spend a
+    # tight budget (e.g. 30 tokens for a session title) before answering.
+    reasoning_token_allowance: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def validate_logprobs_config(self):
@@ -627,6 +794,9 @@ class OpenAIChatModel(ChatModel):
                 ) from error
 
         return self
+
+    def _output_token_limit(self, max_tokens: int) -> int:
+        return max_tokens + self.reasoning_token_allowance
 
     def _effective_reasoning_effort(
         self,
@@ -812,7 +982,7 @@ class OpenAIChatModel(ChatModel):
             params["reasoning"] = {"effort": effective_reasoning_effort}
 
         if arguments.max_tokens is not None:
-            params["max_output_tokens"] = arguments.max_tokens
+            params["max_output_tokens"] = self._output_token_limit(arguments.max_tokens)
 
         if arguments.response_format == "JSON":
             params["text"] = {"format": {"type": "json_object"}}
@@ -820,6 +990,11 @@ class OpenAIChatModel(ChatModel):
         if tools:
             params["tools"] = [convert_to_responses_tool(tool) for tool in tools]
             logger.debug("Using tools: %s", get_tool_names(tools))
+            if arguments.tool_choice is not None:
+                params["tool_choice"] = arguments.tool_choice
+
+        if self.extra_body:
+            params["extra_body"] = copy.deepcopy(self.extra_body)
 
         return params
 
@@ -930,6 +1105,8 @@ class OpenAIChatModel(ChatModel):
             responses_input = convert_to_responses_input(messages)
         else:
             messages = convert_to_open_ai_messages(messages)
+            if self.leading_system_message_only:
+                messages = keep_system_messages_leading(messages)
 
         for attempt in range(retries):
             try:
@@ -967,7 +1144,9 @@ class OpenAIChatModel(ChatModel):
                     params["reasoning_effort"] = effective_reasoning_effort
 
                 if arguments.max_tokens is not None:
-                    params["max_completion_tokens"] = arguments.max_tokens
+                    params["max_completion_tokens"] = self._output_token_limit(
+                        arguments.max_tokens
+                    )
 
                 # Token-level log-probabilities are requested only when the
                 # caller opts in and the model declares support. They are
@@ -998,6 +1177,11 @@ class OpenAIChatModel(ChatModel):
                 if tools:
                     params["tools"] = [convert_to_openai_tool(tool) for tool in tools]
                     logger.debug("Using tools: %s", get_tool_names(tools))
+                    if arguments.tool_choice is not None:
+                        params["tool_choice"] = arguments.tool_choice
+
+                if self.extra_body:
+                    params["extra_body"] = copy.deepcopy(self.extra_body)
 
                 if arguments.stream_handler is not None:
                     return self._create_streamed_chat_completion(

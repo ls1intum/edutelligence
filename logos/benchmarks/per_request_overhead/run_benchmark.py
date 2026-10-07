@@ -33,6 +33,8 @@ Environment (all optional, defaults in parentheses):
   LOGOS_BENCH_BLOCKS          (4)
   LOGOS_BENCH_OUTPUT          (logos/benchmarks/per_request_overhead/reports)
   LOGOS_BENCH_NO_PERF_TRACE   (set to "1" to disable perf tracing)
+  LOGOS_BENCH_WORKER_PYTHON   (auto: <orchestrator>/.venv-worker/bin/python if
+                               it exists, else the orchestrator interpreter)
   HF_HOME / HF_HUB_OFFLINE    (inherited; see CI workflow for the HF cache)
 """
 
@@ -178,6 +180,18 @@ def run() -> int:
     if venv_python.exists():
         python = str(venv_python)
 
+    # The worker under test runs in its own venv (.venv-worker next to the
+    # orchestrator's) so its pinned dependencies from
+    # logos-workernode/requirements.txt cannot replace the orchestrator's
+    # locked versions in the shared environment. Falls back to the
+    # orchestrator interpreter when no worker venv is present.
+    worker_python = _env("LOGOS_BENCH_WORKER_PYTHON", "")
+    if not worker_python:
+        worker_venv_python = _ORCH / ".venv-worker" / "bin" / "python"
+        worker_python = str(worker_venv_python) if worker_venv_python.exists() else python
+    if worker_python == python:
+        print("  [worker] no .venv-worker present — sharing the orchestrator interpreter")
+
     orch = f"http://127.0.0.1:{orch_port}"
     lane = f"http://127.0.0.1:{lane_port}"
 
@@ -229,10 +243,16 @@ def run() -> int:
             _wait_http(probe, f"{lane}/health", "mock-lane", 60.0)
 
         # -- 2. worker under test --------------------------------------------
+        worker_env = dict(base_env)
+        if worker_python != python:
+            # Venv layout <venv>/bin/python. Deliberately no resolve(): the
+            # bin/python symlink points at the base interpreter, which would
+            # land the venv root outside the venv.
+            worker_env["VIRTUAL_ENV"] = str(Path(worker_python).parent.parent)
         worker = _Proc(
             "worker",
-            [python, str(_HERE / "worker_under_test.py")],
-            base_env,
+            [worker_python, str(_HERE / "worker_under_test.py")],
+            worker_env,
             str(_HERE),
             work_dir / "worker.log",
         )
@@ -358,6 +378,7 @@ def run() -> int:
             "fail_ns": FAIL_NS,
             "env": {
                 "python": python,
+                "worker_python": worker_python,
                 "orchestrator": orch,
                 "mock_lane": lane,
                 "db_url_host": db_url.split("@")[-1] if "@" in db_url else db_url,
