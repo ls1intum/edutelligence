@@ -183,6 +183,29 @@ class WorkflowLifecycleControllerTest {
     }
 
     @Test
+    void renameStep_rejectsAConflictingTrimmedName() throws Exception {
+        int[] ids = seedWorkflowWithStep();
+        Integer otherStep = jdbc.queryForObject("""
+            INSERT INTO ai_workflow_steps (workflow_id, name, tag, recommended_sla)
+            VALUES (?, 'summarize', 'checkout-summarize', 'ux-background')
+            RETURNING id
+            """, Integer.class, ids[0]);
+
+        mvc.perform(patch("/admin/teams/2001/workflow-steps/" + otherStep)
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"  score  \"}"))
+           .andExpect(status().isConflict());
+
+        mvc.perform(patch("/admin/teams/2001/workflow-steps/" + otherStep)
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"name\":\"  summarize-2  \"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.name").value("summarize-2"));
+    }
+
+    @Test
     void proposeTaggingPr_isLogosAdminOnlyAndPersistsMissingTags() throws Exception {
         int[] ids = seedWorkflowWithStep();
         jdbc.update("UPDATE ai_workflows SET tag = NULL WHERE id = ?", ids[0]);

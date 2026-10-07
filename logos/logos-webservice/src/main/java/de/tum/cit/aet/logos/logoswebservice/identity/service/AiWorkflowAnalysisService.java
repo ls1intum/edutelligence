@@ -55,7 +55,9 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepositoryCr
 @Service
 public class AiWorkflowAnalysisService {
 
-    private static final Set<String> VALID_SLAS = Set.of("ux-critical", "ux-high-prio", "ux-background");
+    private static final Set<String> VALID_SLOS = Set.of("ux-critical", "ux-high-prio", "ux-background");
+    /** Steps keep SLA column names; the tier set matches VALID_SLOS. */
+    private static final Set<String> VALID_SLAS = VALID_SLOS;
     private static final Set<String> VALID_WORKFLOW_STATUSES = Set.of("active", "deprecated", "ignored");
     private static final int MAX_MODEL_NAME_LENGTH = 200;
     private static final int MAX_DIAGRAM_MERMAID_LENGTH = 100_000;
@@ -74,7 +76,7 @@ public class AiWorkflowAnalysisService {
      */
     static final String ANALYSIS_TASK_TEMPLATE = """
         Analyse this linked application repository for AI / LLM call sites and produce
-        workflow diagrams plus SLA recommendations.
+        workflow diagrams plus SLO recommendations.
 
         Write structured results ONLY to `/artifacts/analysis.json` (UTF-8 JSON).
         Do not push commits, open pull requests, or modify the remote.
@@ -103,15 +105,16 @@ public class AiWorkflowAnalysisService {
           "recommendations": [
             {
               "workflow": "<matching workflows[].name>",
+              "step": "<optional matching workflows[].steps[].name>",
               "file_path": "path/from/repo/root.py",
               "start_line": 1,
               "end_line": 20,
               "code_url": "optional permalink to the call site, or null",
               "detected_model": "optional model name or null",
-              "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+              "recommended_slo": "ux-critical" | "ux-high-prio" | "ux-background",
               "objective_priority": ["latency" | "quality" | "price", "..."],
               "confidence": 0.0,
-              "justification": "why this SLA and objective order",
+              "justification": "why this SLO and objective order",
               "traffic_flags": {"night_heavy": false}
             }
           ]
@@ -123,7 +126,7 @@ public class AiWorkflowAnalysisService {
         unquoted label are syntax errors and the diagram will not render.
 
         `objective_priority` is a full ranking of latency, quality, and price (most
-        important first). It complements SLA: SLA is urgency/interactivity; the ranking
+        important first). It complements SLO: SLO is urgency/interactivity; the ranking
         says what to optimize for when choosing a model. If omitted, defaults are:
         ux-critical → [latency, quality, price]; ux-high-prio → [quality, latency, price];
         ux-background → [price, quality, latency].
@@ -364,18 +367,18 @@ public class AiWorkflowAnalysisService {
 
         if ("reject".equals(action)) {
             rec.setReviewStatus("rejected");
-            rec.setConfirmedSla(null);
+            rec.setConfirmedSlo(null);
             rec.setConfirmedObjectivePriority(null);
             recommendationRepository.save(rec);
             return recommendationToMap(rec);
         }
 
-        String confirmedSla;
+        String confirmedSlo;
         List<Object> confirmedPriority;
         if ("accept".equals(action)) {
-            confirmedSla = rec.getRecommendedSla();
-            if (body.confirmedSla() != null && !body.confirmedSla().isBlank()) {
-                confirmedSla = body.confirmedSla().trim();
+            confirmedSlo = rec.getRecommendedSlo();
+            if (body.confirmedSlo() != null && !body.confirmedSlo().isBlank()) {
+                confirmedSlo = body.confirmedSlo().trim();
             }
             confirmedPriority = ObjectivePriority.asJsonList(
                 body.confirmedObjectivePriority() != null
@@ -384,22 +387,22 @@ public class AiWorkflowAnalysisService {
             rec.setReviewStatus("accepted");
         }
         else {
-            if (body.confirmedSla() == null || body.confirmedSla().isBlank()) {
+            if (body.confirmedSlo() == null || body.confirmedSlo().isBlank()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "confirmed_sla is required for override");
+                    "confirmed_slo is required for override");
             }
-            confirmedSla = body.confirmedSla().trim();
+            confirmedSlo = body.confirmedSlo().trim();
             confirmedPriority = ObjectivePriority.asJsonList(
                 body.confirmedObjectivePriority() != null
                     ? body.confirmedObjectivePriority()
                     : ObjectivePriority.asStringList(rec.getObjectivePriority()));
             rec.setReviewStatus("overridden");
         }
-        if (!VALID_SLAS.contains(confirmedSla)) {
+        if (!VALID_SLOS.contains(confirmedSlo)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "confirmed_sla must be ux-critical, ux-high-prio, or ux-background");
+                "confirmed_slo must be ux-critical, ux-high-prio, or ux-background");
         }
-        rec.setConfirmedSla(confirmedSla);
+        rec.setConfirmedSlo(confirmedSlo);
         rec.setConfirmedObjectivePriority(confirmedPriority);
 
         boolean noKey = Boolean.TRUE.equals(body.noApiKey());
@@ -416,7 +419,7 @@ public class AiWorkflowAnalysisService {
                     "API key does not belong to this team");
             }
             rec.setApiKeyId(apiKeyId);
-            int priority = slaToPriority(confirmedSla);
+            int priority = sloToPriority(confirmedSlo);
             apiKeyAdminService.updateKey(apiKeyId, new UpdateApiKeyRequestDTO(
                 null, priority, null, null, null, null, null, null, null));
         }
@@ -641,6 +644,13 @@ public class AiWorkflowAnalysisService {
             String name = body.name().trim();
             if (name.isEmpty()) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name must not be blank");
+            }
+            for (AiWorkflowStep sibling : stepRepository.findByWorkflowIdOrderBySortOrderAsc(step.getWorkflowId())) {
+                if (!sibling.getId().equals(step.getId())
+                        && name.equals(sibling.getName() == null ? "" : sibling.getName().trim())) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "a step with this name already exists on the workflow");
+                }
             }
             step.setName(name);
         }
@@ -1146,8 +1156,8 @@ public class AiWorkflowAnalysisService {
                 "Repository link not found"));
     }
 
-    static int slaToPriority(String sla) {
-        return switch (sla) {
+    static int sloToPriority(String slo) {
+        return switch (slo) {
             case "ux-critical" -> 10;
             case "ux-background" -> 1;
             default -> 5;
@@ -1224,13 +1234,13 @@ public class AiWorkflowAnalysisService {
         m.put("code_url", rec.getCodeUrl());
         m.put("detected_model", rec.getDetectedModel());
         m.put("api_key_id", rec.getApiKeyId());
-        m.put("recommended_sla", rec.getRecommendedSla());
+        m.put("recommended_slo", rec.getRecommendedSlo());
         m.put("objective_priority", ObjectivePriority.asStringList(rec.getObjectivePriority()));
         m.put("confidence", rec.getConfidence());
         m.put("justification", rec.getJustification());
         m.put("traffic_flags", rec.getTrafficFlags());
         m.put("review_status", rec.getReviewStatus());
-        m.put("confirmed_sla", rec.getConfirmedSla());
+        m.put("confirmed_slo", rec.getConfirmedSlo());
         m.put("confirmed_objective_priority",
             rec.getConfirmedObjectivePriority() != null
                 ? ObjectivePriority.asStringList(rec.getConfirmedObjectivePriority())
@@ -1328,7 +1338,7 @@ public class AiWorkflowAnalysisService {
                      WHERE c.review_status = 'pending' AND c.depth < ?
                 )
                 SELECT DISTINCT ON (c.start_id) c.start_id, d.id, d.review_status,
-                       COALESCE(d.confirmed_sla, d.recommended_sla) AS sla,
+                       COALESCE(d.confirmed_slo, d.recommended_slo) AS slo,
                        COALESCE(d.confirmed_objective_priority, d.objective_priority)::text AS priority,
                        d.reviewed_at
                   FROM chain c
@@ -1343,7 +1353,7 @@ public class AiWorkflowAnalysisService {
             Map<String, Object> p = new LinkedHashMap<>();
             p.put("id", rs.getInt("id"));
             p.put("review_status", rs.getString("review_status"));
-            p.put("sla", rs.getString("sla"));
+            p.put("slo", rs.getString("slo"));
             p.put("objective_priority", ObjectivePriority.asStringList(parseJsonList(rs.getString("priority"))));
             var reviewedAt = rs.getTimestamp("reviewed_at");
             p.put("reviewed_at", reviewedAt != null ? reviewedAt.toInstant().toString() : null);

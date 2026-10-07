@@ -76,17 +76,17 @@ an unchanged repository is skipped.
 ### Workflows
 
 Latest AI-workflow analyses for the team's linked repositories: Mermaid
-diagrams of detected flows and per-call **SLA** plus **objective priority**
+diagrams of detected flows and per-call **SLO** plus **objective priority**
 recommendations (ordered latency / quality / price). Owners (and Logos Admins)
 can **edit** a workflow's Mermaid diagram; later analyses keep that edit and,
 when the agent draws something different, show an **Agent update** beside it
 so you can **Accept** the proposal or **Keep mine**. Owners can also **Accept**
-a recommendation, **Override** SLA or priority order, or **Reject** it. The
+a recommendation, **Override** SLO or priority order, or **Reject** it. The
 **Application key** picker above the recommendations applies
 to every Accept and Override on the tab — it defaults to the team's
 highest-priority key (usually production), and **No key** leaves key
 priorities untouched. Accepting or overriding sets that key's queue priority
-from the confirmed SLA so the orchestrator serves traffic accordingly.
+from the confirmed SLO so the orchestrator serves traffic accordingly.
 
 #### Lifecycle
 

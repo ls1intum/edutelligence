@@ -42,7 +42,7 @@ public class AiLlmCallRecommendation {
     private Integer apiKeyId;
 
     @Column(nullable = false)
-    private String recommendedSla;
+    private String recommendedSlo;
 
     @Column(nullable = false)
     private Float confidence = 0.5f;
@@ -65,7 +65,7 @@ public class AiLlmCallRecommendation {
     @Column(nullable = false)
     private String reviewStatus = "pending";
 
-    private String confirmedSla;
+    private String confirmedSlo;
     private Integer reviewedBy;
     private Instant reviewedAt;
     /** The recommendation this one succeeds in the previous analysis of the same repository. */
@@ -88,14 +88,14 @@ public class AiLlmCallRecommendation {
     public String getCodeUrl() { return codeUrl; }
     public String getDetectedModel() { return detectedModel; }
     public Integer getApiKeyId() { return apiKeyId; }
-    public String getRecommendedSla() { return recommendedSla; }
+    public String getRecommendedSlo() { return recommendedSlo; }
     public Float getConfidence() { return confidence; }
     public String getJustification() { return justification; }
     public Map<String, Object> getTrafficFlags() { return trafficFlags; }
     public List<Object> getObjectivePriority() { return objectivePriority; }
     public List<Object> getConfirmedObjectivePriority() { return confirmedObjectivePriority; }
     public String getReviewStatus() { return reviewStatus; }
-    public String getConfirmedSla() { return confirmedSla; }
+    public String getConfirmedSlo() { return confirmedSlo; }
     public Integer getReviewedBy() { return reviewedBy; }
     public Instant getReviewedAt() { return reviewedAt; }
     public Integer getPreviousRecommendationId() { return previousRecommendationId; }
@@ -112,7 +112,7 @@ public class AiLlmCallRecommendation {
     public void setCodeUrl(String codeUrl) { this.codeUrl = codeUrl; }
     public void setDetectedModel(String detectedModel) { this.detectedModel = detectedModel; }
     public void setApiKeyId(Integer apiKeyId) { this.apiKeyId = apiKeyId; }
-    public void setRecommendedSla(String recommendedSla) { this.recommendedSla = recommendedSla; }
+    public void setRecommendedSlo(String recommendedSlo) { this.recommendedSlo = recommendedSlo; }
     public void setConfidence(Float confidence) { this.confidence = confidence; }
     public void setJustification(String justification) { this.justification = justification; }
     public void setTrafficFlags(Map<String, Object> trafficFlags) { this.trafficFlags = trafficFlags; }
@@ -121,7 +121,7 @@ public class AiLlmCallRecommendation {
         this.confirmedObjectivePriority = confirmedObjectivePriority;
     }
     public void setReviewStatus(String reviewStatus) { this.reviewStatus = reviewStatus; }
-    public void setConfirmedSla(String confirmedSla) { this.confirmedSla = confirmedSla; }
+    public void setConfirmedSlo(String confirmedSlo) { this.confirmedSlo = confirmedSlo; }
     public void setReviewedBy(Integer reviewedBy) { this.reviewedBy = reviewedBy; }
     public void setReviewedAt(Instant reviewedAt) { this.reviewedAt = reviewedAt; }
     public void setPreviousRecommendationId(Integer previousRecommendationId) {

@@ -28,7 +28,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.AiWorkflowAnalysisService;
 
 /**
- * AI workflow analysis and SLA recommendation review for linked repositories.
+ * AI workflow analysis and SLO recommendation review for linked repositories.
  * Same ownership gate as {@link TeamRepoLinkController}: logos admins, or an
  * app admin who owns the team.
  */

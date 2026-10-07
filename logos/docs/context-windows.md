@@ -187,6 +187,20 @@ It also does two things with the listing it already has in hand:
   printed. The first run records the baseline silently rather than announcing
   everything as new.
 
+**Web search.** Claude Code's `WebSearch` is a server-side Anthropic tool: the
+model's call turns into a Messages request carrying
+`{"type": "web_search_20250305", ...}`, and the API is expected to run the
+searches and answer with `server_tool_use` / `web_search_tool_result` blocks. Logos
+plays that part (`logos/anthropic_compat/web_search.py`): the server tool becomes a
+function tool for the model, each call is searched on DuckDuckGo by the
+orchestrator (through the server's proxy settings; result pages are never fetched),
+and the turns come back folded into one Anthropic-shaped message. Every model turn
+runs through the normal pipeline, so routing, permissions and billing are those of
+any other request. Up to 5 searches per request; `allowed_domains` /
+`blocked_domains` filter the results. Revisions of the wrapper before 6 denied
+`WebSearch` in their settings layer; revision 6 lifts that deny on start. To keep it
+off for a run, pass `--disallowedTools WebSearch`.
+
 `LOGOS_CONTEXT_SOURCE` picks which figure to size the session from: `available`
 (default, `max_model_len_current_max`), `guaranteed`
 (`max_model_len_current_min`) or `max` (`max_model_len_overall`).
