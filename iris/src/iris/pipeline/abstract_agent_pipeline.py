@@ -16,6 +16,7 @@ from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.compaction_dto import CompactionDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+from iris.domain.status.suggested_context_dto import SuggestedContextDTO
 from iris.domain.variant.abstract_variant import AbstractVariant
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
@@ -91,6 +92,9 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # it is sent to the client with the next outgoing status callback.
     deferred_session_title: Optional[str]
     deferred_session_title_delivered: bool
+    # Context switch requested by the agent via the switch_chat_context tool;
+    # delivered to Artemis with the final result status update.
+    pending_context_switch: Optional[SuggestedContextDTO]
     partial_result_sender: Optional[PartialResultSender]
     activity_tracker: ActivityTracker
     system_prompt: str
@@ -336,6 +340,18 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> bool:
         """Return True when the raw agent response may be streamed to the client."""
+        _ = state
+        return True
+
+    def should_stream_agent_delta(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> bool:
+        """Return True while text deltas of a streamed agent response may reach the client.
+
+        Checked for every delta, so a pipeline can hold back the rest of the answer
+        when the run changes course midway. Resets always pass, so the client can
+        still clear a draft it already shows.
+        """
         _ = state
         return True
 
@@ -695,7 +711,12 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             return None
 
         sender.start()
-        state.llm.completion_args.stream_handler = sender.on_delta
+
+        def stream_handler(delta: Optional[str]) -> None:
+            if delta is None or self.should_stream_agent_delta(state):
+                sender.on_delta(delta)
+
+        state.llm.completion_args.stream_handler = stream_handler
         return sender
 
     def _collect_recent_messages(
@@ -868,6 +889,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.start_time = start_time
         state.deferred_session_title = None
         state.deferred_session_title_delivered = False
+        state.pending_context_switch = None
         state.partial_result_sender = None
         state.system_prompt = ""
         state.compaction_settings = None
