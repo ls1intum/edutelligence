@@ -30,16 +30,18 @@ Not sure which to pick? Start with **Cloud** for the best experience. You can al
 
 ## Where to Find Iris
 
-Iris must be **enabled by your instructor** for a given course before it appears. Once enabled, it shows up in several places throughout Artemis, each tailored to a different context.
+Iris must be **enabled by your instructor** for a given course and requires that you select **Cloud** or **On-Premise** AI features before it appears. Once both conditions are met, you can open Iris from several places in Artemis:
 
-| Location               | How to Open                                                    | What It Does                                                                            |
-| ---------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| **Course Chat**        | Course sidebar                                                 | General-purpose assistant for the entire course — lecture questions, topic explanations |
-| **Exercise Chat**      | Floating Iris icon (bottom-right) while working on an exercise | Context-aware help with your specific exercise, code, and build results                 |
-| **Text Exercise Chat** | Floating Iris icon while working on a text exercise            | Guidance on structuring and improving written submissions                               |
-| **Lecture Chat**       | Floating Iris icon while viewing a lecture                     | Questions about the specific lecture slides and materials                               |
+| Location                 | How to Open                                                    |
+| ------------------------ | -------------------------------------------------------------- |
+| **Course sidebar (Web)** | Click the Iris entry in the course sidebar                     |
+| **Exercise page (Web)**  | Floating Iris icon (bottom-right) while working on an exercise |
+| **Lecture page (Web)**   | Floating Iris icon while viewing a lecture                     |
+| **Artemis iOS App**      | Tap the Iris icon within a course, lecture, or exercise        |
 
-For details on each chat type, see the dedicated pages: [Course Chat](./course-chat), [Exercise Chat](./exercise-chat), [Text Exercise Chat](./text-exercise-chat), and [Lecture Chat](./lecture-chat).
+These are entry points into the same kind of chat, not into separate kinds. What differs is the **active context** — the lecture or exercise a chat is currently about, which decides what material Iris can draw on. Opening Iris from a lecture or an exercise page offers that page as the context, and you can change it at any time without losing the conversation.
+
+See [The Iris Chat](./chat) for the chat itself and [Chat Context](./chat-context) for how contexts work.
 
 ## Your First Interaction
 
@@ -52,12 +54,28 @@ For details on each chat type, see the dedicated pages: [Course Chat](./course-c
 Check out [Tips for Effective Use](./tips) for more advice on getting the most out of Iris.
 :::
 
+## Iris on the iOS App
+
+Iris is also available in the **Artemis iOS App**, providing the same AI tutoring and context-aware capabilities on iPhone and iPad.
+
+When you first open a course with Iris enabled, you will be prompted to choose your AI experience just like on the web. You can chat with Iris, manage active contexts, and ask questions about lectures and exercises on the go.
+
+<div class="doc-video-container">
+  <iframe
+    src="https://live.rbg.tum.de/w/artemisintro/75422?video_only=1&t=0"
+    allowfullscreen="allowfullscreen"
+    class="doc-video-iframe doc-video-iframe-mobile"
+  >
+    Iris in the Artemis iOS App on TUM-Live.
+  </iframe>
+</div>
+
 ## Enabling Memory
 
 During the AI experience selection, you can also enable **Iris Memory**. When active, Iris remembers your learning preferences and past interactions across conversations to provide more personalized support over time. Learn more on the [Memory](./memory) page.
 
 ## Next Steps
 
-- [Course Chat](./course-chat) — ask questions about lectures and course topics
-- [Exercise Chat](./exercise-chat) — get help while working on programming exercises
+- [The Iris Chat](./chat) — where to open Iris, citations, and chat history
+- [Chat Context](./chat-context) — how the active context shapes the answers you get
 - [How Iris Helps You Learn](./how-iris-helps) — understand the pedagogical approach behind Iris
