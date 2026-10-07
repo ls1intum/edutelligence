@@ -5,6 +5,7 @@ import {
   AnalyzeAllResult,
   Team, AdminUser, TeamDetail, TeamMember, TeamApiKey,
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
+  TeamProviderBudget,
   ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
   TeamRepositoryPayload, TeamWorkflowsResponse, ReviewRecommendationPayload,
   StoreDeployKeyPayload, AiLlmCallRecommendation, AiWorkflow, AiWorkflowStep,
@@ -49,6 +50,31 @@ export class TeamManagementService {
 
   updateTeamLimits(teamId: number, payload: TeamLimitsPayload): Promise<void> {
     return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}`, payload));
+  }
+
+  getTeamProviderBudgets(teamId: number): Promise<TeamProviderBudget[]> {
+    return firstValueFrom(
+      this.http.get<TeamProviderBudget[]>(`/api/admin/teams/${teamId}/provider-budgets`),
+    );
+  }
+
+  upsertTeamProviderBudget(
+    teamId: number,
+    providerId: number,
+    monthlyBudgetMicroCents: number | null,
+  ): Promise<TeamProviderBudget> {
+    return firstValueFrom(
+      this.http.put<TeamProviderBudget>(
+        `/api/admin/teams/${teamId}/provider-budgets/${providerId}`,
+        { monthly_budget_micro_cents: monthlyBudgetMicroCents },
+      ),
+    );
+  }
+
+  deleteTeamProviderBudget(teamId: number, providerId: number): Promise<void> {
+    return firstValueFrom(
+      this.http.delete<void>(`/api/admin/teams/${teamId}/provider-budgets/${providerId}`),
+    );
   }
 
   /** Sets the queue priority of a team's traffic (logos_admin only); null unsets it. */

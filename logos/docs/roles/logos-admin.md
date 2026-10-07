@@ -73,7 +73,7 @@ roles. An App Admin can manage only App Developers.
 
 ![Users page](/img/roles/logos-admin-user-management.png)
 
-## Teams {#teams}
+## Teams
 
 This page shows the teams, their owners and their members. The **Priority**
 column of each team sets the queue level of that team's traffic (1–10, or

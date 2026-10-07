@@ -5,6 +5,7 @@ import {
   UserManagementService,
   CreateUserResult,
   ImportResult,
+  ImportRow,
 } from '../../core/services/user-management.service';
 import { TeamManagementService } from '../../core/services/team-management.service';
 import { PlatformUser } from '../../shared/models/platform-user.model';
@@ -319,26 +320,57 @@ export class UserManagement {
   }
 
   // ── CSV Import ───────────────────────────────────────────────────────────
+  // The file is parsed once on selection into raw columns + rows; the user then
+  // maps which columns hold prename/name/email, picks the rows to import and
+  // reviews the preview before anything is written. No team is assigned.
   importOpen = signal(false);
-  importFile = signal<File | null>(null);
   importFileName = signal<string | null>(null);
-  importLoading = signal(false);
+  importColumns = signal<string[]>([]);
+  importRows = signal<string[][]>([]);
+  // Mapped column index per field, held as a string ('' = unset) so it binds
+  // cleanly to a <select> whose option values are strings.
+  importMapping = signal({ prename: '', name: '', email: '' });
+  importSelected = signal<Set<number>>(new Set());
+  importLoading = signal(false); // parsing (preview) or importing
+  importPreviewLoading = signal(false);
   importError = signal<string | null>(null);
   importResult = signal<ImportResult | null>(null);
-  importCopied = signal(false);
+
+  knownEmails = computed(() => new Set(this.users().map((u) => (u.email ?? '').toLowerCase())));
+  importReady = computed(() => this.importColumns().length > 0);
+
+  importValid = computed(() => {
+    const m = this.importMapping();
+    return m.prename !== '' && m.name !== '' && m.email !== '' && this.importSelected().size > 0;
+  });
+
+  importSummary = computed(() => {
+    let selected = 0;
+    let toCreate = 0;
+    let existing = 0;
+    this.importSelected().forEach((idx) => {
+      selected++;
+      if (this.rowStatus(idx) === 'existing') existing++;
+      else toCreate++;
+    });
+    return { selected, toCreate, existing, total: this.importRows().length };
+  });
 
   openImportDialog(): void {
-    this.importFile.set(null);
     this.importFileName.set(null);
+    this.importColumns.set([]);
+    this.importRows.set([]);
+    this.importMapping.set({ prename: '', name: '', email: '' });
+    this.importSelected.set(new Set());
     this.importLoading.set(false);
+    this.importPreviewLoading.set(false);
     this.importError.set(null);
     this.importResult.set(null);
-    this.importCopied.set(false);
     this.importOpen.set(true);
   }
 
   closeImportDialog(): void {
-    if (this.importLoading()) return;
+    if (this.importLoading() || this.importPreviewLoading()) return;
     if (this.importResult()) void this.fetchUsers();
     this.importOpen.set(false);
   }
@@ -349,29 +381,125 @@ export class UserManagement {
     input.accept = '.csv';
     input.onchange = (e: Event) => {
       const f = (e.target as HTMLInputElement).files?.[0];
-      if (f) {
-        this.importFile.set(f);
-        this.importFileName.set(f.name);
-        this.importError.set(null);
-        this.importResult.set(null);
-      }
+      if (f) void this.loadImportPreview(f);
     };
     input.click();
   }
 
+  private async loadImportPreview(file: File): Promise<void> {
+    this.importPreviewLoading.set(true);
+    this.importError.set(null);
+    this.importResult.set(null);
+    this.importFileName.set(file.name);
+    try {
+      const preview = await this.userSvc.previewImport(file);
+      const columns = preview.columns ?? [];
+      const rows = preview.rows ?? [];
+      this.importColumns.set(columns);
+      this.importRows.set(rows);
+      this.importMapping.set(this.guessMapping(columns));
+      // Everything is selected by default; the user de-selects what to skip.
+      this.importSelected.set(new Set(rows.map((_, i) => i)));
+    } catch (err: unknown) {
+      const e = err as { error?: { detail?: string; error?: string } };
+      this.importError.set(e?.error?.detail ?? e?.error?.error ?? 'Could not read that file.');
+      this.importColumns.set([]);
+      this.importRows.set([]);
+    } finally {
+      this.importPreviewLoading.set(false);
+    }
+  }
+
+  /** Best-effort column matching so common exports map themselves automatically. */
+  private guessMapping(columns: string[]): { prename: string; name: string; email: string } {
+    const norm = columns.map((c) => c.trim().toLowerCase());
+    const find = (patterns: RegExp[]): string => {
+      for (const p of patterns) {
+        const i = norm.findIndex((c) => p.test(c));
+        if (i !== -1) return String(i);
+      }
+      return '';
+    };
+    return {
+      prename: find([/first\s+name/, /given\s+name/, /prename/, /vorname/]),
+      name: find([/last\s+name/, /surname/, /family\s+name/, /^name$/]),
+      email: find([/e-?mail/]),
+    };
+  }
+
+  setMappingField(field: 'prename' | 'name' | 'email', value: string): void {
+    this.importMapping.update((m) => ({ ...m, [field]: value }));
+  }
+
+  /** Column index a field is mapped to, or -1 when unmapped. */
+  colIndex(field: 'prename' | 'name' | 'email'): number {
+    const v = this.importMapping()[field];
+    return v === '' ? -1 : Number(v);
+  }
+
+  /** Grid template for the preview table: a select column, one per CSV column, then status. */
+  importPreviewGrid(): string {
+    const n = Math.max(this.importColumns().length, 1);
+    return `48px repeat(${n}, minmax(120px, 1fr)) 96px`;
+  }
+
+  toggleRow(index: number): void {
+    this.importSelected.update((s) => {
+      const next = new Set(s);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }
+
+  selectAllRows(): void {
+    this.importSelected.set(new Set(this.importRows().map((_, i) => i)));
+  }
+
+  deselectAllRows(): void {
+    this.importSelected.set(new Set());
+  }
+
+  isRowSelected(index: number): boolean {
+    return this.importSelected().has(index);
+  }
+
+  /** "existing" when the mapped email already belongs to a known user, else "new". */
+  rowStatus(index: number): 'existing' | 'new' {
+    const cells = this.importRows()[index];
+    const emailCol = this.colIndex('email');
+    if (!cells || emailCol < 0) return 'new';
+    const email = (cells[emailCol] ?? '').trim().toLowerCase();
+    return email !== '' && this.knownEmails().has(email) ? 'existing' : 'new';
+  }
+
+  private buildImportRows(): ImportRow[] {
+    const prenameCol = this.colIndex('prename');
+    const nameCol = this.colIndex('name');
+    const emailCol = this.colIndex('email');
+    const cell = (cells: string[], i: number): string => (i >= 0 && i < cells.length ? (cells[i] ?? '') : '');
+    const rows: ImportRow[] = [];
+    [...this.importSelected()]
+      .sort((a, b) => a - b)
+      .forEach((idx) => {
+        const cells = this.importRows()[idx];
+        if (!cells) return;
+        rows.push({ prename: cell(cells, prenameCol), name: cell(cells, nameCol), email: cell(cells, emailCol) });
+      });
+    return rows;
+  }
+
   async submitImport(): Promise<void> {
-    const file = this.importFile();
-    if (!file || this.importLoading()) return;
+    if (!this.importValid() || this.importLoading()) return;
     this.importLoading.set(true);
     this.importError.set(null);
     try {
-      const result = await this.userSvc.importUsers(file);
+      const result = await this.userSvc.importUsers(this.buildImportRows());
       this.importResult.set(result);
       await this.fetchUsers();
     } catch (err: unknown) {
       const e = err as { error?: { detail?: string; error?: string } };
-      const msg = e?.error?.detail ?? e?.error?.error ?? 'Import failed.';
-      this.importError.set(msg);
+      this.importError.set(e?.error?.detail ?? e?.error?.error ?? 'Import failed.');
     } finally {
       this.importLoading.set(false);
     }
@@ -383,37 +511,5 @@ export class UserManagement {
       : status === 'existing'
         ? 'status-existing'
         : 'status-failed';
-  }
-
-  downloadImportCsv(): void {
-    const result = this.importResult();
-    if (!result) return;
-    const header = ['email', 'username', 'apiKey', 'team', 'status', 'error'];
-    const rows = result.rows.map((r) =>
-      [r.email, r.username, r.apiKey, r.team, r.status, r.error ?? '']
-        .map((v) => (/[",\n\r]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v))
-        .join(','),
-    );
-    const csv = [header.join(','), ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'import-credentials.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  copyImportCsv(): void {
-    const result = this.importResult();
-    if (!result) return;
-    const header = 'email,username,apiKey,team,status,error';
-    const rows = result.rows.map((r) =>
-      [r.email, r.username, r.apiKey, r.team, r.status, r.error ?? ''].join(','),
-    );
-    navigator.clipboard.writeText([header, ...rows].join('\n')).then(() => {
-      this.importCopied.set(true);
-      setTimeout(() => this.importCopied.set(false), 2000);
-    });
   }
 }

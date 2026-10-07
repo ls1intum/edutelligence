@@ -321,6 +321,15 @@ class TeamProviderPermission(Base):
     provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
 
 
+class TeamProviderBudget(Base):
+    """Per-provider monthly budget override for a team (null = unlimited / sponsored)."""
+
+    __tablename__ = "team_provider_budgets"
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True)
+    provider_id = Column(Integer, ForeignKey("providers.id", ondelete="CASCADE"), primary_key=True)
+    monthly_budget_micro_cents = Column(BigInteger, nullable=True)
+
+
 class ApiKeyProviderPermission(Base):
     __tablename__ = "api_key_provider_permissions"
     api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), primary_key=True)

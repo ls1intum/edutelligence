@@ -12,7 +12,7 @@
          4. Per-workflow historic-vs-candidate benchmark rows, following the
             workflow across re-analyses
          5. Logos-admin cross–application-key queue ranks -->
-    <changeSet id="052-workflow-lifecycle" author="wasnertobias">
+    <changeSet id="057-workflow-lifecycle" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="ai_workflows" columnName="status"/></not>
         </preConditions>
@@ -37,7 +37,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-workflow-steps" author="wasnertobias">
+    <changeSet id="057-workflow-steps" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="ai_workflow_steps"/></not>
         </preConditions>
@@ -75,7 +75,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-log-entry-workflow-attribution" author="wasnertobias">
+    <changeSet id="057-log-entry-workflow-attribution" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="log_entry" columnName="workflow_tag"/></not>
         </preConditions>
@@ -107,7 +107,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-workflow-benchmarks" author="wasnertobias">
+    <changeSet id="057-workflow-benchmarks" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="ai_workflow_benchmarks"/></not>
         </preConditions>
@@ -136,7 +136,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-workflow-lineage" author="wasnertobias">
+    <changeSet id="057-workflow-lineage" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="ai_workflows" columnName="previous_workflow_id"/></not>
         </preConditions>
@@ -153,7 +153,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="052-application-key-queue-ranks" author="wasnertobias">
+    <changeSet id="057-application-key-queue-ranks" author="wasnertobias">
         <preConditions onFail="MARK_RAN">
             <not><tableExists tableName="application_key_queue_ranks"/></not>
         </preConditions>

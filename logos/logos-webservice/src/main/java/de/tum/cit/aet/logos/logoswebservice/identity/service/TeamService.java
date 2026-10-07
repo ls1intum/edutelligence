@@ -2,6 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -9,6 +10,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TeamModelPermissionRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamBudgetRepository;
@@ -41,12 +43,14 @@ public class TeamService {
     private final TeamModelPermissionRepository teamModelPermissionRepository;
     private final ApiKeyRepository apiKeyRepository;
     private final TeamMembershipService membershipService;
+    private final AuditLogService auditLog;
 
     public TeamService(TeamRepository teamRepository, TeamMemberRepository memberRepository,
                        UserRepository userRepository, TeamBudgetRepository teamBudgetRepository,
                        TeamModelPermissionRepository teamModelPermissionRepository,
                        ApiKeyRepository apiKeyRepository,
-                       TeamMembershipService membershipService) {
+                       TeamMembershipService membershipService,
+                       AuditLogService auditLog) {
         this.teamRepository = teamRepository;
         this.memberRepository = memberRepository;
         this.userRepository = userRepository;
@@ -54,6 +58,7 @@ public class TeamService {
         this.teamModelPermissionRepository = teamModelPermissionRepository;
         this.apiKeyRepository = apiKeyRepository;
         this.membershipService = membershipService;
+        this.auditLog = auditLog;
     }
 
     /**
@@ -119,6 +124,11 @@ public class TeamService {
         Team team = new Team();
         team.setName(body.name());
         team = teamRepository.save(team);
+        Map<String, Object> created = new LinkedHashMap<>();
+        created.put("exists", true);
+        created.put("name", team.getName());
+        auditLog.record("team.created", "team", team.getId(), team.getId(),
+            Map.of("exists", false), created);
         List<Integer> ownerIds = (body.owner_ids() != null && !body.owner_ids().isEmpty())
             ? body.owner_ids()
             : List.of(callerId);
@@ -137,11 +147,16 @@ public class TeamService {
         return memberRepository.isMember(teamId, userId);
     }
 
+    @Transactional
     public boolean deleteTeam(Integer teamId) {
         Optional<Team> teamOpt = teamRepository.findById(teamId);
         if (teamOpt.isEmpty()) return false;
         requireUnmanaged(teamOpt.get(), "deleted");
+        Map<String, Object> gone = new LinkedHashMap<>();
+        gone.put("exists", true);
+        gone.put("name", teamOpt.get().getName());
         teamRepository.deleteById(teamId);
+        auditLog.record("team.deleted", "team", teamId, teamId, gone, Map.of("exists", false));
         return true;
     }
 
@@ -201,8 +216,10 @@ public class TeamService {
         });
     }
 
+    @Transactional
     public Optional<TeamResponseDTO> updateTeamLimits(Integer teamId, UpdateTeamRequestDTO body) {
         return teamRepository.findById(teamId).map(team -> {
+            Map<String, Object> before = limitsSnapshot(team);
             if (body.default_cloud_rpm_limit() != null) team.setDefaultCloudRpmLimit(body.default_cloud_rpm_limit());
             if (body.default_cloud_tpm_limit() != null) team.setDefaultCloudTpmLimit(body.default_cloud_tpm_limit());
             if (body.default_local_rpm_limit() != null) team.setDefaultLocalRpmLimit(body.default_local_rpm_limit());
@@ -210,8 +227,20 @@ public class TeamService {
             if (body.default_monthly_budget_micro_cents() != null) team.setDefaultMonthlyBudgetMicroCents(body.default_monthly_budget_micro_cents());
             if (body.team_monthly_budget_micro_cents() != null) team.setTeamMonthlyBudgetMicroCents(body.team_monthly_budget_micro_cents());
             teamRepository.save(team);
+            auditLog.record("team.limits_updated", "team", team.getId(), team.getId(), before, limitsSnapshot(team));
             return new TeamResponseDTO(team.getId(), team.getName());
         });
+    }
+
+    private static Map<String, Object> limitsSnapshot(Team team) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("default_cloud_rpm_limit", team.getDefaultCloudRpmLimit());
+        m.put("default_cloud_tpm_limit", team.getDefaultCloudTpmLimit());
+        m.put("default_local_rpm_limit", team.getDefaultLocalRpmLimit());
+        m.put("default_local_tpm_limit", team.getDefaultLocalTpmLimit());
+        m.put("default_monthly_budget_micro_cents", team.getDefaultMonthlyBudgetMicroCents());
+        m.put("team_monthly_budget_micro_cents", team.getTeamMonthlyBudgetMicroCents());
+        return m;
     }
 
     public Optional<TeamResponseDTO> updateTeamName(Integer teamId, String name) {
@@ -314,8 +343,11 @@ public class TeamService {
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
         return memberRepository.findById(memberId).map(m -> {
             if (Boolean.TRUE.equals(body.is_owner())) requireOwnerCapableRole(userId);
+            Map<String, Object> before = TeamMembershipService.snapshot(m);
             if (body.is_owner() != null) m.setIsOwner(body.is_owner());
             memberRepository.save(m);
+            auditLog.record("team.member_updated", "team_member", teamId + "/" + userId, teamId,
+                before, TeamMembershipService.snapshot(m));
             return true;
         }).orElse(false);
     }

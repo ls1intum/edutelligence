@@ -755,6 +755,15 @@ class _FakeDB:
     def get_team(self, team_id):
         return None
 
+    def get_team_provider_budget(self, team_id, provider_id):
+        return False, None
+
+    def get_team_default_budget_usage(self, team_id, month_start):
+        return 0
+
+    def get_team_provider_budget_usage(self, team_id, provider_id, month_start):
+        return 0
+
 
 def _patch_env(monkeypatch, db, upstream, auth=None):
     """Point the Batch API at a fake DB, a canned upstream and a fixed key."""
@@ -3667,3 +3676,42 @@ def test_a_batch_already_running_here_is_not_started_again(monkeypatch):
     # processes.
     asyncio.run(batch_local.run_local_batch(row))
     assert claimed == [2002]
+
+
+class _BudgetDB:
+    """Team over its default budget; the provider-3 override is unlimited."""
+
+    def get_team(self, team_id):
+        return {"team_monthly_budget_micro_cents": 100}
+
+    def get_team_budget_usage(self, team_id, month_start):
+        return 100
+
+    def get_team_default_budget_usage(self, team_id, month_start):
+        return 100
+
+    def get_team_provider_budget(self, team_id, provider_id):
+        return (True, None) if provider_id == 3 else (False, None)
+
+    def get_team_provider_budget_usage(self, team_id, provider_id, month_start):
+        return 0
+
+    def get_api_key_budget_limit(self, api_key_id):
+        return None
+
+
+def test_a_local_batch_leaves_the_team_budget_to_each_line():
+    auth = SimpleNamespace(api_key_id=1, team_id=7, key_type="developer")
+
+    # The lines' providers are only known once each one is routed, so total
+    # team spend (sponsored providers included) must not refuse the batch.
+    batch_api._check_batch_budget(_BudgetDB(), auth, {"execution": "logos", "provider_id": None})
+
+
+def test_a_provider_batch_checks_the_budget_of_its_provider():
+    auth = SimpleNamespace(api_key_id=1, team_id=7, key_type="developer")
+
+    batch_api._check_batch_budget(_BudgetDB(), auth, {"execution": "provider", "provider_id": 3})
+    with pytest.raises(HTTPException) as exc:
+        batch_api._check_batch_budget(_BudgetDB(), auth, {"execution": "provider", "provider_id": 4})
+    assert exc.value.status_code == 402

@@ -98,7 +98,7 @@ public class GatewayCloudAccounting {
     @Transactional
     public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment, byte[] requestBody,
                                    GatewayRequestAttribution attribution) {
-        budgetService.enforceCloudBudget(key);
+        budgetService.enforceCloudBudget(key, deployment.providerId());
 
         if (reservationMicroCents <= 0) {
             return null;
@@ -142,20 +142,20 @@ public class GatewayCloudAccounting {
         Number id = keys.getKey();
         // Bump the snapshot only after commit so a concurrent refresh cannot
         // SELECT before the row is visible and then overwrite the bump.
-        noteReservationAfterCommit(key, reservationMicroCents);
+        noteReservationAfterCommit(key, reservationMicroCents, deployment.providerId());
         return id == null ? null : id.intValue();
     }
 
-    private void noteReservationAfterCommit(GatewayKey key, long microCents) {
+    private void noteReservationAfterCommit(GatewayKey key, long microCents, Integer providerId) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    budgetService.noteReservation(key, microCents);
+                    budgetService.noteReservation(key, microCents, providerId);
                 }
             });
         } else {
-            budgetService.noteReservation(key, microCents);
+            budgetService.noteReservation(key, microCents, providerId);
         }
     }
 

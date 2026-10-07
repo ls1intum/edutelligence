@@ -19,18 +19,21 @@ import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
 @Service
 public class ExportImportService {
 
-    private static final List<String> TABLES = List.of(
+    static final List<String> TABLES = List.of(
         "users", "teams", "team_repositories", "team_repository_credentials",
         "team_members", "api_keys", "providers", "models",
         "model_provider", "team_model_permissions", "api_key_model_permissions",
         "team_provider_permissions", "api_key_provider_permissions", "policies",
+        "team_provider_budgets",
         "ai_workflow_analyses", "ai_workflows", "ai_workflow_steps", "ai_llm_call_recommendations",
         "ai_workflow_benchmarks", "application_key_queue_ranks",
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );
     private static final Set<String> TABLE_WHITELIST = Set.copyOf(TABLES);
-    /** Tables newer than some exports in circulation: absent means empty. */
+
+    /** Tables added after exports already existed; an export without one restores it empty. */
     private static final Set<String> OPTIONAL_TABLES = Set.of(
+        "team_provider_budgets",
         "ai_workflow_steps", "ai_workflow_benchmarks", "application_key_queue_ranks"
     );
 
@@ -111,11 +114,7 @@ public class ExportImportService {
 
     @Transactional
     public Map<String, Object> importData(Map<String, Object> jsonData) {
-        for (String table : TABLES) {
-            if (!jsonData.containsKey(table) && !OPTIONAL_TABLES.contains(table)) {
-                throw new IllegalArgumentException("Missing table in json: " + table);
-            }
-        }
+        requireTables(jsonData);
         // Snapshot (session_id → team_id + repo_slug) so linked analysis
         // sessions can be reattached after truncate replaces repository rows.
         List<Map<String, Object>> sessionLinks = jdbc.queryForList("""
@@ -150,6 +149,14 @@ public class ExportImportService {
         sanitizeImportedAnalysisSessionLinks();
         resetSequences();
         return Map.of("result", "Import successful");
+    }
+
+    static void requireTables(Map<String, Object> jsonData) {
+        for (String table : TABLES) {
+            if (!jsonData.containsKey(table) && !OPTIONAL_TABLES.contains(table)) {
+                throw new IllegalArgumentException("Missing table in json: " + table);
+            }
+        }
     }
 
     /**
