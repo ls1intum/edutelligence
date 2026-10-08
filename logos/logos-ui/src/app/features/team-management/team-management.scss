@@ -32,10 +32,36 @@
 }
 
 
+// The name with, for a Keycloak-linked team, the group it draws members from
+// beneath it — the team column has the room the narrow actions column lacks.
+.team-name-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .team-name {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
   color: rgb(var(--nav-active-text));
+}
+
+.team-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  i {
+    font-size: var(--font-size-xs);
+    flex-shrink: 0;
+  }
 }
 
 .count-cell {
@@ -86,18 +112,11 @@
   font-weight: var(--font-weight-semibold);
 }
 
-.managed-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
+// ── Field hint (create dialog) ────────────────────────────────────────
+.field-hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
   color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
-  white-space: nowrap;
-
-  i {
-    font-size: var(--font-size-xs);
-  }
 }
 
 // ── Delete button ─────────────────────────────────────────────────────
@@ -327,9 +346,11 @@
     padding-left: 0;
   }
 
-  .team-name {
+  .team-name-stack {
     flex: 1;
-    min-width: 0;
+  }
+
+  .team-name {
     overflow-wrap: anywhere;
     word-break: break-word;
   }

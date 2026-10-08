@@ -54,8 +54,9 @@ key or a member has no individual limit.
 ### Members
 
 This tab shows the owners and the members, with budget and rate-limit
-overrides for each person. Add or remove people here, unless Keycloak manages
-the team.
+overrides for each person. Add or remove people here. If a Keycloak group is
+linked to the team, then you cannot remove the members that Keycloak added.
+Logos makes these members agree with the group at each login.
 
 ![Team detail — Members](/img/roles/team-detail-members.png)
 
@@ -170,6 +171,9 @@ the team. Local models do not show here. For local models, see Activity.
 
 This tab shows the monthly budget of the team, the default key budget and the
 default cloud and local rate limits. An owner can also delete the team here.
+If a Keycloak group is linked to the team, then the tab shows the name of the
+group and no delete control. Only a Logos Admin can change or remove the link.
+See [Logos Admin → Keycloak Group Links](logos-admin.md#keycloak-group-links).
 
 ![Team detail — Settings](/img/roles/team-detail-settings.png)
 

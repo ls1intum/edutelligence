@@ -77,7 +77,8 @@ roles. An App Admin can manage only App Developers.
 
 This page shows the teams, their owners and their members. The **Priority**
 column of each team sets the queue level of that team's traffic (1–10, or
-Default).
+Default). A team that gets its members from Keycloak has a lock badge. The
+badge shows the name of the linked group.
 
 ![Teams page](/img/roles/logos-admin-team-management.png)
 
@@ -88,6 +89,41 @@ priority buckets tie. For example, `testapp1-prod` can outrank
 keys up or down, remove them from the ranking, or add an unranked application
 key from any team. Keys that are not in the list keep their usual team and
 per-key priority only.
+
+### Keycloak Group Links
+
+A team can get its members from a Keycloak group or a realm role. Then you do
+not add the members by hand. Only a Logos Admin sees this field, because a team
+owner controls the members, not the identity provider.
+
+To make the link, type the name of the group in the **New Team** dialog, or
+later in the **Settings** tab of the team. To remove the link, make the field
+empty.
+
+![New Team dialog with a Keycloak group](/img/roles/logos-admin-new-team.png)
+
+A link has these effects:
+
+- Each member of the group joins the team at the next login of that person, and
+  at the nightly directory sync.
+- Logos removes a person from the team at the first login after that person
+  leaves the group.
+- You cannot add or remove these members in the **Members** tab.
+- One group gives its members to one team only. You cannot link the platform
+  admin roles (`KEYCLOAK_ROLES_LOGOS_ADMIN` and `KEYCLOAK_ROLES_APP_ADMIN`),
+  because these roles give a role and not a team.
+- You cannot rename or delete the team while the link is in place. Remove the
+  link first. This also removes the members that Keycloak added.
+
+If the deployment can read the realm (`logos.auth.sync.enabled=true`), then the
+field shows the groups and the realm roles of the realm. It also shows how many
+of them you can select. If the deployment cannot read the realm, then type the
+name exactly as the login claim contains it. This is a group path without the
+first `/`.
+
+The **Settings** tab of the team shows the same field. For a linked team, this
+tab shows a note in place of the Danger Zone, because you cannot rename or
+delete the team.
 
 When you open a team, you see the same detail tabs as an owning App Admin sees.
 For the tabs Overview to Settings, see [App Admin → Teams](app-admin.md#teams).

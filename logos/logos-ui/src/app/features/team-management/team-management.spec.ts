@@ -22,6 +22,7 @@ function team(overrides: Partial<Team> = {}): Team {
     priority: null,
     is_caller_owner: true,
     managed: false,
+    keycloak_group: null,
     ...overrides,
   };
 }
@@ -48,6 +49,8 @@ describe('TeamManagement', () => {
     getApplicationKeyQueueRanks: ReturnType<typeof vi.fn>;
     getTeamApiKeys: ReturnType<typeof vi.fn>;
     replaceApplicationKeyQueueRanks: ReturnType<typeof vi.fn>;
+    getKeycloakGroups: ReturnType<typeof vi.fn>;
+    createTeam: ReturnType<typeof vi.fn>;
   };
   let currentUser: ReturnType<typeof signal<User | null>>;
 
@@ -79,6 +82,8 @@ describe('TeamManagement', () => {
       getApplicationKeyQueueRanks: vi.fn().mockResolvedValue([]),
       getTeamApiKeys: vi.fn().mockResolvedValue([]),
       replaceApplicationKeyQueueRanks: vi.fn().mockResolvedValue([]),
+      getKeycloakGroups: vi.fn().mockResolvedValue({ available: false, groups: [] }),
+      createTeam: vi.fn().mockResolvedValue(team()),
     };
     TestBed.resetTestingModule();
   });
@@ -188,6 +193,120 @@ describe('TeamManagement', () => {
 
     expect(teamService.updateTeamPriority).toHaveBeenCalledWith(2001, null);
     expect(component.teams()[0].priority).toBeNull();
+  });
+
+  // ── Keycloak group link ───────────────────────────────────────────────────
+
+  it('names the linked group under a managed team and offers no delete', async () => {
+    await createFor('logos_admin');
+    component.teams.set([team({ managed: true, keycloak_group: 'ios-26ws' })]);
+    fixture.detectChanges();
+
+    const group: HTMLElement | null = fixture.nativeElement.querySelector('.team-cell .team-group');
+    expect(group?.textContent).toContain('ios-26ws');
+    expect(group?.title).toContain('ios-26ws');
+    expect(fixture.nativeElement.querySelector('.actions-cell .btn-icon--danger')).toBeNull();
+  });
+
+  it('keeps the delete button on an unlinked team', async () => {
+    await createFor('logos_admin');
+    component.teams.set([team()]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.team-cell .team-group')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.actions-cell .btn-icon--danger')).toBeTruthy();
+  });
+
+  it('offers the group field in the create dialog to logos admins', async () => {
+    await createFor('logos_admin');
+    component.openCreateDialog();
+    fixture.detectChanges();
+    expect(document.querySelector('#team-keycloak-group')).toBeTruthy();
+  });
+
+  it('hides the group field from app admins, who must not link a group', async () => {
+    await createFor('app_admin');
+    component.openCreateDialog();
+    fixture.detectChanges();
+    expect(document.querySelector('#team-keycloak-group')).toBeNull();
+  });
+
+  it('suggests only the groups no other team holds', async () => {
+    teamService.getKeycloakGroups.mockResolvedValue({
+      available: true,
+      groups: [
+        { name: 'ios-26ws', source: 'group', linked_team_id: null, linked_team_name: null },
+        { name: 'taken', source: 'role', linked_team_id: 2002, linked_team_name: 'other' },
+      ],
+    });
+    await createFor('logos_admin');
+    component.openCreateDialog();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fixture.detectChanges();
+
+    expect(component.availableKeycloakGroups().map((g) => g.name)).toEqual(['ios-26ws']);
+  });
+
+  // A datalist has no affordance of its own, so the hint is the only thing
+  // telling the admin whether the realm can be browsed at all.
+  it('says how many groups can be picked when the realm is readable', async () => {
+    teamService.getKeycloakGroups.mockResolvedValue({
+      available: true,
+      groups: [
+        { name: 'ios-26ws', source: 'group', linked_team_id: null, linked_team_name: null },
+        { name: 'taken', source: 'role', linked_team_id: 2002, linked_team_name: 'other' },
+      ],
+    });
+    await createFor('logos_admin');
+    component.openCreateDialog();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(component.groupPickerHint()).toContain('1 unlinked');
+  });
+
+  it('tells the admin to type the claim name when the realm is unreadable', async () => {
+    await createFor('logos_admin');
+    component.openCreateDialog();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(component.groupPickerHint()).toContain('login claim');
+  });
+
+  it('creates the team with the typed group', async () => {
+    await createFor('logos_admin');
+    component.openCreateDialog();
+    component.createName.set('iOS');
+    component.createKeycloakGroup.set('  ios-26ws  ');
+
+    await component.submitCreate();
+
+    expect(teamService.createTeam).toHaveBeenCalledWith('iOS', [], 'ios-26ws');
+  });
+
+  it('creates a Logos-managed team when the group is left blank', async () => {
+    await createFor('logos_admin');
+    component.openCreateDialog();
+    component.createName.set('ML Research');
+
+    await component.submitCreate();
+
+    expect(teamService.createTeam).toHaveBeenCalledWith('ML Research', [], null);
+  });
+
+  // A rejected group (reserved, already linked) is the one case where the
+  // server's own wording says what to fix, so it has to reach the dialog.
+  it('reports the rejection the server sent', async () => {
+    await createFor('logos_admin');
+    teamService.createTeam.mockRejectedValue({
+      error: { detail: "Keycloak group 'ios-26ws' is already linked to team 'iOS'." },
+    });
+    component.openCreateDialog();
+    component.createName.set('iOS 2');
+    component.createKeycloakGroup.set('ios-26ws');
+
+    await component.submitCreate();
+
+    expect(component.createError()).toContain("already linked to team 'iOS'");
   });
 
   it('rolls back and reports when saving fails', async () => {

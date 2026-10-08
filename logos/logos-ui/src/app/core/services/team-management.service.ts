@@ -11,6 +11,7 @@ import {
   StoreDeployKeyPayload, AiLlmCallRecommendation, AiWorkflow, AiWorkflowStep,
   UpdateWorkflowPayload, UpdateWorkflowStepPayload, WorkflowBenchmark,
   WorkflowBenchmarkRequest, ProposeTaggingPrResult, ApplicationKeyQueueRankEntry,
+  KeycloakGroupDirectory,
 } from '../../shared/models/team.model';
 
 export interface TeamMembersResponse {
@@ -27,8 +28,29 @@ export class TeamManagementService {
     return firstValueFrom(this.http.get<Team[]>('/api/teams'));
   }
 
-  createTeam(name: string, ownerIds: number[]): Promise<Team> {
-    return firstValueFrom(this.http.post<Team>('/api/teams', { name, owner_ids: ownerIds }));
+  /** `keycloakGroup` links the new team to a Keycloak group; Logos admins only. */
+  createTeam(name: string, ownerIds: number[], keycloakGroup?: string | null): Promise<Team> {
+    const body: Record<string, unknown> = { name, owner_ids: ownerIds };
+    if (keycloakGroup) body['keycloak_group'] = keycloakGroup;
+    return firstValueFrom(this.http.post<Team>('/api/teams', body));
+  }
+
+  /**
+   * Links the team to a Keycloak group (logos_admin only); null unlinks it.
+   * Members of the group join on their next login and on the directory sync.
+   */
+  updateTeamKeycloakGroup(teamId: number, keycloakGroup: string | null): Promise<void> {
+    return firstValueFrom(
+      this.http.patch<void>(`/api/teams/${teamId}/keycloak-group`, { keycloak_group: keycloakGroup }),
+    );
+  }
+
+  /**
+   * The realm's groups and roles for the group picker. Reports
+   * `available: false` when the deployment has no Keycloak directory access.
+   */
+  getKeycloakGroups(): Promise<KeycloakGroupDirectory> {
+    return firstValueFrom(this.http.get<KeycloakGroupDirectory>('/api/teams/keycloak-groups'));
   }
 
   deleteTeam(id: number): Promise<void> {
