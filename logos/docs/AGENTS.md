@@ -218,6 +218,7 @@ flows use a **concept** name (no role prefix); role-only list pages keep the
 | `logos-admin-billing.png` | `tobias.wasner` | `/billing` | `roles/logos-admin.md` |
 | `logos-admin-user-management.png` | `tobias.wasner` | `/user-management` | `roles/logos-admin.md` |
 | `logos-admin-team-management.png` | `tobias.wasner` | `/team-management` | `roles/logos-admin.md` |
+| `logos-admin-new-team.png` | `tobias.wasner` | `/team-management` — **New Team** dialog, Keycloak group filled | `roles/logos-admin.md#keycloak-group-links` |
 | `logos-admin-agents.png` | `tobias.wasner` | `/agents` | `roles/logos-admin.md` |
 | `logos-admin-my-workspace.png` | `tobias.wasner` | `/my-workspace` | `roles/logos-admin.md` |
 | `app-admin-models.png` | `alexandra.szuminska` | `/models` | `roles/app-admin.md` |
