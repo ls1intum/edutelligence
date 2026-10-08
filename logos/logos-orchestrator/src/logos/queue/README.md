@@ -31,13 +31,13 @@ Inside the queue, entries are ordered by:
    before developer/service traffic (0). This is the default intra-team
    ordering *application > app admin > developer*; unknown callers rank 0.
 4. **FIFO** — enqueue time breaks remaining ties.
-5. **Background-app interleave** — within the group of entries tied on the
-   highest (raw priority, role rank) pair, flagged ``background_app``
-   entries (``x-app: cli-bg`` traffic, e.g. an agent's auto-permission
-   classifier) dispatch in a bounded interleave with regular entries: one
-   flagged, then two regular, repeating (see `priority_queue.py`). The
-   flag only reorders entries that would otherwise tie — it never jumps a
-   higher raw priority or role rank.
+5. **Request-SLO fast-lane interleave** — within the group of entries tied
+   on the highest (raw priority, role rank) pair, ``slo_fast_lane`` entries
+   (from `logos.request_slo`, today ``x-app: cli-bg`` traffic such as an
+   agent's auto-permission classifier) dispatch in a bounded interleave
+   with regular entries: one fast-lane, then two regular, repeating (see
+   `priority_queue.py`). The fast lane only reorders entries that would
+   otherwise tie — it never jumps a higher raw priority or role rank.
 
 `enqueue` takes `raw_priority` (defaults to the bucket's level) and
 `role_rank` (default 0). `move_priority` keeps the entry's role rank across

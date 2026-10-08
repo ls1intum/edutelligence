@@ -953,7 +953,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             provider_id,
             priority,
             is_cold_at_queue=is_cold_at_queue,
-            background_app=request.background_app,
+            slo_fast_lane=request.slo_fast_lane,
             provider_affinity=request.required_provider_id,
             raw_priority=priority_int,
             role_rank=request.role_rank,

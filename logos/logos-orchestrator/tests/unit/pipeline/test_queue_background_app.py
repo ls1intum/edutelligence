@@ -1,12 +1,13 @@
-"""The background-app flag travels from the request headers to the queue.
+"""The request-SLO fast lane travels from headers to the queue.
 
 Claude Code's background agents mark their traffic with the ``x-app: cli-bg``
-header. The pipeline derives ``SchedulingRequest.background_app`` from it and
-the queue gives flagged entries bounded precedence at the same priority
-level — a 1-flagged : 2-regular dispatch interleave, so a latency-sensitive
-call (an agent's auto-permission classifier) does not wait out a full queue
-of interactive traffic, but a steady flagged stream cannot starve it either
-— while unrecognised traffic keeps plain arrival order.
+header. ``logos.request_slo`` derives ``SchedulingRequest.slo_fast_lane`` from
+it (without changing the priority bucket), and the queue gives fast-lane
+entries bounded precedence at the same priority level — a 1-fast-lane :
+2-regular dispatch interleave, so a latency-sensitive call (an agent's
+auto-permission classifier) does not wait out a full queue of interactive
+traffic, but a steady fast-lane stream cannot starve it either — while
+unrecognised traffic keeps plain arrival order.
 """
 
 import asyncio
@@ -14,9 +15,9 @@ from unittest.mock import MagicMock
 
 from logos import EttftEstimate, ReadinessTier, SchedulingRequest, SchedulingResult
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.pipeline import is_background_app
 from logos.queue import PriorityQueueManager
 from logos.queue.priority_queue import Priority
+from logos.request_slo import is_cli_bg
 
 MODEL_ID = 7
 PROVIDER_ID = 3
@@ -42,13 +43,13 @@ def _make_scheduler():
     return scheduler
 
 
-def _make_request(request_id: str, payload: dict, background_app: bool = False) -> SchedulingRequest:
+def _make_request(request_id: str, payload: dict, slo_fast_lane: bool = False) -> SchedulingRequest:
     return SchedulingRequest(
         request_id=request_id,
         payload=payload,
         deployments=[{"model_id": MODEL_ID, "provider_id": PROVIDER_ID, "type": "logosnode"}],
         classified_models=[(MODEL_ID, 1.0, 5)],
-        background_app=background_app,
+        slo_fast_lane=slo_fast_lane,
     )
 
 
@@ -78,25 +79,25 @@ async def _queue_request(scheduler, request, min_depth: int = 1) -> asyncio.Task
     raise AssertionError("request never reached the queue")
 
 
-def test_is_background_app_only_flags_the_cli_bg_header():
-    assert is_background_app({"x-app": "cli-bg"}) is True
+def test_is_cli_bg_only_flags_the_cli_bg_header():
+    assert is_cli_bg({"x-app": "cli-bg"}) is True
     # HTTP headers are case-insensitive in name; compare the value the same
     # way.
-    assert is_background_app({"X-App": "CLI-BG"}) is True
+    assert is_cli_bg({"X-App": "CLI-BG"}) is True
     # Interactive Claude Code sessions and anything unrecognised stay plain.
-    assert is_background_app({"x-app": "cli"}) is False
-    assert is_background_app({"x-app": "other-app"}) is False
-    assert is_background_app({"user-agent": "claude-cli/1.0"}) is False
-    assert is_background_app({}) is False
+    assert is_cli_bg({"x-app": "cli"}) is False
+    assert is_cli_bg({"x-app": "other-app"}) is False
+    assert is_cli_bg({"user-agent": "claude-cli/1.0"}) is False
+    assert is_cli_bg({}) is False
 
 
-async def test_background_app_flag_reaches_the_queue():
+async def test_slo_fast_lane_flag_reaches_the_queue():
     scheduler = _make_scheduler()
-    wait = await _queue_request(scheduler, _make_request("req-1", {"model": "m"}, background_app=True))
+    wait = await _queue_request(scheduler, _make_request("req-1", {"model": "m"}, slo_fast_lane=True))
 
     entries = scheduler._queue_mgr.get_entries_for_priority(MODEL_ID, Priority.NORMAL)
     assert len(entries) == 1
-    assert entries[0].background_app is True
+    assert entries[0].slo_fast_lane is True
 
     entries[0].task.set_result(_dispatched_result())
     assert (await wait).model_id == MODEL_ID
@@ -108,34 +109,34 @@ async def test_unflagged_request_queues_as_plain_traffic():
 
     entries = scheduler._queue_mgr.get_entries_for_priority(MODEL_ID, Priority.NORMAL)
     assert len(entries) == 1
-    assert entries[0].background_app is False
+    assert entries[0].slo_fast_lane is False
 
     entries[0].task.set_result(_dispatched_result())
     await wait
 
 
-async def test_the_dispatcher_hands_out_background_app_first():
-    """On a fresh priority level the interleave cycle starts with the flagged
-    slot, so an interactive request that arrived first is not dispatched
-    ahead of the flagged one: the first free capacity goes to the background
-    call, not the old wait."""
+async def test_the_dispatcher_hands_out_slo_fast_lane_first():
+    """On a fresh priority level the interleave cycle starts with the
+    fast-lane slot, so an interactive request that arrived first is not
+    dispatched ahead of the fast-lane one: the first free capacity goes to
+    the background call, not the old wait."""
     scheduler = _make_scheduler()
     interactive_wait = await _queue_request(
         scheduler, _make_request("req-interactive", {"messages": [{"role": "user", "content": "x" * 10_000}]})
     )
     bg_wait = await _queue_request(
         scheduler,
-        _make_request("req-bg", {"messages": [{"role": "user", "content": "x" * 500}]}, background_app=True),
+        _make_request("req-bg", {"messages": [{"role": "user", "content": "x" * 500}]}, slo_fast_lane=True),
         min_depth=2,
     )
 
     # What the release/dispatch path pops next:
     _task, first_out = scheduler._queue_mgr.dequeue_with_entry(MODEL_ID, PROVIDER_ID)
-    assert first_out.background_app is True
+    assert first_out.slo_fast_lane is True
 
     first_out.task.set_result(_dispatched_result())
     _task, second_out = scheduler._queue_mgr.dequeue_with_entry(MODEL_ID, PROVIDER_ID)
-    assert second_out.background_app is False
+    assert second_out.slo_fast_lane is False
     second_out.task.set_result(_dispatched_result())
 
     assert (await bg_wait).model_id == MODEL_ID

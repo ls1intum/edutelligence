@@ -83,12 +83,12 @@ class SchedulingRequest:
     # (api key + actual prompt prefix), deepest block first. Used for
     # prefix-cache-aware placement; empty/None means "route as before".
     affinity_keys: Optional[List[str]] = None
-    # True when the request carried the ``x-app: cli-bg`` header: background
-    # app traffic (e.g. an agent's auto-permission classifier call) that gets
-    # bounded precedence at the same priority level — the dispatch interleave
-    # keeps a fast lane for it without letting a steady flagged stream starve
-    # ordinary same-priority traffic.
-    background_app: bool = False
+    # True when ``logos.request_slo`` marked this request for the same-bucket
+    # SLO fast lane (today: ``x-app: cli-bg``). The priority queue interleaves
+    # these with ordinary entries at the same (raw_priority, role_rank) —
+    # one fast-lane, then two regular — so latency-sensitive background
+    # calls get bounded precedence without starving same-bucket traffic.
+    slo_fast_lane: bool = False
     # time.monotonic() stamp of request ingress (sync path only; None for
     # async jobs and tests). The scheduler recomputes the remaining queue-wait
     # budget from this absolute stamp immediately before each queue wait (see
