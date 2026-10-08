@@ -706,6 +706,7 @@ class _FakeDB:
         api_key_id,
         team_id,
         user_id,
+        log_level=None,
     ):
         row = {
             "id": 2000 + len(self.local_batches),
@@ -723,6 +724,7 @@ class _FakeDB:
             "team_id": team_id,
             "api_key_id": api_key_id,
             "user_id": user_id,
+            "log_level": log_level,
             "created_at": datetime.now(timezone.utc),
         }
         self.local_batches[upstream_id] = row
@@ -3676,6 +3678,136 @@ def test_a_batch_already_running_here_is_not_started_again(monkeypatch):
     # processes.
     asyncio.run(batch_local.run_local_batch(row))
     assert claimed == [2002]
+
+
+# ---------------------------------------------------------------------------
+# Per-request logging opt-in on the Batch API
+# ---------------------------------------------------------------------------
+
+
+def test_batch_operation_log_row_honours_logging_header_opt_in(monkeypatch):
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM)},
+    )
+    _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(
+            200, json={"id": "batch_1", "status": "validating", "input_file_id": "file-own"}
+        ),
+    )
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        headers={"logos-logging": "FULL"},
+    )
+
+    assert resp.status_code == 200
+    assert db.log_usage_kwargs["log_level"] == "FULL"
+    assert db.registered[0]["log_level"] == "FULL"
+
+
+def test_batch_operation_log_row_honours_logging_header_opt_out(monkeypatch):
+    db = _FakeDB(
+        [OPENAI_PROVIDER],
+        OPENAI_DEPLOYMENTS,
+        owned={("file", "file-own"): _remote(5, OWN_TEAM)},
+    )
+    # Key would normally be FULL; the header opts out for this operation.
+    auth = _auth()
+    auth.log_level = "FULL"
+    _patch_env(
+        monkeypatch,
+        db,
+        lambda request: httpx.Response(
+            200, json={"id": "batch_1", "status": "validating", "input_file_id": "file-own"}
+        ),
+        auth=auth,
+    )
+
+    resp = client.post(
+        "/v1/batches",
+        json={"input_file_id": "file-own", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        headers={"logos-logging": "no"},
+    )
+
+    assert resp.status_code == 200
+    assert db.log_usage_kwargs["log_level"] == "BILLING"
+    assert db.registered[0]["log_level"] == "BILLING"
+
+
+def test_local_batch_records_logging_consent(monkeypatch):
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+    monkeypatch.setattr(batch_api, "_start_local_batch", lambda created: None)
+
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_local_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    file_id = upload.json()["id"]
+
+    created = client.post(
+        "/v1/batches",
+        json={"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        headers={"logos-logging": "yes"},
+    )
+
+    assert created.status_code == 200
+    batch = next(iter(db.local_batches.values()))
+    assert batch["log_level"] == "FULL"
+
+
+def test_local_batch_without_header_records_no_consent(monkeypatch):
+    db = _FakeDB([OPENAI_PROVIDER], OPENAI_DEPLOYMENTS + LOCAL_DEPLOYMENTS)
+    _patch_env(monkeypatch, db, lambda request: httpx.Response(200, json={"id": "unused"}))
+    monkeypatch.setattr(batch_api, "_start_local_batch", lambda created: None)
+
+    upload = client.post(
+        "/v1/files",
+        files={"file": ("batch.jsonl", _jsonl(_local_line()), "application/jsonl")},
+        data={"purpose": "batch"},
+    )
+    file_id = upload.json()["id"]
+
+    created = client.post(
+        "/v1/batches",
+        json={"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+    )
+
+    assert created.status_code == 200
+    batch = next(iter(db.local_batches.values()))
+    assert batch["log_level"] is None
+
+
+@pytest.mark.asyncio
+async def test_settlement_honours_recorded_batch_log_level(monkeypatch):
+    db = _SettlingDB()
+    monkeypatch.setattr(batch_api, "DBManager", lambda: db)
+    monkeypatch.setattr(
+        batch_api, "_http_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(_files_upstream))
+    )
+
+    owner = {
+        "id": 77,
+        "api_key_id": 11,
+        "team_id": OWN_TEAM,
+        "user_id": 13,
+        "upstream_id": "batch_1",
+        "log_level": "FULL",
+    }
+    written = await settle_batch(
+        OPENAI_PROVIDER,
+        owner,
+        {"status": "completed", "output_file_id": "file-out", "input_file_id": "file-in"},
+    )
+
+    assert written == 2
+    assert all(row["privacy_level"] == "FULL" for row in db.rows)
 
 
 class _BudgetDB:

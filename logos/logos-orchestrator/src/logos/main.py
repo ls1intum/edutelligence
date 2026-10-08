@@ -35,7 +35,7 @@ from logos.anthropic_compat import (
     translate_response,
 )
 from logos.anthropic_compat.common import sse
-from logos.auth import AuthContext, authenticate_api_key
+from logos.auth import AuthContext, authenticate_api_key, resolve_log_level
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
 from logos.batch_local import local_batch_runner_loop
 from logos.benchmarks.guidellm_runner import (
@@ -4332,7 +4332,9 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
             "team_id": auth.team_id,
             "user_id": auth.user_id,
             "environment": auth.environment,
-            "log_level": auth.log_level,
+            # The key's level is the default; a per-request logos-logging header
+            # (the end user's opt-in/out) overrides it for this request's row.
+            "log_level": resolve_log_level(headers, auth.log_level),
             "client_ip": client_ip,
             "input_payload": sanitized_payload_for_logging(body),
             "headers": sanitized_headers_for_persistence(headers),
