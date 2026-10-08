@@ -42,6 +42,7 @@ describe('SettingsTabComponent — Keycloak link', () => {
       priority: null,
       managed: false,
       keycloak_group: null,
+      show_on_public_stats: false,
       ...overrides,
     };
   }
