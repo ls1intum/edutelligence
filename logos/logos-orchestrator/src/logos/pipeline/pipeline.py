@@ -320,6 +320,7 @@ class RequestPipeline:
             # block on per-candidate SDI refreshes) counts against it too.
             ingress_at=request.ingress_at,
             role_rank=request.role_rank,
+            api_key_id=request.api_key_id,
         )
 
         # Record enqueue

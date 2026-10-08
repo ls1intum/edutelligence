@@ -44,8 +44,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * settles with. Only a response that reports no usage at all keeps the flat
  * reservation, and failure zeros it.
  *
- * <p>The row is written at the key's own logging level, and a key set to
- * {@code FULL} stores its request and response payloads like the orchestrator
+ * <p>The row is written at the effective logging level for the request (the
+ * key's configured level, or a per-request {@code logos-logging} override).
+ * {@code FULL} stores request and response payloads like the orchestrator
  * does. A streamed response has no single body to store, so it records the
  * level without a response payload.
  */
@@ -53,8 +54,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class GatewayCloudAccounting {
 
     /** The only levels {@code logging_enum} has; anything else is not a level we may store. */
-    private static final String LEVEL_FULL = "FULL";
-    private static final String LEVEL_BILLING = "BILLING";
+    private static final String LEVEL_FULL = GatewayLoggingLevel.LEVEL_FULL;
+    private static final String LEVEL_BILLING = GatewayLoggingLevel.LEVEL_BILLING;
 
     private final NamedParameterJdbcTemplate jdbc;
     private final GatewayBudgetService budgetService;
@@ -87,16 +88,30 @@ public class GatewayCloudAccounting {
      * the bound the budget already documents. Cloud RPM/TPM are claimed in
      * Redis before this method is called.
      *
-     * @param requestBody the forwarded request, stored when the key logs payloads
+     * @param requestBody the forwarded request, stored when the effective level is FULL
      * @return log_entry id, or {@code null} when reservation amount is 0
      */
     @Transactional
     public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment, byte[] requestBody) {
+        return admitAndReserve(key, deployment, requestBody,
+            GatewayLoggingLevel.resolve(null, key != null ? key.logLevel() : null));
+    }
+
+    /**
+     * Check budget then insert an in-flight reservation at a resolved logging level.
+     *
+     * @param logLevel the effective request logging level ({@code FULL} or {@code BILLING})
+     * @return log_entry id, or {@code null} when reservation amount is 0
+     */
+    @Transactional
+    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
+                                   byte[] requestBody, String logLevel) {
         budgetService.enforceCloudBudget(key, deployment.providerId());
 
         if (reservationMicroCents <= 0) {
             return null;
         }
+        String privacy = privacyLevel(logLevel);
         String requestId = "gw-" + UUID.randomUUID();
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("request_id", requestId)
@@ -107,8 +122,9 @@ public class GatewayCloudAccounting {
             .addValue("model_id", deployment.modelId())
             .addValue("provider_id", deployment.providerId())
             .addValue("settled", reservationMicroCents)
-            .addValue("privacy_level", privacyLevel(key))
-            .addValue("input_payload", key.logsFullPayloads() ? asJsonb(requestBody) : null);
+            .addValue("privacy_level", privacy)
+            .addValue("input_payload",
+                GatewayLoggingLevel.storesPayloads(privacy) ? asJsonb(requestBody) : null);
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO log_entry (
@@ -249,9 +265,9 @@ public class GatewayCloudAccounting {
             .addValue("payload", payload));
     }
 
-    /** The key's logging level, or {@code BILLING} for anything unrecognised. */
-    private static String privacyLevel(GatewayKey key) {
-        return key != null && key.logsFullPayloads() ? LEVEL_FULL : LEVEL_BILLING;
+    /** Normalise a resolved level to a value {@code logging_enum} accepts. */
+    private static String privacyLevel(String logLevel) {
+        return GatewayLoggingLevel.storesPayloads(logLevel) ? LEVEL_FULL : LEVEL_BILLING;
     }
 
     /**

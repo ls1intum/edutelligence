@@ -98,6 +98,9 @@ class SchedulingRequest:
     # HTTP with a 5s timeout each), so only a wait-time recompute keeps the
     # queue-timeout 429 ahead of the client's watchdog.
     ingress_at: Optional[float] = None
+    # The caller's key. Carried so in-flight capacity can be split by who is
+    # holding it: a model's busy figure alone cannot say whose requests fill it.
+    api_key_id: Optional[int] = None
 
 
 class SchedulerInterface(ABC):

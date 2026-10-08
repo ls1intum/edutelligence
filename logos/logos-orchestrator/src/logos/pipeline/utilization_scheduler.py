@@ -71,6 +71,7 @@ class UtilizationAwareScheduler(BaseScheduler):
                 priority_int,
                 request.request_id,
                 was_queued=False,
+                api_key_id=request.api_key_id,
             )
 
         if not request.classified_models:
@@ -112,6 +113,7 @@ class UtilizationAwareScheduler(BaseScheduler):
             provider_affinity=request.required_provider_id,
             raw_priority=priority_int,
             role_rank=request.role_rank,
+            api_key_id=request.api_key_id,
         )
         logger.info(
             "Request %s queued for model %s provider %s (depth=%s)",
@@ -148,6 +150,7 @@ class UtilizationAwareScheduler(BaseScheduler):
                             model_id=result.model_id,
                             provider_id=provider_id,
                             priority=priority.name.lower(),
+                            api_key_id=request.api_key_id,
                         )
                     self._logosnode.on_request_begin_processing(
                         request.request_id,
