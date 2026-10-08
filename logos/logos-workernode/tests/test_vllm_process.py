@@ -2915,3 +2915,57 @@ def test_generic_startup_error_does_not_invent_a_root_cause():
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig())
     handle._recent_logs.append("RuntimeError: Engine core initialization failed. See root cause above.")
     assert handle._startup_root_cause() == ""
+
+
+def test_expand_model_path_points_at_the_local_snapshot(monkeypatch, tmp_path: Path) -> None:
+    import huggingface_hub
+
+    from logos_worker_node import vllm_process
+
+    calls = []
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(tmp_path / "snapshot")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    cmd = ["vllm", "serve", "autotrust/JEV-27B-VL", "--lora-modules", "jev-decision={model_path}/adapter_vllm"]
+
+    expanded = vllm_process.expand_model_path(cmd, "autotrust/JEV-27B-VL", str(tmp_path))
+
+    assert expanded[-1] == f"jev-decision={tmp_path / 'snapshot'}/adapter_vllm"
+    assert calls[0]["repo_id"] == "autotrust/JEV-27B-VL"
+    assert calls[0]["cache_dir"] == str(tmp_path / "hub")
+    assert calls[0]["local_files_only"] is True
+
+
+def test_expand_model_path_downloads_a_missing_snapshot(monkeypatch, tmp_path: Path) -> None:
+    import huggingface_hub
+
+    from logos_worker_node import vllm_process
+
+    def snapshot_download(**kwargs):
+        if kwargs.get("local_files_only"):
+            raise FileNotFoundError("not cached")
+        return "/hub/snapshot"
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    expanded = vllm_process.expand_model_path(["--x={model_path}"], "org/model", None)
+    assert expanded == ["--x=/hub/snapshot"]
+
+
+def test_expand_model_path_leaves_commands_without_the_placeholder(monkeypatch) -> None:
+    import huggingface_hub
+
+    from logos_worker_node import vllm_process
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", None)
+    cmd = ["vllm", "serve", "org/model"]
+    assert vllm_process.expand_model_path(cmd, "org/model", None) is cmd
+
+
+def test_expand_model_path_uses_a_local_model_directory(tmp_path: Path) -> None:
+    from logos_worker_node import vllm_process
+
+    expanded = vllm_process.expand_model_path(["{model_path}/adapter"], str(tmp_path), None)
+    assert expanded == [f"{tmp_path.resolve()}/adapter"]

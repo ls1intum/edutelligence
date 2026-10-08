@@ -373,6 +373,14 @@ When the provider reports duration-based usage, Logos stores millisecond
 precision and applies the provider's per-second catalogue price. This avoids
 discarding fractional audio duration while retaining the integer usage schema.
 
+### Decision models
+
+`POST /v1/systemone` answers typed questions about a text (yes/no, choice,
+score) with calibrated probabilities. The endpoint uses the schema of TypeSafe's
+Jev API. Logos serves it with decision models such as `autotrust/JEV-27B-VL` on
+a plain vLLM lane. See [Decision models](docs/decision-models.md) for the API and
+for the worker-node configuration.
+
 ### Batch processing
 
 Logos serves the OpenAI Batch API (`/v1/files` for the input and result files,

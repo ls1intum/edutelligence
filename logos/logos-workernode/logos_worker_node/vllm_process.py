@@ -99,6 +99,38 @@ def effective_gmu(vllm_config: VllmConfig) -> float:
     return GMU_AUTO_FLOOR
 
 
+MODEL_PATH_PLACEHOLDER = "{model_path}"
+
+
+def resolve_model_snapshot(model: str, hf_home: str | None) -> str:
+    """Local snapshot directory of a Hugging Face model, downloading it when missing.
+
+    A local directory is returned unchanged.
+    """
+    if Path(model).is_dir():
+        return str(Path(model).resolve())
+    from huggingface_hub import snapshot_download
+
+    cache_dir = os.path.join(hf_home, "hub") if hf_home else None
+    token = os.environ.get("HF_TOKEN") or None
+    try:
+        return snapshot_download(repo_id=model, cache_dir=cache_dir, token=token, local_files_only=True)
+    except Exception:
+        return snapshot_download(repo_id=model, cache_dir=cache_dir, token=token)
+
+
+def expand_model_path(cmd: list[str], model: str, hf_home: str | None) -> list[str]:
+    """Replace ``{model_path}`` in vLLM arguments with the model's local snapshot directory.
+
+    Lets per-model ``extra_args`` reference files shipped inside the checkpoint,
+    e.g. ``--lora-modules jev-decision={model_path}/adapter_vllm``.
+    """
+    if not any(MODEL_PATH_PLACEHOLDER in arg for arg in cmd):
+        return cmd
+    snapshot = resolve_model_snapshot(model, hf_home)
+    return [arg.replace(MODEL_PATH_PLACEHOLDER, snapshot) for arg in cmd]
+
+
 def _env_ready_timeout() -> int:
     """Ready-wait timeout, configurable via ``LOGOS_VLLM_READY_TIMEOUT_S``.
 
@@ -455,6 +487,11 @@ class VllmProcessHandle:
         self._require_c_compiler()
         self._require_nvcc(lane_config)
         env = self._build_env(lane_config)
+        if any(MODEL_PATH_PLACEHOLDER in arg for arg in cmd):
+            hf_home = env.get("HF_HOME") or os.environ.get("HF_HOME")
+            cmd = await asyncio.get_running_loop().run_in_executor(
+                None, expand_model_path, cmd, lane_config.model, hf_home
+            )
 
         logger.info(
             "[%s] Spawning vLLM (port=%d, model=%s)",

@@ -284,6 +284,8 @@ engines:
     #
     #   extra_args: list           — arbitrary extra CLI flags passed verbatim to
     #     "vllm serve". Use for features not yet exposed as first-class fields.
+    #     "{model_path}" in a flag is replaced by the model's local snapshot
+    #     directory, for files shipped inside the checkpoint (e.g. a LoRA adapter).
 
     # Profile-level keys (min_context_fraction, base_residency_mb, kv_budget_mb,
     # ...) do NOT belong in model_overrides: they are not vLLM engine settings.
@@ -327,6 +329,21 @@ engines:
       # the same path in the container) or the lane refuses to start.
       some-org/some-model-with-custom-prompting:
         chat_template: some-model-tools.jinja
+
+      # Decision model behind POST /v1/systemone: the decision head ships as the
+      # LoRA module "jev-decision" inside the checkpoint; the orchestrator reads
+      # its answer-label logprobs. Chat requests keep reaching the base model.
+      # max_num_seqs 8: larger batches return wrong decision probabilities on
+      # this model's multimodal LoRA path. Needs one GPU with >= 80 GB.
+      autotrust/JEV-27B-VL:
+        max_model_len: 32768
+        max_num_seqs: 8
+        extra_args:
+          - --enable-lora
+          - --max-lora-rank=32
+          - --lora-modules=jev-decision={model_path}/adapter_vllm
+          - --logprobs-mode=processed_logprobs
+          - --mamba-cache-mode=align
 
 
 # ── Static lane configuration (optional) ─────────────────────────────────────

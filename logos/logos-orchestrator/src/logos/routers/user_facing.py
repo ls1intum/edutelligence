@@ -23,7 +23,8 @@ from logos.auth import authenticate_api_key
 from logos.batch_api import handle_batch_api_request
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.dbrequest import WebSearchRequest
+from logos.dbutils.dbrequest import SystemOneRequest, WebSearchRequest
+from logos.decision import DecisionError, answer_system_one
 from logos.errors import coerce_upstream_error
 from logos.jobs.job_service import JobService
 from logos.logosnode_snapshot import _resolve_requested_model_name, claude_visible_id
@@ -514,14 +515,17 @@ _ERROR_TYPES = {
 }
 
 
-async def _messages_turn(request: Request, payload: dict) -> tuple[int, dict]:
-    """One non-streaming Messages request through the normal pipeline, in process.
+async def _pipeline_turn(path: str, request: Request, payload: dict) -> tuple[int, Optional[dict]]:
+    """One non-streaming request through the normal pipeline, in process.
 
     The client's own request with a different body: same headers, so the same
     key, client IP and routing hints; a fresh request id and log entry, so the
     turn is accounted like any other. The body stream ends after the payload
     and then waits instead of reporting a disconnect — a client that leaves
     cancels the task running this turn instead.
+
+    Returns the status and the JSON body, ``None`` for an unreadable one.
+    Raises the pipeline's HTTPException for a request it rejects.
     """
     raw = json.dumps(payload).encode()
     headers = [(k, v) for k, v in request.scope["headers"] if k.lower() != b"content-length"]
@@ -536,14 +540,7 @@ async def _messages_turn(request: Request, payload: dict) -> tuple[int, dict]:
         await asyncio.Event().wait()
 
     turn = Request({**request.scope, "headers": headers}, receive)
-    try:
-        response = await handle_sync_request("v1/messages", turn)
-    except HTTPException as exc:
-        status = exc.status_code
-        return status, {
-            "type": "error",
-            "error": {"type": _ERROR_TYPES.get(status, "api_error"), "message": str(exc.detail)},
-        }
+    response = await handle_sync_request(path, turn)
     if isinstance(response, StreamingResponse):
         body = b"".join(
             [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
@@ -553,12 +550,27 @@ async def _messages_turn(request: Request, payload: dict) -> tuple[int, dict]:
     try:
         data = json.loads(body)
     except ValueError:
+        data = None
+    return response.status_code, data
+
+
+async def _messages_turn(request: Request, payload: dict) -> tuple[int, dict]:
+    """One non-streaming Messages request through the normal pipeline, in process."""
+    try:
+        status, data = await _pipeline_turn("v1/messages", request, payload)
+    except HTTPException as exc:
+        status = exc.status_code
+        return status, {
+            "type": "error",
+            "error": {"type": _ERROR_TYPES.get(status, "api_error"), "message": str(exc.detail)},
+        }
+    if data is None:
         return 502, {
             "type": "error",
             "error": {"type": "api_error", "message": "The model returned an unreadable response."},
         }
-    if response.status_code != 200:
-        return response.status_code, translate_error(data)
+    if status != 200:
+        return status, translate_error(data)
     return 200, data
 
 
@@ -604,6 +616,29 @@ async def _serve_server_web_search(request: Request, payload: dict, tool: dict):
             yield event
 
     return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@router.post("/v1/systemone", tags=["decisions"], summary="Answer typed questions with a decision model")
+async def system_one(body: SystemOneRequest, request: Request):
+    """Answer noul, choice and score questions about a state with calibrated probabilities.
+
+    Each question is one completion on the decision model's lane, run through
+    the normal pipeline (authorisation, scheduling, logging, billing).
+    """
+    authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
+
+    async def turn(path: str, payload: dict) -> tuple[int, Optional[dict]]:
+        try:
+            return await _pipeline_turn(path, request, payload)
+        except HTTPException as exc:
+            return exc.status_code, {"error": {"message": str(exc.detail)}}
+
+    try:
+        return await answer_system_one(body, turn)
+    except DecisionError as exc:
+        if exc.body is not None:
+            return JSONResponse(exc.body, status_code=exc.status)
+        return JSONResponse({"error": {"message": str(exc), "type": "invalid_request_error"}}, status_code=exc.status)
 
 
 @router.post("/v1/{path:path}", tags=["user-facing"])
