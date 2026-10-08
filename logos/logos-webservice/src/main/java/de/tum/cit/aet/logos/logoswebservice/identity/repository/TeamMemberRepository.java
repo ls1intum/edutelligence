@@ -32,5 +32,7 @@ public interface TeamMemberRepository extends JpaRepository<TeamMember, TeamMemb
 
     List<TeamMember> findById_UserIdAndSource(Integer userId, TeamMemberSource source);
 
+    List<TeamMember> findById_TeamIdAndSource(Integer teamId, TeamMemberSource source);
+
     boolean existsById_UserIdAndIsOwnerTrue(Integer userId);
 }

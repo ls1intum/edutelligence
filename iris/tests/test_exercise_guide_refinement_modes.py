@@ -11,7 +11,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from iris.config import Settings, settings as iris_settings  # noqa: E402
-from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
+from iris.domain.status.suggested_context_dto import SuggestedContextDTO  # noqa: E402
+from iris.pipeline.chat.chat_pipeline import (  # noqa: E402
+    ChatPipeline,
+    _guide_problem_statement,
+)
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode  # noqa: E402
 
 
@@ -23,7 +27,10 @@ def _make_dto():
             id=7,
             name="Test Course",
             competencies=[],
-            exercises=[],
+            exercises=[
+                SimpleNamespace(id=4, problem_statement="Implement the strategy."),
+                SimpleNamespace(id=5, problem_statement="Implement the observer."),
+            ],
             student_analytics_dashboard_enabled=False,
         ),
         lecture=None,
@@ -287,3 +294,89 @@ def test_non_exercise_modes_never_invoke_guide(chat_mode):
     _run_pipeline(pipeline, callback)
 
     pipeline._run_guide_refinement.assert_not_called()
+
+
+def _switching_pipeline(chat_mode: IrisChatMode, switch: SuggestedContextDTO):
+    """A pipeline whose agent switches the context before it answers."""
+    pipeline = _make_pipeline(chat_mode)
+
+    def execute_agent(state):
+        pipeline._captured_state = state
+        state.pending_context_switch = switch
+        return "agent answer"
+
+    pipeline.execute_agent = execute_agent
+    pipeline._run_guide_refinement = MagicMock(
+        return_value=("Please use a smaller hint.", "Please use a smaller hint.")
+    )
+    return pipeline
+
+
+@pytest.mark.parametrize("chat_mode", [IrisChatMode.COURSE, IrisChatMode.LECTURE])
+def test_switch_into_a_programming_exercise_invokes_guide(chat_mode):
+    pipeline = _switching_pipeline(
+        chat_mode, SuggestedContextDTO(mode=IrisChatMode.EXERCISE, entity_id=4)
+    )
+    callback = MagicMock()
+
+    _run_pipeline(pipeline, callback)
+
+    pipeline._run_guide_refinement.assert_called_once()
+    assert callback.send_result.call_args_list[0].args[0] == (
+        "Please use a smaller hint."
+    )
+
+
+@pytest.mark.parametrize(
+    "switch",
+    [
+        SuggestedContextDTO(mode=IrisChatMode.COURSE, entity_id=7),
+        SuggestedContextDTO(mode=IrisChatMode.LECTURE, entity_id=3),
+        SuggestedContextDTO(mode=IrisChatMode.TEXT_EXERCISE, entity_id=6),
+    ],
+)
+def test_switch_away_from_a_programming_exercise_skips_guide(switch):
+    pipeline = _switching_pipeline(IrisChatMode.EXERCISE, switch)
+    callback = MagicMock()
+
+    _run_pipeline(pipeline, callback)
+
+    pipeline._run_guide_refinement.assert_not_called()
+    assert callback.send_result.call_args_list[0].args[0] == "agent answer"
+
+
+def test_guide_checks_against_the_target_exercise_after_a_switch():
+    state = SimpleNamespace(
+        dto=_make_dto(),
+        pending_context_switch=SuggestedContextDTO(
+            mode=IrisChatMode.EXERCISE, entity_id=5
+        ),
+    )
+
+    assert _guide_problem_statement(state) == "Implement the observer."
+
+
+def test_guide_checks_against_the_active_exercise_without_a_switch():
+    state = SimpleNamespace(dto=_make_dto(), pending_context_switch=None)
+
+    assert _guide_problem_statement(state) == "Implement the exercise."
+
+
+def test_guide_after_a_switch_into_an_exercise_does_not_stream_a_second_answer():
+    """The agent's answer was streamed already, so the guide result comes with the final result."""
+    pipeline = _make_refinement_pipeline()
+    pipeline.chat_mode = IrisChatMode.COURSE
+    pipeline._create_partial_result_sender = MagicMock()
+    pipeline._run_guide_refinement = MagicMock(return_value=("!ok!", "agent answer"))
+    state = SimpleNamespace(
+        dto=_make_dto(),
+        result="agent answer",
+        pending_context_switch=SuggestedContextDTO(
+            mode=IrisChatMode.EXERCISE, entity_id=4
+        ),
+    )
+
+    assert pipeline._refine_response(state) == "agent answer"
+
+    pipeline._create_partial_result_sender.assert_not_called()
+    assert pipeline._run_guide_refinement.call_args.kwargs["stream_handler"] is None

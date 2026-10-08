@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Activity-tab FULL-privacy existence check.
+
+         getTeamActivity polls every five seconds and asks whether any row in
+         the selected window was stored at FULL privacy (export hint). That
+         EXISTS is outside the aggregate cache, so a busy BILLING-only team
+         would otherwise walk every row in the window on every refresh via
+         idx_log_entry_team_ts_request and then heap-filter privacy_level.
+
+         The partial index keeps an empty consented window an index-only
+         miss on (team_id, timestamp_request) rather than a scan proportional
+         to traffic. Predicate matches the query exactly so PostgreSQL can
+         use the index for EXISTS ... privacy_level = 'FULL'.
+
+         Runs outside a transaction so CONCURRENTLY does not lock log_entry
+         against writers (same rationale as 012/014/027/028/035/036/043/049). -->
+    <changeSet id="056-log-entry-team-full-privacy-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_team_full_privacy"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_log_entry_team_full_privacy
+                ON log_entry (team_id, timestamp_request)
+                WHERE privacy_level = 'FULL';
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_team_full_privacy;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

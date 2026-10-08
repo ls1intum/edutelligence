@@ -380,7 +380,7 @@ class TestWhatTheEngineSaysItself:
 
 
 class TestNotReactingToItself:
-    """The orchestrator says how busy a model is, never who is keeping it so.
+    """These payloads carry no per-key split, so the share is estimated.
 
     A runner with sessions in flight reads its own requests as platform
     load: it pauses itself for them, the load it reacted to leaves with
@@ -451,6 +451,303 @@ class TestNotReactingToItself:
         reading = capacity.parse_scheduler_state(self.busy(4.0), lane=self.LANE)
 
         assert reading.busy_slots == 4
+
+
+class TestWhoIsKeepingItBusy:
+    """The per-key split: a session may start subagents, and they hold slots.
+
+    A session count sees at most one request per running session. A session
+    that has fanned out into subagents holds several of a model's slots at
+    once, and the estimate subtracts only the first of them — the rest reads
+    as user load, and the runner pauses for its own work, thaws, and pauses
+    again. Every session's traffic, subagents included, goes through the
+    runner's one key, and the split for that key is the figure that sees
+    all of it.
+    """
+
+    LANE = frozenset({("15", "97")})
+    MODEL = "Qwen/Qwen3.8-27B"
+
+    @staticmethod
+    def one(running: float, split: dict | None = None):
+        model = {
+            "model_name": "Qwen/Qwen3.8-27B",
+            "active": 0,
+            "queue_depth": 0,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": running,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        if split is not None:
+            model["active_by_api_key"] = split
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {"97": model},
+                    }
+                }
+            },
+        }
+
+    @staticmethod
+    def two(a_running: float, a_split: dict | None, b_running: float, b_split: dict | None):
+        def model(name: str, running: float, split: dict | None):
+            m = {
+                "model_name": name,
+                "active": 0,
+                "queue_depth": 0,
+                "max_capacity": 10,
+                "loaded": True,
+                "scheduler_signals": {
+                    "requests_running_current": running,
+                    "queue_waiting_current": 0.0,
+                },
+            }
+            if split is not None:
+                m["active_by_api_key"] = split
+            return m
+
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {
+                    "15": {
+                        "models": {
+                            "97": model("model-a", a_running, a_split),
+                            "37": model("model-b", b_running, b_split),
+                        }
+                    }
+                }
+            },
+        }
+
+    def test_a_session_with_subagents_is_not_platform_load(self):
+        # One session, ten in-flight requests: it plus the subagents it
+        # started. All of them run under the runner's key, so all of them
+        # come off the figure and nothing is left to pause for.
+        payload = self.one(running=10.0, split={"7": 10})
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 1}, own_api_key_id=7)
+
+        assert reading.busy_slots == 0 and reading.load == 0.0
+        assert not capacity.pause_decision(reading)[0]
+
+    def test_the_session_count_estimate_pauses_for_the_subagents(self):
+        # The same moment, read without the split: the estimate subtracts
+        # the one session and reads the other nine as user load —
+        # pause-worthy. That is the oscillation the split removes, and it is
+        # what a payload without the per-key figure still does.
+        payload = self.one(running=10.0)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 1})
+
+        assert reading.load == 0.9
+        assert capacity.pause_decision(reading)[0]
+
+    def test_without_the_split_the_estimate_still_applies(self):
+        # An orchestrator without the split offers no per-key figure; the
+        # session count is the only discount the payload supports, and it
+        # still comes off.
+        payload = self.one(running=3.0)
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 2}, own_api_key_id=7)
+
+        assert reading.busy_slots == 1 and reading.load == 0.1
+
+    def test_a_key_that_holds_nothing_here_counts_zero(self):
+        # The split says this key holds none of the model's slots — the
+        # session is between turns. Zero is the answer: subtracting the
+        # session count would erase one of the user's requests.
+        payload = self.one(running=4.0, split={"9": 4})
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 1}, own_api_key_id=7)
+
+        assert reading.busy_slots == 4 and reading.load == 0.4
+
+    def test_the_split_does_not_leak_between_models(self):
+        # Ours on model A must not discount model B: on a model the key has
+        # no request on the split says zero, and zero comes off — not a
+        # session count that would subtract traffic that is not there.
+        payload = self.two(a_running=1.0, a_split={"7": 1}, b_running=5.0, b_split={"9": 5})
+        lane = frozenset({("15", "97"), ("15", "37")})
+
+        reading = capacity.parse_scheduler_state(
+            payload, lane=lane, ours={"model-a": 1, "model-b": 1}, own_api_key_id=7
+        )
+
+        # A reads as empty; B reads as five of ten, and B is the answer.
+        assert reading.load == 0.5
+        assert "model-b" in reading.detail
+
+    def test_keyed_discount_does_not_erase_users_missing_from_the_engine_sample(self):
+        # Ledger: 18 users + 2 of ours = 20. Engine sample still shows only
+        # the 18 users — our two are dispatched but not yet in the sample.
+        # Subtracting the ledger key count from the sample would report 16
+        # and miss the pause threshold; the matching ledger discount keeps 18.
+        model = {
+            "model_name": self.MODEL,
+            "active": 20,
+            "active_by_api_key": {"7": 2},
+            "queue_depth": 0,
+            "max_capacity": 20,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 18.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, own_api_key_id=7)
+
+        assert reading.busy_slots == 18 and reading.load == 0.9
+        assert capacity.pause_decision(reading)[0]
+
+    def test_only_our_queued_request_is_not_a_waiting_user(self):
+        # Running session whose only request sits in the orchestrator queue:
+        # active_by_api_key is empty, queue_depth is 1, and that one entry is
+        # ours. Without a queued-by-key split the in-flight figure cannot
+        # discount it; with the split the backlog clears and we stay running.
+        model = {
+            "model_name": self.MODEL,
+            "active": 0,
+            "active_by_api_key": {},
+            "queued_by_api_key": {"7": 1},
+            "queue_depth": 1,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 0.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 1}, own_api_key_id=7)
+
+        assert reading.queue_total == 0
+        assert not capacity.pause_decision(reading)[0]
+
+    def test_our_own_engine_waiting_is_not_a_user_waiting(self):
+        # Two of ours in the ledger: one running on the engine, one waiting
+        # behind it. Empty orchestrator backlog. The waiting request is still
+        # in active_by_api_key, not queued_by_api_key — discounting only the
+        # backlog would leave queue_total at 1 and pause both sessions.
+        model = {
+            "model_name": self.MODEL,
+            "active": 2,
+            "active_by_api_key": {"7": 2},
+            "queued_by_api_key": {},
+            "queue_depth": 0,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 1.0,
+                "queue_waiting_current": 1.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 2}, own_api_key_id=7)
+
+        assert reading.busy_slots == 0 and reading.queue_total == 0
+        assert not reading.saturated
+        assert not capacity.pause_decision(reading)[0]
+
+    def test_a_user_waiting_in_the_engine_still_counts(self):
+        # Two of ours running; a stranger sits in the engine wait list.
+        # Residual keyed actives are zero after matching the running sample,
+        # so the waiter stays and we pause.
+        model = {
+            "model_name": self.MODEL,
+            "active": 3,
+            "active_by_api_key": {"7": 2, "9": 1},
+            "queued_by_api_key": {},
+            "queue_depth": 0,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 2.0,
+                "queue_waiting_current": 1.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 2}, own_api_key_id=7)
+
+        assert reading.queue_total == 1 and reading.saturated
+        assert capacity.pause_decision(reading)[0]
+
+    def test_a_lagging_engine_sample_does_not_erase_a_user_waiter(self):
+        # Ledger: one user + two of ours. Engine sample still shows only one
+        # of ours running and one waiter — our second request is dispatched
+        # but missing from the sample. The residual keyed gap must not clear
+        # that waiter: it may be the user's, and ownership is not established
+        # by this snapshot.
+        model = {
+            "model_name": self.MODEL,
+            "active": 3,
+            "active_by_api_key": {"7": 2, "9": 1},
+            "queued_by_api_key": {},
+            "queue_depth": 0,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 1.0,
+                "queue_waiting_current": 1.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 2}, own_api_key_id=7)
+
+        assert reading.busy_slots == 1 and reading.load == pytest.approx(0.1)
+        assert reading.queue_total == 1 and reading.saturated
+        assert capacity.pause_decision(reading)[0]
+
+    def test_session_estimate_still_clears_our_queued_work_on_older_payloads(self):
+        # No per-key splits at all: the session count still empties a backlog
+        # that can only be ours on this lane.
+        model = {
+            "model_name": self.MODEL,
+            "active": 0,
+            "queue_depth": 1,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 0.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, ours={self.MODEL: 1})
+
+        assert reading.queue_total == 0
+        assert not capacity.pause_decision(reading)[0]
 
 
 class TestWhichDecisionGetsTheDiscount:

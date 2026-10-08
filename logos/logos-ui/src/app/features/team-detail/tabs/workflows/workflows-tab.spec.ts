@@ -35,7 +35,7 @@ describe('WorkflowsTabComponent review actions', () => {
     start_line: 10,
     end_line: 40,
     detected_model: 'gpt-fast',
-    recommended_sla: 'ux-critical',
+    recommended_slo: 'ux-critical',
     objective_priority: ['latency', 'quality', 'price'],
     confidence: 0.9,
     justification: 'interactive chat',
@@ -243,15 +243,15 @@ describe('WorkflowsTabComponent review actions', () => {
     ).toBe('flowchart TD\n  A --> J["Title LLM (deferred)"]');
   });
 
-  it('overrides with the selected SLA and reordered priority', async () => {
+  it('overrides with the selected SLO and reordered priority', async () => {
     const component = setup();
     await component.load();
-    component.setOverrideSla(55, 'ux-background');
+    component.setOverrideSlo(55, 'ux-background');
     component.movePriority(55, 0, 1);
     await component.override(pending);
     expect(reviewRecommendation).toHaveBeenCalledWith(7, 55, {
       action: 'override',
-      confirmed_sla: 'ux-background',
+      confirmed_slo: 'ux-background',
       confirmed_objective_priority: ['quality', 'latency', 'price'],
       api_key_id: 12,
     });

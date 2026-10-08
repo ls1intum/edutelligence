@@ -4,84 +4,89 @@ title: App Developer
 
 # App Developer
 
-The App Developer role (`app_developer`) is the default role: every
-authenticated user who does not carry a configured admin role on the
-identity provider becomes an App Developer (see the
+The App Developer role (`app_developer`) is the default role. Every
+authenticated user who does not have a configured admin role on the identity
+provider becomes an App Developer (see the
 [installation guide](../admin/installation.md)). App Developers use Logos
-through their team's models and their own API keys.
+with the models of their team and with their own API keys.
 
-The UI shows the role badge "App Developer" in the header menu. Until the
-user belongs to a team that has an API key, the developer-only pages are not
-reachable and the UI shows a **No Access** page instead.
+The UI shows the role badge "App Developer" in the header menu. A user can
+use the developer-only pages only if the user belongs to a team that has an
+API key. Until then, the UI shows a **No Access** page.
 
 ## Models
 
-The deployment's model catalogue, with what each model supports (function
-calling, vision, reasoning) and where it is served. Models can be searched
-and their details opened from the list.
+This page shows the model catalogue of the deployment. For each model, it
+shows what the model supports (function calling, vision, reasoning) and where
+Logos serves the model. You can search the list and open the details of a
+model.
 
 ![Models page](/img/roles/app-developer-models.png)
 
 ## My Workspace
 
-The developer's own view: the teams the user belongs to and the API keys in
-them — including creating, rotating, and revoking keys and setting per-key
-model permissions. This is where a developer gets the secret to call the
-[Logos API](../user/api-usage.md).
+This page is the own view of the developer. It shows the teams of the user and
+the API keys in these teams. On this page, you can create, rotate and revoke
+keys. You can also set model permissions for each key. Use this page to get the
+secret that you need to call the [Logos API](../user/api-usage.md).
 
 ![My Workspace page](/img/roles/app-developer-my-workspace.png)
 
-## AI Tools {#ai-tools}
+## AI Tools
 
-**AI Coding Tools** is a guided setup wizard shared by every role (the page
-itself does not change with the role badge). It walks you through connecting
-a coding assistant — Claude Code or OpenCode — to Logos with your own API
-key. The stepper renumbers itself: **Team** is skipped when you only have
-one key, and **Model** is skipped when that key can only reach one usable
+**AI Coding Tools** is a guided wizard that every role uses. The page does not
+change with the role badge. The wizard helps you to connect a coding
+assistant, Claude Code or OpenCode, to Logos with your own API key. The step
+numbers change to fit your setup. The wizard skips **Team** if you have only
+one key. The wizard skips **Model** if that key can reach only one usable
 model.
 
 ### 1. Tool
 
-Pick Claude Code or OpenCode. The comparison table is the decision surface —
-same Logos models and key either way; they differ in where they run, how
-they treat the context window, and what they do to an existing setup.
+Select Claude Code or OpenCode. The comparison table helps you to decide. Both
+tools use the same Logos models and the same key. They are different in these
+ways: where they run, how they use the context window, and what they do to an
+existing setup.
 
 ![AI Tools — choose tool](/img/roles/ai-tools-step-tool.png)
 
 ### 2. Team
 
-Choose which team's key the assistant will use (billing and model
-permissions follow that key). Shown only when you have more than one key.
+Select the team whose key the assistant uses. The billing and the model
+permissions follow that key. The wizard shows this step only if you have more
+than one key.
 
 ![AI Tools — choose team](/img/roles/ai-tools-step-team.png)
 
 ### 3. Model
 
-Pick the model the assistant should call. For Claude Code the wrapper maps
-every alias (`opus` / `sonnet` / `haiku`) to this one model so `/model`
-never leaves Logos.
+Select the model that the assistant calls. For Claude Code, the wrapper maps
+every alias (`opus` / `sonnet` / `haiku`) to this one model. Thus `/model`
+does not send a request outside Logos.
 
 ![AI Tools — choose model](/img/roles/ai-tools-step-model.png)
 
 ### 4. Install
 
-OS-specific install commands for the tool itself (skip if you already have
-it). Tabs cover macOS, Linux, and Windows.
+This step shows the install commands for the tool for each operating system.
+Do not do this step if the tool is already installed. The tabs show macOS,
+Linux and Windows.
 
 ![AI Tools — install](/img/roles/ai-tools-step-install.png)
 
 ### 5. Connect
 
-Generated commands that wire the tool to this Logos deployment — for Claude
-Code that is the `claude-logos` wrapper (your plain `claude` Anthropic setup
-is left alone). `WebSearch` works in those sessions: Logos runs the searches
-on DuckDuckGo, no Anthropic account needed.
+This step shows generated commands that connect the tool to this Logos
+deployment. For Claude Code, the commands install the `claude-logos` wrapper.
+The wrapper does not change your normal `claude` Anthropic setup. `WebSearch`
+works in these sessions. Logos does the searches on DuckDuckGo, and you do not
+need an Anthropic account.
 
 ![AI Tools — connect](/img/roles/ai-tools-step-connect.png)
 
 ### 6. Verify
 
-Check the connection (`claude-logos --check`), update the wrapper, or
-uninstall it again.
+In this step, you can check the connection (`claude-logos --check`). You can
+also update the wrapper or uninstall it.
 
 ![AI Tools — verify](/img/roles/ai-tools-step-verify.png)

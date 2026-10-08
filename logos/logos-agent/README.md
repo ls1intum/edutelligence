@@ -64,10 +64,14 @@ deliberately not filtered — models share GPUs, so a person waiting on any of
 them is a person this runner gets out of the way of.
 
 **Minus its own share, where that is the right question.** The orchestrator
-reports how busy a model is; it does not report *who* is keeping it busy,
-and nothing in its payload could say. So the runner estimates: a running
-session has at most one request outstanding, per model, and that many come
-off the figures.
+reports how busy a model is, and *who* is keeping it busy: how many of the
+model's in-flight requests each caller key is making. A session may start
+subagents, so one session can hold several of a model's slots at once —
+every session's traffic, subagents included, goes through this runner's one
+key, and the per-key figure for it is the runner's true share. That is what
+comes off the figures. Against an orchestrator that does not report the
+split, the runner falls back to an estimate: a running session has at most
+one request outstanding, per model, and that many come off.
 
 Whether to *hand capacity back* is a question about other people, so it is
 decided on that adjusted figure. Without it a runner reads its own sessions
@@ -376,6 +380,15 @@ requested. Empty the variable to leave only CODEOWNERS.
 `logos-developers` (`LOGOS_AGENT_REVIEW_TEAMS`) is treated like asking the
 agent by name: GitHub never puts the bot login in `requested_reviewers` for
 a team request, so without this list the gesture was silent.
+
+**A requested review is a review, not a commit.** Being added as a
+reviewer — by name or through a team — never gets the agent the branch:
+the session reads `refs/pull/<n>/head`, may not push, and its findings land
+as one review whose inline comments (`review-comments.json`) sit on the
+lines they are about, with `reply.md` as the summary. A line GitHub cannot
+place turns the remarks into one ordinary comment instead. A change on a
+pull request the agent does not own is asked for in a comment by somebody
+whose word counts (see below).
 
 **It reads the pull request it is asked about.** A question on somebody
 else's pull request used to be answered from a checkout of the default

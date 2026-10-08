@@ -5,9 +5,10 @@ import {
   AnalyzeAllResult,
   Team, AdminUser, TeamDetail, TeamMember, TeamApiKey,
   ProviderItem, ProviderModelItem, TeamModelPermission, TeamLimitsPayload,
+  TeamProviderBudget,
   ApiKeyUpdatePayload, CreateApiKeyPayload, MyTeam, TeamRepository,
   TeamRepositoryPayload, TeamWorkflowsResponse, ReviewRecommendationPayload,
-  StoreDeployKeyPayload, AiLlmCallRecommendation, AiWorkflow,
+  StoreDeployKeyPayload, AiLlmCallRecommendation, AiWorkflow, KeycloakGroupDirectory,
 } from '../../shared/models/team.model';
 
 export interface TeamMembersResponse {
@@ -24,8 +25,29 @@ export class TeamManagementService {
     return firstValueFrom(this.http.get<Team[]>('/api/teams'));
   }
 
-  createTeam(name: string, ownerIds: number[]): Promise<Team> {
-    return firstValueFrom(this.http.post<Team>('/api/teams', { name, owner_ids: ownerIds }));
+  /** `keycloakGroup` links the new team to a Keycloak group; Logos admins only. */
+  createTeam(name: string, ownerIds: number[], keycloakGroup?: string | null): Promise<Team> {
+    const body: Record<string, unknown> = { name, owner_ids: ownerIds };
+    if (keycloakGroup) body['keycloak_group'] = keycloakGroup;
+    return firstValueFrom(this.http.post<Team>('/api/teams', body));
+  }
+
+  /**
+   * Links the team to a Keycloak group (logos_admin only); null unlinks it.
+   * Members of the group join on their next login and on the directory sync.
+   */
+  updateTeamKeycloakGroup(teamId: number, keycloakGroup: string | null): Promise<void> {
+    return firstValueFrom(
+      this.http.patch<void>(`/api/teams/${teamId}/keycloak-group`, { keycloak_group: keycloakGroup }),
+    );
+  }
+
+  /**
+   * The realm's groups and roles for the group picker. Reports
+   * `available: false` when the deployment has no Keycloak directory access.
+   */
+  getKeycloakGroups(): Promise<KeycloakGroupDirectory> {
+    return firstValueFrom(this.http.get<KeycloakGroupDirectory>('/api/teams/keycloak-groups'));
   }
 
   deleteTeam(id: number): Promise<void> {
@@ -47,6 +69,31 @@ export class TeamManagementService {
 
   updateTeamLimits(teamId: number, payload: TeamLimitsPayload): Promise<void> {
     return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}`, payload));
+  }
+
+  getTeamProviderBudgets(teamId: number): Promise<TeamProviderBudget[]> {
+    return firstValueFrom(
+      this.http.get<TeamProviderBudget[]>(`/api/admin/teams/${teamId}/provider-budgets`),
+    );
+  }
+
+  upsertTeamProviderBudget(
+    teamId: number,
+    providerId: number,
+    monthlyBudgetMicroCents: number | null,
+  ): Promise<TeamProviderBudget> {
+    return firstValueFrom(
+      this.http.put<TeamProviderBudget>(
+        `/api/admin/teams/${teamId}/provider-budgets/${providerId}`,
+        { monthly_budget_micro_cents: monthlyBudgetMicroCents },
+      ),
+    );
+  }
+
+  deleteTeamProviderBudget(teamId: number, providerId: number): Promise<void> {
+    return firstValueFrom(
+      this.http.delete<void>(`/api/admin/teams/${teamId}/provider-budgets/${providerId}`),
+    );
   }
 
   /** Sets the queue priority of a team's traffic (logos_admin only); null unsets it. */

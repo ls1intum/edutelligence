@@ -5,153 +5,171 @@ title: App Admin
 # App Admin
 
 The App Admin role (`app_admin`) manages the application for its people:
-users, teams, and keys — without touching the platform-level settings
-(providers, policies, billing, agent sessions), which stay with the
-[Logos Admin](logos-admin.md). On the identity provider, an account becomes
-an App Admin when it carries the OIDC role configured in
+users, teams and keys. An App Admin does not change the platform-level
+settings (providers, policies, billing, agent sessions). These settings stay
+with the [Logos Admin](logos-admin.md). On the identity provider, an account
+becomes an App Admin if the account has the OIDC role that is configured in
 `KEYCLOAK_ROLES_APP_ADMIN` (see the
 [installation guide](../admin/installation.md)).
 
 The UI shows the role badge "App Admin" in the header menu.
 
-## Models {#models}
+## Models
 
-The deployment's model catalogue: name, description, and capabilities.
-App Admins see the list but not the per-model operator controls (weights,
-aliases, add/delete).
+This page shows the model catalogue of the deployment: the name, the
+description and the capabilities of each model. App Admins see the list. They
+do not see the operator controls for each model (weights, aliases, add and
+delete).
 
 ![Models page](/img/roles/app-admin-models.png)
 
 ## Users
 
-The users of the deployment: their role, teams, and status. An App Admin can
-create users and assign them to teams — but can only create App Developers,
-never higher roles.
+This page shows the users of the deployment, with their role, teams and
+status. An App Admin can create users and assign them to teams. An App Admin
+can create only App Developers, and no higher roles.
 
 ![Users page](/img/roles/app-admin-user-management.png)
 
-## Teams {#teams}
+## Teams
 
-Teams, their owners, and members. App Admins can create teams, add members,
-and manage the team's API keys — for the teams they own.
+This page shows the teams, their owners and their members. For the teams that
+they own, App Admins can create teams, add members and manage the API keys of
+the team.
 
 ![Teams page](/img/roles/app-admin-team-management.png)
 
-Opening a team opens its detail view. Owners (and Logos Admins) get the full
-tab set below; other members only see **Overview** and **Members**.
+When you open a team, the page shows the detail view of the team. Owners and
+Logos Admins see all the tabs that follow. Other members see only
+**Overview** and **Members**.
 
 ### Overview
 
-Headcount, active keys, permitted models, member budget usage, and the
-defaults applied when a key or member has no individual limit.
+This tab shows the number of members, the active keys, the permitted models
+and the budget use of the members. It also shows the defaults that apply when a
+key or a member has no individual limit.
 
 ![Team detail — Overview](/img/roles/team-detail-overview.png)
 
 ### Members
 
-Owners and members, with per-person budget and rate-limit overrides. Add or
-remove people here (unless the team is Keycloak-managed).
+This tab shows the owners and the members, with budget and rate-limit
+overrides for each person. Add or remove people here. If a Keycloak group is
+linked to the team, then you cannot remove the members that Keycloak added.
+Logos makes these members agree with the group at each login.
 
 ![Team detail — Members](/img/roles/team-detail-members.png)
 
 ### Application Keys
 
-Application (service) keys that belong to the team — create, rotate, revoke,
-and set per-key limits / model permissions.
+This tab shows the application (service) keys of the team. You can create,
+rotate and revoke keys. You can also set limits and model permissions for each
+key.
 
 ![Team detail — Application Keys](/img/roles/team-detail-application-keys.png)
 
 ### Repositories
 
-GitHub repositories this team's applications live in. Owners link a repository
-URL, branch, and optional path filters; for private repos they can paste a
-read-only deploy key. LogosOSSAgent picks up a newly linked repository on its
-own within a few minutes; queue an analysis from the same tab to run it sooner
-(one at a time — a second request while one is queued or running is refused).
-Every night it re-analyses each repository whose branch has new commits;
-an unchanged repository is skipped.
+This tab shows the GitHub repositories that contain the applications of the
+team. Owners link a repository URL, a branch and optional path filters. For
+private repositories, owners can paste a read-only deploy key. LogosOSSAgent
+finds a newly linked repository automatically within a few minutes. To start
+an analysis sooner, queue it on the same tab. You can queue only one analysis
+at a time. Logos refuses a second request while an analysis is queued or runs.
+Each night, LogosOSSAgent analyzes again each repository whose branch has new
+commits. It does not analyze a repository that has no change.
 
 ![Team detail — Repositories](/img/roles/team-detail-repositories.png)
 
 ### Workflows
 
-Latest AI-workflow analyses for the team's linked repositories: Mermaid
-diagrams of detected flows and per-call **SLA** plus **objective priority**
-recommendations (ordered latency / quality / price). Owners (and Logos Admins)
-can **edit** a workflow's Mermaid diagram; later analyses keep that edit and,
-when the agent draws something different, show an **Agent update** beside it
-so you can **Accept** the proposal or **Keep mine**. Owners can also **Accept**
-a recommendation, **Override** SLA or priority order, or **Reject** it. The
-**Application key** picker above the recommendations applies
-to every Accept and Override on the tab — it defaults to the team's
-highest-priority key (usually production), and **No key** leaves key
-priorities untouched. Accepting or overriding sets that key's queue priority
-from the confirmed SLA so the orchestrator serves traffic accordingly.
+This tab shows the latest AI-workflow analyses for the linked repositories of
+the team. It shows Mermaid diagrams of the flows that the analysis found. It
+also shows recommendations for each call: the **SLO** and the **objective
+priority** (the order of latency, quality and price). Owners and Logos Admins
+can **edit** the Mermaid diagram of a workflow. Later analyses keep that edit.
+If the agent draws a different diagram, the tab shows an **Agent update** next
+to the edit. Then you can select **Accept** for the proposal or **Keep mine**.
+Owners can also **Accept** a recommendation, **Override** the SLO or the
+priority order, or **Reject** the recommendation.
 
-A re-analysis **proposes**, it does not overwrite. When it recommends what you
-already accepted, overrode to, or rejected for a call site, that decision is
-kept ("Kept from the previous analysis"). When it recommends something else,
-the call site is **pending** again and shows the earlier decision next to the
-new proposal ("Was accepted: ux-critical · latency › quality › price"); key
-priorities change only when you review it. A decision survives analyses you
-have not reviewed yet: the earlier one is still what is shown and carried
-over. If a newer analysis arrived while the tab was open, reviewing an
-outdated proposal is refused — reload the tab.
+The **Application key** picker above the recommendations applies to every
+Accept and Override on the tab. The default is the key of the team with the
+highest priority (usually the production key). If you select **No key**, the
+key priorities do not change. When you accept or override a recommendation,
+Logos sets the queue priority of that key from the confirmed SLO. Thus the
+orchestrator serves the traffic as the SLO requires.
 
-The analysis often cannot tell which model a call site uses (it is usually
-configuration, not code), so the **Model** column is a picker: choose the model
-the call site actually uses, or leave it **Unknown**. Later analyses keep your
-pick. When the model has Likert
-profile ratings, a spider chart is shown beside it.
+A new analysis **proposes** changes and does not overwrite your decisions. If
+it recommends what you already accepted, overrode or rejected for a call site,
+Logos keeps your decision ("Kept from the previous analysis"). If it
+recommends something different, the call site is **pending** again. The tab
+then shows the earlier decision next to the new proposal ("Was accepted:
+ux-critical · latency › quality › price"). The key priorities change only
+after you review the proposal. A decision stays valid through analyses that you
+did not review. The tab shows the earlier decision, and Logos carries it over.
+If a newer analysis arrives while the tab is open, Logos refuses the review of
+an outdated proposal. Then reload the tab.
+
+The analysis often cannot find which model a call site uses, because this
+information is usually in the configuration and not in the code. Thus the
+**Model** column is a picker. Select the model that the call site uses, or
+leave the value **Unknown**. Later analyses keep your selection. If the model
+has Likert profile ratings, the tab shows a spider chart next to it.
 
 ![Team detail — Workflows](/img/roles/team-detail-workflows.png)
 
-### Models {#team-models}
+### Models
 
-Which catalogue models this team may use.
+This tab shows which catalogue models the team can use.
 
 ![Team detail — Models](/img/roles/team-detail-models.png)
 
 ### Activity
 
-Live queue state for the team, recent request log, token totals, and export.
+This tab shows the live queue state of the team, the recent request log, the
+token totals and the export function.
 
 ![Team detail — Activity](/img/roles/team-detail-activity.png)
 
 ### Cloud Usage
 
-What cloud providers charged for this team's off-site traffic (local models
-do not appear here — see Activity for that).
+This tab shows the charges of the cloud providers for the off-site traffic of
+the team. Local models do not show here. For local models, see Activity.
 
 ![Team detail — Cloud Usage](/img/roles/team-detail-cloud-usage.png)
 
 ### Settings
 
-Team monthly budget, default key budget, and default cloud/local rate limits.
-Also where an owner deletes the team.
+This tab shows the monthly budget of the team, the default key budget and the
+default cloud and local rate limits. An owner can also delete the team here.
+If a Keycloak group is linked to the team, then the tab shows the name of the
+group and no delete control. Only a Logos Admin can change or remove the link.
+See [Logos Admin → Keycloak Group Links](logos-admin.md#keycloak-group-links).
 
 ![Team detail — Settings](/img/roles/team-detail-settings.png)
 
 ## My Workspace
 
-The developer-facing view of the signed-in user: their teams, their API keys
-(create, rotate, revoke), and per-key model permissions. Available to every
-role that has at least one team and key.
+This page is the developer view of the signed-in user. It shows the teams of
+the user and the API keys of the user. You can create, rotate and revoke keys.
+You can also set model permissions for each key. Every role that has at least
+one team and one key can use this page.
 
 ![My Workspace page](/img/roles/app-admin-my-workspace.png)
 
 ## AI Tools
 
-Same guided setup as for every other role — pick a coding assistant, team
-key, and model, then install and connect. The page does not change with the
-role; see the step-by-step walkthrough under
+This is the same guided setup as for every other role. Select a coding
+assistant, a team key and a model. Then install the assistant and connect it.
+The page does not change with the role. For the step-by-step procedure, see
 [App Developer → AI Tools](app-developer.md#ai-tools).
 
-## Batches {#batches}
+## Batches
 
-The OpenAI Batch API in the browser: upload a `.jsonl` file, watch the job's
-progress, download the result file. See [batch processing](../batch-processing.md)
-for what happens server-side. The page is the same for every role that can
-open it (App Admin and Logos Admin).
+This page is the OpenAI Batch API in the browser. Upload a `.jsonl` file, look
+at the progress of the job and download the result file. For the server-side
+process, see [batch processing](../batch-processing.md). The page is the same
+for every role that can open it (App Admin and Logos Admin).
 
 ![Batches page](/img/roles/batches.png)

@@ -19,15 +19,19 @@ import de.tum.cit.aet.logos.logoswebservice.identity.ObjectivePriority;
 @Service
 public class ExportImportService {
 
-    private static final List<String> TABLES = List.of(
+    static final List<String> TABLES = List.of(
         "users", "teams", "team_repositories", "team_repository_credentials",
         "team_members", "api_keys", "providers", "models",
         "model_provider", "team_model_permissions", "api_key_model_permissions",
         "team_provider_permissions", "api_key_provider_permissions", "policies",
+        "team_provider_budgets",
         "ai_workflow_analyses", "ai_workflows", "ai_llm_call_recommendations",
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );
     private static final Set<String> TABLE_WHITELIST = Set.copyOf(TABLES);
+
+    /** Tables added after exports already existed; an export without one restores it empty. */
+    private static final Set<String> OPTIONAL_TABLES = Set.of("team_provider_budgets");
 
     private static final List<String> SEQUENCE_TABLES = List.of(
         "users", "teams", "team_repositories", "api_keys", "providers", "models",
@@ -105,11 +109,7 @@ public class ExportImportService {
 
     @Transactional
     public Map<String, Object> importData(Map<String, Object> jsonData) {
-        for (String table : TABLES) {
-            if (!jsonData.containsKey(table)) {
-                throw new IllegalArgumentException("Missing table in json: " + table);
-            }
-        }
+        requireTables(jsonData);
         // Snapshot (session_id → team_id + repo_slug) so linked analysis
         // sessions can be reattached after truncate replaces repository rows.
         List<Map<String, Object>> sessionLinks = jdbc.queryForList("""
@@ -120,7 +120,7 @@ public class ExportImportService {
         detachAgentSessionsFromRepositories();
         try {
             for (String table : TABLES) {
-                List<?> rows = (List<?>) jsonData.get(table);
+                List<?> rows = (List<?>) jsonData.getOrDefault(table, List.of());
                 jdbc.execute("TRUNCATE TABLE " + safeTable(table) + " CASCADE");
                 List<Map<String, Object>> normalized = normalizeImportRows(table, rows);
                 if (!normalized.isEmpty()) {
@@ -144,6 +144,14 @@ public class ExportImportService {
         sanitizeImportedAnalysisSessionLinks();
         resetSequences();
         return Map.of("result", "Import successful");
+    }
+
+    static void requireTables(Map<String, Object> jsonData) {
+        for (String table : TABLES) {
+            if (!jsonData.containsKey(table) && !OPTIONAL_TABLES.contains(table)) {
+                throw new IllegalArgumentException("Missing table in json: " + table);
+            }
+        }
     }
 
     /**
@@ -170,16 +178,24 @@ public class ExportImportService {
             if ("models".equals(table) && copy.get("profile_ratings") == null) {
                 copy.put("profile_ratings", Map.of());
             }
-            if ("ai_llm_call_recommendations".equals(table)
-                    && copy.get("objective_priority") == null) {
-                Object sla = copy.get("recommended_sla");
-                copy.put(
-                    "objective_priority",
-                    ObjectivePriority.forSla(sla == null ? null : String.valueOf(sla)));
-            }
             if ("ai_llm_call_recommendations".equals(table)) {
+                // Dumps taken before the sla → slo column rename still carry the
+                // old key names; jsonb_populate_recordset drops unknown keys,
+                // which would fail the NOT NULL recommended_slo insert.
+                if (copy.get("recommended_slo") == null && copy.get("recommended_sla") != null) {
+                    copy.put("recommended_slo", copy.remove("recommended_sla"));
+                }
+                if (copy.get("confirmed_slo") == null && copy.get("confirmed_sla") != null) {
+                    copy.put("confirmed_slo", copy.remove("confirmed_sla"));
+                }
                 for (String flag : List.of("model_set_by_owner", "review_carried_over")) {
                     if (copy.get(flag) == null) copy.put(flag, false);
+                }
+                if (copy.get("objective_priority") == null) {
+                    Object slo = copy.get("recommended_slo");
+                    copy.put(
+                        "objective_priority",
+                        ObjectivePriority.forSlo(slo == null ? null : String.valueOf(slo)));
                 }
             }
             if ("ai_workflows".equals(table) && copy.get("diagram_set_by_owner") == null) {

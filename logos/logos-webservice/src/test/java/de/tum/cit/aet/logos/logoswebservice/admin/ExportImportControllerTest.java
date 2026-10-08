@@ -354,7 +354,8 @@ class ExportImportControllerTest {
         rec.put("detected_model", "gpt-fast");
         rec.put("api_key_id", null);
         rec.put("recommended_sla", "ux-critical");
-        // Pre-044: no objective_priority / confirmed_objective_priority
+        // Pre-044: no objective_priority / confirmed_objective_priority; the sla
+        // key names are from before the rename to slo and exercise the mapping.
         rec.put("confidence", 0.9);
         rec.put("justification", "interactive");
         rec.put("traffic_flags", java.util.Map.of("night_heavy", false));
