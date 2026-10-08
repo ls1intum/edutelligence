@@ -41,6 +41,8 @@ export class Agents implements OnInit {
   private agentService = inject(AgentService);
   private teamService = inject(TeamManagementService);
   private destroyRef = inject(DestroyRef);
+  /** Local clock: elapsed timings keep moving even when session polling stops. */
+  private now = signal(Date.now());
 
   /** The template binds a numeric workspace id to the select's string value. */
   readonly String = String;
@@ -171,18 +173,16 @@ export class Agents implements OnInit {
 
   // ── lifecycle ────────────────────────────────────────────────────────────
   async ngOnInit(): Promise<void> {
-    // Register cleanup before the awaited refresh: navigating away while the
-    // initial HTTP requests are pending would otherwise resume on a destroyed
-    // component, create the polling interval, then fail to register onDestroy.
-    let timer: ReturnType<typeof setInterval> | undefined;
+    this.now.set(Date.now());
+    const clock = setInterval(() => this.now.set(Date.now()), 1000);
+    const timer = setInterval(() => void this.tick(), POLL_MS);
     this.destroyRef.onDestroy(() => {
-      if (timer !== undefined) clearInterval(timer);
+      clearInterval(clock);
+      clearInterval(timer);
       this.stopStream();
       this.resetScreenshots();
     });
     await this.refresh();
-    if (this.destroyRef.destroyed) return;
-    timer = setInterval(() => void this.tick(), POLL_MS);
   }
 
   private async tick(): Promise<void> {
@@ -777,12 +777,25 @@ export class Agents implements OnInit {
 
   duration(session: AgentSession): string {
     if (!session.started_at) return '—';
-    const end = session.finished_at ? new Date(session.finished_at) : new Date();
-    const seconds = Math.max(0, (end.getTime() - new Date(session.started_at).getTime()) / 1000);
-    const wholeSeconds = Math.floor(seconds);
-    if (wholeSeconds < 60) return `${wholeSeconds}s`;
-    if (wholeSeconds < 3600) return `${Math.floor(wholeSeconds / 60)}m ${wholeSeconds % 60}s`;
-    return `${Math.floor(wholeSeconds / 3600)}h ${Math.floor((wholeSeconds % 3600) / 60)}m`;
+    return this.elapsed(session.started_at, session.finished_at);
+  }
+
+  queueDuration(session: AgentSession): string {
+    // A cancellation before starting ends the wait without a runtime.
+    return this.elapsed(session.created_at, session.started_at ?? session.finished_at);
+  }
+
+  finishedAgo(session: AgentSession): string {
+    return session.finished_at ? this.elapsed(session.finished_at) : '—';
+  }
+
+  private elapsed(start: string, end: string | null = null): string {
+    const milliseconds = (end ? Date.parse(end) : this.now()) - Date.parse(start);
+    if (!Number.isFinite(milliseconds)) return '—';
+    const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+    return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
   }
 
   taskPreview(task: string): string {
