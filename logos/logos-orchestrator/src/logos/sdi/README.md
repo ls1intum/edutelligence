@@ -147,7 +147,7 @@ facade.update_rate_limits(10, 'gpt-4o', response.headers)
 - `get_model_profiles(provider_id)` → `dict[str, ModelProfile]` - Calibrated profiles
 - `evaluate_admission(model_id, provider_id)` → `AdmissionDecision` - Forwarding gate
 - `is_provider_online(provider_id)` → `bool` - Live, non-stale worker session
-- `on_request_start(request_id, model_id, provider_id, priority='normal')` - Track request arrival (→ queue)
+- `on_request_start(request_id, model_id, provider_id, priority='normal', api_key_id=None)` - Track request arrival (→ queue)
 - `on_request_begin_processing(request_id)` - Track processing start (queue → active)
 - `on_request_complete(request_id, was_cold_start, duration_ms)` → `RequestMetrics` - Track completion
 

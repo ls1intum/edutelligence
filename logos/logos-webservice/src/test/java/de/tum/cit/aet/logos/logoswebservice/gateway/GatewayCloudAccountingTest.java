@@ -277,6 +277,34 @@ class GatewayCloudAccountingTest {
     }
 
     @Test
+    void aHeaderOptingInStoresThePayloadsOfABillingKey() throws Exception {
+        Fixture f = seedPricedDeployment("BILLING");
+        Integer logId = accounting.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY, "FULL");
+        assertThat(logId).isNotNull();
+        assertThat(privacyLevel(logId)).isEqualTo("FULL");
+        assertThat(inputPayloadField(logId, "model")).isEqualTo("m");
+
+        accounting.settleSuccess(logId, Map.of("prompt_tokens", 10L),
+            "{\"ok\":true}".getBytes(java.nio.charset.StandardCharsets.UTF_8), null);
+
+        assertThat(responsePayload(logId)).contains("\"ok\"");
+    }
+
+    @Test
+    void aHeaderOptingOutDropsThePayloadsOfAFullKey() {
+        Fixture f = seedPricedDeployment("FULL");
+        Integer logId = accounting.admitAndReserve(f.key(), f.deployment(), REQUEST_BODY, "BILLING");
+        assertThat(logId).isNotNull();
+        assertThat(privacyLevel(logId)).isEqualTo("BILLING");
+        assertThat(inputPayload(logId)).isNull();
+
+        accounting.settleSuccess(logId, Map.of("prompt_tokens", 10L),
+            "{\"leaked\":true}".getBytes(java.nio.charset.StandardCharsets.UTF_8), null);
+
+        assertThat(responsePayload(logId)).isNull();
+    }
+
+    @Test
     void malformedPayloadIsSkippedRatherThanFailingTheSettlement() {
         Fixture f = seedPricedDeployment("FULL");
         int logId = admit(f);
