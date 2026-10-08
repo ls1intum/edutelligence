@@ -67,15 +67,27 @@ def test_native_empty_text_delta_is_metadata():
     assert _SsePreCommitGate._line_is_output(_line(frame)) is False
 
 
-# --- end-to-end through has_output (line framing) --------------------------
+# --- end-to-end through has_output (event framing) -------------------------
 
 
 def test_has_output_fires_on_first_reasoning_chunk():
     gate = _SsePreCommitGate(text_stream=True)
     # A role-only open is metadata; the reasoning delta that follows starts
-    # the stream — no ordinary text is ever needed.
-    assert gate.has_output(b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n') is False
-    assert gate.has_output(b'data: {"choices": [{"delta": {"reasoning_content": "thinking"}}]}\n') is True
+    # the stream — no ordinary text is ever needed. Both must be complete
+    # events (blank-line terminated): a content data line alone is not yet
+    # releasable by ``_SseEventBuffer``.
+    assert gate.has_output(b'data: {"choices": [{"delta": {"role": "assistant"}}]}\n\n') is False
+    assert gate.has_output(b'data: {"choices": [{"delta": {"reasoning_content": "thinking"}}]}\n\n') is True
+
+
+def test_has_output_holds_until_blank_line_separator():
+    """A content data line whose blank-line event terminator has not arrived
+    must keep the gate closed: opening on the data-line newline alone would
+    commit HTTP 200 while ``_SseEventBuffer`` still withholds the answer."""
+    gate = _SsePreCommitGate(text_stream=True)
+    content_line = b'data: {"choices": [{"delta": {"content": "hi"}}]}\n'
+    assert gate.has_output(content_line) is False
+    assert gate.has_output(b"\n") is True
 
 
 # --- SSE framing: comments, control fields, no-space data ------------------

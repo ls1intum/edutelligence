@@ -1890,10 +1890,16 @@ class _SsePreCommitGate:
     output is known.
 
     The worker forwards each ``aiter_bytes()`` chunk unchanged, and those
-    transport chunks can split a frame mid-line or mid-JSON — an incomplete
-    fragment proves nothing about what the frame will say. The gate
-    therefore keeps the trailing line until its newline arrives and
-    classifies only complete lines:
+    transport chunks can split a frame mid-line, mid-JSON, or between a
+    data line and its blank-line event terminator. An incomplete fragment
+    proves nothing about what the frame will say, and even a complete
+    content data line is not yet releasable: ``_SseEventBuffer`` withholds
+    until the blank-line separator, so opening the gate on the data-line
+    newline alone would commit HTTP 200 while the answer event is still
+    held — a failure in that window leaves an empty resume prefix. The
+    gate therefore buffers until a blank-line-terminated SSE event
+    (``\\n\\n`` or ``\\r\\n\\r\\n``, same rules as ``_sse_event_end``) and
+    classifies only complete events:
 
     - a data line — the single space after the colon is optional, so
       ``data:{...}`` is valid SSE — that parses to a completion frame
@@ -1923,27 +1929,33 @@ class _SsePreCommitGate:
 
     def __init__(self, text_stream: bool):
         self._text_stream = text_stream
-        self._line = b""  # trailing line awaiting its newline
+        self._buf = bytearray()  # trailing bytes awaiting a blank-line event end
 
     def has_output(self, chunk) -> bool:
-        """Feed a transport chunk; True once a complete line proves that
+        """Feed a transport chunk; True once a complete SSE event proves that
         generated output has started, False while only metadata (or an
-        unfinished fragment) is known."""
+        unfinished event) is known."""
         if not self._text_stream:
             return bool(chunk)
         if chunk:
-            self._line += chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
-        while b"\n" in self._line:
-            line, self._line = self._line.split(b"\n", 1)
-            if self._line_is_output(line):
-                return True
+            self._buf.extend(chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8"))
+        while True:
+            # Resolved at call time so this class can sit above ``_sse_event_end``.
+            end = _sse_event_end(self._buf)
+            if end < 0:
+                return False
+            event = bytes(self._buf[:end])
+            del self._buf[:end]
+            for raw_line in event.split(b"\n"):
+                if self._line_is_output(raw_line.rstrip(b"\r")):
+                    return True
         return False
 
     @staticmethod
     def _line_is_output(line: bytes) -> bool:
         text = line.decode("utf-8", errors="replace").strip()
         if not text:
-            return False  # event separator — no decision
+            return False  # blank line inside a delimited event — no decision
         if text.startswith(":"):
             # SSE comment — providers send ": keepalive" lines to hold the
             # connection open; the comment carries no output.
@@ -2350,11 +2362,12 @@ async def _streaming_response(
             So on text streams, initial metadata frames are buffered and
             replayed ahead of the first real chunk (or of a clean stream
             end); a failure while only metadata is held is still a pre-token
-            failure. Transport chunks can split a frame mid-JSON, so the
-            gate decides only on complete lines and holds unfinished
-            fragments (see ``_SsePreCommitGate``). Binary (audio-upload)
-            streams are never buffered — their payload is not SSE and every
-            byte is output.
+            failure. Transport chunks can split a frame mid-JSON or between
+            a data line and its blank-line terminator, so the gate decides
+            only on complete SSE events and holds unfinished fragments
+            (see ``_SsePreCommitGate``). Binary (audio-upload) streams are
+            never buffered — their payload is not SSE and every byte is
+            output.
 
             Returns ``(first_chunks, chunk_iter, error)`` — on success
             ``first_chunks`` holds the frames to yield before continuing the
@@ -2903,9 +2916,10 @@ async def _streaming_response(
     # would commit HTTP 200 while nothing has been generated: a failure
     # right after it could no longer be re-dispatched, because the retry
     # only sees pre-stream errors and a committed stream reads as unsettled.
-    # Transport chunks can split a frame mid-JSON, so the gate decides only
-    # on complete lines (see ``_SsePreCommitGate``). Binary (audio-upload)
-    # streams are never gated — every byte is output.
+    # Transport chunks can split a frame mid-JSON or between a data line and
+    # its blank-line terminator, so the gate decides only on complete SSE
+    # events (see ``_SsePreCommitGate``). Binary (audio-upload) streams are
+    # never gated — every byte is output.
     gate = _SsePreCommitGate(not is_audio_upload_path(request_path or ""))
     held_chunks: list = []
 
