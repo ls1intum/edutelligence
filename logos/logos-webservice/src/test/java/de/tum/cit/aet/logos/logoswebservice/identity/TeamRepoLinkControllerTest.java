@@ -232,7 +232,7 @@ class TeamRepoLinkControllerTest {
             """, Integer.class, linkId);
         Integer recId = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla)
+                (analysis_id, team_id, file_path, recommended_slo)
             VALUES (?, 2001, 'app/chat.py', 'ux-critical')
             RETURNING id
             """, Integer.class, analysisId);
@@ -374,7 +374,7 @@ class TeamRepoLinkControllerTest {
         jdbc.update("UPDATE api_keys SET default_priority = 7 WHERE id = 3001");
         Integer recId = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla, api_key_id)
+                (analysis_id, team_id, file_path, recommended_slo, api_key_id)
             VALUES (?, 2001, 'app/batch.py', 'ux-background', 3001)
             RETURNING id
             """, Integer.class, analysisId);
@@ -456,19 +456,19 @@ class TeamRepoLinkControllerTest {
         }
         Integer a = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla, review_status, confirmed_sla, reviewed_at)
+                (analysis_id, team_id, file_path, recommended_slo, review_status, confirmed_slo, reviewed_at)
             VALUES (?, 2001, 'app/chat.py', 'ux-critical', 'accepted', 'ux-critical', now())
             RETURNING id
             """, Integer.class, analyses[0]);
         Integer b = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla, previous_recommendation_id)
+                (analysis_id, team_id, file_path, recommended_slo, previous_recommendation_id)
             VALUES (?, 2001, 'app/chat.py', 'ux-background', ?)
             RETURNING id
             """, Integer.class, analyses[1], a);
         Integer c = jdbc.queryForObject("""
             INSERT INTO ai_llm_call_recommendations
-                (analysis_id, team_id, file_path, recommended_sla, previous_recommendation_id)
+                (analysis_id, team_id, file_path, recommended_slo, previous_recommendation_id)
             VALUES (?, 2001, 'app/chat.py', 'ux-high-prio', ?)
             RETURNING id
             """, Integer.class, analyses[2], b);
@@ -478,7 +478,7 @@ class TeamRepoLinkControllerTest {
            // Only the latest analysis is up for review, and it shows A's decision.
            .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + b + ")]").isEmpty())
            .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + c + ")].previous.id").value(a))
-           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + c + ")].previous.sla").value("ux-critical"));
+           .andExpect(jsonPath("$.pending_recommendations[?(@.id == " + c + ")].previous.slo").value("ux-critical"));
 
         mvc.perform(put("/admin/teams/2001/recommendations/" + b + "/model")
                 .with(TestJwt.logosAdmin())
@@ -519,7 +519,7 @@ class TeamRepoLinkControllerTest {
             VALUES (2001, ?, 'nofinish', 'succeeded', 'agent')
             """, linkId);
         Integer rec = jdbc.queryForObject("""
-            INSERT INTO ai_llm_call_recommendations (analysis_id, team_id, file_path, recommended_sla)
+            INSERT INTO ai_llm_call_recommendations (analysis_id, team_id, file_path, recommended_slo)
             VALUES (?, 2001, 'app/x.py', 'ux-critical') RETURNING id
             """, Integer.class, finished);
 

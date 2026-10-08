@@ -11,6 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.AddProviderRequestDTO;
@@ -44,15 +45,32 @@ public class ProviderService {
     private final ModelProviderRepository modelProviderRepository;
     private final OrchestratorNotificationService orchestratorNotificationService;
     private final JdbcTemplate jdbc;
+    private final AuditLogService auditLog;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
                            OrchestratorNotificationService orchestratorNotificationService,
-                           JdbcTemplate jdbc) {
+                           JdbcTemplate jdbc,
+                           AuditLogService auditLog) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
         this.jdbc = jdbc;
+        this.auditLog = auditLog;
+    }
+
+    /** What the audit trail keeps of a provider: never the API key, only whether it was replaced. */
+    private static Map<String, Object> providerSnapshot(Provider p, boolean apiKeyChanged) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("name", p.getName());
+        m.put("base_url", p.getBaseUrl());
+        m.put("provider_type", p.getProviderType() == null ? null : p.getProviderType().name());
+        m.put("cloud_provider_type", p.getCloudProviderType() == null ? null : p.getCloudProviderType().name());
+        m.put("privacy_level", p.getPrivacyLevel() == null ? null : p.getPrivacyLevel().name());
+        if (apiKeyChanged) {
+            m.put("api_key_replaced", true);
+        }
+        return m;
     }
 
     public List<Map<String, Object>> getProviders(AuthContext auth) {
@@ -91,6 +109,7 @@ public class ProviderService {
         p.setApiKey(apiKey);
 
         p = providerRepository.save(p);
+        auditLog.record("provider.created", "provider", p.getId(), null, Map.of(), providerSnapshot(p, false));
         // A cloud provider is created empty: its models come from the orchestrator's
         // /v1/models scrape. Ask for that pass now instead of leaving the operator
         // looking at an empty list until the next interval tick.
@@ -109,6 +128,8 @@ public class ProviderService {
     public Map<String, Object> updateProvider(UpdateProviderRequestDTO req) {
         Provider p = providerRepository.findById(req.providerId())
             .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + req.providerId()));
+        Map<String, Object> before = providerSnapshot(p, false);
+        boolean apiKeyChanged = req.apiKey() != null && !req.apiKey().equals(p.getApiKey());
         if (req.providerName() != null) p.setName(req.providerName());
         if (req.baseUrl() != null) p.setBaseUrl(normalizeBaseUrl(req.baseUrl()));
         if (req.apiKey() != null) p.setApiKey(req.apiKey());
@@ -123,6 +144,7 @@ public class ProviderService {
             p.setPrivacyLevel(ThresholdLevel.valueOf(req.privacyLevel()));
         }
         providerRepository.save(p);
+        auditLog.record("provider.updated", "provider", p.getId(), null, before, providerSnapshot(p, apiKeyChanged));
         // Base URL, key and cloud type all change what the upstream lists, so a
         // cloud provider is re-scraped on every edit.
         orchestratorNotificationService.notifyRefresh(false, p.getProviderType() == ProviderType.cloud);
@@ -155,7 +177,12 @@ public class ProviderService {
                     + " batch(es) running or not yet settled; they must finish and be metered "
                     + "before the provider can be deleted.");
         }
+        Provider doomed = providerRepository.findById(providerId).orElse(null);
         providerRepository.deleteById(providerId);
+        // Cascades the provider's team budget overrides away, so the deletion is part of the budget trail.
+        if (doomed != null) {
+            auditLog.record("provider.deleted", "provider", providerId, null, providerSnapshot(doomed, false), Map.of());
+        }
         orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Deleted Provider.");
     }

@@ -18,10 +18,13 @@
     claude-logos -Update             replace this wrapper with the current one
     claude-logos -Uninstall          remove the wrapper, its config and its key
 
+  WebSearch works as in plain `claude`: Logos runs the searches itself, on
+  DuckDuckGo, so no Anthropic account is involved.
+
   NOTHING OUTSIDE THIS WRAPPER IS TOUCHED. The Logos credential, base URL and model are
   set on this process only - never with [Environment]::SetEnvironmentVariable at User or
-  Machine scope - and the extra Claude Code settings live in this wrapper's own folder
-  and are handed over with --settings. Your PowerShell profile,
+  Machine scope - and extra Claude Code settings, if any, live in this wrapper's own
+  folder and are handed over with --settings. Your PowerShell profile,
   %USERPROFILE%\.claude\settings.json and your claude.ai login are left exactly as they
   are, so plain `claude` keeps using your Anthropic subscription.
 
@@ -51,7 +54,7 @@ $ErrorActionPreference = 'Stop'
 # Bump on every change installed copies should pick up. Keep in step with the same
 # constant in claude-logos.sh - the two wrappers are one tool with two front ends.
 # A monotonic integer, not a version string: the comparison cannot misread anything.
-$ClaudeLogosVersion = 5          # 2026-10-02
+$ClaudeLogosVersion = 6          # 2026-10-06
 
 $ConfigDir = if ($env:LOGOS_CONFIG_DIR) { $env:LOGOS_CONFIG_DIR }
              else { Join-Path $env:USERPROFILE '.config\claude-logos' }
@@ -237,19 +240,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0claude-logos.ps1" %*
     if ($model) { $configLines += "LOGOS_MODEL=$model" }
     Set-Content -LiteralPath $ConfigFile -Value $configLines -Encoding UTF8
 
-    # WebSearch is a server-side Anthropic tool: Claude Code sends it as a tool with no
-    # input_schema, which vLLM on the Logos worker nodes rejects with 400 and Claude
-    # Code then retries in a loop. Denying it keeps it out of the request. A separate
-    # settings FILE, so %USERPROFILE%\.claude\settings.json stays untouched.
-    '{ "permissions": { "deny": ["WebSearch"] } }' |
-        Set-Content -LiteralPath $SettingsFile -Encoding UTF8
-
     Write-Host 'Installed:'
     Write-Host "  $ShimPath"
     Write-Host "  $InstallPath"
     Write-Host "  $KeyFile (key, readable by you only)"
     Write-Host "  $ConfigFile"
-    Write-Host "  $SettingsFile"
     Write-Host ''
     Write-Host 'Nothing else on this machine was modified - plain `claude` still uses your'
     Write-Host 'Anthropic subscription.'
@@ -607,6 +602,7 @@ if ($Check) {
     Write-ContextReport
     Write-Host ("key      : {0} ({1} chars)" -f $KeyFile, $LogosKey.Length)
     Write-Host ("effort   : {0}" -f $(if ($Effort) { $Effort } else { '<not set by this wrapper>' }))
+    Write-Host 'search   : WebSearch, answered by Logos with DuckDuckGo results'
     Report-NewModels $AllModelIds
     Report-NewRevision
     Update-CachedRevision
@@ -641,6 +637,29 @@ Report-NewModels $AllModelIds
 Report-NewRevision
 Update-CachedRevision
 Write-Host ''
+
+# Revisions before 6 wrote a settings file denying WebSearch: the tool sent a request
+# vLLM rejects. Logos answers that request itself now, so the deny is lifted from
+# this wrapper's own file on every start; whatever else is in it stays, and a file
+# left empty goes. Keep WebSearch off for a run with --disallowedTools WebSearch.
+if (Test-Path -LiteralPath $SettingsFile) {
+    try {
+        $cfg = Get-Content -Raw -LiteralPath $SettingsFile | ConvertFrom-Json
+        if ($cfg.permissions -and (@($cfg.permissions.deny) -contains 'WebSearch')) {
+            $kept = @($cfg.permissions.deny | Where-Object { $_ -ne 'WebSearch' })
+            if ($kept.Count) { $cfg.permissions.deny = $kept }
+            else { $cfg.permissions.PSObject.Properties.Remove('deny') }
+            if (-not @($cfg.permissions.PSObject.Properties).Count) { $cfg.PSObject.Properties.Remove('permissions') }
+            if (@($cfg.PSObject.Properties).Count) {
+                $cfg | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $SettingsFile -Encoding UTF8
+            } else {
+                Remove-Item -LiteralPath $SettingsFile -Force
+            }
+        }
+    } catch {
+        Write-Note "could not lift the WebSearch deny in $SettingsFile ($($_.Exception.Message))"
+    }
+}
 
 $passThrough = @()
 if (Test-Path -LiteralPath $SettingsFile) { $passThrough += @('--settings', $SettingsFile) }

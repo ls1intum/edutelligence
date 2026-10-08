@@ -21,6 +21,83 @@
     </div>
   </div>
 
+  <p class="section-label">SPONSORED PROVIDERS</p>
+  <p class="settings-hint">
+    Dedicated monthly budgets for specific cloud providers. Spend on these providers does not
+    draw from the member budget above. Leave the amount blank for unlimited (sponsored) access.
+  </p>
+
+  <div class="settings-card">
+    @if (providerBudgets().length === 0) {
+      <p class="settings-empty">No sponsored provider budgets yet.</p>
+    } @else {
+      <ul class="provider-budget-list">
+        @for (row of providerBudgets(); track row.provider_id) {
+          <li class="provider-budget-row">
+            <div class="provider-budget-meta">
+              <span class="provider-budget-name">{{ row.provider_name }}</span>
+              <span class="provider-budget-cap">{{ budgetLabel(row.monthly_budget_micro_cents) }}</span>
+            </div>
+            @if (canEdit) {
+              <button
+                class="btn-text-danger"
+                type="button"
+                [disabled]="providerBudgetLoading()"
+                (click)="removeProviderBudget(row.provider_id)"
+              >
+                Remove
+              </button>
+            }
+          </li>
+        }
+      </ul>
+    }
+
+    @if (canEdit && availableCloudProviders().length > 0) {
+      <div class="settings-group-label">Add provider budget</div>
+      <div class="settings-row-2">
+        <div class="settings-field">
+          <label class="field-label" for="s-provider">Cloud provider</label>
+          <select
+            id="s-provider"
+            class="field-input"
+            [value]="newProviderId()"
+            (change)="newProviderId.set($any($event.target).value)"
+            [disabled]="providerBudgetLoading()"
+          >
+            <option value="">Select…</option>
+            @for (p of availableCloudProviders(); track p.id) {
+              <option [value]="p.id">{{ p.name }}</option>
+            }
+          </select>
+        </div>
+        <div class="settings-field">
+          <label class="field-label" for="s-provider-budget">Monthly cap (USD)</label>
+          <input
+            id="s-provider-budget"
+            class="field-input"
+            type="text"
+            placeholder="blank = unlimited"
+            [value]="newProviderBudget()"
+            (input)="newProviderBudget.set($any($event.target).value)"
+            [disabled]="providerBudgetLoading()"
+          />
+        </div>
+      </div>
+      <div class="settings-actions">
+        @if (providerBudgetError()) {
+          <span class="save-error"><i class="pi pi-exclamation-triangle"></i> {{ providerBudgetError() }}</span>
+        }
+        <button class="btn-primary" type="button" [disabled]="providerBudgetLoading()" (click)="addProviderBudget()">
+          @if (providerBudgetLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+          Add Provider Budget
+        </button>
+      </div>
+    } @else if (providerBudgetError()) {
+      <p class="save-error provider-budget-error"><i class="pi pi-exclamation-triangle"></i> {{ providerBudgetError() }}</p>
+    }
+  </div>
+
   <p class="section-label">DEFAULT LIMITS</p>
   <p class="settings-hint">Fallback limits applied when no specific limits are set for a key or member.</p>
 

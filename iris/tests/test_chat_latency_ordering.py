@@ -300,6 +300,7 @@ def test_mcq_provider_defers_lecture_content_fetch():
         callback=MagicMock(),
         mcq_pipeline=MagicMock(return_value='{"type": "mcq"}'),
         allow_lecture_tool=True,
+        pending_context_switch=None,
     )
 
     with patch(
