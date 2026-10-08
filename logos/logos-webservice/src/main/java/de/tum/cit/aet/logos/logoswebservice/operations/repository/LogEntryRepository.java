@@ -43,12 +43,15 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     java.util.Optional<RequestPayloadProjection> findRequestPayloads(@Param("requestId") String requestId);
 
     /**
-     * Successful requests per team, for the public stats page.
+     * Successful requests per opted-in team, for the public stats page.
      *
-     * <p>Only settled successes are counted — the page shows what the platform
-     * actually delivered, not what it attempted. The join is left so a
-     * successful request whose key recorded no team still surfaces, under a
-     * null team id, instead of vanishing from the total.
+     * <p>Only settled successes on teams with {@code show_on_public_stats}
+     * are counted — the page never names or includes a team an admin has not
+     * published. Inner join on that flag so a success with no team, or a team
+     * that stays private, vanishes from both the pie and the headline total.
+     * {@code since} is null for the all-time window; otherwise ranged on
+     * {@code timestamp_request} under {@code idx_log_entry_success_timestamp_request}
+     * (060).
      */
     @Transactional(readOnly = true)
     @Query(value = """
@@ -56,47 +59,72 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                t.name     AS teamName,
                COUNT(*)   AS requests
         FROM log_entry le
-        LEFT JOIN teams t ON t.id = le.team_id
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
         WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
         GROUP BY le.team_id, t.name
         ORDER BY COUNT(*) DESC, t.name
         """, nativeQuery = true)
-    List<TeamRequestCountProjection> countSuccessfulByTeam();
+    List<TeamRequestCountProjection> countSuccessfulByTeam(@Param("since") Timestamp since);
 
     /**
      * Successful requests by API key type, for the public stats page.
      *
-     * <p>Left join so a success whose key was later deleted (api_key_id SET
-     * NULL) still counts, under the explicit {@code unknown} category, instead
-     * of vanishing from the key-type split while remaining in the headline.
+     * <p>Scoped to opted-in teams so the key-type split matches the headline
+     * total. Left join on the key so a success whose key was later deleted
+     * (api_key_id SET NULL) still counts under {@code unknown}.
      */
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT COALESCE(ak.key_type::text, 'unknown') AS keyType,
                COUNT(*)                               AS requests
         FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
         LEFT JOIN api_keys ak ON ak.id = le.api_key_id
         WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
         GROUP BY COALESCE(ak.key_type::text, 'unknown')
         """, nativeQuery = true)
-    List<KeyTypeRequestCountProjection> countSuccessfulByKeyType();
+    List<KeyTypeRequestCountProjection> countSuccessfulByKeyType(@Param("since") Timestamp since);
 
     /**
      * Successful requests by provider type, for the public stats page.
      *
-     * <p>Left join so a success whose provider was later deleted (provider_id
-     * SET NULL) still counts, under the explicit {@code unknown} category.
+     * <p>Scoped to opted-in teams. Left join on the provider so a success
+     * whose provider was later deleted (provider_id SET NULL) still counts
+     * under {@code unknown}.
      */
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT COALESCE(p.provider_type::text, 'unknown') AS providerType,
                COUNT(*)                                   AS requests
         FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
         LEFT JOIN providers p ON p.id = le.provider_id
         WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
         GROUP BY COALESCE(p.provider_type::text, 'unknown')
         """, nativeQuery = true)
-    List<ProviderTypeRequestCountProjection> countSuccessfulByProviderType();
+    List<ProviderTypeRequestCountProjection> countSuccessfulByProviderType(@Param("since") Timestamp since);
+
+    /**
+     * Distinct active users who made at least one successful request on an
+     * opted-in team inside the window — the public page's "active students".
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(DISTINCT le.user_id)
+        FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
+        INNER JOIN users u ON u.id = le.user_id AND u.is_active = TRUE
+        WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
+        """, nativeQuery = true)
+    long countActiveStudentsOnPublicTeams(@Param("since") Timestamp since);
 
     /**
      * One team's requests by stage, right now.

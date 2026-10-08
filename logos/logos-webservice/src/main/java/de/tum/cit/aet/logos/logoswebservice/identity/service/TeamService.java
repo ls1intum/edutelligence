@@ -193,6 +193,7 @@ public class TeamService {
             // Same field as the teams list: needed so the application-keys SLO
             // column can show what an unset (inherited) key is actually served as.
             teamMap.put("priority", team.getPriority());
+            teamMap.put("show_on_public_stats", team.isShowOnPublicStats());
 
             List<Map<String, Object>> members = memberRepository.findActiveById_TeamId(teamId).stream()
                 .flatMap(m -> userRepository.findById(m.getId().getUserId()).stream().map(user -> {
@@ -226,6 +227,7 @@ public class TeamService {
             if (body.default_local_tpm_limit() != null) team.setDefaultLocalTpmLimit(body.default_local_tpm_limit());
             if (body.default_monthly_budget_micro_cents() != null) team.setDefaultMonthlyBudgetMicroCents(body.default_monthly_budget_micro_cents());
             if (body.team_monthly_budget_micro_cents() != null) team.setTeamMonthlyBudgetMicroCents(body.team_monthly_budget_micro_cents());
+            if (body.show_on_public_stats() != null) team.setShowOnPublicStats(body.show_on_public_stats());
             teamRepository.save(team);
             auditLog.record("team.limits_updated", "team", team.getId(), team.getId(), before, limitsSnapshot(team));
             return new TeamResponseDTO(team.getId(), team.getName());
@@ -240,6 +242,7 @@ public class TeamService {
         m.put("default_local_tpm_limit", team.getDefaultLocalTpmLimit());
         m.put("default_monthly_budget_micro_cents", team.getDefaultMonthlyBudgetMicroCents());
         m.put("team_monthly_budget_micro_cents", team.getTeamMonthlyBudgetMicroCents());
+        m.put("show_on_public_stats", team.isShowOnPublicStats());
         return m;
     }
 

@@ -1,7 +1,11 @@
--- The public stats page counts settled successes only, so the fixtures mix
--- successes with an error and a timeout that share the key, team and
--- provider of successful rows: any aggregate that counts a failing row is
--- wrong.
+-- The public stats page counts settled successes on opted-in teams only, so
+-- the fixtures mix successes with an error and a timeout that share the key,
+-- team and provider of successful rows: any aggregate that counts a failing
+-- row is wrong. Team 2001 is published; team 2002 stays private so its
+-- traffic must not leak into any public figure.
+UPDATE teams SET show_on_public_stats = TRUE WHERE id = 2001;
+UPDATE teams SET show_on_public_stats = FALSE WHERE id = 2002;
+
 INSERT INTO providers (id, name, base_url, provider_type, privacy_level, auth_name, auth_format)
 VALUES (9601, 'local-node', 'http://logos-orchestrator:8000', 'logosnode', 'LOCAL', 'Authorization', 'Bearer {}');
 
@@ -22,6 +26,12 @@ VALUES
    NOW() - INTERVAL '8 minutes 30 seconds', NOW() - INTERVAL '8 minutes',
    NOW() - INTERVAL '7 minutes 45 seconds', NOW() - INTERVAL '7 minutes 30 seconds',
    false, 1, 1001, 2001, NULL),
+  -- older than the default 30-day window: days=30 / days=7 must drop it,
+  -- days=all (and days=90/365) must keep it
+  (9110, 'ps-team-cloud-old', 3001, 5001, 6001, 'success',
+   NOW() - INTERVAL '40 days', NOW() - INTERVAL '40 days' + INTERVAL '1 minute',
+   NOW() - INTERVAL '40 days' + INTERVAL '90 seconds', NOW() - INTERVAL '40 days' + INTERVAL '2 minutes',
+   false, 1, 1001, 2001, NULL),
   -- the two failures below sit next to the successes above: counting them
   -- would move team 2001, the developer split and both lanes
   (9103, 'ps-team-error', 3001, 5001, 6001, 'error',
@@ -32,8 +42,8 @@ VALUES
    NOW() - INTERVAL '7 minutes', NOW() - INTERVAL '6 minutes',
    NULL, NOW() - INTERVAL '5 minutes',
    false, 1, 1002, 2001, NULL),
-  -- application-key successes: the key records no user, the request carries
-  -- the owning team and an environment
+  -- application-key successes on the private team: must not appear until an
+  -- admin opts team 2002 in
   (9105, 'ps-app-cloud-a', 3002, 5001, 6001, 'success',
    NOW() - INTERVAL '6 minutes', NOW() - INTERVAL '5 minutes',
    NOW() - INTERVAL '5 minutes 30 seconds', NOW() - INTERVAL '4 minutes',

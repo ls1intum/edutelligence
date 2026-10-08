@@ -1,9 +1,13 @@
 package de.tum.cit.aet.logos.logoswebservice.operations.service;
 
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.stereotype.Service;
 
@@ -13,7 +17,6 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRep
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
-import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.KeyTypeRequestCountProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderTypeRequestCountProjection;
@@ -22,25 +25,25 @@ import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamRequestCou
 @Service
 public class StatsService {
 
+    /** Allowed rolling windows for GET /public/stats?days=… (plus {@code all}). */
+    public static final Set<String> PUBLIC_STATS_DAY_OPTIONS = Set.of("7", "30", "90", "365", "all");
+
     private final ModelRepository modelRepository;
     private final ApiKeyRepository apiKeyRepository;
     private final ProviderRepository providerRepository;
     private final LogEntryRepository logEntryRepository;
     private final TeamRepository teamRepository;
-    private final UserRepository userRepository;
 
     public StatsService(ModelRepository modelRepository,
                         ApiKeyRepository apiKeyRepository,
                         ProviderRepository providerRepository,
                         LogEntryRepository logEntryRepository,
-                        TeamRepository teamRepository,
-                        UserRepository userRepository) {
+                        TeamRepository teamRepository) {
         this.modelRepository = modelRepository;
         this.apiKeyRepository = apiKeyRepository;
         this.providerRepository = providerRepository;
         this.logEntryRepository = logEntryRepository;
         this.teamRepository = teamRepository;
-        this.userRepository = userRepository;
     }
 
     public Map<String, Object> generalStats() {
@@ -61,23 +64,60 @@ public class StatsService {
     }
 
     /**
-     * Platform-wide figures for the public stats page — the one part of the
-     * platform reachable without a credential.
-     *
-     * <p>Only aggregate counts leave the service: no request rows, no key
-     * values, no user names. Every request figure counts settled successes
-     * only — what the platform actually delivered — while errors and timeouts
-     * stay on the admin statistics page, where they are an operational
-     * concern. "Students" are the registered users still active; a user only
-     * becomes inactive once their Keycloak account is gone.
+     * Resolves the public-stats {@code days} query value to a lower bound, or
+     * null for all time. Allowed values are 7, 30, 90, 365 and {@code all};
+     * anything else is rejected. Null or blank defaults to 30.
      */
-    public Map<String, Object> publicStats() {
-        long students = userRepository.countByIsActiveTrue();
-        long teams = teamRepository.count();
+    public static Timestamp resolvePublicStatsSince(String days) {
+        String normalized = (days == null || days.isBlank()) ? "30" : days.trim().toLowerCase();
+        if (!PUBLIC_STATS_DAY_OPTIONS.contains(normalized)) {
+            throw new IllegalArgumentException(
+                "days must be one of 7, 30, 90, 365, or all");
+        }
+        if ("all".equals(normalized)) {
+            return null;
+        }
+        int window = Integer.parseInt(normalized);
+        return Timestamp.from(Instant.now().minus(window, ChronoUnit.DAYS));
+    }
+
+    /**
+     * Echoes the window the response was computed for (default {@code 30}).
+     */
+    public static String normalizePublicStatsDays(String days) {
+        String normalized = (days == null || days.isBlank()) ? "30" : days.trim().toLowerCase();
+        if (!PUBLIC_STATS_DAY_OPTIONS.contains(normalized)) {
+            throw new IllegalArgumentException(
+                "days must be one of 7, 30, 90, 365, or all");
+        }
+        return normalized;
+    }
+
+    /**
+     * Figures for the public stats page — the one part of the platform
+     * reachable without a credential.
+     *
+     * <p>Scope decision (totals stay consistent with what is shown): every
+     * aggregate is limited to teams with {@code show_on_public_stats = true}.
+     * Non-selected teams never appear by name, and their traffic is not
+     * folded into {@code successful_requests}, the key-type or lane splits,
+     * or the active-student count. {@code teams} is the count of opted-in
+     * teams (including those with no traffic in the window). {@code students}
+     * are distinct active users who made at least one successful request on
+     * an opted-in team inside the window. Request figures count settled
+     * successes only, ranged on {@code timestamp_request} when {@code since}
+     * is set.
+     */
+    public Map<String, Object> publicStats(String days) {
+        String window = normalizePublicStatsDays(days);
+        Timestamp since = resolvePublicStatsSince(days);
+
+        long students = logEntryRepository.countActiveStudentsOnPublicTeams(since);
+        long teams = teamRepository.countByShowOnPublicStatsTrue();
 
         List<Map<String, Object>> requestsPerTeam = new ArrayList<>();
         long successfulRequests = 0;
-        for (TeamRequestCountProjection row : logEntryRepository.countSuccessfulByTeam()) {
+        for (TeamRequestCountProjection row : logEntryRepository.countSuccessfulByTeam(since)) {
             Map<String, Object> team = new LinkedHashMap<>();
             team.put("team_id", row.getTeamId());
             team.put("team_name", row.getTeamName());
@@ -93,7 +133,7 @@ public class StatsService {
         // Rows whose API key was deleted land here so the key-type split still
         // adds up to successful_requests.
         requestsByKeyType.put("unknown", 0L);
-        for (KeyTypeRequestCountProjection row : logEntryRepository.countSuccessfulByKeyType()) {
+        for (KeyTypeRequestCountProjection row : logEntryRepository.countSuccessfulByKeyType(since)) {
             String keyType = row.getKeyType() == null ? "unknown" : row.getKeyType();
             requestsByKeyType.merge(keyType, row.getRequests(), Long::sum);
         }
@@ -106,7 +146,7 @@ public class StatsService {
         localCloud.put("local", 0L);
         localCloud.put("cloud", 0L);
         localCloud.put("unknown", 0L);
-        for (ProviderTypeRequestCountProjection row : logEntryRepository.countSuccessfulByProviderType()) {
+        for (ProviderTypeRequestCountProjection row : logEntryRepository.countSuccessfulByProviderType(since)) {
             String providerType = row.getProviderType();
             String lane;
             if (providerType == null || "unknown".equals(providerType)) {
@@ -122,6 +162,7 @@ public class StatsService {
         double averageRequestsPerUser = students == 0 ? 0.0 : Math.round(successfulRequests * 100.0 / students) / 100.0;
 
         Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("days", window);
         stats.put("students", students);
         stats.put("teams", teams);
         stats.put("successful_requests", successfulRequests);

@@ -104,6 +104,8 @@ class Team(Base):
     default_local_tpm_limit = Column(Integer, nullable=True, default=10000)
     default_monthly_budget_micro_cents = Column(BigInteger, nullable=True, default=100000000)
     team_monthly_budget_micro_cents = Column(BigInteger, nullable=True, default=500000000)
+    # Opt-in for the public stats page (webservice-owned; orchestrator does not read it).
+    show_on_public_stats = Column(Boolean, nullable=False, default=False)
 
 
 class ApiKey(Base):

@@ -25,4 +25,7 @@ public interface TeamRepository extends JpaRepository<Team, Integer> {
     List<Team> findByKeycloakGroupIsNotNull();
 
     Optional<Team> findByKeycloakGroup(String keycloakGroup);
+
+    /** Teams an admin opted into the public stats page. */
+    long countByShowOnPublicStatsTrue();
 }

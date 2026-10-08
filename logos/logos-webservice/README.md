@@ -12,7 +12,8 @@ Browser / logos-ui / API clients
       │                                            cloud named-model → Azure/OpenAI directly
       │                                            local / mixed → reverse-proxy to orchestrator
       ├── /api/me, /api/users, /api/teams      → logos-webservice (priority 200, strip /api)
-      ├── /api/public/stats                     → logos-webservice (priority 200, strip /api)
+      ├── /api/public/stats?days=…              → logos-webservice (priority 200, strip /api;
+      │                                            opted-in teams only; default days=30)
       ├── /api/logosdb/*                        → logos-webservice (priority 200, strip /api)
       ├── /api/admin/*                          → logos-webservice (priority 200, strip /api)
       ├── /api/ws/stats, /api/ws/stats/v2       → logos-webservice (priority 200, strip /api)
@@ -157,6 +158,21 @@ Example changeset:
     </changeSet>
 </databaseChangeLog>
 ```
+
+## Public stats (`GET /public/stats`)
+
+Unauthenticated aggregates for the `/stats` page. Rate-limited per source IP.
+
+Query parameter `days` (default `30`): `7`, `30`, `90`, `365`, or `all`. Applied to
+every request-derived figure (per-team, key type, lane, active students, average).
+
+**Totals stay consistent with what is shown:** only teams with
+`teams.show_on_public_stats = true` (set in team settings) appear by name, and
+their traffic alone feeds `successful_requests`, the key-type and lane splits,
+and the active-student count. Non-selected teams are never named and never
+folded into those totals. `teams` is the count of opted-in teams (including
+those with no traffic in the window). `students` are distinct active users who
+made at least one successful request on an opted-in team inside the window.
 
 ## Adding a new endpoint
 
