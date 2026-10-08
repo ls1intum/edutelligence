@@ -89,6 +89,25 @@
   margin-bottom: 28px;
 }
 
+.settings-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--color-typography-0));
+  cursor: pointer;
+
+  input {
+    margin-top: 3px;
+    flex-shrink: 0;
+  }
+
+  &:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: var(--opacity-disabled);
+  }
+}
+
 // ── Fields ──────────────────────────────────────────────────────────────────
 .settings-field {
   margin-bottom: 16px;

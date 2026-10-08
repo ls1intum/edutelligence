@@ -10,9 +10,26 @@
     </div>
   </header>
 
+  <div class="window-bar" role="group" aria-label="Time window">
+    <span class="window-bar-label">Time window</span>
+    <div class="window-segments">
+      @for (opt of dayOptions; track opt.value) {
+        <button
+          type="button"
+          class="window-segment"
+          [class.active]="days() === opt.value"
+          [attr.aria-pressed]="days() === opt.value"
+          (click)="selectDays(opt.value)"
+        >
+          {{ opt.label }}
+        </button>
+      }
+    </div>
+  </div>
+
   @if (error()) {
     <app-error-message [message]="error()" variant="banner" />
-  } @else if (!stats()) {
+  } @else if (loading() || !stats()) {
     <div class="loading" aria-live="polite">
       <span class="loading-pulse" aria-hidden="true"></span>
       Loading the platform numbers…
@@ -21,19 +38,22 @@
     <section class="kpi-grid" aria-label="Platform totals">
       <div class="kpi-tile">
         <span class="kpi-value">{{ formatCount(stats()!.students) }}</span>
-        <span class="kpi-label">Registered students</span>
+        <span class="kpi-label">Active students</span>
+        <span class="kpi-window">{{ windowCaption() }}</span>
       </div>
       <div class="kpi-tile">
         <span class="kpi-value">{{ formatCount(stats()!.teams) }}</span>
-        <span class="kpi-label">Teams</span>
+        <span class="kpi-label">Published teams</span>
       </div>
       <div class="kpi-tile">
         <span class="kpi-value">{{ formatCount(stats()!.successful_requests) }}</span>
         <span class="kpi-label">Successful requests</span>
+        <span class="kpi-window">{{ windowCaption() }}</span>
       </div>
       <div class="kpi-tile">
         <span class="kpi-value">{{ formatAverage(stats()!.average_requests_per_user) }}</span>
         <span class="kpi-label">Successful requests per student</span>
+        <span class="kpi-window">{{ windowCaption() }}</span>
       </div>
     </section>
 
@@ -41,7 +61,10 @@
       <div class="chart-panel">
         <div class="chart-panel-head">
           <h2 class="chart-title">Requests per team</h2>
-          <p class="chart-hint">Tick a team to hide it from the pie — tick it again to bring it back.</p>
+          <p class="chart-hint">
+            Only teams published in team settings. Tick a team to hide it from the pie —
+            tick it again to bring it back. {{ windowCaption() }}.
+          </p>
         </div>
         <app-public-stats-pie
           [slices]="teamSlices()"
@@ -53,16 +76,21 @@
       <div class="chart-column">
         <div class="chart-panel">
           <h2 class="chart-title">Requests by key type</h2>
+          <p class="chart-hint">{{ windowCaption() }}.</p>
           <app-public-stats-split [segments]="keySlices()" label="Requests by key type" />
         </div>
 
         <div class="chart-panel">
           <h2 class="chart-title">Local vs. cloud</h2>
+          <p class="chart-hint">{{ windowCaption() }}.</p>
           <app-public-stats-split [segments]="laneSlices()" label="Local versus cloud requests" />
         </div>
       </div>
     </section>
 
-    <p class="page-footnote">Only successful responses are counted. Numbers cover all time.</p>
+    <p class="page-footnote">
+      Only successful responses on published teams are counted.
+      Numbers cover {{ windowCaption() }}.
+    </p>
   }
 </div>

@@ -64,6 +64,50 @@
   gap: 0.75rem;
 }
 
+.window-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin: 0 0 1.25rem;
+}
+
+.window-bar-label {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.window-segments {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: rgb(var(--color-background-200));
+}
+
+.window-segment {
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover {
+    color: rgb(var(--color-typography-0));
+  }
+
+  &.active {
+    background: rgb(var(--color-background-0));
+    color: rgb(var(--color-typography-0));
+    box-shadow: 0 0 0 1px rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  }
+}
+
 .loading {
   display: flex;
   align-items: center;
@@ -125,6 +169,11 @@
 .kpi-label {
   color: rgb(var(--color-typography-500));
   font-size: var(--font-size-md);
+}
+
+.kpi-window {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────────

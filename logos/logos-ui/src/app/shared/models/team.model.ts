@@ -37,6 +37,8 @@ export interface TeamDetail {
   priority: number | null;
   /** True when the team is provisioned from a Keycloak group; name and existence are Keycloak-owned. */
   managed: boolean;
+  /** When true, this team's name and traffic appear on the public stats page. */
+  show_on_public_stats: boolean;
 }
 
 export interface TeamMember {
@@ -129,6 +131,7 @@ export interface TeamLimitsPayload {
   default_cloud_tpm_limit?: number | null;
   default_local_rpm_limit?: number | null;
   default_local_tpm_limit?: number | null;
+  show_on_public_stats?: boolean;
 }
 
 /** Per-provider monthly budget override (null = unlimited / sponsored). */

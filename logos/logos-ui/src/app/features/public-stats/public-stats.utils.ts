@@ -1,4 +1,4 @@
-import { PublicStats, PublicTeamStats } from './public-stats.service';
+import { PublicStats, PublicStatsDays, PublicTeamStats } from './public-stats.service';
 
 /** One row of a public-stats chart, as the page holds it. */
 export interface ChartSlice {
@@ -9,6 +9,8 @@ export interface ChartSlice {
   color: string;
   /** True once the reader has ticked the slice out of the chart. */
   hidden: boolean;
+  /** Short plain explanation shown under the label (key-type chart). */
+  caption?: string;
 }
 
 /** A chart slice with its drawn geometry. */
@@ -109,13 +111,45 @@ export function teamSlices(teams: PublicTeamStats[]): ChartSlice[] {
   return slices;
 }
 
+/**
+ * Human label for the selected rolling window, used under every number.
+ * {@code all} reads as "all time"; otherwise "last N days".
+ */
+export function windowLabel(days: PublicStatsDays | string): string {
+  if (days === 'all') return 'all time';
+  return `last ${days} days`;
+}
+
 /** Successful requests by key type as segments: members' personal keys first. */
 export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
   const kt = stats.requests_by_key_type;
   const slices: ChartSlice[] = [
-    { key: 'developer', label: 'Member keys', value: kt.developer ?? 0, color: 'var(--series-1)', hidden: false },
-    { key: 'application', label: 'Application keys', value: kt.application ?? 0, color: 'var(--series-2)', hidden: false },
-    { key: 'service', label: 'Service keys', value: kt.service ?? 0, color: 'var(--series-3)', hidden: false },
+    {
+      key: 'developer',
+      label: 'Member keys',
+      caption: 'Personal keys that belong to a team member.',
+      value: kt.developer ?? 0,
+      color: 'var(--series-1)',
+      hidden: false,
+    },
+    {
+      key: 'application',
+      label: 'Application keys',
+      caption: 'Keys for a team app. Each key has an environment tag.',
+      value: kt.application ?? 0,
+      color: 'var(--series-2)',
+      hidden: false,
+    },
+    {
+      // Kept as "Service keys" to match the stored key_type; the caption
+      // answers what that type is for (automated jobs, not a person or app env).
+      key: 'service',
+      label: 'Service keys',
+      caption: 'Keys for automated backend jobs. Not tied to a person or an app environment.',
+      value: kt.service ?? 0,
+      color: 'var(--series-3)',
+      hidden: false,
+    },
   ];
   // Only show the unknown row when deleted keys actually contribute — a zero
   // unknown would pad every empty chart with a meaningless legend entry.
@@ -123,6 +157,7 @@ export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
     slices.push({
       key: 'unknown',
       label: 'Unknown key',
+      caption: 'Requests whose API key was later deleted.',
       value: kt.unknown!,
       color: OTHER_SLICE_COLOR,
       hidden: false,

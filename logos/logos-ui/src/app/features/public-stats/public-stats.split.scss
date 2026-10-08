@@ -36,7 +36,7 @@
 
 .legend-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
   padding: 0.3rem 0.5rem;
   border-radius: 8px;
@@ -47,10 +47,24 @@
     height: 0.75rem;
     border-radius: 4px;
     flex-shrink: 0;
+    margin-top: 0.3rem;
+  }
+
+  .legend-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
   }
 
   .name {
     color: rgb(var(--color-typography-0));
+  }
+
+  .caption {
+    color: rgb(var(--color-typography-500));
+    font-size: var(--font-size-sm);
+    line-height: 1.35;
   }
 
   .value {
@@ -58,6 +72,7 @@
     color: rgb(var(--color-typography-500));
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+    padding-top: 0.05rem;
   }
 
   &:hover,

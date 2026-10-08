@@ -10,11 +10,13 @@ import {
   laneSlices,
   pieSlicePath,
   teamSlices,
+  windowLabel,
   ChartSlice,
 } from './public-stats.utils';
 
 function stats(overrides: Partial<PublicStats> = {}): PublicStats {
   return {
+    days: '30',
     students: 5,
     teams: 2,
     successful_requests: 5,
@@ -151,6 +153,14 @@ describe('teamSlices', () => {
   });
 });
 
+describe('windowLabel', () => {
+  it('labels rolling windows and all time', () => {
+    expect(windowLabel('30')).toBe('last 30 days');
+    expect(windowLabel('7')).toBe('last 7 days');
+    expect(windowLabel('all')).toBe('all time');
+  });
+});
+
 describe('keyTypeSlices and laneSlices', () => {
   it('maps the key types with members first and keeps fixed slots', () => {
     const slices = keyTypeSlices(stats());
@@ -159,6 +169,7 @@ describe('keyTypeSlices and laneSlices', () => {
       ['application', 2, 'var(--series-2)'],
       ['service', 0, 'var(--series-3)'],
     ]);
+    expect(slices.find((s) => s.key === 'service')!.caption).toContain('automated backend jobs');
   });
 
   it('adds an unknown key-type slice only when deleted keys contribute', () => {
@@ -171,6 +182,7 @@ describe('keyTypeSlices and laneSlices', () => {
     expect(withUnknown[withUnknown.length - 1]).toEqual({
       key: 'unknown',
       label: 'Unknown key',
+      caption: 'Requests whose API key was later deleted.',
       value: 2,
       color: OTHER_SLICE_COLOR,
       hidden: false,

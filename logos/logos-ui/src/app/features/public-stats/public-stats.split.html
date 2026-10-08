@@ -22,11 +22,17 @@
         <span
           class="legend-item"
           [class.highlighted]="isHighlighted(seg.key)"
+          [attr.title]="seg.caption || null"
           (mouseenter)="hovered.set(seg.key)"
           (mouseleave)="hovered.set(null)"
         >
           <span class="swatch" [style.background]="seg.color" aria-hidden="true"></span>
-          <span class="name">{{ seg.label }}</span>
+          <span class="legend-text">
+            <span class="name">{{ seg.label }}</span>
+            @if (seg.caption) {
+              <span class="caption">{{ seg.caption }}</span>
+            }
+          </span>
           <span class="value">{{ formatCount(seg.value) }} ({{ percentOf(seg) }}%)</span>
         </span>
       </li>

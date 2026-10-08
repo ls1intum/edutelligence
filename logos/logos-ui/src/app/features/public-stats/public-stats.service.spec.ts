@@ -5,6 +5,7 @@ import { PublicStatsService, PublicStats } from './public-stats.service';
 
 function payload(overrides: Partial<PublicStats> = {}): PublicStats {
   return {
+    days: '30',
     students: 5,
     teams: 2,
     successful_requests: 5,
@@ -24,20 +25,33 @@ describe('PublicStatsService', () => {
     return { service: TestBed.inject(PublicStatsService), http: TestBed.inject(HttpTestingController) };
   }
 
-  it('reads the aggregates from the unauthenticated public endpoint', async () => {
+  it('reads the aggregates from the unauthenticated public endpoint with default days=30', async () => {
     const { service, http } = serviceAndHttp();
     const pending = service.getStats();
-    const request = http.expectOne((req) => req.url === '/api/public/stats' && req.method === 'GET');
+    const request = http.expectOne(
+      (req) => req.url === '/api/public/stats' && req.method === 'GET' && req.params.get('days') === '30'
+    );
     const body = payload();
     request.flush(body);
     await expect(pending).resolves.toEqual(body);
     http.verify();
   });
 
+  it('forwards the selected days window', async () => {
+    const { service, http } = serviceAndHttp();
+    const pending = service.getStats('7');
+    const request = http.expectOne(
+      (req) => req.url === '/api/public/stats' && req.params.get('days') === '7'
+    );
+    request.flush(payload({ days: '7' }));
+    await expect(pending).resolves.toMatchObject({ days: '7' });
+    http.verify();
+  });
+
   it('surfaces transport errors to the page', async () => {
     const { service, http } = serviceAndHttp();
     const pending = service.getStats();
-    http.expectOne('/api/public/stats').error(new ProgressEvent('error'));
+    http.expectOne((req) => req.url === '/api/public/stats').error(new ProgressEvent('error'));
     await expect(pending).rejects.toBeTruthy();
     http.verify();
   });

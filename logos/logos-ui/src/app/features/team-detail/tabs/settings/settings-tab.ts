@@ -73,6 +73,7 @@ export class SettingsTabComponent implements OnChanges {
   cloudTpm = signal('');
   localRpm = signal('');
   localTpm = signal('');
+  showOnPublicStats = signal(false);
 
   providerBudgets = signal<TeamProviderBudget[]>([]);
   cloudProviders = signal<ProviderItem[]>([]);
@@ -101,6 +102,7 @@ export class SettingsTabComponent implements OnChanges {
     this.cloudTpm.set(this.team.default_cloud_tpm_limit?.toString() ?? '');
     this.localRpm.set(this.team.default_local_rpm_limit?.toString() ?? '');
     this.localTpm.set(this.team.default_local_tpm_limit?.toString() ?? '');
+    this.showOnPublicStats.set(!!this.team.show_on_public_stats);
   }
 
   private async loadProviderBudgets(): Promise<void> {
@@ -181,6 +183,7 @@ export class SettingsTabComponent implements OnChanges {
       default_cloud_tpm_limit: strToIntOrNull(this.cloudTpm()),
       default_local_rpm_limit: strToIntOrNull(this.localRpm()),
       default_local_tpm_limit: strToIntOrNull(this.localTpm()),
+      show_on_public_stats: this.showOnPublicStats(),
     };
 
     try {

@@ -4,10 +4,11 @@ import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeService } from '../../core/services/theme.service';
 import { PublicStats as PublicStatsPage } from './public-stats';
-import { PublicStats, PublicStatsService } from './public-stats.service';
+import { PublicStats, PublicStatsDays, PublicStatsService } from './public-stats.service';
 
 function stats(overrides: Partial<PublicStats> = {}): PublicStats {
   return {
+    days: '30',
     students: 5,
     teams: 2,
     successful_requests: 5,
@@ -30,8 +31,27 @@ describe('PublicStats page', () => {
     const root = fixture.nativeElement as HTMLElement;
     const values = Array.from(root.querySelectorAll('.kpi-value')).map((el) => el.textContent!.trim());
     expect(values).toEqual(['5', '2', '5', '1.2']);
+    expect(root.textContent).toContain('last 30 days');
     // Every pie legend row carries its count, so no number rides on color alone.
     expect(root.querySelectorAll('.pie-legend .legend-item')).toHaveLength(2);
+  });
+
+  it('reloads when the time window changes', async () => {
+    const getStats = vi.fn(async (days: PublicStatsDays = '30') => stats({ days }));
+    const fixture = createPage(getStats);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(getStats).toHaveBeenCalledWith('30');
+
+    const root = fixture.nativeElement as HTMLElement;
+    const sevenDay = Array.from(root.querySelectorAll<HTMLButtonElement>('.window-segment')).find(
+      (btn) => btn.textContent?.trim() === '7 days'
+    )!;
+    sevenDay.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(getStats).toHaveBeenCalledWith('7');
+    expect(root.textContent).toContain('last 7 days');
   });
 
   it('shows the loading state until the endpoint answers', () => {
@@ -72,9 +92,18 @@ describe('PublicStats page', () => {
     // The hidden team keeps its dimmed legend row, still tickable back in.
     expect(root.querySelector('.pie-legend .legend-item.off')).not.toBeNull();
   });
+
+  it('explains what a service key is next to the key-type split', async () => {
+    const fixture = createPage(() => Promise.resolve(stats({ requests_by_key_type: { developer: 1, application: 1, service: 1 } })));
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain('Service keys');
+    expect(root.textContent).toContain('Keys for automated backend jobs');
+  });
 });
 
-function createPage(getStats: () => Promise<PublicStats>) {
+function createPage(getStats: (days?: PublicStatsDays) => Promise<PublicStats>) {
   TestBed.configureTestingModule({
     imports: [HostComponent],
     providers: [
