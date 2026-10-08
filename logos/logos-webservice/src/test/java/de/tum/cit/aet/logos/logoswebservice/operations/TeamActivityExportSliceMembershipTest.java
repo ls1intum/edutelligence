@@ -12,8 +12,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
-import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ExportSliceCursorProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
@@ -24,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
@@ -44,7 +41,6 @@ class TeamActivityExportSliceMembershipTest {
         LogEntryRepository repository = mock(LogEntryRepository.class);
         RequestLogService requestLogService = mock(RequestLogService.class);
         TeamRepository teamRepository = mock(TeamRepository.class);
-        ApiKeyRepository apiKeyRepository = mock(ApiKeyRepository.class);
 
         Instant tsA = Instant.parse("2026-10-01T12:00:02Z");
         Instant tsD = Instant.parse("2026-10-01T12:00:01.500Z");
@@ -65,8 +61,7 @@ class TeamActivityExportSliceMembershipTest {
             .thenReturn(List.of(key(tsA, idA), key(tsB, idB)));
         when(repository.countConsentedAmongIds(anyList())).thenReturn(0L);
         when(teamRepository.findById(anyInt())).thenReturn(Optional.empty());
-        when(apiKeyRepository.existsByTeamIdAndLogAndIsActive(anyInt(), any(LogLevel.class), anyBoolean()))
-            .thenReturn(false);
+        when(repository.existsFullPrivacyInWindow(anyInt(), any(), any())).thenReturn(false);
 
         // The database now also holds D. Streaming asks by prepared ids only.
         Map<Integer, LogExportProjection> world = Map.of(
@@ -83,7 +78,7 @@ class TeamActivityExportSliceMembershipTest {
         });
 
         TeamActivityService service = new TeamActivityService(repository, requestLogService,
-            teamRepository, apiKeyRepository, new ObjectMapper(), 10000, 2, 60);
+            teamRepository, new ObjectMapper(), 10000, 2, 60);
 
         TeamActivityService.ExportPrep prep = service.prepareExport(2001, 7, null, "json", null);
         assertEquals(2, prep.count());

@@ -133,6 +133,36 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void migration055_batchObjectsLogLevelExists() {
+        // Per-request logging consent for batches that outlive their creating
+        // request; NULL means the create sent no logos-logging header.
+        assertThat(columnExists("batch_objects", "log_level")).isTrue();
+    }
+
+    @Test
+    void migration056_teamFullPrivacyIndexServesActivityExists() {
+        // The activity-tab FULL-privacy EXISTS must seek the partial
+        // (team_id, timestamp_request) index rather than walk every BILLING
+        // row in the selected window via idx_log_entry_team_ts_request.
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pg_indexes"
+                + " WHERE schemaname='public' AND indexname=?"
+                + " AND indexdef LIKE '%privacy_level%FULL%'",
+            Integer.class, "idx_log_entry_team_full_privacy");
+        assertThat(count).isEqualTo(1);
+
+        String plan = String.join("\n", jdbc.queryForList(
+            "EXPLAIN SELECT EXISTS ("
+                + " SELECT 1 FROM log_entry le"
+                + " WHERE le.team_id = 1"
+                + "   AND le.privacy_level = 'FULL'"
+                + "   AND le.timestamp_request BETWEEN now() - interval '7 days' AND now()"
+                + ")",
+            String.class));
+        assertThat(plan).contains("idx_log_entry_team_full_privacy");
+    }
+
+    @Test
     void migration029_providerSnapshotsTableRenamed() {
         // The physical table carries the engine-neutral name now...
         assertThat(tableType("provider_snapshots")).isEqualTo("BASE TABLE");
