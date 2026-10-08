@@ -67,7 +67,7 @@ class WorkflowLifecycleControllerTest {
             RETURNING id
             """, Integer.class, analysisId);
         Integer stepId = jdbc.queryForObject("""
-            INSERT INTO ai_workflow_steps (workflow_id, name, tag, recommended_sla)
+            INSERT INTO ai_workflow_steps (workflow_id, name, tag, recommended_slo)
             VALUES (?, 'score', 'checkout-score', 'ux-critical')
             RETURNING id
             """, Integer.class, workflowId);
@@ -133,7 +133,7 @@ class WorkflowLifecycleControllerTest {
         mvc.perform(patch("/admin/teams/2001/workflow-steps/" + ids[1])
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
-                .content("{\"confirmed_sla\":\"ux-background\"}"))
+                .content("{\"confirmed_slo\":\"ux-background\"}"))
            .andExpect(status().isConflict());
     }
 
@@ -144,15 +144,15 @@ class WorkflowLifecycleControllerTest {
         mvc.perform(patch("/admin/teams/2001/workflow-steps/" + stepId)
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
-                .content("{\"confirmed_sla\":\"ux-background\"}"))
+                .content("{\"confirmed_slo\":\"ux-background\"}"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.recommended_sla").value("ux-critical"))
-           .andExpect(jsonPath("$.confirmed_sla").value("ux-background"));
+           .andExpect(jsonPath("$.recommended_slo").value("ux-critical"))
+           .andExpect(jsonPath("$.confirmed_slo").value("ux-background"));
 
         mvc.perform(patch("/admin/teams/2001/workflow-steps/" + stepId)
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
-                .content("{\"confirmed_sla\":\"urgent\"}"))
+                .content("{\"confirmed_slo\":\"urgent\"}"))
            .andExpect(status().isBadRequest());
 
         mvc.perform(patch("/admin/teams/2001/workflow-steps/" + stepId)
@@ -172,13 +172,13 @@ class WorkflowLifecycleControllerTest {
         mvc.perform(patch("/admin/teams/2002/workflow-steps/" + stepId)
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
-                .content("{\"confirmed_sla\":\"ux-critical\"}"))
+                .content("{\"confirmed_slo\":\"ux-critical\"}"))
            .andExpect(status().isNotFound());
 
         mvc.perform(patch("/admin/teams/2001/workflow-steps/" + stepId)
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"confirmed_sla\":\"ux-critical\"}"))
+                .content("{\"confirmed_slo\":\"ux-critical\"}"))
            .andExpect(status().isForbidden());
     }
 
@@ -186,7 +186,7 @@ class WorkflowLifecycleControllerTest {
     void renameStep_rejectsAConflictingTrimmedName() throws Exception {
         int[] ids = seedWorkflowWithStep();
         Integer otherStep = jdbc.queryForObject("""
-            INSERT INTO ai_workflow_steps (workflow_id, name, tag, recommended_sla)
+            INSERT INTO ai_workflow_steps (workflow_id, name, tag, recommended_slo)
             VALUES (?, 'summarize', 'checkout-summarize', 'ux-background')
             RETURNING id
             """, Integer.class, ids[0]);
@@ -217,7 +217,7 @@ class WorkflowLifecycleControllerTest {
             RETURNING id
             """, Integer.class, ids[0]);
         jdbc.update("""
-            INSERT INTO ai_workflow_steps (workflow_id, name, tag, recommended_sla)
+            INSERT INTO ai_workflow_steps (workflow_id, name, tag, recommended_slo)
             VALUES (?, 'score', 'checkout-2-score', 'ux-background')
             """, sibling);
 

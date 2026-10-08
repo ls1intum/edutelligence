@@ -203,13 +203,13 @@ async def test_upsert_persists_workflow_tag_and_steps(monkeypatch):
                         "name": "score",
                         "sort_order": 0,
                         "tag": "Checkout/Score",
-                        "recommended_sla": "ux-critical",
+                        "recommended_slo": "ux-critical",
                         "objective_priority": ["latency", "quality"],
                     },
                     {
                         "name": "summarize",
                         "tag": "",
-                        "recommended_sla": "ux-background",
+                        "recommended_slo": "ux-background",
                     },
                     {"sort_order": 9},  # nameless → skipped
                 ],
@@ -221,14 +221,14 @@ async def test_upsert_persists_workflow_tag_and_steps(monkeypatch):
                 "step": "score",
                 "file_path": "src/pay.py",
                 "start_line": 4,
-                "recommended_sla": "ux-critical",
+                "recommended_slo": "ux-critical",
             },
             {
                 "workflow": "checkout",
                 "step": "missing-step",
                 "file_path": "src/other.py",
                 "start_line": 8,
-                "recommended_sla": "ux-high-prio",
+                "recommended_slo": "ux-high-prio",
             },
         ],
     }
@@ -242,12 +242,12 @@ async def test_upsert_persists_workflow_tag_and_steps(monkeypatch):
     assert len(steps) == 2
     assert steps[0]["name"] == "score"
     assert steps[0]["tag"] == "checkoutscore"
-    assert steps[0]["sla"] == "ux-critical"
+    assert steps[0]["slo"] == "ux-critical"
     assert json.loads(steps[0]["priority"]) == ["latency", "quality", "price"]
     assert steps[0]["sort_order"] == 0
     assert steps[1]["name"] == "summarize"
     assert steps[1]["tag"] is None
-    assert steps[1]["sla"] == "ux-background"
+    assert steps[1]["slo"] == "ux-background"
     assert steps[1]["sort_order"] == 1
 
     recs = [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql]
@@ -257,7 +257,7 @@ async def test_upsert_persists_workflow_tag_and_steps(monkeypatch):
 
 
 async def test_upsert_rejects_duplicate_step_names_on_reanalysis(monkeypatch):
-    # Two same-named steps must not both inherit one predecessor's confirmed SLA.
+    # Two same-named steps must not both inherit one predecessor's confirmed SLO.
     conn = _Conn(
         previous_workflows=[
             {"id": 40, "name": "checkout", "status": "active", "deleted_at": None, "tag": "checkout"},
@@ -267,7 +267,7 @@ async def test_upsert_rejects_duplicate_step_names_on_reanalysis(monkeypatch):
                 "workflow_id": 40,
                 "name": "score",
                 "tag": "owner-score",
-                "confirmed_sla": "ux-background",
+                "confirmed_slo": "ux-background",
                 "confirmed_objective_priority": '["price", "quality", "latency"]',
             },
         ],
@@ -280,8 +280,8 @@ async def test_upsert_rejects_duplicate_step_names_on_reanalysis(monkeypatch):
                 "name": "checkout",
                 "tag": "checkout",
                 "steps": [
-                    {"name": "score", "tag": "score-a", "recommended_sla": "ux-critical"},
-                    {"name": " score ", "tag": "score-b", "recommended_sla": "ux-high-prio"},
+                    {"name": "score", "tag": "score-a", "recommended_slo": "ux-critical"},
+                    {"name": " score ", "tag": "score-b", "recommended_slo": "ux-high-prio"},
                 ],
             }
         ],
@@ -293,8 +293,8 @@ async def test_upsert_rejects_duplicate_step_names_on_reanalysis(monkeypatch):
     assert len(steps) == 1
     assert steps[0]["name"] == "score"
     assert steps[0]["tag"] == "owner-score"
-    assert steps[0]["confirmed_sla"] == "ux-background"
-    assert steps[0]["sla"] == "ux-critical"
+    assert steps[0]["confirmed_slo"] == "ux-background"
+    assert steps[0]["slo"] == "ux-critical"
 
 
 async def test_upsert_tolerates_nonnumeric_sort_order(monkeypatch):
@@ -307,8 +307,8 @@ async def test_upsert_tolerates_nonnumeric_sort_order(monkeypatch):
                 "name": "checkout",
                 "sort_order": "not-a-number",
                 "steps": [
-                    {"name": "score", "sort_order": "first", "recommended_sla": "ux-critical"},
-                    {"name": "summarize", "sort_order": 3, "recommended_sla": "ux-background"},
+                    {"name": "score", "sort_order": "first", "recommended_slo": "ux-critical"},
+                    {"name": "summarize", "sort_order": 3, "recommended_slo": "ux-background"},
                 ],
             }
         ],
@@ -333,14 +333,14 @@ async def test_upsert_carries_workflow_lifecycle_and_step_confirmation(monkeypat
                 "workflow_id": 40,
                 "name": "score",
                 "tag": "owner-score",
-                "confirmed_sla": "ux-background",
+                "confirmed_slo": "ux-background",
                 "confirmed_objective_priority": '["price", "quality", "latency"]',
             },
             {
                 "workflow_id": 40,
                 "name": "summarize",
                 "tag": None,
-                "confirmed_sla": None,
+                "confirmed_slo": None,
                 "confirmed_objective_priority": None,
             },
         ],
@@ -353,8 +353,8 @@ async def test_upsert_carries_workflow_lifecycle_and_step_confirmation(monkeypat
                 "name": "checkout",
                 "tag": "checkout",
                 "steps": [
-                    {"name": "score", "tag": "score", "recommended_sla": "ux-critical"},
-                    {"name": "summarize", "tag": "summarize", "recommended_sla": "ux-background"},
+                    {"name": "score", "tag": "score", "recommended_slo": "ux-critical"},
+                    {"name": "summarize", "tag": "summarize", "recommended_slo": "ux-background"},
                 ],
             },
             {"name": "search", "tag": "search", "steps": []},
@@ -371,11 +371,11 @@ async def test_upsert_carries_workflow_lifecycle_and_step_confirmation(monkeypat
     assert workflows[1]["tag"] == "search"
     steps = [p for sql, p in conn.statements if "INSERT INTO ai_workflow_steps" in sql]
     assert steps[0]["tag"] == "owner-score"
-    assert steps[0]["sla"] == "ux-critical"
-    assert steps[0]["confirmed_sla"] == "ux-background"
+    assert steps[0]["slo"] == "ux-critical"
+    assert steps[0]["confirmed_slo"] == "ux-background"
     assert json.loads(steps[0]["confirmed_priority"]) == ["price", "quality", "latency"]
     assert steps[1]["tag"] == "summarize"
-    assert steps[1]["confirmed_sla"] is None
+    assert steps[1]["confirmed_slo"] is None
     assert steps[1]["confirmed_priority"] is None
 
 
@@ -432,7 +432,7 @@ def test_normalize_workflow_tag():
 
 async def test_upsert_honours_the_legacy_sla_key_of_older_sessions(tmp_path, monkeypatch):
     # A session queued before the analysis task asked for recommended_slo
-    # still writes recommended_sla; its tier must be kept, not defaulted.
+    # still writes recommended_slo; its tier must be kept, not defaulted.
     _patch_artifact_root(monkeypatch, tmp_path)
     session_dir = tmp_path / "6"
     session_dir.mkdir()
@@ -440,7 +440,7 @@ async def test_upsert_honours_the_legacy_sla_key_of_older_sessions(tmp_path, mon
         "commit_sha": "abc123",
         "workflows": [],
         "recommendations": [
-            {"file_path": "src/llm.py", "start_line": 10, "end_line": 40, "recommended_sla": "ux-critical"}
+            {"file_path": "src/llm.py", "start_line": 10, "end_line": 40, "recommended_slo": "ux-critical"}
         ],
     }
     (session_dir / "analysis.json").write_text(json.dumps(payload), encoding="utf-8")

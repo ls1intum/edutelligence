@@ -5,9 +5,9 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- SLA / workflow improvements:
+    <!-- SLO / workflow improvements:
          1. Workflow lifecycle (active / deprecated / ignored / soft-delete)
-         2. Explicit steps with their own SLAs and request tags
+         2. Explicit steps with their own SLOs and request tags
          3. Request attribution columns on log_entry
          4. Per-workflow historic-vs-candidate benchmark rows, following the
             workflow across re-analyses
@@ -49,10 +49,10 @@
                 name TEXT NOT NULL,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 tag TEXT,
-                recommended_sla TEXT NOT NULL
-                    CHECK (recommended_sla IN ('ux-critical', 'ux-high-prio', 'ux-background')),
-                confirmed_sla TEXT
-                    CHECK (confirmed_sla IS NULL OR confirmed_sla IN
+                recommended_slo TEXT NOT NULL
+                    CHECK (recommended_slo IN ('ux-critical', 'ux-high-prio', 'ux-background')),
+                confirmed_slo TEXT
+                    CHECK (confirmed_slo IS NULL OR confirmed_slo IN
                         ('ux-critical', 'ux-high-prio', 'ux-background')),
                 objective_priority JSONB NOT NULL DEFAULT '["latency","quality","price"]'::jsonb,
                 confirmed_objective_priority JSONB
@@ -84,8 +84,8 @@
                 ADD COLUMN workflow_tag TEXT,
                 ADD COLUMN workflow_id INTEGER,
                 ADD COLUMN workflow_step_id INTEGER,
-                ADD COLUMN request_sla TEXT
-                    CHECK (request_sla IS NULL OR request_sla IN
+                ADD COLUMN request_slo TEXT
+                    CHECK (request_slo IS NULL OR request_slo IN
                         ('ux-critical', 'ux-high-prio', 'ux-background'));
             CREATE INDEX IF NOT EXISTS idx_log_entry_workflow_tag
                 ON log_entry(workflow_tag, timestamp_request DESC)
@@ -99,7 +99,7 @@
                 DROP INDEX IF EXISTS idx_log_entry_workflow_id;
                 DROP INDEX IF EXISTS idx_log_entry_workflow_tag;
                 ALTER TABLE log_entry
-                    DROP COLUMN IF EXISTS request_sla,
+                    DROP COLUMN IF EXISTS request_slo,
                     DROP COLUMN IF EXISTS workflow_step_id,
                     DROP COLUMN IF EXISTS workflow_id,
                     DROP COLUMN IF EXISTS workflow_tag;
@@ -159,7 +159,7 @@
         </preConditions>
         <sql><![CDATA[
             -- Logos-admin ordered ranking of application keys across teams.
-            -- Lower rank number = higher dequeue priority within the same SLA
+            -- Lower rank number = higher dequeue priority within the same SLO
             -- bucket (raw_priority). Unranked keys keep the historical
             -- role_rank tiebreak only.
             CREATE TABLE application_key_queue_ranks (

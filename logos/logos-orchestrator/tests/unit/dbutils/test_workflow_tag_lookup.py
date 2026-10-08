@@ -53,11 +53,11 @@ def test_lookup_requires_team_id():
 
 
 def test_lookup_scopes_by_team_and_latest_succeeded_analysis():
-    rows = [{"workflow_id": 5, "step_id": 9, "sla": "ux-critical"}]
+    rows = [{"workflow_id": 5, "step_id": 9, "slo": "ux-critical"}]
     db, calls = _make_db(rows)
     info = db.lookup_workflow_tag("checkout", 7)
 
-    assert info == {"workflow_id": 5, "step_id": 9, "sla": "ux-critical"}
+    assert info == {"workflow_id": 5, "step_id": 9, "slo": "ux-critical"}
     assert len(calls) == 1
     sql, params = calls[0]
     assert "ai_workflow_steps" in sql
@@ -70,15 +70,15 @@ def test_lookup_scopes_by_team_and_latest_succeeded_analysis():
     assert "ORDER BY w.id DESC, s.id" in sql
 
 
-def test_lookup_falls_back_to_workflow_tag_without_sla():
+def test_lookup_falls_back_to_workflow_tag_without_slo():
     rows = [
         None,
-        {"workflow_id": 3, "step_id": None, "sla": None},
+        {"workflow_id": 3, "step_id": None, "slo": None},
     ]
     db, calls = _make_db(rows)
     info = db.lookup_workflow_tag("checkout", 7)
 
-    assert info == {"workflow_id": 3, "step_id": None, "sla": None}
+    assert info == {"workflow_id": 3, "step_id": None, "slo": None}
     assert len(calls) == 2
     step_sql, _ = calls[0]
     workflow_sql, _ = calls[1]

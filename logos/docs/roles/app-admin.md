@@ -110,9 +110,9 @@ not show, also when the toggle is on.
 #### Steps and tags
 
 A workflow can contain more than one **step**. Each step has its own
-recommended SLA. Owners can confirm that SLA. Applications attribute traffic
+recommended SLO. Owners can confirm that SLO. Applications attribute traffic
 with `X-Logos-Workflow-Tag` and the workflow or step tag. Click the tag chip
-for a copy hint. A request can also set its SLA with `X-Logos-SLA`
+for a copy hint. A request can also set its SLO with `X-Logos-SLO`
 (`ux-critical`, `ux-high-prio`, or `ux-background`).
 
 A Logos Admin can select **Propose tagging PR**. That action queues an agent

@@ -28,8 +28,6 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_FILE = "analysis.json"
 VALID_SLOS = frozenset({"ux-critical", "ux-high-prio", "ux-background"})
-# Steps keep the SLA column names; the tier set is the same as SLO.
-VALID_SLAS = VALID_SLOS
 OBJECTIVE_KEYS = ("latency", "quality", "price")
 DEFAULT_OBJECTIVE_PRIORITY = list(OBJECTIVE_KEYS)
 # Cap memory: an agent-written artifact must not exhaust the runner.
@@ -544,7 +542,7 @@ async def _insert_workflow_steps(
 
     Missing or empty ``steps`` is fine (backward compatible). Status /
     soft-delete live on the parent workflow. ``previous_steps`` (step name →
-    row of the previous analysis) carries an owner-confirmed SLA and an
+    row of the previous analysis) carries an owner-confirmed SLO and an
     established tag over to a same-named step.
     """
     names_to_ids: dict[str, int] = {}
@@ -556,7 +554,7 @@ async def _insert_workflow_steps(
         name = str(raw.get("name") or "").strip()
         if not name:
             continue
-        # Same trimmed name twice would copy one predecessor's tag/SLA onto both.
+        # Same trimmed name twice would copy one predecessor's tag/SLO onto both.
         if name in names_to_ids:
             logger.warning(
                 "skipping duplicate workflow step name %r on workflow %s",
@@ -564,25 +562,25 @@ async def _insert_workflow_steps(
                 workflow_id,
             )
             continue
-        sla = str(raw.get("recommended_sla") or "").strip()
-        if sla not in VALID_SLAS:
-            sla = "ux-high-prio"
+        slo = str(raw.get("recommended_slo") or raw.get("recommended_sla") or "").strip()
+        if slo not in VALID_SLOS:
+            slo = "ux-high-prio"
         previous = (previous_steps or {}).get(name) or {}
-        confirmed_sla = previous.get("confirmed_sla")
+        confirmed_slo = previous.get("confirmed_slo")
         confirmed_priority = None
         if previous.get("confirmed_objective_priority") is not None:
             confirmed_priority = json.dumps(
-                _priority_list(previous["confirmed_objective_priority"], slo=confirmed_sla or sla)
+                _priority_list(previous["confirmed_objective_priority"], slo=confirmed_slo or slo)
             )
         step_id = (
             await conn.execute(
                 text("""
                     INSERT INTO ai_workflow_steps
-                        (workflow_id, name, sort_order, tag, recommended_sla, objective_priority,
-                         confirmed_sla, confirmed_objective_priority)
+                        (workflow_id, name, sort_order, tag, recommended_slo, objective_priority,
+                         confirmed_slo, confirmed_objective_priority)
                     VALUES
-                        (:workflow_id, :name, :sort_order, :tag, :sla, CAST(:priority AS jsonb),
-                         :confirmed_sla, CAST(:confirmed_priority AS jsonb))
+                        (:workflow_id, :name, :sort_order, :tag, :slo, CAST(:priority AS jsonb),
+                         :confirmed_slo, CAST(:confirmed_priority AS jsonb))
                     RETURNING id
                     """),
                 {
@@ -591,9 +589,9 @@ async def _insert_workflow_steps(
                     "sort_order": _sort_order(raw, index),
                     "tag": previous.get("tag")
                     or unique_workflow_tag(normalize_workflow_tag(raw.get("tag")), taken_tags),
-                    "sla": sla,
-                    "priority": json.dumps(normalize_objective_priority(raw.get("objective_priority"), slo=sla)),
-                    "confirmed_sla": confirmed_sla,
+                    "slo": slo,
+                    "priority": json.dumps(normalize_objective_priority(raw.get("objective_priority"), slo=slo)),
+                    "confirmed_slo": confirmed_slo,
                     "confirmed_priority": confirmed_priority,
                 },
             )
@@ -768,7 +766,7 @@ async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: i
 
     Matched by :func:`match_workflows` when carrying owner edits forward:
     diagrams, lifecycle, tags, and — under ``steps`` (step name → row) —
-    step tags and confirmed SLAs. The caller holds the repository row lock;
+    step tags and confirmed SLOs. The caller holds the repository row lock;
     owner edits take it too.
     """
     rows = (
@@ -805,7 +803,7 @@ async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: i
         (
             await conn.execute(
                 text("""
-                    SELECT s.workflow_id, s.name, s.tag, s.confirmed_sla, s.confirmed_objective_priority
+                    SELECT s.workflow_id, s.name, s.tag, s.confirmed_slo, s.confirmed_objective_priority
                       FROM ai_workflow_steps s
                      WHERE s.workflow_id = ANY(:ids)
                      ORDER BY s.id
@@ -824,7 +822,7 @@ async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: i
                 str(row["name"]),
                 {
                     "tag": row["tag"],
-                    "confirmed_sla": row["confirmed_sla"],
+                    "confirmed_slo": row["confirmed_slo"],
                     "confirmed_objective_priority": row["confirmed_objective_priority"],
                 },
             )

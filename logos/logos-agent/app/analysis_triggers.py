@@ -57,7 +57,7 @@ Schema for `/artifacts/analysis.json`:
           "name": "<short step name>",
           "sort_order": 0,
           "tag": "<stable kebab-case tag for X-Logos-Workflow-Tag>",
-          "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+          "recommended_slo": "ux-critical" | "ux-high-prio" | "ux-background",
           "objective_priority": ["latency" | "quality" | "price", "..."]
         }}
       ]
@@ -93,7 +93,7 @@ ux-critical → [latency, quality, price]; ux-high-prio → [quality, latency, p
 ux-background → [price, quality, latency].
 
 Suggest stable kebab-case `tag` values on workflows and steps so applications
-can send `X-Logos-Workflow-Tag` (and optionally `X-Logos-SLA`) to attribute
+can send `X-Logos-Workflow-Tag` (and optionally `X-Logos-SLO`) to attribute
 traffic. Prefer short, unique tags derived from the workflow/step name.
 
 Repository: {repo_slug}

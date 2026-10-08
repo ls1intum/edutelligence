@@ -4,7 +4,7 @@ import java.util.List;
 
 /**
  * Replace the Logos-admin ordered ranking of application keys.
- * Rank 1 is highest dequeue priority within equal SLA buckets.
+ * Rank 1 is highest dequeue priority within equal SLO buckets.
  * Keys omitted from the list become unranked.
  */
 public record ReplaceApplicationKeyQueueRanksRequestDTO(

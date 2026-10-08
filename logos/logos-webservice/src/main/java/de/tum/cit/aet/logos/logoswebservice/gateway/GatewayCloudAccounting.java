@@ -115,7 +115,7 @@ public class GatewayCloudAccounting {
      * Check budget then insert an in-flight reservation with workflow attribution.
      *
      * @param logLevel the effective request logging level ({@code FULL} or {@code BILLING})
-     * @param attribution optional workflow / SLA headers resolved for this request
+     * @param attribution optional workflow / SLO headers resolved for this request
      * @return log_entry id, or {@code null} when reservation amount is 0
      */
     @Transactional
@@ -146,7 +146,7 @@ public class GatewayCloudAccounting {
             .addValue("workflow_tag", attr.workflowTag())
             .addValue("workflow_id", attr.workflowId())
             .addValue("workflow_step_id", attr.workflowStepId())
-            .addValue("request_sla", attr.requestSla());
+            .addValue("request_slo", attr.requestSlo());
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO log_entry (
@@ -155,14 +155,14 @@ public class GatewayCloudAccounting {
                 model_id, provider_id, request_id,
                 result_status, cost_finalized, settled_cost_micro_cents,
                 privacy_level, input_payload,
-                workflow_tag, workflow_id, workflow_step_id, request_sla
+                workflow_tag, workflow_id, workflow_step_id, request_slo
             ) VALUES (
                 NOW(), NOW(),
                 :api_key_id, :team_id, :user_id, :environment,
                 :model_id, :provider_id, :request_id,
                 NULL, TRUE, :settled,
                 CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb),
-                :workflow_tag, :workflow_id, :workflow_step_id, :request_sla
+                :workflow_tag, :workflow_id, :workflow_step_id, :request_slo
             )
             """, params, keys, new String[] {"id"});
         Number id = keys.getKey();

@@ -4078,7 +4078,7 @@ class DBManager:
         workflow_tag: Optional[str] = None,
         workflow_id: Optional[int] = None,
         workflow_step_id: Optional[int] = None,
-        request_sla: Optional[str] = None,
+        request_slo: Optional[str] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         payload_str = _json_for_jsonb(input_payload) if log_level == "FULL" and input_payload else None
@@ -4089,10 +4089,10 @@ class DBManager:
                  INSERT INTO log_entry (timestamp_request, api_key_id, team_id, user_id,
                                         environment, client_ip,
                                         input_payload, headers, privacy_level, request_id, timeout_s,
-                                        workflow_tag, workflow_id, workflow_step_id, request_sla)
+                                        workflow_tag, workflow_id, workflow_step_id, request_slo)
                  VALUES (:ts, :aki, :tid, :uid, :env,
                          :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid, :timeout_s,
-                         :workflow_tag, :workflow_id, :workflow_step_id, :request_sla)
+                         :workflow_tag, :workflow_id, :workflow_step_id, :request_slo)
                  RETURNING id
                  """),
             {
@@ -4110,7 +4110,7 @@ class DBManager:
                 "workflow_tag": workflow_tag,
                 "workflow_id": workflow_id,
                 "workflow_step_id": workflow_step_id,
-                "request_sla": request_sla,
+                "request_slo": request_slo,
             },
         ).fetchone()
         self.session.commit()
@@ -4131,7 +4131,7 @@ class DBManager:
         workflow_tag: Optional[str] = None,
         workflow_id: Optional[int] = None,
         workflow_step_id: Optional[int] = None,
-        request_sla: Optional[str] = None,
+        request_slo: Optional[str] = None,
     ) -> Optional[int]:
         """Insert a log row, or return the id of an existing one for ``request_id``.
 
@@ -4159,7 +4159,7 @@ class DBManager:
                 workflow_tag=workflow_tag,
                 workflow_id=workflow_id,
                 workflow_step_id=workflow_step_id,
-                request_sla=request_sla,
+                request_slo=request_slo,
             )
             return int(result["log-id"]) if status == 200 else None
         except sqlalchemy.exc.IntegrityError as exc:
@@ -4612,18 +4612,18 @@ class DBManager:
         return data
 
     def lookup_workflow_tag(self, tag: str, team_id: Optional[int]) -> Optional[Dict[str, Any]]:
-        """Resolve a workflow/step tag of ``team_id`` to attribution + SLA for a request.
+        """Resolve a workflow/step tag of ``team_id`` to attribution + SLO for a request.
 
         Prefers a matching ``ai_workflow_steps.tag`` whose parent workflow is
         not soft-deleted and not ``ignored``. Falls back to ``ai_workflows.tag``
-        under the same filters (workflows themselves have no SLA — ``sla`` is
-        then None). Step SLA prefers ``confirmed_sla`` over ``recommended_sla``.
+        under the same filters (workflows themselves have no SLO — ``slo`` is
+        then None). Step SLO prefers ``confirmed_slo`` over ``recommended_slo``.
         Only each repository's latest succeeded analysis counts — the one the
         Workflows tab shows — so ignoring, deleting, or renaming a tag there
         is not undone by a superseded copy. Another team's tag never matches.
 
         Returns:
-            Dict with ``workflow_id``, ``step_id``, ``sla``, or None when no
+            Dict with ``workflow_id``, ``step_id``, ``slo``, or None when no
             live tag of the team matches.
         """
         if not tag or team_id is None:
@@ -4633,7 +4633,7 @@ class DBManager:
             text("""
                  SELECT s.workflow_id AS workflow_id,
                         s.id AS step_id,
-                        COALESCE(s.confirmed_sla, s.recommended_sla) AS sla
+                        COALESCE(s.confirmed_slo, s.recommended_slo) AS slo
                  FROM ai_workflow_steps s
                           JOIN ai_workflows w ON w.id = s.workflow_id
                           JOIN ai_workflow_analyses a ON a.id = w.analysis_id
@@ -4660,7 +4660,7 @@ class DBManager:
             text("""
                  SELECT w.id AS workflow_id,
                         CAST(NULL AS INTEGER) AS step_id,
-                        CAST(NULL AS TEXT) AS sla
+                        CAST(NULL AS TEXT) AS slo
                  FROM ai_workflows w
                           JOIN ai_workflow_analyses a ON a.id = w.analysis_id
                  WHERE w.tag = :tag

@@ -1,7 +1,7 @@
-"""Per-request SLA headers and workflow-tag attribution.
+"""Per-request SLO headers and workflow-tag attribution.
 
-Applications may send ``X-Logos-SLA`` to set queue priority for one request, or
-``X-Logos-Workflow-Tag`` so Logos looks up the matching workflow/step SLA.
+Applications may send ``X-Logos-SLO`` to set queue priority for one request, or
+``X-Logos-Workflow-Tag`` so Logos looks up the matching workflow/step SLO.
 Precedence over the key/team/policy chain is defined by
 ``resolve_request_priority``.
 """
@@ -10,31 +10,31 @@ from __future__ import annotations
 
 from typing import Mapping, Optional
 
-VALID_SLAS = frozenset({"ux-critical", "ux-high-prio", "ux-background"})
+VALID_SLOS = frozenset({"ux-critical", "ux-high-prio", "ux-background"})
 
-_SLA_TO_PRIORITY = {
+_SLO_TO_PRIORITY = {
     "ux-critical": 10,
     "ux-high-prio": 5,
     "ux-background": 1,
 }
 
-_SLA_HEADER_NAMES = ("x-logos-sla", "logos-sla")
+_SLO_HEADER_NAMES = ("x-logos-slo", "logos-slo")
 _WORKFLOW_TAG_HEADER_NAMES = ("x-logos-workflow-tag", "logos-workflow-tag")
 
 
-def sla_to_priority(sla: str) -> int:
-    """Map an SLA string to the 1/5/10 queue priority scale.
+def slo_to_priority(slo: str) -> int:
+    """Map an SLO string to the 1/5/10 queue priority scale.
 
     Args:
-        sla: One of ``VALID_SLAS``.
+        slo: One of ``VALID_SLOS``.
 
     Returns:
         10 for ux-critical, 5 for ux-high-prio, 1 for ux-background.
 
     Raises:
-        KeyError: When ``sla`` is not a known SLA string.
+        KeyError: When ``slo`` is not a known SLO string.
     """
-    return _SLA_TO_PRIORITY[sla]
+    return _SLO_TO_PRIORITY[slo]
 
 
 def _header_value(headers: Mapping[str, str], names: tuple[str, ...]) -> Optional[str]:
@@ -52,20 +52,20 @@ def _header_value(headers: Mapping[str, str], names: tuple[str, ...]) -> Optiona
     return None
 
 
-def parse_request_sla_header(headers: Optional[Mapping[str, str]]) -> Optional[str]:
-    """Parse ``X-Logos-SLA`` (or ``logos-sla``) into a validated SLA string.
+def parse_request_slo_header(headers: Optional[Mapping[str, str]]) -> Optional[str]:
+    """Parse ``X-Logos-SLO`` (or ``logos-slo``) into a validated SLO string.
 
     Args:
         headers: Request headers (case-insensitive).
 
     Returns:
-        A member of ``VALID_SLAS``, or None when absent / unrecognised.
+        A member of ``VALID_SLOS``, or None when absent / unrecognised.
     """
-    raw = _header_value(headers or {}, _SLA_HEADER_NAMES)
+    raw = _header_value(headers or {}, _SLO_HEADER_NAMES)
     if raw is None:
         return None
-    sla = raw.lower()
-    return sla if sla in VALID_SLAS else None
+    slo = raw.lower()
+    return slo if slo in VALID_SLOS else None
 
 
 def parse_workflow_tag_header(headers: Optional[Mapping[str, str]]) -> Optional[str]:
@@ -81,20 +81,20 @@ def parse_workflow_tag_header(headers: Optional[Mapping[str, str]]) -> Optional[
 
 
 def resolve_request_priority(
-    header_sla: Optional[str],
-    tag_sla: Optional[str],
+    header_slo: Optional[str],
+    tag_slo: Optional[str],
     default_priority: Optional[int],
     team_priority: Optional[int],
     policy_priority: Optional[int],
 ) -> int:
-    """Resolve queue priority with SLA headers above the key/team/policy chain.
+    """Resolve queue priority with SLO headers above the key/team/policy chain.
 
-    Precedence: per-request SLA header > workflow-tag step SLA > API key
+    Precedence: per-request SLO header > workflow-tag step SLO > API key
     ``default_priority`` > team priority > policy priority.
 
     Args:
-        header_sla: Validated SLA from ``X-Logos-SLA``, or None.
-        tag_sla: SLA from a workflow-step tag lookup, or None.
+        header_slo: Validated SLO from ``X-Logos-SLO``, or None.
+        tag_slo: SLO from a workflow-step tag lookup, or None.
         default_priority: Key owner's configured priority (0 = unset).
         team_priority: Team admin priority (0 = unset).
         policy_priority: Policy-level priority (may be 0/None).
@@ -102,10 +102,10 @@ def resolve_request_priority(
     Returns:
         Effective integer priority on the 1/5/10 scale (or NORMAL when unset).
     """
-    if header_sla:
-        return sla_to_priority(header_sla)
-    if tag_sla:
-        return sla_to_priority(tag_sla)
+    if header_slo:
+        return slo_to_priority(header_slo)
+    if tag_slo:
+        return slo_to_priority(tag_slo)
     # Lazy import: pipeline imports this module for header parsing at classify time.
     from logos.pipeline.pipeline import resolve_queue_priority
 

@@ -24,7 +24,7 @@ from logos.timeouts import global_timeout_s
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
 from .prefix_affinity import affinity_keys
-from .request_sla import parse_request_sla_header, resolve_request_priority
+from .request_slo import parse_request_slo_header, resolve_request_priority
 from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
@@ -635,13 +635,13 @@ class RequestPipeline:
         )
 
         # The classifier bakes the policy's priority into every candidate, but
-        # per-request SLA headers / workflow-tag SLAs — then the key owner's
+        # per-request SLO headers / workflow-tag SLOs — then the key owner's
         # default_priority, then the team's admin-set priority — take
         # precedence: resolve the effective priority here so all downstream
         # consumers (schedulers, queueing, monitoring, log stats) agree on it.
         effective_priority = resolve_request_priority(
-            parse_request_sla_header(request.headers),
-            None,  # tag SLA is folded into default_priority by the HTTP boundary
+            parse_request_slo_header(request.headers),
+            None,  # tag SLO is folded into default_priority by the HTTP boundary
             request.default_priority,
             request.team_priority,
             policy.get("priority"),

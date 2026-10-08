@@ -63,8 +63,8 @@ describe('WorkflowsTabComponent review actions', () => {
         workflow_id: 1,
         name: 'reply',
         sort_order: 0,
-        recommended_sla: 'ux-critical',
-        confirmed_sla: null,
+        recommended_slo: 'ux-critical',
+        confirmed_slo: null,
       },
     ],
   };
@@ -129,7 +129,7 @@ describe('WorkflowsTabComponent review actions', () => {
     updateWorkflow.mockResolvedValue({ ...activeWorkflow, status: 'deprecated' });
     updateWorkflowStep.mockResolvedValue({
       ...activeWorkflow.steps![0],
-      confirmed_sla: 'ux-critical',
+      confirmed_slo: 'ux-critical',
     });
     runWorkflowBenchmark.mockResolvedValue({
       id: 9,
@@ -431,13 +431,13 @@ describe('WorkflowsTabComponent review actions', () => {
     expect(component.deleteTarget()).toBeNull();
   });
 
-  it('confirms a step SLA', async () => {
+  it('confirms a step SLO', async () => {
     const component = setup();
     await component.load();
     const step = component.data()!.repositories[0].workflows[0].steps![0];
-    await component.confirmStepSla(step);
-    expect(updateWorkflowStep).toHaveBeenCalledWith(7, 101, { confirmed_sla: 'ux-critical' });
-    expect(component.data()!.repositories[0].workflows[0].steps![0].confirmed_sla).toBe('ux-critical');
+    await component.confirmStepSlo(step);
+    expect(updateWorkflowStep).toHaveBeenCalledWith(7, 101, { confirmed_slo: 'ux-critical' });
+    expect(component.data()!.repositories[0].workflows[0].steps![0].confirmed_slo).toBe('ux-critical');
   });
 
   it('runs a workflow benchmark against a candidate model', async () => {

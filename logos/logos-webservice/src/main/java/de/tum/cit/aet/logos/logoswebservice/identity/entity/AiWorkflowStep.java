@@ -32,9 +32,9 @@ public class AiWorkflowStep {
     private String tag;
 
     @Column(nullable = false)
-    private String recommendedSla;
+    private String recommendedSlo;
 
-    private String confirmedSla;
+    private String confirmedSlo;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "objective_priority", columnDefinition = "jsonb", nullable = false)
@@ -49,8 +49,8 @@ public class AiWorkflowStep {
     public String getName() { return name; }
     public Integer getSortOrder() { return sortOrder; }
     public String getTag() { return tag; }
-    public String getRecommendedSla() { return recommendedSla; }
-    public String getConfirmedSla() { return confirmedSla; }
+    public String getRecommendedSlo() { return recommendedSlo; }
+    public String getConfirmedSlo() { return confirmedSlo; }
     public List<Object> getObjectivePriority() { return objectivePriority; }
     public List<Object> getConfirmedObjectivePriority() { return confirmedObjectivePriority; }
 
@@ -58,8 +58,8 @@ public class AiWorkflowStep {
     public void setName(String name) { this.name = name; }
     public void setSortOrder(Integer sortOrder) { this.sortOrder = sortOrder; }
     public void setTag(String tag) { this.tag = tag; }
-    public void setRecommendedSla(String recommendedSla) { this.recommendedSla = recommendedSla; }
-    public void setConfirmedSla(String confirmedSla) { this.confirmedSla = confirmedSla; }
+    public void setRecommendedSlo(String recommendedSlo) { this.recommendedSlo = recommendedSlo; }
+    public void setConfirmedSlo(String confirmedSlo) { this.confirmedSlo = confirmedSlo; }
     public void setObjectivePriority(List<Object> objectivePriority) {
         this.objectivePriority = objectivePriority;
     }

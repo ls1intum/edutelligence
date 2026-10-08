@@ -78,7 +78,7 @@ from logos.pipeline.correcting_scheduler import ClassificationCorrectingSchedule
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, effective_queue_role_rank
-from logos.pipeline.request_sla import VALID_SLAS, parse_request_sla_header, parse_workflow_tag_header, sla_to_priority
+from logos.pipeline.request_slo import VALID_SLOS, parse_request_slo_header, parse_workflow_tag_header, slo_to_priority
 from logos.queue.priority_queue import PriorityQueueManager
 from logos.request_content import (
     force_non_streaming_payload,
@@ -3124,14 +3124,14 @@ async def _execute_resource_mode(
     # Extract policy
     policy = _extract_policy(headers, auth.key_value, body)
 
-    # Per-request SLA header wins; else elevate from the workflow-tag step SLA
+    # Per-request SLO header wins; else elevate from the workflow-tag step SLO
     # resolved during auth_parse_log. Unset leaves the key's default_priority.
-    header_sla = parse_request_sla_header(headers)
-    tag_sla = auth.tag_sla if getattr(auth, "tag_sla", None) in VALID_SLAS else None
-    if header_sla:
-        default_priority = sla_to_priority(header_sla)
-    elif tag_sla:
-        default_priority = sla_to_priority(tag_sla)
+    header_slo = parse_request_slo_header(headers)
+    tag_slo = auth.tag_slo if getattr(auth, "tag_slo", None) in VALID_SLOS else None
+    if header_slo:
+        default_priority = slo_to_priority(header_slo)
+    elif tag_slo:
+        default_priority = slo_to_priority(tag_slo)
     else:
         default_priority = auth.default_priority
 
@@ -3148,7 +3148,7 @@ async def _execute_resource_mode(
         required_provider_id=required_provider_id,
         # The key owner's queue priority; 0 falls back to the team's, then
         # the policy-level priority inside the pipeline. Elevated when a
-        # per-request or workflow-tag SLA is present.
+        # per-request or workflow-tag SLO is present.
         default_priority=default_priority,
         team_priority=auth.team_priority,
         role_rank=effective_queue_role_rank(auth.key_type, auth.user_role, auth.admin_queue_rank),
@@ -4341,15 +4341,15 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
         deployment_cache = refcache.get_ref_cache()
         cached_deployments = deployment_cache.get(("deployments", auth.api_key_id))
 
-        # Request attribution: X-Logos-SLA and/or X-Logos-Workflow-Tag.
-        header_sla = parse_request_sla_header(headers)
+        # Request attribution: X-Logos-SLO and/or X-Logos-Workflow-Tag.
+        header_slo = parse_request_slo_header(headers)
         workflow_tag = parse_workflow_tag_header(headers)
         workflow_id = None
         workflow_step_id = None
-        tag_sla = None
+        tag_slo = None
         if workflow_tag and auth.team_id is not None:
             # Scoped to the caller's own team so a guessed tag cannot
-            # escalate another team's SLA onto this key.
+            # escalate another team's SLO onto this key.
             try:
                 with DBManager() as tag_db:
                     tag_info = tag_db.lookup_workflow_tag(workflow_tag, auth.team_id)
@@ -4359,14 +4359,14 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
             if tag_info:
                 workflow_id = tag_info.get("workflow_id")
                 workflow_step_id = tag_info.get("step_id")
-                looked_up_sla = tag_info.get("sla")
-                tag_sla = looked_up_sla if looked_up_sla in VALID_SLAS else None
-        request_sla = header_sla or tag_sla
-        auth.request_sla = request_sla
+                looked_up_slo = tag_info.get("slo")
+                tag_slo = looked_up_slo if looked_up_slo in VALID_SLOS else None
+        request_slo = header_slo or tag_slo
+        auth.request_slo = request_slo
         auth.workflow_tag = workflow_tag
         auth.workflow_id = workflow_id
         auth.workflow_step_id = workflow_step_id
-        auth.tag_sla = tag_sla
+        auth.tag_slo = tag_slo
 
         log_fields = {
             "api_key_id": auth.api_key_id,
@@ -4384,7 +4384,7 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
             "workflow_tag": workflow_tag,
             "workflow_id": workflow_id,
             "workflow_step_id": workflow_step_id,
-            "request_sla": request_sla,
+            "request_slo": request_slo,
         }
         can_defer_log = (
             cached_deployments is not refcache._MISSING

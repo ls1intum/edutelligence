@@ -25,7 +25,6 @@ import {
   AiWorkflowStatus,
   AiWorkflowStep,
   ObjectiveKey,
-  RecommendedSla,
   RecommendedSlo,
   TeamApiKey,
   TeamWorkflowsResponse,
@@ -73,7 +72,7 @@ function normalizePriority(raw: string[] | null | undefined, slo?: string): Obje
  * Latest AI-workflow analyses for linked repositories: Mermaid diagrams and
  * SLO / objective-priority recommendations that owners can accept, override,
  * or reject. Workflows support lifecycle (active / deprecated / ignored),
- * per-step SLAs, tagging headers, and model benchmarks.
+ * per-step SLOs, tagging headers, and model benchmarks.
  */
 @Component({
   selector: 'app-workflows-tab',
@@ -134,7 +133,7 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
   showDeprecatedIgnored = signal(false);
   workflowActionId = signal<number | null>(null);
   confirmingStepId = signal<number | null>(null);
-  stepSlaPick = signal<Record<number, RecommendedSla>>({});
+  stepSloPick = signal<Record<number, RecommendedSlo>>({});
   /** Workflow id whose inline benchmark panel is open. */
   benchmarkOpenId = signal<number | null>(null);
   benchmarkCandidate = signal('');
@@ -232,12 +231,12 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     return [...(wf.steps ?? [])].sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
   }
 
-  stepSla(step: AiWorkflowStep): RecommendedSla | null {
-    return step.confirmed_sla ?? step.recommended_sla ?? null;
+  stepSlo(step: AiWorkflowStep): RecommendedSlo | null {
+    return step.confirmed_slo ?? step.recommended_slo ?? null;
   }
 
-  stepConfirmSlaValue(step: AiWorkflowStep): string {
-    return this.stepSlaPick()[step.id] ?? this.stepSla(step) ?? '';
+  stepConfirmSloValue(step: AiWorkflowStep): string {
+    return this.stepSloPick()[step.id] ?? this.stepSlo(step) ?? '';
   }
 
   pendingRecs(): AiLlmCallRecommendation[] {
@@ -419,8 +418,8 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     this.overrideSlo.update((m) => ({ ...m, [recId]: value as KeySlo }));
   }
 
-  setStepSlaPick(stepId: number, value: string): void {
-    this.stepSlaPick.update((m) => ({ ...m, [stepId]: value as RecommendedSla }));
+  setStepSloPick(stepId: number, value: string): void {
+    this.stepSloPick.update((m) => ({ ...m, [stepId]: value as RecommendedSlo }));
   }
 
   async setWorkflowStatus(wf: AiWorkflow, status: AiWorkflowStatus): Promise<void> {
@@ -462,19 +461,19 @@ export class WorkflowsTabComponent implements OnChanges, AfterViewChecked {
     }
   }
 
-  async confirmStepSla(step: AiWorkflowStep): Promise<void> {
+  async confirmStepSlo(step: AiWorkflowStep): Promise<void> {
     if (!this.canEdit || this.confirmingStepId() != null) return;
-    const sla = this.stepSlaPick()[step.id] ?? step.confirmed_sla ?? step.recommended_sla;
-    if (!sla) return;
+    const slo = this.stepSloPick()[step.id] ?? step.confirmed_slo ?? step.recommended_slo;
+    if (!slo) return;
     this.confirmingStepId.set(step.id);
     this.actionError.set('');
     try {
       const saved = await this.teamService.updateWorkflowStep(this.teamId, step.id, {
-        confirmed_sla: sla,
+        confirmed_slo: slo,
       });
       this.patchStep(step.id, saved);
     } catch (err: unknown) {
-      this.actionError.set(this.errDetail(err, 'Failed to confirm step SLA.'));
+      this.actionError.set(this.errDetail(err, 'Failed to confirm step SLO.'));
     } finally {
       this.confirmingStepId.set(null);
     }

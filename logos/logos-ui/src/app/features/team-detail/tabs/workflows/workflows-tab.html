@@ -35,9 +35,9 @@
     latest succeeded analysis of each linked repository. Owners can edit a
     diagram's Mermaid; later analyses keep that edit and propose a newer
     diagram beside it when the agent finds a change. Workflows can have
-    multiple steps with their own SLAs. Applications may send
+    multiple steps with their own SLOs. Applications may send
     <code>X-Logos-Workflow-Tag</code> to attribute a request to a workflow (or
-    step), and/or <code>X-Logos-SLA</code> to set the SLA per request.
+    step), and/or <code>X-Logos-SLO</code> to set the SLO per request.
     Objective priority is an ordered list of latency, quality, and price
     (most important first). Confirmations can update an application key's
     queue priority; recommendations never take effect until you review them.
@@ -237,11 +237,11 @@
                           {{ step.tag }}
                         </button>
                       }
-                      @if (stepSla(step); as sla) {
+                      @if (stepSlo(step); as sla) {
                         <span
-                          class="sla-badge"
-                          [class.sla-badge--muted]="!step.confirmed_sla"
-                          [title]="step.confirmed_sla ? 'Confirmed SLA' : 'Recommended SLA (not confirmed)'"
+                          class="slo-badge"
+                          [class.slo-badge--muted]="!step.confirmed_slo"
+                          [title]="step.confirmed_slo ? 'Confirmed SLO' : 'Recommended SLO (not confirmed)'"
                         >
                           {{ sla }}
                         </span>
@@ -249,9 +249,9 @@
                       @if (canEdit) {
                         <select
                           class="field-select field-select--sm"
-                          [attr.aria-label]="'Confirm SLA for step ' + step.name"
-                          [ngModel]="stepConfirmSlaValue(step)"
-                          (ngModelChange)="setStepSlaPick(step.id, $event)"
+                          [attr.aria-label]="'Confirm SLO for step ' + step.name"
+                          [ngModel]="stepConfirmSloValue(step)"
+                          (ngModelChange)="setStepSloPick(step.id, $event)"
                           [disabled]="confirmingStepId() != null"
                         >
                           @for (opt of sloOptions; track opt.value) {
@@ -261,13 +261,13 @@
                         <button
                           type="button"
                           class="btn-primary btn-sm"
-                          [disabled]="confirmingStepId() != null || !stepConfirmSlaValue(step)"
-                          (click)="confirmStepSla(step)"
+                          [disabled]="confirmingStepId() != null || !stepConfirmSloValue(step)"
+                          (click)="confirmStepSlo(step)"
                         >
                           @if (confirmingStepId() === step.id) {
                             <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
                           }
-                          Confirm SLA
+                          Confirm SLO
                         </button>
                       }
                     </li>
@@ -588,7 +588,7 @@
   [visible]="deleteTarget() !== null"
   (visibleChange)="$event || deleteTarget.set(null)"
   [title]="'Delete workflow \'' + (deleteTarget()?.name ?? '') + '\'?'"
-  message="The workflow is soft-deleted and hidden from the default list. You can restore it later from deprecated / ignored workflows."
+  message="The workflow is soft-deleted and hidden from both the default list and the deprecated / ignored list. It is no longer available in this UI."
   confirmLabel="Delete"
   [loading]="deleteLoading()"
   (confirmed)="confirmDeleteWorkflow()"

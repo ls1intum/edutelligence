@@ -2,9 +2,9 @@ package de.tum.cit.aet.logos.logoswebservice.identity.dto;
 
 import java.util.List;
 
-/** Confirm or override the SLA of a workflow step. */
+/** Confirm or override the SLO of a workflow step. */
 public record UpdateWorkflowStepRequestDTO(
-    String confirmedSla,
+    String confirmedSlo,
     List<String> confirmedObjectivePriority,
     String tag,
     String name

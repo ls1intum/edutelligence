@@ -169,7 +169,7 @@ export interface WorkflowAnalysisSummary {
   finished_at?: string | null;
 }
 
-export type RecommendedSla = 'ux-critical' | 'ux-high-prio' | 'ux-background';
+export type RecommendedSlo = 'ux-critical' | 'ux-high-prio' | 'ux-background';
 
 export type RecommendationReviewStatus = 'pending' | 'accepted' | 'overridden' | 'rejected';
 
@@ -179,15 +179,15 @@ export type ObjectiveKey = 'latency' | 'quality' | 'price';
 /** Lifecycle of a detected workflow — active is shown by default; deprecated/ignored stay until soft-deleted. */
 export type AiWorkflowStatus = 'active' | 'deprecated' | 'ignored';
 
-/** A named step within a workflow, with its own SLA and optional tag. */
+/** A named step within a workflow, with its own SLO and optional tag. */
 export interface AiWorkflowStep {
   id: number;
   workflow_id: number;
   name: string;
   sort_order: number;
   tag?: string | null;
-  recommended_sla?: RecommendedSla | null;
-  confirmed_sla?: RecommendedSla | null;
+  recommended_slo?: RecommendedSlo | null;
+  confirmed_slo?: RecommendedSlo | null;
   objective_priority?: ObjectiveKey[];
   confirmed_objective_priority?: ObjectiveKey[] | null;
 }
@@ -209,9 +209,6 @@ export interface AiWorkflow {
   deleted_at?: string | null;
   steps?: AiWorkflowStep[];
 }
-
-/** Call-site urgency tier (same values as RecommendedSla; column renamed to SLO). */
-export type RecommendedSlo = RecommendedSla;
 
 export interface AiLlmCallRecommendation {
   id: number;
@@ -292,7 +289,7 @@ export interface UpdateWorkflowPayload {
 }
 
 export interface UpdateWorkflowStepPayload {
-  confirmed_sla?: RecommendedSla | null;
+  confirmed_slo?: RecommendedSlo | null;
   confirmed_objective_priority?: ObjectiveKey[] | null;
   tag?: string | null;
   name?: string;

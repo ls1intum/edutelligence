@@ -56,8 +56,6 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepositoryCr
 public class AiWorkflowAnalysisService {
 
     private static final Set<String> VALID_SLOS = Set.of("ux-critical", "ux-high-prio", "ux-background");
-    /** Steps keep SLA column names; the tier set matches VALID_SLOS. */
-    private static final Set<String> VALID_SLAS = VALID_SLOS;
     private static final Set<String> VALID_WORKFLOW_STATUSES = Set.of("active", "deprecated", "ignored");
     private static final int MAX_MODEL_NAME_LENGTH = 200;
     private static final int MAX_DIAGRAM_MERMAID_LENGTH = 100_000;
@@ -96,7 +94,7 @@ public class AiWorkflowAnalysisService {
                   "name": "<short step name>",
                   "sort_order": 0,
                   "tag": "<stable kebab-case tag for X-Logos-Workflow-Tag>",
-                  "recommended_sla": "ux-critical" | "ux-high-prio" | "ux-background",
+                  "recommended_slo": "ux-critical" | "ux-high-prio" | "ux-background",
                   "objective_priority": ["latency" | "quality" | "price", "..."]
                 }
               ]
@@ -132,7 +130,7 @@ public class AiWorkflowAnalysisService {
         ux-background → [price, quality, latency].
 
         Suggest stable kebab-case `tag` values on workflows and steps so applications
-        can send `X-Logos-Workflow-Tag` (and optionally `X-Logos-SLA`) to attribute
+        can send `X-Logos-Workflow-Tag` (and optionally `X-Logos-SLO`) to attribute
         traffic. Prefer short, unique tags derived from the workflow/step name.
 
         Repository: %s
@@ -148,7 +146,7 @@ public class AiWorkflowAnalysisService {
         Workflow tag (X-Logos-Workflow-Tag): %s
 
         Steps (send the step tag as X-Logos-Workflow-Tag when the call is that step;
-        also set X-Logos-SLA to the confirmed or recommended SLA when known):
+        also set X-Logos-SLO to the confirmed or recommended SLO when known):
         %s
 
         Repository: %s
@@ -621,17 +619,17 @@ public class AiWorkflowAnalysisService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body is required");
         }
         AiWorkflowStep step = lockCurrentStep(teamId, stepId);
-        if (body.confirmedSla() != null) {
-            String sla = body.confirmedSla().trim();
-            if (sla.isEmpty()) {
-                step.setConfirmedSla(null);
+        if (body.confirmedSlo() != null) {
+            String slo = body.confirmedSlo().trim();
+            if (slo.isEmpty()) {
+                step.setConfirmedSlo(null);
             }
             else {
-                if (!VALID_SLAS.contains(sla)) {
+                if (!VALID_SLOS.contains(slo)) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "confirmed_sla must be ux-critical, ux-high-prio, or ux-background");
+                        "confirmed_slo must be ux-critical, ux-high-prio, or ux-background");
                 }
-                step.setConfirmedSla(sla);
+                step.setConfirmedSlo(slo);
             }
         }
         if (body.confirmedObjectivePriority() != null) {
@@ -738,7 +736,7 @@ public class AiWorkflowAnalysisService {
             : steps.stream()
                 .map(s -> "- " + s.getName()
                     + " | tag=" + s.getTag()
-                    + " | sla=" + (s.getConfirmedSla() != null ? s.getConfirmedSla() : s.getRecommendedSla()))
+                    + " | slo=" + (s.getConfirmedSlo() != null ? s.getConfirmedSlo() : s.getRecommendedSlo()))
                 .collect(Collectors.joining("\n"));
 
         String task = TAGGING_PR_TASK_TEMPLATE.formatted(
@@ -1207,8 +1205,8 @@ public class AiWorkflowAnalysisService {
         m.put("name", step.getName());
         m.put("sort_order", step.getSortOrder());
         m.put("tag", step.getTag());
-        m.put("recommended_sla", step.getRecommendedSla());
-        m.put("confirmed_sla", step.getConfirmedSla());
+        m.put("recommended_slo", step.getRecommendedSlo());
+        m.put("confirmed_slo", step.getConfirmedSlo());
         m.put("objective_priority", ObjectivePriority.asStringList(step.getObjectivePriority()));
         m.put("confirmed_objective_priority",
             step.getConfirmedObjectivePriority() != null
@@ -1284,7 +1282,7 @@ public class AiWorkflowAnalysisService {
 
     /**
      * Same repository-then-row lock as recommendations: ingest copies
-     * owner edits (diagrams, lifecycle, tags, step SLAs) from the previous
+     * owner edits (diagrams, lifecycle, tags, step SLOs) from the previous
      * analysis under the repository
      * lock, so an edit either lands first or waits for the new analysis. An
      * edit on a workflow a newer analysis superseded is refused.
