@@ -1565,7 +1565,7 @@ async def create_pull_review(number: int, body: str, comments: list[dict[str, An
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{_API}/repos/{settings.repo_slug}/pulls/{number}/reviews",
-            headers=_headers(),
+            headers=await _headers(),
             json={
                 "commit_id": commit_id,
                 "event": "COMMENT",

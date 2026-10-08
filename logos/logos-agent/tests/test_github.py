@@ -1022,7 +1022,7 @@ class TestReactionsAndReplies:
                 return False
 
             async def post(self, url, headers=None, json=None):
-                sent.append({"url": url, "json": json})
+                sent.append({"url": url, "headers": headers, "json": json})
                 return FakeResponse(status, payload or {"html_url": "https://github.com/x/y#c1"})
 
         monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
@@ -1061,6 +1061,22 @@ class TestReactionsAndReplies:
 
         assert sent[0]["url"].endswith("/pulls/772/comments/3910035243/replies")
         assert sent[0]["json"] == {"body": "the answer"}
+
+    async def test_an_inline_review_sends_authorization_headers(self, monkeypatch):
+        # create_pull_review must await _headers(); a bare call hands HTTPX a
+        # coroutine and every inline-review delivery fails before the request.
+        sent = self._capture(monkeypatch, status=200, payload={"html_url": "https://github.com/x/y#r1"})
+
+        url = await github.create_pull_review(
+            772,
+            "summary",
+            [{"path": "a.py", "line": 12, "body": "nits"}],
+            commit_id="abc123",
+        )
+
+        assert sent[0]["url"].endswith("/pulls/772/reviews")
+        assert sent[0]["headers"]["Authorization"] == "Bearer tok"
+        assert url == "https://github.com/x/y#r1"
 
 
 class TestReviewSupersession:
