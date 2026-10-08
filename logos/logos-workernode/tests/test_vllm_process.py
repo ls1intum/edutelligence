@@ -739,6 +739,42 @@ def test_build_env_blank_hf_home_resolves_like_the_gguf_resolver(monkeypatch, tm
     assert handle._build_env(lane)["HF_HOME"] == inherited
 
 
+def test_build_env_blank_lane_hf_home_override_falls_through(monkeypatch, tmp_path: Path) -> None:
+    """Blank/whitespace lane env_overrides['HF_HOME'] must not reach the child.
+
+    _effective_hf_home_for_lane treats those as unset (resolution finds weights
+    under the inherited / default root), but merging raw env_overrides after
+    assigning HF_HOME used to overwrite the normalized value with "" / "   "
+    so the child loaded elsewhere and failed offline or re-downloaded.
+    """
+    monkeypatch.delenv("LOGOS_WORKER_CACHE_ROOT", raising=False)
+    inherited = str(tmp_path / "inherited-hf")
+    monkeypatch.setenv("HF_HOME", inherited)
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(models_path=str(tmp_path), gpu_devices="all"))
+
+    for blank in ("", "   "):
+        lane = LaneConfig(
+            model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+            vllm=True,
+            vllm_config=VllmConfig(env_overrides={"HF_HOME": blank, "VLLM_USE_V1": "0"}),
+        )
+        env = handle._build_env(lane)
+        assert env["HF_HOME"] == inherited
+        assert handle._effective_hf_home_for_lane(lane) == inherited
+        # Non-HF overrides still apply.
+        assert env["VLLM_USE_V1"] == "0"
+
+    # A non-blank lane override still wins over the inherited value.
+    lane_hf = str(tmp_path / "lane-hf")
+    lane = LaneConfig(
+        model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+        vllm=True,
+        vllm_config=VllmConfig(env_overrides={"HF_HOME": lane_hf}),
+    )
+    assert handle._build_env(lane)["HF_HOME"] == lane_hf
+    assert handle._effective_hf_home_for_lane(lane) == lane_hf
+
+
 def test_build_env_sets_optional_vllm_env_flags(monkeypatch) -> None:
     # nccl_p2p_available=False (default) → NCCL_P2P_DISABLE=1 globally
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(gpu_devices="all"))

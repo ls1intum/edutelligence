@@ -530,6 +530,38 @@ def test_is_gguf_ref_cached_file_ref(tmp_path: Path) -> None:
     assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Qwen3-8B-Q5_K_M.gguf") is False
 
 
+def test_is_gguf_ref_cached_file_ref_is_case_sensitive(tmp_path: Path) -> None:
+    """Explicit file paths compare case-sensitively; differently cased names miss.
+
+    Serving preserves the requested spelling, so a cache that only holds
+    ``model-Q4_K_M.gguf`` must not report ``Model-Q4_K_M.gguf`` as present —
+    that would suppress prefetch while the offline lane still cannot find the
+    file. Quant-token matching for ``repo:quant`` remains case-insensitive.
+    """
+    _write_gguf(tmp_path, "unsloth/Qwen3-8B-GGUF", ["model-Q4_K_M.gguf"])
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/model-Q4_K_M.gguf") is True
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF/Model-Q4_K_M.gguf") is False
+    # repo:quant still matches case-insensitively via the quant token.
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:Q4_K_M") is True
+    assert gguf.is_gguf_ref_cached(str(tmp_path), "unsloth/Qwen3-8B-GGUF:q4_k_m") is True
+
+
+def test_is_gguf_ref_cached_sharded_file_ref_is_case_sensitive(tmp_path: Path) -> None:
+    """Sharded explicit file families also require exact filename case."""
+    _write_gguf(
+        tmp_path,
+        "unsloth/Qwen3-8B-GGUF",
+        [
+            "model-Q4_K_M-00001-of-00002.gguf",
+            "model-Q4_K_M-00002-of-00002.gguf",
+        ],
+    )
+    exact = "unsloth/Qwen3-8B-GGUF/model-Q4_K_M-00001-of-00002.gguf"
+    mismatched = "unsloth/Qwen3-8B-GGUF/Model-Q4_K_M-00001-of-00002.gguf"
+    assert gguf.is_gguf_ref_cached(str(tmp_path), exact) is True
+    assert gguf.is_gguf_ref_cached(str(tmp_path), mismatched) is False
+
+
 def test_is_gguf_ref_cached_sharded_file_ref_needs_whole_family(tmp_path: Path) -> None:
     # A reference to one shard of a multi-file quant must find the whole
     # -N-of-M family — the plugin's loader expands the first shard to it, so

@@ -674,7 +674,12 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
             all(index in indices for index in range(1, total + 1))
             for (_, _, total), indices in indices_by_family.items()
         )
-    requested = model.rsplit("/", 1)[1].lower()
+    # Explicit file paths are case-sensitive on the Hub and in the plugin's
+    # serve reference: a snapshot holding only ``model-Q4_K_M.gguf`` must not
+    # satisfy a request for the distinct ``Model-Q4_K_M.gguf`` (that would
+    # suppress prefetch while serving still asks for the missing spelling).
+    # Quant-token matching for ``repo:quant`` stays case-insensitive above.
+    requested = model.rsplit("/", 1)[1]
     # The reference's directory is authoritative: the strict Hub form
     # org/repo/file.gguf names the file at the repository root, and the
     # loader resolves the file — and, for a sharded name, the rest of its
@@ -685,8 +690,8 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
     requested_dir = requested.rsplit("/", 1)[0] if "/" in requested else ""
     shard = _SHARD_INDEX_RE.search(requested)
     if shard is None:
-        # Membership check at the exact repository-relative position.
-        return requested in {name.lower() for name, _ in listing}
+        # Membership check at the exact repository-relative position and case.
+        return requested in {name for name, _ in listing}
     requested_total = _shard_marker_parts(shard.group(0))[1]
     requested_family = _SHARD_INDEX_RE.sub("", requested)
     # The loader reads the family from the directory it finds the requested
@@ -696,11 +701,11 @@ def is_gguf_ref_cached(hf_home: str | None, model: str) -> bool | None:
     # of a different-total family of the same base name (…-of-3 files for a
     # …-of-2 request) are a different model and must not fill the requested
     # family's index range, which would report an incomplete cache complete
-    # and suppress the prefetch.
+    # and suppress the prefetch. Family names compare case-sensitively so a
+    # differently cased sibling family cannot fill the requested indices.
     indices: set[int] = set()
     for name, _ in listing:
-        lowered = name.lower()
-        directory, base = lowered.rsplit("/", 1) if "/" in lowered else ("", lowered)
+        directory, base = name.rsplit("/", 1) if "/" in name else ("", name)
         if directory != requested_dir:
             continue
         marker = _SHARD_INDEX_RE.search(base)

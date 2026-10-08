@@ -365,6 +365,68 @@ def test_calibration_spec_empty_listing_no_hub(tmp_path: Path, monkeypatch) -> N
     assert hub_calls == []  # no redundant Hub download
 
 
+def test_calibration_spec_honors_plan_env_override_hf_home(tmp_path: Path, monkeypatch) -> None:
+    """Offline calibration must resolve GGUF weights under plan env_overrides HF_HOME.
+
+    With RAM caching disabled, an unpinned GGUF repository may live only under
+    engines.vllm.model_overrides.<model>.env_overrides['HF_HOME']. Serving
+    already consults that root; calibration resolution / spawn / fingerprints
+    must use the same effective cache root or the probe fails offline before
+    spawning even though the weights are local.
+    """
+    import subprocess
+
+    from logos_worker_node import calibration
+
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setenv("LOGOS_WORKER_CACHE_ROOT", str(tmp_path / "empty-default"))
+
+    lane_hf = tmp_path / "lane-hf"
+    _write_cached(lane_hf, "unsloth/Qwen3-8B-GGUF", ["Qwen3-8B-Q4_K_M.gguf"])
+
+    hub_calls: list[str] = []
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.fetch_repo_gguf_files",
+        lambda repo: hub_calls.append(repo) or (_ for _ in ()).throw(RuntimeError("offline")),
+    )
+
+    plan = {
+        "model": "unsloth/Qwen3-8B-GGUF",
+        "env_overrides": {"HF_HOME": str(lane_hf)},
+    }
+    # Resolution finds the override-only cache (no Hub).
+    spec = _resolve_gguf_calibration_spec(plan, None)
+    assert spec is not None
+    assert spec.serve_ref == "unsloth/Qwen3-8B-GGUF:Q4_K_M"
+    assert hub_calls == []
+
+    # Fingerprint / command build resolve the same serve_ref offline.
+    cmd = calibration._build_vllm_cmd(plan, "vllm", "127.0.0.1", 12999, "4G", hf_home=None)
+    assert "unsloth/Qwen3-8B-GGUF:Q4_K_M" in cmd
+
+    # Child receives the same root resolution consulted.
+    captured: dict[str, object] = {}
+
+    class _FakePopen:
+        pid = 4242
+
+        def __init__(self, cmd, env=None, **kwargs):  # noqa: ARG002
+            captured["env"] = env
+
+    monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+    log_path = tmp_path / "logs" / "probe.log"
+    calibration.spawn_vllm(plan, "vllm", "127.0.0.1", 12999, log_path, "4G", hf_home=None)
+    assert captured["env"]["HF_HOME"] == str(lane_hf)
+    assert calibration._effective_hf_home_for_plan(plan, None) == str(lane_hf)
+
+    # Blank / whitespace plan override falls through (same as serving).
+    for blank in ("", "   "):
+        assert (
+            calibration._effective_hf_home_for_plan({"model": "m", "env_overrides": {"HF_HOME": blank}}, None)
+            == calibration._default_hf_home()
+        )
+
+
 # ---------------------------------------------------------------------------
 # spawn_vllm — the child receives the resolved HF cache root
 # ---------------------------------------------------------------------------

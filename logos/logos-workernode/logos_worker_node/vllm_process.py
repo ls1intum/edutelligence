@@ -2171,13 +2171,12 @@ class VllmProcessHandle:
         # via LOGOS_WORKER_CACHE_ROOT, or per-cache via the individual env vars.
         cache_root_dir = self._resolve_persistent_cache_root(gc)
 
-        # HuggingFace cache — same root GGUF resolution consulted (lane
-        # env_overrides['HF_HOME'], handle override, inherited HF_HOME with
-        # blank counting as unset, or the resolved persistent default).
+        # HuggingFace cache is assigned AFTER per-lane env_overrides below so a
+        # blank/whitespace lane HF_HOME cannot overwrite the normalized root
+        # GGUF resolution consulted (see _effective_hf_home_for_lane).
         if lane_config.vllm_config is None:
             raise RuntimeError(f"[{self.lane_id}] Missing vllm_config for vLLM lane")
         vc = lane_config.vllm_config
-        env["HF_HOME"] = self._effective_hf_home_for_lane(lane_config)
         # Sleep endpoints (/sleep, /wake_up, /is_sleeping) require
         # VLLM_SERVER_DEV_MODE.  Auto-enable it when sleep mode is active
         # so operators don't need to set both flags.
@@ -2260,6 +2259,11 @@ class VllmProcessHandle:
         # whose head dimensions exceed V1 attention kernel limits on SM 7.5).
         if vc.env_overrides:
             env.update(vc.env_overrides)
+
+        # Effective HF_HOME after overrides: blank/whitespace lane values must
+        # not reach the child — resolution already treated them as unset and
+        # found weights under the fallback root; the child must load there too.
+        env["HF_HOME"] = self._effective_hf_home_for_lane(lane_config)
 
         return env
 

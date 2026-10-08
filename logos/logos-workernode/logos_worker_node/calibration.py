@@ -1329,6 +1329,25 @@ def _default_hf_home() -> str:
     return str(Path(cache_root) / ".hf_cache") if cache_root else ""
 
 
+def _effective_hf_home_for_plan(plan: dict[str, Any], hf_home: str | None = None) -> str:
+    """HF cache root calibration resolution / spawn / fingerprints share.
+
+    Precedence matches serving (``VllmProcessHandle._effective_hf_home_for_lane``):
+
+    1. non-blank ``plan['env_overrides']['HF_HOME']`` (from
+       ``engines.vllm.model_overrides.<model>.env_overrides``)
+    2. explicit *hf_home* (tmpfs RAM cache / caller pin)
+    3. inherited ``HF_HOME`` (blank/whitespace counts as unset)
+    4. resolved persistent ``<cache_root>/.hf_cache``
+    """
+    overrides = plan.get("env_overrides") if isinstance(plan, dict) else None
+    if isinstance(overrides, dict):
+        lane_hf = (overrides.get("HF_HOME") or "").strip()
+        if lane_hf:
+            return lane_hf
+    return effective_hf_home(hf_home) or _default_hf_home()
+
+
 def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) -> GgufServeSpec | None:
     """Resolve the GGUF serve reference for a calibration plan.
 
@@ -1341,13 +1360,12 @@ def _resolve_gguf_calibration_spec(plan: dict[str, Any], hf_home: str | None) ->
     file_names: list[tuple[str, int]] | None = None
     non_gguf_weights: list[str] | None = None
     if not is_explicit_gguf_ref(model):
-        # Respect the inherited HF_HOME (and the explicit cache root) before
-        # the resolved default, so the local listing is consulted before the
-        # Hub — matching the serving lane.
-        effective = effective_hf_home(hf_home)
-        if not effective:
-            effective = _default_hf_home()
-        cached = list_cached_model_weights(effective, model)
+        # Same effective root spawn_vllm / fingerprints use (plan HF_HOME
+        # override, RAM-cache pin, inherited HF_HOME, resolved default) so an
+        # offline unpinned GGUF repo cached only under the plan override is
+        # found locally instead of falling through to the Hub.
+        effective = _effective_hf_home_for_plan(plan, hf_home)
+        cached = list_cached_model_weights(effective, model) if effective else None
         if cached is not None:
             file_names, non_gguf_weights = cached
         # An authoritative (possibly empty) local listing stays local; only an
@@ -1397,13 +1415,12 @@ def spawn_vllm(
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
 
-    # Point the child at the cache the resolver consulted: an explicit hf_home
-    # (tmpfs RAM cache / operator override) wins, else the inherited HF_HOME,
-    # else the resolved default cache root — the same root
-    # _resolve_gguf_calibration_spec resolved the weights from. Without this, a
-    # GGUF repo resolved from the default cache root spawns a vLLM that never
-    # looks there and misses the weights offline.
-    resolved_hf_home = effective_hf_home(hf_home) or _default_hf_home()
+    # Point the child at the same cache root the resolver / fingerprint used
+    # (plan env_overrides['HF_HOME'], RAM-cache pin, inherited HF_HOME, or
+    # resolved default). Without this, a GGUF repo resolved from a plan
+    # override or the default cache root spawns a vLLM that never looks there
+    # and misses the weights offline.
+    resolved_hf_home = _effective_hf_home_for_plan(plan, hf_home)
     if resolved_hf_home:
         env["HF_HOME"] = resolved_hf_home
         logger.info("  HF_HOME=%s", resolved_hf_home)
