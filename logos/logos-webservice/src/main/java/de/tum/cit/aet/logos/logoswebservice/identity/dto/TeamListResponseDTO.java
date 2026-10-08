@@ -15,5 +15,7 @@ public record TeamListResponseDTO(
     /** Queue priority of the team's traffic (1..10); null = not set. */
     Integer priority,
     Boolean is_caller_owner,
-    boolean managed
+    boolean managed,
+    /** Keycloak group the team is linked to; null when the team is Logos-owned. */
+    String keycloak_group
 ) {}
