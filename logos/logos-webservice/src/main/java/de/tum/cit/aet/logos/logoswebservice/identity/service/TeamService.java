@@ -375,7 +375,15 @@ public class TeamService {
             .toList();
     }
 
+    /**
+     * The locked team read is the same one the link endpoints take: a login
+     * revives a developer key on the strength of a membership check, so every
+     * removal of a membership has to be serialized against it, or the removal
+     * can land in the window between that check and the key going back on.
+     */
+    @Transactional
     public void removeMember(Integer teamId, Integer userId) {
+        teamRepository.findByIdForUpdate(teamId);
         memberRepository.findById(new TeamMemberId(userId, teamId)).ifPresent(m -> {
             if (m.getSource() == TeamMemberSource.KEYCLOAK) {
                 throw new ConflictException(

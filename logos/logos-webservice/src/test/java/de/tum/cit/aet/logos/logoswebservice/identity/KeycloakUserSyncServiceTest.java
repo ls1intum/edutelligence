@@ -6,6 +6,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
@@ -333,10 +334,12 @@ class KeycloakUserSyncServiceTest {
         UUID subject = UUID.randomUUID();
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger holder = new AtomicInteger();
         try {
             CompletableFuture<Void> adminLink = CompletableFuture.runAsync(() ->
                 new TransactionTemplate(txManager).executeWithoutResult(status -> {
                     teamService.updateTeamKeycloakGroup(adoptable, "bar-dev");
+                    holder.set(backendPid());
                     locked.countDown();
                     try {
                         // Hold the row so the adoption runs into it before committing.
@@ -351,7 +354,8 @@ class KeycloakUserSyncServiceTest {
                 syncService.syncFromClaims(new KeycloakClaims(subject.toString(), "adopter",
                     "Ad", "Opter", subject + "@tum.de", Set.of("foo-dev"), Instant.now())));
 
-            assertThat(awaitLockWait()).as("the adoption must reach the held team row").isTrue();
+            assertThat(awaitBlockedBy(holder.get()))
+                .as("the adoption must reach the held team row").isTrue();
             release.countDown();
             CompletableFuture.allOf(adminLink, login).get(30, TimeUnit.SECONDS);
 
@@ -377,14 +381,94 @@ class KeycloakUserSyncServiceTest {
         }
     }
 
-    /** Waits for a backend to block on a lock — the adoption running into the held row. */
-    private boolean awaitLockWait() throws InterruptedException {
+    /**
+     * The name is the only reason adoption picks a particular team, so a rename
+     * committed while the adoption waits invalidates the choice. Claiming the
+     * team anyway would pour the group's members into a team that no longer
+     * answers to the group's derived name — and hand them its budget.
+     */
+    @Test
+    void adoption_neverClaimsATeamRenamedWhileItWaited() throws Exception {
+        Integer adoptable = jdbc.queryForObject(
+            "INSERT INTO teams (name) VALUES ('Foo') RETURNING id", Integer.class);
+        UUID subject = UUID.randomUUID();
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger holder = new AtomicInteger();
+        try {
+            CompletableFuture<Void> adminRename = CompletableFuture.runAsync(() ->
+                new TransactionTemplate(txManager).executeWithoutResult(status -> {
+                    teamService.updateTeamName(adoptable, "Bar");
+                    holder.set(backendPid());
+                    locked.countDown();
+                    try {
+                        // Hold the row so the adoption runs into it before committing.
+                        release.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }));
+
+            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+            // The login still sees the committed name 'Foo', so it picks this
+            // team to adopt and then blocks on the row the rename holds.
+            CompletableFuture<Void> login = CompletableFuture.runAsync(() ->
+                syncService.syncFromClaims(new KeycloakClaims(subject.toString(), "adopter",
+                    "Ad", "Opter", subject + "@tum.de", Set.of("foo-dev"), Instant.now())));
+
+            assertThat(awaitBlockedBy(holder.get()))
+                .as("the adoption must reach the held team row").isTrue();
+            release.countDown();
+            CompletableFuture.allOf(adminRename, login).get(30, TimeUnit.SECONDS);
+
+            assertThat(teamRepository.findById(adoptable).orElseThrow())
+                .as("the renamed team is not the one 'foo-dev' derives, so it stays unlinked")
+                .extracting(Team::getName, Team::getKeycloakGroup)
+                .containsExactly("Bar", null);
+            assertThat(teamRepository.findByKeycloakGroup("foo-dev"))
+                .as("the adoption falls back to a team of its own")
+                .get()
+                .extracting(Team::getId)
+                .isNotEqualTo(adoptable);
+        } finally {
+            release.countDown();
+            jdbc.update("""
+                DELETE FROM api_keys WHERE team_id IN (
+                    SELECT id FROM teams WHERE name IN ('Foo', 'Bar') OR keycloak_group = 'foo-dev')
+                """);
+            jdbc.update("""
+                DELETE FROM team_members WHERE team_id IN (
+                    SELECT id FROM teams WHERE name IN ('Foo', 'Bar') OR keycloak_group = 'foo-dev')
+                """);
+            jdbc.update("DELETE FROM teams WHERE name IN ('Foo', 'Bar') OR keycloak_group = 'foo-dev'");
+        }
+    }
+
+    /**
+     * Waits until some backend is blocked <em>by the transaction we are holding
+     * the row in</em> — not merely until something, somewhere in this database,
+     * waits on a lock. A test container is shared, and an unrelated waiter would
+     * otherwise release the holder before the contended statement ever reached
+     * the row, leaving the assertions to pass without the race having happened.
+     * {@code pg_blocking_pids} names the blockers, so we can insist it is ours.
+     */
+    private boolean awaitBlockedBy(int holderPid) throws InterruptedException {
         for (int attempt = 0; attempt < 100; attempt++) {
-            Integer waiting = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'", Integer.class);
+            Integer waiting = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND pid <> pg_backend_pid()
+                  AND pid <> ?
+                  AND ? = ANY(pg_blocking_pids(pid))
+                """, Integer.class, holderPid, holderPid);
             if (waiting != null && waiting > 0) return true;
             TimeUnit.MILLISECONDS.sleep(100);
         }
         return false;
+    }
+
+    /** Backend pid of the current transaction; JdbcTemplate shares its connection. */
+    private int backendPid() {
+        return jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class);
     }
 }

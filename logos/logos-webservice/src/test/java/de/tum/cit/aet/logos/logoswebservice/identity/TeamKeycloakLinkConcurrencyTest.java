@@ -9,6 +9,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -23,7 +24,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakClaims;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.User;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.KeycloakUserSyncService;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.TeamService;
 
@@ -55,6 +58,7 @@ class TeamKeycloakLinkConcurrencyTest {
     @Autowired TeamService teamService;
     @Autowired KeycloakUserSyncService syncService;
     @Autowired TeamRepository teamRepository;
+    @Autowired UserRepository userRepository;
     @Autowired JdbcTemplate jdbc;
     @Autowired PlatformTransactionManager txManager;
 
@@ -101,9 +105,11 @@ class TeamKeycloakLinkConcurrencyTest {
         CountDownLatch locked = new CountDownLatch(1);
         CountDownLatch unlinked = new CountDownLatch(1);
 
+        AtomicInteger holder = new AtomicInteger();
         CompletableFuture<Void> unlinkHoldingTheRow = CompletableFuture.runAsync(() ->
             new TransactionTemplate(txManager).executeWithoutResult(status -> {
                 teamRepository.findByIdForUpdate(TEAM_ID).orElseThrow();
+                holder.set(backendPid());
                 locked.countDown();
                 try {
                     // Let the login run into the held row before committing.
@@ -122,7 +128,7 @@ class TeamKeycloakLinkConcurrencyTest {
         // Release the unlink only once the login is genuinely stuck on the held
         // row; counting down earlier would let the unlink finish first and the
         // interleaving under test would never happen.
-        assertThat(awaitLockWait())
+        assertThat(awaitBlockedBy(holder.get()))
             .as("the login must reach the held team row")
             .isTrue();
         assertThat(login).isNotCompleted();
@@ -135,15 +141,106 @@ class TeamKeycloakLinkConcurrencyTest {
             .isZero();
     }
 
-    /** Waits for a backend to block on a lock — the login running into the held team row. */
-    private boolean awaitLockWait() throws InterruptedException {
+    /**
+     * Re-enabling an account switches its keys back on, skipping any key whose
+     * team the user is no longer in. That check is a read, and unlinking the
+     * team is what deletes the membership it reads — so the two have to be
+     * serialized. If the login could check membership, then let the unlink
+     * commit, then switch the key on, nothing afterwards would take it away:
+     * the reconciliation that follows finds no link to the team and no
+     * membership left to remove, and the gateway honours the key without ever
+     * consulting team_members.
+     *
+     * <p>Holding every team named by the user's keys for the rest of the login
+     * closes that window, the same way the join path is closed above.
+     */
+    @Test
+    void aReEnabledLoginNeverRevivesAKeyTheUnlinkIsRemoving() throws Exception {
+        relink();
+        UUID subject = UUID.randomUUID();
+        // A Keycloak-synced member holding the team's developer key, then
+        // switched off in Keycloak — which switches the key off with them.
+        User member = syncService.syncFromClaims(claims(subject));
+        syncService.deactivateUser(userRepository.findById(member.getId()).orElseThrow());
+        Integer keyId = jdbc.queryForObject(
+            "SELECT id FROM api_keys WHERE user_id = ? AND team_id = ?",
+            Integer.class, member.getId(), TEAM_ID);
+        assertThat(keyIsActive(keyId)).isFalse();
+
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch unlinked = new CountDownLatch(1);
+        AtomicInteger holder = new AtomicInteger();
+
+        CompletableFuture<Void> unlinkHoldingTheRow = CompletableFuture.runAsync(() ->
+            new TransactionTemplate(txManager).executeWithoutResult(status -> {
+                teamRepository.findByIdForUpdate(TEAM_ID).orElseThrow();
+                holder.set(backendPid());
+                locked.countDown();
+                try {
+                    // Let the login run into the held row before committing.
+                    unlinked.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                teamService.updateTeamKeycloakGroup(TEAM_ID, null);
+            }));
+
+        assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+        // Keycloak re-enables the account.
+        CompletableFuture<Void> login =
+            CompletableFuture.runAsync(() -> syncService.syncFromClaims(claims(subject)));
+
+        assertThat(awaitBlockedBy(holder.get()))
+            .as("the login must reach the held team row before it touches that team's keys")
+            .isTrue();
+        assertThat(login).isNotCompleted();
+        unlinked.countDown();
+        CompletableFuture.allOf(unlinkHoldingTheRow, login).get(30, TimeUnit.SECONDS);
+
+        assertThat(storedGroup()).isNull();
+        assertThat(membershipsOf(subject))
+            .as("no membership may survive the unlink")
+            .isZero();
+        assertThat(keyIsActive(keyId))
+            .as("the key of a team the login no longer belongs to must stay off")
+            .isFalse();
+    }
+
+    /**
+     * Waits until some backend is blocked <em>by the transaction we are holding
+     * the row in</em> — not merely until something, somewhere in this database,
+     * waits on a lock. A test container is shared, and an unrelated waiter would
+     * otherwise release the holder before the contended statement ever reached
+     * the row, leaving the assertions to pass without the race having happened.
+     * {@code pg_blocking_pids} names the blockers, so we can insist it is ours.
+     */
+    private boolean awaitBlockedBy(int holderPid) throws InterruptedException {
         for (int attempt = 0; attempt < 100; attempt++) {
-            Integer waiting = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'", Integer.class);
+            Integer waiting = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND pid <> pg_backend_pid()
+                  AND pid <> ?
+                  AND ? = ANY(pg_blocking_pids(pid))
+                """, Integer.class, holderPid, holderPid);
             if (waiting != null && waiting > 0) return true;
             TimeUnit.MILLISECONDS.sleep(100);
         }
         return false;
+    }
+
+    /** Backend pid of the current transaction; JdbcTemplate shares its connection. */
+    private int backendPid() {
+        return jdbc.queryForObject("SELECT pg_backend_pid()", Integer.class);
+    }
+
+    private KeycloakClaims claims(UUID subject) {
+        return new KeycloakClaims(subject.toString(), "racer", "Race", "User",
+            subject + "@test.com", Set.of(GROUP), Instant.now());
+    }
+
+    private Boolean keyIsActive(Integer keyId) {
+        return jdbc.queryForObject("SELECT is_active FROM api_keys WHERE id = ?", Boolean.class, keyId);
     }
 
     private Integer membershipsOf(UUID subject) {

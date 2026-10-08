@@ -65,11 +65,20 @@ public interface TeamRepository extends JpaRepository<Team, Integer> {
      *
      * <p>A conditional update rather than a read, a check and a save: the read
      * would go stale the moment an admin links that team, and saving the whole
-     * entity afterwards would overwrite their link. Returns 0 when the team was
-     * linked (or renamed away) in the meantime, which the caller treats as
-     * "not adoptable".
+     * entity afterwards would overwrite their link.
+     *
+     * <p>The name is part of the predicate because the name is the only reason
+     * this team was picked. A rename committed between the lookup and this
+     * update leaves a team that no longer answers to the group's derived name,
+     * and adopting it anyway would pour the group's members into a team nobody
+     * matched it to. Returns 0 when the team was linked or renamed in the
+     * meantime, which the caller treats as "not adoptable".
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("UPDATE Team t SET t.keycloakGroup = :group WHERE t.id = :id AND t.keycloakGroup IS NULL")
-    int adoptIfUnlinked(@Param("id") Integer id, @Param("group") String group);
+    @Query("""
+        UPDATE Team t SET t.keycloakGroup = :group
+        WHERE t.id = :id AND t.keycloakGroup IS NULL AND t.name = :expectedName
+        """)
+    int adoptIfUnlinked(@Param("id") Integer id, @Param("expectedName") String expectedName,
+                        @Param("group") String group);
 }

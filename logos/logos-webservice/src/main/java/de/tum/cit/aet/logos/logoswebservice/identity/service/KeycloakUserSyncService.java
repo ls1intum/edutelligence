@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -115,10 +116,59 @@ public class KeycloakUserSyncService {
             membershipService.revokeOwnerships(user.getId());
         }
 
+        // Resolve first, lock second, write third. Resolution may auto-provision,
+        // which runs in a transaction of its own and would wait forever on a team
+        // row this one already holds; and every write below depends on a read of
+        // a team or its memberships, so all of those reads have to happen with
+        // the rows already held.
+        Map<Integer, Team> resolved = resolveTeams(claims.roleNames());
+        Map<Integer, String> linkedGroups = lockTeams(teamsToHold(user, resolved, wasInactive));
+
         if (wasInactive) reactivateUserKeys(user);
         deactivatePersonalKeys(user);
-        syncTeamMemberships(user, claims.roleNames());
+        syncTeamMemberships(user, resolved, linkedGroups, claims.roleNames());
         return user;
+    }
+
+    /**
+     * Every team this sync may read-then-write: the ones it might join, and —
+     * when it is about to switch keys back on — the ones those keys belong to.
+     *
+     * <p>The second set matters because a key is revived on the strength of a
+     * membership check, and unlinking a team deletes exactly those memberships.
+     * Without the team held, the check can read a membership that the unlink
+     * removes a moment later, and the reconciliation that follows finds neither
+     * a link nor a membership to undo it — leaving an active key for a team the
+     * user is no longer in.
+     */
+    private Set<Integer> teamsToHold(User user, Map<Integer, Team> resolved, boolean wasInactive) {
+        Set<Integer> teamIds = new HashSet<>(resolved.keySet());
+        if (wasInactive) {
+            apiKeyRepository.findByUserId(user.getId()).stream()
+                .map(ApiKey::getTeamId)
+                .filter(Objects::nonNull)
+                .forEach(teamIds::add);
+        }
+        return teamIds;
+    }
+
+    /**
+     * Takes every team row this sync needs and reports the Keycloak group each
+     * one currently carries (absent for an unlinked or vanished team).
+     *
+     * <p>Locked in ascending id order, in a single pass, so two logins holding
+     * overlapping sets can never take them in opposite orders. The read is a
+     * scalar on purpose: resolution has already loaded these teams, and an
+     * entity read would hand back that cached copy with the link seen before
+     * waiting — exactly the stale value the lock is here to rule out. The rows
+     * stay held until this transaction commits.
+     */
+    private Map<Integer, String> lockTeams(Set<Integer> teamIds) {
+        Map<Integer, String> groups = new LinkedHashMap<>();
+        teamIds.stream().sorted().forEach(teamId ->
+            teamRepository.lockAndReadKeycloakGroup(teamId)
+                .ifPresent(group -> groups.put(teamId, group)));
+        return groups;
     }
 
     @Transactional
@@ -194,6 +244,10 @@ public class KeycloakUserSyncService {
      * taken out of it while deactivated) would hand back access that was
      * deliberately removed. Membership they still hold revives its key here;
      * membership this very sync restores is handled by the join that follows.
+     *
+     * <p>The caller holds every team named by these keys, so the membership
+     * read below cannot be invalidated by an unlink between the check and the
+     * commit. Must not be called without those locks.
      */
     private void reactivateUserKeys(User user) {
         apiKeyRepository.findByUserId(user.getId()).forEach(k -> {
@@ -218,21 +272,32 @@ public class KeycloakUserSyncService {
         personal.forEach(k -> { k.setIsActive(false); apiKeyRepository.save(k); });
     }
 
-    private void syncTeamMemberships(User user, Set<String> claimNames) {
+    /** The teams this login's claims point at, before any of them is held. */
+    private Map<Integer, Team> resolveTeams(Set<String> claimNames) {
         Set<String> userLevelRoles = new HashSet<>(props.roles().logosAdmin());
         userLevelRoles.addAll(props.roles().appAdmin());
 
-        Map<Integer, Team> desired = claimNames.stream()
+        return claimNames.stream()
             .filter(r -> !userLevelRoles.contains(r))
             .map(this::resolveTeamForRole)
             .flatMap(Optional::stream)
             .collect(Collectors.toMap(Team::getId, t -> t, (a, b) -> a));
+    }
 
-        // Hold each resolved team until this sync commits. A link removed in
-        // the meantime drops the memberships it produced and must not see a new
-        // one appear behind it: with the row locked, either the removal waits
-        // for us and then cleans up, or it wins and the re-read finds no link.
-        desired = confirmLinksUnderLock(desired, claimNames);
+    private void syncTeamMemberships(User user, Map<Integer, Team> resolved,
+                                     Map<Integer, String> linkedGroups, Set<String> claimNames) {
+        // Keep only the teams still linked to a group this login carries, as the
+        // held rows report them. A link removed in the meantime drops the
+        // memberships it produced and must not see a new one appear behind it:
+        // either the removal waits for us and then cleans up, or it won and the
+        // team no longer resolves here.
+        Map<Integer, Team> desired = new LinkedHashMap<>();
+        resolved.keySet().stream().sorted()
+            .filter(teamId -> {
+                String group = linkedGroups.get(teamId);
+                return group != null && claimNames.contains(group);
+            })
+            .forEach(teamId -> desired.put(teamId, resolved.get(teamId)));
 
         List<TeamMember> currentKeycloak =
             memberRepository.findById_UserIdAndSource(user.getId(), TeamMemberSource.KEYCLOAK);
@@ -245,20 +310,6 @@ public class KeycloakUserSyncService {
         for (Team team : desired.values()) {
             membershipService.join(user.getId(), team.getId(), false, TeamMemberSource.KEYCLOAK);
         }
-    }
-
-    /**
-     * Re-reads each resolved team with its row locked and keeps only the ones
-     * still linked to a group this login carries. Teams are locked in id order
-     * so two concurrent logins can never take them in opposite orders.
-     */
-    private Map<Integer, Team> confirmLinksUnderLock(Map<Integer, Team> desired, Set<String> claimNames) {
-        Map<Integer, Team> confirmed = new LinkedHashMap<>();
-        desired.keySet().stream().sorted().forEach(teamId ->
-            teamRepository.lockAndReadKeycloakGroup(teamId)
-                .filter(claimNames::contains)
-                .ifPresent(group -> confirmed.put(teamId, desired.get(teamId))));
-        return confirmed;
     }
 
     private Optional<Team> resolveTeamForRole(String roleName) {
