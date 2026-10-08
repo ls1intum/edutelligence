@@ -13,12 +13,14 @@ import { FormsModule } from '@angular/forms';
 import { ModalConfirmComponent } from '../../../../shared/components/modal/modal-confirm/modal-confirm';
 import { TeamManagementService } from '../../../../core/services/team-management.service';
 import {
+  KeycloakGroupOption,
   ProviderItem,
   TeamDetail,
   TeamLimitsPayload,
   TeamProviderBudget,
 } from '../../../../shared/models/team.model';
 import { ErrorMessageComponent } from '../../../../shared/components/error-message/error-message';
+import { errorDetail } from '../../../../shared/utils/error-detail';
 
 const MICRO = 100_000_000;
 
@@ -62,6 +64,8 @@ export class SettingsTabComponent implements OnChanges {
   @Input() team!: TeamDetail;
   @Input() teamId!: number;
   @Input() canEdit = false;
+  /** Logos admins only: the Keycloak link decides who ends up in the team. */
+  @Input() canLinkKeycloak = false;
   @Output() refresh = new EventEmitter<void>();
   @Output() teamDeleted = new EventEmitter<void>();
 
@@ -90,9 +94,54 @@ export class SettingsTabComponent implements OnChanges {
   deleteLoading = signal(false);
   deleteError = signal(false);
 
+  // ── Keycloak link ─────────────────────────────────────────────────────────
+  keycloakGroup = signal('');
+  /** Realm groups and roles to suggest; empty when the deployment has no
+   *  Keycloak directory access, in which case the field stays free text. */
+  keycloakGroupOptions = signal<KeycloakGroupOption[]>([]);
+  /** The deployment can read the realm; false means the field is free text only. */
+  keycloakDirectoryAvailable = signal(false);
+  /** The directory was asked once; it stays the same while the tab is open. */
+  private keycloakGroupsRequested = false;
+  linkLoading = signal(false);
+  linkError = signal('');
+  linkSuccess = signal(false);
+
+  /** Suggestions minus the groups another team already holds — the link is unique. */
+  availableKeycloakGroups(): KeycloakGroupOption[] {
+    return this.keycloakGroupOptions()
+      .filter((g) => g.linked_team_id === null || g.linked_team_id === this.teamId);
+  }
+
+  /**
+   * Whether the field offers suggestions — a datalist gives no affordance of
+   * its own, so the admin would otherwise not know the realm can be browsed.
+   */
+  groupPickerHint(): string {
+    if (!this.keycloakDirectoryAvailable()) {
+      return 'Type the name exactly as a login claim carries it (a group path without its leading /).';
+    }
+    const free = this.availableKeycloakGroups().length;
+    return `Pick one of the ${free} selectable groups and roles in the realm, or type another.`;
+  }
+
+  /** Nothing to save while the field still shows what the team is linked to. */
+  linkChanged(): boolean {
+    return this.keycloakGroup().trim() !== (this.team?.keycloak_group ?? '');
+  }
+
+  /** Clearing the field only removes something when a link is actually stored. */
+  linkButtonLabel(): string {
+    return !this.keycloakGroup().trim() && this.team?.keycloak_group ? 'Remove Link' : 'Save Link';
+  }
+
   ngOnChanges(changes: SimpleChanges): void {
     if (this.team) this.resetForm();
     if (this.teamId && changes['teamId']) void this.loadProviderBudgets();
+    if (this.canLinkKeycloak && !this.keycloakGroupsRequested) {
+      this.keycloakGroupsRequested = true;
+      void this.fetchKeycloakGroups();
+    }
   }
 
   private resetForm(): void {
@@ -102,7 +151,43 @@ export class SettingsTabComponent implements OnChanges {
     this.cloudTpm.set(this.team.default_cloud_tpm_limit?.toString() ?? '');
     this.localRpm.set(this.team.default_local_rpm_limit?.toString() ?? '');
     this.localTpm.set(this.team.default_local_tpm_limit?.toString() ?? '');
+    this.keycloakGroup.set(this.team.keycloak_group ?? '');
     this.showOnPublicStats.set(!!this.team.show_on_public_stats);
+  }
+
+  /** Group suggestions for the link field; silently stays free text on failure. */
+  private async fetchKeycloakGroups(): Promise<void> {
+    try {
+      const directory = await this.teamService.getKeycloakGroups();
+      this.keycloakDirectoryAvailable.set(directory.available);
+      this.keycloakGroupOptions.set(directory.available ? directory.groups : []);
+    } catch {
+      this.keycloakDirectoryAvailable.set(false);
+      this.keycloakGroupOptions.set([]);
+    }
+  }
+
+  /**
+   * Saves the Keycloak link; a blank field removes it. Removing or repointing
+   * it also drops the memberships the old group produced, so the whole team has
+   * to be reloaded afterwards.
+   */
+  async saveKeycloakLink(): Promise<void> {
+    if (this.linkLoading() || !this.linkChanged()) return;
+    this.linkLoading.set(true);
+    this.linkError.set('');
+    this.linkSuccess.set(false);
+    const group = this.keycloakGroup().trim();
+    try {
+      await this.teamService.updateTeamKeycloakGroup(this.teamId, group || null);
+      this.linkSuccess.set(true);
+      this.refresh.emit();
+      setTimeout(() => this.linkSuccess.set(false), 3000);
+    } catch (err) {
+      this.linkError.set(errorDetail(err) ?? 'Failed to save the Keycloak link, please try again.');
+    } finally {
+      this.linkLoading.set(false);
+    }
   }
 
   private async loadProviderBudgets(): Promise<void> {

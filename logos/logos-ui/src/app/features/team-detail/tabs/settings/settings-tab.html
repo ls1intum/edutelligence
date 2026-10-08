@@ -191,6 +191,64 @@
     }
   </div>
 
+  @if (canLinkKeycloak) {
+    <p class="section-label">KEYCLOAK LINK</p>
+    <p class="settings-hint">
+      Everyone in the linked Keycloak group joins this team on their next login and on the nightly
+      directory sync, and is removed again on the first login after they leave the group. Those
+      memberships cannot be edited on the Members tab. Leave the field empty for a team whose
+      members are managed in Logos.
+    </p>
+
+    <div class="settings-card">
+      <div class="settings-field">
+        <label class="field-label" for="s-keycloak-group">Keycloak group</label>
+        <input
+          id="s-keycloak-group"
+          class="field-input"
+          type="text"
+          list="s-keycloak-group-options"
+          placeholder="e.g. ios-26ws, leave blank to unlink"
+          [value]="keycloakGroup()"
+          (input)="keycloakGroup.set($any($event.target).value)"
+          [disabled]="linkLoading()"
+          autocomplete="off"
+        />
+        <datalist id="s-keycloak-group-options">
+          @for (group of availableKeycloakGroups(); track group.name) {
+            <option [value]="group.name">{{ group.source }}</option>
+          }
+        </datalist>
+        <p class="settings-hint settings-hint--field">{{ groupPickerHint() }}</p>
+      </div>
+
+      @if (team.managed) {
+        <p class="settings-hint settings-hint--inline">
+          While the link is in place the team cannot be renamed or deleted. Removing it also removes
+          the members the group brought in.
+        </p>
+      }
+
+      <div class="settings-actions">
+        @if (linkSuccess()) {
+          <span class="save-success"><i class="pi pi-check"></i> Saved!</span>
+        }
+        @if (linkError()) {
+          <span class="save-error"><i class="pi pi-exclamation-triangle"></i> {{ linkError() }}</span>
+        }
+        <button
+          class="btn-primary"
+          type="button"
+          [disabled]="linkLoading() || !linkChanged()"
+          (click)="saveKeycloakLink()"
+        >
+          @if (linkLoading()) { <i class="pi pi-spin pi-spinner"></i> }
+          {{ linkButtonLabel() }}
+        </button>
+      </div>
+    </div>
+  }
+
   @if (canEdit && !team.managed) {
     <div class="danger-zone">
       <div class="danger-zone-label">
@@ -202,12 +260,14 @@
         Delete Team
       </button>
     </div>
-  } @else if (canEdit && team.managed) {
+  } @else if (canEdit && team.managed && !canLinkKeycloak) {
     <p class="managed-note">
       <i class="pi pi-lock"></i>
       <span>
-        This team is managed by Keycloak. Its name and membership are synced from Keycloak and
-        cannot be renamed or deleted here; the limits above remain editable.
+        This team is linked to the Keycloak group <strong>{{ team.keycloak_group }}</strong>. Its
+        members come from that group and are removed on their first login after leaving it, so the
+        team cannot be renamed or deleted here; the limits above remain editable. A Logos admin can
+        remove the link.
       </span>
     </p>
   }
