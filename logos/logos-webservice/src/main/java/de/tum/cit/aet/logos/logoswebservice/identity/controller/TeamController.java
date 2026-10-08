@@ -17,10 +17,12 @@ import org.springframework.web.bind.annotation.RestController;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.AddTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamKeycloakGroupRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamPriorityRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.identity.service.KeycloakGroupDirectoryService;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.TeamService;
 
 import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserController.isLogosAdmin;
@@ -30,9 +32,11 @@ import static de.tum.cit.aet.logos.logoswebservice.identity.controller.UserContr
 public class TeamController {
 
     private final TeamService teamService;
+    private final KeycloakGroupDirectoryService groupDirectory;
 
-    public TeamController(TeamService teamService) {
+    public TeamController(TeamService teamService, KeycloakGroupDirectoryService groupDirectory) {
         this.teamService = teamService;
+        this.groupDirectory = groupDirectory;
     }
 
     @GetMapping
@@ -56,6 +60,10 @@ public class TeamController {
             @RequestBody CreateTeamRequestDTO body) {
         if (teamService.teamNameExists(body.name())) {
             return ResponseEntity.status(409).body(Map.of("detail", "A team with this name already exists."));
+        }
+        if (body.keycloak_group() != null && !body.keycloak_group().isBlank() && !isLogosAdmin(auth)) {
+            return ResponseEntity.status(403).body(Map.of(
+                "detail", "Only Logos admins can link a team to a Keycloak group."));
         }
         return ResponseEntity.ok(teamService.createTeam(body, auth.userId()));
     }
@@ -135,6 +143,35 @@ public class TeamController {
         return teamService.updateTeamPriority(teamId, priority)
             .<ResponseEntity<?>>map(ResponseEntity::ok)
             .orElse(ResponseEntity.status(404).body(null));
+    }
+
+    /**
+     * Links the team to a Keycloak group, so that the group's members join it
+     * on their next login and on the nightly directory sync; a null or blank
+     * value removes the link. Who belongs to which team is an identity-level
+     * decision and a team owner must not be able to pull an arbitrary group
+     * into their own team, so this is logos_admin only.
+     */
+    @PatchMapping("/{teamId}/keycloak-group")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> updateTeamKeycloakGroup(
+            @RequestAttribute("authContext") AuthContext auth,
+            @PathVariable Integer teamId,
+            @RequestBody UpdateTeamKeycloakGroupRequestDTO body) {
+        return teamService.updateTeamKeycloakGroup(teamId, body.keycloak_group())
+            .<ResponseEntity<?>>map(ResponseEntity::ok)
+            .orElse(ResponseEntity.status(404).body(Map.of("detail", "Team not found")));
+    }
+
+    /**
+     * The groups and realm roles of the configured Keycloak realm, for the
+     * group picker. Reports {@code available=false} instead of failing when the
+     * deployment has no directory access, so the dialog falls back to free text.
+     */
+    @GetMapping("/keycloak-groups")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> listKeycloakGroups(@RequestAttribute("authContext") AuthContext auth) {
+        return ResponseEntity.ok(groupDirectory.list());
     }
 
     @PostMapping("/{teamId}/members")
