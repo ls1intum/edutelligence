@@ -6,6 +6,19 @@ from fastapi import HTTPException
 
 from logos import batch_credential, refcache
 from logos.dbutils.dbmanager import DBManager
+from logos.dbutils.dbmodules import LoggingLevel
+
+# Per-request opt-in/out for FULL logging. Carries a LoggingLevel value
+# (FULL / BILLING) or the plain words yes/no, and when present overrides the
+# key's own level for the request's log row — see resolve_log_level.
+LOG_LEVEL_HEADER = "logos-logging"
+
+# Plain-language aliases for the level names. Issue #1170 specifies yes/no as
+# the consent vocabulary; the level names remain accepted too.
+_LOG_LEVEL_WORDS = {
+    "YES": LoggingLevel.FULL.value,
+    "NO": LoggingLevel.BILLING.value,
+}
 
 
 def _get_header_value(headers: Dict[str, str], name: str) -> Optional[str]:
@@ -14,6 +27,63 @@ def _get_header_value(headers: Dict[str, str], name: str) -> Optional[str]:
         if key.lower() == name.lower():
             return value
     return None
+
+
+def _normalize_log_level_value(raw: str) -> str:
+    """Map a present header value to a LoggingLevel string.
+
+    Recognises the level names and the plain words ``yes``/``no``
+    (case-insensitive, trimmed). Anything else fails closed to ``BILLING``.
+    """
+    value = raw.strip().upper()
+    if value in _LOG_LEVEL_WORDS:
+        return _LOG_LEVEL_WORDS[value]
+    for level in LoggingLevel:
+        if level.value == value:
+            return level.value
+    return LoggingLevel.BILLING.value
+
+
+def explicit_log_level(headers: Optional[Dict[str, str]]) -> Optional[str]:
+    """The header's own resolved level, or ``None`` when the header is absent.
+
+    Unlike :func:`resolve_log_level`, this does not fall back to the key: a
+    missing or blank header returns ``None`` so a batch that was created
+    without a consent signal can keep tracking the key's living level. A
+    present but unrecognised value is recorded as ``BILLING`` (fail closed).
+    """
+    raw = _get_header_value(headers or {}, LOG_LEVEL_HEADER) or _get_header_value(headers or {}, "logos_logging")
+    if raw is None or not raw.strip():
+        return None
+    return _normalize_log_level_value(raw)
+
+
+def resolve_log_level(headers: Optional[Dict[str, str]], key_log_level) -> str:
+    """Resolve the logging level for a single request.
+
+    The API key's own level (``key_log_level``, from the key's ``log`` column)
+    is the default and remains the effective value when no header is present,
+    so the per-key setting keeps working unchanged. A per-request
+    ``logos-logging`` header overrides it when set, so an application's end
+    user can consent to (or decline) FULL logging per request instead of only
+    per key. The header carries a :class:`~logos.dbutils.dbmodules.LoggingLevel`
+    value (``FULL`` or ``BILLING``) or the plain words ``yes``/``no``
+    (case-insensitive). A present but unrecognized value fails closed to the
+    minimum-logging level (``BILLING``): the header is a consent signal, so an
+    ambiguous value must never be treated as consent to store full request and
+    response data.
+
+    Params:
+        headers: Request headers (case-insensitive lookup); None treated as empty.
+        key_log_level: The key's own logging level (str or LoggingLevel).
+
+    Returns:
+        The effective logging level as a string ("FULL" or "BILLING").
+    """
+    explicit = explicit_log_level(headers)
+    if explicit is None:
+        return key_log_level.value if hasattr(key_log_level, "value") else str(key_log_level)
+    return explicit
 
 
 def _resolve_logos_key(headers: Optional[Dict[str, str]], required: bool = True) -> Optional[str]:

@@ -118,10 +118,11 @@ public class InferenceGatewayController {
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
                 cloudRateLimiter.enforce(ctx.key(), body);
+                String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
                 GatewayRequestAttribution attribution =
                     workflowAttributionResolver.resolve(request, ctx.key().teamId());
                 Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), body, attribution);
+                    ctx.key(), decision.deployment(), body, logLevel, attribution);
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
@@ -132,7 +133,7 @@ public class InferenceGatewayController {
                     request.getMethod(),
                     body,
                     copyHeaders(request),
-                    ctx.key().logsFullPayloads(),
+                    GatewayLoggingLevel.storesPayloads(logLevel),
                     result -> cloudAccounting.settleSuccess(
                         logId, result.usage(), result.responseBody(), result.serviceTier()),
                     err -> cloudAccounting.settleFailure(logId, err));
