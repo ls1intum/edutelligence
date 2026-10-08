@@ -8,11 +8,10 @@
         [style.flex-grow]="seg.value"
         [style.background]="seg.color"
         [class.highlighted]="isHighlighted(seg.key)"
+        [attr.title]="seg.label + ': ' + formatCount(seg.value) + ' (' + percentOf(seg) + '%)'"
         (mouseenter)="hovered.set(seg.key)"
         (mouseleave)="hovered.set(null)"
-      >
-        <title>{{ seg.label }}: {{ formatCount(seg.value) }} ({{ percentOf(seg) }}%)</title>
-      </span>
+      ></span>
     }
   </div>
 

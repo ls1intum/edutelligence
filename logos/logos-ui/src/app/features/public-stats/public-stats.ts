@@ -49,6 +49,9 @@ export class PublicStats implements OnInit {
   keySlices = signal<ChartSlice[]>([]);
   laneSlices = signal<ChartSlice[]>([]);
 
+  /** Ignores out-of-order responses when the reader switches windows quickly. */
+  private loadSeq = 0;
+
   ngOnInit(): void {
     void this.load();
   }
@@ -60,19 +63,22 @@ export class PublicStats implements OnInit {
   }
 
   private async load(): Promise<void> {
+    const seq = ++this.loadSeq;
     this.loading.set(true);
     this.error.set('');
     try {
       const data = await this.service.getStats(this.days());
+      if (seq !== this.loadSeq) return;
       this.stats.set(data);
       this.teamSlices.set(buildTeamSlices(data.requests_per_team));
       this.keySlices.set(keyTypeSlices(data));
       this.laneSlices.set(laneSlices(data));
     } catch {
+      if (seq !== this.loadSeq) return;
       this.stats.set(null);
       this.error.set('The statistics could not be loaded. Please try again.');
     } finally {
-      this.loading.set(false);
+      if (seq === this.loadSeq) this.loading.set(false);
     }
   }
 
