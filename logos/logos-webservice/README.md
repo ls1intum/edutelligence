@@ -12,6 +12,7 @@ Browser / logos-ui / API clients
       │                                            cloud named-model → Azure/OpenAI directly
       │                                            local / mixed → reverse-proxy to orchestrator
       ├── /api/me, /api/users, /api/teams      → logos-webservice (priority 200, strip /api)
+      ├── /api/public/stats                     → logos-webservice (priority 200, strip /api)
       ├── /api/logosdb/*                        → logos-webservice (priority 200, strip /api)
       ├── /api/admin/*                          → logos-webservice (priority 200, strip /api)
       ├── /api/ws/stats, /api/ws/stats/v2       → logos-webservice (priority 200, strip /api)

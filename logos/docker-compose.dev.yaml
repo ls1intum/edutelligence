@@ -351,6 +351,15 @@ services:
       - "traefik.http.routers.webservice-identity.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-identity.priority=200"
 
+      # === Routing: /api/public/stats (unauthenticated aggregates) ===
+      # Must outrank the orchestrator's /api catch-all (priority 100); Spring
+      # serves GET /public/stats after strip-api removes the /api prefix.
+      - "traefik.http.routers.webservice-public-stats.rule=Path(`/api/public/stats`)"
+      - "traefik.http.routers.webservice-public-stats.entrypoints=internal8090"
+      - "traefik.http.routers.webservice-public-stats.service=logos-webservice-svc"
+      - "traefik.http.routers.webservice-public-stats.middlewares=strip-api,rl-admin"
+      - "traefik.http.routers.webservice-public-stats.priority=200"
+
       # === Routing: /api/logosdb ===
       - "traefik.http.routers.webservice-config.rule=PathPrefix(`/api/logosdb`)"
       - "traefik.http.routers.webservice-config.entrypoints=internal8090"
