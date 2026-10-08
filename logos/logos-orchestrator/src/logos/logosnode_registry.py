@@ -1270,9 +1270,13 @@ class LogosNodeRuntimeRegistry:
             raise
         except asyncio.TimeoutError as exc:
             session.pending_commands.pop(cmd_id, None)
+            # Ordinary response timeouts and a spent deadline both abandon the
+            # in-flight command. Cancel before either exception is raised so a
+            # same-lane retry cannot overlap the abandoned generation. The
+            # cancel action itself is excluded to keep the recursion guard.
+            if action != CANCEL_COMMAND_ACTION:
+                self._request_command_cancellation(session, cmd_id)
             if deadline_at is not None and time.monotonic() >= deadline_at:
-                if action != CANCEL_COMMAND_ACTION:
-                    self._request_command_cancellation(session, cmd_id)
                 raise RetryDeadlineExceeded("execution passed its retry deadline") from exc
             self._emit_session_diagnostic(
                 kind="command-timeout",

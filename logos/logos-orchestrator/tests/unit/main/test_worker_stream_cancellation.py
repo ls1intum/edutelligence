@@ -2078,6 +2078,98 @@ async def test_abandoned_sync_infer_is_cancelled_on_the_worker():
 
 
 @pytest.mark.asyncio
+async def test_sync_response_timeout_with_budget_remaining_cancels_before_retry():
+    """A per-command response timeout that fires while the retry deadline is
+    still ahead must cancel the abandoned infer before the caller redispatches.
+
+    Without the cancel, ``_sync_response`` returns 504, the reservation is
+    released, and the retry loop starts a second generation on the same lane
+    while the first is still producing tokens.
+    """
+    import time
+
+    from logos.logosnode_registry import LogosNodeOfflineError
+
+    registry, websocket = _registry_with_session()
+    deadline_at = time.monotonic() + 60.0
+
+    with pytest.raises(LogosNodeOfflineError, match="Command timeout"):
+        await registry.send_command(
+            PROVIDER_ID,
+            "infer",
+            {"lane_id": "lane-a"},
+            timeout_seconds=1,
+            deadline_at=deadline_at,
+        )
+    await _drain_pending_tasks()
+
+    timed_out_cmd_id = next(m["cmd_id"] for m in websocket.sent if m.get("action") == "infer")
+    frames = websocket.cancel_frames()
+    assert len(frames) == 1
+    assert frames[0]["params"] == {"target_cmd_id": timed_out_cmd_id}
+    assert timed_out_cmd_id not in registry._sessions[PROVIDER_ID].pending_commands
+
+    # The timeout stays a flaky-worker offline error (retryable), not a spent
+    # deadline — and a follow-up infer on the same session can still proceed.
+    websocket.infer_command_sent.clear()
+
+    async def _answer_retry() -> None:
+        await asyncio.wait_for(websocket.infer_command_sent.wait(), timeout=1)
+        retry_cmd_id = next(
+            m["cmd_id"]
+            for m in reversed(websocket.sent)
+            if m.get("action") == "infer" and m["cmd_id"] != timed_out_cmd_id
+        )
+        await registry.on_command_result(
+            PROVIDER_ID,
+            {
+                "cmd_id": retry_cmd_id,
+                "success": True,
+                "result": {"status_code": 200, "body": {"ok": True}},
+            },
+        )
+
+    answerer = asyncio.ensure_future(_answer_retry())
+    result = await registry.send_command(
+        PROVIDER_ID,
+        "infer",
+        {"lane_id": "lane-a"},
+        timeout_seconds=5,
+        deadline_at=deadline_at,
+    )
+    await answerer
+    assert result == {"status_code": 200, "body": {"ok": True}}
+    # Exactly one cancel — for the timed-out attempt, not the successful retry.
+    assert len(websocket.cancel_frames()) == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_deadline_timeout_cancels_and_keeps_deadline_identity():
+    """When the response wait is clamped to a near deadline, expiry must still
+    cancel the infer and stay ``RetryDeadlineExceeded`` (not offline)."""
+    import time
+
+    from logos.errors import RetryDeadlineExceeded
+
+    registry, websocket = _registry_with_session()
+
+    with pytest.raises(RetryDeadlineExceeded):
+        await registry.send_command(
+            PROVIDER_ID,
+            "infer",
+            {"lane_id": "lane-a"},
+            timeout_seconds=30,
+            deadline_at=time.monotonic() + 0.3,
+        )
+    await _drain_pending_tasks()
+
+    timed_out_cmd_id = next(m["cmd_id"] for m in websocket.sent if m.get("action") == "infer")
+    frames = websocket.cancel_frames()
+    assert len(frames) == 1
+    assert frames[0]["params"] == {"target_cmd_id": timed_out_cmd_id}
+
+
+@pytest.mark.asyncio
 async def test_a_cancelled_cancel_does_not_cancel_itself():
     """Guard against the obvious recursion."""
     registry, websocket = _registry_with_session()
