@@ -563,7 +563,7 @@ class TestPermissionsRevokedMidFlight:
         async def refresh():
             return revoked
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             # The lane an invalid policy hands over is empty, and an empty
             # lane is refused rather than measured.
             assert lane == frozenset()
@@ -1653,7 +1653,7 @@ class TestAgentPhaseIsolation:
         paused: list = []
         events: list = []
 
-        async def fake_reading(_timeout_s=5.0, lane=None, ours=None):
+        async def fake_reading(_timeout_s=5.0, lane=None, ours=None, own_api_key_id=None):
             return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
 
         async def fake_in_status(status):
@@ -2576,7 +2576,7 @@ class TestOverlappingAdmission:
         decided_loads: list = []
         real_start_decision = capacity.start_decision
 
-        async def fake_read_load(lane=None, ours=None):
+        async def fake_read_load(lane=None, ours=None, own_api_key_id=None):
             # A pass takes two readings of one moment — the platform's, and
             # the platform's minus this runner's share — so only the first
             # of the pair advances the prepared sequence.
@@ -5105,6 +5105,40 @@ class TestResumeCeiling:
         assert resumed == ["cid-1", "cid-2"]
 
 
+class TestTheDiscountedReadingAsksForTheKey:
+    """The per-key discount is only as good as the id it asks for.
+
+    The pass resolves the platform id of the runner's key once and hands it
+    to the reading that subtracts the runner's own share — a session's
+    subagents included. The measured reading asks for nothing, because
+    admission keeps everything it sees.
+    """
+
+    async def test_only_the_discounted_reading_carries_the_key(self, monkeypatch):
+        from app import capacity, sessions
+
+        calls: list = []
+
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+            calls.append((ours is not None, own_api_key_id))
+            return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
+
+        async def none(_status):
+            return []
+
+        monkeypatch.setattr(capacity, "read_load", read_load)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", none)
+        # A fresh manager: the shared singleton's admission lock is bound to
+        # whichever test's event loop first contended on it.
+        monkeypatch.setattr(sessions, "manager", sessions.SessionManager())
+
+        await sessions.manager.scheduler_pass()
+
+        # Two readings of one moment: the measured one keeps everything, and
+        # the discounted one is the one that knows whose key this is.
+        assert calls == [(False, None), (True, 7)]
+
+
 class TestAdmissionMeasuresTheRightLane:
     """A queued session on a saturated model must not enter on an idle one.
 
@@ -5133,7 +5167,7 @@ class TestAdmissionMeasuresTheRightLane:
         async def refresh():
             return policy
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             lanes.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5170,7 +5204,7 @@ class TestAdmissionMeasuresTheRightLane:
 
         readings: list = []
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             readings.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5436,7 +5470,7 @@ class TestAPausedSessionThatCannotComeBack:
         settled: list = []
         resumed: list = []
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def container_state(_container_id):
@@ -5491,7 +5525,7 @@ class TestAPausedSessionThatCannotComeBack:
 
         admitted: list = []
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def in_status(status):
@@ -5621,6 +5655,9 @@ class TestASessionThatRanOutOfTime:
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(
+            sessions.db, "get_session", lambda *_a, **_k: asyncio.sleep(0, result={"status": "running", "error": None})
+        )
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
 
@@ -5665,6 +5702,9 @@ class TestNoClockUnlessSomebodyAsksForOne:
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", nothing)
+        monkeypatch.setattr(
+            sessions.db, "get_session", lambda *_a, **_k: asyncio.sleep(0, result={"status": "running", "error": None})
+        )
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
         real_sleep = asyncio.sleep
