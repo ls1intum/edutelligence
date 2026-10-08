@@ -100,25 +100,24 @@ def test_has_cold_queued_entries_clears_after_dequeue():
     assert mgr.has_cold_queued_entries(5, 1) is False
 
 
-class TestSloFastLaneOrdering:
-    """Within one priority level, request-SLO fast-lane entries dispatch in
-    a bounded interleave with regular ones: one fast-lane, then two
-    regular, repeating, each class in arrival order.
+class TestBackgroundAppOrdering:
+    """Within one priority level, background-app entries dispatch in a
+    bounded interleave with regular ones: one flagged, then two regular,
+    repeating, each class in arrival order.
 
-    The fast lane is the request-SLO attribute for ``x-app: cli-bg``
-    traffic (an agent's background calls, e.g. its auto-permission
-    classifier) that a full queue of interactive traffic would otherwise
-    starve for the whole wait window. The interleave gives it a lane
-    without letting a steady fast-lane stream starve ordinary
-    same-priority traffic: regular entries are guaranteed 2 of every 3
-    dispatch slots, so the worst-case wait behind a continuous fast-lane
-    stream is two dispatches, not the whole queue.
+    The flag marks the ``x-app: cli-bg`` traffic (an agent's background
+    calls, e.g. its auto-permission classifier) that a full queue of
+    interactive traffic would otherwise starve for the whole wait window.
+    The interleave gives it a fast lane without letting a steady flagged
+    stream starve ordinary same-priority traffic: regular entries are
+    guaranteed 2 of every 3 dispatch slots, so the worst-case wait behind
+    a continuous flagged stream is two dispatches, not the whole queue.
     """
 
-    def test_slo_fast_lane_dequeues_before_older_regular_entry(self):
+    def test_background_app_dequeues_before_older_regular_entry(self):
         mgr = PriorityQueueManager()
         mgr.enqueue(DummyTask("interactive"), model_id=5, priority=Priority.NORMAL)
-        mgr.enqueue(DummyTask("classifier"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+        mgr.enqueue(DummyTask("classifier"), model_id=5, priority=Priority.NORMAL, background_app=True)
         assert mgr.dequeue(5).get_id() == "classifier"
         assert mgr.dequeue(5).get_id() == "interactive"
 
@@ -126,8 +125,8 @@ class TestSloFastLaneOrdering:
         mgr = PriorityQueueManager()
         mgr.enqueue(DummyTask("r1"), model_id=5, priority=Priority.NORMAL)
         mgr.enqueue(DummyTask("r2"), model_id=5, priority=Priority.NORMAL)
-        mgr.enqueue(DummyTask("b1"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
-        mgr.enqueue(DummyTask("b2"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+        mgr.enqueue(DummyTask("b1"), model_id=5, priority=Priority.NORMAL, background_app=True)
+        mgr.enqueue(DummyTask("b2"), model_id=5, priority=Priority.NORMAL, background_app=True)
         # Interleave: flagged b1 first, then two regular (r1, r2), then the
         # next flagged (b2) — each class in arrival order.
         assert [mgr.dequeue(5).get_id() for _ in range(4)] == ["b1", "r1", "r2", "b2"]
@@ -135,7 +134,7 @@ class TestSloFastLaneOrdering:
     def test_flagged_stream_cannot_starve_regular_traffic(self):
         mgr = PriorityQueueManager()
         for i in range(1, 5):
-            mgr.enqueue(DummyTask(f"b{i}"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+            mgr.enqueue(DummyTask(f"b{i}"), model_id=5, priority=Priority.NORMAL, background_app=True)
         mgr.enqueue(DummyTask("r1"), model_id=5, priority=Priority.NORMAL)
         mgr.enqueue(DummyTask("r2"), model_id=5, priority=Priority.NORMAL)
         # The two regular entries dispatch before the second flagged one, no
@@ -162,7 +161,7 @@ class TestSloFastLaneOrdering:
         # A flagged burst arrives after the quiescent period, then regular
         # traffic resumes.
         for i in range(1, 5):
-            mgr.enqueue(DummyTask(f"b{i}"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+            mgr.enqueue(DummyTask(f"b{i}"), model_id=5, priority=Priority.NORMAL, background_app=True)
         for i in range(7, 10):
             mgr.enqueue(DummyTask(f"r{i}"), model_id=5, priority=Priority.NORMAL)
         # Bounded interleave: the burst may not dispatch back-to-back. The
@@ -176,12 +175,12 @@ class TestSloFastLaneOrdering:
         arrival never outranks entries already queued (a rank reset to 0 at
         that moment would have given it exactly that)."""
         mgr = PriorityQueueManager()
-        mgr.enqueue(DummyTask("b1"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+        mgr.enqueue(DummyTask("b1"), model_id=5, priority=Priority.NORMAL, background_app=True)
         mgr.enqueue(DummyTask("r1"), model_id=5, priority=Priority.NORMAL)
         mgr.enqueue(DummyTask("r2"), model_id=5, priority=Priority.NORMAL)
         assert mgr.dequeue(5).get_id() == "b1"
         # b2 lands right after b1 dispatched, while r1/r2 are still queued.
-        mgr.enqueue(DummyTask("b2"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+        mgr.enqueue(DummyTask("b2"), model_id=5, priority=Priority.NORMAL, background_app=True)
         assert [mgr.dequeue(5).get_id() for _ in range(3)] == ["r1", "r2", "b2"]
 
     def test_peek_returns_the_dispatch_head(self):
@@ -189,7 +188,7 @@ class TestSloFastLaneOrdering:
         regular dispatch behind) the head is the regular entry even though a
         flagged one is still waiting."""
         mgr = PriorityQueueManager()
-        mgr.enqueue(DummyTask("b1"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+        mgr.enqueue(DummyTask("b1"), model_id=5, priority=Priority.NORMAL, background_app=True)
         mgr.enqueue(DummyTask("r1"), model_id=5, priority=Priority.NORMAL)
         mgr.enqueue(DummyTask("r2"), model_id=5, priority=Priority.NORMAL)
         task, priority = mgr.peek(5)
@@ -201,7 +200,7 @@ class TestSloFastLaneOrdering:
 
     def test_priority_still_dominates_the_flag(self):
         mgr = PriorityQueueManager()
-        mgr.enqueue(DummyTask("bg-normal"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+        mgr.enqueue(DummyTask("bg-normal"), model_id=5, priority=Priority.NORMAL, background_app=True)
         mgr.enqueue(DummyTask("plain-high"), model_id=5, priority=Priority.HIGH)
         assert mgr.dequeue(5).get_id() == "plain-high"
         assert mgr.dequeue(5).get_id() == "bg-normal"
@@ -219,7 +218,7 @@ class TestSloFastLaneOrdering:
             priority=Priority.NORMAL,
             raw_priority=5,
             role_rank=0,
-            slo_fast_lane=True,
+            background_app=True,
         )
         assert mgr.dequeue(5).get_id() == "regular-7"
         assert mgr.dequeue(5).get_id() == "flagged-5"
@@ -236,7 +235,7 @@ class TestSloFastLaneOrdering:
             priority=Priority.NORMAL,
             raw_priority=5,
             role_rank=0,
-            slo_fast_lane=True,
+            background_app=True,
         )
         mgr.enqueue(DummyTask("regular-app"), model_id=5, priority=Priority.NORMAL, raw_priority=5, role_rank=2)
         assert mgr.dequeue(5).get_id() == "regular-app"
@@ -254,7 +253,7 @@ class TestSloFastLaneOrdering:
             priority=Priority.NORMAL,
             raw_priority=7,
             role_rank=0,
-            slo_fast_lane=True,
+            background_app=True,
         )
         mgr.enqueue(DummyTask("regular-7"), model_id=5, priority=Priority.NORMAL, raw_priority=7, role_rank=0)
         mgr.enqueue(DummyTask("regular-5"), model_id=5, priority=Priority.NORMAL, raw_priority=5, role_rank=0)
@@ -265,7 +264,7 @@ class TestSloFastLaneOrdering:
     def test_move_priority_keeps_the_flag(self):
         mgr = PriorityQueueManager()
         mgr.enqueue(DummyTask("plain-high"), model_id=5, priority=Priority.HIGH)
-        moved = mgr.enqueue(DummyTask("bg-normal"), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
+        moved = mgr.enqueue(DummyTask("bg-normal"), model_id=5, priority=Priority.NORMAL, background_app=True)
         assert mgr.move_priority(moved, Priority.HIGH)
         # Both are HIGH now: the escalated entry keeps its flag, so it still
         # comes before the plain one.
@@ -274,9 +273,9 @@ class TestSloFastLaneOrdering:
 
     def test_entry_carries_the_flag(self):
         mgr = PriorityQueueManager()
-        entry_id = mgr.enqueue(DummyTask(1), model_id=5, priority=Priority.NORMAL, slo_fast_lane=True)
-        assert mgr.get_entry_info(entry_id).slo_fast_lane is True
-        assert mgr.get_entry_info(mgr.enqueue(DummyTask(2), model_id=5)).slo_fast_lane is False
+        entry_id = mgr.enqueue(DummyTask(1), model_id=5, priority=Priority.NORMAL, background_app=True)
+        assert mgr.get_entry_info(entry_id).background_app is True
+        assert mgr.get_entry_info(mgr.enqueue(DummyTask(2), model_id=5)).background_app is False
 
 
 def test_role_rank_orders_within_equal_priority():

@@ -56,12 +56,12 @@ Response, logging, completion recording, and scheduler.release()
 
 1.  **Scheduling**: If eligible local candidates are busy, cold, sleeping, or otherwise unavailable:
     *   The scheduler creates an `asyncio.Future`.
-    *   It enqueues the future into `PriorityQueueManager` (HIGH/NORMAL/LOW), marking the entry for the request-SLO same-bucket fast lane when `logos.request_slo` resolves `fast_lane` (today: `x-app: cli-bg`).
+    *   It enqueues the future into `PriorityQueueManager` (HIGH/NORMAL/LOW), flagging the entry when the request carried the `x-app: cli-bg` header (background app traffic; `is_background_app()` in `pipeline.py`).
     *   It `await`s the future, pausing the request execution. The wait is bounded to `DEFAULT_QUEUE_WAIT_TIMEOUT_S` (or `LOGOS_TIMEOUT_S` / the request's `timeout_s`): the window is chosen so the queue-timeout 429 + `Retry-After` reaches a caller that is still connected, instead of holding a slot for minutes after the client gave up.
-2.  **Waiting**: The request remains suspended until a slot opens up. Queues use strict HIGH, then NORMAL, then LOW priority ordering; priorities are not automatically promoted. An optional `X-Logos-SLO` / `logos-slo` header can override the key/team/policy priority for this request using the same three tiers as the key SLO (`ux-critical` / `ux-high-prio` / `ux-background`). **Within one priority level, request-SLO fast-lane entries (today `x-app: cli-bg`) dispatch in a bounded interleave with the regular entries — one fast-lane, then two regular, repeating (F R R | F R R | ...) — each class in arrival order (FIFO).** The cycle starts with the fast-lane slot, so a fast-lane entry that arrives while the level is fresh jumps the queue of regular entries ahead of it; but after a fast-lane dispatch the next two dispatches are owed to regular traffic again. The SLO fast lane is not a monopoly: a steady fast-lane stream can take at most one of every three dispatch slots and cannot starve same-priority interactive traffic. This is what keeps latency-sensitive background calls — e.g. Claude Code's auto-permission classifier requests — from waiting for every interactive request that arrived before them when the queue fills under load. `cli-bg` does not raise the SLO tier (that would jump buckets); it only joins the same-bucket interleave. Everything else sorts exactly as before.
+2.  **Waiting**: The request remains suspended until a slot opens up. Queues use strict HIGH, then NORMAL, then LOW priority ordering; priorities are not automatically promoted. **Within one priority level, background-app entries (the `x-app: cli-bg` header) dispatch in a bounded interleave with the regular entries — one flagged, then two regular, repeating (F R R | F R R | ...) — each class in arrival order (FIFO).** The cycle starts with the flagged slot, so a flagged entry that arrives while the level is fresh jumps the queue of regular entries ahead of it; but after a flagged dispatch the next two dispatches are owed to regular traffic again. The flag buys a fast lane, not a monopoly: a steady flagged stream can take at most one of every three dispatch slots and cannot starve same-priority interactive traffic. This is what keeps latency-sensitive background calls — e.g. Claude Code's auto-permission classifier requests — from waiting for every interactive request that arrived before them when the queue fills under load. Only traffic that explicitly identifies itself as background app traffic is re-ordered; everything else sorts exactly as before.
 3.  **Wake Up**: When another request finishes:
     *   `scheduler.release()` calls `queue_mgr.dequeue_with_entry()`.
-    *   It finds the highest priority waiting future (within the level, the F R R fast-lane:regular interleave picks the next entry).
+    *   It finds the highest priority waiting future (within the level, the F R R flagged:regular interleave picks the next entry).
     *   It calls `future.set_result()`, waking up the suspended request.
 4.  **Resumption**: The `await` returns, and the request proceeds to **Execution**.
 
@@ -75,14 +75,12 @@ When a request names a model, `main.py` first verifies access and limits deploym
 
 ### Queue priority resolution
 
-The priority a request is queued with is resolved by `resolve_queue_priority()` in `pipeline.py`, then layered with `logos.request_slo.resolve_request_slo()` before scheduling:
+The priority a request is queued with is resolved by `resolve_queue_priority()` in `pipeline.py` before scheduling:
 
-- **The API key's `default_priority` wins** when set (non-zero). It is the key SLO written by the admin UI (`ux-critical` / `ux-high-prio` / `ux-background` → 10 / 5 / 1), so a key owner's explicit choice determines where that key's traffic sits in the queue, regardless of the policy.
+- **The API key's `default_priority` wins** when set (non-zero). It is configured per key in the admin UI ("Queue Priority"), so a key owner's explicit choice determines where that key's traffic sits in the queue, regardless of the policy.
 - **The team's admin-set `priority` is next** when the key has none set (`0`, the default for newly created keys).
 - **The policy-level `priority` is the fallback** when neither key nor team has one set.
 - **The default level is `NORMAL` (5)** when none of the above applies. The resolver returns NORMAL's raw value — not `0` — so the entry's `raw_priority` matches the bucket `Priority.from_int` already chooses for it. A raw `0` would land in the NORMAL bucket but rank below explicit NORMAL (5) traffic in that bucket and skip the role-rank tiebreak between the two.
-- **An optional `X-Logos-SLO` / `logos-slo` header** may override that base for this request only, using the same three tier names and integers.
-- **`x-app: cli-bg` does not change the priority** — it only sets the request-SLO same-bucket fast lane used by the queue interleave.
 
 All values use the same 1/5/10 scale (LOW/NORMAL/HIGH, see `queue/models.py`); non-canonical values are normalized by `Priority.from_int`. The resolved value is applied to every classified candidate, so the schedulers, the priority queues, the monitoring events, and the logged classification stats all agree on it.
 
@@ -126,7 +124,7 @@ pipeline/
 - Manages SDI facades (`LogosNodeSchedulingDataFacade`, `AzureSchedulingDataFacade`)
 - Tracks per-model provider and deployment types (LogosNode/cloud)
 - Provides helper methods for queue management and metrics collection
-- Uses strict HIGH → NORMAL → LOW dequeue ordering for queued requests (within a level: the bounded F R R SLO-fast-lane:regular interleave)
+- Uses strict HIGH → NORMAL → LOW dequeue ordering for queued requests (within a level: the bounded F R R flagged:regular interleave)
 - Uses the model-only `PriorityQueueManager`; its compatibility `provider_id` arguments are ignored
 
 ### `fcfs_scheduler.py` - FcfScheduler
@@ -180,7 +178,7 @@ The pipeline integrates several modules together
 ### Priority Queue (`../queue/`)
 - `PriorityQueueManager`: Per-model priority queues
 - `Priority` enum: LOW, NORMAL, HIGH
-- Strict HIGH → NORMAL → LOW dequeue ordering (no automatic promotion); within a level, a bounded interleave — one request-SLO fast-lane (`x-app: cli-bg`) entry, then two regular, repeating (F R R | F R R | ...) — each class in arrival order (FIFO)
+- Strict HIGH → NORMAL → LOW dequeue ordering (no automatic promotion); within a level, a bounded interleave — one background-app (`x-app: cli-bg`) entry, then two regular, repeating (F R R | F R R | ...) — each class in arrival order (FIFO)
 
 ### Monitoring (`../monitoring/`)
 - `MonitoringRecorder`: Logs request lifecycle events and performance metrics
