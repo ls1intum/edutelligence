@@ -153,6 +153,10 @@ class QueueEntry:
     failed-node exclusion the scheduling pass just made. Normal requests
     leave it unset and stay model-wide."""
 
+    api_key_id: int | None = None
+    """Caller key that enqueued this entry, when known. Lets a runner tell how
+    much of a model's backlog is its own traffic rather than a waiting user."""
+
     @property
     def wait_time_seconds(self) -> float:
         """Calculate how long this entry has been waiting in queue."""

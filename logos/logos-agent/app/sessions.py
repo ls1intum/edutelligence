@@ -352,6 +352,12 @@ class SessionManager:
         # this both would read reply_posted_at as unset and post twice.
         self._reply_lock = asyncio.Lock()
         self._last_reading: capacity.Reading = capacity.UNKNOWN
+        # The platform id of this runner's key, resolved once: the
+        # orchestrator splits a model's in-flight requests by that id, and
+        # the discounted readings subtract this runner's share of them.
+        # Distinct from `_own_api_key_id()` below — caching on the method name
+        # would shadow the coroutine and crash every scheduler pass.
+        self._cached_own_api_key_id: int | None = None
         # Set once the session image has been seen on this host.
         self._image_present = False
 
@@ -690,6 +696,21 @@ class SessionManager:
             except asyncio.TimeoutError:
                 pass
 
+    async def _own_api_key_id(self) -> int | None:
+        """The platform id of this runner's key, resolved once.
+
+        Every session — and every subagent a session starts — talks to the
+        models through that one key, so the orchestrator's per-key split of
+        a model's in-flight requests is this runner's true share of it,
+        which the discounted readings subtract. Resolving again is only
+        skipped once a key *was* found: an unresolved one may have been a
+        lookup that failed, not a key that is missing, and the readings
+        fall back to counting sessions while it is.
+        """
+        if self._cached_own_api_key_id is None:
+            self._cached_own_api_key_id = await db.agent_key_id(settings.agent_api_key)
+        return self._cached_own_api_key_id
+
     async def scheduler_pass(self) -> None:
         # Permissions first, then the measurement they describe: a key moved
         # to another model — or stripped of its local one while a session was
@@ -732,8 +753,13 @@ class SessionManager:
         # from a figure that describes another is how nine user requests
         # read as four — which is why it is a second reading rather than an
         # adjustment of the first.
+        own_key = await self._own_api_key_id()
         measured = await capacity.read_load(lane=policy.lane())
-        reading = await capacity.read_load(lane=policy.lane(), ours=_ours_by_model(running, policy))
+        reading = await capacity.read_load(
+            lane=policy.lane(),
+            ours=_ours_by_model(running, policy),
+            own_api_key_id=own_key,
+        )
         self._last_reading = measured
 
         if control.paused:
@@ -788,7 +814,11 @@ class SessionManager:
                     # load — leaving the rest paused for nothing.
                     resumed = await db.sessions_in_status(SessionStatus.RUNNING)
                     self._last_reading = await capacity.read_load(lane=policy.lane())
-                    reading = await capacity.read_load(lane=policy.lane(), ours=_ours_by_model(resumed, policy))
+                    reading = await capacity.read_load(
+                        lane=policy.lane(),
+                        ours=_ours_by_model(resumed, policy),
+                        own_api_key_id=own_key,
+                    )
                     if not capacity.resume_decision(reading)[0]:
                         break
                 if woken:

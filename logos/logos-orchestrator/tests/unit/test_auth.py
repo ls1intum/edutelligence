@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from logos import auth
+from logos.dbutils.dbmodules import LoggingLevel
 
 
 def _api_key_row(key: str = "lg-test-abc") -> dict:
@@ -233,3 +234,100 @@ def test_the_global_key_auth_refuses_a_batch_credential(monkeypatch):
     assert exc.value.status_code == 401
     # It is not even resolved: the global path does not know about it.
     assert fake.seen_by_id is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_log_level — per-request logging opt-in via the logos-logging header
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("header_value", "key_level", "expected"),
+    [
+        # No header: the key's own level is used unchanged (old behavior).
+        (None, "BILLING", "BILLING"),
+        (None, "FULL", "FULL"),
+        # Header present: it overrides the key in both directions.
+        ("BILLING", "BILLING", "BILLING"),
+        ("FULL", "BILLING", "FULL"),
+        ("BILLING", "FULL", "BILLING"),
+        ("FULL", "FULL", "FULL"),
+        # Plain yes/no words (issue #1170 vocabulary).
+        ("yes", "BILLING", "FULL"),
+        ("no", "FULL", "BILLING"),
+        ("yes", "FULL", "FULL"),
+        ("no", "BILLING", "BILLING"),
+    ],
+    ids=[
+        "no-header-billing",
+        "no-header-full",
+        "billing-billing",
+        "full-on-billing",
+        "billing-on-full",
+        "full-full",
+        "yes-on-billing",
+        "no-on-full",
+        "yes-on-full",
+        "no-on-billing",
+    ],
+)
+def test_resolve_log_level_precedence_table(header_value, key_level, expected):
+    headers = {} if header_value is None else {"logos-logging": header_value}
+    assert auth.resolve_log_level(headers, key_level) == expected
+
+
+@pytest.mark.parametrize("name", [auth.LOG_LEVEL_HEADER, "logos_logging"])
+@pytest.mark.parametrize(
+    "case",
+    ["full", "Full", "FULL", "billing", "Billing", "BILLING", "yes", "YES", " no ", "No"],
+)
+def test_resolve_log_level_is_case_insensitive(name, case):
+    # Both the header name and the value match case-insensitively.
+    normalised = case.strip().lower()
+    expected = "FULL" if normalised in ("full", "yes") else "BILLING"
+    assert auth.resolve_log_level({name: case}, "BILLING") == expected
+
+
+def test_resolve_log_level_empty_header_falls_back_to_key():
+    # A present-but-empty value is not a consent signal; it is the same as
+    # no header at all.
+    assert auth.resolve_log_level({"logos-logging": "   "}, "FULL") == "FULL"
+    assert auth.resolve_log_level({"logos-logging": ""}, "BILLING") == "BILLING"
+
+
+def test_resolve_log_level_none_headers_fall_back_to_key():
+    assert auth.resolve_log_level(None, "FULL") == "FULL"
+    assert auth.resolve_log_level(None, "BILLING") == "BILLING"
+
+
+def test_resolve_log_level_invalid_value_fails_closed_to_billing():
+    # An unrecognized value must not be read as consent to FULL logging: it
+    # resolves to the minimum-logging level regardless of the key's default.
+    assert auth.resolve_log_level({"logos-logging": "VERBOSE"}, "FULL") == "BILLING"
+    assert auth.resolve_log_level({"logos-logging": "maybe"}, "FULL") == "BILLING"
+    assert auth.resolve_log_level({"logos-logging": "full "}, "BILLING") == "FULL"
+
+
+def test_resolve_log_level_normalizes_enum_key_level():
+    # The key level may arrive as the LoggingLevel enum (not just a str); the
+    # effective value is always returned as a plain string.
+    assert auth.resolve_log_level({}, LoggingLevel.FULL) == "FULL"
+    assert auth.resolve_log_level({"logos-logging": "BILLING"}, LoggingLevel.FULL) == "BILLING"
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        (None, None),
+        ({}, None),
+        ({"logos-logging": ""}, None),
+        ({"logos-logging": "   "}, None),
+        ({"logos-logging": "FULL"}, "FULL"),
+        ({"logos-logging": "yes"}, "FULL"),
+        ({"logos_logging": "no"}, "BILLING"),
+        ({"logos-logging": "VERBOSE"}, "BILLING"),
+    ],
+    ids=["none", "empty", "blank", "whitespace", "full", "yes", "no", "unrecognised"],
+)
+def test_explicit_log_level(headers, expected):
+    assert auth.explicit_log_level(headers) == expected

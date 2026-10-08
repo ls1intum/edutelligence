@@ -256,3 +256,17 @@ def test_move_priority_preserves_role_rank():
     assert mgr.dequeue(5).get_id() == 2  # escalated app key, rank preserved
     assert mgr.dequeue(5).get_id() == 1
     assert mgr.get_entry_info(low) is None
+
+
+def test_queued_entries_are_countable_by_caller_key():
+    mgr = PriorityQueueManager()
+    mgr.enqueue(DummyTask(1), model_id=5, api_key_id=7)
+    mgr.enqueue(DummyTask(2), model_id=5, api_key_id=7)
+    mgr.enqueue(DummyTask(3), model_id=5, api_key_id=9)
+    mgr.enqueue(DummyTask(4), model_id=5)
+    # Stream resumes share the same attribution surface as ordinary queued
+    # traffic — a re-queued resume must still count against its caller key.
+    mgr.enqueue(DummyTask(5), model_id=5, priority=Priority.RESUME, api_key_id=7)
+
+    assert mgr.get_queued_by_api_key(5) == {7: 3, 9: 1}
+    assert mgr.get_queued_by_api_key(99) == {}

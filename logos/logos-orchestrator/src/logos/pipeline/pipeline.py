@@ -364,6 +364,7 @@ class RequestPipeline:
             eligible_provider_ids=eligible_provider_ids,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
             role_rank=request.role_rank,
+            api_key_id=request.api_key_id,
         )
 
         # Record enqueue
