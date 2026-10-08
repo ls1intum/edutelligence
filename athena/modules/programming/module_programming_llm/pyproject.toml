@@ -24,7 +24,7 @@ prospector = { version = "1.19.1", extras = ["with_mypy"] }
 
 [tool.poetry.group.test.dependencies]
 pytest = "8.2.0"
-pytest-asyncio = "0.26.0"
+pytest-asyncio = "1.4.0"
 
 [tool.poetry.scripts]
 module = "athena:run_module"
