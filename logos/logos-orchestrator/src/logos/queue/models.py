@@ -119,6 +119,10 @@ class QueueEntry:
     """When set, only this provider may dispatch the entry. Normal requests
     leave this unset and retain the model-wide, cross-provider queue behavior."""
 
+    api_key_id: int | None = None
+    """Caller key that enqueued this entry, when known. Lets a runner tell how
+    much of a model's backlog is its own traffic rather than a waiting user."""
+
     @property
     def wait_time_seconds(self) -> float:
         """Calculate how long this entry has been waiting in queue."""
