@@ -237,13 +237,13 @@
                           {{ step.tag }}
                         </button>
                       }
-                      @if (stepSlo(step); as sla) {
+                      @if (stepSlo(step); as slo) {
                         <span
                           class="slo-badge"
                           [class.slo-badge--muted]="!step.confirmed_slo"
                           [title]="step.confirmed_slo ? 'Confirmed SLO' : 'Recommended SLO (not confirmed)'"
                         >
-                          {{ sla }}
+                          {{ slo }}
                         </span>
                       }
                       @if (canEdit) {

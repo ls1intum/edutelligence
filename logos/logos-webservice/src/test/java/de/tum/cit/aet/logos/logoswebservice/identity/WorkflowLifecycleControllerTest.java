@@ -138,7 +138,7 @@ class WorkflowLifecycleControllerTest {
     }
 
     @Test
-    void workflowStep_confirmSlaValidatesAndIsTeamScoped() throws Exception {
+    void workflowStep_confirmSloValidatesAndIsTeamScoped() throws Exception {
         int stepId = seedWorkflowWithStep()[1];
 
         mvc.perform(patch("/admin/teams/2001/workflow-steps/" + stepId)
