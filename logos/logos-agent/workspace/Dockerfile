@@ -54,7 +54,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
   && rm -rf /var/lib/apt/lists/*
 
 # uv, matching the pin used by the other Logos images.
-COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.24 /uv /usr/local/bin/uv
 
 # Logos targets Python 3.13; Debian bookworm ships 3.11. Install the interpreter
 # at build time into a shared location, so a session runs `uv venv --python
