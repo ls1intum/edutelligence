@@ -1420,8 +1420,9 @@ async def may_push(login: str) -> bool:
         return False
     try:
         payload = await _get(f"/repos/{settings.repo_slug}/collaborators/{login}/permission")
-    except GitHubError as exc:
-        # 404 is the ordinary answer for "not a collaborator".
+    except (GitHubError, github_tokens.CredentialError) as exc:
+        # 404 is the ordinary answer for "not a collaborator". A mint failure
+        # is treated the same: unknown permission is not a permission.
         logger.info("could not establish repository permission for %s: %s", login, exc)
         return False
     return str(payload.get("permission") or "").lower() in _WRITE_PERMISSIONS

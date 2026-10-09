@@ -165,7 +165,8 @@ async def test_the_first_call_mints_for_the_repositorys_installation(monkeypatch
         f"https://api.github.com/repos/{_REPO}/installation",
         "https://api.github.com/app/installations/815/access_tokens",
     ]
-    assert calls[1]["json"] == {"expires_in": github_tokens.DEFAULT_TTL_S}
+    assert calls[1]["json"]["expires_in"] == github_tokens.DEFAULT_TTL_S
+    assert calls[1]["json"]["repositories"] == ["edutelligence"]
     # What authenticates the request is the app's own signature — a JWT the
     # app's public key verifies, issued by the app's id — not any stored
     # bearer token.
@@ -308,8 +309,8 @@ async def test_the_asked_lifetime_is_clamped_to_whats_accepted(monkeypatch, rsa_
     # margin would re-mint on every call. Only POSTs carry a json body —
     # the lookup GET must not be indexed here.
     assert [c["json"] for c in calls if c["method"] == "POST"] == [
-        {"expires_in": github_tokens.MAX_TTL_S},
-        {"expires_in": github_tokens.MIN_TTL_S},
+        {"expires_in": github_tokens.MAX_TTL_S, "repositories": ["edutelligence"]},
+        {"expires_in": github_tokens.MIN_TTL_S, "repositories": ["edutelligence"]},
     ]
 
 

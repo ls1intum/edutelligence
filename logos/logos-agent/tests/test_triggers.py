@@ -2573,7 +2573,13 @@ class TestPollerStartup:
         monkeypatch.setattr(
             triggers,
             "settings",
-            replace(triggers.settings, github_token="", session_github_token=""),
+            replace(
+                triggers.settings,
+                github_token="",
+                session_github_token="",
+                github_app_id="",
+                github_app_private_key="",
+            ),
         )
         poller = triggers.TriggerPoller()
 

@@ -215,6 +215,7 @@ async def installation_token(
     identity = (
         app_id.strip(),
         installation_id.strip() or repo_slug,
+        repo_slug.strip().lower(),
         hashlib.sha256(private_key.encode("utf-8")).digest(),
     )
     async with _lock_for_current_loop():
@@ -250,10 +251,16 @@ async def _mint(
             if not installation_id:
                 response = await client.get(f"{_API}/repos/{repo_slug}/installation", headers=_headers_for(signed))
                 installation_id = _installation_id_of(response, repo_slug)
+            # Restrict the token to this repository when the slug is known.
+            # GitHub accepts repository names (without owner) in `repositories`.
+            repo_name = repo_slug.rsplit("/", 1)[-1] if repo_slug else ""
+            body: dict = {"expires_in": ttl_s}
+            if repo_name:
+                body["repositories"] = [repo_name]
             response = await client.post(
                 f"{_API}/app/installations/{installation_id}/access_tokens",
                 headers=_headers_for(signed),
-                json={"expires_in": ttl_s},
+                json=body,
             )
     except httpx.HTTPError as exc:
         raise CredentialError(f"could not reach the GitHub API: {exc}") from exc
