@@ -57,6 +57,7 @@ _STAMPED_SEGMENT_UUID = "66666666-6666-6666-6666-666666666662"
     [
         ("en", "en"),
         ("DE", "de"),
+        ("zh-cn", "zh-cn"),
         ("English", "en"),
         (" english. ", "en"),
         ("Englisch", "en"),
@@ -200,6 +201,24 @@ def test_legacy_transcript_rows_split_into_pieces_are_kept():
         _legacy_row(2, "Quicksort picks a pivot.", 9.0, 15.25),
     ]
     assert _transcription_needs_update(rows) is False
+
+
+def test_legacy_transcript_rows_with_times_of_the_neighbouring_slide_are_kept():
+    # Older versions took a split piece's times from the segment at its character
+    # offset in the whole transcript, which at a slide border is the last segment of
+    # the previous slide. The times are still segment boundaries of this transcript.
+    rows = [
+        _legacy_row(1, "Hello and welcome.", 0.0, 4.5),
+        _legacy_row(1, "Today we look at sorting.", 4.5, 9.0),
+        _legacy_row(2, "Quicksort picks a pivot.", 4.5, 15.25),
+    ]
+    assert _transcription_needs_update(rows) is False
+
+
+def test_legacy_transcript_rows_with_a_time_outside_the_segments_are_rebuilt():
+    rows = _matching_rows()
+    rows[1] = _legacy_row(2, "Quicksort picks a pivot.", 9.0, 16.0)
+    assert _transcription_needs_update(rows) is True
 
 
 def test_legacy_transcript_rows_with_different_words_are_rebuilt():

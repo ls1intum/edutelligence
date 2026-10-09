@@ -260,20 +260,24 @@ class TranscriptionIngestionPipeline(SubPipeline):
         """Whether unstamped legacy rows were built from exactly the requested transcript.
 
         Without a fingerprint stamp, the only proof that stored rows match the
-        current video is their content: per slide, the stored text pieces joined
-        in time order must equal the transcript's segment texts for that slide
-        (ignoring whitespace and the chunk separator, which chunking rewrites),
-        and the stored times must be the transcript's own segment boundaries,
-        with the same first start and last end. Splitting long text into pieces
-        neither changes its words nor invents times, so a match means the same
-        source; a replaced video with the same words but shifted times does not
+        current video is their content. Per slide, the stored text pieces joined
+        in time order must equal the transcript's segment texts for that slide,
+        ignoring whitespace and the chunk separator: older versions joined short
+        slides into one row and split long ones at sentence ends, which changes
+        only whitespace. Every stored start and end time must also be a segment
+        start or end of the requested transcript. Older versions took the times of
+        a split piece from the segment at its character offset in the whole
+        transcript, which can be a segment of the neighbouring slide, so the times
+        are compared with all boundaries and not only with those of the slide. A
+        replaced video with the same words but shifted times (an added intro, a
+        re-cut) has none of its old times among the new boundaries, so it does not
         match. Anything that does not match is rebuilt, which is always safe.
         """
         expected_text: dict = defaultdict(str)
-        boundaries: dict = defaultdict(set)
+        boundaries: set = set()
         for segment in self.dto.lecture_unit.transcription.segments:
             expected_text[segment.slide_number] += segment.text
-            boundaries[segment.slide_number].update(
+            boundaries.update(
                 (round(segment.start_time, 3), round(segment.end_time, 3))
             )
 
@@ -284,26 +288,19 @@ class TranscriptionIngestionPipeline(SubPipeline):
             end = props.get(LectureTranscriptionSchema.SEGMENT_END_TIME.value)
             if start is None or end is None:
                 return False
+            start, end = round(float(start), 3), round(float(end), 3)
+            if start not in boundaries or end not in boundaries:
+                return False
             stored[int(props.get(LectureTranscriptionSchema.PAGE_NUMBER.value))].append(
                 (
-                    round(float(start), 3),
-                    round(float(end), 3),
+                    start,
+                    end,
                     props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value) or "",
                 )
             )
 
         for slide_number, pieces in stored.items():
             pieces.sort(key=lambda piece: (piece[0], piece[1]))
-            slide_boundaries = boundaries[slide_number]
-            if any(
-                start not in slide_boundaries or end not in slide_boundaries
-                for start, end, _ in pieces
-            ):
-                return False
-            if pieces[0][0] != min(slide_boundaries) or max(
-                end for _, end, _ in pieces
-            ) != max(slide_boundaries):
-                return False
             stored_text = "".join(text for _, _, text in pieces)
             if self._comparable_text(stored_text) != self._comparable_text(
                 expected_text[slide_number]
