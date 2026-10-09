@@ -330,6 +330,13 @@ export interface WorkflowHistoricMetrics {
 
 export interface WorkflowCandidateMetrics {
   candidate_model: string;
+  sample_count?: number;
+  avg_queue_wait_ms?: number | null;
+  avg_ttft_ms?: number | null;
+  avg_latency_ms?: number | null;
+  p50_latency_ms?: number | null;
+  p95_latency_ms?: number | null;
+  models_seen?: string[];
   note?: string;
 }
 

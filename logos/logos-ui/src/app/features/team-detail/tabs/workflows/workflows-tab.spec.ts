@@ -146,7 +146,9 @@ describe('WorkflowsTabComponent review actions', () => {
       },
       candidate_metrics: {
         candidate_model: 'gpt-fast',
-        note: 'Historic sample only — re-run traffic with the candidate model to fill live metrics.',
+        sample_count: 4,
+        p50_latency_ms: 80,
+        p95_latency_ms: 150,
       },
     });
     proposeWorkflowTaggingPr.mockResolvedValue({

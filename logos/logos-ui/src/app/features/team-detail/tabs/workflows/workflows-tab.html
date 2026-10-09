@@ -339,9 +339,36 @@
                         </dd>
                       </div>
                     </dl>
-                    @if (bench.candidate_metrics?.note) {
+                    <h5 class="benchmark-result-title">
+                      Candidate
+                      @if (bench.candidate_model) {
+                        ({{ bench.candidate_model }})
+                      }
+                      @if (bench.candidate_metrics?.sample_count != null) {
+                        — {{ bench.candidate_metrics!.sample_count }} requests
+                      }
+                    </h5>
+                    @if ((bench.candidate_metrics?.sample_count ?? 0) > 0) {
+                      <dl class="benchmark-metrics">
+                        <div>
+                          <dt>Sample count</dt>
+                          <dd>{{ bench.candidate_metrics?.sample_count ?? '—' }}</dd>
+                        </div>
+                        <div>
+                          <dt>Avg TTFT</dt>
+                          <dd>{{ formatMs(bench.candidate_metrics?.avg_ttft_ms) }}</dd>
+                        </div>
+                        <div>
+                          <dt>p50 latency</dt>
+                          <dd>{{ formatMs(bench.candidate_metrics?.p50_latency_ms) }}</dd>
+                        </div>
+                        <div>
+                          <dt>p95 latency</dt>
+                          <dd>{{ formatMs(bench.candidate_metrics?.p95_latency_ms) }}</dd>
+                        </div>
+                      </dl>
+                    } @else if (bench.candidate_metrics?.note) {
                       <p class="benchmark-note">
-                        Candidate <strong>{{ bench.candidate_model }}</strong>:
                         {{ bench.candidate_metrics!.note }}
                       </p>
                     }

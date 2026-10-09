@@ -112,8 +112,8 @@ not show, also when the toggle is on.
 
 A workflow can contain more than one **step**. Each step has its own
 recommended SLO. Owners can confirm that SLO. Applications attribute traffic
-with `X-Logos-Workflow-Tag` and the workflow or step tag. Click the tag chip
-for a copy hint. A request can also set its SLO with `X-Logos-SLO`
+with `X-Logos-Workflow-Tag` and the workflow or step tag. To copy a tag to
+the clipboard, click its chip. A request can also set its SLO with `X-Logos-SLO`
 (`ux-critical`, `ux-high-prio`, or `ux-background`).
 
 A Logos Admin can select **Propose tagging PR**. That action queues an agent
@@ -124,9 +124,10 @@ action, because the session pushes as the Logos agent GitHub account.
 #### Compare model
 
 **Compare model** opens an inline benchmark. Select a candidate model from the
-catalogue. Then run compare. The panel shows historic metrics for tagged
-traffic (sample count, latency percentiles, models seen). Live candidate
-metrics need traffic on that model.
+catalogue. Then select **Run compare**. The panel shows historic metrics for
+tagged traffic (sample count, latency percentiles, models seen) next to
+candidate metrics from attributed requests on that model. Candidate metrics
+need attributed traffic on that model.
 
 A new analysis **proposes** changes and does not overwrite your decisions. If
 it recommends what you already accepted, overrode or rejected for a call site,

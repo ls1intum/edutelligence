@@ -685,11 +685,18 @@ public class AiWorkflowAnalysisService {
             }
         }
 
-        Map<String, Object> historicMetrics = computeHistoricMetrics(teamId, workflow.getId(), tags, sampleSize);
+        Map<String, Object> historicMetrics = computeHistoricMetrics(
+            teamId, workflow.getId(), tags, sampleSize, null);
+        Map<String, Object> candidateSample = computeHistoricMetrics(
+            teamId, workflow.getId(), tags, sampleSize, candidateModel);
         Map<String, Object> candidateMetrics = new LinkedHashMap<>();
         candidateMetrics.put("candidate_model", candidateModel);
-        candidateMetrics.put("note",
-            "Historic sample only — re-run traffic with the candidate model to fill live metrics.");
+        candidateMetrics.putAll(candidateSample);
+        int candidateCount = ((Number) candidateSample.getOrDefault("sample_count", 0)).intValue();
+        if (candidateCount == 0) {
+            candidateMetrics.put("note",
+                "No attributed requests found for this candidate model yet.");
+        }
 
         String historicJson = toJson(historicMetrics);
         String candidateJson = toJson(candidateMetrics);
@@ -781,7 +788,8 @@ public class AiWorkflowAnalysisService {
     }
 
     private Map<String, Object> computeHistoricMetrics(int teamId, int workflowId,
-                                                       List<String> tags, int sampleSize) {
+                                                       List<String> tags, int sampleSize,
+                                                       String modelName) {
         List<Map<String, Object>> rows = jdbc.query(con -> {
             var ps = con.prepareStatement("""
                 SELECT le.queue_wait_ms,
@@ -808,6 +816,7 @@ public class AiWorkflowAnalysisService {
                         -- claimed: a tag can move to another workflow later.
                         OR (le.workflow_id IS NULL
                             AND cardinality(?) > 0 AND le.workflow_tag = ANY(?)))
+                   AND (?::text IS NULL OR COALESCE(le.model_name, m.name) = ?)
                  ORDER BY le.timestamp_request DESC NULLS LAST
                  LIMIT ?
                 """);
@@ -816,7 +825,9 @@ public class AiWorkflowAnalysisService {
             var tagArray = con.createArrayOf("text", tags.toArray());
             ps.setArray(3, tagArray);
             ps.setArray(4, tagArray);
-            ps.setInt(5, sampleSize);
+            ps.setString(5, modelName);
+            ps.setString(6, modelName);
+            ps.setInt(7, sampleSize);
             return ps;
         }, (rs, rowNum) -> {
             Map<String, Object> row = new LinkedHashMap<>();

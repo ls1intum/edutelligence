@@ -287,10 +287,41 @@ class WorkflowLifecycleControllerTest {
                     .content("{\"candidate_model\":\"gpt-fast\"}"))
                .andExpect(status().isOk())
                // Its predecessor's two requests plus the one no workflow claimed.
-               .andExpect(jsonPath("$.historic_metrics.sample_count").value(3));
+               .andExpect(jsonPath("$.historic_metrics.sample_count").value(3))
+               .andExpect(jsonPath("$.candidate_metrics.sample_count").value(0))
+               .andExpect(jsonPath("$.candidate_metrics.note").exists());
         }
         finally {
             jdbc.update("DELETE FROM log_entry WHERE request_id LIKE 'wf-bench-%'");
+        }
+    }
+
+    @Test
+    void benchmark_reportsCandidateMetricsWhenAttributedTrafficExists() throws Exception {
+        int workflowId = seedWorkflowWithStep()[0];
+        String insertLog = """
+            INSERT INTO log_entry (
+                request_id, team_id, workflow_id, workflow_tag, model_name,
+                timestamp_request, timestamp_response
+            ) VALUES (?, 2001, ?, 'checkout', ?, now(), now() + interval '100 milliseconds')
+            """;
+        try {
+            jdbc.update(insertLog, "wf-cand-1", workflowId, "gpt-fast");
+            jdbc.update(insertLog, "wf-cand-2", workflowId, "gpt-fast");
+            jdbc.update(insertLog, "wf-cand-3", workflowId, "gpt-slow");
+
+            mvc.perform(post("/admin/teams/2001/workflows/" + workflowId + "/benchmark")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"candidate_model\":\"gpt-fast\"}"))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.historic_metrics.sample_count").value(3))
+               .andExpect(jsonPath("$.candidate_metrics.candidate_model").value("gpt-fast"))
+               .andExpect(jsonPath("$.candidate_metrics.sample_count").value(2))
+               .andExpect(jsonPath("$.candidate_metrics.note").doesNotExist());
+        }
+        finally {
+            jdbc.update("DELETE FROM log_entry WHERE request_id LIKE 'wf-cand-%'");
         }
     }
 
