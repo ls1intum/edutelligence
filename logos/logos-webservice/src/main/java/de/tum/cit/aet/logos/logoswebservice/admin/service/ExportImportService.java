@@ -243,10 +243,16 @@ public class ExportImportService {
     }
 
     private void detachAgentSessionsFromRepositories() {
+        // Drop FKs that would make TRUNCATE … CASCADE of exported tables
+        // wipe preserved agent_sessions rows (repositories and session keys).
         jdbc.update("UPDATE agent_sessions SET team_repository_id = NULL "
             + "WHERE team_repository_id IS NOT NULL");
+        jdbc.update("UPDATE agent_sessions SET session_api_key_id = NULL "
+            + "WHERE session_api_key_id IS NOT NULL");
         jdbc.execute("ALTER TABLE agent_sessions DROP CONSTRAINT IF EXISTS "
             + "agent_sessions_team_repository_id_fkey");
+        jdbc.execute("ALTER TABLE agent_sessions DROP CONSTRAINT IF EXISTS "
+            + "agent_sessions_session_api_key_id_fkey");
     }
 
     private void restoreAgentSessionsRepositoryFk() {
@@ -260,6 +266,15 @@ public class ExportImportService {
                   ADD CONSTRAINT agent_sessions_team_repository_id_fkey
                   FOREIGN KEY (team_repository_id)
                   REFERENCES team_repositories(id) ON DELETE SET NULL;
+              END IF;
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                 WHERE conname = 'agent_sessions_session_api_key_id_fkey'
+              ) THEN
+                ALTER TABLE agent_sessions
+                  ADD CONSTRAINT agent_sessions_session_api_key_id_fkey
+                  FOREIGN KEY (session_api_key_id)
+                  REFERENCES api_keys(id) ON DELETE SET NULL;
               END IF;
             END $$;
             """);

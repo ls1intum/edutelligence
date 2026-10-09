@@ -14,18 +14,16 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 
 /**
- * Mints and revokes short-lived session API keys for the agent runner.
+ * Mints and revokes session API keys for the agent runner.
  *
  * <p>A minted key clones the standing agent key's team, settings, priority and
  * permissions. It cannot mint further keys ({@code parent_api_key_id} is set).
- * The key value is returned once to the caller and never written to the audit
- * log.
+ * Lifetime equals the agent session: the runner revokes the key when the
+ * session ends. The key value is returned once to the caller and never written
+ * to the audit log.
  */
 @Service
 public class SessionApiKeyService {
-
-    /** Hard ceiling on a session key's lifetime (24 hours). */
-    public static final int MAX_TTL_SECONDS = 86_400;
 
     private final ApiKeyRepository apiKeyRepository;
     private final NamedParameterJdbcTemplate jdbc;
@@ -40,15 +38,9 @@ public class SessionApiKeyService {
     }
 
     @Transactional
-    public Map<String, Object> mint(String parentKeyValue, int ttlSeconds, String name) {
+    public Map<String, Object> mint(String parentKeyValue, String name) {
         if (parentKeyValue == null || parentKeyValue.isBlank()) {
             throw new IllegalArgumentException("parent_key_value is required");
-        }
-        if (ttlSeconds <= 0) {
-            throw new IllegalArgumentException("ttl_seconds must be positive");
-        }
-        if (ttlSeconds > MAX_TTL_SECONDS) {
-            throw new IllegalArgumentException("ttl_seconds exceeds the " + MAX_TTL_SECONDS + "s cap");
         }
 
         ApiKey parent = apiKeyRepository.findByKeyValue(parentKeyValue)
@@ -56,14 +48,10 @@ public class SessionApiKeyService {
         if (!Boolean.TRUE.equals(parent.getIsActive())) {
             throw new IllegalArgumentException("parent API key is inactive");
         }
-        if (parent.getExpiresAt() != null && !parent.getExpiresAt().isAfter(Instant.now())) {
-            throw new IllegalArgumentException("parent API key is expired");
-        }
         if (parent.getParentApiKeyId() != null) {
             throw new IllegalArgumentException("a minted session key cannot mint further keys");
         }
 
-        Instant expiresAt = Instant.now().plusSeconds(ttlSeconds);
         String keyName = (name == null || name.isBlank())
             ? "agent-session-" + parent.getId() + "-" + Instant.now().getEpochSecond()
             : name.trim();
@@ -80,7 +68,6 @@ public class SessionApiKeyService {
         child.setDefaultPriority(parent.getDefaultPriority() == null ? 0 : parent.getDefaultPriority());
         child.setIsActive(true);
         child.setUseCustomPermissions(Boolean.TRUE.equals(parent.getUseCustomPermissions()));
-        child.setExpiresAt(expiresAt);
         child.setParentApiKeyId(parent.getId());
         child = apiKeyRepository.save(child);
 
@@ -90,7 +77,6 @@ public class SessionApiKeyService {
 
         Map<String, Object> after = new LinkedHashMap<>();
         after.put("parent_api_key_id", parent.getId());
-        after.put("expires_at", expiresAt.toString());
         after.put("name", keyName);
         after.put("minted_by", "agent");
         auditLog.record("api_key.agent_minted", "api_key", child.getId(), child.getTeamId(), Map.of(), after);
@@ -98,7 +84,6 @@ public class SessionApiKeyService {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("id", child.getId());
         response.put("key_value", child.getKeyValue());
-        response.put("expires_at", expiresAt.toString());
         response.put("parent_api_key_id", parent.getId());
         return response;
     }

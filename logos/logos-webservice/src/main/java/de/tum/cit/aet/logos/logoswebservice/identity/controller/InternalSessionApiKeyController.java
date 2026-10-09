@@ -17,9 +17,11 @@ import org.springframework.web.bind.annotation.RestController;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.SessionApiKeyService;
 
 /**
- * Internal mint/revoke of short-lived session API keys for the agent runner.
+ * Internal mint/revoke of session API keys for the agent runner.
  *
  * <p>Authenticated with {@code LOGOS_INTERNAL_SECRET}, not a JWT or Logos key.
+ * A minted key lives for the agent session; the runner revokes it when the
+ * session ends.
  */
 @RestController
 @RequestMapping("/internal/session_api_keys")
@@ -43,9 +45,8 @@ public class InternalSessionApiKeyController {
             return ResponseEntity.status(401).body(Map.of("error", "unauthorized"));
         }
         try {
-            int ttl = request.ttlSeconds() == null ? 0 : request.ttlSeconds();
             return ResponseEntity.ok(sessionApiKeyService.mint(
-                request.parentKeyValue(), ttl, request.name()));
+                request.parentKeyValue(), request.name()));
         } catch (IllegalArgumentException exc) {
             return ResponseEntity.badRequest().body(Map.of("error", exc.getMessage()));
         }
@@ -77,6 +78,5 @@ public class InternalSessionApiKeyController {
 
     public record MintRequest(
             @JsonProperty("parent_key_value") String parentKeyValue,
-            @JsonProperty("ttl_seconds") Integer ttlSeconds,
             @JsonProperty("name") String name) {}
 }

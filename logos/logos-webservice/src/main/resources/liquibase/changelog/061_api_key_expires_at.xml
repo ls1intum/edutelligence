@@ -5,25 +5,19 @@
     xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
         http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
-    <!-- Short-lived session API keys for the agent runner.
+    <!-- Session API keys for the agent runner.
 
-         Standing keys keep expires_at and parent_api_key_id NULL. A minted
-         session key stores its lifetime and the parent it clones; auth
-         rejects the row after expiry, and the runner revokes it when the
-         session ends. -->
-    <changeSet id="061-api-key-expires-at" author="logos">
+         Standing keys keep parent_api_key_id NULL. A minted session key
+         stores the parent it clones; the runner revokes it when the session
+         ends (and a janitor revokes orphans after a crash). -->
+    <changeSet id="061-api-key-session-parent" author="logos">
         <preConditions onFail="MARK_RAN">
-            <not><columnExists tableName="api_keys" columnName="expires_at"/></not>
+            <not><columnExists tableName="api_keys" columnName="parent_api_key_id"/></not>
         </preConditions>
         <sql><![CDATA[
             ALTER TABLE api_keys
-                ADD COLUMN expires_at TIMESTAMPTZ NULL;
-            ALTER TABLE api_keys
                 ADD COLUMN parent_api_key_id INTEGER NULL
                     REFERENCES api_keys(id) ON DELETE CASCADE;
-            CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at
-                ON api_keys (expires_at)
-                WHERE expires_at IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_api_keys_parent
                 ON api_keys (parent_api_key_id)
                 WHERE parent_api_key_id IS NOT NULL;
@@ -31,9 +25,7 @@
         <rollback>
             <sql><![CDATA[
                 DROP INDEX IF EXISTS idx_api_keys_parent;
-                DROP INDEX IF EXISTS idx_api_keys_expires_at;
                 ALTER TABLE api_keys DROP COLUMN IF EXISTS parent_api_key_id;
-                ALTER TABLE api_keys DROP COLUMN IF EXISTS expires_at;
             ]]></sql>
         </rollback>
     </changeSet>

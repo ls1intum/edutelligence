@@ -52,7 +52,7 @@ class InternalSessionApiKeyControllerTest {
     void mintRequiresInternalSecret() throws Exception {
         mvc.perform(post("/internal/session_api_keys")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"lg-seed\",\"ttl_seconds\":60}"))
+                .content("{\"parent_key_value\":\"lg-seed\"}"))
            .andExpect(status().isUnauthorized());
     }
 
@@ -67,12 +67,12 @@ class InternalSessionApiKeyControllerTest {
         MvcResult minted = mvc.perform(post("/internal/session_api_keys")
                 .header("Authorization", "Bearer test-internal-secret")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"" + parent + "\",\"ttl_seconds\":120,\"name\":\"agent-session-test\"}"))
+                .content("{\"parent_key_value\":\"" + parent + "\",\"name\":\"agent-session-test\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.id").isNumber())
            .andExpect(jsonPath("$.key_value").isString())
-           .andExpect(jsonPath("$.expires_at").isString())
            .andExpect(jsonPath("$.parent_api_key_id").isNumber())
+           .andExpect(jsonPath("$.expires_at").doesNotExist())
            .andReturn();
 
         Map<?, ?> body = mapper.readValue(minted.getResponse().getContentAsString(), Map.class);
@@ -94,6 +94,12 @@ class InternalSessionApiKeyControllerTest {
             Map.of("id", childId),
             Boolean.class);
         assertThat(active).isFalse();
+
+        Integer revokeAudit = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'api_key.agent_revoked' AND target_id = :id",
+            Map.of("id", String.valueOf(childId)),
+            Integer.class);
+        assertThat(revokeAudit).isEqualTo(1);
     }
 
     @Test
@@ -115,20 +121,6 @@ class InternalSessionApiKeyControllerTest {
     }
 
     @Test
-    void ttlAboveCapIsRejected() throws Exception {
-        String parent = jdbc.queryForObject(
-            "SELECT key_value FROM api_keys WHERE is_active = true AND parent_api_key_id IS NULL ORDER BY id LIMIT 1",
-            Map.of(),
-            String.class);
-
-        mvc.perform(post("/internal/session_api_keys")
-                .header("Authorization", "Bearer test-internal-secret")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"" + parent + "\",\"ttl_seconds\":999999}"))
-           .andExpect(status().isBadRequest());
-    }
-
-    @Test
     void mintedKeyCannotMintFurtherKeys() throws Exception {
         String parent = jdbc.queryForObject(
             "SELECT key_value FROM api_keys WHERE is_active = true AND parent_api_key_id IS NULL ORDER BY id LIMIT 1",
@@ -138,7 +130,7 @@ class InternalSessionApiKeyControllerTest {
         MvcResult minted = mvc.perform(post("/internal/session_api_keys")
                 .header("Authorization", "Bearer test-internal-secret")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"" + parent + "\",\"ttl_seconds\":60}"))
+                .content("{\"parent_key_value\":\"" + parent + "\"}"))
            .andExpect(status().isOk())
            .andReturn();
         Map<?, ?> body = mapper.readValue(minted.getResponse().getContentAsString(), Map.class);
@@ -147,7 +139,7 @@ class InternalSessionApiKeyControllerTest {
         mvc.perform(post("/internal/session_api_keys")
                 .header("Authorization", "Bearer test-internal-secret")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"" + childValue + "\",\"ttl_seconds\":60}"))
+                .content("{\"parent_key_value\":\"" + childValue + "\"}"))
            .andExpect(status().isBadRequest());
     }
 }

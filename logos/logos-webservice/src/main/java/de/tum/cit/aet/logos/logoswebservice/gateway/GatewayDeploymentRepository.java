@@ -41,7 +41,6 @@ public class GatewayDeploymentRepository {
             FROM api_keys ak
             WHERE ak.key_value = :key_value
               AND ak.is_active = true
-              AND (ak.expires_at IS NULL OR ak.expires_at > NOW())
         ),
         effective_providers AS (
             SELECT akpp.provider_id
@@ -126,7 +125,6 @@ public class GatewayDeploymentRepository {
         FROM api_keys ak
         WHERE ak.key_value = :key_value
           AND ak.is_active = true
-          AND (ak.expires_at IS NULL OR ak.expires_at > NOW())
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -185,7 +183,6 @@ public class GatewayDeploymentRepository {
                 FROM api_keys ak
                 WHERE ak.id = :api_key_id
                   AND ak.is_active = true
-                  AND (ak.expires_at IS NULL OR ak.expires_at > NOW())
             ),
             effective_providers AS (
                 SELECT akpp.provider_id

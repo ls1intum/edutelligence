@@ -1,7 +1,5 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.entity;
 
-import java.time.Instant;
-
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 import jakarta.persistence.Column;
@@ -54,9 +52,6 @@ public class ApiKey {
     @Column(nullable = false)
     private Boolean useCustomPermissions = false;
 
-    /** Null for standing keys; set for agent-minted session keys. */
-    private Instant expiresAt;
-
     /** Null for standing keys; the parent standing key a session key clones. */
     private Integer parentApiKeyId;
 
@@ -72,7 +67,6 @@ public class ApiKey {
     public Integer getDefaultPriority() { return defaultPriority; }
     public Boolean getIsActive() { return isActive; }
     public Boolean getUseCustomPermissions() { return useCustomPermissions; }
-    public Instant getExpiresAt() { return expiresAt; }
     public Integer getParentApiKeyId() { return parentApiKeyId; }
 
     public void setKeyValue(String keyValue) { this.keyValue = keyValue; }
@@ -86,6 +80,5 @@ public class ApiKey {
     public void setDefaultPriority(Integer defaultPriority) { this.defaultPriority = defaultPriority; }
     public void setIsActive(Boolean isActive) { this.isActive = isActive; }
     public void setUseCustomPermissions(Boolean useCustomPermissions) { this.useCustomPermissions = useCustomPermissions; }
-    public void setExpiresAt(Instant expiresAt) { this.expiresAt = expiresAt; }
     public void setParentApiKeyId(Integer parentApiKeyId) { this.parentApiKeyId = parentApiKeyId; }
 }

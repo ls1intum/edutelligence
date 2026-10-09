@@ -3225,14 +3225,12 @@ class DBManager:
                 text("""
                 SELECT ak.id, ak.key_value, ak.name, ak.key_type, ak.team_id, ak.user_id,
                        ak.environment, ak.log, ak.settings, ak.default_priority,
-                       ak.expires_at, ak.parent_api_key_id,
                        u.role,
                        t.priority AS team_priority
                 FROM api_keys ak
                          LEFT JOIN users u ON u.id = ak.user_id
                          LEFT JOIN teams t ON t.id = ak.team_id
                 WHERE ak.id = :api_key_id AND ak.is_active = true
-                  AND (ak.expires_at IS NULL OR ak.expires_at > NOW())
                 """),
                 {"api_key_id": int(api_key_id)},
             )
@@ -4567,8 +4565,6 @@ class DBManager:
                         ak.default_priority,
                         ak.is_active,
                         ak.use_custom_permissions,
-                        ak.expires_at,
-                        ak.parent_api_key_id,
                         u.role,
                         t.priority AS team_priority
                  FROM api_keys ak
@@ -4576,7 +4572,6 @@ class DBManager:
                           LEFT JOIN teams t ON t.id = ak.team_id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
-                   AND (ak.expires_at IS NULL OR ak.expires_at > NOW())
                  """),
             {"kv": key_value},
         ).fetchone()

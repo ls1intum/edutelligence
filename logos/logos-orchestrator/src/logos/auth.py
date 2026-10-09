@@ -1,6 +1,5 @@
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
@@ -209,29 +208,6 @@ def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
     )
 
 
-def _key_row_expired(row: Optional[Dict[str, Any]]) -> bool:
-    """True when a cached or fresh key row is past its expires_at.
-
-    The SQL lookup already filters expired rows, but a key that expires while
-    still in the auth cache must not keep working until the cache TTL elapses.
-    """
-    if row is None:
-        return True
-    expires_at = row.get("expires_at")
-    if expires_at is None:
-        return False
-    if isinstance(expires_at, str):
-        try:
-            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        except ValueError:
-            return True
-    if isinstance(expires_at, datetime):
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        return expires_at <= datetime.now(timezone.utc)
-    return True
-
-
 def _lookup_api_key_row(logos_key: str) -> Optional[Dict[str, Any]]:
     # The digest keeps the bearer value out of cache keys and diagnostics.
     cache_key = hashlib.sha256(logos_key.encode("utf-8")).hexdigest()
@@ -240,10 +216,7 @@ def _lookup_api_key_row(logos_key: str) -> Optional[Dict[str, Any]]:
         with DBManager() as db:
             return db.get_api_key_by_value(logos_key)
 
-    row = refcache.get_ref_cache().load(("api_key", cache_key), _load)
-    if _key_row_expired(row):
-        return None
-    return row
+    return refcache.get_ref_cache().load(("api_key", cache_key), _load)
 
 
 def authenticate_api_key(headers: Optional[Dict[str, str]], client_ip: Optional[str] = None) -> AuthContext:
