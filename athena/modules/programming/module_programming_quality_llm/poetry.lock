@@ -304,7 +304,7 @@ develop = true
 
 [package.dependencies]
 fastapi = "0.141.1"
-gitpython = "3.1.59"
+gitpython = "3.1.62"
 httpx = "0.28.1"
 psycopg2 = "2.9.12"
 sqlalchemy = {version = "2.0.52", extras = ["mypy"]}
@@ -814,14 +814,14 @@ smmap = ">=3.0.1,<6"
 
 [[package]]
 name = "gitpython"
-version = "3.1.59"
+version = "3.1.62"
 description = "GitPython is a Python library used to interact with Git repositories"
 optional = false
 python-versions = ">=3.7"
 groups = ["main"]
 files = [
-    {file = "gitpython-3.1.59-py3-none-any.whl", hash = "sha256:67a82f537384578643624c8b2c531938a9b82be431663e575dcf638526631d4c"},
-    {file = "gitpython-3.1.59.tar.gz", hash = "sha256:0a1475cfdc38a5bfba1a3e9a4a9da52a39749ecec322b772915c019f94e5b7e4"},
+    {file = "gitpython-3.1.62-py3-none-any.whl", hash = "sha256:7002251225e10e29d2e1f49e6532613fe5d5d9f0b6f1f02997a52b38fe56899e"},
+    {file = "gitpython-3.1.62.tar.gz", hash = "sha256:1791de66309bc0c7cfca40bf8d2e3de7ca091cbf94e6051be1ad0722c61062af"},
 ]
 
 [package.dependencies]
@@ -4180,4 +4180,4 @@ cffi = ["cffi (>=1.17,<2.0)", "cffi (>=2.0.0b)"]
 [metadata]
 lock-version = "2.1"
 python-versions = "3.11.*"
-content-hash = "ee50c6bd4520acf4446a643eda522b1b658ae6b0deb97f707bf3128e97d82d1f"
+content-hash = "c5217a08c85fd0f286a3a7ebec98ad0d3b59da600cb09240a67d0021f71e8e65"
