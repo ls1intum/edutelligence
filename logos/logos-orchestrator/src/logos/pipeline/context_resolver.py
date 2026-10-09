@@ -28,6 +28,7 @@ from logos.anthropic_compat import (
 from logos.benchmarks.guidellm_runner import credential_transport_is_secure
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.types import cloud_auth_header, cloud_protocol_headers
+from logos.decision import lane_model_override
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 from logos.pipeline.effort_normalization import normalize_reasoning_effort
 from logos.request_content import is_multipart_payload, set_payload_field
@@ -414,6 +415,10 @@ class ContextResolver:
         # OpenWebUI requires model name injection
         if context.provider_type in {"logosnode"} or "openwebui" in context.provider_name.lower():
             payload = set_payload_field(payload, "model", context.model_name)
+        # A decision-model read-out addresses the lane's LoRA module, which is
+        # served under its own name next to the catalogued model.
+        if context.provider_type == "logosnode" and lane_model_override.get():
+            payload = set_payload_field(payload, "model", lane_model_override.get())
 
         # The Qwen3.8 chat template only accepts xhigh/medium/low as reasoning
         # effort, but clients such as Claude Code send the Anthropic value
