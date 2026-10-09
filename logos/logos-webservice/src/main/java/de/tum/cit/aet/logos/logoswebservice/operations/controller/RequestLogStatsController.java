@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
 
 /**
@@ -53,7 +54,8 @@ public class RequestLogStatsController {
         try {
             return ResponseEntity.ok(
                     requestLogStatsService.getRequestLogStats(
-                        startDate, endDate, targetBuckets, userId, teamId, providerId, errorsOnly));
+                        startDate, endDate, targetBuckets, userId, teamId, providerId, errorsOnly,
+                        RequestLogService.readFeedIds(body, "model_ids")));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
