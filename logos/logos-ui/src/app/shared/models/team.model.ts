@@ -43,6 +43,8 @@ export interface TeamDetail {
   keycloak_group: string | null;
   /** When true, this team's name and traffic appear on the public stats page. */
   show_on_public_stats: boolean;
+  /** Free-text group the public stats page sorts this team into; null = uncategorized. */
+  public_category: string | null;
 }
 
 /** A Keycloak claim name a team can be linked to, as offered by the group picker. */
@@ -150,6 +152,8 @@ export interface TeamLimitsPayload {
   default_local_rpm_limit?: number | null;
   default_local_tpm_limit?: number | null;
   show_on_public_stats?: boolean;
+  /** Blank clears the category. */
+  public_category?: string;
 }
 
 /** Per-provider monthly budget override (null = unlimited / sponsored). */

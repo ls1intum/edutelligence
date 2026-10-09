@@ -34,6 +34,9 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
 @TestPropertySource(properties = {
     "spring.liquibase.enabled=true",
     "spring.liquibase.change-log=classpath:liquibase/changelog/master.xml",
+    // No scheduled rollup pass: the seed reads usage from log_entry and must
+    // not have its rows rolled up halfway through a test.
+    "logos.stats.rollup.refresh-cron=-",
     "logos.auth.roles.logos-admin=itg-admin",
     "logos.auth.roles.app-admin=chair-member",
     "logos.auth.sync-debounce-minutes=5"
@@ -75,6 +78,88 @@ class PublicStatsControllerTest {
            .andExpect(jsonPath("$.local_cloud_requests.local").value(1))
            .andExpect(jsonPath("$.local_cloud_requests.cloud").value(2))
            .andExpect(jsonPath("$.local_cloud_requests.unknown").value(0));
+    }
+
+    @Test
+    @Sql(scripts = "/sql/seed-public-stats.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(scripts = "/sql/cleanup-public-stats.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    void usageFiguresCountSuccessfulTokensOnOptedInTeamsOnly() throws Exception {
+        // Successes 9101 (100, cloud), 9102 (50, local) and 9107 (30, cloud)
+        // are in the window. The error row's 1000 tokens and team 2002's
+        // traffic must not show up anywhere.
+        mvc.perform(get("/public/stats"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.tokens").value(180))
+           .andExpect(jsonPath("$.local_cloud_tokens.local").value(50))
+           .andExpect(jsonPath("$.local_cloud_tokens.cloud").value(130))
+           .andExpect(jsonPath("$.active_persons").value(1))
+           .andExpect(jsonPath("$.active_teams").value(1))
+           .andExpect(jsonPath("$.categories.length()").value(1))
+           .andExpect(jsonPath("$.categories[0].category").value("Research"))
+           .andExpect(jsonPath("$.categories[0].teams").value(1))
+           .andExpect(jsonPath("$.categories[0].requests").value(3))
+           .andExpect(jsonPath("$.categories[0].tokens").value(180))
+           .andExpect(jsonPath("$.models.all.length()").value(1))
+           .andExpect(jsonPath("$.models.all[0].model").value("gpt-4"))
+           .andExpect(jsonPath("$.models.all[0].requests").value(3))
+           .andExpect(jsonPath("$.models.local[0].requests").value(1))
+           .andExpect(jsonPath("$.models.cloud[0].requests").value(2))
+           // One active person is below the publishing threshold.
+           .andExpect(jsonPath("$.usage_per_person.count").value(1))
+           .andExpect(jsonPath("$.usage_per_person.suppressed").value(true))
+           .andExpect(jsonPath("$.usage_per_person.requests").doesNotExist())
+           .andExpect(jsonPath("$.usage_per_team.count").value(1))
+           .andExpect(jsonPath("$.usage_per_team.requests.median").value(3.0))
+           .andExpect(jsonPath("$.usage_per_team.tokens.median").value(180.0))
+           // The monthly series starts with the month of the 40-day-old success.
+           .andExpect(jsonPath("$.monthly[0].requests").value(1))
+           .andExpect(jsonPath("$.monthly[0].tokens").value(7))
+           .andExpect(jsonPath("$.monthly[0].persons").value(1))
+           .andExpect(jsonPath("$.monthly[0].students").value(1))
+           // Everything else is in the current, still incomplete week.
+           .andExpect(jsonPath("$.regular_activity.persons_any").value(0))
+           .andExpect(jsonPath("$.agent.sessions").value(0));
+    }
+
+    @Test
+    @Sql(scripts = "/sql/seed-public-stats.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(scripts = "/sql/cleanup-public-stats.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    void adminsSetAndClearAPublicCategory() throws Exception {
+        mvc.perform(patch("/teams/2002")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"public_category\":\"  Teaching  \"}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(get("/teams/public-categories").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(2))
+           .andExpect(jsonPath("$[0]").value("Research"))
+           .andExpect(jsonPath("$[1]").value("Teaching"));
+
+        mvc.perform(patch("/teams/2002")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"public_category\":\"\"}"))
+           .andExpect(status().isOk());
+
+        mvc.perform(get("/teams/public-categories").with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(1));
+
+        mvc.perform(patch("/teams/2002")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"public_category\":\"" + "x".repeat(65) + "\"}"))
+           .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void developersCannotListPublicCategories() throws Exception {
+        mvc.perform(get("/teams/public-categories").with(TestJwt.testUser()))
+           .andExpect(status().isForbidden());
     }
 
     @Test

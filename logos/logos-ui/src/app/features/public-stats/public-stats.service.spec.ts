@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { PublicStatsService, PublicStats } from './public-stats.service';
+import { usageFields } from './public-stats.testing';
 
 function payload(overrides: Partial<PublicStats> = {}): PublicStats {
   return {
@@ -13,6 +14,7 @@ function payload(overrides: Partial<PublicStats> = {}): PublicStats {
     requests_per_team: [{ team_id: 1, team_name: 'Team', requests: 5 }],
     requests_by_key_type: { developer: 3, application: 2, service: 0 },
     local_cloud_requests: { local: 1, cloud: 4 },
+    ...usageFields(),
     ...overrides,
   };
 }

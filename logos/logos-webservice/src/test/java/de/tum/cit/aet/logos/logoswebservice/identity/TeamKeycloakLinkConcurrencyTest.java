@@ -78,7 +78,7 @@ class TeamKeycloakLinkConcurrencyTest {
                 teamService.updateTeamKeycloakGroup(TEAM_ID, null));
             CompletableFuture<Void> limits = run(start, () ->
                 teamService.updateTeamLimits(TEAM_ID, new UpdateTeamRequestDTO(
-                    42, null, null, null, null, null, null)));
+                    42, null, null, null, null, null, null, null)));
             CompletableFuture.allOf(unlink, limits).join();
 
             assertThat(storedGroup())

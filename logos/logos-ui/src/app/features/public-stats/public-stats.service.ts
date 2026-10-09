@@ -54,6 +54,102 @@ export interface PublicStats {
     cloud: number;
     unknown?: number;
   };
+  /** Tokens of the successful requests above. */
+  tokens: number;
+  local_cloud_tokens: {
+    local: number;
+    cloud: number;
+    unknown?: number;
+  };
+  /** Distinct people (students and staff) with a successful request. */
+  active_persons: number;
+  /** Published teams with a successful request. */
+  active_teams: number;
+  usage_per_person: PublicUsageDistribution;
+  usage_per_team: PublicUsageDistribution;
+  categories: PublicCategoryStats[];
+  models: {
+    all: PublicModelStats[];
+    local: PublicModelStats[];
+    cloud: PublicModelStats[];
+  };
+  /** Independent of the window: the last complete weeks. */
+  regular_activity: PublicRegularActivity;
+  /** Independent of the window: every month since the first request. */
+  monthly: PublicMonthStats[];
+  agent: PublicAgentStats;
+}
+
+/** Median and 90th percentile of one figure across active people or teams. */
+export interface PublicPercentiles {
+  median: number;
+  p90: number;
+}
+
+/**
+ * Requests, tokens and active days per active person (or team) in the window.
+ * The figures are null while too few are active to publish them.
+ */
+export interface PublicUsageDistribution {
+  count: number;
+  suppressed: boolean;
+  requests: PublicPercentiles | null;
+  tokens: PublicPercentiles | null;
+  active_days: PublicPercentiles | null;
+}
+
+/** One team category (free text set in team settings; null = uncategorized). */
+export interface PublicCategoryStats {
+  category: string | null;
+  teams: number;
+  requests: number;
+  tokens: number;
+}
+
+/** One model's successful requests and tokens; `other` sums the long tail. */
+export interface PublicModelStats {
+  model: string | null;
+  requests: number;
+  tokens: number;
+  other: boolean;
+}
+
+/** People and teams active in most of the last complete weeks. */
+export interface PublicRegularActivity {
+  weeks: number;
+  min_weeks: number;
+  from: string;
+  to: string;
+  persons_any: number;
+  persons_regular: number;
+  persons_every_week: number;
+  teams_any: number;
+  teams_regular: number;
+  teams_every_week: number;
+}
+
+/** One calendar month (UTC) of the all-time series. */
+export interface PublicMonthStats {
+  /** `YYYY-MM` */
+  month: string;
+  teams: number;
+  persons: number;
+  students: number;
+  requests: number;
+  local_requests: number;
+  tokens: number;
+  agent_sessions: number;
+  agent_users: number;
+}
+
+/** Logos Agent sessions in the window. */
+export interface PublicAgentStats {
+  sessions: number;
+  users: number;
+  succeeded: number;
+  pull_requests: number;
+  /** `YYYY-MM-DD` of the first session ever; null before the first one. */
+  first_session_day: string | null;
 }
 
 /**

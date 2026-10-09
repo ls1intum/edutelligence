@@ -18,6 +18,30 @@
       />
       <span>Show this team on the public stats page</span>
     </label>
+
+    <div class="settings-field settings-field--spaced">
+      <label class="field-label" for="s-public-category">Category</label>
+      <input
+        id="s-public-category"
+        class="field-input"
+        type="text"
+        list="s-public-category-options"
+        maxlength="64"
+        placeholder="e.g. Research, leave blank for uncategorized"
+        [value]="publicCategory()"
+        (input)="publicCategory.set($any($event.target).value)"
+        [disabled]="!canEdit || saveLoading()"
+        autocomplete="off"
+      />
+      <datalist id="s-public-category-options">
+        @for (category of publicCategoryOptions(); track category) {
+          <option [value]="category"></option>
+        }
+      </datalist>
+      <p class="settings-hint settings-hint--field">
+        The public stats page groups teams by this label. Pick one other teams use, or type a new one.
+      </p>
+    </div>
   </div>
 
   <p class="section-label">OVERALL TEAM LIMITS</p>

@@ -1,4 +1,11 @@
-import { PublicStats, PublicStatsDays, PublicTeamStats } from './public-stats.service';
+import {
+  PublicCategoryStats,
+  PublicModelStats,
+  PublicMonthStats,
+  PublicStats,
+  PublicStatsDays,
+  PublicTeamStats,
+} from './public-stats.service';
 
 /** One row of a public-stats chart, as the page holds it. */
 export interface ChartSlice {
@@ -191,4 +198,113 @@ export function formatCount(value: number): string {
 
 export function formatAverage(value: number): string {
   return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/** Large counts as "12.1M" / "3.4B"; small ones in full. */
+export function formatCompact(value: number): string {
+  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+}
+
+function percentOf(value: number, total: number): number {
+  return total === 0 ? 0 : Math.round((value / total) * 100);
+}
+
+/** Tokens by serving lane, in the same order and colors as the request split. */
+export function laneTokenSlices(stats: PublicStats): ChartSlice[] {
+  const lc = stats.local_cloud_tokens;
+  const slices: ChartSlice[] = [
+    { key: 'local', label: 'Local', value: lc.local ?? 0, color: 'var(--series-1)', hidden: false },
+    { key: 'cloud', label: 'Cloud', value: lc.cloud ?? 0, color: 'var(--series-2)', hidden: false },
+  ];
+  if ((lc.unknown ?? 0) > 0) {
+    slices.push({ key: 'unknown', label: 'Unknown lane', value: lc.unknown!, color: OTHER_SLICE_COLOR, hidden: false });
+  }
+  return slices;
+}
+
+/**
+ * Team categories by successful requests. Categories are whatever admins
+ * typed in team settings; teams without one form "Uncategorized", which like
+ * the overflow takes the neutral color.
+ */
+export function categorySlices(categories: PublicCategoryStats[]): ChartSlice[] {
+  const named = categories.filter((c) => c.category != null && c.requests > 0);
+  const uncategorized = categories.filter((c) => c.category == null && c.requests > 0);
+  const caption = (teams: number, tokens: number) =>
+    `${teams} ${teams === 1 ? 'team' : 'teams'} · ${formatCompact(tokens)} tokens`;
+
+  const slices: ChartSlice[] = named.slice(0, MAX_NAMED_TEAM_SLICES).map((c, index) => ({
+    key: `category:${c.category}`,
+    label: c.category!,
+    caption: caption(c.teams, c.tokens),
+    value: c.requests,
+    color: `var(--series-${index + 1})`,
+    hidden: false,
+  }));
+  const rest = [...named.slice(MAX_NAMED_TEAM_SLICES), ...uncategorized];
+  if (rest.length > 0) {
+    const label = named.length > MAX_NAMED_TEAM_SLICES ? 'Other categories' : 'Uncategorized';
+    slices.push({
+      key: 'category:other',
+      label,
+      caption: caption(
+        rest.reduce((sum, c) => sum + c.teams, 0),
+        rest.reduce((sum, c) => sum + c.tokens, 0)
+      ),
+      value: rest.reduce((sum, c) => sum + c.requests, 0),
+      color: OTHER_SLICE_COLOR,
+      hidden: false,
+    });
+  }
+  return slices;
+}
+
+/**
+ * Models by successful requests, as the server ranked them. The caption
+ * carries the token share, which for chat and embedding models can differ a
+ * lot from the request share.
+ */
+export function modelSlices(models: PublicModelStats[]): ChartSlice[] {
+  const totalTokens = models.reduce((sum, m) => sum + m.tokens, 0);
+  return models
+    .filter((m) => m.requests > 0)
+    .map((m, index) => ({
+      key: m.other ? 'model:other' : `model:${m.model}`,
+      label: m.other ? 'Other models' : (m.model ?? 'Unknown model'),
+      caption: `${percentOf(m.tokens, totalTokens)}% of tokens`,
+      value: m.requests,
+      color: m.other ? OTHER_SLICE_COLOR : `var(--series-${index + 1})`,
+      hidden: false,
+    }));
+}
+
+/** What the growth chart can plot per month. */
+export type TrendMetric = 'persons' | 'teams' | 'requests' | 'tokens' | 'agent_sessions';
+
+export const TREND_METRICS: { value: TrendMetric; label: string }[] = [
+  { value: 'persons', label: 'Active people' },
+  { value: 'teams', label: 'Active teams' },
+  { value: 'requests', label: 'Requests' },
+  { value: 'tokens', label: 'Tokens' },
+  { value: 'agent_sessions', label: 'Logos Agent sessions' },
+];
+
+/** One bar of the growth chart. */
+export interface TrendPoint {
+  key: string;
+  label: string;
+  value: number;
+}
+
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "2026-04" reads as "Apr 2026". */
+export function monthLabel(month: string): string {
+  const [year, m] = month.split('-');
+  const index = Number(m) - 1;
+  return index >= 0 && index < 12 ? `${MONTH_NAMES[index]} ${year}` : month;
+}
+
+export function trendPoints(months: PublicMonthStats[], metric: TrendMetric): TrendPoint[] {
+  return months.map((m) => ({ key: m.month, label: monthLabel(m.month), value: m[metric] }));
 }
