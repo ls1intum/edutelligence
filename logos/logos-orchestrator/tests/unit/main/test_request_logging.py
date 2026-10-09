@@ -546,11 +546,22 @@ async def test_logosnode_sync_stamps_the_response_before_post_provider_processin
 
 
 @pytest.mark.asyncio
-async def test_logosnode_sync_error_records_the_upstream_message(monkeypatch):
+@pytest.mark.parametrize(
+    ("upstream_body", "upstream_message"),
+    [
+        (
+            {"error": {"message": "This model's maximum context length is 40960 tokens.", "code": 400}},
+            "This model's maximum context length is 40960 tokens.",
+        ),
+        ("Bad Request: unsupported input", "Bad Request: unsupported input"),
+        ({"error": {"message": "invalid timeout value", "code": 400}}, "invalid timeout value"),
+    ],
+    ids=["openai-shape", "plain-text", "message-names-timeout"],
+)
+async def test_logosnode_sync_error_records_the_upstream_message(monkeypatch, upstream_body, upstream_message):
     """A worker that answers with an error status but no ``error`` field must
-    still record the upstream's own message, not only the status code."""
-    upstream_message = "This model's maximum context length is 40960 tokens."
-    upstream_body = {"error": {"message": upstream_message, "type": "BadRequestError", "code": 400}}
+    still record the upstream's own message, not only the status code. Text in
+    that message must not make the HTTP error settle as a timeout."""
 
     async def fake_send_command(**kwargs):  # noqa: ARG001
         return {"status_code": 400, "body": upstream_body, "headers": {}}

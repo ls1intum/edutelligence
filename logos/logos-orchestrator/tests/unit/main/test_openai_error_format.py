@@ -283,9 +283,17 @@ class TestUpstreamErrorMessage:
     def test_plain_string_error(self):
         assert upstream_error_message({"error": " lane offline "}) == "lane offline"
 
+    def test_plain_text_body(self):
+        assert upstream_error_message("Internal Server Error\n") == "Internal Server Error"
+
+    def test_long_message_is_trimmed(self):
+        message = upstream_error_message("x" * 600)
+        assert len(message) == 500
+        assert message.endswith("...")
+
     @pytest.mark.parametrize(
         "body",
-        [None, "text", b"bytes", {}, {"error": ""}, {"error": {"type": "x"}}, {"response": "x"}],
+        [None, " ", b"bytes", {}, {"error": ""}, {"error": {"type": "x"}}, {"response": "x"}],
     )
     def test_no_message(self, body):
         assert upstream_error_message(body) is None

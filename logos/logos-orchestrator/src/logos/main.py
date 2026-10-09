@@ -2462,6 +2462,8 @@ async def _sync_response(
         # at dispatch keeps that logos-side post-response work out of the
         # provider's run figure.
         response_at = None
+        # (status description, the same with the upstream's message appended)
+        upstream_error_detail = None
 
         if context.provider_type == "logosnode" and context.lane_id:
             sync_payload = force_non_streaming_payload(prepared_payload)
@@ -2520,14 +2522,16 @@ async def _sync_response(
                         and is_multipart_payload(sync_payload)
                     )
                     rpc_raw_body = response_payload.encode("utf-8") if raw_audio_response else None
-                if not isinstance(response_payload, dict) and not raw_audio_response:
-                    response_payload = {"response": response_payload}
                 rpc_error = str(rpc_result.get("error") or "").strip() or None
                 if status_override >= 400 and rpc_error is None:
                     rpc_error = f"logosnode infer returned HTTP {status_override}"
                     upstream_message = upstream_error_message(response_payload)
                     if upstream_message:
-                        rpc_error = f"{rpc_error}: {upstream_message}"
+                        upstream_error_detail = (rpc_error, f"{rpc_error}: {upstream_message}")
+                if not isinstance(response_payload, dict) and not raw_audio_response:
+                    # A plain-text error body is the error message itself.
+                    wrapper_key = "error" if status_override >= 400 else "response"
+                    response_payload = {wrapper_key: response_payload}
                 exec_result = ExecutionResult(
                     success=status_override < 400,
                     response=response_payload,
@@ -2629,6 +2633,10 @@ async def _sync_response(
                     error_message = exec_result.error
                     if status_override is None:
                         status_override = 504
+            # Appended after the timeout check, so an upstream message that
+            # mentions a timeout cannot turn an HTTP error into a timeout.
+            if upstream_error_detail and exec_result.error == upstream_error_detail[0]:
+                exec_result.error = upstream_error_detail[1]
 
         if exec_result.success and context.provider_type == "cloud":
             response_payload, _ = _response_with_cost(
