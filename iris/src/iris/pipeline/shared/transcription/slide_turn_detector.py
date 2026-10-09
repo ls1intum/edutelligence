@@ -15,7 +15,7 @@ import base64
 import re
 from collections import OrderedDict
 from threading import Event
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import cv2
 
@@ -159,6 +159,9 @@ class SlideTurnDetector:
         self.on_progress = on_progress
         self.cancel_event = cancel_event
         self.labels: List[Optional[int]] = [None] * len(segments)
+        # Segments already sent to the vision model, whether it answered or not; counted as progress
+        # so a run of failed vision calls still advances the reported counter
+        self._checked: Set[int] = set()
         self.frame_cache = _FrameCache(
             video_path,
             segments,
@@ -222,6 +225,7 @@ class SlideTurnDetector:
 
     def _query_label(self, idx: int) -> Optional[int]:
         raise_if_cancelled(self.cancel_event, self.job_id, "before slide vision query")
+        self._checked.add(idx)
         frame_b64 = self.frame_cache.get(idx)
         if frame_b64 is None:
             return None
@@ -330,10 +334,14 @@ class SlideTurnDetector:
 
     def _log_progress(self, context: str) -> None:
         total = len(self.labels)
-        filled = sum(1 for lbl in self.labels if lbl is not None)
+        filled = sum(
+            1
+            for i, lbl in enumerate(self.labels)
+            if lbl is not None or i in self._checked
+        )
         percent = (filled / total * 100) if total else 100.0
         logger.debug(
-            "[Lecture %s] %s | labeled %d/%d (%.1f%%)",
+            "[Lecture %s] %s | checked %d/%d (%.1f%%)",
             self.job_id,
             context,
             filled,
