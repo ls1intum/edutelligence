@@ -66,12 +66,14 @@ export const STATUS_COLOR: Record<'success' | 'error' | 'timeout' | 'pending', s
 };
 
 /**
- * Chart role colors for different data series types (theme-reactive). Total
- * keeps the brand violet; local and cloud get two clearly different hues so
- * the two lanes never rely on lightness alone.
+ * Chart role colors for different data series types (theme-reactive). A
+ * two-part split like local vs. cloud stays in the brand violet, as on the
+ * public stats page: a strong step for local, a light one for cloud. Total
+ * takes a third step so the KPI cards stay apart; categorical hues are only
+ * for charts with more than two series.
  */
 export const CHART_ROLE = {
-  total: cssVar('--color-primary-600'),
-  cloud: cssVar('--color-series-1'),
-  local: cssVar('--color-series-3'),
+  total: cssVar('--color-primary-800'),
+  cloud: cssVar('--color-primary-200'),
+  local: cssVar('--color-primary-600'),
 };
