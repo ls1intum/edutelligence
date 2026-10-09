@@ -97,6 +97,24 @@ class InternalSessionApiKeyControllerTest {
     }
 
     @Test
+    void standingKeyCannotBeRevokedThroughTheRunnerEndpoint() throws Exception {
+        Integer standingId = jdbc.queryForObject(
+            "SELECT id FROM api_keys WHERE is_active = true AND parent_api_key_id IS NULL ORDER BY id LIMIT 1",
+            Map.of(),
+            Integer.class);
+
+        mvc.perform(post("/internal/session_api_keys/" + standingId + "/revoke")
+                .header("Authorization", "Bearer test-internal-secret"))
+           .andExpect(status().isNotFound());
+
+        Boolean active = jdbc.queryForObject(
+            "SELECT is_active FROM api_keys WHERE id = :id",
+            Map.of("id", standingId),
+            Boolean.class);
+        assertThat(active).isTrue();
+    }
+
+    @Test
     void ttlAboveCapIsRejected() throws Exception {
         String parent = jdbc.queryForObject(
             "SELECT key_value FROM api_keys WHERE is_active = true AND parent_api_key_id IS NULL ORDER BY id LIMIT 1",

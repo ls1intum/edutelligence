@@ -107,6 +107,11 @@ public class SessionApiKeyService {
     public void revoke(int keyId) {
         ApiKey key = apiKeyRepository.findById(keyId)
             .orElseThrow(() -> new IllegalArgumentException("API key not found: " + keyId));
+        // Only minted session keys may be revoked here: a standing key must
+        // never be switched off through the internal runner endpoint.
+        if (key.getParentApiKeyId() == null) {
+            throw new IllegalArgumentException("API key not found: " + keyId);
+        }
         if (!Boolean.TRUE.equals(key.getIsActive())) {
             return;
         }
