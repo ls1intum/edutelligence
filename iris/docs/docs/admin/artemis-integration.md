@@ -70,6 +70,7 @@ Key network requirements:
 
 - **Artemis to Iris**: Artemis must be able to reach Iris on the configured `iris.url`. Default port is `8000`.
 - **Iris to Artemis**: Iris sends webhook callbacks to the `artemis_base_url` provided in each pipeline request. Ensure Iris can reach Artemis's API.
+- **Lecture ingestion**: Iris claims lecture ingestion jobs from every Artemis that health-checks it; Artemis does not send them. Iris learns the Artemis URL from the `X-Artemis-Base-Url` header of the health check, so it must be able to reach that URL. Settings: `ingestion_worker` in the Iris configuration.
 - **Iris to LLM providers**: Iris must have outbound HTTPS access to your configured LLM endpoints (e.g., `api.openai.com`, Azure endpoints, or local Ollama).
 - **Iris to Weaviate**: Internal connection, typically on the same Docker network.
 

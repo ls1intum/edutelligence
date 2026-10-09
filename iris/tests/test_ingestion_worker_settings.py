@@ -62,3 +62,10 @@ def test_heartbeat_timeout_seconds_accepts_the_upper_bound():
         IngestionWorkerSettings(heartbeat_timeout_seconds=30).heartbeat_timeout_seconds
         == 30
     )
+
+
+def test_a_configuration_that_still_sets_enabled_is_accepted():
+    # The switch is gone: the worker always runs, since Artemis no longer pushes lecture
+    # ingestion jobs. Existing configuration files that still set it keep loading.
+    settings = IngestionWorkerSettings.model_validate({"enabled": False})
+    assert not hasattr(settings, "enabled")
