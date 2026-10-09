@@ -127,7 +127,7 @@ export function windowLabel(days: PublicStatsDays | string): string {
   return `last ${days} days`;
 }
 
-/** Successful requests by key type as violet steps of one whole: members' personal keys first. */
+/** Successful requests by key type as parts of one whole: members' personal keys first. */
 export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
   const kt = stats.requests_by_key_type;
   const slices: ChartSlice[] = [
@@ -173,7 +173,7 @@ export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
   return slices;
 }
 
-/** Local vs. cloud as violet steps of one whole: the self-hosted lane first. */
+/** Local vs. cloud as parts of one whole: the self-hosted lane first. */
 export function laneSlices(stats: PublicStats): ChartSlice[] {
   const lc = stats.local_cloud_requests;
   const slices: ChartSlice[] = [

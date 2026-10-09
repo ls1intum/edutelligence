@@ -5,26 +5,28 @@
 // * --series-*: identity of many nominal things (teams, models, categories).
 //   A muted version of the validated categorical palette: same hues in the
 //   same order (the order is what keeps neighbors apart for color-blind
-//   readers), OKLCH chroma capped at 0.13 so the page reads calm. Validated
-//   per theme against the shell surface; never cycled past slot 8, and the
-//   overflow "Other" slice takes no hue at all.
+//   readers), OKLCH chroma capped at 0.16. That keeps every adjacent pair at
+//   ΔE >= 8 under protanopia and deuteranopia in both themes, against the
+//   shell surface. Never cycled past slot 8; the overflow "Other" slice takes
+//   no hue at all.
 // * --duo-*: two or three parts of one whole (local vs. cloud, key types)
-//   and single-series charts (growth), in steps of the brand violet. The
-//   primary scale reverses in dark mode, so these stay strong-on-surface in
-//   both themes without their own dark overrides.
+//   and single-series charts (growth). Brand violet for the first part, a
+//   teal for the second so neighbors never rely on lightness alone, and a
+//   lighter violet for the third. Fixed per theme: the reversed primary
+//   scale puts its light step outside the dark-mode lightness band.
 .public-stats-page {
-  --series-1: #407ac4;
-  --series-2: #d87754;
-  --series-3: #32ad7c;
-  --series-4: #e2a648;
-  --series-5: #e37fa4;
-  --series-6: #377e33;
-  --series-7: #4a4294;
-  --series-8: #c9645e;
+  --series-1: #2c78d5;
+  --series-2: #e56e40;
+  --series-3: #1baf7a;
+  --series-4: #eda108;
+  --series-5: #e87ba4;
+  --series-6: #21811d;
+  --series-7: #4a3ca3;
+  --series-8: #d65854;
   --series-other: #898781;
-  --duo-1: rgb(var(--color-primary-600));
-  --duo-2: rgb(var(--color-primary-200));
-  --duo-3: rgb(var(--color-primary-400));
+  --duo-1: #6d28d9;
+  --duo-2: #1baf7a;
+  --duo-3: #a78bfa;
 
   position: relative;
   min-height: 100vh;
@@ -38,14 +40,17 @@
 }
 
 :host-context([data-theme='dark']) .public-stats-page {
-  --series-1: #4d88d3;
-  --series-2: #c76846;
+  --series-1: #3a87e4;
+  --series-2: #d45e31;
   --series-3: #199e70;
-  --series-4: #bf8222;
-  --series-5: #c56282;
-  --series-6: #377e33;
-  --series-7: #9087e1;
-  --series-8: #d97270;
+  --series-4: #c98500;
+  --series-5: #d15681;
+  --series-6: #21811d;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --duo-1: #8b5cf6;
+  --duo-2: #199e70;
+  --duo-3: #6d28d9;
 }
 
 .page-header {
