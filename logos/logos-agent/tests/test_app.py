@@ -243,11 +243,16 @@ class TestTheEndpointsThatCombineModules:
                 detail="one local model",
             )
 
-        async def reading(timeout_s: float = 5.0, lane=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, *, discount_own=True):
             assert lane == frozenset({("15", "97")}), "the reading must be taken on the runner's own lane"
-            return capacity.Reading(load=0.1, busy_slots=2, total_slots=20, queue_total=0, ok=True)
+            assert discount_own is False
+            return capacity.Reading(load=0.1, busy_slots=2, total_slots=20, queue_total=0, ok=True, own_slots=1)
+
+        async def key_id(_key):
+            return 7
 
         monkeypatch.setattr(db, "count_sessions_by_status", counts)
+        monkeypatch.setattr(db, "agent_key_id", key_id)
         monkeypatch.setattr(model_policy, "refresh", policy)
         monkeypatch.setattr(model_policy, "_current", await policy())
         monkeypatch.setattr(capacity, "read_load", reading)
@@ -256,6 +261,7 @@ class TestTheEndpointsThatCombineModules:
 
         assert state.sessions_running == 1 and state.sessions_queued == 2
         assert state.may_start is True
+        assert state.own_slots == 1 and state.other_slots == 1
 
     async def test_triggers_answers_with_the_quota_in_force(self, monkeypatch):
         from app import controls, db
