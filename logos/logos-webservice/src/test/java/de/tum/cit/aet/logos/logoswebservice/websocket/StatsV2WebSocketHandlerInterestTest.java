@@ -61,7 +61,7 @@ class StatsV2WebSocketHandlerInterestTest {
         vramService = mock(VramService.class);
         requestLogService = mock(RequestLogService.class);
         statsService = mock(RequestLogStatsService.class);
-        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean()))
+        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn(Map.of("bucketSeconds", 60));
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));
@@ -131,7 +131,7 @@ class StatsV2WebSocketHandlerInterestTest {
 
         assertThat(pushedTypes()).contains("vram_init");
         assertThat(pushedTypes()).doesNotContain("timeline_init", "requests", "stats");
-        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean());
+        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -194,6 +194,6 @@ class StatsV2WebSocketHandlerInterestTest {
 
         assertThat(pushedTypes()).contains("vram_init");
         assertThat(pushedTypes()).doesNotContain("timeline_init", "requests", "stats");
-        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean());
+        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any());
     }
 }
