@@ -512,8 +512,9 @@ for entry in data.get("data", []):
 # The model an unpinned session starts on, as the id Logos advertises to Claude
 # Code (the Anthropic listing, where every id carries the "claude-" prefix Claude
 # Code needs to show it). LOGOS_DEFAULT_MODEL wins when Logos lists it, by either
-# spelling; otherwise the first model a coding session can talk to — embedding,
-# reranking and speech models are skipped. Prints nothing when Logos lists none.
+# spelling (the exact one first); otherwise the first model a coding session can
+# talk to — embedding, reranking, speech and image models are skipped. Prints
+# nothing when Logos lists none.
 #
 # Claude Code otherwise starts on the model saved in ~/.claude/settings.json — an
 # Anthropic id such as claude-opus-5-5 — and keeps using that id for the requests it
@@ -533,16 +534,20 @@ except Exception:
 ids = [str(m["id"]) for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
 
 
-def plain(model_id):
-    return model_id[len("claude-"):] if model_id.startswith("claude-") else model_id
-
-
 if wanted:
-    for model_id in ids:
-        if wanted in (model_id, plain(model_id)):
-            print(model_id)
+    # An id exactly as written wins over the claude- form anywhere in the
+    # listing: Logos lists "foo" unprefixed when a model "claude-foo" exists,
+    # and that listing may well put claude-foo first.
+    for candidate in (wanted, "claude-" + wanted):
+        if candidate in ids:
+            print(candidate)
             sys.exit(0)
-not_chat = re.compile(r"embed|rerank|whisper|tts|transcri|speech", re.IGNORECASE)
+# Models that cannot answer a Messages request: embeddings, rerankers, speech
+# and image generation. Logos keeps no modality per model, so the name decides.
+not_chat = re.compile(
+    r"embed|rerank|whisper|tts|transcri|speech|dall-e|image|diffusion|sdxl|flux|imagen",
+    re.IGNORECASE,
+)
 for model_id in ids:
     if not not_chat.search(model_id):
         print(model_id)

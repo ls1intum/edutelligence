@@ -433,8 +433,9 @@ try {
 # -- The model an unpinned session starts on --------------------------------------
 # The id Logos advertises to Claude Code (the Anthropic listing, where every id
 # carries the "claude-" prefix Claude Code needs to show it). LOGOS_DEFAULT_MODEL
-# wins when Logos lists it, by either spelling; otherwise the first model a coding
-# session can talk to - embedding, reranking and speech models are skipped.
+# wins when Logos lists it, by either spelling (the exact one first); otherwise the
+# first model a coding session can talk to - embedding, reranking, speech and image
+# models are skipped.
 #
 # Claude Code otherwise starts on the model saved in %USERPROFILE%\.claude\settings.json
 # - an Anthropic id such as claude-opus-5-5 - and keeps using that id for the requests
@@ -447,13 +448,17 @@ if (-not $HasPinnedModel) {
             -Headers @{ Authorization = "Bearer $LogosKey"; 'anthropic-version' = '2023-06-01' }
         $anthropicIds = @($anthropicListing.data | ForEach-Object { "$($_.id)" } | Where-Object { $_ })
         if ($LogosDefaultModel) {
-            $SessionDefaultModel = $anthropicIds |
-                Where-Object { $_ -eq $LogosDefaultModel -or $_ -eq "claude-$LogosDefaultModel" } |
-                Select-Object -First 1
+            # The id exactly as written wins over the claude- form anywhere in the
+            # listing: Logos lists "foo" unprefixed when a model "claude-foo" exists.
+            foreach ($candidate in @($LogosDefaultModel, "claude-$LogosDefaultModel")) {
+                if ($anthropicIds -ccontains $candidate) { $SessionDefaultModel = $candidate; break }
+            }
         }
         if (-not $SessionDefaultModel) {
+            # Embeddings, rerankers, speech and image generation cannot answer a
+            # Messages request; Logos keeps no modality per model, so the name decides.
             $SessionDefaultModel = $anthropicIds |
-                Where-Object { $_ -notmatch 'embed|rerank|whisper|tts|transcri|speech' } |
+                Where-Object { $_ -notmatch 'embed|rerank|whisper|tts|transcri|speech|dall-e|image|diffusion|sdxl|flux|imagen' } |
                 Select-Object -First 1
         }
         if (-not $SessionDefaultModel) { $SessionDefaultModel = '' }

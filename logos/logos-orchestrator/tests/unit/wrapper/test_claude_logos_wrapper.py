@@ -58,8 +58,11 @@ def _model_entry(name: str, window: Optional[int]) -> Dict[str, Any]:
 class _StubGateway:
     """A Logos-shaped gateway: the model list, warmup, and Messages."""
 
-    def __init__(self, models: list[Dict[str, Any]]):
+    def __init__(self, models: list[Dict[str, Any]], anthropic_ids: Optional[list[str]] = None):
         self.models = models
+        # The ids of the Anthropic-shaped listing; by default claude-<id> for
+        # every model, as Logos advertises them.
+        self.anthropic_ids = anthropic_ids
         self.requests: list[Dict[str, Any]] = []
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
@@ -102,9 +105,8 @@ class _StubGateway:
                     if self.headers.get("anthropic-version"):
                         # The Anthropic shape Claude Code reads: every id carries
                         # the claude- prefix it needs to show a gateway model.
-                        data = [
-                            {"type": "model", "id": f"claude-{m['id']}", "display_name": m["id"]} for m in stub.models
-                        ]
+                        ids = stub.anthropic_ids or [f"claude-{m['id']}" for m in stub.models]
+                        data = [{"type": "model", "id": model_id, "display_name": model_id} for model_id in ids]
                         self._send(200, json.dumps({"data": data, "has_more": False}).encode())
                         return
                     self._send(200, json.dumps({"object": "list", "data": stub.models}).encode())
@@ -570,3 +572,33 @@ def test_unpinned_launch_ignores_a_default_logos_does_not_serve(mixed_gateway, t
     for slot in MODEL_SLOTS:
         assert launch["env"][slot] == "claude-openai/gpt-oss-120b", slot
     assert "LOGOS_DEFAULT_MODEL=claude-opus-5-5 is not served here" in launch["stderr"]
+
+
+def _gateway_with(anthropic_ids: list[str]) -> _StubGateway:
+    stub = _StubGateway([_model_entry(MODEL, WIDE_WINDOW)], anthropic_ids=anthropic_ids)
+    stub.start()
+    return stub
+
+
+def test_unpinned_launch_skips_image_generation_models(tmp_path, fake_claude):
+    """An image model listed first must not take every slot: it cannot answer Messages."""
+    stub = _gateway_with(["claude-dall-e-3", "claude-gpt-image-1", f"claude-{MODEL}"])
+    try:
+        launch = _unpinned_launch(stub, tmp_path, fake_claude)
+    finally:
+        stub.stop()
+    for slot in MODEL_SLOTS:
+        assert launch["env"][slot] == f"claude-{MODEL}", slot
+
+
+def test_unpinned_launch_prefers_the_exact_default_over_its_claude_form(tmp_path, fake_claude):
+    """Logos lists "foo" unprefixed when a model "claude-foo" exists; listing order must not decide."""
+    stub = _gateway_with(["claude-foo", "foo"])
+    try:
+        exact = _unpinned_launch(stub, tmp_path, fake_claude, LOGOS_DEFAULT_MODEL="foo")
+        prefixed = _unpinned_launch(stub, tmp_path, fake_claude, LOGOS_DEFAULT_MODEL="claude-foo")
+    finally:
+        stub.stop()
+    for slot in MODEL_SLOTS:
+        assert exact["env"][slot] == "foo", slot
+        assert prefixed["env"][slot] == "claude-foo", slot

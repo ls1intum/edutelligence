@@ -1,4 +1,4 @@
-"""Reasoning-effort normalization for Qwen3.8 models.
+"""Reasoning-effort normalization for Qwen3.8 and gpt-oss models.
 
 The Qwen3.8 chat template only accepts
 xhigh/medium/low as reasoning effort, while clients such as Claude Code send
@@ -196,3 +196,30 @@ def test_prepare_headers_and_payload_multipart_payload():
     }
     _, prepared = ContextResolver.prepare_headers_and_payload(_context(), payload)
     assert prepared["model"] == MODEL
+
+
+GPT_OSS = "openai/gpt-oss-120b"
+
+
+def test_gpt_oss_maps_xhigh_and_max_to_high():
+    # Harmony rejects xhigh with HTTP 400 — the effort claude-logos starts
+    # every session on, so a session that lands on gpt-oss failed every turn.
+    assert effort_scale_for_model(GPT_OSS) == CHAT_TEMPLATE_EFFORT_SCALES["gpt-oss"]
+    for value, expected in (("xhigh", "high"), ("max", "high"), ("minimal", "low")):
+        payload = {"model": GPT_OSS, "output_config": {"effort": value}, "reasoning_effort": value}
+        result = normalize_reasoning_effort(payload, GPT_OSS)
+        assert result["output_config"]["effort"] == expected
+        assert result["reasoning_effort"] == expected
+
+
+def test_gpt_oss_accepted_values_pass_through_unchanged():
+    for value in ("low", "medium", "high"):
+        payload = {"model": GPT_OSS, "output_config": {"effort": value}}
+        assert normalize_reasoning_effort(payload, GPT_OSS) is payload
+
+
+def test_prepare_headers_and_payload_normalizes_xhigh_for_gpt_oss():
+    _, payload = ContextResolver.prepare_headers_and_payload(
+        _context(model_name=GPT_OSS), {"model": GPT_OSS, "output_config": {"effort": "xhigh"}}
+    )
+    assert payload["output_config"]["effort"] == "high"
