@@ -709,12 +709,16 @@ services:
     depends_on:
       - logos-orchestrator
     environment:
-      # The Logos key the gateway injects into the agent's model calls. The
-      # image ships the configuration as a template, and its entrypoint runs
-      # envsubst at container start, so the key enters the running
-      # configuration here and never has to be passed to a session
-      # container — nor does it sit in an image layer.
+      # The Logos key the gateway injects into the agent's model calls when
+      # injection is allowed. The image ships the configuration as a template;
+      # the entrypoint derives injection values from mint/fallback, then
+      # envsubst puts them into the running configuration — the key never
+      # has to be passed to a session container, nor does it sit in an image
+      # layer. When minting is on without fallback, empty/placeholder
+      # credentials are rejected instead of injecting this key.
       LOGOS_AGENT_API_KEY: "${LOGOS_AGENT_API_KEY:-}"
+      LOGOS_AGENT_SESSION_API_KEY_MINT: "${LOGOS_AGENT_SESSION_API_KEY_MINT:-false}"
+      LOGOS_AGENT_SESSION_API_KEY_FALLBACK: "${LOGOS_AGENT_SESSION_API_KEY_FALLBACK:-false}"
     networks:
       - internal
       - agent

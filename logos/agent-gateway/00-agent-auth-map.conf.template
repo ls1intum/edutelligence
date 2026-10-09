@@ -1,11 +1,12 @@
 # Maps the session's Authorization header onto what the orchestrator sees.
 #
-# When minting is on, the session sends its per-session Logos key and that
-# value is forwarded. When the session still sends the placeholder (feature
-# off, or explicit fallback), the standing agent key is injected here so it
-# never has to live in the container.
+# AGENT_AUTH_EMPTY / AGENT_AUTH_PLACEHOLDER are set by the entrypoint from
+# LOGOS_AGENT_SESSION_API_KEY_MINT and LOGOS_AGENT_SESSION_API_KEY_FALLBACK:
+# either the standing Bearer key (injection allowed) or empty (minting
+# required without fallback). An empty mapped value is rejected in
+# default.conf so a session cannot omit credentials and ride the standing key.
 map $http_authorization $agent_authorization {
     default                                     $http_authorization;
-    ""                                          "Bearer ${LOGOS_AGENT_API_KEY}";
-    "Bearer injected-by-logos-agent-gateway"    "Bearer ${LOGOS_AGENT_API_KEY}";
+    ""                                          "${AGENT_AUTH_EMPTY}";
+    "Bearer injected-by-logos-agent-gateway"    "${AGENT_AUTH_PLACEHOLDER}";
 }

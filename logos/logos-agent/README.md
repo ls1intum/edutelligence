@@ -367,8 +367,12 @@ providers only.**
 ### Logos session keys
 
 By default the gateway still injects `LOGOS_AGENT_API_KEY` when a session
-sends the placeholder credential. Set `LOGOS_AGENT_SESSION_API_KEY_MINT=true`
-to mint one clone of that key for each session instead:
+sends the placeholder credential. The agent gateway reads the same
+`LOGOS_AGENT_SESSION_API_KEY_MINT` / `LOGOS_AGENT_SESSION_API_KEY_FALLBACK`
+flags as the runner: when minting is required without fallback, missing or
+placeholder Authorization is rejected (401) instead of injecting the standing
+key. Set `LOGOS_AGENT_SESSION_API_KEY_MINT=true` to mint one clone of that key
+for each session instead:
 
 - One key per session. The key lives as long as the agent session. The runner
   revokes it when the session ends — success, failure, cancel, or timeout.

@@ -10,11 +10,17 @@
 # released. Shipping the file inside the image removes the whole class of
 # that failure.
 #
-# It stays a *template*: the image's entrypoint runs envsubst over
-# /etc/nginx/templates at container start, which is what puts
-# ${LOGOS_AGENT_API_KEY} into the live configuration — the key belongs in
-# the running container, not in an image layer.
+# It stays a *template*: the image's entrypoint sets injection values from
+# mint/fallback, then the stock nginx entrypoint runs envsubst over
+# /etc/nginx/templates — so keys and policy enter the running configuration,
+# not an image layer.
 FROM nginx:1.31-alpine
 
+COPY logos/agent-gateway/auth_injection_env.sh /auth_injection_env.sh
+COPY logos/agent-gateway/entrypoint.sh /entrypoint.sh
 COPY logos/agent-gateway/00-agent-auth-map.conf.template /etc/nginx/templates/00-agent-auth-map.conf.template
 COPY logos/agent-gateway/nginx.conf /etc/nginx/templates/default.conf.template
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["nginx", "-g", "daemon off;"]
