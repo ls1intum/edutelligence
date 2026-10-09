@@ -2917,6 +2917,13 @@ def test_generic_startup_error_does_not_invent_a_root_cause():
     assert handle._startup_root_cause() == ""
 
 
+def _write_lora_adapter(adapter_dir: Path, *, weights_name: str = "adapter_model.safetensors") -> Path:
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    (adapter_dir / "adapter_config.json").write_text('{"r": 8}', encoding="utf-8")
+    (adapter_dir / weights_name).write_bytes(b"weights")
+    return adapter_dir
+
+
 def test_expand_model_path_points_at_the_local_snapshot(monkeypatch, tmp_path: Path) -> None:
     import huggingface_hub
 
@@ -2924,7 +2931,7 @@ def test_expand_model_path_points_at_the_local_snapshot(monkeypatch, tmp_path: P
 
     calls = []
     snapshot = tmp_path / "snapshot"
-    (snapshot / "adapter_vllm").mkdir(parents=True)
+    _write_lora_adapter(snapshot / "adapter_vllm")
 
     def snapshot_download(**kwargs):
         calls.append(kwargs)
@@ -2983,7 +2990,7 @@ def test_expand_model_path_uses_the_lane_token_and_revision(monkeypatch, tmp_pat
 
     calls = []
     pinned = tmp_path / "pinned"
-    (pinned / "adapter_vllm").mkdir(parents=True)
+    _write_lora_adapter(pinned / "adapter_vllm")
 
     def snapshot_download(**kwargs):
         calls.append(kwargs)
@@ -3020,7 +3027,7 @@ def test_expand_model_path_downloads_when_a_cached_snapshot_lacks_adapter_files(
     partial.mkdir()
     (partial / "config.json").write_text("{}", encoding="utf-8")
     complete = tmp_path / "complete"
-    (complete / "adapter_vllm").mkdir(parents=True)
+    _write_lora_adapter(complete / "adapter_vllm")
 
     def snapshot_download(**kwargs):
         calls.append(kwargs)
@@ -3040,3 +3047,80 @@ def test_expand_model_path_downloads_when_a_cached_snapshot_lacks_adapter_files(
     assert "local_files_only" not in calls[1]
     assert calls[1]["revision"] == pin
     assert calls[1]["token"] == "t"
+    assert calls[1]["allow_patterns"] == ["adapter_vllm/**", "adapter_vllm"]
+
+
+def test_expand_model_path_downloads_when_adapter_config_exists_without_weights(monkeypatch, tmp_path: Path) -> None:
+    """adapter_config.json alone must not skip the download of adapter weights."""
+    import huggingface_hub
+
+    from logos_worker_node import vllm_process
+
+    calls = []
+    partial = tmp_path / "partial"
+    adapter = partial / "adapter_vllm"
+    adapter.mkdir(parents=True)
+    (adapter / "adapter_config.json").write_text('{"r": 8}', encoding="utf-8")
+    complete = tmp_path / "complete"
+    _write_lora_adapter(complete / "adapter_vllm")
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("local_files_only"):
+            return str(partial)
+        return str(complete)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    cmd = ["--lora-modules=jev-decision={model_path}/adapter_vllm"]
+
+    expanded = vllm_process.expand_model_path(cmd, "org/model", str(tmp_path), token="t")
+
+    assert expanded[-1] == f"--lora-modules=jev-decision={complete}/adapter_vllm"
+    assert len(calls) == 2
+    assert "local_files_only" not in calls[1]
+    assert calls[1]["allow_patterns"] == ["adapter_vllm/**", "adapter_vllm"]
+
+
+@pytest.mark.parametrize("weights_name", ["adapter_model.safetensors", "adapter_model.bin"])
+def test_expand_model_path_accepts_supported_adapter_weight_files(
+    monkeypatch, tmp_path: Path, weights_name: str
+) -> None:
+    import huggingface_hub
+
+    from logos_worker_node import vllm_process
+
+    calls = []
+    snapshot = tmp_path / "snapshot"
+    _write_lora_adapter(snapshot / "adapter_vllm", weights_name=weights_name)
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(snapshot)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    cmd = ["--lora-modules=jev-decision={model_path}/adapter_vllm"]
+
+    expanded = vllm_process.expand_model_path(cmd, "org/model", str(tmp_path))
+
+    assert expanded[-1] == f"--lora-modules=jev-decision={snapshot}/adapter_vllm"
+    assert len(calls) == 1
+
+
+def test_expand_model_path_errors_when_adapter_still_incomplete_after_download(monkeypatch, tmp_path: Path) -> None:
+    import huggingface_hub
+
+    from logos_worker_node import vllm_process
+
+    snapshot = tmp_path / "snapshot"
+    adapter = snapshot / "adapter_vllm"
+    adapter.mkdir(parents=True)
+    (adapter / "adapter_config.json").write_text('{"r": 8}', encoding="utf-8")
+
+    def snapshot_download(**kwargs):
+        return str(snapshot)
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    cmd = ["--lora-modules=jev-decision={model_path}/adapter_vllm"]
+
+    with pytest.raises(FileNotFoundError, match="adapter_model.safetensors or adapter_model.bin"):
+        vllm_process.expand_model_path(cmd, "org/model", str(tmp_path))
