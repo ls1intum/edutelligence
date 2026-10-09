@@ -15,6 +15,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langdetect import DetectorFactory, detect
+from langdetect.detector_factory import init_factory
 from langdetect.lang_detect_exception import LangDetectException
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
@@ -76,6 +77,12 @@ logger = get_logger(__name__)
 # the same deck always resolves to the same language across runs. This is a
 # correctness property, not a deployment tunable, so it is not configurable.
 DetectorFactory.seed = 0
+# Load the language profiles now, while the module import holds the import lock.
+# langdetect loads them lazily on the first detect() call, and that loading is not
+# thread-safe: parallel ingestion runs right after a start would see a partly loaded
+# profile set and detect English slides as Catalan, Danish or French (or fail and
+# fall back to the default), which stamps a wrong language on the chunks.
+init_factory()
 
 
 def detect_course_language(page_texts: list[str]) -> str:
@@ -96,6 +103,37 @@ def detect_course_language(page_texts: list[str]) -> str:
         return detect(sample[: settings.lecture_ingestion.language_detection_max_chars])
     except LangDetectException:
         return settings.lecture_ingestion.default_language
+
+
+# Language names that older Iris versions stored on page chunks: they asked an LLM for
+# "the language of the text" and stored its free-text answer ("English", "Deutsch").
+_LEGACY_LANGUAGE_NAMES = {
+    "english": "en",
+    "englisch": "en",
+    "german": "de",
+    "deutsch": "de",
+}
+
+
+_LANGUAGE_CODE = re.compile(r"[a-z]{2}(-[a-z]{2})?")
+
+
+def normalize_language(value: Optional[str]) -> Optional[str]:
+    """Map a stored or requested course language to an ISO 639-1 code.
+
+    Current chunks store ISO codes, including the region codes language
+    detection returns for some languages ("zh-cn"); chunks written by older Iris
+    versions store the language name an LLM answered with. Both forms of the same
+    language must compare equal, or every legacy unit would be re-ingested only
+    because of the format. Anything that is neither a code nor a known name
+    returns None, so a garbage value never matches and its unit is rebuilt.
+    """
+    if not value:
+        return None
+    cleaned = value.strip().strip(".").strip().lower()
+    if _LANGUAGE_CODE.fullmatch(cleaned):
+        return cleaned
+    return _LEGACY_LANGUAGE_NAMES.get(cleaned)
 
 
 _UNICODE_BULLETS = (
@@ -493,7 +531,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             stored_language = chunk.properties.get(
                 LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
             )
-            if not stored_language or stored_language != requested_language:
+            # Compared as ISO codes: legacy chunks store the language name ("English").
+            stored_code = normalize_language(stored_language)
+            if stored_code is None or stored_code != normalize_language(
+                requested_language
+            ):
                 return True
             # A null display number is legacy data written before the field existed
             # (or before slide detection). Re-ingest so the current pipeline
