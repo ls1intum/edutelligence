@@ -163,11 +163,12 @@ class AnalysisPoller:
         now = datetime.now(timezone.utc)
         await self._reconcile_stale_analyses()
         control = await controls.current()
+        # Pause and drain stop *starting* work, not writing it down. A link
+        # that needs analysis while the runner is paused still becomes a
+        # queued session so it is waiting when the runner comes back.
         blocked = control.admission_block()
         if blocked:
-            logger.debug("analysis poll skipped: %s", blocked)
-            self._last_pass = now
-            return []
+            logger.debug("analysis poll queueing while stopped: %s", blocked)
         policy = model_policy.current()
         if not policy.ok:
             logger.debug("analysis poll skipped: %s", policy.detail)
