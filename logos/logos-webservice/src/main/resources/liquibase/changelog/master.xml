@@ -60,5 +60,6 @@
     <include file="liquibase/changelog/054_audit_log.xml"/>
     <include file="liquibase/changelog/055_batch_objects_log_level.xml"/>
     <include file="liquibase/changelog/056_log_entry_team_full_privacy_index.xml"/>
+    <include file="liquibase/changelog/057_api_key_expires_at.xml"/>
 
 </databaseChangeLog>

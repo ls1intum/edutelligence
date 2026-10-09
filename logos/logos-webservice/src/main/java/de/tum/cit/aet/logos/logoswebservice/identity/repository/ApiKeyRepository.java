@@ -16,6 +16,8 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProje
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.RateLimitUsageProjection;
 
 public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
+    Optional<ApiKey> findByKeyValue(String keyValue);
+
     Optional<ApiKey> findByKeyValueAndIsActiveTrue(String keyValue);
 
     long countByIsActive(boolean isActive);
