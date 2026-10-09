@@ -286,7 +286,10 @@ class TranscriptionIngestionPipeline(SubPipeline):
         seen_pages: set[int] = set()
         for row in rows:
             props = row.properties
-            page = int(props.get(LectureTranscriptionSchema.PAGE_NUMBER.value))
+            raw_page = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
+            if raw_page is None:
+                return False
+            page = int(raw_page)
             if page in seen_pages:
                 return False
             seen_pages.add(page)

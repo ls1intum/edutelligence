@@ -28,6 +28,7 @@ for thread in threads:
     thread.start()
 for thread in threads:
     thread.join()
+assert len(results) == len(threads), "a detection thread failed"
 print(sorted(set(results)))
 """
 

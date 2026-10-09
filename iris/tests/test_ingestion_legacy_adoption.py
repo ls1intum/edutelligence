@@ -174,7 +174,7 @@ def _transcription_needs_update(rows, segments=None) -> bool:
             content_fingerprint=_FINGERPRINT,
             force_reingest=False,
             transcription=SimpleNamespace(
-                language="en", segments=segments or _SEGMENTS
+                language="en", segments=_SEGMENTS if segments is None else segments
             ),
         ),
         settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
@@ -253,6 +253,13 @@ def test_legacy_transcript_rows_without_times_are_rebuilt():
     rows = _matching_rows()
     rows[0] = _legacy_row(1, "Hello and welcome. Today we look at sorting.", None, 9.0)
     assert _transcription_needs_update(rows) is True
+
+
+def test_legacy_transcript_row_without_a_page_number_is_rebuilt():
+    # An empty transcript has no slides, so a stored row without a page number passes
+    # the slide-set check and must be rejected here instead of failing the run.
+    rows = [_legacy_row(None, "Orphaned text.", 0.0, 1.0)]
+    assert _transcription_needs_update(rows, segments=[]) is True
 
 
 def test_mixed_stamped_and_unstamped_transcript_rows_are_rebuilt():
