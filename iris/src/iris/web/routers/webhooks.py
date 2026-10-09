@@ -195,31 +195,6 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str
 
 
 @router.post(
-    "/lectures/ingest",
-    status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(TokenValidator())],
-)
-@observe(name="POST /webhooks/lectures/ingest")
-def lecture_ingestion_webhook(dto: IngestionPipelineExecutionDto):
-    """Webhook endpoint to trigger the lecture ingestion pipeline."""
-    variant = validate_pipeline_variant(dto.settings, LectureIngestionUpdatePipeline)
-
-    cancel_event = ingestion_job_handler.create_cancellation_event()
-    thread = Thread(
-        target=run_lecture_update_pipeline_worker,
-        args=(dto, variant, cancel_event),
-    )
-    ingestion_job_handler.add_job(
-        process=thread,
-        base_url=dto.settings.artemis_base_url,
-        course_id=dto.lecture_unit.course_id,
-        lecture_id=dto.lecture_unit.lecture_id,
-        lecture_unit_id=dto.lecture_unit.lecture_unit_id,
-        cancel_event=cancel_event,
-    )
-
-
-@router.post(
     "/lectures/metadata",
     status_code=status.HTTP_202_ACCEPTED,
     responses={
