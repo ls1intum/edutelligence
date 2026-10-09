@@ -88,6 +88,14 @@ def test_chat_template_kwargs_effort_mapped():
     assert result["chat_template_kwargs"] == {"reasoning_effort": "xhigh", "enable_thinking": True}
 
 
+def test_responses_reasoning_effort_mapped_keeping_its_siblings():
+    _learn()
+    payload = {"model": MODEL, "input": "hello", "reasoning": {"effort": "high", "summary": "auto"}}
+    result = normalize_reasoning_effort(payload, MODEL)
+    assert result["reasoning"] == {"effort": "xhigh", "summary": "auto"}
+    assert payload["reasoning"]["effort"] == "high"
+
+
 def test_all_three_locations_mapped_independently():
     _learn()
     payload = {

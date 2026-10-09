@@ -21,7 +21,8 @@ the error. Every later request to that model is normalized before it is sent,
 in every payload location vLLM forwards to the chat template:
 
 - ``output_config.effort`` (Anthropic Messages API)
-- ``reasoning_effort`` (OpenAI API, top level)
+- ``reasoning_effort`` (OpenAI Chat Completions API, top level)
+- ``reasoning.effort`` (OpenAI Responses API)
 - ``chat_template_kwargs.reasoning_effort`` (explicit template kwarg)
 """
 
@@ -181,6 +182,12 @@ def normalize_reasoning_effort(payload: Dict[str, Any], model_name: Optional[str
         mapped = _map_effort(payload["reasoning_effort"], scale)
         if mapped != payload["reasoning_effort"]:
             result = {**result, "reasoning_effort": mapped}
+
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, dict) and isinstance(reasoning.get("effort"), str):
+        mapped = _map_effort(reasoning["effort"], scale)
+        if mapped != reasoning["effort"]:
+            result = {**result, "reasoning": {**reasoning, "effort": mapped}}
 
     template_kwargs = payload.get("chat_template_kwargs")
     if isinstance(template_kwargs, dict) and isinstance(template_kwargs.get("reasoning_effort"), str):

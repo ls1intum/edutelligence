@@ -274,3 +274,35 @@ async def test_logosnode_sync_resends_once_only_for_an_effort_rejection(
 
     assert [payload["reasoning_effort"] for payload in sent] == expected_efforts
     assert response.status_code == expected_status
+
+
+RESPONSES_PAYLOAD = {"model": MODEL, "input": "hi", "reasoning": {"effort": "xhigh", "summary": "auto"}}
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_resends_a_responses_request_with_the_effort_adapted(monkeypatch):
+    executor, completion_calls, _r = _install_cloud(monkeypatch, REJECTION_BODY)
+    monkeypatch.setattr(main, "write_queue", _FakeWriteQueueFactory(), raising=False)
+
+    response = await main._sync_response(
+        _context("cloud"), dict(RESPONSES_PAYLOAD), 42, 12, 27, -1, {}, _scheduling("cloud")
+    )
+
+    assert [payload["reasoning"] for payload in executor.payloads] == [
+        {"effort": "xhigh", "summary": "auto"},
+        {"effort": "high", "summary": "auto"},
+    ]
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_cloud_stream_resends_a_responses_request_with_the_effort_adapted(monkeypatch):
+    executor, completion_calls, _r = _install_cloud(monkeypatch, REJECTION_BODY)
+
+    response = await main._streaming_response(
+        _context("cloud"), dict(RESPONSES_PAYLOAD), 42, 12, 27, -1, {}, _scheduling("cloud")
+    )
+    await _read_stream_response(response)
+
+    assert [payload["reasoning"]["effort"] for payload in executor.payloads] == ["xhigh", "high"]
+    assert [call["result_status"] for call in completion_calls] == ["success"]

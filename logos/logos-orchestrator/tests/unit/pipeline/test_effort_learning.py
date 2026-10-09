@@ -101,6 +101,16 @@ def test_adapting_learns_the_scale_and_rewrites_every_location():
     assert payload["reasoning_effort"] == "xhigh"
 
 
+def test_adapting_a_responses_payload():
+    # The Responses API (and a Messages request translated by to_responses)
+    # carries the effort as reasoning.effort.
+    payload = {"model": GPT_OSS, "input": "hi", "reasoning": {"effort": "xhigh", "summary": "auto"}}
+    adapted = adapt_payload_after_effort_rejection(payload, GPT_OSS, HARMONY_400)
+    assert adapted["reasoning"] == {"effort": "high", "summary": "auto"}
+    later = normalize_reasoning_effort({"input": "hi", "reasoning": {"effort": "max"}}, GPT_OSS)
+    assert later["reasoning"]["effort"] == "high"
+
+
 def test_a_learned_scale_normalizes_later_requests_up_front():
     adapt_payload_after_effort_rejection({"reasoning_effort": "xhigh"}, GPT_OSS, HARMONY_400)
     later = normalize_reasoning_effort({"output_config": {"effort": "max"}}, GPT_OSS)
