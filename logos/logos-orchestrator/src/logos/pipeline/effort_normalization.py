@@ -10,7 +10,8 @@ template, for example, only accepts ``xhigh`` (its default), ``medium`` and
 ``low``; the Anthropic value ``high`` — and vLLM's ``minimal``/``max`` —
 therefore raise a template exception that vLLM surfaces as an HTTP 500
 ``internal_error``, failing every turn of a client session left on
-``high``.
+``high``. gpt-oss (Harmony) is the mirror image: it accepts ``low``,
+``medium`` and ``high`` and rejects ``xhigh`` with an HTTP 400.
 
 This module keeps a registry mapping chat template families to the effort
 scale their ``chat_template.jinja`` enforces, and rewrites out-of-scale
@@ -66,6 +67,16 @@ CHAT_TEMPLATE_EFFORT_SCALES: Dict[str, EffortScale] = {
         # The template's own default — what it would resolve to without
         # rejecting the value.
         default="xhigh",
+    ),
+    # gpt-oss (https://huggingface.co/openai/gpt-oss-120b): the Harmony format
+    # accepts only low, medium and high, and vLLM answers "xhigh" with HTTP 400
+    # "reasoning_effort='xhigh' is not supported by Harmony" — the value the
+    # claude-logos wrapper starts every session on, because Qwen3.8 needs it.
+    "gpt-oss": EffortScale(
+        accepted=frozenset({"low", "medium", "high"}),
+        map={"xhigh": "high", "max": "high", "minimal": "low"},
+        # Harmony's own default reasoning level.
+        default="medium",
     ),
 }
 
