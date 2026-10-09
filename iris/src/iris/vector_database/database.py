@@ -8,6 +8,7 @@ from weaviate.classes.query import Filter
 from iris.common.logging_config import get_logger
 from iris.config import settings
 
+from .course_memory_schema import init_course_memory_schema
 from .faq_schema import init_faq_schema
 from .lecture_transcription_schema import init_lecture_transcription_schema
 from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema
@@ -35,7 +36,7 @@ class VectorDatabase:
                     if settings.weaviate.api_key
                     else None
                 )
-                VectorDatabase.static_client_instance = weaviate.connect_to_custom(
+                client = weaviate.connect_to_custom(
                     http_host=settings.weaviate.host,
                     http_port=settings.weaviate.port,
                     http_secure=settings.weaviate.http_secure,
@@ -44,21 +45,30 @@ class VectorDatabase:
                     grpc_secure=settings.weaviate.grpc_secure,
                     auth_credentials=auth,
                 )
-                atexit.register(VectorDatabase.static_client_instance.close)
                 logger.info("Weaviate client initialized")
 
                 # Initialize schemas exactly once per process. Running them on
                 # every ``VectorDatabase()`` call is racy: multiple threads can
                 # pass the ``exists()`` check and then all call ``create()``,
                 # with the losers getting a 422 "class already exists".
-                client = VectorDatabase.static_client_instance
-                VectorDatabase._static_collections = {
-                    "lectures": init_lecture_unit_page_chunk_schema(client),
-                    "transcriptions": init_lecture_transcription_schema(client),
-                    "lecture_segments": init_lecture_unit_segment_schema(client),
-                    "lecture_units": init_lecture_unit_schema(client),
-                    "faqs": init_faq_schema(client),
-                }
+                # The client is published only after every schema initialised: a
+                # failure closes it and re-raises, so the next construction retries
+                # everything instead of finding a client without collections.
+                try:
+                    collections = {
+                        "lectures": init_lecture_unit_page_chunk_schema(client),
+                        "transcriptions": init_lecture_transcription_schema(client),
+                        "lecture_segments": init_lecture_unit_segment_schema(client),
+                        "lecture_units": init_lecture_unit_schema(client),
+                        "faqs": init_faq_schema(client),
+                        "course_memory": init_course_memory_schema(client),
+                    }
+                except Exception:
+                    client.close()
+                    raise
+                VectorDatabase._static_collections = collections
+                VectorDatabase.static_client_instance = client
+                atexit.register(client.close)
 
         self.client = VectorDatabase.static_client_instance
         collections = VectorDatabase._static_collections
@@ -67,6 +77,7 @@ class VectorDatabase:
         self.lecture_segments = collections["lecture_segments"]
         self.lecture_units = collections["lecture_units"]
         self.faqs = collections["faqs"]
+        self.course_memory = collections["course_memory"]
 
     def delete_collection(self, collection_name):
         """

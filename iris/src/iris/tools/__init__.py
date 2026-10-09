@@ -10,6 +10,9 @@ from .combined_view_point_out import create_tool_combined_view_point_out
 
 # Course-related tools
 from .course_details import create_tool_get_course_details
+
+# Retrieval tools
+from .course_memory_retrieval import create_tool_course_memory_retrieval
 from .course_simple_details import create_tool_get_simple_course_details
 from .current_view_content import create_tool_current_view_content
 from .exercise_example_solution import create_tool_get_example_solution
@@ -20,8 +23,6 @@ from .feedbacks import create_tool_get_feedbacks
 from .file_lookup import create_tool_file_lookup
 from .file_lookup_numbered import create_tool_file_lookup_with_line_numbers
 from .last_artifact import create_tool_get_last_artifact
-
-# Retrieval tools
 from .lecture_content_retrieval import create_tool_lecture_content_retrieval
 from .lecture_list import create_tool_get_lecture_list
 from .local_vs_submitted_diff import create_tool_local_vs_submitted_diff
@@ -55,6 +56,7 @@ __all__ = [
     "create_tool_lecture_content_retrieval",
     "create_tool_get_lecture_list",
     "create_tool_faq_content_retrieval",
+    "create_tool_course_memory_retrieval",
     "create_tool_combined_view_point_out",
     "create_tool_current_view_content",
     # Tutor Suggestion tools

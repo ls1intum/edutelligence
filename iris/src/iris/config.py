@@ -69,6 +69,80 @@ class MemirisSettings(BaseModel):
         return self
 
 
+class CourseMemorySettings(BaseModel):
+    """Settings for the Course Memory feature.
+
+    The embedding/chat models are NOT configured here; they are resolved through
+    the variant roles of ``course_memory_ingestion_pipeline`` and
+    ``course_memory_retrieval_pipeline`` in ``llm_configuration``.
+    """
+
+    enabled: bool = Field(default=True)
+    alpha: float = Field(
+        default=0.5,
+        description=(
+            "Hybrid fusion weight, passed straight to Weaviate: "
+            "0 = pure BM25/keyword, 1 = pure dense/vector"
+        ),
+    )
+    similarity_threshold: float = Field(
+        default=0.85,
+        description=(
+            "Minimum Weaviate cosine certainty (0-1) for a retrieved entry; "
+            "certainty = (1 + cosine_similarity) / 2"
+        ),
+    )
+    result_limit: int = Field(default=5)
+    query_rewrite_enabled: bool = Field(default=True)
+    context_message_limit: int = Field(
+        default=20, description="Preceding thread messages used for context"
+    )
+
+
+# Artemis publishes an autonomous-tutor reply without review at or above this confidence
+# (AutonomousTutorService.AUTO_VERIFY_CONFIDENCE_THRESHOLD in Artemis), holds it for tutor
+# review in [0.70, 0.85) and discards it below 0.70.
+ARTEMIS_AUTO_PUBLISH_THRESHOLD = 0.85
+# Artemis discards replies below this confidence and sends the rest below the publish threshold to tutor review.
+ARTEMIS_REVIEW_THRESHOLD = 0.70
+
+
+class OrganizationalEvidenceGuardSettings(BaseModel):
+    """Guard against organizational answers that reach students without review.
+
+    Every reply whose confidence would let Artemis publish it unreviewed is checked by
+    an LLM: if it states organizational facts (dates, rooms, deadlines, grading, exam
+    scope, ...) that tutor-verified Course Memory answers do not explicitly state, its
+    confidence is capped inside the review band, so a tutor sees it first.
+
+    Modes:
+    - ``enabled=false``: no guard at all.
+    - ``enabled=true, llm_check_enabled=true`` (default): the check above.
+    - ``enabled=true, llm_check_enabled=false``: "review everything" — every reply that
+      would be published unreviewed is capped, so nothing is auto-published.
+    """
+
+    enabled: bool = Field(default=True)
+    llm_check_enabled: bool = Field(default=True)
+    confidence_cap: float = Field(
+        default=0.75,
+        ge=ARTEMIS_REVIEW_THRESHOLD,
+        lt=ARTEMIS_AUTO_PUBLISH_THRESHOLD,
+        description=(
+            "Confidence a reply gets when the guard holds it back. Must stay below "
+            "Artemis's auto-publish threshold (0.85); the guard only ever lowers a score."
+        ),
+    )
+
+
+class AutonomousTutorSettings(BaseModel):
+    """Settings for the autonomous tutor pipeline."""
+
+    organizational_evidence_guard: OrganizationalEvidenceGuardSettings = Field(
+        default_factory=OrganizationalEvidenceGuardSettings
+    )
+
+
 class LangfuseSettings(BaseModel):
     """Settings for LangFuse observability integration."""
 
@@ -288,6 +362,10 @@ class Settings(BaseModel):
     env_vars: dict[str, str]
     weaviate: WeaviateSettings
     memiris: MemirisSettings
+    course_memory: CourseMemorySettings = Field(default_factory=CourseMemorySettings)
+    autonomous_tutor: AutonomousTutorSettings = Field(
+        default_factory=AutonomousTutorSettings
+    )
     langfuse: LangfuseSettings = Field(default_factory=LangfuseSettings)
     local_llm_enabled: bool = Field(default=True)
     llm_configuration: dict[str, LlmVariantConfiguration] = Field(default_factory=dict)
