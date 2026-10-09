@@ -115,8 +115,14 @@ a session resumed at exactly the load that paused it pauses again next tick.
 
 A **workspace** is one working copy on one Docker volume. **One session runs in
 a workspace at a time** — two would write over each other. Parallelism comes
-from having several workspaces; the ceiling across all of them is
-`MAX_PARALLEL_SESSIONS`.
+from having several workspaces; the *execution* ceiling across running and
+paused sessions is `MAX_PARALLEL_SESSIONS`. The trigger poller may hold more
+workspaces than that so assigned work can wait its turn (queued or paused)
+without losing comments to the lookback window — capped at
+`MAX_QUEUE_WORKSPACES` (default: five times the parallel ceiling). Free
+workspaces are reused or re-pointed before any queue-only workspace is
+created; a queued session still waits for a real execution slot before it
+starts.
 
 Workspaces the runner creates for triggered work are named after it —
 `issue-812-oom-on-startup`, `pr-772-add-an-agent-runner` — which is also what
@@ -266,7 +272,8 @@ has a default that is right for this deployment.
 | `LOGOS_AGENT_DEFAULT_MODEL` | — | Model when a session does not name one. Optional: with exactly one local model reachable, that one is the default |
 | `LOGOS_AGENT_TRIGGERS_ENABLED` | `true` | Kill switch for reacting to the repository |
 | `LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC` | `0` | UTC hour of the nightly re-analysis of linked team repositories whose branch head moved; `-1` turns it off |
-| `LOGOS_AGENT_MAX_PARALLEL_SESSIONS` | `10` | Hard ceiling on concurrent sessions |
+| `LOGOS_AGENT_MAX_PARALLEL_SESSIONS` | `10` | Hard ceiling on concurrent (running + paused) sessions |
+| `LOGOS_AGENT_MAX_QUEUE_WORKSPACES` | `0` (= 5× parallel) | Cap on live workspaces holding waiting triggered work |
 | `LOGOS_AGENT_START_BELOW_LOAD` | `0.60` | Start only below this load |
 | `LOGOS_AGENT_PAUSE_ABOVE_LOAD` | `0.85` | Pause at or above this load |
 | `LOGOS_AGENT_SESSION_MEMORY_MB` | `4096` | Per-session memory ceiling |

@@ -783,6 +783,22 @@ class TestWorkspaceNaming:
         assert triggers._next_auto_name(set()) == "auto-1"
         assert triggers._next_auto_name({"auto-1", "auto-3"}) == "auto-2"
 
+    def test_the_queue_workspace_pool_defaults_to_five_times_parallel(self, monkeypatch):
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(triggers.settings, max_parallel_sessions=4, max_queue_workspaces=0),
+        )
+        assert triggers.queue_workspace_limit() == 20
+
+    def test_a_configured_queue_pool_never_falls_below_parallel(self, monkeypatch):
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(triggers.settings, max_parallel_sessions=10, max_queue_workspaces=3),
+        )
+        assert triggers.queue_workspace_limit() == 10
+
     async def test_a_full_pool_repoints_a_free_workspace(self, monkeypatch):
         FakeRepo(assigned_pulls=[pull(772)], heads={772: ("logos/agent/x/session-3", REPO)}).install(monkeypatch)
         fake_db = FakeDb(workspaces=[{"id": 1, "name": "auto-1", "active_sessions": 0, "base_branch": "main"}])
@@ -846,6 +862,63 @@ class TestTheCommentMark:
         assert len(queued) == 1
         assert fake_db.created[0]["trigger_ref"]
         assert fake_db.comment_mark is not None
+
+    async def test_a_paused_full_pool_still_queues(self, monkeypatch):
+        # Raising room while stopped is not enough: every workspace can still
+        # be occupied by a paused or queued session, and the old parallel
+        # ceiling refused to create another. Queue-only workspaces beyond
+        # that ceiling keep the assignment from falling out of the lookback.
+        FakeRepo(assigned_issues=[issue(1223)]).install(monkeypatch)
+        fake_db = FakeDb(workspaces=[{"id": 1, "name": "auto-1", "active_sessions": 1, "base_branch": "main"}])
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(triggers.settings, github_login=AGENT, repo_slug=REPO, max_parallel_sessions=1),
+        )
+
+        async def paused():
+            return {"mode": "paused", "mode_reason": "incident", "max_parallel": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(controls.db, "get_controls", paused)
+        controls.forget()
+
+        queued = await triggers.TriggerPoller().poll_once()
+
+        assert len(queued) == 1
+        assert fake_db.created[0]["trigger_ref"] == "issue-1223"
+        assert len(fake_db.workspaces) == 2
+        assert fake_db.comment_mark is not None
+
+    async def test_the_queue_workspace_pool_is_capped(self, monkeypatch):
+        # Unbounded growth would fill the host with idle volumes; once the
+        # documented pool is full, the assignment stays in the repository.
+        FakeRepo(assigned_issues=[issue(1223)]).install(monkeypatch)
+        fake_db = FakeDb(workspaces=[{"id": 1, "name": "auto-1", "active_sessions": 1, "base_branch": "main"}])
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(
+                triggers.settings,
+                github_login=AGENT,
+                repo_slug=REPO,
+                max_parallel_sessions=1,
+                max_queue_workspaces=1,
+            ),
+        )
+
+        async def paused():
+            return {"mode": "paused", "mode_reason": "incident", "max_parallel": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(controls.db, "get_controls", paused)
+        controls.forget()
+
+        assert await triggers.TriggerPoller().poll_once() == []
+        assert fake_db.created == []
+        assert fake_db.comment_mark is None
 
     async def test_work_left_for_the_next_pass_holds_the_mark(self, monkeypatch):
         # One workspace, two pieces of work: the second is left where it
