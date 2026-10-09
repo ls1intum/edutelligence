@@ -551,4 +551,72 @@ class RequestLogStatsRollupTest {
         assertThat((Boolean) entry.get("modelDeleted")).isTrue();
         assertThat(((Number) entry.get("requestCount")).longValue()).isEqualTo(7L);
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_model_selection_narrows_every_aggregate_from_both_sources() {
+        // Two completed-hour rows (rollup side) and one running-hour row (live
+        // tail) on a second model, next to the seed's model 5001 traffic.
+        jdbc.update("""
+            INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
+                                   timestamp_request, timestamp_forwarding, timestamp_response,
+                                   was_cold_start, user_id, team_id)
+            VALUES
+              (9411, 'roll-model-1', 3001, 5002, 6001, 'success',
+               date_trunc('hour', NOW()) - INTERVAL '4 hours',
+               date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '1 second',
+               date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '3 seconds',
+               false, 1001, 2001),
+              (9412, 'roll-model-2', 3001, 5002, 6001, 'error',
+               date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '10 minutes',
+               date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '10 minutes 1 second',
+               date_trunc('hour', NOW()) - INTERVAL '4 hours' + INTERVAL '10 minutes 3 seconds',
+               false, 1001, 2001),
+              (9413, 'roll-model-3', 3001, 5002, 6001, 'success',
+               date_trunc('hour', NOW()) + INTERVAL '3 minutes',
+               date_trunc('hour', NOW()) + INTERVAL '3 minutes 1 second',
+               date_trunc('hour', NOW()) + INTERVAL '3 minutes 3 seconds',
+               false, 1001, 2001)
+            """);
+        try {
+            long all = ((Number) ((Map<String, Object>) stats(query(24, null, null)).get("totals"))
+                .get("requests")).longValue();
+
+            assertRollupIsEmpty();
+            assertModelScopeNarrows(all);
+            populateRollup();
+            assertModelScopeNarrows(all);
+        } finally {
+            // The cleanup script only knows the seed's ids.
+            jdbc.update("DELETE FROM log_entry WHERE id IN (9411, 9412, 9413)");
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void assertModelScopeNarrows(long all) {
+        Map<String, Object> only = stats(statsService.getRequestLogStats(
+            start(), end(), 24, null, null, null, false, List.of(5002)));
+        assertThat(((Number) ((Map<String, Object>) only.get("totals")).get("requests")).longValue()).isEqualTo(3L);
+        Map<String, Object> statuses = (Map<String, Object>) only.get("statusCounts");
+        assertThat(statuses.get("success")).isEqualTo(2);
+        assertThat(statuses.get("error")).isEqualTo(1);
+        List<Map<String, Object>> breakdown = (List<Map<String, Object>>) only.get("modelBreakdown");
+        assertThat(breakdown).hasSize(1);
+        assertThat(breakdown.get(0).get("modelName")).isEqualTo("gpt-3.5");
+        List<Map<String, Object>> series = (List<Map<String, Object>>) only.get("modelTimeSeries");
+        assertThat(series).isNotEmpty().allSatisfy(point -> assertThat(point.get("modelId")).isEqualTo(5002));
+        long seriesTotal = ((List<Map<String, Object>>) only.get("timeSeries")).stream()
+            .mapToLong(point -> ((Number) point.get("total")).longValue()).sum();
+        assertThat(seriesTotal).isEqualTo(3L);
+
+        Map<String, Object> rest = stats(statsService.getRequestLogStats(
+            start(), end(), 24, null, null, null, false, List.of(5001)));
+        assertThat(((Number) ((Map<String, Object>) rest.get("totals")).get("requests")).longValue())
+            .isEqualTo(all - 3L);
+
+        // An empty selection is every model, as before.
+        Map<String, Object> none = stats(statsService.getRequestLogStats(
+            start(), end(), 24, null, null, null, false, List.of()));
+        assertThat(((Number) ((Map<String, Object>) none.get("totals")).get("requests")).longValue()).isEqualTo(all);
+    }
 }
