@@ -152,6 +152,40 @@ export class Agents implements OnInit {
 
   loadPercent = computed(() => Math.round((this.capacity()?.load ?? 0) * 100));
 
+  /** Free slots on the local model after agent and other traffic. */
+  freeSlots = computed(() => {
+    const cap = this.capacity();
+    if (!cap) return 0;
+    return Math.max(0, cap.total_slots - cap.own_slots - cap.other_slots);
+  });
+
+  /**
+   * One cell per serving slot on the local model, coloured by who holds it.
+   * Caps the rendered count so a misreported ceiling cannot flood the page.
+   */
+  slotCells = computed((): Array<'agent' | 'other' | 'free'> => {
+    const cap = this.capacity();
+    if (!cap || cap.total_slots <= 0) return [];
+    const total = Math.min(cap.total_slots, 64);
+    const own = Math.min(Math.max(0, cap.own_slots), total);
+    const other = Math.min(Math.max(0, cap.other_slots), total - own);
+    const free = total - own - other;
+    return [
+      ...Array<'agent'>(own).fill('agent'),
+      ...Array<'other'>(other).fill('other'),
+      ...Array<'free'>(free).fill('free'),
+    ];
+  });
+
+  slotAriaLabel = computed(() => {
+    const cap = this.capacity();
+    if (!cap) return 'Platform load unknown';
+    return (
+      `Local model slots: ${cap.own_slots} agent, ${cap.other_slots} other, ` +
+      `${this.freeSlots()} free of ${cap.total_slots}; load ${this.loadPercent()} percent`
+    );
+  });
+
   /**
    * The session occupying each workspace, by workspace id.
    *

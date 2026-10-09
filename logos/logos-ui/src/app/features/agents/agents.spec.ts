@@ -55,6 +55,8 @@ const CAPACITY: AgentCapacity = {
   load: 0.25,
   total_slots: 4,
   busy_slots: 1,
+  own_slots: 1,
+  other_slots: 0,
   sessions_running: 1,
   sessions_queued: 0,
   sessions_paused: 0,

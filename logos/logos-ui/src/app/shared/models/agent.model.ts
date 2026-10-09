@@ -82,6 +82,10 @@ export interface AgentCapacity {
   load: number;
   total_slots: number;
   busy_slots: number;
+  /** Slots held by this runner (sessions and their subagents). */
+  own_slots: number;
+  /** Slots held by other production traffic on the same local model. */
+  other_slots: number;
   sessions_running: number;
   sessions_queued: number;
   sessions_paused: number;
