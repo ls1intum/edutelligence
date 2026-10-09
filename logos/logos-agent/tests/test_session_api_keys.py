@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 import httpx
 import pytest
 from app import capacity, session_api_keys, sessions
 from app.schemas import SessionStatus
+from app.sessions import _Helper
 
 
 @pytest.mark.asyncio
@@ -369,6 +371,64 @@ async def test_terminal_paths_revoke_session_key(monkeypatch, terminal_path):
         await manager._settle(7, exit_code=1, error="race")
 
     assert revoked == [(7, 42)]
+
+
+@pytest.mark.asyncio
+async def test_cancel_stops_helper_before_revoking_session_key(monkeypatch):
+    """A slow webservice revoke must not leave the helper running after cancel."""
+    manager = sessions.SessionManager()
+    manager._session_logos_keys[7] = "lg-session"
+    manager._minted_api_key_ids.add(42)
+
+    helper = _Helper()
+    helper.container_id = "cid-helper"
+    helper.created.set()
+    helper.started.set()
+    manager._helpers[7] = helper
+
+    order: list[str] = []
+    revoke_started = asyncio.Event()
+    revoke_release = asyncio.Event()
+
+    async def delayed_revoke(session_id: int, key_id: int | None = None) -> None:
+        order.append("revoke_start")
+        revoke_started.set()
+        await revoke_release.wait()
+        order.append("revoke_done")
+        manager._session_logos_keys.pop(session_id, None)
+        if key_id is not None:
+            manager._minted_api_key_ids.discard(int(key_id))
+
+    async def fake_stop(cid, **_kwargs):
+        order.append(f"stop:{cid}")
+
+    async def fake_remove(cid, **_kwargs):
+        order.append(f"remove:{cid}")
+
+    async def get_session(sid):
+        return {"id": 7, "status": "running", "session_api_key_id": 42, "container_id": None}
+
+    async def transition_session(sid, status, **fields):
+        return True
+
+    async def add_event(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(manager, "_revoke_session_logos_key", delayed_revoke)
+    monkeypatch.setattr(sessions.db, "get_session", get_session)
+    monkeypatch.setattr(sessions.db, "transition_session", transition_session)
+    monkeypatch.setattr(sessions.db, "add_event", add_event)
+    monkeypatch.setattr(sessions.docker_engine, "stop_container", fake_stop)
+    monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+
+    cancel_task = asyncio.create_task(manager.cancel(7))
+    await revoke_started.wait()
+    # Helper must already be stopped before revoke awaits the webservice.
+    assert order[:3] == ["stop:cid-helper", "remove:cid-helper", "revoke_start"]
+    assert 7 not in manager._helpers
+    revoke_release.set()
+    assert await cancel_task is True
+    assert order == ["stop:cid-helper", "remove:cid-helper", "revoke_start", "revoke_done"]
 
 
 async def _true():

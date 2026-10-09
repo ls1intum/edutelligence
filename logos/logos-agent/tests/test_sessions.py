@@ -563,7 +563,7 @@ class TestPermissionsRevokedMidFlight:
         async def refresh():
             return revoked
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             # The lane an invalid policy hands over is empty, and an empty
             # lane is refused rather than measured.
             assert lane == frozenset()
@@ -1893,7 +1893,7 @@ class TestAgentPhaseIsolation:
         paused: list = []
         events: list = []
 
-        async def fake_reading(_timeout_s=5.0, lane=None, ours=None, own_api_key_id=None):
+        async def fake_reading(_timeout_s=5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
 
         async def fake_in_status(status):
@@ -2816,7 +2816,7 @@ class TestOverlappingAdmission:
         decided_loads: list = []
         real_start_decision = capacity.start_decision
 
-        async def fake_read_load(lane=None, ours=None, own_api_key_id=None):
+        async def fake_read_load(lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             # A pass takes two readings of one moment — the platform's, and
             # the platform's minus this runner's share — so only the first
             # of the pair advances the prepared sequence.
@@ -5359,7 +5359,7 @@ class TestTheDiscountedReadingAsksForTheKey:
 
         calls: list = []
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             calls.append((ours is not None, own_api_key_id))
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5407,7 +5407,7 @@ class TestAdmissionMeasuresTheRightLane:
         async def refresh():
             return policy
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             lanes.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5444,7 +5444,7 @@ class TestAdmissionMeasuresTheRightLane:
 
         readings: list = []
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             readings.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5710,7 +5710,7 @@ class TestAPausedSessionThatCannotComeBack:
         settled: list = []
         resumed: list = []
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def container_state(_container_id):
@@ -5765,7 +5765,7 @@ class TestAPausedSessionThatCannotComeBack:
 
         admitted: list = []
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def in_status(status):

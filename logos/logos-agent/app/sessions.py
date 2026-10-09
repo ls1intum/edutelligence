@@ -3515,12 +3515,12 @@ class SessionManager:
         if launch is not None:
             launch.cancelled = True
         await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
-        await self._revoke_session_logos_key(session_id, session.get("session_api_key_id"))
-        # The credential-bearing helper first: a finalizer mid-push would
-        # otherwise keep committing, pushing, or opening a pull request after
-        # the API has already reported the session cancelled. It is tracked
-        # per session rather than read from the supervisor because restart
-        # reconciliation finalizes without one.
+        # Stop credential-bearing containers BEFORE revoking the Logos key.
+        # Awaiting revocation first (webservice timeout can be ~15s) would
+        # leave a finalizer free to keep committing, pushing, or opening a
+        # pull request after the API has already reported cancelled. The
+        # helper is tracked per session rather than read from the supervisor
+        # because restart reconciliation finalizes without one.
         helper = self._helpers.pop(session_id, None)
         if helper is not None:
             # Wait for the create to settle before anything else: a cancel
@@ -3590,6 +3590,9 @@ class SessionManager:
                 await docker_engine.remove_container(container_id)
             except Exception:
                 logger.warning("could not remove the container of cancelled session %s", session_id)
+        # Best-effort after containers are stopped: a slow revoke must not
+        # delay killing the credential-bearing helper / agent.
+        await self._revoke_session_logos_key(session_id, session.get("session_api_key_id"))
         return True
 
 
