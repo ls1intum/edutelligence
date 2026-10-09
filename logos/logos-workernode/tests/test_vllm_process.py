@@ -2937,6 +2937,7 @@ def test_expand_model_path_points_at_the_local_snapshot(monkeypatch, tmp_path: P
     assert calls[0]["repo_id"] == "autotrust/JEV-27B-VL"
     assert calls[0]["cache_dir"] == str(tmp_path / "hub")
     assert calls[0]["local_files_only"] is True
+    assert "revision" not in calls[0]
 
 
 def test_expand_model_path_downloads_a_missing_snapshot(monkeypatch, tmp_path: Path) -> None:
@@ -2969,3 +2970,34 @@ def test_expand_model_path_uses_a_local_model_directory(tmp_path: Path) -> None:
 
     expanded = vllm_process.expand_model_path(["{model_path}/adapter"], str(tmp_path), None)
     assert expanded == [f"{tmp_path.resolve()}/adapter"]
+
+
+def test_expand_model_path_uses_the_lane_token_and_revision(monkeypatch, tmp_path: Path) -> None:
+    """Snapshot lookup must use the lane HF_TOKEN and the command's --revision pin."""
+    import huggingface_hub
+
+    from logos_worker_node import vllm_process
+
+    calls = []
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        return str(tmp_path / "pinned")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    pin = "ba3f0d584994b37998f235c0a3f6f1beff32ba1e"
+    cmd = [
+        "vllm",
+        "serve",
+        "autotrust/JEV-27B-VL",
+        f"--revision={pin}",
+        "--lora-modules",
+        "jev-decision={model_path}/adapter_vllm",
+    ]
+
+    expanded = vllm_process.expand_model_path(cmd, "autotrust/JEV-27B-VL", str(tmp_path), token="lane-hf-token")
+
+    assert expanded[-1] == f"jev-decision={tmp_path / 'pinned'}/adapter_vllm"
+    assert calls[0]["token"] == "lane-hf-token"
+    assert calls[0]["revision"] == pin
+    assert calls[0]["local_files_only"] is True

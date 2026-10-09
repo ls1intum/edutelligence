@@ -102,32 +102,52 @@ def effective_gmu(vllm_config: VllmConfig) -> float:
 MODEL_PATH_PLACEHOLDER = "{model_path}"
 
 
-def resolve_model_snapshot(model: str, hf_home: str | None) -> str:
+def resolve_model_snapshot(
+    model: str,
+    hf_home: str | None,
+    *,
+    token: str | None = None,
+    revision: str | None = None,
+) -> str:
     """Local snapshot directory of a Hugging Face model, downloading it when missing.
 
-    A local directory is returned unchanged.
+    A local directory is returned unchanged. ``token`` is the effective lane
+    ``HF_TOKEN`` (worker env plus ``vllm_config.env_overrides``); when omitted,
+    the worker process environment is used. ``revision`` is the pin vLLM loads
+    via ``--revision``, when present.
     """
     if Path(model).is_dir():
         return str(Path(model).resolve())
     from huggingface_hub import snapshot_download
 
     cache_dir = os.path.join(hf_home, "hub") if hf_home else None
-    token = os.environ.get("HF_TOKEN") or None
+    effective_token = token if token is not None else (os.environ.get("HF_TOKEN") or None)
+    kwargs: dict[str, Any] = {"repo_id": model, "cache_dir": cache_dir, "token": effective_token}
+    if revision:
+        kwargs["revision"] = revision
     try:
-        return snapshot_download(repo_id=model, cache_dir=cache_dir, token=token, local_files_only=True)
+        return snapshot_download(**kwargs, local_files_only=True)
     except Exception:
-        return snapshot_download(repo_id=model, cache_dir=cache_dir, token=token)
+        return snapshot_download(**kwargs)
 
 
-def expand_model_path(cmd: list[str], model: str, hf_home: str | None) -> list[str]:
+def expand_model_path(
+    cmd: list[str],
+    model: str,
+    hf_home: str | None,
+    token: str | None = None,
+) -> list[str]:
     """Replace ``{model_path}`` in vLLM arguments with the model's local snapshot directory.
 
     Lets per-model ``extra_args`` reference files shipped inside the checkpoint,
     e.g. ``--lora-modules jev-decision={model_path}/adapter_vllm``.
+    ``token`` is the effective lane ``HF_TOKEN`` after ``_build_env``.
     """
     if not any(MODEL_PATH_PLACEHOLDER in arg for arg in cmd):
         return cmd
-    snapshot = resolve_model_snapshot(model, hf_home)
+    from logos_worker_node.calibration import extract_revision_arg
+
+    snapshot = resolve_model_snapshot(model, hf_home, token=token, revision=extract_revision_arg(cmd))
     return [arg.replace(MODEL_PATH_PLACEHOLDER, snapshot) for arg in cmd]
 
 
@@ -489,8 +509,12 @@ class VllmProcessHandle:
         env = self._build_env(lane_config)
         if any(MODEL_PATH_PLACEHOLDER in arg for arg in cmd):
             hf_home = env.get("HF_HOME") or os.environ.get("HF_HOME")
+            # Pass the lane's effective HF_TOKEN (incl. vc.env_overrides), not
+            # only the worker process env — gated snapshots otherwise fail
+            # here while the vLLM child would have received the token.
+            hf_token = env.get("HF_TOKEN")
             cmd = await asyncio.get_running_loop().run_in_executor(
-                None, expand_model_path, cmd, lane_config.model, hf_home
+                None, expand_model_path, cmd, lane_config.model, hf_home, hf_token
             )
 
         logger.info(

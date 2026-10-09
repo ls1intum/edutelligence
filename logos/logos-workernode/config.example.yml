@@ -333,12 +333,15 @@ engines:
       # Decision model behind POST /v1/systemone: the decision head ships as the
       # LoRA module "jev-decision" inside the checkpoint; the orchestrator reads
       # its answer-label logprobs. Chat requests keep reaching the base model.
-      # max_num_seqs 8: larger batches return wrong decision probabilities on
-      # this model's multimodal LoRA path. Needs one GPU with >= 80 GB.
+      # Pin --revision to the commit whose decision_head.json / calibration.json
+      # the orchestrator hard-codes. max_num_seqs: a positive value from 1 to 8
+      # (larger batches return wrong decision probabilities on this multimodal
+      # LoRA path). Needs one GPU with >= 80 GB.
       autotrust/JEV-27B-VL:
         max_model_len: 32768
         max_num_seqs: 8
         extra_args:
+          - --revision=ba3f0d584994b37998f235c0a3f6f1beff32ba1e
           - --enable-lora
           - --max-lora-rank=32
           - --lora-modules=jev-decision={model_path}/adapter_vllm
