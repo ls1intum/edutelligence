@@ -1,3 +1,4 @@
+from collections import defaultdict
 from functools import reduce
 from threading import Event
 from typing import Any, Dict, List, Optional
@@ -111,9 +112,10 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 and not self.check_if_transcription_needs_update()
             ):
                 # The stored rows provably derive from the current content
-                # (fingerprint stamps match) and cover exactly the expected
-                # slides, so re-running the summary and embedding work would
-                # reproduce what is already there.
+                # (fingerprint stamps match, or legacy rows whose text and times
+                # match the transcript) and cover exactly the expected slides, so
+                # re-running the summary and embedding work would reproduce what
+                # is already there.
                 logger.info(
                     "[%s / %s] Stored transcription rows are current and "
                     "complete, skipping transcription ingestion",
@@ -184,10 +186,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
     def check_if_transcription_needs_update(self) -> bool:
         """Decide structurally whether the stored transcription rows are current.
 
-        Skipping is only safe when every stored row carries the current
-        content fingerprint (an unstamped row is a legacy row of unknown
-        origin), all rows belong to a single ingestion generation, and the
-        stored slide numbers cover exactly the transcript's slide set.
+        Skipping is only safe when every stored row carries the current content
+        fingerprint, all rows belong to a single ingestion generation, and the
+        stored slide numbers cover exactly the transcript's slide set. Rows written
+        before fingerprints existed carry no stamp at all; they are kept only when
+        their text and times match the requested transcript slide by slide (see
+        :meth:`_legacy_rows_match_transcript`), which proves the same source
+        without any LLM call. A mix of stamped and unstamped rows is never kept.
         """
         expected_fingerprint = self.dto.lecture_unit.content_fingerprint
         if expected_fingerprint is None:
@@ -200,6 +205,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     LectureTranscriptionSchema.PAGE_NUMBER.value,
                     LectureTranscriptionSchema.CONTENT_FINGERPRINT.value,
                     LectureTranscriptionSchema.INGESTION_RUN_ID.value,
+                    LectureTranscriptionSchema.SEGMENT_TEXT.value,
+                    LectureTranscriptionSchema.SEGMENT_START_TIME.value,
+                    LectureTranscriptionSchema.SEGMENT_END_TIME.value,
                 ],
             )
         ).objects
@@ -211,14 +219,17 @@ class TranscriptionIngestionPipeline(SubPipeline):
         if len(rows) >= _TRANSCRIPTION_SKIP_CHECK_FETCH_LIMIT:
             return True
 
+        stamps = {
+            row.properties.get(LectureTranscriptionSchema.CONTENT_FINGERPRINT.value)
+            for row in rows
+        }
+        legacy = stamps == {None}
+        if not legacy and stamps != {expected_fingerprint}:
+            return True
+
         stored_pages: set[int] = set()
         run_ids: set = set()
         for row in rows:
-            if (
-                row.properties.get(LectureTranscriptionSchema.CONTENT_FINGERPRINT.value)
-                != expected_fingerprint
-            ):
-                return True
             run_ids.add(
                 row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
             )
@@ -236,12 +247,74 @@ class TranscriptionIngestionPipeline(SubPipeline):
         }
         if stored_pages != expected_pages:
             return True
+        if legacy and not self._legacy_rows_match_transcript(rows):
+            return True
 
         # A structurally complete scan can still be all ghosts (scan-visible,
         # object-store-missing): the final audit confirms every row, so trusting
         # the raw scan here would skip re-ingestion forever while the audit fails
         # on every retry, with nothing able to break the loop.
         return len(confirmed_rows(self.collection, rows)) != len(rows)
+
+    def _legacy_rows_match_transcript(self, rows) -> bool:
+        """Whether unstamped legacy rows were built from exactly the requested transcript.
+
+        Without a fingerprint stamp, the only proof that stored rows match the
+        current video is their content: per slide, the stored text pieces joined
+        in time order must equal the transcript's segment texts for that slide
+        (ignoring whitespace and the chunk separator, which chunking rewrites),
+        and the stored times must be the transcript's own segment boundaries,
+        with the same first start and last end. Splitting long text into pieces
+        neither changes its words nor invents times, so a match means the same
+        source; a replaced video with the same words but shifted times does not
+        match. Anything that does not match is rebuilt, which is always safe.
+        """
+        expected_text: dict = defaultdict(str)
+        boundaries: dict = defaultdict(set)
+        for segment in self.dto.lecture_unit.transcription.segments:
+            expected_text[segment.slide_number] += segment.text
+            boundaries[segment.slide_number].update(
+                (round(segment.start_time, 3), round(segment.end_time, 3))
+            )
+
+        stored: dict = defaultdict(list)
+        for row in rows:
+            props = row.properties
+            start = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
+            end = props.get(LectureTranscriptionSchema.SEGMENT_END_TIME.value)
+            if start is None or end is None:
+                return False
+            stored[int(props.get(LectureTranscriptionSchema.PAGE_NUMBER.value))].append(
+                (
+                    round(float(start), 3),
+                    round(float(end), 3),
+                    props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value) or "",
+                )
+            )
+
+        for slide_number, pieces in stored.items():
+            pieces.sort(key=lambda piece: (piece[0], piece[1]))
+            slide_boundaries = boundaries[slide_number]
+            if any(
+                start not in slide_boundaries or end not in slide_boundaries
+                for start, end, _ in pieces
+            ):
+                return False
+            if pieces[0][0] != min(slide_boundaries) or max(
+                end for _, end, _ in pieces
+            ) != max(slide_boundaries):
+                return False
+            stored_text = "".join(text for _, _, text in pieces)
+            if self._comparable_text(stored_text) != self._comparable_text(
+                expected_text[slide_number]
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def _comparable_text(text: str) -> str:
+        """Text with whitespace and the chunk separator removed, for source comparison."""
+        return "".join(text.replace(CHUNK_SEPARATOR_CHAR, "").split())
 
     def _lecture_unit_id(self) -> Optional[int]:
         lecture_unit = self.dto.lecture_unit if self.dto is not None else None

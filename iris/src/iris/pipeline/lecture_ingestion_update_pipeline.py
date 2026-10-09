@@ -34,7 +34,7 @@ from iris.pipeline.transcription_ingestion_pipeline import (
     TranscriptionIngestionPipeline,
 )
 from iris.tracing import observe
-from iris.vector_database.batch_verify import delete_many_with_retry
+from iris.vector_database.batch_verify import delete_many_with_retry, fetch_with_retry
 from iris.vector_database.database import VectorDatabase, batch_update_lock
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -43,6 +43,10 @@ from iris.vector_database.lecture_transcription_schema import (
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
+)
+from iris.vector_database.lecture_unit_segment_schema import (
+    LectureUnitSegmentSchema,
+    init_lecture_unit_segment_schema,
 )
 from iris.web.status.ingestion_status_callback import IngestionStatusCallback
 
@@ -526,6 +530,9 @@ class LectureIngestionUpdatePipeline(Pipeline):
         variant_id = self.variant_id
         is_local = self._is_local
         cancel_event = self.cancel_event
+        # Rows the purges below remove from the index in this run. Any removal means
+        # content went away, so stored summaries must not be reused for this run.
+        purged_rows = 0
 
         # PDF page ingestion
         has_pdf = bool(self.dto.lecture_unit.pdf_file_base64)
@@ -553,7 +560,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
         else:
             self._send_heartbeats(callback, 6, "missing PDF page ingestion")
-            self._purge_stale_page_chunks(client)
+            purged_rows += self._purge_stale_page_chunks(client)
 
         # Transcription ingestion
         has_transcript = (
@@ -578,7 +585,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
             )
         else:
             self._send_heartbeats(callback, 8, "missing transcription ingestion")
-            self._purge_stale_transcription(client)
+            purged_rows += self._purge_stale_transcription(client)
 
         # Lecture unit summary. When every content sub-pipeline structurally
         # skipped (or kept its previous generation), the stored unit summary
@@ -590,8 +597,12 @@ class LectureIngestionUpdatePipeline(Pipeline):
         # prove those segments were ever finished: without this check, such a
         # retry would reuse the same incomplete segments and fail the identical
         # audit check again, forever, instead of recomputing them once.
-        structurally_unchanged = (not has_pdf or pdf_skipped or pdf_kept_previous) and (
-            not has_transcript or transcript_skipped
+        # A purge that removed rows means a PDF or transcript went away in this run; the
+        # stored summaries may still describe it, so they are never reused then.
+        structurally_unchanged = (
+            (not has_pdf or pdf_skipped or pdf_kept_previous)
+            and (not has_transcript or transcript_skipped)
+            and purged_rows == 0
         )
         # `and` short-circuits: the extra read only happens when every content
         # sub-pipeline already skipped, not on every ordinary run.
@@ -667,7 +678,7 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 tokens=tokens,
             )
 
-    def _purge_stale_page_chunks(self, client) -> None:
+    def _purge_stale_page_chunks(self, client) -> int:
         """Clear any page chunks stored for this unit when this dispatch has no PDF.
 
         Artemis rebuilds the full attachment/transcript payload from its current
@@ -681,6 +692,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         empty -> clear what's stored" handling one level up. delete_many is
         idempotent, so this is safe to call unconditionally, including when
         nothing is stored.
+
+        :return: the number of page chunks removed
         """
         lecture_unit = self.dto.lecture_unit
         collection = init_lecture_unit_page_chunk_schema(client)
@@ -707,13 +720,17 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 self.cancel_event,
                 "PDF removal purge",
             ):
-                delete_many_with_retry(
+                self._invalidate_legacy_segments_before_purge(
+                    client, collection, unit_filter
+                )
+                result = delete_many_with_retry(
                     collection,
                     unit_filter,
                     "stale page chunks (no PDF in this dispatch)",
                 )
+        return result.successful
 
-    def _purge_stale_transcription(self, client) -> None:
+    def _purge_stale_transcription(self, client) -> int:
         """Clear any transcription rows stored for this unit when this dispatch
         has no transcript.
 
@@ -721,6 +738,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         means Artemis currently associates none with the unit (removed, video
         source changed, or never present), so any surviving rows are stale and
         would otherwise fail the manifest-based audit on every retry forever.
+
+        :return: the number of transcription rows removed
         """
         lecture_unit = self.dto.lecture_unit
         collection = init_lecture_transcription_schema(client)
@@ -747,11 +766,70 @@ class LectureIngestionUpdatePipeline(Pipeline):
                 self.cancel_event,
                 "transcription removal purge",
             ):
-                delete_many_with_retry(
+                self._invalidate_legacy_segments_before_purge(
+                    client, collection, unit_filter
+                )
+                result = delete_many_with_retry(
                     collection,
                     unit_filter,
                     "stale transcription rows (no transcript in this dispatch)",
                 )
+        return result.successful
+
+    def _invalidate_legacy_segments_before_purge(
+        self, client, source_collection, source_filter
+    ) -> None:
+        """Delete the unit's unstamped slide summaries before its source rows are purged.
+
+        Slide summaries written before fingerprints existed carry no stamp, so nothing
+        else ties them to the content they summarize. If a PDF or transcript is purged
+        and the run then fails before new summaries are written, a retry finds nothing
+        left to purge and would otherwise reuse summaries that still describe the
+        removed content. Deleting them first leaves the slide summaries incomplete,
+        so every later run regenerates them. Stamped summaries need no such step: the
+        unit's fingerprint changes with its content, so they are never reused.
+        """
+        if not fetch_with_retry(
+            lambda: source_collection.query.fetch_objects(
+                filters=source_filter, limit=1, return_properties=[]
+            )
+        ).objects:
+            return
+        lecture_unit = self.dto.lecture_unit
+        segments = init_lecture_unit_segment_schema(client)
+        segment_filter = (
+            Filter.by_property(LectureUnitSegmentSchema.BASE_URL.value).equal(
+                self.dto.settings.artemis_base_url
+            )
+            & Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).equal(
+                lecture_unit.course_id
+            )
+            & Filter.by_property(LectureUnitSegmentSchema.LECTURE_ID.value).equal(
+                lecture_unit.lecture_id
+            )
+            & Filter.by_property(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value).equal(
+                lecture_unit.lecture_unit_id
+            )
+        )
+        rows = fetch_with_retry(
+            lambda: segments.query.fetch_objects(
+                filters=segment_filter,
+                limit=settings.lecture_ingestion.skip_check_fetch_limit,
+                return_properties=[LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value],
+            )
+        ).objects
+        legacy_ids = [
+            row.uuid
+            for row in rows
+            if row.properties.get(LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value)
+            is None
+        ]
+        if legacy_ids:
+            delete_many_with_retry(
+                segments,
+                Filter.by_id().contains_any(legacy_ids),
+                "unstamped slide summaries of purged content",
+            )
 
     # ── Checkpoint helpers ───────────────────────────────────────────────
 

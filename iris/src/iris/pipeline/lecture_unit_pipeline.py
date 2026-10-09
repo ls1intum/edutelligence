@@ -5,6 +5,7 @@ from weaviate.classes.query import Filter
 
 from iris.common.cancellation import raise_if_cancelled
 from iris.common.logging_config import get_logger
+from iris.config import settings
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import LlmRequestHandler
@@ -22,6 +23,10 @@ from iris.vector_database.database import VectorDatabase, batch_update_lock
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
+)
+from iris.vector_database.lecture_unit_segment_schema import (
+    LectureUnitSegmentSchema,
+    init_lecture_unit_segment_schema,
 )
 from iris.vector_database.write_retry import WeaviateWriteRetry
 from iris.web.status.status_update import StatusCallback
@@ -89,6 +94,12 @@ class LectureUnitPipeline(SubPipeline):
         fingerprint: same inputs, already summarized, already embedded. This is
         what makes a metadata-only or reconcile re-dispatch of an unchanged
         unit cost zero LLM calls. Any doubt falls through to a full recompute.
+
+        A unit row written before fingerprints existed has no stamp. Its summary
+        is reused only while every slide summary of the unit is unstamped too:
+        those are the summaries it was built from, and the content sub-pipelines
+        already proved the unit's sources unchanged. Once any slide summary was
+        regenerated (stamped), the old unit summary no longer matches them.
         """
         if not lecture_unit.content_unchanged or not lecture_unit.content_fingerprint:
             return None
@@ -98,10 +109,13 @@ class LectureUnitPipeline(SubPipeline):
         if not stored_rows:
             return None
         stored = stored_rows[0]
-        if (
-            stored.properties.get(LectureUnitSchema.CONTENT_FINGERPRINT.value)
-            != lecture_unit.content_fingerprint
-        ):
+        stored_fingerprint = stored.properties.get(
+            LectureUnitSchema.CONTENT_FINGERPRINT.value
+        )
+        if stored_fingerprint is None:
+            if not self._all_segments_unstamped(lecture_unit):
+                return None
+        elif stored_fingerprint != lecture_unit.content_fingerprint:
             return None
         summary = stored.properties.get(LectureUnitSchema.LECTURE_UNIT_SUMMARY.value)
         vector = stored.vector
@@ -110,6 +124,36 @@ class LectureUnitPipeline(SubPipeline):
         if not summary or not vector:
             return None
         return summary, vector
+
+    def _all_segments_unstamped(self, lecture_unit: LectureUnitDTO) -> bool:
+        """Whether every stored slide summary of the unit predates fingerprint stamps."""
+        segments = init_lecture_unit_segment_schema(self.weaviate_client)
+        segment_filter = (
+            Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).equal(
+                lecture_unit.course_id
+            )
+            & Filter.by_property(LectureUnitSegmentSchema.LECTURE_ID.value).equal(
+                lecture_unit.lecture_id
+            )
+            & Filter.by_property(LectureUnitSegmentSchema.LECTURE_UNIT_ID.value).equal(
+                lecture_unit.lecture_unit_id
+            )
+            & Filter.by_property(LectureUnitSegmentSchema.BASE_URL.value).equal(
+                lecture_unit.base_url
+            )
+        )
+        rows = segments.query.fetch_objects(
+            filters=segment_filter,
+            limit=settings.lecture_ingestion.skip_check_fetch_limit,
+            return_properties=[LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value],
+        ).objects
+        if len(rows) >= settings.lecture_ingestion.skip_check_fetch_limit:
+            return False
+        return all(
+            row.properties.get(LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value)
+            is None
+            for row in rows
+        )
 
     @observe(name="Lecture Unit Pipeline")
     def __call__(

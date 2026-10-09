@@ -98,6 +98,33 @@ def detect_course_language(page_texts: list[str]) -> str:
         return settings.lecture_ingestion.default_language
 
 
+# Language names that older Iris versions stored on page chunks: they asked an LLM for
+# "the language of the text" and stored its free-text answer ("English", "Deutsch").
+_LEGACY_LANGUAGE_NAMES = {
+    "english": "en",
+    "englisch": "en",
+    "german": "de",
+    "deutsch": "de",
+}
+
+
+def normalize_language(value: Optional[str]) -> Optional[str]:
+    """Map a stored or requested course language to an ISO 639-1 code.
+
+    Current chunks store ISO codes; chunks written by older Iris versions store
+    the language name an LLM answered with. Both forms of the same language must
+    compare equal, or every legacy unit would be re-ingested only because of the
+    format. Anything that is neither a code nor a known name returns None, so a
+    garbage value never matches and its unit is rebuilt.
+    """
+    if not value:
+        return None
+    cleaned = value.strip().strip(".").strip().lower()
+    if len(cleaned) == 2 and cleaned.isalpha():
+        return cleaned
+    return _LEGACY_LANGUAGE_NAMES.get(cleaned)
+
+
 _UNICODE_BULLETS = (
     "\u0095"  # BULLET (legacy Windows-1252)
     "\u2022"  # BULLET
@@ -493,7 +520,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             stored_language = chunk.properties.get(
                 LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
             )
-            if not stored_language or stored_language != requested_language:
+            # Compared as ISO codes: legacy chunks store the language name ("English").
+            stored_code = normalize_language(stored_language)
+            if stored_code is None or stored_code != normalize_language(
+                requested_language
+            ):
                 return True
             # A null display number is legacy data written before the field existed
             # (or before slide detection). Re-ingest so the current pipeline
