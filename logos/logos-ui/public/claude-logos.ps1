@@ -54,7 +54,7 @@ $ErrorActionPreference = 'Stop'
 # Bump on every change installed copies should pick up. Keep in step with the same
 # constant in claude-logos.sh - the two wrappers are one tool with two front ends.
 # A monotonic integer, not a version string: the comparison cannot misread anything.
-$ClaudeLogosVersion = 6          # 2026-10-06
+$ClaudeLogosVersion = 7          # 2026-10-09
 
 $ConfigDir = if ($env:LOGOS_CONFIG_DIR) { $env:LOGOS_CONFIG_DIR }
              else { Join-Path $env:USERPROFILE '.config\claude-logos' }
@@ -77,6 +77,7 @@ function Stop-WithError([string]$Message) { Write-Error "claude-logos: $Message"
 # redirected without editing anything:
 #
 #   $env:LOGOS_MODEL = 'openai/gpt-oss-120b'; claude-logos   # optional pin; omit to pick in Claude Code
+#   $env:LOGOS_DEFAULT_MODEL = 'Qwen/Qwen3.8-27B'; claude-logos   # start model when nothing is pinned
 #
 $Config = @{}
 if (Test-Path -LiteralPath $ConfigFile) {
@@ -93,6 +94,7 @@ function Get-Setting([string]$Name, $Default) {
 
 $LogosUrl = (Get-Setting 'LOGOS_URL' 'https://logos.aet.cit.tum.de').TrimEnd('/')
 $LogosModel = Get-Setting 'LOGOS_MODEL' ''
+$LogosDefaultModel = Get-Setting 'LOGOS_DEFAULT_MODEL' ''
 
 # Which context size to run the session at: 'available' (what Logos can give this
 # model at the moment - the default, since long requests are sent wherever there is
@@ -427,6 +429,38 @@ try {
 } catch {
     Write-Note "could not ask Logos how much context is available ($($_.Exception.Message))"
 }
+
+# -- The model an unpinned session starts on --------------------------------------
+# The id Logos advertises to Claude Code (the Anthropic listing, where every id
+# carries the "claude-" prefix Claude Code needs to show it). LOGOS_DEFAULT_MODEL
+# wins when Logos lists it, by either spelling; otherwise the first model a coding
+# session can talk to - embedding, reranking and speech models are skipped.
+#
+# Claude Code otherwise starts on the model saved in %USERPROFILE%\.claude\settings.json
+# - an Anthropic id such as claude-opus-5-5 - and keeps using that id for the requests
+# it sends on its own (session titles among them) even after /model switched the main
+# loop to a Logos model. Logos then answers them with "No deployment found".
+$SessionDefaultModel = ''
+if (-not $HasPinnedModel) {
+    try {
+        $anthropicListing = Invoke-RestMethod -Uri "$LogosUrl/v1/models" -TimeoutSec 15 `
+            -Headers @{ Authorization = "Bearer $LogosKey"; 'anthropic-version' = '2023-06-01' }
+        $anthropicIds = @($anthropicListing.data | ForEach-Object { "$($_.id)" } | Where-Object { $_ })
+        if ($LogosDefaultModel) {
+            $SessionDefaultModel = $anthropicIds |
+                Where-Object { $_ -eq $LogosDefaultModel -or $_ -eq "claude-$LogosDefaultModel" } |
+                Select-Object -First 1
+        }
+        if (-not $SessionDefaultModel) {
+            $SessionDefaultModel = $anthropicIds |
+                Where-Object { $_ -notmatch 'embed|rerank|whisper|tts|transcri|speech' } |
+                Select-Object -First 1
+        }
+        if (-not $SessionDefaultModel) { $SessionDefaultModel = '' }
+    } catch {
+        Write-Note "could not ask Logos for a model to start on ($($_.Exception.Message))"
+    }
+}
 if ($ContextTokens -le 0) { $ContextTokens = $ContextFallback; $ContextOrigin = 'estimate' }
 
 $Headroom = [int](Get-Setting 'LOGOS_CONTEXT_HEADROOM' 0)
@@ -505,10 +539,19 @@ function Write-ContextReport {
     if ($HasPinnedModel) {
         Write-Host ("model    : {0}" -f $LogosModel)
     } else {
-        Write-Host 'model    : (Claude Code picks via GET /v1/models - set LOGOS_MODEL to pin a default)'
+        $startModel = if ($SessionDefaultModel) { $SessionDefaultModel } else { '<none>' }
+        Write-Host ("model    : {0} to start with, switch with /model (set LOGOS_MODEL to pin one)" -f $startModel)
     }
     Write-Host ("logos    : {0}" -f $LogosUrl)
     if (-not $HasPinnedModel) {
+        if (-not $SessionDefaultModel) {
+            Write-Host 'warning  : Logos lists no chat model for this key, so Claude Code falls back to'
+            Write-Host '           its own default model, which Logos does not serve.'
+        } elseif ($LogosDefaultModel -and $SessionDefaultModel -ne $LogosDefaultModel -and
+                  $SessionDefaultModel -ne "claude-$LogosDefaultModel") {
+            Write-Host ("warning  : LOGOS_DEFAULT_MODEL={0} is not served here, starting on {1}" -f
+                $LogosDefaultModel, $SessionDefaultModel)
+        }
         if ($AllModelIds.Count -gt 0) {
             Write-Host ("available : {0}" -f ($AllModelIds -join ' '))
         }
@@ -572,21 +615,29 @@ function Write-ContextReport {
 $env:ANTHROPIC_BASE_URL = $LogosUrl
 $env:ANTHROPIC_AUTH_TOKEN = $LogosKey
 $env:ANTHROPIC_API_KEY = ''
-if ($HasPinnedModel) {
-    foreach ($slot in @('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-                        'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
-                        'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL')) {
-        Set-Item -Path "env:$slot" -Value $LogosModel
+# Every model slot Claude Code has points at a Logos model. Left unset, each one falls
+# back to an Anthropic id - the model saved in settings.json, or the built-in
+# haiku/sonnet/opus - which Logos does not serve, and Claude Code sends some of those
+# requests on its own (the session title, for one) even after /model switched to a
+# Logos model. With a pin every slot is that model; without one they all start on the
+# session default and /model switches the main loop from there. See claude-logos.sh.
+$ModelSlots = @('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+                'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
+                'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL',
+                'CLAUDE_CODE_SUBAGENT_MODEL')
+function Set-ModelSlots([string]$Model) {
+    foreach ($slot in $ModelSlots) {
+        if ($Model) { Set-Item -Path "env:$slot" -Value $Model }
+        else { Remove-Item -Path "env:$slot" -ErrorAction SilentlyContinue }
     }
+}
+if ($HasPinnedModel) {
+    Set-ModelSlots $LogosModel
     $env:CLAUDE_CODE_MAX_CONTEXT_TOKENS = "$ContextForCli"
 } else {
-    # Drop inherited pins/context so /model discovery is not overridden.
-    foreach ($slot in @('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-                        'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL',
-                        'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL',
-                        'CLAUDE_CODE_MAX_CONTEXT_TOKENS')) {
-        Remove-Item -Path "env:$slot" -ErrorAction SilentlyContinue
-    }
+    Set-ModelSlots $SessionDefaultModel
+    # Claude Code sizes each discovered model from List Models (max_input_tokens).
+    Remove-Item -Path env:CLAUDE_CODE_MAX_CONTEXT_TOKENS -ErrorAction SilentlyContinue
     # Opt into gateway List Models -> /model. Requires Claude Code >= 2.1.257 when
     # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set.
     $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
@@ -594,6 +645,13 @@ if ($HasPinnedModel) {
 $env:CLAUDE_CODE_MAX_OUTPUT_TOKENS = "$MaxOutputTokens"
 # Keep telemetry, model discovery and other non-inference calls off api.anthropic.com.
 $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
+# The same, one switch at a time, in case the umbrella above ever covers less; the
+# claude.ai connectors come from the claude.ai login. See claude-logos.sh.
+$env:DISABLE_TELEMETRY = '1'
+$env:DISABLE_ERROR_REPORTING = '1'
+$env:DISABLE_AUTOUPDATER = '1'
+$env:DISABLE_FEEDBACK_COMMAND = '1'
+$env:ENABLE_CLAUDEAI_MCP_SERVERS = 'false'
 
 # Everything the startup line prints, plus which key and effort are in play. It
 # deliberately makes no inference request: reading the model list already proves
