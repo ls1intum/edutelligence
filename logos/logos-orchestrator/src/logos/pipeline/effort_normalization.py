@@ -22,11 +22,22 @@ forwards to the chat template:
 - ``chat_template_kwargs.reasoning_effort`` (explicit template kwarg)
 
 A new template family with a restricted scale is added by registering one
-entry in ``CHAT_TEMPLATE_EFFORT_SCALES``.
+entry in ``CHAT_TEMPLATE_EFFORT_SCALES``. A family nobody registered yet is
+learned at run time instead: when an upstream rejects an effort value and
+names the values it supports (vLLM/Harmony: ``Supported values are: high,
+medium, low``; the Qwen3.8 template: ``Supported types are xhigh (default),
+medium, and low``), ``adapt_payload_after_effort_rejection`` records that
+scale for the model and returns the payload rewritten onto it, so the caller
+can resend the request once. Every later request to that model is then
+normalized before it is sent.
 """
 
+import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, Mapping, Optional
+
+logger = logging.getLogger(__name__)
 
 # Snapshot of vLLM 0.31.0's ChatCompletionRequest.reasoning_effort Literal,
 # kept in sync with the workernode's VLLM_PIP_SPEC (the "Logos - Update
@@ -70,15 +81,105 @@ CHAT_TEMPLATE_EFFORT_SCALES: Dict[str, EffortScale] = {
 }
 
 
+# The effort levels in ascending order. A learned scale maps a level the
+# upstream rejects onto the next higher level it accepts, and onto the next
+# lower one only when nothing higher is accepted: asking for more reasoning
+# than requested is closer to the client's intent than asking for less.
+EFFORT_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "max")
+
+# Scales learned from upstream rejections, keyed by the lower-cased model
+# name. They are exact per model and observed, so they win over the
+# substring-matched registry above. Process-local: a restart relearns each
+# one with a single rejected request.
+_LEARNED_EFFORT_SCALES: Dict[str, EffortScale] = {}
+
+# "Supported values are: high, medium, low" (vLLM / Harmony) and
+# "Supported types are xhigh (default), medium, and low" (Qwen3.8 template).
+# The list runs to the end of the line or of the JSON string it sits in.
+_SUPPORTED_LIST_RE = re.compile(r"supported\s+(?:values|types|levels)\s*(?:are)?\s*:?\s*([^\n\"]*)", re.IGNORECASE)
+
+
+def effort_scale_from_accepted(accepted: FrozenSet[str]) -> EffortScale:
+    """The scale for an upstream that accepts exactly ``accepted``.
+
+    Every known level outside it maps to the next higher accepted level, or
+    the next lower one when none is higher; anything else falls back to
+    what ``high`` (the Anthropic default) maps to.
+    """
+    ranked = [level for level in EFFORT_LEVELS if level in accepted]
+
+    def nearest(level: str) -> str:
+        position = EFFORT_LEVELS.index(level)
+        higher = [candidate for candidate in ranked if EFFORT_LEVELS.index(candidate) > position]
+        return higher[0] if higher else ranked[-1]
+
+    mapping = {level: nearest(level) for level in EFFORT_LEVELS if level not in accepted}
+    return EffortScale(accepted=frozenset(ranked), map=mapping, default=mapping.get("high", "high"))
+
+
+def parse_effort_rejection(error_text: Any) -> Optional[FrozenSet[str]]:
+    """The effort levels an upstream error says it supports, or None.
+
+    Only an error about the reasoning effort that lists at least one known
+    level counts; anything else — a context-length error, a timeout, an
+    unrelated "supported values" message — returns None.
+    """
+    text = str(error_text or "")
+    if "effort" not in text.lower():
+        return None
+    match = _SUPPORTED_LIST_RE.search(text)
+    if match is None:
+        return None
+    accepted = frozenset(word for word in re.findall(r"[a-z]+", match.group(1).lower()) if word in EFFORT_LEVELS)
+    return accepted or None
+
+
+def adapt_payload_after_effort_rejection(
+    payload: Dict[str, Any], model_name: Optional[str], error_text: Any
+) -> Optional[Dict[str, Any]]:
+    """The payload to resend after an upstream rejected its effort, or None.
+
+    When ``error_text`` is an effort rejection that names the supported
+    levels, the scale is recorded for ``model_name`` (so every later request
+    is normalized up front) and the payload is returned rewritten onto it.
+    Returns None when the error is not an effort rejection, when there is no
+    model to learn for, or when rewriting changes nothing — resending the
+    same payload would only fail the same way.
+    """
+    accepted = parse_effort_rejection(error_text)
+    if accepted is None or not model_name or not isinstance(payload, dict):
+        return None
+    scale = effort_scale_from_accepted(accepted)
+    key = model_name.lower()
+    if _LEARNED_EFFORT_SCALES.get(key) != scale:
+        _LEARNED_EFFORT_SCALES[key] = scale
+        logger.info(
+            "Learned the reasoning-effort scale of %s from an upstream rejection: %s",
+            model_name,
+            ", ".join(level for level in EFFORT_LEVELS if level in scale.accepted),
+        )
+    adapted = normalize_reasoning_effort(payload, model_name)
+    return None if adapted is payload else adapted
+
+
+def forget_learned_effort_scales() -> None:
+    """Drop every learned scale (used by the tests)."""
+    _LEARNED_EFFORT_SCALES.clear()
+
+
 def effort_scale_for_model(model_name: Optional[str]) -> Optional[EffortScale]:
     """Return the effort scale the model's chat template enforces, if any.
 
-    When several registered patterns match (e.g. a broad ``qwen3`` and a
-    specific ``qwen3.8``), the most specific one — the longest matching
-    pattern — wins, so broad entries cannot shadow specific ones
-    regardless of registration order.
+    A scale learned for exactly this model wins. Otherwise, when several
+    registered patterns match (e.g. a broad ``qwen3`` and a specific
+    ``qwen3.8``), the most specific one — the longest matching pattern —
+    wins, so broad entries cannot shadow specific ones regardless of
+    registration order.
     """
     low = (model_name or "").lower()
+    learned = _LEARNED_EFFORT_SCALES.get(low)
+    if learned is not None:
+        return learned
     best_pattern: Optional[str] = None
     for pattern in CHAT_TEMPLATE_EFFORT_SCALES:
         if pattern in low and (best_pattern is None or len(pattern) > len(best_pattern)):
