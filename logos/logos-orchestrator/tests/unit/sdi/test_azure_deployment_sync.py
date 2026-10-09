@@ -209,3 +209,35 @@ def test_an_unparseable_base_url_warns_instead_of_raising(caplog):
 def test_a_missing_base_url_warns_instead_of_raising(caplog):
     _warn_if_not_an_azure_endpoint({"id": 4, "name": "blank", "base_url": None})
     assert caplog.records
+
+
+_TURBO = f"{HOST}/openai/deployments/gpt-4-turbo/chat/completions"
+
+
+def test_sync_keeps_a_deployment_pinned_to_a_legacy_api_version():
+    from logos.dbutils.dbmanager import keep_pinned_legacy_api_version
+
+    pinned = f"{_TURBO}?api-version=2024-02-01"
+    assert keep_pinned_legacy_api_version(pinned, f"{_TURBO}?api-version=2025-01-01-preview") == pinned
+
+
+def test_sync_pin_keeps_turbo_on_max_tokens_after_a_sync():
+    from logos.anthropic_compat.common import wants_max_completion_tokens
+    from logos.dbutils.dbmanager import keep_pinned_legacy_api_version
+
+    stored = keep_pinned_legacy_api_version(
+        f"{_TURBO}?api-version=2024-02-01", f"{_TURBO}?api-version=2025-01-01-preview"
+    )
+    assert wants_max_completion_tokens(stored) is False
+
+
+def test_sync_still_moves_a_current_or_changed_endpoint():
+    from logos.dbutils.dbmanager import keep_pinned_legacy_api_version
+
+    new = f"{_TURBO}?api-version=2025-01-01-preview"
+    # An old synced default (>= 2024-09-01) is not a pin: it follows the sync.
+    assert keep_pinned_legacy_api_version(f"{_TURBO}?api-version=2024-10-21", new) == new
+    # A renamed deployment is a different URL: no pin applies.
+    other = f"{HOST}/openai/deployments/other/chat/completions?api-version=2024-02-01"
+    assert keep_pinned_legacy_api_version(other, new) == new
+    assert keep_pinned_legacy_api_version(None, new) == new
