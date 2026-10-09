@@ -35,6 +35,8 @@ Run matching versions from the same release cycle. Pairing an Artemis release wi
 | 9.6.x           | 2.6.x                 | ✅ Stable |
 | 9.7.x - 9.9.x   | 2.7.x                 | ✅ Stable |
 | 10.0.x          | 3.0.x                 | ✅ Stable |
+| 10.1.x          | 3.1.x                 | ✅ Stable |
+| 10.2.x          | 3.2.x                 | ✅ Stable |
 
 The same table is maintained in the [EduTelligence README](https://github.com/ls1intum/edutelligence#-artemis-compatibility); update both when cutting a release.
 
