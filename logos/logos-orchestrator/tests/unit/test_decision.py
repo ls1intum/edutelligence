@@ -8,7 +8,7 @@ from unittest.mock import Mock
 import httpx
 import pytest
 from fastapi import HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 import logos as main
 from logos.dbutils.dbrequest import SystemOneRequest
@@ -268,6 +268,46 @@ async def test_route_reports_a_rejected_completion(monkeypatch):
     response = await post({"model": MODEL, "state": "x", "questions": {"q": {"type": "noul"}}})
     assert response.status_code == 403
     assert response.json() == {"error": {"message": "no access to this model"}}
+
+
+async def test_route_reports_an_unreadable_completion_as_bad_gateway(monkeypatch):
+    monkeypatch.setattr(user_facing, "authenticate_api_key", Mock())
+
+    async def handle(path, req):
+        return Response(content=b"not-json", status_code=200, media_type="text/plain")
+
+    monkeypatch.setattr(user_facing, "handle_sync_request", handle)
+    response = await post({"model": MODEL, "state": "x", "questions": {"q": {"type": "noul"}}})
+    assert response.status_code == 502
+    assert response.json() == {"error": {"message": "The model returned an unreadable response."}}
+
+
+async def test_route_labels_a_local_bad_gateway_as_api_error(monkeypatch):
+    monkeypatch.setattr(user_facing, "authenticate_api_key", Mock())
+
+    async def handle(path, req):
+        return JSONResponse({"choices": [{"text": "x", "logprobs": None}]})
+
+    monkeypatch.setattr(user_facing, "handle_sync_request", handle)
+    response = await post({"model": MODEL, "state": "x", "questions": {"q": {"type": "noul"}}})
+    assert response.status_code == 502
+    body = response.json()
+    assert body["error"]["type"] == "api_error"
+    assert "logprobs" in body["error"]["message"]
+
+
+async def test_route_labels_an_unknown_model_as_invalid_request(monkeypatch):
+    monkeypatch.setattr(user_facing, "authenticate_api_key", Mock())
+    response = await post({"model": "not-a-decision-model", "state": "x", "questions": {"q": {"type": "noul"}}})
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "invalid_request_error"
+
+
+async def test_route_rejects_too_many_questions(monkeypatch):
+    monkeypatch.setattr(user_facing, "authenticate_api_key", Mock())
+    questions = {f"q{i}": {"type": "noul"} for i in range(33)}
+    response = await post({"model": MODEL, "state": "x", "questions": questions})
+    assert response.status_code == 422
 
 
 async def test_route_validates_the_question_type(monkeypatch):

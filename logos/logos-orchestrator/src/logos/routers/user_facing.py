@@ -510,6 +510,7 @@ _ERROR_TYPES = {
     403: "permission_error",
     404: "not_found_error",
     413: "request_too_large",
+    422: "invalid_request_error",
     429: "rate_limit_error",
     529: "overloaded_error",
 }
@@ -629,7 +630,10 @@ async def system_one(body: SystemOneRequest, request: Request):
 
     async def turn(path: str, payload: dict) -> tuple[int, Optional[dict]]:
         try:
-            return await _pipeline_turn(path, request, payload)
+            status, data = await _pipeline_turn(path, request, payload)
+            if data is None:
+                return 502, {"error": {"message": "The model returned an unreadable response."}}
+            return status, data
         except HTTPException as exc:
             return exc.status_code, {"error": {"message": str(exc.detail)}}
 
@@ -638,7 +642,17 @@ async def system_one(body: SystemOneRequest, request: Request):
     except DecisionError as exc:
         if exc.body is not None:
             return JSONResponse(exc.body, status_code=exc.status)
-        return JSONResponse({"error": {"message": str(exc), "type": "invalid_request_error"}}, status_code=exc.status)
+        # Locally raised failures: invalid_request_error only for 400/422;
+        # other statuses map through _ERROR_TYPES with api_error as fallback.
+        return JSONResponse(
+            {
+                "error": {
+                    "message": str(exc),
+                    "type": _ERROR_TYPES.get(exc.status, "api_error"),
+                }
+            },
+            status_code=exc.status,
+        )
 
 
 @router.post("/v1/{path:path}", tags=["user-facing"])

@@ -50,12 +50,18 @@ class ScoreQuestion(BaseModel):
 DecisionQuestion = Annotated[Union[NoulQuestion, ChoiceQuestion, ScoreQuestion], Field(discriminator="type")]
 
 
+# Upper bound on questions per /v1/systemone call. Each entry becomes one
+# pipeline completion; without a cap a single request can spawn unbounded
+# concurrent auth/schedule/DB work before per-turn rate limits apply.
+SYSTEM_ONE_MAX_QUESTIONS = 32
+
+
 class SystemOneRequest(BaseModel):
     """Body of ``POST /v1/systemone``: a state and the typed questions to answer about it."""
 
     model: str = Field(min_length=1)
     state: Any
-    questions: dict[str, DecisionQuestion] = Field(min_length=1)
+    questions: dict[str, DecisionQuestion] = Field(min_length=1, max_length=SYSTEM_ONE_MAX_QUESTIONS)
 
 
 class LogosNodeAuthRequest(BaseModel):
