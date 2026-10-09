@@ -105,8 +105,18 @@ class _StubGateway:
                     if self.headers.get("anthropic-version"):
                         # The Anthropic shape Claude Code reads: every id carries
                         # the claude- prefix it needs to show a gateway model.
-                        ids = stub.anthropic_ids or [f"claude-{m['id']}" for m in stub.models]
-                        data = [{"type": "model", "id": model_id, "display_name": model_id} for model_id in ids]
+                        if stub.anthropic_ids:
+                            data = [{"type": "model", "id": i, "display_name": i} for i in stub.anthropic_ids]
+                        else:
+                            data = [
+                                {
+                                    "type": "model",
+                                    "id": f"claude-{m['id']}",
+                                    "display_name": m["id"],
+                                    "max_input_tokens": m.get("max_model_len"),
+                                }
+                                for m in stub.models
+                            ]
                         self._send(200, json.dumps({"data": data, "has_more": False}).encode())
                         return
                     self._send(200, json.dumps({"object": "list", "data": stub.models}).encode())
@@ -602,3 +612,41 @@ def test_unpinned_launch_prefers_the_exact_default_over_its_claude_form(tmp_path
     for slot in MODEL_SLOTS:
         assert exact["env"][slot] == "foo", slot
         assert prefixed["env"][slot] == "claude-foo", slot
+
+
+NARROW_WINDOW = 32768
+
+
+@pytest.fixture
+def narrow_first_gateway() -> Iterator[_StubGateway]:
+    """A 32k chat model listed before a wide one, as Logos orders by id."""
+    stub = _StubGateway([_model_entry("a-small-chat", NARROW_WINDOW), _model_entry(MODEL, WIDE_WINDOW)])
+    stub.start()
+    try:
+        yield stub
+    finally:
+        stub.stop()
+
+
+def test_unpinned_launch_passes_over_a_window_too_narrow_for_the_first_request(
+    narrow_first_gateway, tmp_path, fake_claude
+):
+    """32768 tokens cannot hold the ~13000-token opening prompt plus the 20000 reserved for the reply."""
+    launch = _unpinned_launch(narrow_first_gateway, tmp_path, fake_claude)
+    for slot in MODEL_SLOTS:
+        assert launch["env"][slot] == f"claude-{MODEL}", slot
+
+
+def test_a_smaller_reply_reservation_makes_the_narrow_model_usable(narrow_first_gateway, tmp_path, fake_claude):
+    launch = _unpinned_launch(narrow_first_gateway, tmp_path, fake_claude, LOGOS_MAX_OUTPUT_TOKENS="4096")
+    assert launch["env"]["ANTHROPIC_MODEL"] == "claude-a-small-chat"
+
+
+def test_with_only_narrow_models_the_first_chat_model_is_still_chosen(tmp_path, fake_claude):
+    stub = _StubGateway([_model_entry("a-small-chat", NARROW_WINDOW), _model_entry("b-small-chat", NARROW_WINDOW)])
+    stub.start()
+    try:
+        launch = _unpinned_launch(stub, tmp_path, fake_claude)
+    finally:
+        stub.stop()
+    assert launch["env"]["ANTHROPIC_MODEL"] == "claude-a-small-chat"

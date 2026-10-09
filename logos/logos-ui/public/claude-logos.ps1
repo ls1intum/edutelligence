@@ -435,7 +435,8 @@ try {
 # carries the "claude-" prefix Claude Code needs to show it). LOGOS_DEFAULT_MODEL
 # wins when Logos lists it, by either spelling (the exact one first); otherwise the
 # first model a coding session can talk to - embedding, reranking, speech and image
-# models are skipped.
+# models are skipped, and so is a model whose advertised window cannot hold the
+# opening prompt plus the reply reservation, as long as a wider one is listed.
 #
 # Claude Code otherwise starts on the model saved in %USERPROFILE%\.claude\settings.json
 # - an Anthropic id such as claude-opus-5-5 - and keeps using that id for the requests
@@ -457,9 +458,19 @@ if (-not $HasPinnedModel) {
         if (-not $SessionDefaultModel) {
             # Embeddings, rerankers, speech and image generation cannot answer a
             # Messages request; Logos keeps no modality per model, so the name decides.
-            $SessionDefaultModel = $anthropicIds |
-                Where-Object { $_ -notmatch 'embed|rerank|whisper|tts|transcri|speech|dall-e|image|diffusion|sdxl|flux|imagen' } |
+            $chat = @($anthropicListing.data | Where-Object {
+                $_.id -and "$($_.id)" -notmatch 'embed|rerank|whisper|tts|transcri|speech|dall-e|image|diffusion|sdxl|flux|imagen'
+            })
+            # A model whose advertised window cannot hold Claude Code's opening
+            # prompt (~13000), the reply reservation, the 3000-token hard-stop
+            # margin and the smallest headroom fails the first request, so it is
+            # passed over while a wider one is listed. An unknown window is no
+            # reason to skip a model.
+            $needed = 13000 + $MaxOutputTokens + 3000 + 1024
+            $fitting = $chat | Where-Object { (Get-Window $_.max_input_tokens) -eq 0 -or (Get-Window $_.max_input_tokens) -ge $needed } |
                 Select-Object -First 1
+            $picked = if ($fitting) { $fitting } else { $chat | Select-Object -First 1 }
+            if ($picked) { $SessionDefaultModel = "$($picked.id)" }
         }
         if (-not $SessionDefaultModel) { $SessionDefaultModel = '' }
     } catch {

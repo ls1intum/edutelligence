@@ -513,8 +513,10 @@ for entry in data.get("data", []):
 # Code (the Anthropic listing, where every id carries the "claude-" prefix Claude
 # Code needs to show it). LOGOS_DEFAULT_MODEL wins when Logos lists it, by either
 # spelling (the exact one first); otherwise the first model a coding session can
-# talk to — embedding, reranking, speech and image models are skipped. Prints
-# nothing when Logos lists none.
+# talk to — embedding, reranking, speech and image models are skipped, and so is
+# a model whose advertised window cannot hold the opening prompt plus the reply
+# reservation, as long as a wider one is listed. Prints nothing when Logos lists
+# no chat model.
 #
 # Claude Code otherwise starts on the model saved in ~/.claude/settings.json — an
 # Anthropic id such as claude-opus-5-5 — and keeps using that id for the requests it
@@ -528,10 +530,15 @@ import json, re, sys
 
 wanted = sys.argv[1].strip()
 try:
+    max_output = int(sys.argv[2])
+except ValueError:
+    max_output = 20000
+try:
     data = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
-ids = [str(m["id"]) for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
+entries = [m for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
+ids = [str(m["id"]) for m in entries]
 
 
 if wanted:
@@ -548,11 +555,28 @@ not_chat = re.compile(
     r"embed|rerank|whisper|tts|transcri|speech|dall-e|image|diffusion|sdxl|flux|imagen",
     re.IGNORECASE,
 )
-for model_id in ids:
-    if not not_chat.search(model_id):
-        print(model_id)
-        break
-' "$LOGOS_DEFAULT_MODEL" || true
+# The narrowest window a session can start in: Claude Code opening prompt
+# (~13000 tokens), the reply reservation, its 3000-token hard-stop margin and
+# the smallest headroom this wrapper keeps (see the floor check further down).
+# A model whose advertised window is smaller fails the very first request, so
+# it is passed over while a wider one is listed; an unknown window is no reason
+# to skip a model.
+needed = 13000 + max_output + 3000 + 1024
+
+
+def fits(entry):
+    try:
+        window = int(entry.get("max_input_tokens") or 0)
+    except (TypeError, ValueError):
+        window = 0
+    return window <= 0 or window >= needed
+
+
+chat = [m for m in entries if not not_chat.search(str(m["id"]))]
+chosen = next((m for m in chat if fits(m)), chat[0] if chat else None)
+if chosen is not None:
+    print(chosen["id"])
+' "$LOGOS_DEFAULT_MODEL" "$LOGOS_MAX_OUTPUT_TOKENS" || true
 }
 
 # ── New models since the last run ───────────────────────────────────────────────
