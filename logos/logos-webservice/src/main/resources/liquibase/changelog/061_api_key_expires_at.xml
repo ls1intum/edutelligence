@@ -11,7 +11,7 @@
          session key stores its lifetime and the parent it clones; auth
          rejects the row after expiry, and the runner revokes it when the
          session ends. -->
-    <changeSet id="057-api-key-expires-at" author="logos">
+    <changeSet id="061-api-key-expires-at" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="api_keys" columnName="expires_at"/></not>
         </preConditions>
@@ -38,7 +38,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="057-agent-session-api-key" author="logos">
+    <changeSet id="061-agent-session-api-key" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="agent_sessions" columnName="session_api_key_id"/></not>
         </preConditions>
