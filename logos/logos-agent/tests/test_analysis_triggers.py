@@ -196,3 +196,92 @@ async def test_a_failed_nightly_pass_is_retried_within_the_hour(monkeypatch):
     except RuntimeError:
         pass
     assert poller._nightly_due(night.replace(minute=10))
+
+
+async def test_a_stopped_runner_still_queues_analysis(monkeypatch):
+    # Pause stops starting work, not writing it down: a link that needs
+    # analysis while the runner is stopped must still become a queued
+    # session so it is waiting when the runner comes back.
+    monkeypatch.setattr(
+        analysis_triggers, "settings", replace(analysis_triggers.settings, analysis_nightly_hour_utc=-1)
+    )
+    poller = AnalysisPoller()
+    link = _link(1, None)
+    queued_links: list[dict] = []
+
+    async def nothing(*args, **kwargs):
+        return None
+
+    async def needing():
+        return [link]
+
+    async def queue(item, *, previous_commit=None):
+        queued_links.append(item)
+        return 42
+
+    class _Control:
+        def admission_block(self):
+            return "the runner is paused"
+
+    async def current():
+        return _Control()
+
+    monkeypatch.setattr(poller, "_reconcile_stale_analyses", nothing)
+    monkeypatch.setattr(poller, "_links_needing_analysis", needing)
+    monkeypatch.setattr(poller, "_queue", queue)
+    monkeypatch.setattr(analysis_triggers.controls, "current", current)
+    monkeypatch.setattr(analysis_triggers.model_policy, "current", lambda: type("P", (), {"ok": True, "detail": ""})())
+
+    sessions = await poller.poll_once()
+
+    assert sessions == [42]
+    assert queued_links == [link]
+
+
+async def test_a_stopped_runner_still_queues_nightly_analysis(monkeypatch):
+    monkeypatch.setattr(analysis_triggers, "settings", replace(analysis_triggers.settings, analysis_nightly_hour_utc=1))
+    poller = AnalysisPoller()
+    link = _link(2, HEAD)
+    queued: list[tuple[dict, str | None]] = []
+
+    async def nothing(*args, **kwargs):
+        return []
+
+    async def for_nightly():
+        return [link]
+
+    async def queue(item, *, previous_commit=None):
+        queued.append((item, previous_commit))
+        return 99
+
+    async def head(slug, branch):
+        return MOVED
+
+    class _Control:
+        def admission_block(self):
+            return "no new sessions while draining"
+
+    async def current():
+        return _Control()
+
+    night = datetime(2026, 10, 3, 1, 5, tzinfo=timezone.utc)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return night
+
+    monkeypatch.setattr(poller, "_reconcile_stale_analyses", nothing)
+    monkeypatch.setattr(poller, "_links_needing_analysis", nothing)
+    monkeypatch.setattr(poller, "_links_for_nightly", for_nightly)
+    monkeypatch.setattr(poller, "_queue", queue)
+    monkeypatch.setattr(github, "branch_head", head)
+    monkeypatch.setattr(analysis_triggers.controls, "current", current)
+    monkeypatch.setattr(analysis_triggers.model_policy, "current", lambda: type("P", (), {"ok": True, "detail": ""})())
+    monkeypatch.setattr(analysis_triggers, "datetime", _Clock)
+
+    sessions = await poller.poll_once()
+
+    assert sessions == [99]
+    assert queued == [(link, None)]
+    assert poller._nightly_done_for == night.date()

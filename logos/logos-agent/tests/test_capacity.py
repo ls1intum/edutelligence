@@ -1112,6 +1112,37 @@ class TestOwnSlotsAreVisible:
         assert reading.busy_slots == 5
         assert reading.load == 0.5
 
+    def test_lagging_engine_sample_keeps_one_slot_population(self):
+        # Ledger: 2 of ours + 18 others = 20. Engine sample still shows only
+        # the 18 others. Own and busy must share that ledger population, or
+        # the page reports 2 agent / 16 other / 2 free.
+        model = {
+            "model_name": "Qwen/Qwen3.8-27B",
+            "active": 20,
+            "active_by_api_key": {"7": 2},
+            "queue_depth": 0,
+            "max_capacity": 20,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 18.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, own_api_key_id=7, discount_own=False)
+
+        assert reading.own_slots == 2
+        assert reading.busy_slots == 20
+        assert reading.total_slots == 20
+        own = max(0, min(reading.own_slots, reading.busy_slots))
+        other = max(0, reading.busy_slots - own)
+        free = max(0, reading.total_slots - own - other)
+        assert (own, other, free) == (2, 18, 0)
+
     def test_discount_still_removes_own_share_for_pause(self):
         model = {
             "model_name": "Qwen/Qwen3.8-27B",

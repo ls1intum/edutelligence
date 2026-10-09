@@ -205,6 +205,8 @@ async def get_capacity(_: Principal = Depends(require_agent_operator)) -> Capaci
     policy = await model_policy.refresh()
     if not policy.ok:
         may_start, reason = False, policy.detail
+    # own_slots and busy_slots share one population (see capacity.parse):
+    # partition against busy so agent + other + free always add up.
     own_slots = max(0, min(reading.own_slots, reading.busy_slots))
     other_slots = max(0, reading.busy_slots - own_slots)
     return CapacityState(

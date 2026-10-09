@@ -436,6 +436,14 @@ def parse_scheduler_state(
         depth = model_depth.get(name, 0)
         if not discount_own:
             slots[1] = engine_waiting + depth
+            # Own slots come from the ledger's per-key split. When that
+            # ledger sees more in-flight work than the engine sample, use
+            # it for busy too — otherwise the page invents free slots from
+            # a lagging sample while still colouring agent cells from the
+            # fuller ledger (20 ledger = 2 agent + 18 other, 18 engine →
+            # 2/16/2 instead of 2/18/0).
+            if name in key_reported:
+                slots[0] = max(engine, per_model_ledger.get(name, 0))
             busy += slots[0]
             queue_total += slots[1]
             continue
