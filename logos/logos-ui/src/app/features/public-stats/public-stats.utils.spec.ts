@@ -172,9 +172,9 @@ describe('keyTypeSlices and laneSlices', () => {
   it('maps the key types with members first and keeps fixed slots', () => {
     const slices = keyTypeSlices(stats());
     expect(slices.map((s) => [s.key, s.value, s.color])).toEqual([
-      ['developer', 3, 'var(--series-1)'],
-      ['application', 2, 'var(--series-2)'],
-      ['service', 0, 'var(--series-3)'],
+      ['developer', 3, 'var(--duo-1)'],
+      ['application', 2, 'var(--duo-2)'],
+      ['service', 0, 'var(--duo-3)'],
     ]);
     expect(slices.find((s) => s.key === 'service')!.caption).toContain('automated backend jobs');
   });
@@ -199,8 +199,8 @@ describe('keyTypeSlices and laneSlices', () => {
   it('maps the lanes with local first', () => {
     const slices = laneSlices(stats());
     expect(slices.map((s) => [s.key, s.value, s.color])).toEqual([
-      ['local', 1, 'var(--series-1)'],
-      ['cloud', 4, 'var(--series-2)'],
+      ['local', 1, 'var(--duo-1)'],
+      ['cloud', 4, 'var(--duo-2)'],
     ]);
   });
 

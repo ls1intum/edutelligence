@@ -127,7 +127,7 @@ export function windowLabel(days: PublicStatsDays | string): string {
   return `last ${days} days`;
 }
 
-/** Successful requests by key type as segments: members' personal keys first. */
+/** Successful requests by key type as violet steps of one whole: members' personal keys first. */
 export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
   const kt = stats.requests_by_key_type;
   const slices: ChartSlice[] = [
@@ -136,7 +136,7 @@ export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
       label: 'Member keys',
       caption: 'Personal keys that belong to a team member.',
       value: kt.developer ?? 0,
-      color: 'var(--series-1)',
+      color: 'var(--duo-1)',
       hidden: false,
     },
     {
@@ -144,7 +144,7 @@ export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
       label: 'Application keys',
       caption: 'Keys for a team app. Each key has an environment tag.',
       value: kt.application ?? 0,
-      color: 'var(--series-2)',
+      color: 'var(--duo-2)',
       hidden: false,
     },
     {
@@ -154,7 +154,7 @@ export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
       label: 'Service keys',
       caption: 'Keys for automated backend jobs. Not tied to a person or an app environment.',
       value: kt.service ?? 0,
-      color: 'var(--series-3)',
+      color: 'var(--duo-3)',
       hidden: false,
     },
   ];
@@ -173,12 +173,12 @@ export function keyTypeSlices(stats: PublicStats): ChartSlice[] {
   return slices;
 }
 
-/** Local vs. cloud as segments: the self-hosted lane first. */
+/** Local vs. cloud as violet steps of one whole: the self-hosted lane first. */
 export function laneSlices(stats: PublicStats): ChartSlice[] {
   const lc = stats.local_cloud_requests;
   const slices: ChartSlice[] = [
-    { key: 'local', label: 'Local', value: lc.local ?? 0, color: 'var(--series-1)', hidden: false },
-    { key: 'cloud', label: 'Cloud', value: lc.cloud ?? 0, color: 'var(--series-2)', hidden: false },
+    { key: 'local', label: 'Local', value: lc.local ?? 0, color: 'var(--duo-1)', hidden: false },
+    { key: 'cloud', label: 'Cloud', value: lc.cloud ?? 0, color: 'var(--duo-2)', hidden: false },
   ];
   if ((lc.unknown ?? 0) > 0) {
     slices.push({
@@ -213,8 +213,8 @@ function percentOf(value: number, total: number): number {
 export function laneTokenSlices(stats: PublicStats): ChartSlice[] {
   const lc = stats.local_cloud_tokens;
   const slices: ChartSlice[] = [
-    { key: 'local', label: 'Local', value: lc.local ?? 0, color: 'var(--series-1)', hidden: false },
-    { key: 'cloud', label: 'Cloud', value: lc.cloud ?? 0, color: 'var(--series-2)', hidden: false },
+    { key: 'local', label: 'Local', value: lc.local ?? 0, color: 'var(--duo-1)', hidden: false },
+    { key: 'cloud', label: 'Cloud', value: lc.cloud ?? 0, color: 'var(--duo-2)', hidden: false },
   ];
   if ((lc.unknown ?? 0) > 0) {
     slices.push({ key: 'unknown', label: 'Unknown lane', value: lc.unknown!, color: OTHER_SLICE_COLOR, hidden: false });

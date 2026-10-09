@@ -35,7 +35,7 @@
   align-items: flex-end;
 
   &.marked {
-    border-left: 2px dashed var(--series-2);
+    border-left: 2px dashed rgb(var(--color-typography-500));
   }
 }
 
@@ -43,7 +43,7 @@
   width: 100%;
   min-height: 1px;
   border-radius: 3px 3px 0 0;
-  background: var(--series-1);
+  background: var(--duo-1);
   transition: opacity 120ms ease;
 
   &.highlighted {
@@ -56,7 +56,7 @@
   top: -1.2rem;
   left: -2px;
   white-space: nowrap;
-  color: var(--series-2);
+  color: rgb(var(--color-typography-500));
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   pointer-events: none;
