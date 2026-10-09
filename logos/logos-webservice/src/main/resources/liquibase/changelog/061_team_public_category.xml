@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Free-text grouping label for the public stats page (for example
+         "Applications", "Research", "Teaching"). The set of categories is
+         whatever admins type in team settings; the page groups opted-in
+         teams by it and shows teams without one as uncategorized. -->
+    <changeSet id="061-team-public-category" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="teams" columnName="public_category"/></not>
+        </preConditions>
+        <addColumn tableName="teams">
+            <column name="public_category" type="TEXT"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="teams" columnName="public_category"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,83 @@
+.trend-empty {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-md);
+  padding: 1rem 0;
+}
+
+.trend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.trend-max {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-xs);
+}
+
+.trend-plot {
+  // Room above the bars for the marker label.
+  margin-top: 1.1rem;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 11rem;
+  border-top: 1px dashed rgb(var(--color-typography-500) / var(--opacity-guide));
+  border-bottom: 1px solid rgb(var(--color-typography-500) / var(--opacity-muted));
+}
+
+.trend-slot {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+
+  &.marked {
+    border-left: 2px dashed var(--series-2);
+  }
+}
+
+.trend-bar {
+  width: 100%;
+  min-height: 1px;
+  border-radius: 3px 3px 0 0;
+  background: var(--series-1);
+  transition: opacity 120ms ease;
+
+  &.highlighted {
+    opacity: 0.75;
+  }
+}
+
+.trend-marker-label {
+  position: absolute;
+  top: -1.2rem;
+  left: -2px;
+  white-space: nowrap;
+  color: var(--series-2);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  pointer-events: none;
+}
+
+.trend-axis {
+  display: flex;
+  gap: 2px;
+}
+
+.trend-month {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: visible;
+  white-space: nowrap;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-xs);
+}
+
+.trend-readout {
+  margin: 0.5rem 0 0;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+}

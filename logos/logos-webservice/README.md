@@ -171,8 +171,23 @@ every request-derived figure (per-team, key type, lane, active students, average
 their traffic alone feeds `successful_requests`, the key-type and lane splits,
 and the active-student count. Non-selected teams are never named and never
 folded into those totals. `teams` is the count of opted-in teams (including
-those with no traffic in the window). `students` are distinct active users who
-made at least one successful request on an opted-in team inside the window.
+those with no traffic in the window). `students` are distinct active users with
+role `app_developer` (admins count as staff) who made at least one successful
+request on an opted-in team inside the window.
+
+Usage figures on the same opted-in teams, read from the hourly rollup plus the
+live tail of `log_entry`:
+
+| Field | Window | Meaning |
+|-------|--------|---------|
+| `tokens`, `local_cloud_tokens` | `days` | Tokens of successful requests, total and by lane. |
+| `active_persons`, `active_teams` | `days` | People (any role) and teams with a successful request. |
+| `usage_per_person`, `usage_per_team` | `days` | Median and 90th percentile of requests, tokens and active days. Per-person values are `null` (`suppressed: true`) below five active people. |
+| `categories` | `days` | Requests, tokens and active teams per `teams.public_category` (free text set in team settings; `null` = uncategorized). |
+| `models` | `days` | Top models (`all`, `local`, `cloud`) by requests, with tokens; the tail is one `other` row. |
+| `regular_activity` | last 4 complete weeks | People and teams active in at least 3 / all 4 weeks. |
+| `monthly` | all time | Active teams, people, students, requests, tokens and Logos Agent sessions per UTC month. |
+| `agent` | `days` | Logos Agent sessions, distinct starters, successes and pull requests. |
 
 ## Adding a new endpoint
 

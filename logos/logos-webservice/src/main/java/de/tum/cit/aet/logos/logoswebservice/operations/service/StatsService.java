@@ -2,6 +2,8 @@ package de.tum.cit.aet.logos.logoswebservice.operations.service;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -22,6 +24,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.KeyTypeRequestCountProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderTypeRequestCountProjection;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.PublicUsageRowProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamRequestCountProjection;
 
 @Service
@@ -186,6 +189,18 @@ public class StatsService {
         stats.put("requests_per_team", requestsPerTeam);
         stats.put("requests_by_key_type", requestsByKeyType);
         stats.put("local_cloud_requests", localCloud);
+
+        // Distributions, shares and monthly series come from one row set
+        // (day x team x user x lane x model) so they describe the same requests.
+        Timestamp now = Timestamp.from(Instant.now());
+        Timestamp beginning = Timestamp.from(Instant.EPOCH);
+        List<PublicUsageRowProjection> allRows = logEntryRepository.findPublicUsageRows(beginning, now);
+        List<PublicUsageRowProjection> windowRows =
+            since == null ? allRows : logEntryRepository.findPublicUsageRows(since, now);
+        LocalDate today = now.toInstant().atZone(ZoneOffset.UTC).toLocalDate();
+        LocalDate windowStartDay = since == null ? null : since.toInstant().atZone(ZoneOffset.UTC).toLocalDate();
+        PublicUsageSummary.putAll(stats, windowRows, allRows, logEntryRepository.findAgentSessionDays(),
+            windowStartDay, today);
         return stats;
     }
 }

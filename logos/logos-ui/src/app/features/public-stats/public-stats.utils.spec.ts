@@ -12,7 +12,13 @@ import {
   teamSlices,
   windowLabel,
   ChartSlice,
+  categorySlices,
+  laneTokenSlices,
+  modelSlices,
+  monthLabel,
+  trendPoints,
 } from './public-stats.utils';
+import { usageFields } from './public-stats.testing';
 
 function stats(overrides: Partial<PublicStats> = {}): PublicStats {
   return {
@@ -24,6 +30,7 @@ function stats(overrides: Partial<PublicStats> = {}): PublicStats {
     requests_per_team: [],
     requests_by_key_type: { developer: 3, application: 2, service: 0 },
     local_cloud_requests: { local: 1, cloud: 4 },
+    ...usageFields(),
     ...overrides,
   };
 }
@@ -218,3 +225,55 @@ describe('formatters', () => {
     expect(formatAverage(1.234)).toBe('1.23');
   });
 });
+
+describe('usage helpers', () => {
+  it('splits tokens by lane like requests, with unknown only when present', () => {
+    const slices = laneTokenSlices(stats({ ...usageFields({ local_cloud_tokens: { local: 70, cloud: 30 } }) }));
+    expect(slices.map((s) => [s.key, s.value])).toEqual([
+      ['local', 70],
+      ['cloud', 30],
+    ]);
+  });
+
+  it('names categories in order and folds uncategorized teams into the neutral slice', () => {
+    const slices = categorySlices([
+      { category: 'Research', teams: 3, requests: 50, tokens: 2_000_000 },
+      { category: null, teams: 2, requests: 20, tokens: 1000 },
+      { category: 'Teaching', teams: 1, requests: 10, tokens: 10 },
+    ]);
+    expect(slices.map((s) => s.label)).toEqual(['Research', 'Teaching', 'Uncategorized']);
+    expect(slices[0].color).toBe('var(--series-1)');
+    expect(slices[2].color).toBe(OTHER_SLICE_COLOR);
+    expect(slices[0].caption).toContain('3 teams');
+  });
+
+  it('labels the model long tail and carries each token share', () => {
+    const slices = modelSlices([
+      { model: 'big', requests: 10, tokens: 75, other: false },
+      { model: null, requests: 5, tokens: 25, other: true },
+    ]);
+    expect(slices.map((s) => s.label)).toEqual(['big', 'Other models']);
+    expect(slices[0].caption).toBe('75% of tokens');
+    expect(slices[1].color).toBe(OTHER_SLICE_COLOR);
+  });
+
+  it('reads months as short names and plots the chosen metric', () => {
+    expect(monthLabel('2026-04')).toBe('Apr 2026');
+    const months = [
+      {
+        month: '2026-08',
+        teams: 2,
+        persons: 5,
+        students: 3,
+        requests: 100,
+        local_requests: 90,
+        tokens: 1000,
+        agent_sessions: 0,
+        agent_users: 0,
+      },
+    ];
+    expect(trendPoints(months, 'persons')).toEqual([{ key: '2026-08', label: 'Aug 2026', value: 5 }]);
+    expect(trendPoints(months, 'tokens')[0].value).toBe(1000);
+  });
+});
+

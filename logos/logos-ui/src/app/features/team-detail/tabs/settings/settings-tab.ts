@@ -78,6 +78,10 @@ export class SettingsTabComponent implements OnChanges {
   localRpm = signal('');
   localTpm = signal('');
   showOnPublicStats = signal(false);
+  publicCategory = signal('');
+  /** Categories other teams already use, so the same label is spelled the same way. */
+  publicCategoryOptions = signal<string[]>([]);
+  private publicCategoriesRequested = false;
 
   providerBudgets = signal<TeamProviderBudget[]>([]);
   cloudProviders = signal<ProviderItem[]>([]);
@@ -138,6 +142,10 @@ export class SettingsTabComponent implements OnChanges {
   ngOnChanges(changes: SimpleChanges): void {
     if (this.team) this.resetForm();
     if (this.teamId && changes['teamId']) void this.loadProviderBudgets();
+    if (this.canEdit && !this.publicCategoriesRequested) {
+      this.publicCategoriesRequested = true;
+      void this.fetchPublicCategories();
+    }
     if (this.canLinkKeycloak && !this.keycloakGroupsRequested) {
       this.keycloakGroupsRequested = true;
       void this.fetchKeycloakGroups();
@@ -153,6 +161,16 @@ export class SettingsTabComponent implements OnChanges {
     this.localTpm.set(this.team.default_local_tpm_limit?.toString() ?? '');
     this.keycloakGroup.set(this.team.keycloak_group ?? '');
     this.showOnPublicStats.set(!!this.team.show_on_public_stats);
+    this.publicCategory.set(this.team.public_category ?? '');
+  }
+
+  /** Category suggestions; the field stays free text when they cannot be loaded. */
+  private async fetchPublicCategories(): Promise<void> {
+    try {
+      this.publicCategoryOptions.set(await this.teamService.getPublicCategories());
+    } catch {
+      this.publicCategoryOptions.set([]);
+    }
   }
 
   /** Group suggestions for the link field; silently stays free text on failure. */
@@ -269,6 +287,7 @@ export class SettingsTabComponent implements OnChanges {
       default_local_rpm_limit: strToIntOrNull(this.localRpm()),
       default_local_tpm_limit: strToIntOrNull(this.localTpm()),
       show_on_public_stats: this.showOnPublicStats(),
+      public_category: this.publicCategory().trim(),
     };
 
     try {

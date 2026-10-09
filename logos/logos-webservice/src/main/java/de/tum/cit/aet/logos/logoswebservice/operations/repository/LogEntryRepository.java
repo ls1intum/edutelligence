@@ -111,15 +111,16 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     List<ProviderTypeRequestCountProjection> countSuccessfulByProviderType(@Param("since") Timestamp since);
 
     /**
-     * Distinct active users who made at least one successful request on an
-     * opted-in team inside the window — the public page's "active students".
+     * Distinct active students (role {@code app_developer}; admins are staff)
+     * who made at least one successful request on an opted-in team inside the
+     * window — the public page's "active students".
      */
     @Transactional(readOnly = true)
     @Query(value = """
         SELECT COUNT(DISTINCT le.user_id)
         FROM log_entry le
         INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
-        INNER JOIN users u ON u.id = le.user_id AND u.is_active = TRUE
+        INNER JOIN users u ON u.id = le.user_id AND u.is_active = TRUE AND u.role = 'app_developer'
         WHERE le.result_status = 'success'
           AND (CAST(:since AS TIMESTAMPTZ) IS NULL
                OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
@@ -138,12 +139,89 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         SELECT COUNT(*)
         FROM log_entry le
         INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
-        INNER JOIN users u ON u.id = le.user_id AND u.is_active = TRUE
+        INNER JOIN users u ON u.id = le.user_id AND u.is_active = TRUE AND u.role = 'app_developer'
         WHERE le.result_status = 'success'
           AND (CAST(:since AS TIMESTAMPTZ) IS NULL
                OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
         """, nativeQuery = true)
     long countSuccessfulRequestsFromActiveStudentsOnPublicTeams(@Param("since") Timestamp since);
+
+    /**
+     * Successful usage on opted-in teams, one row per UTC day, team, user,
+     * serving lane and model, between {@code start} and {@code end}. The public
+     * stats page derives every distribution, share and monthly series from
+     * these rows, so they all describe the same set of requests.
+     *
+     * <p>Reads the hourly rollup for the hours it covers and log_entry for the
+     * rest, split by logos_stats_rollup_window like the statistics aggregates
+     * below. Rows are bucketed on the effective timestamp the rollup uses.
+     * {@code user_id} is null for application and service keys; {@code student}
+     * is true for active users with role {@code app_developer}.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, TRUE)),
+        parts AS (
+            SELECT s.bucket_hour AS ts, s.team_id, s.user_id, s.provider_id,
+                   s.model_id, s.model_name, s.requests, s.total_tokens
+            FROM log_entry_hourly_stats s
+            WHERE s.bucket_hour >= (SELECT mv_lo FROM w) AND s.bucket_hour < (SELECT mv_hi FROM w)
+              AND s.result_status = 'success'
+            UNION ALL
+            SELECT COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response),
+                   le.team_id, le.user_id, le.provider_id, le.model_id, le.model_name,
+                   1::bigint, COALESCE(tok.total_tokens, 0)::bigint
+            FROM log_entry le
+            LEFT JOIN LATERAL (
+                SELECT SUM(ut.token_count) AS total_tokens
+                FROM usage_tokens ut
+                JOIN token_types tt ON tt.id = ut.type_id
+                WHERE ut.log_entry_id = le.id AND tt.name = 'total_tokens'
+            ) tok ON TRUE
+            WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+              AND (COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) <  (SELECT mv_lo FROM w)
+                OR COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) >= (SELECT mv_hi FROM w))
+              AND le.result_status = 'success'
+        )
+        SELECT to_char(pt.ts AT TIME ZONE 'UTC', 'YYYY-MM-DD')                  AS day,
+               pt.team_id                                                      AS teamId,
+               t.public_category                                               AS category,
+               u.id                                                            AS userId,
+               COALESCE(u.role = 'app_developer', FALSE)                       AS student,
+               CASE WHEN p.provider_type IS NULL THEN 'unknown'
+                    WHEN p.provider_type = 'logosnode' THEN 'local'
+                    ELSE 'cloud' END                                           AS lane,
+               COALESCE(m.name, pt.model_name)                                 AS model,
+               SUM(pt.requests)::bigint                                        AS requests,
+               SUM(pt.total_tokens)::bigint                                    AS tokens
+        FROM parts pt
+        INNER JOIN teams t ON t.id = pt.team_id AND t.show_on_public_stats = TRUE
+        LEFT JOIN users u ON u.id = pt.user_id AND u.is_active = TRUE
+        LEFT JOIN providers p ON p.id = pt.provider_id
+        LEFT JOIN models m ON m.id = pt.model_id
+        GROUP BY 1, 2, 3, 4, 5, 6, 7
+        """, nativeQuery = true)
+    List<PublicUsageRowProjection> findPublicUsageRows(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end);
+
+    /**
+     * Logos Agent sessions per UTC day and starter: how many were started, how
+     * many succeeded and how many opened a pull request. The starter leaves
+     * this query only as a hash, enough to count distinct people; no task
+     * text, names or repositories are read.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT to_char(a.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+               COUNT(*)::bigint                                       AS sessions,
+               COUNT(*) FILTER (WHERE a.status = 'succeeded')::bigint  AS succeeded,
+               COUNT(a.pr_url)::bigint                                AS pullRequests,
+               md5(a.created_by)                                      AS starter
+        FROM agent_sessions a
+        GROUP BY 1, md5(a.created_by)
+        """, nativeQuery = true)
+    List<AgentSessionDayProjection> findAgentSessionDays();
 
     /**
      * One team's requests by stage, right now.

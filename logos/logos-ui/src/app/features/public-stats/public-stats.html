@@ -37,13 +37,22 @@
   } @else {
     <section class="kpi-grid" aria-label="Platform totals">
       <div class="kpi-tile">
-        <span class="kpi-value">{{ formatCount(stats()!.students) }}</span>
-        <span class="kpi-label">Active students</span>
-        <span class="kpi-window">{{ windowCaption() }}</span>
+        <span class="kpi-value">{{ formatCount(stats()!.active_persons) }}</span>
+        <span class="kpi-label">Active people</span>
+        <span class="kpi-window">{{ formatCount(stats()!.students) }} of them students · {{ windowCaption() }}</span>
+      </div>
+      <div class="kpi-tile">
+        <span class="kpi-value">{{ formatCount(stats()!.regular_activity.persons_regular) }}</span>
+        <span class="kpi-label">Regular users</span>
+        <span class="kpi-window">
+          Active in {{ stats()!.regular_activity.min_weeks }}+ of the last {{ stats()!.regular_activity.weeks }} weeks
+          · {{ formatCount(stats()!.regular_activity.teams_regular) }} teams
+        </span>
       </div>
       <div class="kpi-tile">
         <span class="kpi-value">{{ formatCount(stats()!.teams) }}</span>
         <span class="kpi-label">Published teams</span>
+        <span class="kpi-window">{{ formatCount(stats()!.active_teams) }} active · {{ windowCaption() }}</span>
       </div>
       <div class="kpi-tile">
         <span class="kpi-value">{{ formatCount(stats()!.successful_requests) }}</span>
@@ -51,10 +60,43 @@
         <span class="kpi-window">{{ windowCaption() }}</span>
       </div>
       <div class="kpi-tile">
+        <span class="kpi-value">{{ formatCompact(stats()!.tokens) }}</span>
+        <span class="kpi-label">Tokens</span>
+        <span class="kpi-window">{{ localTokenShare() }}% on own hardware · {{ windowCaption() }}</span>
+      </div>
+      <div class="kpi-tile">
         <span class="kpi-value">{{ formatAverage(stats()!.average_requests_per_user) }}</span>
         <span class="kpi-label">Successful requests per student</span>
         <span class="kpi-window">Student traffic only · {{ windowCaption() }}</span>
       </div>
+    </section>
+
+    <section class="chart-panel section" aria-labelledby="growth-title">
+      <div class="section-head">
+        <div>
+          <h2 class="chart-title" id="growth-title">Growth per month</h2>
+          <p class="chart-hint">All months since the first request, independent of the time window.</p>
+        </div>
+        <div class="window-segments" role="group" aria-label="Metric">
+          @for (opt of trendMetrics; track opt.value) {
+            <button
+              type="button"
+              class="window-segment"
+              [class.active]="trendMetric() === opt.value"
+              [attr.aria-pressed]="trendMetric() === opt.value"
+              (click)="trendMetric.set(opt.value)"
+            >
+              {{ opt.label }}
+            </button>
+          }
+        </div>
+      </div>
+      <app-public-stats-trend
+        [points]="trend()"
+        [markerKey]="agentLaunchMonth()"
+        markerLabel="Logos Agent"
+        [label]="trendLabel()"
+      />
     </section>
 
     <section class="charts-grid" aria-label="Request breakdowns">
@@ -82,14 +124,108 @@
 
         <div class="chart-panel">
           <h2 class="chart-title">Local vs. cloud</h2>
-          <p class="chart-hint">{{ windowCaption() }}.</p>
+          <p class="chart-hint">Requests · {{ windowCaption() }}.</p>
           <app-public-stats-split [segments]="laneSlices()" label="Local versus cloud requests" />
+          <p class="chart-hint split-gap">Tokens · {{ windowCaption() }}.</p>
+          <app-public-stats-split [segments]="laneTokenSlices()" label="Local versus cloud tokens" />
+        </div>
+      </div>
+    </section>
+
+    <section class="charts-grid even section" aria-label="Usage and categories">
+      <div class="chart-panel">
+        <h2 class="chart-title">Usage per person and team</h2>
+        <p class="chart-hint">
+          Per active person (or team) over the {{ windowCaption() }}. Coding agents send many requests per
+          task, so tokens and active days say more than requests alone.
+        </p>
+        <table class="usage-table">
+          <thead>
+            <tr>
+              <th scope="col"></th>
+              <th scope="col">Median</th>
+              <th scope="col">Heavy users (top 10%)</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of usageRows(); track row.key) {
+              <tr>
+                <th scope="row">{{ row.label }}</th>
+                <td>{{ row.median }}</td>
+                <td>{{ row.p90 }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        @if (stats()!.usage_per_person.suppressed) {
+          <p class="chart-hint table-note">
+            Per-person figures are shown once at least five people are active in the window.
+          </p>
+        }
+      </div>
+
+      <div class="chart-panel">
+        <h2 class="chart-title">Requests by team category</h2>
+        <p class="chart-hint">Categories are set per team in team settings. {{ windowCaption() }}.</p>
+        <app-public-stats-split [segments]="categorySlices()" label="Requests by team category" />
+      </div>
+    </section>
+
+    <section class="charts-grid even section" aria-label="Models and Logos Agent">
+      <div class="chart-panel">
+        <div class="section-head">
+          <h2 class="chart-title">Most used models</h2>
+          <div class="window-segments" role="group" aria-label="Serving lane">
+            @for (opt of modelLanes; track opt.value) {
+              <button
+                type="button"
+                class="window-segment"
+                [class.active]="modelLane() === opt.value"
+                [attr.aria-pressed]="modelLane() === opt.value"
+                (click)="modelLane.set(opt.value)"
+              >
+                {{ opt.label }}
+              </button>
+            }
+          </div>
+        </div>
+        <p class="chart-hint">Share of successful requests; the token share is under each model. {{ windowCaption() }}.</p>
+        <app-public-stats-split [segments]="modelSlices()" label="Requests by model" />
+      </div>
+
+      <div class="chart-panel">
+        <h2 class="chart-title">Logos Agent</h2>
+        <p class="chart-hint">
+          Coding tasks Logos runs in isolated containers and hands back as pull requests.
+          @if (stats()!.agent.first_session_day) {
+            Running since {{ stats()!.agent.first_session_day }}.
+          }
+          {{ windowCaption() }}.
+        </p>
+        <div class="mini-kpis">
+          <div class="mini-kpi">
+            <span class="kpi-value">{{ formatCount(stats()!.agent.sessions) }}</span>
+            <span class="kpi-label">Sessions</span>
+          </div>
+          <div class="mini-kpi">
+            <span class="kpi-value">{{ formatCount(stats()!.agent.users) }}</span>
+            <span class="kpi-label">People</span>
+          </div>
+          <div class="mini-kpi">
+            <span class="kpi-value">{{ formatCount(stats()!.agent.succeeded) }}</span>
+            <span class="kpi-label">Succeeded</span>
+          </div>
+          <div class="mini-kpi">
+            <span class="kpi-value">{{ formatCount(stats()!.agent.pull_requests) }}</span>
+            <span class="kpi-label">Pull requests</span>
+          </div>
         </div>
       </div>
     </section>
 
     <p class="page-footnote">
-      Only successful responses on published teams are counted.
+      Only successful responses on published teams are counted. Students are members without an
+      admin role.
       The per-student average uses student traffic only (application and service
       keys are in the totals above, not in that average).
       Numbers cover {{ windowCaption() }}.

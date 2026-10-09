@@ -84,4 +84,12 @@ public interface TeamRepository extends JpaRepository<Team, Integer> {
 
     /** Teams an admin opted into the public stats page. */
     long countByShowOnPublicStatsTrue();
+
+    /** Distinct public stats categories in use, alphabetically. */
+    @Query("""
+        SELECT DISTINCT t.publicCategory FROM Team t
+        WHERE t.publicCategory IS NOT NULL
+        ORDER BY t.publicCategory
+        """)
+    List<String> findDistinctPublicCategories();
 }

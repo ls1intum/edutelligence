@@ -141,7 +141,7 @@
 
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 1rem;
   margin-bottom: 1.5rem;
 
@@ -226,4 +226,79 @@
   color: rgb(var(--color-typography-500));
   font-size: var(--font-size-sm);
   text-align: center;
+}
+
+// ── Sections added below the request breakdowns ─────────────────────────────
+
+.section {
+  margin-top: 1rem;
+}
+
+.charts-grid.even {
+  grid-template-columns: 1fr 1fr;
+
+  @media (max-width: 56rem) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.split-gap {
+  margin-top: 1.25rem;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-md);
+
+  th,
+  td {
+    padding: 0.45rem 0.25rem;
+    text-align: right;
+    border-bottom: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  }
+
+  th[scope='row'],
+  thead th:first-child {
+    text-align: left;
+    font-weight: var(--font-weight-normal);
+    color: rgb(var(--color-typography-500));
+  }
+
+  thead th {
+    color: rgb(var(--color-typography-500));
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  td {
+    color: rgb(var(--color-typography-0));
+    font-weight: var(--font-weight-semibold);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.table-note {
+  margin-top: 0.75rem;
+}
+
+.mini-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+.mini-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }

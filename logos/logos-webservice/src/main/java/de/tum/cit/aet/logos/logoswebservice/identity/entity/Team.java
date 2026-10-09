@@ -39,6 +39,10 @@ public class Team {
     @Column(nullable = false)
     private boolean showOnPublicStats = false;
 
+    // Free-text group the public stats page sorts this team into (for
+    // example "Research"). Null = uncategorized.
+    private String publicCategory;
+
     public Integer getId() { return id; }
     public String getName() { return name; }
     public Integer getDefaultCloudRpmLimit() { return defaultCloudRpmLimit; }
@@ -50,6 +54,7 @@ public class Team {
     public Integer getPriority() { return priority; }
     public String getKeycloakGroup() { return keycloakGroup; }
     public boolean isShowOnPublicStats() { return showOnPublicStats; }
+    public String getPublicCategory() { return publicCategory; }
     public void setName(String name) { this.name = name; }
     public void setDefaultCloudRpmLimit(Integer v) { this.defaultCloudRpmLimit = v; }
     public void setDefaultCloudTpmLimit(Integer v) { this.defaultCloudTpmLimit = v; }
@@ -60,4 +65,5 @@ public class Team {
     public void setPriority(Integer v) { this.priority = v; }
     public void setKeycloakGroup(String keycloakGroup) { this.keycloakGroup = keycloakGroup; }
     public void setShowOnPublicStats(boolean v) { this.showOnPublicStats = v; }
+    public void setPublicCategory(String v) { this.publicCategory = v; }
 }
