@@ -55,10 +55,10 @@ def test_system_blocks_become_a_leading_system_message():
 @pytest.mark.parametrize(
     "endpoint_url,cap",
     [
-        # The upstream operation decides the cap name, not the model: gpt-6 and
-        # Azure GPT-4 Turbo both store a chat/completions URL, and that surface
-        # wants max_completion_tokens. The legacy text completions endpoint is
-        # the one that still wants max_tokens.
+        # The upstream URL decides the cap name, not the model: chat/completions
+        # wants max_completion_tokens, the legacy text completions endpoint and
+        # Azure api-versions before 2024-09-01 (GPT-4 Turbo's 2024-02-01) still
+        # want max_tokens.
         (
             "https://ase.openai.azure.com/openai/deployments/gpt-6-luna/chat/completions"
             "?api-version=2025-01-01-preview",
@@ -66,7 +66,7 @@ def test_system_blocks_become_a_leading_system_message():
         ),
         (
             "https://ase.openai.azure.com/openai/deployments/turbo/chat/completions" "?api-version=2024-02-01",
-            "max_completion_tokens",
+            "max_tokens",
         ),
         ("https://api.openai.com/v1/chat/completions", "max_completion_tokens"),
         ("https://api.openai.com/v1/completions", "max_tokens"),

@@ -143,6 +143,11 @@ def test_strip_billing_header_from_payload_preserves_everything_else():
         ),
         ("https://api.openai.com/v1/completions", False),
         ("https://api.openai.com/v1/completions?foo=1", False),
+        # Azure api-versions before 2024-09-01 predate max_completion_tokens.
+        ("https://x.openai.azure.com/openai/deployments/turbo/chat/completions?api-version=2024-02-01", False),
+        ("https://x.openai.azure.com/openai/deployments/turbo/chat/completions?api-version=2024-08-01-preview", False),
+        ("https://x.openai.azure.com/openai/deployments/m/chat/completions?api-version=2024-09-01-preview", True),
+        ("https://x.openai.azure.com/openai/deployments/m/chat/completions?api-version=2025-01-01-preview", True),
         (None, True),
         ("", True),
     ],
