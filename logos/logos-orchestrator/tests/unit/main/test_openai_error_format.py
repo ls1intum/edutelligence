@@ -14,6 +14,7 @@ from logos.errors import (
     coerce_upstream_error,
     openai_error_response,
     raise_openai_error,
+    upstream_error_message,
 )
 
 # ── _error_type_for_status ───────────────────────────────────────────────────
@@ -269,3 +270,22 @@ class TestUpstreamStreamError:
         assert err.status_code == 429
         assert err.body == {"error": {"message": "rate limited"}}
         assert "429" in str(err)
+
+
+# ── upstream_error_message ───────────────────────────────────────────────────
+
+
+class TestUpstreamErrorMessage:
+    def test_openai_shape(self):
+        body = {"error": {"message": "prompt too long", "type": "BadRequestError"}}
+        assert upstream_error_message(body) == "prompt too long"
+
+    def test_plain_string_error(self):
+        assert upstream_error_message({"error": " lane offline "}) == "lane offline"
+
+    @pytest.mark.parametrize(
+        "body",
+        [None, "text", b"bytes", {}, {"error": ""}, {"error": {"type": "x"}}, {"response": "x"}],
+    )
+    def test_no_message(self, body):
+        assert upstream_error_message(body) is None

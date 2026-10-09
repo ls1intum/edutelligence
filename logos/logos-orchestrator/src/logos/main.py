@@ -62,7 +62,7 @@ from logos.dbutils.types import (
     infer_cloud_provider_type,
     normalize_provider_type,
 )
-from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
+from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response, upstream_error_message
 from logos.jobs.job_service import JobService, JobSubmission
 from logos.live_stream import _LiveStreamRegistry, _StreamingLogAccumulator, _usage_tokens_from_payload
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, LogosNodeRuntimeRegistry
@@ -2086,7 +2086,10 @@ async def _streaming_response(
         # The provider was called and answered (with an error status) — the
         # queue figure ends at the dispatch it captured.
         _stamp_provider_call()
-        return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
+        upstream_message = upstream_error_message(exc.body)
+        return _pre_stream_error_response(
+            exc.status_code, exc.body, f"{exc}: {upstream_message}" if upstream_message else str(exc)
+        )
     except StopAsyncIteration:
         first_chunk = None
     except Exception as exc:
@@ -2522,6 +2525,9 @@ async def _sync_response(
                 rpc_error = str(rpc_result.get("error") or "").strip() or None
                 if status_override >= 400 and rpc_error is None:
                     rpc_error = f"logosnode infer returned HTTP {status_override}"
+                    upstream_message = upstream_error_message(response_payload)
+                    if upstream_message:
+                        rpc_error = f"{rpc_error}: {upstream_message}"
                 exec_result = ExecutionResult(
                     success=status_override < 400,
                     response=response_payload,

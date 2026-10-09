@@ -546,6 +546,70 @@ async def test_logosnode_sync_stamps_the_response_before_post_provider_processin
 
 
 @pytest.mark.asyncio
+async def test_logosnode_sync_error_records_the_upstream_message(monkeypatch):
+    """A worker that answers with an error status but no ``error`` field must
+    still record the upstream's own message, not only the status code."""
+    upstream_message = "This model's maximum context length is 40960 tokens."
+    upstream_body = {"error": {"message": upstream_message, "type": "BadRequestError", "code": 400}}
+
+    async def fake_send_command(**kwargs):  # noqa: ARG001
+        return {"status_code": 400, "body": upstream_body, "headers": {}}
+
+    enqueued = []
+
+    class _FakeWriteQueue:
+        def enqueue(self, *args, **kwargs):  # noqa: ARG002
+            enqueued.append(args)
+
+    class _FakeWriteQueueFactory:
+        def get_write_queue(self):
+            return _FakeWriteQueue()
+
+    monkeypatch.setattr(main, "DBManager", _make_dummy_db())
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=fake_send_command), raising=False)
+    monkeypatch.setattr(main, "write_queue", _FakeWriteQueueFactory(), raising=False)
+    pipeline, _c, _r = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+
+    context = SimpleNamespace(
+        provider_type="logosnode",
+        lane_id="lane-1",
+        model_name="model",
+        anthropic_dialect=None,
+        messages_upstream=False,
+        forward_url="http://upstream",
+    )
+    response = await main._sync_response(
+        context,
+        {"model": "model", "input": "hi"},
+        58,
+        12,
+        27,
+        -1,
+        {"policy": "ok"},
+        {
+            "request_id": "req-sync-error",
+            "provider_type": "logosnode",
+            "is_cold_start": False,
+            "queue_depth_at_arrival": 0,
+            "utilization_at_arrival": 1,
+        },
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["message"] == upstream_message
+    terminal = next(args for args in enqueued if args[0] is main._persist_terminal_response)
+    assert terminal[8] == "error"
+    assert terminal[9] == f"logosnode infer returned HTTP 400: {upstream_message}"
+
+
+@pytest.mark.asyncio
 async def test_cloud_sync_stamps_the_instants_the_executor_captured(monkeypatch):
     """The cloud sync path stamps the call and response from the instants the
     executor captured — after request preparation and before response
@@ -1173,7 +1237,7 @@ async def test_cloud_sync_duration_only_response_still_prices_live(monkeypatch):
             UpstreamStreamError(429, {"error": {"message": "rate limited"}}),
             429,
             "rate limited",
-            "Upstream returned HTTP 429",
+            "Upstream returned HTTP 429: rate limited",
         ),
     ],
     ids=["transport", "upstream-http"],
