@@ -17,7 +17,10 @@
 #
 # LOGOS_MODEL is optional. When set, every Claude Code model slot is pinned to it
 # (previous behaviour). When unset, Claude Code discovers Logos models via
-# GET /v1/models (Anthropic shape) and can switch with /model.
+# GET /v1/models (Anthropic shape) and can switch with /model; the session starts on
+# LOGOS_DEFAULT_MODEL (or the first chat model Logos lists), and every model slot
+# Claude Code uses on its own — session titles, haiku/sonnet/opus aliases, subagents —
+# points at that Logos model too, so no request ever names a model Logos does not serve.
 #   claude-logos --install            install to ~/.local/bin (reads config from stdin)
 #   claude-logos --update             replace this wrapper with the current one
 #   claude-logos --uninstall          remove the wrapper, its config and its key
@@ -41,7 +44,7 @@ set -euo pipefail
 # version string: the comparison is a single `-gt` that cannot misread anything,
 # where sorting "1.10" against "1.9" needs care to get right. The date is here for
 # people; only the number is compared.
-CLAUDE_LOGOS_VERSION=6          # 2026-10-06
+CLAUDE_LOGOS_VERSION=7          # 2026-10-09
 
 CONFIG_DIR="${LOGOS_CONFIG_DIR:-$HOME/.config/claude-logos}"
 CONFIG_FILE="$CONFIG_DIR/config"
@@ -60,6 +63,7 @@ VERSION_STATE_FILE="$CONFIG_DIR/latest-revision"
 # redirected without editing anything:
 #
 #   LOGOS_MODEL=openai/gpt-oss-120b claude-logos   # optional pin; omit to pick in Claude Code
+#   LOGOS_DEFAULT_MODEL=Qwen/Qwen3.8-27B claude-logos   # start model when nothing is pinned
 #
 if [[ -r "$CONFIG_FILE" ]]; then
   # Read as data, not as shell: a stray backtick or $(...) in a value must not run.
@@ -74,6 +78,7 @@ fi
 LOGOS_URL="${LOGOS_URL:-https://logos.aet.cit.tum.de}"
 LOGOS_URL="${LOGOS_URL%/}"
 LOGOS_MODEL="${LOGOS_MODEL:-}"
+LOGOS_DEFAULT_MODEL="${LOGOS_DEFAULT_MODEL:-}"
 LOGOS_KEY_FILE="${LOGOS_KEY_FILE:-$KEY_FILE_DEFAULT}"
 LOGOS_SETTINGS="${LOGOS_SETTINGS-$SETTINGS_FILE_DEFAULT}"
 
@@ -504,6 +509,76 @@ for entry in data.get("data", []):
 ' || true
 }
 
+# The model an unpinned session starts on, as the id Logos advertises to Claude
+# Code (the Anthropic listing, where every id carries the "claude-" prefix Claude
+# Code needs to show it). LOGOS_DEFAULT_MODEL wins when Logos lists it, by either
+# spelling (the exact one first); otherwise the first model a coding session can
+# talk to — embedding, reranking, speech and image models are skipped, and so is
+# a model whose advertised window cannot hold the opening prompt plus the reply
+# reservation, as long as a wider one is listed. Prints nothing when Logos lists
+# no chat model.
+#
+# Claude Code otherwise starts on the model saved in ~/.claude/settings.json — an
+# Anthropic id such as claude-opus-5-5 — and keeps using that id for the requests it
+# sends on its own (session titles among them) even after /model switched the main
+# loop to a Logos model. Logos then answers them with "No deployment found".
+default_model_probe() {
+  curl -fsS -m 15 "$LOGOS_URL/v1/models" -H "Authorization: Bearer $LOGOS_KEY" \
+    -H "anthropic-version: 2023-06-01" 2>/dev/null |
+    python3 -c '
+import json, re, sys
+
+wanted = sys.argv[1].strip()
+try:
+    max_output = int(sys.argv[2])
+except ValueError:
+    max_output = 20000
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+entries = [m for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
+ids = [str(m["id"]) for m in entries]
+
+
+if wanted:
+    # An id exactly as written wins over the claude- form anywhere in the
+    # listing: Logos lists "foo" unprefixed when a model "claude-foo" exists,
+    # and that listing may well put claude-foo first.
+    for candidate in (wanted, "claude-" + wanted):
+        if candidate in ids:
+            print(candidate)
+            sys.exit(0)
+# Models that cannot answer a Messages request: embeddings, rerankers, speech
+# and image generation. Logos keeps no modality per model, so the name decides.
+not_chat = re.compile(
+    r"embed|rerank|whisper|tts|transcri|speech|dall-e|image|diffusion|sdxl|flux|imagen",
+    re.IGNORECASE,
+)
+# The narrowest window a session can start in: Claude Code opening prompt
+# (~13000 tokens), the reply reservation, its 3000-token hard-stop margin and
+# the smallest headroom this wrapper keeps (see the floor check further down).
+# A model whose advertised window is smaller fails the very first request, so
+# it is passed over while a wider one is listed; an unknown window is no reason
+# to skip a model.
+needed = 13000 + max_output + 3000 + 1024
+
+
+def fits(entry):
+    try:
+        window = int(entry.get("max_input_tokens") or 0)
+    except (TypeError, ValueError):
+        window = 0
+    return window <= 0 or window >= needed
+
+
+chat = [m for m in entries if not not_chat.search(str(m["id"]))]
+chosen = next((m for m in chat if fits(m)), chat[0] if chat else None)
+if chosen is not None:
+    print(chosen["id"])
+' "$LOGOS_DEFAULT_MODEL" "$LOGOS_MAX_OUTPUT_TOKENS" || true
+}
+
 # ── New models since the last run ───────────────────────────────────────────────
 # Models get added to a team without anyone telling the people on it. The list is
 # already in hand from the call above, so noticing an addition costs one file
@@ -553,6 +628,7 @@ KNOWN_MODEL_IDS=""
 # models (Anthropic GET /v1/models) and the user switches with /model.
 HAS_PINNED_MODEL=0
 [[ -n "$LOGOS_MODEL" ]] && HAS_PINNED_MODEL=1
+SESSION_DEFAULT_MODEL=""
 
 probe_result=""
 if (( HAS_PINNED_MODEL )); then
@@ -561,6 +637,7 @@ else
   # Still learn the key's model ids for the "new model" notice and --check.
   _ids="$(model_ids_probe | tr '\n' '\t')"
   probe_result=$'ids\t'"${_ids}"
+  SESSION_DEFAULT_MODEL="$(default_model_probe)"
 fi
 
 if (( HAS_PINNED_MODEL )); then
@@ -675,10 +752,19 @@ context_report() {
   if (( HAS_PINNED_MODEL )); then
     printf 'model    : %s\n' "$LOGOS_MODEL"
   else
-    printf 'model    : (Claude Code picks via GET /v1/models — set LOGOS_MODEL to pin a default)\n'
+    printf 'model    : %s to start with, switch with /model (set LOGOS_MODEL to pin one)\n' \
+      "${SESSION_DEFAULT_MODEL:-<none>}"
   fi
   printf 'logos    : %s\n' "$LOGOS_URL"
   if (( ! HAS_PINNED_MODEL )); then
+    if [[ -z "$SESSION_DEFAULT_MODEL" ]]; then
+      printf 'warning  : Logos lists no chat model for this key, so Claude Code falls back to\n'
+      printf '           its own default model, which Logos does not serve.\n'
+    elif [[ -n "$LOGOS_DEFAULT_MODEL" && "$LOGOS_DEFAULT_MODEL" != "$SESSION_DEFAULT_MODEL" \
+            && "claude-$LOGOS_DEFAULT_MODEL" != "$SESSION_DEFAULT_MODEL" ]]; then
+      printf 'warning  : LOGOS_DEFAULT_MODEL=%s is not served here, starting on %s\n' \
+        "$LOGOS_DEFAULT_MODEL" "$SESSION_DEFAULT_MODEL"
+    fi
     if [[ -n "$KNOWN_MODEL_IDS" ]]; then
       printf 'available : %s\n' "$KNOWN_MODEL_IDS"
     fi
@@ -757,26 +843,36 @@ export ANTHROPIC_BASE_URL="$LOGOS_URL"
 export ANTHROPIC_AUTH_TOKEN="$LOGOS_KEY"
 unset ANTHROPIC_API_KEY
 
-# When a model is pinned, force every Claude Code slot at it (previous behaviour).
-# When it is not, clear any inherited pin/context so Claude Code discovers Logos
-# models via GET /v1/models and can switch with /model — an inherited
-# ANTHROPIC_MODEL would otherwise still select that id.
+# Every model slot Claude Code has points at a Logos model. Left unset, each one
+# falls back to an Anthropic id — the model saved in ~/.claude/settings.json, or the
+# built-in haiku/sonnet/opus — which Logos does not serve: the request fails with
+# "No deployment found" in the request log, and Claude Code sends some of them on its
+# own (the session title, for one) even after /model switched to a Logos model.
+#
+# With a pin every slot is that model (previous behaviour). Without one they all
+# start on the session default, and /model, fed by GET /v1/models, switches the main
+# loop between Logos models from there. ANTHROPIC_MODEL also outranks the "model"
+# saved in ~/.claude/settings.json, which is what keeps the subscription's default
+# out of this session.
+set_model_slots() {
+  local model="$1" slot
+  for slot in ANTHROPIC_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL \
+      ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_FABLE_MODEL \
+      ANTHROPIC_SMALL_FAST_MODEL CLAUDE_CODE_SUBAGENT_MODEL; do
+    if [[ -n "$model" ]]; then
+      export "$slot=$model"
+    else
+      unset "$slot"
+    fi
+  done
+}
 if (( HAS_PINNED_MODEL )); then
-  export ANTHROPIC_MODEL="$LOGOS_MODEL"
-  export ANTHROPIC_DEFAULT_HAIKU_MODEL="$LOGOS_MODEL"
-  export ANTHROPIC_DEFAULT_SONNET_MODEL="$LOGOS_MODEL"
-  export ANTHROPIC_DEFAULT_OPUS_MODEL="$LOGOS_MODEL"
-  export ANTHROPIC_DEFAULT_FABLE_MODEL="$LOGOS_MODEL"
-  export ANTHROPIC_SMALL_FAST_MODEL="$LOGOS_MODEL"   # pre-2.x name, harmless if ignored
+  set_model_slots "$LOGOS_MODEL"
   export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$CONTEXT_FOR_CLI"
 else
-  unset ANTHROPIC_MODEL \
-    ANTHROPIC_DEFAULT_HAIKU_MODEL \
-    ANTHROPIC_DEFAULT_SONNET_MODEL \
-    ANTHROPIC_DEFAULT_OPUS_MODEL \
-    ANTHROPIC_DEFAULT_FABLE_MODEL \
-    ANTHROPIC_SMALL_FAST_MODEL \
-    CLAUDE_CODE_MAX_CONTEXT_TOKENS
+  set_model_slots "$SESSION_DEFAULT_MODEL"
+  # Claude Code sizes each discovered model from List Models (max_input_tokens).
+  unset CLAUDE_CODE_MAX_CONTEXT_TOKENS
   # Opt into gateway List Models -> /model. Requires Claude Code >= 2.1.257 when
   # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC is also set (older builds suppress
   # discovery under that flag).
@@ -786,6 +882,14 @@ export CLAUDE_CODE_MAX_OUTPUT_TOKENS="$LOGOS_MAX_OUTPUT_TOKENS"
 # Keep telemetry, model discovery and other non-inference calls off api.anthropic.com,
 # so the only traffic leaving this machine goes to Logos.
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+# The same, spelled out one switch at a time: the umbrella above covers each of them
+# today, and these keep them off if it ever covers less. The claude.ai connectors
+# come from the claude.ai login, which a Logos session must not reach for.
+export DISABLE_TELEMETRY=1
+export DISABLE_ERROR_REPORTING=1
+export DISABLE_AUTOUPDATER=1
+export DISABLE_FEEDBACK_COMMAND=1
+export ENABLE_CLAUDEAI_MCP_SERVERS=false
 
 # ── --check ─────────────────────────────────────────────────────────────────────
 # Everything the startup line prints, plus which key and effort are in play. It
