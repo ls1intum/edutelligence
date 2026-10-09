@@ -524,6 +524,10 @@ class SessionManager:
         settlement, so a later cancel or cleanup can still reach the
         credential-bearing agent.
         """
+        # Capacity discount must know minted keys before the first scheduler
+        # pass: after a restart this process's set is empty, but recovered
+        # containers still use those keys.
+        await self._restore_minted_api_key_ids()
         live: dict[int, dict[str, Any]] = {}
         try:
             for container in await docker_engine.list_managed_containers():
@@ -772,11 +776,35 @@ class SessionManager:
         # only the children so a missing standing id does not empty the sum.
         return frozenset(ids)
 
+    async def _restore_minted_api_key_ids(self) -> None:
+        """Rebuild capacity-discount ids from surviving sessions after a restart."""
+        restored: set[int] = set()
+        for status in (
+            SessionStatus.STARTING,
+            SessionStatus.RUNNING,
+            SessionStatus.PAUSED,
+            SessionStatus.FINALIZING,
+        ):
+            try:
+                rows = await db.sessions_in_status(status)
+            except Exception as exc:
+                logger.warning("could not restore minted API key ids from %s sessions: %s", status.value, exc)
+                continue
+            for row in rows:
+                key_id = row.get("session_api_key_id")
+                if key_id is not None:
+                    restored.add(int(key_id))
+        self._minted_api_key_ids = restored
+        if restored:
+            logger.info("restored %s minted session API key id(s) after restart", len(restored))
+
     async def _mint_session_logos_key(self, session_id: int) -> str | None:
         """Mint a Logos key for the agent phase, or None to use the gateway placeholder.
 
         Returns the key value to put in the session env when minting succeeds.
         Raises SessionApiKeyError when minting is required and fails without fallback.
+        The webservice creates the key and links ``agent_sessions.session_api_key_id``
+        in one transaction; a failed association rolls the key back.
         """
         if not settings.session_api_key_mint:
             return None
@@ -792,10 +820,6 @@ class SessionManager:
             raise
         self._session_logos_keys[session_id] = minted.key_value
         self._minted_api_key_ids.add(minted.id)
-        try:
-            await db.update_session(session_id, session_api_key_id=minted.id)
-        except Exception as exc:
-            logger.info("could not record session_api_key_id for session %s: %s", session_id, exc)
         return minted.key_value
 
     async def _revoke_session_logos_key(self, session_id: int, key_id: int | None = None) -> None:
@@ -816,10 +840,10 @@ class SessionManager:
 
         Idempotent crash safety: settle and cancel already revoke on the happy
         path; this covers keys left active after a runner crash or a lost
-        race. Never touches standing keys (no ``parent_api_key_id``).
+        race. Runs even when minting is disabled so earlier orphans are not
+        left usable indefinitely. Never touches standing keys (no
+        ``parent_api_key_id``).
         """
-        if not settings.session_api_key_mint:
-            return
         try:
             orphans = await db.orphaned_session_api_key_ids()
         except Exception as exc:

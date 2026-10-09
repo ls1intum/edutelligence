@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.Map;
+import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,26 +49,49 @@ class InternalSessionApiKeyControllerTest {
     @Autowired ObjectMapper mapper;
     @MockitoBean JwtDecoder jwtDecoder;
 
+    private int createStartingSession() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        Integer workspaceId = jdbc.getJdbcOperations().queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES (?, 'main', ?, 'test', FALSE)
+            RETURNING id
+            """, Integer.class, "session-key-ws-" + suffix, "session-key-vol-" + suffix);
+        return jdbc.getJdbcOperations().queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push
+            ) VALUES (?, 'mint-key', 'starting', 'test', FALSE, FALSE, '[]'::jsonb, TRUE)
+            RETURNING id
+            """, Integer.class, workspaceId);
+    }
+
+    private String parentKeyValue() {
+        return jdbc.queryForObject(
+            "SELECT key_value FROM api_keys WHERE is_active = true AND parent_api_key_id IS NULL ORDER BY id LIMIT 1",
+            Map.of(),
+            String.class);
+    }
+
     @Test
     void mintRequiresInternalSecret() throws Exception {
+        int sessionId = createStartingSession();
         mvc.perform(post("/internal/session_api_keys")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"lg-seed\"}"))
+                .content("{\"parent_key_value\":\"lg-seed\",\"session_id\":" + sessionId + "}"))
            .andExpect(status().isUnauthorized());
     }
 
     @Test
     void mintAndRevokeSessionKey() throws Exception {
-        String parent = jdbc.queryForObject(
-            "SELECT key_value FROM api_keys WHERE is_active = true AND parent_api_key_id IS NULL ORDER BY id LIMIT 1",
-            Map.of(),
-            String.class);
+        String parent = parentKeyValue();
         assertThat(parent).isNotBlank();
+        int sessionId = createStartingSession();
 
         MvcResult minted = mvc.perform(post("/internal/session_api_keys")
                 .header("Authorization", "Bearer test-internal-secret")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"" + parent + "\",\"name\":\"agent-session-test\"}"))
+                .content("{\"parent_key_value\":\"" + parent
+                    + "\",\"name\":\"agent-session-test\",\"session_id\":" + sessionId + "}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.id").isNumber())
            .andExpect(jsonPath("$.key_value").isString())
@@ -77,6 +101,12 @@ class InternalSessionApiKeyControllerTest {
 
         Map<?, ?> body = mapper.readValue(minted.getResponse().getContentAsString(), Map.class);
         int childId = ((Number) body.get("id")).intValue();
+
+        Integer linked = jdbc.queryForObject(
+            "SELECT session_api_key_id FROM agent_sessions WHERE id = :id",
+            Map.of("id", sessionId),
+            Integer.class);
+        assertThat(linked).isEqualTo(childId);
 
         Integer audit = jdbc.queryForObject(
             "SELECT COUNT(*) FROM audit_log WHERE action = 'api_key.agent_minted' AND target_id = :id",
@@ -103,6 +133,38 @@ class InternalSessionApiKeyControllerTest {
     }
 
     @Test
+    void mintWithoutSessionIdIsRejected() throws Exception {
+        String parent = parentKeyValue();
+        mvc.perform(post("/internal/session_api_keys")
+                .header("Authorization", "Bearer test-internal-secret")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"parent_key_value\":\"" + parent + "\",\"name\":\"missing-session\"}"))
+           .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void mintRollsBackKeyWhenSessionCannotBeLinked() throws Exception {
+        String parent = parentKeyValue();
+        int before = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM api_keys WHERE parent_api_key_id IS NOT NULL",
+            Map.of(),
+            Integer.class);
+
+        mvc.perform(post("/internal/session_api_keys")
+                .header("Authorization", "Bearer test-internal-secret")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"parent_key_value\":\"" + parent
+                    + "\",\"name\":\"orphan-guard\",\"session_id\":999999001}"))
+           .andExpect(status().isBadRequest());
+
+        int after = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM api_keys WHERE parent_api_key_id IS NOT NULL",
+            Map.of(),
+            Integer.class);
+        assertThat(after).isEqualTo(before);
+    }
+
+    @Test
     void standingKeyCannotBeRevokedThroughTheRunnerEndpoint() throws Exception {
         Integer standingId = jdbc.queryForObject(
             "SELECT id FROM api_keys WHERE is_active = true AND parent_api_key_id IS NULL ORDER BY id LIMIT 1",
@@ -122,24 +184,23 @@ class InternalSessionApiKeyControllerTest {
 
     @Test
     void mintedKeyCannotMintFurtherKeys() throws Exception {
-        String parent = jdbc.queryForObject(
-            "SELECT key_value FROM api_keys WHERE is_active = true AND parent_api_key_id IS NULL ORDER BY id LIMIT 1",
-            Map.of(),
-            String.class);
+        String parent = parentKeyValue();
+        int sessionId = createStartingSession();
 
         MvcResult minted = mvc.perform(post("/internal/session_api_keys")
                 .header("Authorization", "Bearer test-internal-secret")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"" + parent + "\"}"))
+                .content("{\"parent_key_value\":\"" + parent + "\",\"session_id\":" + sessionId + "}"))
            .andExpect(status().isOk())
            .andReturn();
         Map<?, ?> body = mapper.readValue(minted.getResponse().getContentAsString(), Map.class);
         String childValue = (String) body.get("key_value");
 
+        int otherSession = createStartingSession();
         mvc.perform(post("/internal/session_api_keys")
                 .header("Authorization", "Bearer test-internal-secret")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"parent_key_value\":\"" + childValue + "\"}"))
+                .content("{\"parent_key_value\":\"" + childValue + "\",\"session_id\":" + otherSession + "}"))
            .andExpect(status().isBadRequest());
     }
 }

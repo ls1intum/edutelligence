@@ -20,8 +20,9 @@ import de.tum.cit.aet.logos.logoswebservice.identity.service.SessionApiKeyServic
  * Internal mint/revoke of session API keys for the agent runner.
  *
  * <p>Authenticated with {@code LOGOS_INTERNAL_SECRET}, not a JWT or Logos key.
- * A minted key lives for the agent session; the runner revokes it when the
- * session ends.
+ * Mint requires a {@code session_id} and links the new key on that session in
+ * the same transaction. A minted key lives for the agent session; the runner
+ * revokes it when the session ends.
  */
 @RestController
 @RequestMapping("/internal/session_api_keys")
@@ -46,7 +47,7 @@ public class InternalSessionApiKeyController {
         }
         try {
             return ResponseEntity.ok(sessionApiKeyService.mint(
-                request.parentKeyValue(), request.name()));
+                request.parentKeyValue(), request.name(), request.sessionId()));
         } catch (IllegalArgumentException exc) {
             return ResponseEntity.badRequest().body(Map.of("error", exc.getMessage()));
         }
@@ -78,5 +79,6 @@ public class InternalSessionApiKeyController {
 
     public record MintRequest(
             @JsonProperty("parent_key_value") String parentKeyValue,
-            @JsonProperty("name") String name) {}
+            @JsonProperty("name") String name,
+            @JsonProperty("session_id") Integer sessionId) {}
 }

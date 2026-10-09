@@ -7,6 +7,7 @@ from dataclasses import replace
 import httpx
 import pytest
 from app import capacity, session_api_keys, sessions
+from app.schemas import SessionStatus
 
 
 @pytest.mark.asyncio
@@ -56,6 +57,7 @@ async def test_mint_posts_to_webservice_without_logging_key(monkeypatch, caplog)
     assert minted.parent_api_key_id == 7
     assert captured["url"].endswith("/internal/session_api_keys")
     assert captured["json"]["parent_key_value"] == "lg-parent"
+    assert captured["json"]["session_id"] == 9
     assert "ttl_seconds" not in captured["json"]
     assert "lg-session-secret" not in caplog.text
 
@@ -137,6 +139,38 @@ async def test_mint_failure_without_fallback_raises(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mint_does_not_separately_update_session_row(monkeypatch):
+    """Association is the webservice mint transaction; the runner must not link later."""
+    manager = sessions.SessionManager()
+    monkeypatch.setattr(
+        sessions,
+        "settings",
+        replace(
+            sessions.settings,
+            session_api_key_mint=True,
+            session_api_key_fallback=False,
+            agent_api_key="lg-parent",
+            internal_secret="s",
+        ),
+    )
+
+    async def fake_mint(*, session_id: int, parent_key_value: str):
+        return session_api_keys.MintedSessionKey(id=55, key_value="lg-session-x", parent_api_key_id=1)
+
+    updated: list = []
+
+    async def capture_update(sid, **fields):
+        updated.append((sid, fields))
+
+    monkeypatch.setattr(sessions.session_api_keys, "mint", fake_mint)
+    monkeypatch.setattr(sessions.db, "update_session", capture_update)
+
+    assert await manager._mint_session_logos_key(13) == "lg-session-x"
+    assert manager._minted_api_key_ids == {55}
+    assert updated == []
+
+
+@pytest.mark.asyncio
 async def test_mint_failure_with_fallback_returns_none(monkeypatch):
     manager = sessions.SessionManager()
     monkeypatch.setattr(
@@ -186,23 +220,82 @@ async def test_janitor_revokes_orphaned_minted_keys(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_janitor_skips_when_minting_disabled(monkeypatch):
+async def test_janitor_runs_when_minting_disabled_with_existing_orphan(monkeypatch):
+    """Orphans minted earlier must still be revoked after minting is turned off."""
     manager = sessions.SessionManager()
+    manager._minted_api_key_ids.add(77)
     monkeypatch.setattr(
         sessions,
         "settings",
         replace(sessions.settings, session_api_key_mint=False),
     )
-    called = False
+    revoked: list[int] = []
 
     async def orphans():
-        nonlocal called
-        called = True
-        return [1]
+        return [77]
+
+    async def capture_revoke(key_id: int) -> None:
+        revoked.append(key_id)
 
     monkeypatch.setattr(sessions.db, "orphaned_session_api_key_ids", orphans)
+    monkeypatch.setattr(sessions.session_api_keys, "revoke", capture_revoke)
+
     await manager._janitor_session_api_keys()
-    assert not called
+
+    assert revoked == [77]
+    assert 77 not in manager._minted_api_key_ids
+
+
+@pytest.mark.asyncio
+async def test_reconcile_restores_minted_key_ids_before_capacity(monkeypatch, tmp_path):
+    """After a runner restart, recovered sessions' key ids must discount capacity."""
+    from app.sessions import branch_for
+
+    monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+    monkeypatch.setattr(sessions.os, "chown", lambda *args, **kwargs: None)
+
+    manager = sessions.SessionManager()
+    assert manager._minted_api_key_ids == set()
+
+    running_row = {
+        "id": 7,
+        "workspace_name": "feature-work",
+        "container_id": "cid-x",
+        "branch_name": branch_for(7, "feature-work"),
+        "session_api_key_id": 42,
+    }
+    container = {
+        "Id": "cid-x",
+        "Labels": {"logos.agent.session": "7", "logos.agent.managed": "true"},
+        "State": "running",
+    }
+
+    async def fake_in_status(status):
+        if status is SessionStatus.RUNNING:
+            return [running_row]
+        return []
+
+    async def fake_list():
+        return [container]
+
+    async def fake_transition(sid, target, **fields):
+        return True
+
+    supervised: list = []
+
+    def fake_supervise(self, sid, cid):
+        supervised.append((sid, cid))
+
+    monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+    monkeypatch.setattr(sessions.docker_engine, "list_managed_containers", fake_list)
+    monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+    monkeypatch.setattr(sessions.SessionManager, "_supervise", fake_supervise)
+
+    await manager._reconcile()
+
+    assert manager._minted_api_key_ids == {42}
+    assert supervised == [(7, "cid-x")]
+    assert 42 in manager._own_api_key_ids()
 
 
 @pytest.mark.asyncio

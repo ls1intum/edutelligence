@@ -39,6 +39,9 @@ async def mint(*, session_id: int, parent_key_value: str) -> MintedSessionKey:
     body = {
         "parent_key_value": parent_key_value,
         "name": f"agent-session-{session_id}",
+        # Association is part of the mint transaction on the webservice so a
+        # concurrent janitor cannot revoke an unlinked key before launch.
+        "session_id": session_id,
     }
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
