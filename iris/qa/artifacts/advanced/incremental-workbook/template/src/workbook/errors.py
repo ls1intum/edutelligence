@@ -1,0 +1,2 @@
+class FormulaCycleError(RuntimeError):
+    pass

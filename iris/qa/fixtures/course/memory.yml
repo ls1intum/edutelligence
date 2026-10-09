@@ -1,0 +1,10 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+user:
+  memirisEnabled: true
+qa:
+  memories:
+    - id: memory-17
+      title: Learner preference
+      content: Alex learns best from small traced examples before formal notation.
+      reference: session-messages/811

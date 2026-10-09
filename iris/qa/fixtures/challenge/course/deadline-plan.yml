@@ -1,0 +1,77 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+course:
+  id: 42
+  name: Algorithms and Data Structures
+  description: An undergraduate course on algorithms, graphs, and complexity.
+  startTime: 2026-04-13T08:00:00Z
+  endTime: 2026-07-25T18:00:00Z
+  defaultProgrammingLanguage: JAVA
+  exercises:
+    - id: 9102
+      title: Graph Model Check
+      type: TEXT
+      mode: INDIVIDUAL
+      maxPoints: 10
+      dueDate: 2026-06-17T13:00:00Z
+      difficultyLevel: MEDIUM
+      problemStatement: Justify the graph representation used by the Transit Planner. This prerequisite review must be passed before the programming assessment can be submitted.
+      submissions:
+        - id: 701
+          score: 3.0
+          submitted: true
+    - id: 9103
+      title: Transit Planner
+      type: PROGRAMMING
+      mode: INDIVIDUAL
+      maxPoints: 20
+      dueDate: 2026-06-18T18:00:00Z
+      difficultyLevel: HARD
+      problemStatement: Implement shortest-path routing after completing the Graph Model Check.
+      submissions:
+        - id: 702
+          score: 8.0
+          submitted: true
+    - id: 9104
+      title: Amortized Analysis Quiz
+      type: QUIZ
+      mode: INDIVIDUAL
+      maxPoints: 10
+      dueDate: 2026-06-17T15:00:00Z
+      difficultyLevel: MEDIUM
+      problemStatement: Analyze dynamic-array operations.
+      submissions:
+        - id: 703
+          score: 9.0
+          submitted: true
+    - id: 9105
+      title: Network Flow
+      type: PROGRAMMING
+      mode: INDIVIDUAL
+      maxPoints: 20
+      dueDate: 2026-06-20T18:00:00Z
+      difficultyLevel: HARD
+      problemStatement: Implement Edmonds-Karp after the shortest-path unit.
+      submissions: []
+    - id: 9106
+      title: Optional Graph Review
+      type: TEXT
+      mode: INDIVIDUAL
+      maxPoints: 0
+      dueDate: 2026-06-17T12:30:00Z
+      difficultyLevel: EASY
+      problemStatement: Optional ungraded review of adjacency lists.
+      submissions: []
+qa:
+  syntheticNow: "2026-06-17T10:30:00Z"
+  retrieval:
+    faqAvailable: true
+    faqs:
+      - id: 8201
+        question: Was the Transit Planner deadline extended after the CI outage?
+        answer: Yes. The official deadline is Friday, 19 June 2026 at 18:00 Europe/Berlin. Artemis may continue to display the original Thursday deadline until the next course sync. The Graph Model Check prerequisite still closes Wednesday at 13:00.
+        link: /courses/42/faq/8201
+      - id: 8202
+        question: Does the optional review unlock the Transit Planner?
+        answer: No. Only a passing Graph Model Check unlocks submission of Transit Planner; the Optional Graph Review is ungraded.
+        link: /courses/42/faq/8202

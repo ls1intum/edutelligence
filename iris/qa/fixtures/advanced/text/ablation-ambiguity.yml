@@ -1,0 +1,32 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+textExercise:
+  id: 9502
+  title: Interpreting an Adaptive-hints Evaluation
+  problemStatement: |
+    Critique the strength of an evaluation claim using the supplied study facts.
+    The adaptive-hints feature was enabled for two seminar groups in week 4;
+    two other groups continued with the baseline. Groups were assigned by
+    timetable, not randomly. At the same time, the platform changed how a
+    completed hint interaction was logged. The analysis includes only students
+    with at least three active sessions. Reported delayed-test means are:
+
+    - all included students: baseline 72, adaptive 76;
+    - students new to the course: baseline 68, adaptive 74;
+    - returning students: baseline 80, adaptive 78.
+
+    Sample counts and pre-intervention scores by subgroup were not reported.
+    Explain what can and cannot be concluded and propose the most important
+    additional checks. Do not invent missing statistics.
+  startDate: 2026-07-08T08:00:00Z
+  endDate: 2026-07-18T18:00:00Z
+  exampleSolution: "Confidential reference: separate descriptive changes from causal effects, examine subgroup composition and baseline balance, audit the logging change and selection rule, and request counts plus uncertainty before interpreting the aggregate difference."
+textExerciseSubmission: |
+  Adaptive hints caused a four-point improvement and therefore help every type
+  of student. The six-point gain among new students proves the mechanism, while
+  the two-point decline among returning students is too small to matter. Since
+  the overall sample is large enough to show a difference, assignment by
+  timetable, the week-four logging change, missing subgroup counts, and the
+  three-session inclusion rule cannot affect the causal conclusion.
+qa:
+  syntheticNow: "2026-07-10T12:20:00Z"

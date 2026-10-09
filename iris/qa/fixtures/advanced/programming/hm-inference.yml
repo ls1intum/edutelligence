@@ -1,0 +1,45 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [base/chat.yml]
+programmingExercise:
+  id: 9602
+  title: Principal Type Inference
+  problemStatement: |
+    Implement Algorithm W for variables, integer and Boolean literals,
+    lambdas, application, non-recursive let bindings, and pairs. Let-bound
+    schemes must be instantiated independently at every use. Inference must
+    reject infinite types, produce a principal type rather than an unsound
+    over-general type, and compose substitutions in semantic application
+    order. Equivalent fresh-variable names are accepted by the tests.
+  startDate: 2026-07-15T08:00:00Z
+  endDate: 2026-07-29T18:00:00Z
+  programmingLanguage: PYTHON
+  templateRepository: { $repository: advanced/hm-inference/template }
+  solutionRepository: { $repository: advanced/hm-inference/solution }
+  testRepository: { $repository: advanced/hm-inference/tests }
+programmingExerciseSubmission:
+  id: 941
+  date: 2026-07-23T14:40:00Z
+  repository: { $repository: advanced/hm-inference/student/latest }
+  isPractice: false
+  buildFailed: false
+  buildLogEntries:
+    - timestamp: 2026-07-23T14:41:00Z
+      message: "BUILD SUCCESS: 9 source files imported; 18 public tests passed."
+    - timestamp: 2026-07-23T14:41:12Z
+      message: "Hidden higher-order group: 3 failed, 7 passed. Parser and AST regression groups: 12 passed."
+  latestResult:
+    completionDate: 2026-07-23T14:41:14Z
+    successful: false
+    feedbacks:
+      - testCaseName: constrainedUseKeepsLaterIdentityGeneric
+        text: "For let id = λx.x in (id 1, id), expected (Int, α→α) with fresh α, but the second component was inferred as Int→Int."
+        credits: 0.0
+      - testCaseName: selfApplicationHasNoFiniteType
+        text: "For λx. x x, expected InfiniteTypeError, but inference returned a recursive-looking function type."
+        credits: 0.0
+      - testCaseName: repeatedApplicationPrincipalType
+        text: "For λf.λx.f(f x), expected (α→α)→α→α, but the inferred type allowed f's argument and result to differ."
+        credits: 0.0
+qa:
+  syntheticNow: "2026-07-23T15:10:00Z"
+  submissionHistory: artifacts/advanced/hm-inference/submission-history.yml

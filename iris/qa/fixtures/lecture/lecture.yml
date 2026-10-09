@@ -1,0 +1,30 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+lecture:
+  id: 6001
+  title: Divide and Conquer
+  description: Recurrences, merge sort, and asymptotic analysis.
+  startDate: 2026-05-08T08:00:00Z
+  units: []
+lectureUnitId: 7001
+context:
+  - type: slides
+    lectureUnitId: 7001
+    page: 8
+qa:
+  retrieval:
+    lectureAvailable: true
+    currentView:
+      pages:
+        - uuid: page-7001-8
+          lectureUnitId: 7001
+          lectureUnitName: Merge Sort Recurrence
+          pageNumber: 8
+          text: "Merge sort satisfies T(n)=2T(n/2)+Theta(n), hence T(n)=Theta(n log n)."
+          link: /courses/42/lectures/6001?lectureUnitId=7001&page=8
+    search:
+      - uuid: segment-master-theorem
+        lectureUnitId: 7001
+        lectureUnitName: Master Theorem
+        text: "For a=2, b=2 and f(n)=Theta(n), case 2 yields Theta(n log n)."
+        link: /courses/42/lectures/6001?lectureUnitId=7001

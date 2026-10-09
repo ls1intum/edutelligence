@@ -1,0 +1,57 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [tutor/base.yml]
+programmingExerciseDTO:
+  id: 9601
+  title: Incremental Multi-sheet Workbook
+  problemStatement: |
+    Evaluate integer formulas in a multi-sheet dependency graph. Cell identity
+    includes sheet and name, shared dependencies are not cycles, and edits must
+    invalidate all transitively affected cached values.
+  programmingLanguage: PYTHON
+  templateRepository: { $repository: advanced/incremental-workbook/template }
+  solutionRepository: { $repository: advanced/incremental-workbook/solution }
+  testRepository: { $repository: advanced/incremental-workbook/tests }
+submission:
+  id: 932
+  date: 2026-07-19T09:20:00Z
+  repository: { $repository: advanced/incremental-workbook/student/latest }
+  isPractice: false
+  buildFailed: false
+  latestResult:
+    completionDate: 2026-07-19T09:21:10Z
+    successful: false
+    feedbacks:
+      - testCaseName: recalculationSequence14
+        text: "Changing a source after a cached multi-step calculation leaves the final cell stale."
+        credits: 0.0
+      - testCaseName: sharedInputGraph7
+        text: "Reusing one source through two acyclic branches is reported as a cycle."
+        credits: 0.0
+      - testCaseName: parallelSheetImport
+        text: "Two unrelated sheets with the same cell name return one sheet's value."
+        credits: 0.0
+post:
+  id: 4901
+  userID: 117
+  content: "I fixed the reference parser and all parser tests pass. I still think qualified references are being parsed incorrectly somewhere. How should I continue?"
+  answers:
+    - id: 4902
+      userID: 301
+      content: "Maybe strip sheet prefixes before evaluating; that would make all names consistent."
+      redacted: false
+    - id: 4903
+      userID: 302
+      content: "The remaining failures depend on what was evaluated before them, so I would first trace state rather than tokenization."
+      redacted: false
+chatHistory:
+  - id: 4904
+    sentAt: 2026-07-19T10:02:00Z
+    sender: USER
+    contents:
+      - type: text
+        textContent: "Give me three concise suggestions for guiding the student. They should help the student choose and run diagnostic traces, not reveal the implementation."
+qa:
+  syntheticNow: "2026-07-19T10:05:00Z"
+  retrieval:
+    lectureAvailable: false
+    faqAvailable: false
