@@ -415,6 +415,18 @@ def test_legacy_unit_summary_is_rebuilt_after_its_sources_were_replaced(
     )
 
 
+def test_legacy_unit_summary_is_rebuilt_when_no_source_rows_are_left():
+    # A run removed the unit's last PDF and transcript and then failed: the retry
+    # finds only empty collections, and the old summary describes removed content.
+    summary_pipeline_cls, inserted = _run_unit_pipeline_over_legacy_row([], (), ())
+
+    summary_pipeline_cls.assert_called_once()
+    assert (
+        inserted["properties"][LectureUnitSchema.LECTURE_UNIT_SUMMARY.value]
+        == "fresh summary"
+    )
+
+
 # ── Purge of removed content ─────────────────────────────────────────────
 
 

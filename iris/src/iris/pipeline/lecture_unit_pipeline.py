@@ -136,32 +136,42 @@ class LectureUnitPipeline(SubPipeline):
         return summary, vector
 
     def _all_unit_rows_unstamped(self, lecture_unit: LectureUnitDTO) -> bool:
-        """Whether no slide summary, page chunk or transcript row of the unit was written by a current run."""
+        """Whether the unit still has source rows and no slide summary, page chunk or
+        transcript row of it was written by a current run.
+
+        Without any page chunk or transcript row, the old summary describes content
+        that is gone: a run that removed the unit's last PDF or transcript and then
+        failed must not leave it for the retry, which finds three empty collections.
+        """
+        segments_unstamped, _ = self._unit_rows_unstamped(
+            lecture_unit,
+            init_lecture_unit_segment_schema,
+            LectureUnitSegmentSchema,
+            LectureUnitSegmentSchema.CONTENT_FINGERPRINT,
+        )
+        chunks_unstamped, chunk_count = self._unit_rows_unstamped(
+            lecture_unit,
+            init_lecture_unit_page_chunk_schema,
+            LectureUnitPageChunkSchema,
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID,
+        )
+        transcript_unstamped, transcript_count = self._unit_rows_unstamped(
+            lecture_unit,
+            init_lecture_transcription_schema,
+            LectureTranscriptionSchema,
+            LectureTranscriptionSchema.INGESTION_RUN_ID,
+        )
         return (
-            self._unit_rows_unstamped(
-                lecture_unit,
-                init_lecture_unit_segment_schema,
-                LectureUnitSegmentSchema,
-                LectureUnitSegmentSchema.CONTENT_FINGERPRINT,
-            )
-            and self._unit_rows_unstamped(
-                lecture_unit,
-                init_lecture_unit_page_chunk_schema,
-                LectureUnitPageChunkSchema,
-                LectureUnitPageChunkSchema.INGESTION_RUN_ID,
-            )
-            and self._unit_rows_unstamped(
-                lecture_unit,
-                init_lecture_transcription_schema,
-                LectureTranscriptionSchema,
-                LectureTranscriptionSchema.INGESTION_RUN_ID,
-            )
+            segments_unstamped
+            and chunks_unstamped
+            and transcript_unstamped
+            and chunk_count + transcript_count > 0
         )
 
     def _unit_rows_unstamped(
         self, lecture_unit: LectureUnitDTO, init_schema, schema, stamp
-    ) -> bool:
-        """Whether every row of the unit in one collection lacks the given stamp."""
+    ) -> tuple[bool, int]:
+        """Whether every row of the unit in one collection lacks the given stamp, and how many rows it has."""
         collection = init_schema(self.weaviate_client)
         unit_filter = (
             Filter.by_property(schema.COURSE_ID.value).equal(lecture_unit.course_id)
@@ -176,8 +186,8 @@ class LectureUnitPipeline(SubPipeline):
             filters=unit_filter, limit=limit, return_properties=[stamp.value]
         ).objects
         if len(rows) >= limit:
-            return False
-        return all(row.properties.get(stamp.value) is None for row in rows)
+            return False, len(rows)
+        return all(row.properties.get(stamp.value) is None for row in rows), len(rows)
 
     @observe(name="Lecture Unit Pipeline")
     def __call__(
