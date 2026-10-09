@@ -35,6 +35,7 @@ class LectureUnitSegmentSchema(Enum):
     SLIDES = "slides"
     BASE_URL = "base_url"
     HIDDEN_UNTIL = "hidden_until"
+    CONTENT_FINGERPRINT = "content_fingerprint"
 
 
 def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
@@ -64,6 +65,19 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
                 description="UTC timestamp until which this slide-backed summary is hidden",
                 data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+        )
+
+        _add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value,
+                description=(
+                    "Fingerprint of the source content this summary was "
+                    "derived from, stamped verbatim as sent by Artemis"
+                ),
+                data_type=DataType.TEXT,
                 index_searchable=False,
             ),
         )
@@ -124,6 +138,15 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
                 description="UTC timestamp until which this slide-backed summary is hidden",
                 data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value,
+                description=(
+                    "Fingerprint of the source content this summary was "
+                    "derived from, stamped verbatim as sent by Artemis"
+                ),
+                data_type=DataType.TEXT,
                 index_searchable=False,
             ),
         ],
