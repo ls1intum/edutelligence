@@ -637,22 +637,42 @@ async def system_one(body: SystemOneRequest, request: Request):
         except HTTPException as exc:
             return exc.status_code, {"error": {"message": str(exc.detail)}}
 
+    # Each turn's synthetic receive waits forever after the body, so the
+    # pipeline's disconnect watcher cannot see the caller leave. Race the
+    # decision work against a watcher on the ORIGINAL request and cancel when
+    # the client goes away — otherwise up to 32 question completions keep
+    # running after nobody is left to read them.
+    work = asyncio.create_task(answer_system_one(body, turn))
+    watcher = asyncio.create_task(_main._wait_for_client_disconnect(request))
     try:
-        return await answer_system_one(body, turn)
-    except DecisionError as exc:
-        if exc.body is not None:
-            return JSONResponse(exc.body, status_code=exc.status)
-        # Locally raised failures: invalid_request_error only for 400/422;
-        # other statuses map through _ERROR_TYPES with api_error as fallback.
-        return JSONResponse(
-            {
-                "error": {
-                    "message": str(exc),
-                    "type": _ERROR_TYPES.get(exc.status, "api_error"),
-                }
-            },
-            status_code=exc.status,
-        )
+        done, _ = await asyncio.wait({work, watcher}, return_when=asyncio.FIRST_COMPLETED)
+    except asyncio.CancelledError:
+        await _main._settle(work)
+        raise
+    finally:
+        await _main._settle(watcher)
+
+    if work in done and watcher not in done:
+        try:
+            return work.result()
+        except DecisionError as exc:
+            if exc.body is not None:
+                return JSONResponse(exc.body, status_code=exc.status)
+            # Locally raised failures: invalid_request_error only for 400/422;
+            # other statuses map through _ERROR_TYPES with api_error as fallback.
+            return JSONResponse(
+                {
+                    "error": {
+                        "message": str(exc),
+                        "type": _ERROR_TYPES.get(exc.status, "api_error"),
+                    }
+                },
+                status_code=exc.status,
+            )
+
+    await _main._settle(work)
+    logger.info("Cancelled /v1/systemone: client disconnected before the response was ready")
+    return JSONResponse(status_code=499, content={"detail": "Client closed request"})
 
 
 @router.post("/v1/{path:path}", tags=["user-facing"])

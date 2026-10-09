@@ -199,8 +199,17 @@ def answer_probabilities(profile: DecisionProfile, compiled: CompiledQuestion, c
     logprobs: dict[int, float] = {}
     for token, logprob in (top or {}).items():
         _, _, token_id = str(token).rpartition(":")
-        if token_id.isdigit() and logprob is not None:
-            logprobs[int(token_id)] = float(logprob)
+        if not token_id.isdigit() or logprob is None:
+            continue
+        value = float(logprob)
+        if math.isfinite(value):
+            logprobs[int(token_id)] = value
+    # At least one requested label must carry a real logprob. An empty or
+    # unmatched distribution would otherwise fall through to the -1e9 filler
+    # for every label and return a fabricated softmax (HTTP 200). Individually
+    # missing labels still get zero probability below.
+    if not any(profile.verbalizer_ids[i] in logprobs for i in compiled.slot_indices):
+        raise DecisionError("the decision model returned no answer logprobs", status=502)
     temperature = profile.temperatures[compiled.kind]
     logits = [
         (max(logprobs.get(profile.verbalizer_ids[i], -1e9), -1e9) + profile.bias[i]) / temperature

@@ -1,5 +1,6 @@
 """Decision models behind POST /v1/systemone."""
 
+import asyncio
 import importlib
 import json
 import math
@@ -20,6 +21,16 @@ decision = importlib.import_module("logos.decision")
 
 MODEL = "autotrust/JEV-27B-VL"
 PROFILE = decision.PROFILES["autotrust/jev-27b-vl"]
+
+
+@pytest.fixture(autouse=True)
+def _idle_disconnect_watcher(monkeypatch):
+    """ASGITransport's ``is_disconnected`` can block the portal; idle until cancel."""
+
+    async def _idle_until_cancelled(request):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(main, "_wait_for_client_disconnect", _idle_until_cancelled)
 
 
 def request(questions, state="I was charged twice and want a refund.", model=MODEL):
@@ -138,6 +149,25 @@ def test_a_completion_without_logprobs_is_a_bad_gateway():
     compiled = decision.compile_question(PROFILE, "x", body.questions["q"])
     with pytest.raises(decision.DecisionError) as exc:
         decision.answer_probabilities(PROFILE, compiled, {"choices": [{"text": "x", "logprobs": None}]})
+    assert exc.value.status == 502
+
+
+@pytest.mark.parametrize(
+    "top",
+    [
+        {},
+        None,
+        {"token_id:99999": -0.1},
+        {"token_id:3721": None, "token_id:1802": float("nan")},
+    ],
+)
+def test_empty_or_unmatched_logprobs_are_a_bad_gateway(top):
+    """Fallback-only softmax must not become a successful answer distribution."""
+    body = request({"q": {"type": "noul"}})
+    compiled = decision.compile_question(PROFILE, "x", body.questions["q"])
+    completion = {"choices": [{"text": "", "logprobs": {"top_logprobs": [top]}}]}
+    with pytest.raises(decision.DecisionError) as exc:
+        decision.answer_probabilities(PROFILE, compiled, completion)
     assert exc.value.status == 502
 
 
@@ -322,3 +352,40 @@ async def test_route_rejects_a_bad_key(monkeypatch):
     )
     response = await post({"model": MODEL, "state": "x", "questions": {"q": {"type": "noul"}}})
     assert response.status_code == 401
+
+
+async def test_route_cancels_when_the_client_disconnects(monkeypatch):
+    """Synthetic pipeline turns cannot see the caller leave; the route must."""
+    monkeypatch.setattr(user_facing, "authenticate_api_key", Mock())
+    monkeypatch.setattr(user_facing, "get_client_ip", Mock(return_value="127.0.0.1"))
+    monkeypatch.setattr(main, "_CLIENT_DISCONNECT_POLL_SECONDS", 0.001)
+
+    async def watch(request):
+        while not await request.is_disconnected():
+            await asyncio.sleep(0.001)
+
+    monkeypatch.setattr(main, "_wait_for_client_disconnect", watch)
+    cancelled = asyncio.Event()
+
+    class LeavingClient:
+        headers = {}
+
+        async def is_disconnected(self):
+            return True
+
+    async def never_finishes(body, turn):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr(user_facing, "answer_system_one", never_finishes)
+    response = await user_facing.system_one(
+        request({"q": {"type": "noul"}}),
+        LeavingClient(),
+    )
+
+    assert cancelled.is_set()
+    assert response.status_code == 499
+    assert json.loads(response.body) == {"detail": "Client closed request"}
