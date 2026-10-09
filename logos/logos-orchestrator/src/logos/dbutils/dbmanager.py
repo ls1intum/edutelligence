@@ -289,40 +289,6 @@ _SETTLED_COST_SNAPSHOT_SQL = """
 
 
 # noinspection PyUnresolvedReferences
-
-
-def keep_pinned_legacy_api_version(existing: Optional[str], desired: str) -> str:
-    """Keep an operator-pinned Azure ``api-version`` older than 2024-09-01.
-
-    Azure sync regenerates each deployment URL with the current default
-    api-version. A deployment that only knows ``max_tokens`` (GPT-4 Turbo) is
-    pinned to an older version by hand, and the URL decides which output cap
-    the Messages translation sends; overwriting the pin on the next sync would
-    silently break it. Only a pin on the same URL apart from the version is
-    kept, so a renamed deployment or host still follows the sync.
-    """
-    from logos.anthropic_compat.common import MAX_COMPLETION_TOKENS_MIN_API_VERSION
-
-    if not existing or existing == desired:
-        return desired
-    existing_base, _, existing_query = existing.partition("?")
-    desired_base, _, desired_query = desired.partition("?")
-    if existing_base != desired_base:
-        return desired
-
-    def _version(query: str) -> Optional[str]:
-        for param in query.split("&"):
-            name, _, value = param.partition("=")
-            if name == "api-version" and re.match(r"\d{4}-\d{2}-\d{2}", value):
-                return value
-        return None
-
-    pinned = _version(existing_query)
-    if pinned is not None and pinned[:10] < MAX_COMPLETION_TOKENS_MIN_API_VERSION:
-        return existing
-    return desired
-
-
 class DBManager:
     def __init__(self):
         pass
@@ -1134,11 +1100,7 @@ class DBManager:
             # is what gates the per-provider price rows, so every freshly
             # linked model — even one whose row already existed globally —
             # needs a price/capability refresh on the webservice side.
-            # An operator may pin a deployment to an api-version that predates
-            # max_completion_tokens (GPT-4 Turbo on 2024-02-01); the sync only
-            # ever generates the current default, so that pin is kept.
             new_link = model_name not in existing_by_name
-            endpoint = keep_pinned_legacy_api_version(existing_endpoint.get(model_name), endpoint)
             if new_link or existing_endpoint.get(model_name) != endpoint:
                 changed = True
             if new_link:

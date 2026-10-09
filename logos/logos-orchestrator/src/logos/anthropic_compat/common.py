@@ -92,7 +92,7 @@ def is_reasoning_model(model_name: Optional[str]) -> bool:
 # First Azure OpenAI api-version whose chat/completions schema accepts
 # ``max_completion_tokens``. Older versions (e.g. 2024-02-01, which GPT-4 Turbo
 # deployments still use) define only ``max_tokens`` and answer 400 otherwise.
-MAX_COMPLETION_TOKENS_MIN_API_VERSION = "2024-09-01"
+_MAX_COMPLETION_TOKENS_MIN_API_VERSION = "2024-09-01"
 
 
 def wants_max_completion_tokens(endpoint_url: Optional[str]) -> bool:
@@ -114,7 +114,7 @@ def wants_max_completion_tokens(endpoint_url: Optional[str]) -> bool:
     for param in query.split("&"):
         name, _, value = param.partition("=")
         if name == "api-version" and re.match(r"\d{4}-\d{2}-\d{2}", value):
-            return value[:10] >= MAX_COMPLETION_TOKENS_MIN_API_VERSION
+            return value[:10] >= _MAX_COMPLETION_TOKENS_MIN_API_VERSION
     # No usable URL or no api-version (OpenAI itself): the caller is already
     # translating into the chat/completions dialect, which wants the modern name.
     return True
