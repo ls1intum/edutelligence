@@ -157,6 +157,23 @@ def max_active_sessions(ceiling: int | None = None) -> int:
     return max(0, limit - max(1, limit // 5))
 
 
+def queue_workspace_limit() -> int:
+    """How many live workspaces may hold waiting triggered work.
+
+    Larger than the parallel-session ceiling: a pause stops *starting*, not
+    writing work down, and each waiting session needs a workspace of its
+    own. Execution is still capped by the scheduler's admission against
+    ``max_parallel_sessions`` — a queued session beyond that ceiling waits
+    for a real execution slot before it starts. Free workspaces are reused
+    first; this limit only caps how many new ones the poller may create.
+    """
+    parallel = settings.max_parallel_sessions
+    configured = settings.max_queue_workspaces
+    if configured > 0:
+        return max(configured, parallel)
+    return parallel * 5
+
+
 def mentions_agent(body: str) -> bool:
     """Whether a comment addresses the agent by name.
 
@@ -528,30 +545,29 @@ class TriggerPoller:
     async def poll_once(self) -> list[int]:
         """One look at the repository. Returns the sessions queued, if any."""
         now = datetime.now(timezone.utc)
-        # Nothing to queue into: the runner is paused, draining, or its
-        # ceiling is zero. The repository is read again next pass, and
-        # nothing is lost by not looking now.
         control = await controls.current()
-        blocked = control.admission_block()
-        if blocked:
-            # Nothing is queued while the runner is stopped — and nothing is
-            # forgotten either: the comment mark is only moved by a pass
-            # that handled what it saw, so a question asked during a pause is
-            # still in the window when the runner comes back.
-            logger.debug("trigger poll skipped: %s", blocked)
-            self._last_pass = now
-            return []
         # How much of the platform the automation may hold at once. Queued
         # sessions are not counted against it: they are work waiting its
         # turn, which is what the queue on the page is for, and refusing to
         # write them down is what kept that queue permanently empty while
         # the backlog sat invisible in the repository.
+        #
+        # When the runner is paused or draining, nothing may *start*, but
+        # assigned work is still written down — otherwise a pause loses
+        # every assignment that arrived while it was stopped. The active
+        # ceiling does not apply to that queue: paused sessions hold no
+        # serving capacity, and the work is only waiting.
         quota = max_active_sessions(control.max_parallel)
-        room = quota - await db.count_active_trigger_sessions()
-        if room <= 0:
-            logger.debug("trigger poll skipped: already running %s self-queued sessions", quota)
-            self._last_pass = now
-            return []
+        blocked = control.admission_block()
+        if blocked:
+            room = 10**9
+            logger.debug("trigger poll queueing while stopped: %s", blocked)
+        else:
+            room = quota - await db.count_active_trigger_sessions()
+            if room <= 0:
+                logger.debug("trigger poll skipped: already running %s self-queued sessions", quota)
+                self._last_pass = now
+                return []
 
         # Permission answers are cached per pass: they can change, and a
         # pass is short enough that reading them once is honest.
@@ -1410,16 +1426,19 @@ class TriggerPoller:
         """A free workspace whose checkout starts from ``base_branch``.
 
         Sessions the runner queues have nobody to prepare a working copy for
-        them, so it makes its own — up to the parallel ceiling, since a
-        workspace beyond that could never be used anyway. Each is one Docker
-        volume holding one shallow clone.
+        them, so it makes its own. Each is one Docker volume holding one
+        shallow clone. Starting a session is still capped at
+        ``max_parallel_sessions`` by the scheduler; workspaces beyond that
+        only hold queued or paused rows so a pause can still write waiting
+        work down.
 
-        A free workspace already on the wanted branch is the cheapest answer;
-        otherwise a new one is created, and only when the ceiling forbids
-        that is a free workspace re-pointed at the branch. Re-pointing is
-        safe: the base branch is what the preparation phase resets the
-        checkout to, and a workspace with no active session holds nothing
-        worth keeping.
+        Preference order: a free workspace already on the wanted branch; a
+        new one while under the parallel ceiling; a free workspace re-pointed
+        at the branch (reuse before growing the queue-only pool); a new one
+        up to the queue-workspace pool when every existing workspace is
+        occupied. Re-pointing is safe: the base branch is what the
+        preparation phase resets the checkout to, and a workspace with no
+        active session holds nothing worth keeping.
         """
         workspaces = await db.list_workspaces()
         free = [w for w in workspaces if int(w.get("active_sessions") or 0) == 0]
@@ -1427,25 +1446,42 @@ class TriggerPoller:
             if str(workspace.get("base_branch") or "") == base_branch:
                 return int(workspace["id"])
         if len(workspaces) < settings.max_parallel_sessions:
-            name = preferred_name or _next_auto_name({str(w.get("name") or "") for w in workspaces})
-            try:
-                created = await db.create_workspace(
-                    name=name, base_branch=base_branch, created_by=CREATED_BY, ephemeral=True
-                )
-            except ValueError:
-                # The name belongs to a workspace that is currently
-                # occupied — most often the one for this very pull request,
-                # already working on an earlier request.
-                logger.info("workspace '%s' is taken; deferring", name)
-                return None
-            logger.info("created workspace '%s' on '%s' for triggered work", name, base_branch)
-            return int(created["id"])
+            return await self._create_queue_workspace(
+                workspaces, base_branch=base_branch, preferred_name=preferred_name
+            )
         if free:
             workspace = free[0]
             await db.set_workspace_base_branch(int(workspace["id"]), base_branch)
             logger.info("repointed workspace '%s' at '%s'", workspace.get("name"), base_branch)
             return int(workspace["id"])
+        if len(workspaces) < queue_workspace_limit():
+            # Every existing workspace holds a waiting or running session;
+            # grow the pool so a pause can still record the assignment.
+            return await self._create_queue_workspace(
+                workspaces, base_branch=base_branch, preferred_name=preferred_name
+            )
         return None
+
+    async def _create_queue_workspace(
+        self,
+        workspaces: list[dict[str, Any]],
+        *,
+        base_branch: str,
+        preferred_name: str | None,
+    ) -> int | None:
+        name = preferred_name or _next_auto_name({str(w.get("name") or "") for w in workspaces})
+        try:
+            created = await db.create_workspace(
+                name=name, base_branch=base_branch, created_by=CREATED_BY, ephemeral=True
+            )
+        except ValueError:
+            # The name belongs to a workspace that is currently occupied —
+            # most often the one for this very pull request, already working
+            # on an earlier request.
+            logger.info("workspace '%s' is taken; deferring", name)
+            return None
+        logger.info("created workspace '%s' on '%s' for triggered work", name, base_branch)
+        return int(created["id"])
 
     # --- what the UI shows ------------------------------------------------
 
@@ -1487,6 +1523,7 @@ __all__ = [
     "max_active_sessions",
     "mentions_agent",
     "poller",
+    "queue_workspace_limit",
     "review_task",
     "takeover_task",
     "thread_task",

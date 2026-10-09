@@ -245,6 +245,12 @@ class Settings:
     # thresholds below decide how many of them actually run at any moment,
     # and each still needs a free workspace of its own.
     max_parallel_sessions: int = _int("LOGOS_AGENT_MAX_PARALLEL_SESSIONS", 10)
+    # How many live workspaces the trigger poller may leave so assigned work
+    # can wait its turn. Execution stays capped at max_parallel_sessions; the
+    # extras only hold queued (and paused) sessions so a long pause does not
+    # lose comments to the lookback window. Zero means five times the parallel
+    # ceiling. Never below max_parallel_sessions.
+    max_queue_workspaces: int = _int("LOGOS_AGENT_MAX_QUEUE_WORKSPACES", 0)
     # A session may start only while the platform's busy share is below this.
     # Expressed as a fraction of reserved-to-total serving capacity.
     start_below_load: float = _float("LOGOS_AGENT_START_BELOW_LOAD", 0.60)

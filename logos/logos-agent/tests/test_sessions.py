@@ -2737,6 +2737,47 @@ class TestOverlappingAdmission:
         # launches and find no room, not admit another full batch.
         assert sorted(launched) == [1, 2]
 
+    async def test_queue_only_workspaces_still_wait_for_an_execution_slot(self, monkeypatch, tmp_path):
+        # Extra workspaces beyond max_parallel_sessions may hold queued
+        # sessions while the runner is paused, but the scheduler still
+        # refuses to start once running+paused fill the execution ceiling.
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        reading = capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)
+        claimed: list = []
+        # Workspace 2 is a queue-only hold beyond the parallel ceiling.
+        queue = [{"id": 2, "workspace_id": 2, "model": None}]
+
+        async def ceiling_of_one():
+            return {"mode": "running", "mode_reason": "", "max_parallel": 1, "updated_by": "tobias"}
+
+        async def fake_in_status(status):
+            if status.value == "running":
+                return [{"id": 1, "workspace_id": 1}]
+            return []
+
+        async def fake_claim(_limit, *, include_triggered: bool = True):
+            claimed.append(1)
+            return []
+
+        async def peek(*, include_triggered: bool = True):
+            return queue[0] if queue else None
+
+        monkeypatch.setattr(controls.db, "get_controls", ceiling_of_one)
+        controls.forget()
+        monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
+        monkeypatch.setattr(sessions.db, "next_queued_session", peek)
+        monkeypatch.setattr(sessions.db, "count_active_trigger_sessions", self._async_value(0))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+
+        await sessions.SessionManager().scheduler_pass()
+
+        assert claimed == []
+
     async def test_one_fresh_reading_admits_at_most_one_session(self, monkeypatch, tmp_path):
         # A single below-threshold reading must not claim every open slot:
         # a whole batch admitted at once would move a small fleet from zero
