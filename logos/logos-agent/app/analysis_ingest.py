@@ -3,7 +3,7 @@
 A read-only analysis session writes ``/artifacts/analysis.json``. After a
 successful no-push finalize the runner loads that file (when present) and
 upserts ``ai_workflow_analyses`` / ``ai_workflows`` / ``ai_workflow_steps`` /
-``ai_llm_call_recommendations`` — the same tables Liquibase 046/051 and the
+``ai_llm_call_recommendations`` — the same tables Liquibase 046/057 and the
 webservice analysis path use. Missing file is a no-op with a log line;
 the session still succeeds.
 """

@@ -196,7 +196,7 @@ export class TeamManagement implements OnInit {
   }
 
   async loadQueueOrder(): Promise<void> {
-    if (this.queueLoading()) return;
+    if (this.queueLoading() || this.queueSaving()) return;
     this.queueLoading.set(true);
     this.queueError.set('');
     try {
@@ -342,13 +342,13 @@ export class TeamManagement implements OnInit {
   async moveQueueRank(index: number, dir: -1 | 1): Promise<void> {
     const list = [...this.queueRanks()];
     const j = index + dir;
-    if (j < 0 || j >= list.length || this.queueSaving()) return;
+    if (j < 0 || j >= list.length || this.queueSaving() || this.queueLoading()) return;
     [list[index], list[j]] = [list[j], list[index]];
     await this.saveQueueOrder(list.map((r) => r.api_key_id));
   }
 
   async removeQueueRank(apiKeyId: number): Promise<void> {
-    if (this.queueSaving()) return;
+    if (this.queueSaving() || this.queueLoading()) return;
     const ids = this.queueRanks()
       .filter((r) => r.api_key_id !== apiKeyId)
       .map((r) => r.api_key_id);
@@ -357,7 +357,7 @@ export class TeamManagement implements OnInit {
 
   async addQueueRank(): Promise<void> {
     const id = this.queueAddKeyId();
-    if (id === '' || this.queueSaving()) return;
+    if (id === '' || this.queueSaving() || this.queueLoading()) return;
     if (this.rankedKeyIds().has(id)) return;
     await this.saveQueueOrder([...this.queueRanks().map((r) => r.api_key_id), id]);
     this.queueAddKeyId.set('');

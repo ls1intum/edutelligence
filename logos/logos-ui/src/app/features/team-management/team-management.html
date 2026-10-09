@@ -127,7 +127,7 @@
           type="button"
           class="btn-secondary"
           (click)="loadQueueOrder()"
-          [disabled]="queueLoading()"
+          [disabled]="queueLoading() || queueSaving()"
         >
           <i
             class="pi"
@@ -178,7 +178,7 @@
                   <button
                     type="button"
                     class="btn-icon"
-                    [disabled]="i === 0 || queueSaving()"
+                    [disabled]="i === 0 || queueSaving() || queueLoading()"
                     [attr.aria-label]="'Move ' + entry.key_name + ' up'"
                     (click)="moveQueueRank(i, -1)"
                   >
@@ -187,7 +187,7 @@
                   <button
                     type="button"
                     class="btn-icon"
-                    [disabled]="i === queueRanks().length - 1 || queueSaving()"
+                    [disabled]="i === queueRanks().length - 1 || queueSaving() || queueLoading()"
                     [attr.aria-label]="'Move ' + entry.key_name + ' down'"
                     (click)="moveQueueRank(i, 1)"
                   >
@@ -196,7 +196,7 @@
                   <button
                     type="button"
                     class="btn-icon btn-icon--danger"
-                    [disabled]="queueSaving()"
+                    [disabled]="queueSaving() || queueLoading()"
                     [attr.aria-label]="'Remove ' + entry.key_name + ' from queue order'"
                     (click)="removeQueueRank(entry.api_key_id)"
                   >
@@ -216,7 +216,7 @@
               class="field-input queue-add-select"
               [ngModel]="queueAddKeyId()"
               (ngModelChange)="queueAddKeyId.set($event === '' ? '' : +$event)"
-              [disabled]="queueSaving() || unrankedKeys().length === 0"
+              [disabled]="queueSaving() || queueLoading() || unrankedKeys().length === 0"
             >
               <option value="">
                 {{ unrankedKeys().length === 0 ? 'All keys are ranked' : 'Select a key…' }}
@@ -228,7 +228,7 @@
             <button
               type="button"
               class="btn-primary"
-              [disabled]="queueAddKeyId() === '' || queueSaving()"
+              [disabled]="queueAddKeyId() === '' || queueSaving() || queueLoading()"
               (click)="addQueueRank()"
             >
               @if (queueSaving()) {

@@ -432,7 +432,7 @@ def test_normalize_workflow_tag():
 
 async def test_upsert_honours_the_legacy_sla_key_of_older_sessions(tmp_path, monkeypatch):
     # A session queued before the analysis task asked for recommended_slo
-    # still writes recommended_slo; its tier must be kept, not defaulted.
+    # still writes recommended_sla; its tier must be kept, not defaulted.
     _patch_artifact_root(monkeypatch, tmp_path)
     session_dir = tmp_path / "6"
     session_dir.mkdir()
@@ -440,7 +440,7 @@ async def test_upsert_honours_the_legacy_sla_key_of_older_sessions(tmp_path, mon
         "commit_sha": "abc123",
         "workflows": [],
         "recommendations": [
-            {"file_path": "src/llm.py", "start_line": 10, "end_line": 40, "recommended_slo": "ux-critical"}
+            {"file_path": "src/llm.py", "start_line": 10, "end_line": 40, "recommended_sla": "ux-critical"}
         ],
     }
     (session_dir / "analysis.json").write_text(json.dumps(payload), encoding="utf-8")
