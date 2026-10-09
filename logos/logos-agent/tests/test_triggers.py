@@ -827,7 +827,10 @@ class TestTheCommentMark:
 
         assert fake_db.comment_mark is not None
 
-    async def test_a_stopped_runner_forgets_nothing(self, monkeypatch):
+    async def test_a_stopped_runner_still_queues(self, monkeypatch):
+        # Pause stops starting work, not writing it down: assigned work that
+        # arrives while the runner is paused must still become a queued row,
+        # or it is lost when the lookback window moves on.
         FakeRepo(assigned_issues=[issue(812)]).install(monkeypatch)
         fake_db = FakeDb()
         fake_db.install(monkeypatch)
@@ -839,10 +842,10 @@ class TestTheCommentMark:
         monkeypatch.setattr(controls.db, "get_controls", paused)
         controls.forget()
 
-        assert await triggers.TriggerPoller().poll_once() == []
-        # Moving the mark here would drop every question asked during the
-        # pause out of the window before anyone could answer it.
-        assert fake_db.comment_mark is None
+        queued = await triggers.TriggerPoller().poll_once()
+        assert len(queued) == 1
+        assert fake_db.created[0]["trigger_ref"]
+        assert fake_db.comment_mark is not None
 
     async def test_work_left_for_the_next_pass_holds_the_mark(self, monkeypatch):
         # One workspace, two pieces of work: the second is left where it

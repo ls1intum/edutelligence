@@ -525,30 +525,29 @@ class TriggerPoller:
     async def poll_once(self) -> list[int]:
         """One look at the repository. Returns the sessions queued, if any."""
         now = datetime.now(timezone.utc)
-        # Nothing to queue into: the runner is paused, draining, or its
-        # ceiling is zero. The repository is read again next pass, and
-        # nothing is lost by not looking now.
         control = await controls.current()
-        blocked = control.admission_block()
-        if blocked:
-            # Nothing is queued while the runner is stopped — and nothing is
-            # forgotten either: the comment mark is only moved by a pass
-            # that handled what it saw, so a question asked during a pause is
-            # still in the window when the runner comes back.
-            logger.debug("trigger poll skipped: %s", blocked)
-            self._last_pass = now
-            return []
         # How much of the platform the automation may hold at once. Queued
         # sessions are not counted against it: they are work waiting its
         # turn, which is what the queue on the page is for, and refusing to
         # write them down is what kept that queue permanently empty while
         # the backlog sat invisible in the repository.
+        #
+        # When the runner is paused or draining, nothing may *start*, but
+        # assigned work is still written down — otherwise a pause loses
+        # every assignment that arrived while it was stopped. The active
+        # ceiling does not apply to that queue: paused sessions hold no
+        # serving capacity, and the work is only waiting.
         quota = max_active_sessions(control.max_parallel)
-        room = quota - await db.count_active_trigger_sessions()
-        if room <= 0:
-            logger.debug("trigger poll skipped: already running %s self-queued sessions", quota)
-            self._last_pass = now
-            return []
+        blocked = control.admission_block()
+        if blocked:
+            room = 10**9
+            logger.debug("trigger poll queueing while stopped: %s", blocked)
+        else:
+            room = quota - await db.count_active_trigger_sessions()
+            if room <= 0:
+                logger.debug("trigger poll skipped: already running %s self-queued sessions", quota)
+                self._last_pass = now
+                return []
 
         # Permission answers are cached per pass: they can change, and a
         # pass is short enough that reading them once is honest.
