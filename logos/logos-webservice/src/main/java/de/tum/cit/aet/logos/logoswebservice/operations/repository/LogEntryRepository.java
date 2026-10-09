@@ -596,6 +596,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (:allModels = TRUE OR le.model_id IN (:modelIds))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         """, nativeQuery = true)
     ScopeMovementProjection findScopeMovement(
@@ -604,6 +605,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
 
     /**
@@ -1063,6 +1066,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR s.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR s.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR s.result_status IN ('error', 'timeout'))
             UNION ALL
             SELECT 1::bigint, le.provider_id, COALESCE(le.was_cold_start, FALSE),
@@ -1097,6 +1101,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
         SELECT COALESCE(SUM(pt.requests), 0)::bigint AS requests,
@@ -1129,6 +1134,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
 
     @Transactional(readOnly = true)
@@ -1141,6 +1148,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR s.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR s.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR s.result_status IN ('error', 'timeout'))
             UNION ALL
             SELECT le.result_status, 1::bigint
@@ -1151,6 +1159,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
         SELECT COALESCE(pt.result_status::text, 'pending') AS status, SUM(pt.requests)::int AS cnt
@@ -1163,6 +1172,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
 
     // Model breakdown — a TRUE per-model breakdown, aggregated across ALL providers.
@@ -1183,6 +1194,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR s.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR s.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR s.result_status IN ('error', 'timeout'))
             UNION ALL
             SELECT le.model_id, le.model_name, le.provider_id, COALESCE(le.was_cold_start, FALSE), 1::bigint,
@@ -1211,6 +1223,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
         SELECT pt.model_id AS modelId,
@@ -1236,6 +1249,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
 
     /**
@@ -1256,6 +1271,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR s.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR s.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR s.result_status IN ('error', 'timeout'))
             UNION ALL
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)) / :bucketSec) * :bucketSec),
@@ -1274,6 +1290,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         ),
         bucket_series AS (
@@ -1310,6 +1327,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
 
     @Transactional(readOnly = true)
@@ -1326,6 +1345,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR s.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR s.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR s.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR s.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR s.result_status IN ('error', 'timeout'))
             UNION ALL
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response)) / :bucketSec) * :bucketSec),
@@ -1340,6 +1360,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
         SELECT EXTRACT(EPOCH FROM pt.bucket_ts)::double precision AS bucketTs,
@@ -1359,6 +1380,8 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
 
     /**

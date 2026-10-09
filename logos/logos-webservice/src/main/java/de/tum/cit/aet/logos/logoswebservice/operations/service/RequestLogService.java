@@ -290,6 +290,13 @@ public class RequestLogService {
     public String scopeMovementSig(String startDate, String endDate,
                                    Integer userId, Integer teamId,
                                    Integer providerId, boolean errorsOnly) {
+        return scopeMovementSig(startDate, endDate, userId, teamId, providerId, errorsOnly, List.of());
+    }
+
+    public String scopeMovementSig(String startDate, String endDate,
+                                   Integer userId, Integer teamId,
+                                   Integer providerId, boolean errorsOnly,
+                                   List<Integer> modelIds) {
         ZonedDateTime endDt = parseInstantOrNow(endDate);
         ZonedDateTime startDt = parseInstantOrNull(startDate);
         if (startDt == null || startDt.isAfter(endDt)) {
@@ -298,7 +305,7 @@ public class RequestLogService {
         Timestamp startTs = Timestamp.from(startDt.toInstant());
         Timestamp endTs = Timestamp.from(endDt.toInstant());
         var movement = logEntryRepository.findScopeMovement(
-            startTs, endTs, userId, teamId, providerId, errorsOnly);
+            startTs, endTs, userId, teamId, providerId, modelIds.isEmpty(), queryIds(modelIds), errorsOnly);
         if (movement == null) return "";
         return movement.getRowCount() + ";" + movement.getLastEventTs();
     }

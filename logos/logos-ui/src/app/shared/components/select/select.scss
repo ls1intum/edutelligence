@@ -42,8 +42,9 @@
 
 .app-select--compact {
   width: auto;
-  height: auto;
-  padding: 6px 32px 6px 12px;
+  max-width: 100%;
+  height: 32px;
+  padding: 0 32px 0 12px;
   font-weight: var(--font-weight-medium);
   // Native <select> otherwise sizes to the longest <option>, which left a
   // hollow gap beside short labels like "All teams" next to a wider neighbour.
