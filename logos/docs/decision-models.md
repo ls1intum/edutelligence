@@ -70,8 +70,9 @@ The response has this form. The values are examples.
 }
 ```
 
-`state`, `instructions`, and the criteria descriptions accept a string or any
-JSON value. Logos renders JSON as text.
+`state`, `instructions`, and criteria descriptions accept a string, an object,
+an array, or `null`. Logos renders non-string values as JSON text. Numbers and
+booleans are rejected. Score criteria also reject `null`.
 
 ## Question types
 
@@ -122,6 +123,7 @@ engines:
         max_model_len: 32768
         max_num_seqs: 8
         extra_args:
+          - --revision=ba3f0d584994b37998f235c0a3f6f1beff32ba1e
           - --enable-lora
           - --max-lora-rank=32
           - --lora-modules=jev-decision={model_path}/adapter_vllm
@@ -132,14 +134,17 @@ engines:
 - `{model_path}` stands for the model's local Hugging Face snapshot. The worker
   replaces it before it starts vLLM. The LoRA module must be named
   `jev-decision`.
+- `--revision` pins the Hub commit whose decision head and calibration Logos
+  uses. The worker resolves `{model_path}` at the same revision.
 - `--logprobs-mode=processed_logprobs` makes vLLM report the probabilities
   after it restricts the next token to the answer labels.
-- `max_num_seqs: 8` is required. Larger batches return wrong probabilities on
-  this model's multimodal LoRA path.
+- Set `max_num_seqs` to a positive value from 1 to 8. Larger batches return
+  wrong probabilities on this model's multimodal LoRA path.
 - The model needs one GPU with at least 80 GB of memory.
 
 ## Limits
 
+- At most 32 questions in one request. Each question is one completion.
 - `choice`: 2 to 16 options. The decision head is calibrated for the labels A to P.
 - `score`: 2 to 6 levels.
 - Text and JSON state only. Images are not supported on this endpoint.
