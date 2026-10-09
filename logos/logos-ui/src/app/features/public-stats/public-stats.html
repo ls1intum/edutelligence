@@ -53,7 +53,7 @@
       <div class="kpi-tile">
         <span class="kpi-value">{{ formatAverage(stats()!.average_requests_per_user) }}</span>
         <span class="kpi-label">Successful requests per student</span>
-        <span class="kpi-window">{{ windowCaption() }}</span>
+        <span class="kpi-window">Student traffic only · {{ windowCaption() }}</span>
       </div>
     </section>
 
@@ -90,6 +90,8 @@
 
     <p class="page-footnote">
       Only successful responses on published teams are counted.
+      The per-student average uses student traffic only (application and service
+      keys are in the totals above, not in that average).
       Numbers cover {{ windowCaption() }}.
     </p>
   }

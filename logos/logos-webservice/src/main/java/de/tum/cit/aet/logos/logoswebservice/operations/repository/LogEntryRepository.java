@@ -127,6 +127,25 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     long countActiveStudentsOnPublicTeams(@Param("since") Timestamp since);
 
     /**
+     * Successful requests from the same active-user cohort as
+     * {@link #countActiveStudentsOnPublicTeams} — numerator for the public
+     * page's per-student average. Application/service traffic (no user) and
+     * inactive users stay out so the average is not inflated by automated
+     * or deactivated accounts.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*)
+        FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
+        INNER JOIN users u ON u.id = le.user_id AND u.is_active = TRUE
+        WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
+        """, nativeQuery = true)
+    long countSuccessfulRequestsFromActiveStudentsOnPublicTeams(@Param("since") Timestamp since);
+
+    /**
      * One team's requests by stage, right now.
      *
      * Stage is read off the timestamps rather than a status column, because

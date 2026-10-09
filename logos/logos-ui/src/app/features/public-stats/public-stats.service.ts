@@ -33,7 +33,12 @@ export interface PublicStats {
   students: number;
   /** Teams an admin opted into the public page. */
   teams: number;
+  /** Settled successes on published teams (includes application/service keys). */
   successful_requests: number;
+  /**
+   * Active-student successes divided by {@link students}. Application and
+   * service-key traffic is excluded so the average matches the student cohort.
+   */
   average_requests_per_user: number;
   requests_per_team: PublicTeamStats[];
   /** Successful requests by API key type (unknown = deleted key). */

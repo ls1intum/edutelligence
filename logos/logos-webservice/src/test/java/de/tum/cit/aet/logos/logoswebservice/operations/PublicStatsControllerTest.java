@@ -154,11 +154,16 @@ class PublicStatsControllerTest {
            .andExpect(status().isOk());
 
         // Both teams now publish: 2001 still leads with 3 recent successes;
-        // 2002's two application-key successes appear and raise the totals.
+        // 2002's two application-key successes appear and raise the headline
+        // total to 5. The per-student average must stay at 3 — those two
+        // application-key rows have no user and must not inflate the cohort
+        // numerator (3 student requests / 1 active student, not 5 / 1).
         mvc.perform(get("/public/stats"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.teams").value(2))
+           .andExpect(jsonPath("$.students").value(1))
            .andExpect(jsonPath("$.successful_requests").value(5))
+           .andExpect(jsonPath("$.average_requests_per_user").value(3.0))
            .andExpect(jsonPath("$.requests_per_team.length()").value(2))
            .andExpect(jsonPath("$.requests_per_team[0].team_id").value(2001))
            .andExpect(jsonPath("$.requests_per_team[1].team_id").value(2002))

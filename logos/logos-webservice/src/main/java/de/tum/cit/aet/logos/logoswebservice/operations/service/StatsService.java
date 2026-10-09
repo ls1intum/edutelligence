@@ -10,6 +10,8 @@ import java.util.Map;
 import java.util.Set;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ProviderType;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
@@ -106,13 +108,26 @@ public class StatsService {
      * are distinct active users who made at least one successful request on
      * an opted-in team inside the window. Request figures count settled
      * successes only, ranged on {@code timestamp_request} when {@code since}
-     * is set.
+     * is set. {@code successful_requests} and the breakdowns include every
+     * success on published teams (personal and application/service keys);
+     * {@code average_requests_per_user} divides only the active-student
+     * cohort's successes by {@code students}, so automated traffic does not
+     * inflate the per-student figure.
+     *
+     * <p>All aggregates are read inside one repeatable-read transaction so a
+     * concurrent success cannot make the headline and breakdown totals
+     * disagree. Callers must go through the Spring proxy (as
+     * {@code PublicStatsController} does) — a self-call would skip the
+     * transaction boundary.
      */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Map<String, Object> publicStats(String days) {
         String window = normalizePublicStatsDays(days);
         Timestamp since = resolvePublicStatsSince(days);
 
         long students = logEntryRepository.countActiveStudentsOnPublicTeams(since);
+        long studentRequests =
+            logEntryRepository.countSuccessfulRequestsFromActiveStudentsOnPublicTeams(since);
         long teams = teamRepository.countByShowOnPublicStatsTrue();
 
         List<Map<String, Object>> requestsPerTeam = new ArrayList<>();
@@ -159,7 +174,8 @@ public class StatsService {
             localCloud.merge(lane, row.getRequests(), Long::sum);
         }
 
-        double averageRequestsPerUser = students == 0 ? 0.0 : Math.round(successfulRequests * 100.0 / students) / 100.0;
+        double averageRequestsPerUser =
+            students == 0 ? 0.0 : Math.round(studentRequests * 100.0 / students) / 100.0;
 
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("days", window);
