@@ -110,13 +110,12 @@ def test_a_learned_scale_normalizes_later_requests_up_front():
     assert effort_scale_for_model("openai/gpt-oss-20b") is None
 
 
-def test_a_learned_scale_wins_over_the_registry(monkeypatch):
-    # The registry matches by substring; what the upstream itself said is exact.
-    adapt_payload_after_effort_rejection({"reasoning_effort": "high"}, "Qwen/Qwen3.8-27B-new", HARMONY_400)
-    result = normalize_reasoning_effort({"reasoning_effort": "xhigh"}, "Qwen/Qwen3.8-27B-new")
-    assert result["reasoning_effort"] == "high"
-    # The registry still covers the rest of the family.
-    assert normalize_reasoning_effort({"reasoning_effort": "high"}, "Qwen/Qwen3.8-27B")["reasoning_effort"] == "xhigh"
+def test_relearning_replaces_a_changed_scale():
+    # A redeployed model with a different template is learned anew.
+    adapt_payload_after_effort_rejection({"reasoning_effort": "high"}, GPT_OSS, QWEN_TEMPLATE_500)
+    assert normalize_reasoning_effort({"reasoning_effort": "high"}, GPT_OSS)["reasoning_effort"] == "xhigh"
+    adapt_payload_after_effort_rejection({"reasoning_effort": "xhigh"}, GPT_OSS, HARMONY_400)
+    assert normalize_reasoning_effort({"reasoning_effort": "xhigh"}, GPT_OSS)["reasoning_effort"] == "high"
 
 
 def test_no_retry_when_the_error_is_something_else():

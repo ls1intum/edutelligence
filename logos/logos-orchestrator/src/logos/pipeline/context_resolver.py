@@ -416,11 +416,11 @@ class ContextResolver:
         if context.provider_type == "logosnode" and lane_model_override.get():
             payload = set_payload_field(payload, "model", lane_model_override.get())
 
-        # The Qwen3.8 chat template only accepts xhigh/medium/low as reasoning
-        # effort, but clients such as Claude Code send the Anthropic value
-        # "high" in every request. vLLM forwards the value to the template,
-        # which rejects it with an error surfaced as HTTP 500 — map the wider
-        # client scale onto the accepted one before forwarding.
+        # Upstreams whose chat template accepts only part of the reasoning-
+        # effort scale (Qwen3.8, gpt-oss) reject the rest before the first
+        # token. Once a model has rejected a value, its scale is known (see
+        # effort_normalization), and every value is mapped onto it here
+        # before forwarding.
         payload = normalize_reasoning_effort(payload, context.model_name)
 
         # Azure routes that resolve the deployment from the body's "model"
