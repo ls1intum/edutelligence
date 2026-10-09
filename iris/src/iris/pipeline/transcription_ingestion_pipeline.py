@@ -111,9 +111,10 @@ class TranscriptionIngestionPipeline(SubPipeline):
                 and not self.check_if_transcription_needs_update()
             ):
                 # The stored rows provably derive from the current content
-                # (fingerprint stamps match) and cover exactly the expected
-                # slides, so re-running the summary and embedding work would
-                # reproduce what is already there.
+                # (fingerprint stamps match, or legacy rows whose text and times
+                # match the transcript) and cover exactly the expected slides, so
+                # re-running the summary and embedding work would reproduce what
+                # is already there.
                 logger.info(
                     "[%s / %s] Stored transcription rows are current and "
                     "complete, skipping transcription ingestion",
@@ -184,10 +185,13 @@ class TranscriptionIngestionPipeline(SubPipeline):
     def check_if_transcription_needs_update(self) -> bool:
         """Decide structurally whether the stored transcription rows are current.
 
-        Skipping is only safe when every stored row carries the current
-        content fingerprint (an unstamped row is a legacy row of unknown
-        origin), all rows belong to a single ingestion generation, and the
-        stored slide numbers cover exactly the transcript's slide set.
+        Skipping is only safe when every stored row carries the current content
+        fingerprint, all rows belong to a single ingestion generation, and the
+        stored slide numbers cover exactly the transcript's slide set. Rows written
+        before fingerprints existed carry no stamp at all; they are kept only when
+        their text and times match the requested transcript slide by slide (see
+        :meth:`_legacy_rows_match_transcript`), which proves the same source
+        without any LLM call. A mix of stamped and unstamped rows is never kept.
         """
         expected_fingerprint = self.dto.lecture_unit.content_fingerprint
         if expected_fingerprint is None:
@@ -200,6 +204,9 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     LectureTranscriptionSchema.PAGE_NUMBER.value,
                     LectureTranscriptionSchema.CONTENT_FINGERPRINT.value,
                     LectureTranscriptionSchema.INGESTION_RUN_ID.value,
+                    LectureTranscriptionSchema.SEGMENT_TEXT.value,
+                    LectureTranscriptionSchema.SEGMENT_START_TIME.value,
+                    LectureTranscriptionSchema.SEGMENT_END_TIME.value,
                 ],
             )
         ).objects
@@ -211,14 +218,17 @@ class TranscriptionIngestionPipeline(SubPipeline):
         if len(rows) >= _TRANSCRIPTION_SKIP_CHECK_FETCH_LIMIT:
             return True
 
+        stamps = {
+            row.properties.get(LectureTranscriptionSchema.CONTENT_FINGERPRINT.value)
+            for row in rows
+        }
+        legacy = stamps == {None}
+        if not legacy and stamps != {expected_fingerprint}:
+            return True
+
         stored_pages: set[int] = set()
         run_ids: set = set()
         for row in rows:
-            if (
-                row.properties.get(LectureTranscriptionSchema.CONTENT_FINGERPRINT.value)
-                != expected_fingerprint
-            ):
-                return True
             run_ids.add(
                 row.properties.get(LectureTranscriptionSchema.INGESTION_RUN_ID.value)
             )
@@ -236,12 +246,72 @@ class TranscriptionIngestionPipeline(SubPipeline):
         }
         if stored_pages != expected_pages:
             return True
+        if legacy and not self._legacy_rows_match_transcript(rows):
+            return True
 
         # A structurally complete scan can still be all ghosts (scan-visible,
         # object-store-missing): the final audit confirms every row, so trusting
         # the raw scan here would skip re-ingestion forever while the audit fails
         # on every retry, with nothing able to break the loop.
         return len(confirmed_rows(self.collection, rows)) != len(rows)
+
+    def _legacy_rows_match_transcript(self, rows) -> bool:
+        """Whether unstamped legacy rows were built from exactly the requested transcript.
+
+        Without a fingerprint stamp, the only proof that stored rows match the
+        current video is their content. Older versions stored a slide's transcript
+        as one row when it had fewer than 1200 characters: the segment texts joined
+        in transcript order, from the start of the slide's first segment to the end
+        of its last one. Such a row is kept only when its text (ignoring whitespace
+        and the chunk separator) and both times equal what the requested transcript
+        gives for that slide, so a replaced video with the same words but other
+        times (an added intro, an inserted pause) is rebuilt. Longer slides were
+        split into pieces whose times came from an inexact character-offset lookup,
+        so their timestamps cannot be trusted and they are rebuilt as well.
+        Anything that does not match is rebuilt, which is always safe.
+        """
+        expected: dict = {}
+        for segment in self.dto.lecture_unit.transcription.segments:
+            entry = expected.get(segment.slide_number)
+            if entry is None:
+                expected[segment.slide_number] = [
+                    segment.text,
+                    segment.start_time,
+                    segment.end_time,
+                ]
+            else:
+                entry[0] += segment.text
+                entry[2] = segment.end_time
+
+        seen_pages: set[int] = set()
+        for row in rows:
+            props = row.properties
+            raw_page = props.get(LectureTranscriptionSchema.PAGE_NUMBER.value)
+            if raw_page is None:
+                return False
+            page = int(raw_page)
+            if page in seen_pages:
+                return False
+            seen_pages.add(page)
+            start = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
+            end = props.get(LectureTranscriptionSchema.SEGMENT_END_TIME.value)
+            text, expected_start, expected_end = expected[page]
+            if start is None or end is None:
+                return False
+            if round(float(start), 3) != round(expected_start, 3) or round(
+                float(end), 3
+            ) != round(expected_end, 3):
+                return False
+            if self._comparable_text(
+                props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value) or ""
+            ) != self._comparable_text(text):
+                return False
+        return True
+
+    @staticmethod
+    def _comparable_text(text: str) -> str:
+        """Text with whitespace and the chunk separator removed, for source comparison."""
+        return "".join(text.replace(CHUNK_SEPARATOR_CHAR, "").split())
 
     def _lecture_unit_id(self) -> Optional[int]:
         lecture_unit = self.dto.lecture_unit if self.dto is not None else None
