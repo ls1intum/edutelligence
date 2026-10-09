@@ -40,6 +40,7 @@ from . import (
     github,
     github_tokens,
     model_policy,
+    session_api_keys,
     triggers,
 )
 from .config import INTERRUPTION_FILE, REPLY_DIR, REPLY_FILE, REVIEW_COMMENTS_FILE, REVIEWED_SHA_FILE, settings
@@ -398,6 +399,10 @@ class SessionManager:
         # Distinct from `_own_api_key_id()` below — caching on the method name
         # would shadow the coroutine and crash every scheduler pass.
         self._cached_own_api_key_id: int | None = None
+        # Minted session Logos key values by session id (never logged).
+        self._session_logos_keys: dict[int, str] = {}
+        # Minted key ids still attributed to this runner for capacity discount.
+        self._minted_api_key_ids: set[int] = set()
         # Set once the session image has been seen on this host.
         self._image_present = False
 
@@ -751,6 +756,52 @@ class SessionManager:
             self._cached_own_api_key_id = await db.agent_key_id(settings.agent_api_key)
         return self._cached_own_api_key_id
 
+    def _own_api_key_ids(self) -> frozenset[int]:
+        """Standing key id plus minted session key ids still in flight."""
+        ids = set(self._minted_api_key_ids)
+        # The standing id is added by callers via own_api_key_id; this set is
+        # only the children so a missing standing id does not empty the sum.
+        return frozenset(ids)
+
+    async def _mint_session_logos_key(self, session_id: int) -> str | None:
+        """Mint a short-lived Logos key for the agent phase, or None to use the gateway placeholder.
+
+        Returns the key value to put in the session env when minting succeeds.
+        Raises SessionApiKeyError when minting is required and fails without fallback.
+        """
+        if not settings.session_api_key_mint:
+            return None
+        try:
+            minted = await session_api_keys.mint(session_id=session_id, parent_key_value=settings.agent_api_key)
+        except session_api_keys.SessionApiKeyError:
+            if settings.session_api_key_fallback:
+                logger.warning(
+                    "session %s: Logos session-key mint failed; falling back to standing-key gateway injection",
+                    session_id,
+                )
+                return None
+            raise
+        self._session_logos_keys[session_id] = minted.key_value
+        self._minted_api_key_ids.add(minted.id)
+        try:
+            await db.update_session(session_id, session_api_key_id=minted.id)
+        except Exception as exc:
+            logger.info("could not record session_api_key_id for session %s: %s", session_id, exc)
+        return minted.key_value
+
+    async def _revoke_session_logos_key(self, session_id: int, key_id: int | None = None) -> None:
+        """Revoke a minted session key and drop local tracking."""
+        self._session_logos_keys.pop(session_id, None)
+        resolved = key_id
+        if resolved is None:
+            row = await db.get_session(session_id)
+            if row and row.get("session_api_key_id") is not None:
+                resolved = int(row["session_api_key_id"])
+        if resolved is None:
+            return
+        self._minted_api_key_ids.discard(int(resolved))
+        await session_api_keys.revoke(int(resolved))
+
     async def scheduler_pass(self) -> None:
         # Permissions first, then the measurement they describe: a key moved
         # to another model — or stripped of its local one while a session was
@@ -799,6 +850,7 @@ class SessionManager:
             lane=policy.lane(),
             ours=_ours_by_model(running, policy),
             own_api_key_id=own_key,
+            own_api_key_ids=self._own_api_key_ids(),
         )
         self._last_reading = measured
 
@@ -858,6 +910,7 @@ class SessionManager:
                         lane=policy.lane(),
                         ours=_ours_by_model(resumed, policy),
                         own_api_key_id=own_key,
+                        own_api_key_ids=self._own_api_key_ids(),
                     )
                     if not capacity.resume_decision(reading)[0]:
                         break
@@ -1247,6 +1300,20 @@ class SessionManager:
             except Exception as exc:
                 logger.info("could not record what session %s was told: %s", sid, exc)
 
+            try:
+                logos_key = await self._mint_session_logos_key(sid)
+            except session_api_keys.SessionApiKeyError as exc:
+                await self._settle(
+                    sid,
+                    exit_code=None,
+                    error=(
+                        f"could not mint a short-lived Logos session key: {exc}. "
+                        "Set LOGOS_AGENT_SESSION_API_KEY_FALLBACK=true to allow "
+                        "the standing key via the gateway, or fix minting."
+                    ),
+                )
+                return
+
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
@@ -1256,6 +1323,7 @@ class SessionManager:
                     continuing=continuing,
                     images=images,
                     notes=notes,
+                    logos_api_key=logos_key,
                 ),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
@@ -1397,18 +1465,23 @@ class SessionManager:
         continuing: bool = False,
         images: list[str] | None = None,
         notes: str = "",
+        logos_api_key: str | None = None,
     ) -> dict[str, str]:
         """The environment the untrusted agent phase runs with.
 
-        Nothing reusable: no GitHub token (the helper phases do the
-        authenticated work), no model credential (the gateway injects it —
-        the placeholder only keeps the CLI from refusing to start without a
-        token). No workflow scope, no production URL, no internal secret.
+        Nothing reusable for GitHub (helpers hold those tokens). The Logos
+        model credential is either a short-lived session key (when minting is
+        on) or the gateway placeholder that keeps the standing key out of the
+        container. No workflow scope, no production URL, no internal secret.
         """
         # The policy resolves what "no model named" means — the configured
         # default, or the single local model of a one-model deployment — and
         # it has already refused anything that is not served locally.
         model = model_policy.current().resolve(session.get("model"))
+        # Prefer an explicit mint for this launch; fall back to a value still
+        # held for the session (retry paths) or the gateway placeholder.
+        logos_token = logos_api_key or self._session_logos_keys.get(int(session["id"]))
+        auth_token = logos_token or "injected-by-logos-agent-gateway"
         env = {
             "LOGOS_SESSION_PHASE": "agent",
             # Set when the preparation restored this workspace's earlier
@@ -1430,7 +1503,7 @@ class SessionManager:
             # gateway replaces whatever credential the container sends with
             # the real one — the container holds none.
             "ANTHROPIC_BASE_URL": settings.session_model_url,
-            "ANTHROPIC_AUTH_TOKEN": "injected-by-logos-agent-gateway",
+            "ANTHROPIC_AUTH_TOKEN": auth_token,
             "ANTHROPIC_API_KEY": "",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "LOGOS_SESSION_ID": str(session["id"]),
@@ -2319,6 +2392,7 @@ class SessionManager:
             },
         )
         session_row = (await db.get_session(session_id)) or {}
+        await self._revoke_session_logos_key(session_id, session_row.get("session_api_key_id"))
 
         if result.get("pr_url"):
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
@@ -3383,6 +3457,7 @@ class SessionManager:
         if launch is not None:
             launch.cancelled = True
         await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
+        await self._revoke_session_logos_key(session_id, session.get("session_api_key_id"))
         # The credential-bearing helper first: a finalizer mid-push would
         # otherwise keep committing, pushing, or opening a pull request after
         # the API has already reported the session cancelled. It is tracked

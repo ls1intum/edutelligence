@@ -259,7 +259,12 @@ a default that is right for this deployment.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LOGOS_AGENT_API_KEY` | — | Logos key sessions call models with. **Required.** |
+| `LOGOS_AGENT_API_KEY` | — | Standing Logos key for the runner. **Required.** Sessions use a short-lived clone when minting is on. |
+| `LOGOS_WEBSERVICE_URL` | `http://logos-webservice:8081` | Where the runner mints and revokes session API keys |
+| `LOGOS_AGENT_SESSION_API_KEY_MINT` | `false` | Mint a short-lived Logos key per session instead of gateway-injecting the standing key |
+| `LOGOS_AGENT_SESSION_API_KEY_FALLBACK` | `false` | If minting fails, keep gateway injection of the standing key; otherwise the session does not start |
+| `LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S` | `300` | Extra lifetime beyond the session timeout (or the cap) |
+| `LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S` | `86400` | Hard ceiling on a minted session key's TTL; also the budget when there is no session timeout |
 | `LOGOS_AGENT_GITHUB_TOKEN` | — | The agent account's token. **Required** unless the GitHub App fields are set (then ignored) |
 | `LOGOS_AGENT_GITHUB_LOGIN` | `LogosOSSAgent` | The account every credential must belong to; with a GitHub App, that app's bot user |
 | `LOGOS_AGENT_GITHUB_APP_ID` | — | The app's id. With the key below, replaces the personal tokens — the service mints short-lived installation tokens on demand |
@@ -332,10 +337,12 @@ for it.
 The account is not taken on trust. Every credential is checked against it
 when the service starts, and one belonging to somebody else stops the service
 rather than committing agent work under that person's name. With personal
-access tokens that is `GET /user`. With a GitHub App the check asks the App
-for its bot user and the minted installation token which App it belongs to —
-installation tokens cannot answer `/user` — and the finalizer re-checks the
-token against the App id inside the container, immediately before it pushes.
+access tokens that is `GET /user`. With a GitHub App the runner checks the
+App JWT against `GET /app` (App id and bot user) and
+`GET /app/installations/{id}` (installation belongs to that App). Installation
+tokens cannot answer `/user`. The finalizer then proves the installation
+token works with `GET /installation/repositories` and a numeric repository
+count — it does not re-bind the App id.
 
 **Two tokens if you can.** A second token of the same account *without*
 `workflow` scope, given to session containers, means a session cannot dispatch
@@ -356,9 +363,31 @@ an alias of one, and not because the agent key was granted a cloud provider
 by mistake.
 
 The boundary is the platform's own key scoping: a Logos key reaches exactly
-the deployments its permissions grant, and the gateway replaces whatever
-credential a session sends with that key. **Give the agent key local
+the deployments its permissions grant. **Give the standing agent key local
 providers only.**
+
+### Short-lived Logos session keys
+
+By default the gateway still injects `LOGOS_AGENT_API_KEY` when a session
+sends the placeholder credential. Set `LOGOS_AGENT_SESSION_API_KEY_MINT=true`
+to mint a short-lived clone of that key for each session instead:
+
+- TTL is the session wall-clock budget (`LOGOS_AGENT_SESSION_TIMEOUT_S`) plus
+  `LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S`, capped by
+  `LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S` (default 24 h). When there is no
+  session timeout, the cap is the lifetime. Sessions that outlive the key are
+  not refreshed in this version — raise the cap or set a timeout.
+- The minted key inherits the standing key's team, settings, priority and
+  permissions. It cannot mint further keys. The runner revokes it when the
+  session ends, cancels, or crashes.
+- Mint failures refuse to start the session unless
+  `LOGOS_AGENT_SESSION_API_KEY_FALLBACK=true`, which keeps gateway injection
+  of the standing key.
+- Capacity accounting still attributes minted traffic to the runner: the
+  discounted load reading sums the standing key id and every minted session
+  key id still in flight.
+
+Key values are never logged.
 
 The runner refuses to assume that was done. It reads what the key can
 actually reach and gates on the answer:

@@ -1,0 +1,11 @@
+# Maps the session's Authorization header onto what the orchestrator sees.
+#
+# When minting is on, the session sends its short-lived Logos key and that
+# value is forwarded. When the session still sends the placeholder (feature
+# off, or explicit fallback), the standing agent key is injected here so it
+# never has to live in the container.
+map $http_authorization $agent_authorization {
+    default                                     $http_authorization;
+    ""                                          "Bearer ${LOGOS_AGENT_API_KEY}";
+    "Bearer injected-by-logos-agent-gateway"    "Bearer ${LOGOS_AGENT_API_KEY}";
+}

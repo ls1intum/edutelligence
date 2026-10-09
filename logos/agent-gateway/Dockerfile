@@ -16,4 +16,5 @@
 # the running container, not in an image layer.
 FROM nginx:1.31-alpine
 
+COPY logos/agent-gateway/00-agent-auth-map.conf.template /etc/nginx/templates/00-agent-auth-map.conf.template
 COPY logos/agent-gateway/nginx.conf /etc/nginx/templates/default.conf.template

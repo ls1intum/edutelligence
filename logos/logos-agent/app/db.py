@@ -854,6 +854,7 @@ _SESSION_SELECT = """
            s.reply_target, s.reaction_target,
            s.priority, s.priority_reason, s.environment_notes,
            s.repo_url, s.repo_slug, s.team_repository_id,
+           s.session_api_key_id,
            t.name AS team_name,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
@@ -1437,6 +1438,7 @@ async def update_session(session_id: int, **fields: Any) -> None:
         # anybody still owes that.
         "checks_sha",
         "checks_watch",
+        "session_api_key_id",
     }
     unknown = set(fields) - allowed
     if unknown:

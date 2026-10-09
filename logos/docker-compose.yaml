@@ -541,6 +541,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: root
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
+      LOGOS_WEBSERVICE_URL: "http://logos-webservice:8081"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       # Same encryption secret as logos-webservice — needed to decrypt
       # per-link deploy keys for private analysis checkouts.
@@ -559,9 +560,14 @@ services:
       KEYCLOAK_ROLES_LOGOS_ADMIN: "${KEYCLOAK_ROLES_LOGOS_ADMIN:-itg-admin}"
       LOGOS_AGENT_REQUIRED_ROLE: "${LOGOS_AGENT_REQUIRED_ROLE:-logos_admin}"
 
-      # The Logos key sessions call models with. Give it LOW priority so agent
-      # traffic never outranks a user at the scheduler.
+      # The standing Logos key for the runner. When session-key minting is on,
+      # each session gets a short-lived clone; this key stays on the runner
+      # and is what the gateway injects only for the placeholder path.
       LOGOS_AGENT_API_KEY: "${LOGOS_AGENT_API_KEY:-}"
+      LOGOS_AGENT_SESSION_API_KEY_MINT: "${LOGOS_AGENT_SESSION_API_KEY_MINT:-false}"
+      LOGOS_AGENT_SESSION_API_KEY_FALLBACK: "${LOGOS_AGENT_SESSION_API_KEY_FALLBACK:-false}"
+      LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S: "${LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S:-300}"
+      LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S: "${LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S:-86400}"
       LOGOS_AGENT_DEFAULT_MODEL: "${LOGOS_AGENT_DEFAULT_MODEL:-}"
 
       # Sessions run in this image, on this network, under these ceilings.

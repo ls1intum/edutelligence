@@ -133,12 +133,27 @@ class Settings:
     # of a Logos key: the scheduler_state payload carries cluster internals
     # (queue depth, lane state) that a user key must not be able to read.
     internal_secret: str = os.getenv("LOGOS_INTERNAL_SECRET", "")
-    # The Logos key: the session gateway injects it into the agent's model
-    # calls. It is what makes agent traffic ordinary, accounted Logos
-    # traffic — give it LOW priority and a token budget so agent work never
-    # outranks a user at the scheduler. It no longer enters a session
-    # container at all.
+    # The Logos key: the runner's standing credential for control-plane work
+    # (capacity attribution, model policy). When session-key minting is on,
+    # each session gets a short-lived clone instead of this value; the
+    # gateway still injects this key only when the session sends the
+    # placeholder (feature off or explicit fallback).
     agent_api_key: str = os.getenv("LOGOS_AGENT_API_KEY", "")
+    # Webservice base URL for internal session-key mint/revoke.
+    webservice_url: str = os.getenv("LOGOS_WEBSERVICE_URL", "http://logos-webservice:8081")
+    # Mint a short-lived Logos API key per session (issue #1205). Off by
+    # default so a deployment keeps today's standing-key gateway injection
+    # until operators turn the feature on.
+    session_api_key_mint: bool = _bool("LOGOS_AGENT_SESSION_API_KEY_MINT", False)
+    # Extra lifetime beyond the session wall-clock budget (or the cap when
+    # there is no session timeout).
+    session_api_key_ttl_margin_s: int = _int("LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S", 300)
+    # Hard ceiling on a minted session key's TTL (also the budget used when
+    # session_timeout_s is 0). Sessions that outlive this are not refreshed.
+    session_api_key_ttl_cap_s: int = _int("LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S", 86400)
+    # When minting fails, fall back to gateway injection of the standing key.
+    # Off by default: a mint failure refuses to start the session.
+    session_api_key_fallback: bool = _bool("LOGOS_AGENT_SESSION_API_KEY_FALLBACK", False)
     # Which model drives a session that does not name one. Optional: when it
     # is unset and the key reaches exactly one locally served model, that one
     # is the default — a single-model deployment then needs no model
