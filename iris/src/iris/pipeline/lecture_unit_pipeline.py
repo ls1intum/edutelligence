@@ -5,6 +5,7 @@ from weaviate.classes.query import Filter
 
 from iris.common.cancellation import raise_if_cancelled
 from iris.common.logging_config import get_logger
+from iris.config import settings
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.ingestion.ingestion_job_handler import ingestion_job_handler
 from iris.llm import LlmRequestHandler
@@ -19,9 +20,21 @@ from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 from iris.vector_database.batch_verify import purge_other_rows
 from iris.vector_database.database import VectorDatabase, batch_update_lock
+from iris.vector_database.lecture_transcription_schema import (
+    LectureTranscriptionSchema,
+    init_lecture_transcription_schema,
+)
+from iris.vector_database.lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
+)
+from iris.vector_database.lecture_unit_segment_schema import (
+    LectureUnitSegmentSchema,
+    init_lecture_unit_segment_schema,
 )
 from iris.vector_database.write_retry import WeaviateWriteRetry
 from iris.web.status.status_update import StatusCallback
@@ -89,6 +102,14 @@ class LectureUnitPipeline(SubPipeline):
         fingerprint: same inputs, already summarized, already embedded. This is
         what makes a metadata-only or reconcile re-dispatch of an unchanged
         unit cost zero LLM calls. Any doubt falls through to a full recompute.
+
+        A unit row written before fingerprints existed has no stamp. Its summary
+        is reused only while every row of the unit predates the stamps too: the
+        slide summaries it was built from, and the page chunks and transcript rows
+        the content sub-pipelines just proved unchanged. Once any of them was
+        written again (a slide summary regenerated, or a PDF or transcript
+        replaced by a run that then failed before its summaries), the old unit
+        summary no longer matches them.
         """
         if not lecture_unit.content_unchanged or not lecture_unit.content_fingerprint:
             return None
@@ -98,10 +119,13 @@ class LectureUnitPipeline(SubPipeline):
         if not stored_rows:
             return None
         stored = stored_rows[0]
-        if (
-            stored.properties.get(LectureUnitSchema.CONTENT_FINGERPRINT.value)
-            != lecture_unit.content_fingerprint
-        ):
+        stored_fingerprint = stored.properties.get(
+            LectureUnitSchema.CONTENT_FINGERPRINT.value
+        )
+        if stored_fingerprint is None:
+            if not self._all_unit_rows_unstamped(lecture_unit):
+                return None
+        elif stored_fingerprint != lecture_unit.content_fingerprint:
             return None
         summary = stored.properties.get(LectureUnitSchema.LECTURE_UNIT_SUMMARY.value)
         vector = stored.vector
@@ -110,6 +134,60 @@ class LectureUnitPipeline(SubPipeline):
         if not summary or not vector:
             return None
         return summary, vector
+
+    def _all_unit_rows_unstamped(self, lecture_unit: LectureUnitDTO) -> bool:
+        """Whether the unit still has source rows and no slide summary, page chunk or
+        transcript row of it was written by a current run.
+
+        Without any page chunk or transcript row, the old summary describes content
+        that is gone: a run that removed the unit's last PDF or transcript and then
+        failed must not leave it for the retry, which finds three empty collections.
+        """
+        segments_unstamped, _ = self._unit_rows_unstamped(
+            lecture_unit,
+            init_lecture_unit_segment_schema,
+            LectureUnitSegmentSchema,
+            LectureUnitSegmentSchema.CONTENT_FINGERPRINT,
+        )
+        chunks_unstamped, chunk_count = self._unit_rows_unstamped(
+            lecture_unit,
+            init_lecture_unit_page_chunk_schema,
+            LectureUnitPageChunkSchema,
+            LectureUnitPageChunkSchema.INGESTION_RUN_ID,
+        )
+        transcript_unstamped, transcript_count = self._unit_rows_unstamped(
+            lecture_unit,
+            init_lecture_transcription_schema,
+            LectureTranscriptionSchema,
+            LectureTranscriptionSchema.INGESTION_RUN_ID,
+        )
+        return (
+            segments_unstamped
+            and chunks_unstamped
+            and transcript_unstamped
+            and chunk_count + transcript_count > 0
+        )
+
+    def _unit_rows_unstamped(
+        self, lecture_unit: LectureUnitDTO, init_schema, schema, stamp
+    ) -> tuple[bool, int]:
+        """Whether every row of the unit in one collection lacks the given stamp, and how many rows it has."""
+        collection = init_schema(self.weaviate_client)
+        unit_filter = (
+            Filter.by_property(schema.COURSE_ID.value).equal(lecture_unit.course_id)
+            & Filter.by_property(schema.LECTURE_ID.value).equal(lecture_unit.lecture_id)
+            & Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(
+                lecture_unit.lecture_unit_id
+            )
+            & Filter.by_property(schema.BASE_URL.value).equal(lecture_unit.base_url)
+        )
+        limit = settings.lecture_ingestion.skip_check_fetch_limit
+        rows = collection.query.fetch_objects(
+            filters=unit_filter, limit=limit, return_properties=[stamp.value]
+        ).objects
+        if len(rows) >= limit:
+            return False, len(rows)
+        return all(row.properties.get(stamp.value) is None for row in rows), len(rows)
 
     @observe(name="Lecture Unit Pipeline")
     def __call__(
