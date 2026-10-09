@@ -2564,6 +2564,7 @@ class DBManager:
         status: Optional[str] = None,
         models: Optional[List[str]] = None,
         provider_object_id: Optional[str] = None,
+        log_level: Optional[str] = None,
     ) -> None:
         """Record who owns an object the provider just minted.
 
@@ -2577,6 +2578,10 @@ class DBManager:
         exposed under Logos's ids, and the download forward resolves back to
         the provider's through this column.
 
+        ``log_level`` is the creating request's explicit logging consent
+        (``FULL``/``BILLING``), or ``None`` when the request sent no header.
+        Poll re-registrations omit it so an existing consent is not clobbered.
+
         An id is globally unique — a client supplies the id without the
         provider that minted it, so one id may not name two objects. A row
         another provider already holds therefore makes the upsert a no-op,
@@ -2587,9 +2592,11 @@ class DBManager:
             text("""
                 INSERT INTO batch_objects
                     (kind, upstream_id, provider_id, api_key_id, team_id, user_id,
-                     input_file_id, status, models, provider_object_id, created_at, updated_at)
+                     input_file_id, status, models, provider_object_id, log_level,
+                     created_at, updated_at)
                 VALUES (:kind, :upstream_id, :provider_id, :api_key_id, :team_id, :user_id,
-                        :input_file_id, :status, CAST(:models AS JSONB), :provider_object_id, :now, :now)
+                        :input_file_id, :status, CAST(:models AS JSONB), :provider_object_id,
+                        CAST(:log_level AS logging_enum), :now, :now)
                 -- The upsert only takes the row of the provider that minted
                 -- the id: when another provider already holds it the DO
                 -- UPDATE matches nothing (rowcount 0), and the caller turns
@@ -2600,6 +2607,7 @@ class DBManager:
                               models = COALESCE(EXCLUDED.models, batch_objects.models),
                               provider_object_id = COALESCE(EXCLUDED.provider_object_id,
                                                             batch_objects.provider_object_id),
+                              log_level = COALESCE(EXCLUDED.log_level, batch_objects.log_level),
                               updated_at = EXCLUDED.updated_at
                 WHERE COALESCE(batch_objects.provider_id, 0) = COALESCE(EXCLUDED.provider_id, 0)
                 """),
@@ -2614,6 +2622,7 @@ class DBManager:
                 "status": status,
                 "models": _json_for_jsonb(models) if models else None,
                 "provider_object_id": provider_object_id,
+                "log_level": log_level,
                 "now": datetime.datetime.now(datetime.timezone.utc),
             },
         )
@@ -2829,7 +2838,7 @@ class DBManager:
         """
         rows = self.session.execute(
             text("""
-                SELECT id, upstream_id, provider_id, api_key_id, team_id, user_id, status
+                SELECT id, upstream_id, provider_id, api_key_id, team_id, user_id, status, log_level
                 FROM batch_objects
                 WHERE kind = 'batch' AND settled_at IS NULL AND execution = 'provider'
                 ORDER BY updated_at
@@ -2909,17 +2918,23 @@ class DBManager:
         api_key_id: Optional[int],
         team_id: Optional[int],
         user_id: Optional[int],
+        log_level: Optional[str] = None,
     ) -> int:
-        """Record a batch Logos will execute itself, ready for the runner."""
+        """Record a batch Logos will execute itself, ready for the runner.
+
+        ``log_level`` is the creating request's explicit logging consent, or
+        ``None`` when the request sent no header (runner then uses the key's
+        living level).
+        """
         row = self.session.execute(
             text("""
                 INSERT INTO batch_objects
                     (kind, upstream_id, execution, api_key_id, team_id, user_id,
                      input_file_id, endpoint, completion_window, request_metadata,
-                     total_requests, status, created_at, updated_at)
+                     total_requests, status, log_level, created_at, updated_at)
                 VALUES ('batch', :upstream_id, 'logos', :api_key_id, :team_id, :user_id,
                         :input_file_id, :endpoint, :completion_window, CAST(:metadata AS JSONB),
-                        :total, 'validating', :now, :now)
+                        :total, 'validating', CAST(:log_level AS logging_enum), :now, :now)
                 RETURNING id
                 """),
             {
@@ -2932,6 +2947,7 @@ class DBManager:
                 "completion_window": completion_window,
                 "metadata": _json_for_jsonb(metadata) if metadata else None,
                 "total": int(total_requests),
+                "log_level": log_level,
                 "now": datetime.datetime.now(datetime.timezone.utc),
             },
         ).fetchone()
@@ -3010,7 +3026,8 @@ class DBManager:
         """
         rows = self.session.execute(
             text("""
-                SELECT id, upstream_id, input_file_id, endpoint, api_key_id, team_id, user_id, status
+                SELECT id, upstream_id, input_file_id, endpoint, api_key_id, team_id, user_id,
+                       status, log_level
                 FROM batch_objects
                 WHERE kind = 'batch' AND execution = 'logos'
                   AND status IN ('validating', 'in_progress', 'cancelling')
@@ -4583,6 +4600,63 @@ class DBManager:
                    AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                  """),
             {"tid": team_id, "month": month_start},
+        ).fetchone()
+        return int(row._mapping["total"] or 0) if row else 0
+
+    def get_team_provider_budget(self, team_id: int, provider_id: int) -> tuple[bool, Optional[int]]:
+        """Return (exists, limit) for a team-provider budget override.
+
+        ``exists=False`` means the team default bucket applies. ``exists=True``
+        with ``limit=None`` means unlimited (sponsored) for that provider.
+        """
+        row = self.session.execute(
+            text("""
+                 SELECT monthly_budget_micro_cents
+                 FROM team_provider_budgets
+                 WHERE team_id = :tid AND provider_id = :pid
+                 """),
+            {"tid": team_id, "pid": provider_id},
+        ).fetchone()
+        if row is None:
+            return False, None
+        limit = row._mapping["monthly_budget_micro_cents"]
+        return True, (int(limit) if limit is not None else None)
+
+    def get_team_default_budget_usage(self, team_id: int, month_start: str) -> int:
+        """Developer-key spend that still draws from the team's default monthly budget."""
+        row = self.session.execute(
+            text("""
+                 SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
+                 FROM log_entry_cost lec
+                 JOIN log_entry le ON le.id = lec.log_entry_id
+                 WHERE lec.api_key_id = ANY(
+                         ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                       )
+                   AND lec.timestamp_request >= CAST(:month AS DATE)
+                   AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                   AND (le.provider_id IS NULL OR le.provider_id NOT IN (
+                         SELECT provider_id FROM team_provider_budgets WHERE team_id = :tid
+                       ))
+                 """),
+            {"tid": team_id, "month": month_start},
+        ).fetchone()
+        return int(row._mapping["total"] or 0) if row else 0
+
+    def get_team_provider_budget_usage(self, team_id: int, provider_id: int, month_start: str) -> int:
+        """Developer-key spend on one provider for the team."""
+        row = self.session.execute(
+            text("""
+                 SELECT COALESCE(SUM(lec.cost_micro_cents), 0) AS total
+                 FROM log_entry_cost lec
+                 JOIN log_entry le ON le.id = lec.log_entry_id
+                 WHERE lec.api_key_id = ANY(
+                         ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
+                       )
+                   AND le.provider_id = :pid
+                   AND lec.timestamp_request >= CAST(:month AS DATE)
+                   AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                 """),
+            {"tid": team_id, "pid": provider_id, "month": month_start},
         ).fetchone()
         return int(row._mapping["total"] or 0) if row else 0
 

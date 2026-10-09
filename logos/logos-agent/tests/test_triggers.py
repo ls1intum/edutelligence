@@ -783,6 +783,22 @@ class TestWorkspaceNaming:
         assert triggers._next_auto_name(set()) == "auto-1"
         assert triggers._next_auto_name({"auto-1", "auto-3"}) == "auto-2"
 
+    def test_the_queue_workspace_pool_defaults_to_five_times_parallel(self, monkeypatch):
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(triggers.settings, max_parallel_sessions=4, max_queue_workspaces=0),
+        )
+        assert triggers.queue_workspace_limit() == 20
+
+    def test_a_configured_queue_pool_never_falls_below_parallel(self, monkeypatch):
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(triggers.settings, max_parallel_sessions=10, max_queue_workspaces=3),
+        )
+        assert triggers.queue_workspace_limit() == 10
+
     async def test_a_full_pool_repoints_a_free_workspace(self, monkeypatch):
         FakeRepo(assigned_pulls=[pull(772)], heads={772: ("logos/agent/x/session-3", REPO)}).install(monkeypatch)
         fake_db = FakeDb(workspaces=[{"id": 1, "name": "auto-1", "active_sessions": 0, "base_branch": "main"}])
@@ -827,7 +843,10 @@ class TestTheCommentMark:
 
         assert fake_db.comment_mark is not None
 
-    async def test_a_stopped_runner_forgets_nothing(self, monkeypatch):
+    async def test_a_stopped_runner_still_queues(self, monkeypatch):
+        # Pause stops starting work, not writing it down: assigned work that
+        # arrives while the runner is paused must still become a queued row,
+        # or it is lost when the lookback window moves on.
         FakeRepo(assigned_issues=[issue(812)]).install(monkeypatch)
         fake_db = FakeDb()
         fake_db.install(monkeypatch)
@@ -839,9 +858,66 @@ class TestTheCommentMark:
         monkeypatch.setattr(controls.db, "get_controls", paused)
         controls.forget()
 
+        queued = await triggers.TriggerPoller().poll_once()
+        assert len(queued) == 1
+        assert fake_db.created[0]["trigger_ref"]
+        assert fake_db.comment_mark is not None
+
+    async def test_a_paused_full_pool_still_queues(self, monkeypatch):
+        # Raising room while stopped is not enough: every workspace can still
+        # be occupied by a paused or queued session, and the old parallel
+        # ceiling refused to create another. Queue-only workspaces beyond
+        # that ceiling keep the assignment from falling out of the lookback.
+        FakeRepo(assigned_issues=[issue(1223)]).install(monkeypatch)
+        fake_db = FakeDb(workspaces=[{"id": 1, "name": "auto-1", "active_sessions": 1, "base_branch": "main"}])
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(triggers.settings, github_login=AGENT, repo_slug=REPO, max_parallel_sessions=1),
+        )
+
+        async def paused():
+            return {"mode": "paused", "mode_reason": "incident", "max_parallel": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(controls.db, "get_controls", paused)
+        controls.forget()
+
+        queued = await triggers.TriggerPoller().poll_once()
+
+        assert len(queued) == 1
+        assert fake_db.created[0]["trigger_ref"] == "issue-1223"
+        assert len(fake_db.workspaces) == 2
+        assert fake_db.comment_mark is not None
+
+    async def test_the_queue_workspace_pool_is_capped(self, monkeypatch):
+        # Unbounded growth would fill the host with idle volumes; once the
+        # documented pool is full, the assignment stays in the repository.
+        FakeRepo(assigned_issues=[issue(1223)]).install(monkeypatch)
+        fake_db = FakeDb(workspaces=[{"id": 1, "name": "auto-1", "active_sessions": 1, "base_branch": "main"}])
+        fake_db.install(monkeypatch)
+        allow_models(monkeypatch)
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(
+                triggers.settings,
+                github_login=AGENT,
+                repo_slug=REPO,
+                max_parallel_sessions=1,
+                max_queue_workspaces=1,
+            ),
+        )
+
+        async def paused():
+            return {"mode": "paused", "mode_reason": "incident", "max_parallel": None, "updated_by": "tobias"}
+
+        monkeypatch.setattr(controls.db, "get_controls", paused)
+        controls.forget()
+
         assert await triggers.TriggerPoller().poll_once() == []
-        # Moving the mark here would drop every question asked during the
-        # pause out of the window before anyone could answer it.
+        assert fake_db.created == []
         assert fake_db.comment_mark is None
 
     async def test_work_left_for_the_next_pass_holds_the_mark(self, monkeypatch):
@@ -2276,16 +2352,16 @@ class TestBeingAskedForAReview:
         queued = fake_db.created[0]
         assert queued["trigger_kind"] == "review-request"
         assert queued["trigger_ref"] == "pr-882-review-requested-wasnertobias-event-900882"
-        # It arrives able to do something about what it finds: the head is
-        # in this repository, so it is the session's branch.
-        assert queued["branch"] == "logos/agent/pr/session-882"
-        # It updates that pull request; it does not open one of its own.
+        # A reviewer, not an author: even with the head in this repository
+        # the session gets no branch and the row may not push.
+        assert queued["branch"] is None
+        assert queued["no_push"] is True
         assert queued["open_pull_request"] is False
-        # ...and the row may push, because the head is in this repository.
-        assert queued["no_push"] is False
+        assert fake_db.workspaces[-1]["base_branch"] == "refs/pull/882/head"
         assert queued["reply_target"] == "issue:882"
         assert "Add dynamic Scheduler" in queued["task"]
-        assert "you can fix what you find" in queued["task"]
+        assert "do not change, commit or push anything" in queued["task"]
+        assert "review-comments.json" in queued["task"]
 
     async def test_a_configured_team_review_request_is_answered(self, monkeypatch):
         # Asking logos-maintainers never puts LogosOSSAgent in
@@ -2335,7 +2411,7 @@ class TestBeingAskedForAReview:
         # the fork however the session's task text ended up phrased.
         assert fake_db.created[0]["no_push"] is True
         assert fake_db.workspaces[-1]["base_branch"] == "refs/pull/882/head"
-        assert "must not try" in fake_db.created[0]["task"]
+        assert "do not change, commit or push anything" in fake_db.created[0]["task"]
 
     async def test_a_request_from_outside_is_left_alone(self, monkeypatch):
         repo = FakeRepo()
@@ -2504,35 +2580,3 @@ class TestAHeadThePassCouldNotRead:
 
         assert len(queued) == 1
         assert fake_db.created[0]["branch"] == "logos/agent/x/session-1"
-
-    async def test_a_review_request_is_not_spent_on_a_failed_lookup(self, monkeypatch):
-        # The review request stays unacknowledged while the head cannot be
-        # read, and the next pass — with the lookup working — answers it.
-        repo = FakeRepo(
-            heads={882: ("logos/agent/pr/session-882", REPO)},
-            failing_heads={882},
-        )
-        repo.review_requests = [self.asked(882)]
-        repo.review_requesters = {882: "wasnertobias"}
-        repo.writers = {"wasnertobias"}
-        repo.install(monkeypatch)
-        fake_db = FakeDb()
-        fake_db.install(monkeypatch)
-        allow_models(monkeypatch)
-        poller = triggers.TriggerPoller()
-
-        assert await poller.poll_once() == []
-        assert fake_db.created == []
-
-        repo.failing_heads.clear()
-        queued = await poller.poll_once()
-
-        assert len(queued) == 1
-        created = fake_db.created[0]
-        assert created["trigger_kind"] == "review-request"
-        # The head is in this repository, so the answer works its branch.
-        assert created["branch"] == "logos/agent/pr/session-882"
-
-    @staticmethod
-    def asked(number: int, title: str = "A change", body: str = "What it does."):
-        return {"number": number, "title": title, "body": body, "labels": []}

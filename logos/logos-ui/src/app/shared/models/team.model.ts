@@ -11,8 +11,10 @@ export interface Team {
   /** Queue priority of the team's traffic (1..10, same scale as API-key priorities); null = not set. */
   priority: number | null;
   is_caller_owner: boolean;
-  /** True when the team is provisioned from a Keycloak group; name and existence are Keycloak-owned. */
+  /** True when the team is linked to a Keycloak group; name and existence are Keycloak-owned. */
   managed: boolean;
+  /** The linked Keycloak group (or realm role); null when the team is Logos-owned. */
+  keycloak_group: string | null;
 }
 
 export interface AdminUser {
@@ -35,8 +37,24 @@ export interface TeamDetail {
   default_local_tpm_limit: number | null;
   /** Queue priority of the team's traffic (1..10); null = not set. */
   priority: number | null;
-  /** True when the team is provisioned from a Keycloak group; name and existence are Keycloak-owned. */
+  /** True when the team is linked to a Keycloak group; name and existence are Keycloak-owned. */
   managed: boolean;
+  /** The linked Keycloak group (or realm role); null when the team is Logos-owned. */
+  keycloak_group: string | null;
+}
+
+/** A Keycloak claim name a team can be linked to, as offered by the group picker. */
+export interface KeycloakGroupOption {
+  name: string;
+  source: 'group' | 'role';
+  linked_team_id: number | null;
+  linked_team_name: string | null;
+}
+
+export interface KeycloakGroupDirectory {
+  /** False when the deployment has no Keycloak directory access — type the group instead. */
+  available: boolean;
+  groups: KeycloakGroupOption[];
 }
 
 export interface TeamMember {
@@ -129,6 +147,14 @@ export interface TeamLimitsPayload {
   default_cloud_tpm_limit?: number | null;
   default_local_rpm_limit?: number | null;
   default_local_tpm_limit?: number | null;
+}
+
+/** Per-provider monthly budget override (null = unlimited / sponsored). */
+export interface TeamProviderBudget {
+  provider_id: number;
+  provider_name: string;
+  provider_type?: string;
+  monthly_budget_micro_cents: number | null;
 }
 
 /** GitHub repository linked to a team for later AI-workflow / SLO analysis. */

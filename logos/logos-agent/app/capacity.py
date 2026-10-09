@@ -21,6 +21,10 @@ can reach, by provider and model id rather than by name. A name is not
 enough: the same model is served by providers this key has no permission
 for, and their idle slots would make a busy lane look free.
 
+The queue is narrowed the same way: a backlog on another local model, or on
+a cloud provider, is not a person waiting for the lane this runner uses.
+Pausing for those used to hand a GPU back to nobody who was asking for it.
+
 It falls back to the fleet-wide figure only when none of those deployments
 is resident — there is nothing of ours to measure then, and the older signal
 is the better of the two available answers. A key that reaches *nothing*
@@ -61,6 +65,11 @@ class Reading:
     # Warming a lane in that situation is a different product decision, and
     # it must stay opt-in rather than the default.
     reclaimable: bool = True
+    # How many of the reported model's in-flight slots this runner holds.
+    # A session may fan out into subagents, so the count can exceed the
+    # number of sessions. Zero when the payload does not say, or when the
+    # runner's key was not given.
+    own_slots: int = 0
 
     @property
     def saturated(self) -> bool:
@@ -81,6 +90,9 @@ async def read_load(
     timeout_s: float = 5.0,
     lane: frozenset[tuple[str, str]] | None = None,
     ours: Mapping[str, int] | None = None,
+    own_api_key_id: int | None = None,
+    *,
+    discount_own: bool = True,
 ) -> Reading:
     """Ask the orchestrator how busy the serving lane we would use is.
 
@@ -92,6 +104,13 @@ async def read_load(
     served by. ``None`` asks for the fleet-wide figure, which is what this
     answered before it knew about lanes; an empty set says the key reaches
     nothing at all, which is not the same question and is refused.
+
+    ``own_api_key_id`` is this runner's key: when the orchestrator reports
+    in-flight requests per key, the discount uses how many of them are ours —
+    the true figure, which a session's subagents can push well past one —
+    and falls back to ``ours`` (a session count) on an orchestrator that does
+    not. ``discount_own=False`` still reports ``own_slots`` but leaves the
+    load figure as measured — admission must not subtract our share.
     """
     if not settings.internal_secret:
         return Reading(
@@ -125,7 +144,13 @@ async def read_load(
         logger.warning("capacity read failed: %s", _describe(exc))
         return UNKNOWN
 
-    return parse_scheduler_state(payload, lane=lane, ours=ours)
+    return parse_scheduler_state(
+        payload,
+        lane=lane,
+        ours=ours,
+        own_api_key_id=own_api_key_id,
+        discount_own=discount_own,
+    )
 
 
 def _describe(exc: BaseException) -> str:
@@ -201,6 +226,9 @@ def parse_scheduler_state(
     payload: dict,
     lane: frozenset[tuple[str, str]] | None = None,
     ours: Mapping[str, int] | None = None,
+    own_api_key_id: int | None = None,
+    *,
+    discount_own: bool = True,
 ) -> Reading:
     """Turn the orchestrator's debug payload into a single load figure.
 
@@ -208,17 +236,40 @@ def parse_scheduler_state(
     payloads, and so a change in the orchestrator's shape surfaces as a test
     failure rather than as a runner that silently believes the fleet is idle.
 
-    ``lane`` narrows the ratio to the deployments the runner's sessions are
-    served by, matched on the payload's own provider and model ids. The
-    queue is deliberately *not* narrowed: models share GPUs, so a person
-    waiting on any of them is a person this runner should get out of the way
-    of.
+    ``lane`` narrows both the ratio and the queue to the deployments the
+    runner's sessions are served by, matched on the payload's own provider
+    and model ids. A backlog on another local model, or on a cloud
+    provider, is not a person waiting for this lane.
 
     ``ours`` is how many sessions this runner is running *per model*, and it
     is subtracted from that model before anything is compared. Per model
     rather than in total: five sessions on one model say nothing about
     another, and subtracting them there would turn somebody else's busy
     lane into an idle-looking one.
+
+    When ``own_api_key_id`` is given and the payload splits a model's
+    in-flight requests by caller key (``active_by_api_key``), that split
+    replaces the session count for the *active* discount: a session that has
+    fanned out into several subagents holds several of the model's slots at
+    once, and only the per-key figure sees them. The discount is taken from
+    the matching ledger ``active`` total — not from the engine sample
+    ``_live`` prefers — because those are different populations and
+    subtracting one from the other understates user load. Engine-side
+    waiting is a third population: ledger actives the engine has accepted
+    but not started sit in ``queue_waiting_current``. Those waiters are
+    discounted only when the same engine snapshot accounts for the ledger
+    (running plus waiting covers ``active``) — then keyed actives not in
+    the running sample are the ones still waiting. A lagging sample that
+    is missing a newly dispatched request must not spend that residual on
+    the wait list, or a real user's waiter is erased. Orchestrator backlog
+    ownership is yet another split (``queued_by_api_key``); the in-flight
+    figure must not stand in for it, or a runner pauses for its own
+    orchestrator backlog. An orchestrator that does not report a split
+    falls back to the session count for that population.
+
+    ``discount_own=False`` still fills ``own_slots`` from the split but
+    leaves busy, queue and load as measured — the figure admission decides
+    on.
     """
     mine = {str(name).strip().lower(): int(count) for name, count in (ours or {}).items()}
     if lane is not None and not lane:
@@ -230,7 +281,7 @@ def parse_scheduler_state(
             load=1.0,
             busy_slots=0,
             total_slots=0,
-            queue_total=int(payload.get("queue_total") or 0),
+            queue_total=0,
             ok=True,
             detail="the runner's key reaches no local deployment",
             reclaimable=False,
@@ -246,7 +297,9 @@ def parse_scheduler_state(
     # about that helps a request bound for a cloud provider.
     #
     # The cloud never appears below: `logosnode.providers` is the local
-    # fleet, and that is the whole point of reading it here.
+    # fleet, and that is the whole point of reading it here. With a lane,
+    # only that lane's deployments contribute — another local model's
+    # backlog is the same kind of false alarm as the cloud's.
     queue_total = 0
     # Counted per model as well as in total: a lane holding a saturated
     # model and an idle one is not half busy — a session bound for the
@@ -264,6 +317,29 @@ def parse_scheduler_state(
     # not two. The engine's wait is the opposite — one list per deployment
     # — and is added where it is seen.
     model_depth: dict[str, int] = {}
+    # Lane models whose orchestrator backlog still counts even when they
+    # are unloaded (no row in `per_model` yet).
+    lane_model_names: set[str] = set()
+    # This runner's in-flight share, per model, read off the payload's own
+    # per-key split rather than estimated from a session count. `key_reported`
+    # lists the models whose deployment carried the split: for them the
+    # session-count fallback would understate a session that fanned out into
+    # subagents, so the per-key figure is the one to subtract. For a model
+    # that did not carry it — an older orchestrator — the session count is
+    # the only figure the payload offers, and it is the one to keep.
+    per_model_own_key: dict[str, int] = {}
+    key_reported: set[str] = set()
+    # Matching ledger totals for the keyed active discount. The engine sample
+    # in slots[0] is a different population; subtracting a ledger key count
+    # from it erases user load that the sample already omitted.
+    per_model_ledger: dict[str, int] = {}
+    # Queued ownership is tracked apart from in-flight: a request waiting in
+    # the orchestrator is not in `active_by_api_key`, and must not be.
+    per_model_own_queued: dict[str, int] = {}
+    queue_key_reported: set[str] = set()
+    # Own share before any discount, so the UI can colour agent slots apart
+    # from other traffic even when admission keeps the measured figure.
+    per_model_own_slots: dict[str, int] = {}
     for provider_id, provider in providers.items():
         deployments = (provider or {}).get("models") or {}
         for model_id, model in deployments.items():
@@ -274,8 +350,20 @@ def parse_scheduler_state(
             # not become two pools — the busiest of which would then be one
             # provider's view of a model, not the model.
             name = str(model.get("model_name") or model_id).strip().lower()
+            on_lane = not wanted or (str(provider_id), str(model_id)) in wanted
             depth, wait = _queue_parts(model)
-            model_depth[name] = max(model_depth.get(name, 0), depth)
+            if on_lane:
+                model_depth[name] = max(model_depth.get(name, 0), depth)
+                lane_model_names.add(name)
+                # The backlog is model-wide: two providers reporting the same
+                # queued-by-key split describe one queue, so keep the larger
+                # reading rather than summing them.
+                queued_split = model.get("queued_by_api_key")
+                if own_api_key_id is not None and isinstance(queued_split, dict):
+                    queue_key_reported.add(name)
+                    qshare = queued_split.get(str(own_api_key_id), 0)
+                    if isinstance(qshare, (int, float)):
+                        per_model_own_queued[name] = max(per_model_own_queued.get(name, 0), int(qshare))
             capacity = int(model.get("max_capacity") or 0)
             if not model.get("loaded") or capacity <= 0:
                 # Only loaded models hold capacity. An unloaded one
@@ -284,53 +372,116 @@ def parse_scheduler_state(
                 # idle-looking fleet out of a node that simply has nothing
                 # resident.
                 #
-                # Its queue still counts. A request waiting for a local
-                # model that is asleep is a request waiting for a lane to be
-                # woken, and waking it takes the VRAM our sessions are
-                # sitting on.
-                queue_total += wait
+                # Its queue still counts when it is on our lane: a request
+                # waiting for a model that is asleep is a request waiting
+                # for that lane to be woken, and waking it takes the VRAM
+                # our sessions are sitting on. Off-lane sleepers are ignored.
+                if on_lane:
+                    queue_total += wait
                 continue
             active, waiting, cache = _live(model, capacity)
+            ledger_active = max(0, int(model.get("active") or 0))
             fleet_total += capacity
             fleet_busy += active
-            if wanted and (str(provider_id), str(model_id)) not in wanted:
-                # Still counted towards the queue: somebody waiting on a
-                # deployment we cannot reach is somebody waiting.
-                queue_total += waiting
+            if not on_lane:
+                # Not our lane: neither its slots nor its queue decide
+                # whether this runner may start or must yield.
                 continue
             total += capacity
+            # slots: engine-active, engine-waiting, capacity, cache.
+            # Orchestrator backlog stays in `model_depth` until the discount
+            # below — the two queue stages are different populations.
             slots = per_model.setdefault(name, [0, 0, 0, 0.0])
             slots[0] += active
             slots[1] += waiting
             slots[2] += capacity
             slots[3] = max(slots[3], cache)
+            per_model_ledger[name] = per_model_ledger.get(name, 0) + ledger_active
+            # The orchestrator splits this model's in-flight requests by
+            # caller key. When the deployment carries the split, the discount
+            # below reads this runner's share off it instead of estimating it
+            # from a session count: a session fanned out into subagents holds
+            # several of the slots at once, and only the split sees them all.
+            split = model.get("active_by_api_key")
+            if own_api_key_id is not None and isinstance(split, dict):
+                key_reported.add(name)
+                share = split.get(str(own_api_key_id), 0)
+                if isinstance(share, (int, float)):
+                    per_model_own_key[name] = per_model_own_key.get(name, 0) + int(share)
 
-    # The ledger's backlog folds into the model it belongs to. For a model
-    # this lane serves that puts it in front of the subtraction of our own
-    # sessions below, which must be able to empty it exactly as before — a
-    # queue that reads as empty is the signal that no user is waiting, and
-    # on our lane the requests it can hold are our own. For a model the
-    # lane does not serve it goes straight to the total, where the queue is
-    # not narrowed either.
+    # Unloaded lane models contribute their orchestrator backlog here.
+    # Off-lane depth never entered `model_depth` when a lane was set.
     for name, depth in model_depth.items():
-        if name in per_model:
-            per_model[name][1] += depth
-        else:
+        if name not in per_model and name in lane_model_names:
             queue_total += depth
+
+    # Attribute own slots before any discount so the page can show them
+    # even when admission keeps the measured load.
+    for name, slots in per_model.items():
+        if name in key_reported:
+            per_model_own_slots[name] = per_model_own_key.get(name, 0)
+        elif mine:
+            per_model_own_slots[name] = min(mine.get(name.strip().lower(), 0), int(slots[0]) + int(slots[1]))
 
     # Ours come off each model *once*, after its deployments are added up:
     # the same model served by three providers is one lane, and subtracting
     # the same sessions from each of them would erase three times what this
-    # runner is doing. From what is *running* before what is waiting, too —
-    # the other way round empties the queue on the assumption that our
-    # sessions are the ones waiting, and a queue that reads as empty is the
-    # signal that no user is waiting.
+    # runner is doing. Active, engine-waiting and orchestrator-backlog are
+    # discounted from matching populations — ledger key counts against
+    # ledger totals and the engine wait list they still occupy, queued key
+    # counts against the backlog — never mixed across stages.
     for name, slots in per_model.items():
-        ours_here = mine.get(name.strip().lower(), 0)
-        ours_serving = min(ours_here, slots[0])
-        ours_waiting = min(ours_here - ours_serving, slots[1])
-        slots[0] -= ours_serving
-        slots[1] -= ours_waiting
+        engine = int(slots[0])
+        engine_waiting = int(slots[1])
+        depth = model_depth.get(name, 0)
+        if not discount_own:
+            slots[1] = engine_waiting + depth
+            # Own slots come from the ledger's per-key split. When that
+            # ledger sees more in-flight work than the engine sample, use
+            # it for busy too — otherwise the page invents free slots from
+            # a lagging sample while still colouring agent cells from the
+            # fuller ledger (20 ledger = 2 agent + 18 other, 18 engine →
+            # 2/16/2 instead of 2/18/0).
+            if name in key_reported:
+                slots[0] = max(engine, per_model_ledger.get(name, 0))
+            busy += slots[0]
+            queue_total += slots[1]
+            continue
+        if name in key_reported:
+            own_active = per_model_own_key.get(name, 0)
+            ledger = per_model_ledger.get(name, 0)
+            # Discount each population against itself, then keep the larger
+            # user load: subtracting a ledger key count from a lagging engine
+            # sample understates users; ignoring the engine when the ledger
+            # is the one behind would do the same the other way.
+            slots[0] = max(max(0, engine - own_active), max(0, ledger - own_active))
+            # Ledger `active` includes requests the engine has accepted but
+            # not yet started — those show up in `queue_waiting_current`,
+            # not in `queued_by_api_key`. Attribute keyed residuals to that
+            # wait list only when this snapshot explains the ledger: every
+            # in-flight request is either running or waiting. Otherwise the
+            # sample is lagging and the residual may be a request that has
+            # not appeared yet; clearing a waiter then would hide a user.
+            if ledger <= engine + engine_waiting:
+                own_engine_waiting = min(engine_waiting, max(0, own_active - engine))
+                engine_waiting = max(0, engine_waiting - own_engine_waiting)
+            if name in queue_key_reported:
+                depth = max(0, depth - per_model_own_queued.get(name, 0))
+            else:
+                # Active split present but no queued split yet: keep the
+                # session estimate for the orchestrator backlog only.
+                depth = max(0, depth - min(mine.get(name.strip().lower(), 0), depth))
+        else:
+            ours_here = mine.get(name.strip().lower(), 0)
+            ours_serving = min(ours_here, engine)
+            remainder = ours_here - ours_serving
+            ours_engine_waiting = min(remainder, engine_waiting)
+            remainder -= ours_engine_waiting
+            ours_depth = min(remainder, depth)
+            slots[0] = engine - ours_serving
+            engine_waiting -= ours_engine_waiting
+            depth -= ours_depth
+        slots[1] = engine_waiting + depth
         busy += slots[0]
         queue_total += slots[1]
 
@@ -356,6 +507,14 @@ def parse_scheduler_state(
             reclaimable=False,
         )
 
+    def _clamped_load(model_busy: float, model_total: float) -> float:
+        if not model_total:
+            return 0.0
+        return min(1.0, max(0.0, model_busy / model_total))
+
+    def _own_for(model_name: str) -> int:
+        return max(0, int(per_model_own_slots.get(model_name, 0)))
+
     if wanted and not fell_back and per_model:
         # The busiest of them decides. Being kept out of an idle model
         # because another is full costs this runner some capacity; letting a
@@ -375,13 +534,14 @@ def parse_scheduler_state(
         if cache:
             detail += f", {cache:.0%} of a KV cache in use"
         return Reading(
-            load=(model_busy / model_total) if model_total else 0.0,
-            busy_slots=model_busy,
-            total_slots=model_total,
+            load=_clamped_load(model_busy, model_total),
+            busy_slots=int(model_busy),
+            total_slots=int(model_total),
             queue_total=queue_total,
             cache_pressure=cache,
             ok=True,
             detail=detail,
+            own_slots=_own_for(name),
         )
 
     if not wanted:
@@ -390,13 +550,15 @@ def parse_scheduler_state(
         lane_note = " across the fleet (none of the runner's own models is resident)"
     else:
         lane_note = " on the model this runner uses"
+    own_total = sum(per_model_own_slots.values()) if not fell_back else 0
     return Reading(
-        load=busy / total,
-        busy_slots=busy,
+        load=_clamped_load(busy, total),
+        busy_slots=int(busy),
         total_slots=total,
         queue_total=queue_total,
         ok=True,
         detail=f"{busy}/{total} slots busy{lane_note}",
+        own_slots=own_total,
     )
 
 

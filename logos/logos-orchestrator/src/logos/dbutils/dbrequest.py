@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -18,6 +18,50 @@ class WebSearchRequest(BaseModel):
     @classmethod
     def _strip_query(cls, value: Any) -> Any:
         return value.strip() if isinstance(value, str) else value
+
+
+# A free-form text field of the decision API: a string, or JSON rendered as text.
+DecisionText = Union[str, dict, list, None]
+
+
+class NoulCriteria(BaseModel):
+    true: DecisionText = None
+    false: DecisionText = None
+
+
+class NoulQuestion(BaseModel):
+    type: Literal["noul"]
+    instructions: DecisionText = None
+    criteria: Optional[NoulCriteria] = None
+
+
+class ChoiceQuestion(BaseModel):
+    type: Literal["choice"]
+    instructions: DecisionText = None
+    criteria: dict[str, DecisionText]
+
+
+class ScoreQuestion(BaseModel):
+    type: Literal["score"]
+    instructions: DecisionText = None
+    criteria: list[Union[str, dict, list]] = Field(min_length=1)
+
+
+DecisionQuestion = Annotated[Union[NoulQuestion, ChoiceQuestion, ScoreQuestion], Field(discriminator="type")]
+
+
+# Upper bound on questions per /v1/systemone call. Each entry becomes one
+# pipeline completion; without a cap a single request can spawn unbounded
+# concurrent auth/schedule/DB work before per-turn rate limits apply.
+SYSTEM_ONE_MAX_QUESTIONS = 32
+
+
+class SystemOneRequest(BaseModel):
+    """Body of ``POST /v1/systemone``: a state and the typed questions to answer about it."""
+
+    model: str = Field(min_length=1)
+    state: Any
+    questions: dict[str, DecisionQuestion] = Field(min_length=1, max_length=SYSTEM_ONE_MAX_QUESTIONS)
 
 
 class LogosNodeAuthRequest(BaseModel):

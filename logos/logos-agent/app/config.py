@@ -54,6 +54,19 @@ REPLY_FILE = "reply.md"
 # answers every thread somewhere none of them was asked.
 REPLY_DIR = "replies"
 
+# The inline comments of a review the agent was asked for: a JSON list of
+# ``{"path", "line", "body"}`` objects, ``line`` being a line of the new
+# file inside the diff. The runner posts them with the summary in
+# ``REPLY_FILE`` as one pull-request review, so each remark sits on the code
+# it is about.
+REVIEW_COMMENTS_FILE = "review-comments.json"
+
+# The commit a requested review read, relative to the session's state
+# directory: recorded by the runner right after the trusted checkout, before
+# the agent runs, and sent as the review's ``commit_id`` so its line numbers
+# are read against that commit even when the pull request moved on since.
+REVIEWED_SHA_FILE = "reviewed-sha"
+
 # The file the runner appends to whenever it freezes a session, relative to
 # the session's state directory — not the artefact directory: the state
 # directory is the runner's own, mounted into the session read-only, so the
@@ -224,6 +237,12 @@ class Settings:
     # thresholds below decide how many of them actually run at any moment,
     # and each still needs a free workspace of its own.
     max_parallel_sessions: int = _int("LOGOS_AGENT_MAX_PARALLEL_SESSIONS", 10)
+    # How many live workspaces the trigger poller may leave so assigned work
+    # can wait its turn. Execution stays capped at max_parallel_sessions; the
+    # extras only hold queued (and paused) sessions so a long pause does not
+    # lose comments to the lookback window. Zero means five times the parallel
+    # ceiling. Never below max_parallel_sessions.
+    max_queue_workspaces: int = _int("LOGOS_AGENT_MAX_QUEUE_WORKSPACES", 0)
     # A session may start only while the platform's busy share is below this.
     # Expressed as a fraction of reserved-to-total serving capacity.
     start_below_load: float = _float("LOGOS_AGENT_START_BELOW_LOAD", 0.60)

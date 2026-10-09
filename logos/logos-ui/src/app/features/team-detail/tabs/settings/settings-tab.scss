@@ -20,6 +20,67 @@
   margin: -6px 0 16px;
 }
 
+.settings-empty {
+  margin: 0 0 8px;
+  font-size: var(--font-size-md);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+.provider-budget-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.provider-budget-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.provider-budget-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.provider-budget-name {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+}
+
+.provider-budget-cap {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--nav-item-text) / var(--nav-item-text-opacity));
+}
+
+.btn-text-danger {
+  background: transparent;
+  border: none;
+  color: rgb(var(--color-error));
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  padding: 4px 0;
+
+  &:disabled {
+    opacity: var(--opacity-disabled);
+    cursor: not-allowed;
+  }
+}
+
+.provider-budget-error {
+  margin: 8px 0 0;
+}
+
 // ── Card ────────────────────────────────────────────────────────────────────
 .settings-card {
   @include glass-surface;
@@ -76,6 +137,17 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
+}
+
+/** A hint that sits inside a card rather than above it. */
+.settings-hint--inline {
+  margin: -4px 0 12px;
+}
+
+/** A hint directly under the field it explains. */
+.settings-hint--field {
+  margin: 6px 0 0;
+  font-size: var(--font-size-sm);
 }
 
 // ── Save actions ────────────────────────────────────────────────────────────

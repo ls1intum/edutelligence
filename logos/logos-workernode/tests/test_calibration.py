@@ -4076,3 +4076,59 @@ def test_calibration_reserves_the_entry_before_the_selection_returns(tmp_path) -
     assert cache.reserved_at_selection == [{"org/test-model"}]
     # And the run still releases it on the way out.
     assert cache.cache_use_reservations() == set()
+
+
+def test_spawn_vllm_expands_model_path_with_plan_cache_token_and_revision(monkeypatch, tmp_path: Path) -> None:
+    """Calibration must expand ``{model_path}`` before Popen, like serving."""
+    from logos_worker_node.calibration import spawn_vllm
+
+    snapshot = tmp_path / "snapshot"
+    (snapshot / "adapter_vllm").mkdir(parents=True)
+    seen = {}
+
+    def expand(cmd, model, hf_home, token=None):
+        seen["cmd"] = list(cmd)
+        seen["model"] = model
+        seen["hf_home"] = hf_home
+        seen["token"] = token
+        return [arg.replace("{model_path}", str(snapshot)) for arg in cmd]
+
+    class FakePopen:
+        def __init__(self, cmd, **kwargs):
+            seen["popen_cmd"] = list(cmd)
+            seen["popen_env"] = kwargs.get("env")
+            self.pid = 4242
+
+    monkeypatch.setattr("logos_worker_node.vllm_process.expand_model_path", expand)
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
+    pin = "ba3f0d584994b37998f235c0a3f6f1beff32ba1e"
+    plan = {
+        "model": "autotrust/JEV-27B-VL",
+        "extra_args": [
+            f"--revision={pin}",
+            "--enable-lora",
+            "--lora-modules=jev-decision={model_path}/adapter_vllm",
+        ],
+        "env_overrides": {"HF_TOKEN": "plan-token"},
+    }
+
+    proc, cmd = spawn_vllm(
+        plan,
+        "vllm",
+        "127.0.0.1",
+        19001,
+        tmp_path / "probe.log",
+        kv_cache_memory_bytes="1000000000",
+        hf_home=str(tmp_path / "hf"),
+    )
+
+    assert proc.pid == 4242
+    assert seen["model"] == "autotrust/JEV-27B-VL"
+    assert seen["hf_home"] == str(tmp_path / "hf")
+    assert seen["token"] == "plan-token"
+    assert any("{model_path}" in arg for arg in seen["cmd"])
+    assert cmd[-1] == f"--lora-modules=jev-decision={snapshot}/adapter_vllm"
+    assert seen["popen_cmd"][-1] == cmd[-1]
+    assert "{model_path}" not in " ".join(cmd)
+    assert seen["popen_env"]["HF_TOKEN"] == "plan-token"
+    assert seen["popen_env"]["HF_HOME"] == str(tmp_path / "hf")

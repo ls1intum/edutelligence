@@ -14,7 +14,7 @@ becomes an App Admin if the account has the OIDC role that is configured in
 
 The UI shows the role badge "App Admin" in the header menu.
 
-## Models {#models}
+## Models
 
 This page shows the model catalogue of the deployment: the name, the
 description and the capabilities of each model. App Admins see the list. They
@@ -31,7 +31,7 @@ can create only App Developers, and no higher roles.
 
 ![Users page](/img/roles/app-admin-user-management.png)
 
-## Teams {#teams}
+## Teams
 
 This page shows the teams, their owners and their members. For the teams that
 they own, App Admins can create teams, add members and manage the API keys of
@@ -54,8 +54,9 @@ key or a member has no individual limit.
 ### Members
 
 This tab shows the owners and the members, with budget and rate-limit
-overrides for each person. Add or remove people here, unless Keycloak manages
-the team.
+overrides for each person. Add or remove people here. If a Keycloak group is
+linked to the team, then you cannot remove the members that Keycloak added.
+Logos makes these members agree with the group at each login.
 
 ![Team detail — Members](/img/roles/team-detail-members.png)
 
@@ -118,7 +119,7 @@ has Likert profile ratings, the tab shows a spider chart next to it.
 
 ![Team detail — Workflows](/img/roles/team-detail-workflows.png)
 
-### Models {#team-models}
+### Models
 
 This tab shows which catalogue models the team can use.
 
@@ -142,6 +143,9 @@ the team. Local models do not show here. For local models, see Activity.
 
 This tab shows the monthly budget of the team, the default key budget and the
 default cloud and local rate limits. An owner can also delete the team here.
+If a Keycloak group is linked to the team, then the tab shows the name of the
+group and no delete control. Only a Logos Admin can change or remove the link.
+See [Logos Admin → Keycloak Group Links](logos-admin.md#keycloak-group-links).
 
 ![Team detail — Settings](/img/roles/team-detail-settings.png)
 
@@ -161,7 +165,7 @@ assistant, a team key and a model. Then install the assistant and connect it.
 The page does not change with the role. For the step-by-step procedure, see
 [App Developer → AI Tools](app-developer.md#ai-tools).
 
-## Batches {#batches}
+## Batches
 
 This page is the OpenAI Batch API in the browser. Upload a `.jsonl` file, look
 at the progress of the job and download the result file. For the server-side

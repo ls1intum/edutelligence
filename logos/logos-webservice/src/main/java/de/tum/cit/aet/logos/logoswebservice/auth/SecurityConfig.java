@@ -124,6 +124,8 @@ public class SecurityConfig {
             "OpenAI-Beta",
             "logos_key",
             "logos-key",
+            "logos-logging",
+            "logos_logging",
             "policy",
             "X-Request-ID",
             "X-Logos-Batch-Execution"

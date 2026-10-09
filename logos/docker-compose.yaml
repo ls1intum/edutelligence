@@ -7,7 +7,7 @@
 # .env, and a self-built stack points it at wherever those images were pushed.
 services:
   traefik:
-    image: traefik:v3.7.10
+    image: traefik:v3.7.14
     container_name: traefik
     restart: unless-stopped
     command:

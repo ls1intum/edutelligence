@@ -255,6 +255,10 @@ class CapacityState(BaseModel):
     load: float  # 0..1, reserved share of local serving slots
     total_slots: int
     busy_slots: int
+    # How many of those busy slots this runner holds (sessions and the
+    # subagents they started). The rest are other production traffic.
+    own_slots: int = 0
+    other_slots: int = 0
     sessions_running: int
     sessions_queued: int
     sessions_paused: int

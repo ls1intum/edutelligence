@@ -1,4 +1,5 @@
-"""Regression tests for PR 660 review feedback."""
+"""Regression tests for ingestion robustness: deletion retries, the
+transcription write path, and webhook worker failure reporting."""
 
 # pylint: skip-file
 
@@ -11,6 +12,10 @@ import pytest
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.custom_exceptions import IngestionCancelledException  # noqa: E402
+from iris.common.ingestion_errors import (  # noqa: E402
+    TRANSCRIPT_INGESTION_FAILED,
+    IngestionStageError,
+)
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO  # noqa: E402
 from iris.domain.ingestion.ingestion_pipeline_execution_dto import (  # noqa: E402
     IngestionPipelineExecutionDto,
@@ -72,8 +77,13 @@ def test_transcription_embedding_does_not_hold_lock_while_updating_status():
         def __exit__(self, *_args):
             lock.inside = False
 
-    def update():
+    def update(**_kwargs):
         assert lock.inside is False
+
+    def delete_inside_lock(**_kwargs):
+        # The purge's delete runs inside the write lock.
+        assert lock.inside is True
+        return SimpleNamespace(failed=0, matches=0, successful=0)
 
     lecture_unit = SimpleNamespace(course_id=3, lecture_id=2, lecture_unit_id=1)
     batch = MagicMock()
@@ -81,7 +91,14 @@ def test_transcription_embedding_does_not_hold_lock_while_updating_status():
     dynamic_context.__enter__.return_value = batch
     dynamic_context.__exit__.return_value = None
     pipeline.collection = SimpleNamespace(
-        batch=SimpleNamespace(dynamic=MagicMock(return_value=dynamic_context))
+        batch=SimpleNamespace(
+            dynamic=MagicMock(return_value=dynamic_context),
+            failed_objects=[],
+        ),
+        query=SimpleNamespace(
+            fetch_objects=MagicMock(return_value=SimpleNamespace(objects=[]))
+        ),
+        data=SimpleNamespace(delete_many=MagicMock(side_effect=delete_inside_lock)),
     )
     pipeline.dto = SimpleNamespace(
         lecture_unit=lecture_unit,
@@ -89,7 +106,6 @@ def test_transcription_embedding_does_not_hold_lock_while_updating_status():
     )
     pipeline.callback = SimpleNamespace(update=MagicMock(side_effect=update))
     pipeline.llm_embedding = SimpleNamespace(embed=MagicMock(return_value=[0.1]))
-    pipeline.delete_existing_transcription_data = MagicMock()
     chunk = {LectureTranscriptionSchema.SEGMENT_TEXT.value: "transcript"}
 
     with patch(
@@ -100,7 +116,14 @@ def test_transcription_embedding_does_not_hold_lock_while_updating_status():
         pipeline._replace_prepared_chunks(lecture_unit, prepared_chunks)
 
     pipeline.callback.update.assert_called_once()
-    batch.add_object.assert_called_once_with(properties=chunk, vector=[0.1])
+    # The purge deletes by unit identity inside the lock every run (no read); the
+    # status update happens outside the lock, and the write carries a client uuid.
+    pipeline.collection.query.fetch_objects.assert_not_called()
+    pipeline.collection.data.delete_many.assert_called_once()
+    add_call = batch.add_object.call_args
+    assert add_call.kwargs["properties"] == chunk
+    assert add_call.kwargs["vector"] == [0.1]
+    assert "uuid" in add_call.kwargs
 
 
 def test_transcription_ingestion_reraises_without_terminal_callback():
@@ -115,23 +138,20 @@ def test_transcription_ingestion_reraises_without_terminal_callback():
             lecture_name="Lecture",
             lecture_unit_name="Unit",
             transcription=SimpleNamespace(language="en"),
+            force_reingest=True,
         ),
         settings=SimpleNamespace(artemis_base_url="https://artemis.example"),
     )
     pipeline.tokens = []
-    pipeline.chunk_transcription = MagicMock(return_value=[{"text": "segment"}])
-    pipeline.summarize_chunks = MagicMock(return_value=[{"text": "segment"}])
-    pipeline._prepare_batch_insert = MagicMock(
-        return_value=[({"text": "segment"}, [0.1])]
-    )
-    pipeline.delete_existing_transcription_data = MagicMock(
-        side_effect=RuntimeError("delete failed")
+    pipeline.chunk_transcription = MagicMock(
+        side_effect=RuntimeError("chunking failed")
     )
     pipeline.collection = MagicMock()
 
-    with pytest.raises(RuntimeError, match="delete failed"):
+    with pytest.raises(IngestionStageError, match="chunking failed") as exc_info:
         pipeline()
 
+    assert exc_info.value.error_code == TRANSCRIPT_INGESTION_FAILED
     pipeline.callback.fail.assert_not_called()
 
 
@@ -145,6 +165,7 @@ def test_transcription_ingestion_clears_existing_rows_when_new_chunks_are_empty(
         lecture_name="Lecture",
         lecture_unit_name="Unit",
         transcription=SimpleNamespace(language="en"),
+        force_reingest=True,
     )
     pipeline.callback = MagicMock()
     pipeline.dto = SimpleNamespace(
@@ -155,14 +176,20 @@ def test_transcription_ingestion_clears_existing_rows_when_new_chunks_are_empty(
     pipeline.chunk_transcription = MagicMock(return_value=[])
     pipeline.summarize_chunks = MagicMock(return_value=[])
     pipeline._prepare_batch_insert = MagicMock(return_value=[])
-    pipeline.delete_existing_transcription_data = MagicMock()
-    pipeline._insert_prepared_chunks = MagicMock()
+    pipeline.collection = MagicMock()
+    pipeline.collection.data.delete_many.return_value = SimpleNamespace(
+        failed=0, matches=0, successful=0
+    )
 
     language, _tokens = pipeline()
 
     assert language == "en"
-    pipeline.delete_existing_transcription_data.assert_called_once_with(lecture_unit)
-    pipeline._insert_prepared_chunks.assert_called_once_with([])
+    # Nothing to write-then-sweep when the transcript is genuinely empty: the
+    # commit phase falls back to clearing whatever is stored instead of leaving
+    # a stale transcription behind forever (purge_other_rows refuses to purge
+    # with no ids to keep, precisely to avoid wiping the unit on an accidental
+    # empty write -- this is the deliberate, structurally-empty case instead).
+    pipeline.collection.data.delete_many.assert_called_once()
 
 
 def test_lecture_update_worker_reports_failure_without_lecture_unit_payload():
@@ -213,6 +240,12 @@ def test_terminal_callback_is_skipped_when_run_is_no_longer_current():
         pdf_file_base64=None,
         transcription=None,
         display_page_numbers=[],
+        attachment_version=1,
+        chunk_counts_by_page=None,
+        quality_flags=None,
+        content_fingerprint=None,
+        ingestion_run_id="run-x",
+        quality_score=None,
     )
     dto = SimpleNamespace(
         lecture_unit=lecture_unit,
@@ -241,7 +274,11 @@ def test_terminal_callback_is_skipped_when_run_is_no_longer_current():
             "iris.pipeline.lecture_ingestion_update_pipeline.ingestion_job_handler.current_job_guard",
             side_effect=cancelled_guard,
         ),
+        patch(
+            "iris.pipeline.lecture_ingestion_update_pipeline.IngestionAudit"
+        ) as audit_cls,
     ):
+        audit_cls.for_client.return_value.verify.return_value = None
         database_cls.return_value.get_client.return_value = MagicMock()
         lecture_unit_pipeline_cls.return_value.return_value = []
 
