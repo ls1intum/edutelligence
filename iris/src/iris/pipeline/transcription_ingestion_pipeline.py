@@ -1,4 +1,3 @@
-from collections import defaultdict
 from functools import reduce
 from threading import Event
 from typing import Any, Dict, List, Optional
@@ -260,51 +259,49 @@ class TranscriptionIngestionPipeline(SubPipeline):
         """Whether unstamped legacy rows were built from exactly the requested transcript.
 
         Without a fingerprint stamp, the only proof that stored rows match the
-        current video is their content. Per slide, the stored text pieces joined
-        in time order must equal the transcript's segment texts for that slide,
-        ignoring whitespace and the chunk separator: older versions joined short
-        slides into one row and split long ones at sentence ends, which changes
-        only whitespace. Every stored start and end time must also be a segment
-        start or end of the requested transcript. Older versions took the times of
-        a split piece from the segment at its character offset in the whole
-        transcript, which can be a segment of the neighbouring slide, so the times
-        are compared with all boundaries and not only with those of the slide. A
-        replaced video with the same words but shifted times (an added intro, a
-        re-cut) has none of its old times among the new boundaries, so it does not
-        match. Anything that does not match is rebuilt, which is always safe.
+        current video is their content. Older versions stored a slide's transcript
+        as one row when it had fewer than 1200 characters: the segment texts joined
+        in transcript order, from the start of the slide's first segment to the end
+        of its last one. Such a row is kept only when its text (ignoring whitespace
+        and the chunk separator) and both times equal what the requested transcript
+        gives for that slide, so a replaced video with the same words but other
+        times (an added intro, an inserted pause) is rebuilt. Longer slides were
+        split into pieces whose times came from an inexact character-offset lookup,
+        so their timestamps cannot be trusted and they are rebuilt as well.
+        Anything that does not match is rebuilt, which is always safe.
         """
-        expected_text: dict = defaultdict(str)
-        boundaries: set = set()
+        expected: dict = {}
         for segment in self.dto.lecture_unit.transcription.segments:
-            expected_text[segment.slide_number] += segment.text
-            boundaries.update(
-                (round(segment.start_time, 3), round(segment.end_time, 3))
-            )
+            entry = expected.get(segment.slide_number)
+            if entry is None:
+                expected[segment.slide_number] = [
+                    segment.text,
+                    segment.start_time,
+                    segment.end_time,
+                ]
+            else:
+                entry[0] += segment.text
+                entry[2] = segment.end_time
 
-        stored: dict = defaultdict(list)
+        seen_pages: set[int] = set()
         for row in rows:
             props = row.properties
+            page = int(props.get(LectureTranscriptionSchema.PAGE_NUMBER.value))
+            if page in seen_pages:
+                return False
+            seen_pages.add(page)
             start = props.get(LectureTranscriptionSchema.SEGMENT_START_TIME.value)
             end = props.get(LectureTranscriptionSchema.SEGMENT_END_TIME.value)
+            text, expected_start, expected_end = expected[page]
             if start is None or end is None:
                 return False
-            start, end = round(float(start), 3), round(float(end), 3)
-            if start not in boundaries or end not in boundaries:
+            if round(float(start), 3) != round(expected_start, 3) or round(
+                float(end), 3
+            ) != round(expected_end, 3):
                 return False
-            stored[int(props.get(LectureTranscriptionSchema.PAGE_NUMBER.value))].append(
-                (
-                    start,
-                    end,
-                    props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value) or "",
-                )
-            )
-
-        for slide_number, pieces in stored.items():
-            pieces.sort(key=lambda piece: (piece[0], piece[1]))
-            stored_text = "".join(text for _, _, text in pieces)
-            if self._comparable_text(stored_text) != self._comparable_text(
-                expected_text[slide_number]
-            ):
+            if self._comparable_text(
+                props.get(LectureTranscriptionSchema.SEGMENT_TEXT.value) or ""
+            ) != self._comparable_text(text):
                 return False
         return True
 
