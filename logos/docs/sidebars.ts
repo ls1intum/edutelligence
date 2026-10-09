@@ -5,6 +5,7 @@ const sidebars: SidebarsConfig = {
     { type: "doc", id: "user/getting-started", label: "Getting Started" },
     { type: "doc", id: "user/api-usage", label: "Using the API" },
     { type: "doc", id: "batch-processing", label: "Batch Processing" },
+    { type: "doc", id: "decision-models", label: "Decision Models" },
     { type: "doc", id: "passkey-login", label: "Passkey Login" },
   ],
   adminSidebar: [

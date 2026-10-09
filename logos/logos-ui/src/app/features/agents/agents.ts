@@ -29,6 +29,45 @@ import { SelectComponent, AppSelectOption } from '../../shared/components/select
 /** How often the list and the open session are refreshed while work is live. */
 const POLL_MS = 4000;
 
+/** Cap on rendered slot cells so a misreported ceiling cannot flood the page. */
+const SLOT_CELL_LIMIT = 64;
+
+/**
+ * Scale category counts into `limit` cells, preserving composition.
+ * Every non-zero category keeps at least one cell; remainders go to the
+ * categories with the largest fractional parts (largest-remainder method).
+ */
+export function scaleSlotCounts(parts: number[], limit: number): number[] {
+  const safe = parts.map((n) => Math.max(0, Math.floor(n)));
+  const sum = safe.reduce((a, b) => a + b, 0);
+  if (sum <= limit) return safe;
+  const base = safe.map((n) => (n > 0 ? 1 : 0));
+  const reserved = base.reduce<number>((a, b) => a + b, 0);
+  if (reserved >= limit) {
+    let left = limit;
+    return base.map((n) => {
+      const take = Math.min(n, left);
+      left -= take;
+      return take;
+    });
+  }
+  const remaining = limit - reserved;
+  const excess = safe.map((n, i) => n - base[i]);
+  const excessSum = excess.reduce((a, b) => a + b, 0);
+  if (excessSum <= 0) return base;
+  const raw = excess.map((e) => (e * remaining) / excessSum);
+  const floors = raw.map((r) => Math.floor(r));
+  let used = floors.reduce((a, b) => a + b, 0);
+  const order = raw
+    .map((r, i) => ({ i, frac: r - Math.floor(r) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (let k = 0; used < remaining && k < order.length; k++) {
+    floors[order[k].i]++;
+    used++;
+  }
+  return base.map((n, i) => n + floors[i]);
+}
+
 @Component({
   selector: 'app-agents',
   standalone: true,
@@ -151,6 +190,45 @@ export class Agents implements OnInit {
   finishedSessions = computed(() => this.sessions().filter((s) => !isActive(s.status)));
 
   loadPercent = computed(() => Math.round((this.capacity()?.load ?? 0) * 100));
+
+  /** Free slots on the local model after agent and other traffic. */
+  freeSlots = computed(() => {
+    const cap = this.capacity();
+    if (!cap) return 0;
+    return Math.max(0, cap.total_slots - cap.own_slots - cap.other_slots);
+  });
+
+  /**
+   * One cell per serving slot on the local model, coloured by who holds it.
+   * Caps the rendered count so a misreported ceiling cannot flood the page;
+   * above the cap the three categories scale proportionally so later ones
+   * are not truncated away.
+   */
+  slotCells = computed((): Array<'agent' | 'other' | 'free'> => {
+    const cap = this.capacity();
+    if (!cap || cap.total_slots <= 0) return [];
+    const own = Math.max(0, cap.own_slots);
+    const other = Math.max(0, cap.other_slots);
+    const free = Math.max(0, cap.total_slots - own - other);
+    const [agentCells, otherCells, freeCells] = scaleSlotCounts(
+      [own, other, free],
+      SLOT_CELL_LIMIT,
+    );
+    return [
+      ...Array<'agent'>(agentCells).fill('agent'),
+      ...Array<'other'>(otherCells).fill('other'),
+      ...Array<'free'>(freeCells).fill('free'),
+    ];
+  });
+
+  slotAriaLabel = computed(() => {
+    const cap = this.capacity();
+    if (!cap) return 'Platform load unknown';
+    return (
+      `Local model slots: ${cap.own_slots} agent, ${cap.other_slots} other, ` +
+      `${this.freeSlots()} free of ${cap.total_slots}; load ${this.loadPercent()} percent`
+    );
+  });
 
   /**
    * The session occupying each workspace, by workspace id.
