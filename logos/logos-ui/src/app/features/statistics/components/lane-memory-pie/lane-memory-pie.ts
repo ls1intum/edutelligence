@@ -109,7 +109,7 @@ export class LaneMemoryPieComponent {
     if (otherUsedMb > 0) {
       result.push({
         value: Number((otherUsedMb / 1024).toFixed(3)),
-        color: seriesColor(3), // orange, unused by lane state colors
+        color: seriesColor(3), // ochre, unused by lane state colors
         text: 'Other used',
       });
     }
