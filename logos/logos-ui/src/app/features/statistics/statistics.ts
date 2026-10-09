@@ -319,12 +319,11 @@ export class Statistics implements OnInit, OnDestroy {
   }
 
   // ── Request feed filters ────────────────────────────────────────────────────
-  // One lifecycle bucket and a model set the recent-requests list is narrowed
-  // to; empty shows everything. Deliberately not part of the page scope: they
-  // only make sense for the list of individual requests, not for the KPI cards
-  // and charts above it, which must keep summarising the whole team/user
-  // selection. The selectors still sit in the page-top row with the scope —
-  // every selector on the page lives there, none inside a panel.
+  // One lifecycle bucket and a model set; empty shows everything. The model
+  // selection narrows the whole page — request list, KPI cards and charts —
+  // like the team, requester and provider filters do. The lifecycle bucket
+  // only makes sense for the list of individual requests, so it narrows that
+  // list alone while the cards and charts keep summarising the full scope.
   readonly feedStatus = signal<string | null>(null);
   readonly feedModelIds = signal<string[]>([]);
   readonly feedFilterActive = computed(() =>
@@ -335,6 +334,9 @@ export class Statistics implements OnInit, OnDestroy {
   })));
 
   setFeedModelFilter(values: string[]): void {
+    // A model selection narrows the whole page, so every range-scoped panel is
+    // blanked until the server answers — the same treatment a scope change gets.
+    this.markRangeChanged();
     this.feedModelIds.set(values);
     this.applyFeedFilters();
   }
@@ -1027,6 +1029,8 @@ export class Statistics implements OnInit, OnDestroy {
       void this.loadScopeOptions();
     }
     if (feedActive) {
+      // Models are part of the page scope: clearing them re-answers the panels.
+      if (this.feedModelIds().length > 0) this.markRangeChanged();
       this.feedStatus.set(null);
       this.feedModelIds.set([]);
       this.applyFeedFilters();
@@ -1089,6 +1093,7 @@ export class Statistics implements OnInit, OnDestroy {
       const modelIds = new Set(this.feedModels().map((m) => String(m.id)));
       const keptModels = this.feedModelIds().filter((id) => modelIds.has(id));
       if (keptModels.length !== this.feedModelIds().length) {
+        this.markRangeChanged();
         this.feedModelIds.set(keptModels);
         this.applyFeedFilters();
       }

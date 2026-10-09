@@ -311,6 +311,12 @@ describe('recent request model and state filters', () => {
     page.component.liveFeedTotal.set(12);
     page.component.setFeedModelFilter(['5001', '5002']);
     expect(page.component.requestFeedTotal()).toBeNull();
+    // A model selection narrows the whole page: the cards and charts are
+    // blanked until the server answers for it.
+    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith(null, [5001, 5002], []);
+    expect(page.component.statsPending()).toBe(true);
+    page.component.statsPending.set(false);
+    // The state bucket narrows the request list alone.
     page.component.setFeedStatusFilter('running');
     expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith('running', [5001, 5002], []);
     expect(page.ws.setScope).not.toHaveBeenCalled();
