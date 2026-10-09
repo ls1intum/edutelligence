@@ -52,14 +52,34 @@ def test_system_blocks_become_a_leading_system_message():
     assert result["max_completion_tokens"] == 64
 
 
-@pytest.mark.parametrize("model", ["gpt-4.1-nano", "gpt-5.6-luna", "an-unreleased-family", None])
-def test_output_cap_is_max_completion_tokens_whatever_the_model(model):
-    # The reasoning families reject the deprecated max_tokens with a 400, and a
-    # new family cannot be recognised by its name; max_completion_tokens is
-    # accepted by every model on chat/completions.
-    result = to_chat_completions({"model": model, "max_tokens": 64, "messages": []})
-    assert result["max_completion_tokens"] == 64
-    assert "max_tokens" not in result
+@pytest.mark.parametrize(
+    "endpoint_url,cap",
+    [
+        # The upstream URL decides the cap name, not the model: chat/completions
+        # wants max_completion_tokens, the legacy text completions endpoint and
+        # Azure api-versions before 2024-09-01 (GPT-4 Turbo's 2024-02-01) still
+        # want max_tokens.
+        (
+            "https://ase.openai.azure.com/openai/deployments/gpt-6-luna/chat/completions"
+            "?api-version=2025-01-01-preview",
+            "max_completion_tokens",
+        ),
+        (
+            "https://ase.openai.azure.com/openai/deployments/turbo/chat/completions" "?api-version=2024-02-01",
+            "max_tokens",
+        ),
+        ("https://api.openai.com/v1/chat/completions", "max_completion_tokens"),
+        ("https://api.openai.com/v1/completions", "max_tokens"),
+    ],
+)
+def test_output_cap_follows_endpoint_url(endpoint_url, cap):
+    result = to_chat_completions(
+        {"model": "gpt-6-luna", "max_tokens": 64, "messages": []},
+        endpoint_url=endpoint_url,
+    )
+    assert result[cap] == 64
+    other = "max_tokens" if cap == "max_completion_tokens" else "max_completion_tokens"
+    assert other not in result
 
 
 def test_top_k_and_metadata_are_dropped():
