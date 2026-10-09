@@ -10,7 +10,7 @@
          Standing keys keep parent_api_key_id NULL. A minted session key
          stores the parent it clones; the runner revokes it when the session
          ends (and a janitor revokes orphans after a crash). -->
-    <changeSet id="061-api-key-session-parent" author="logos">
+    <changeSet id="062-api-key-session-parent" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="api_keys" columnName="parent_api_key_id"/></not>
         </preConditions>
@@ -30,7 +30,7 @@
         </rollback>
     </changeSet>
 
-    <changeSet id="061-agent-session-api-key" author="logos">
+    <changeSet id="062-agent-session-api-key" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="agent_sessions" columnName="session_api_key_id"/></not>
         </preConditions>
