@@ -60,8 +60,10 @@ deployments is resident: there is nothing of ours to measure then, and the
 older signal is the better of the two answers available. A key that reaches
 *nothing* is a different question and is refused outright, so a paused
 session is never resumed into a permission it no longer has. The **queue** is
-deliberately not filtered — models share GPUs, so a person waiting on any of
-them is a person this runner gets out of the way of.
+filtered the same way: a backlog on another local model, or on a cloud
+provider, is not a person waiting for the lane this runner uses. The Agents
+page shows how many of that model's dynamic slots this runner holds versus
+other production traffic.
 
 **Minus its own share, where that is the right question.** The orchestrator
 reports how busy a model is, and *who* is keeping it busy: how many of the
@@ -113,8 +115,14 @@ a session resumed at exactly the load that paused it pauses again next tick.
 
 A **workspace** is one working copy on one Docker volume. **One session runs in
 a workspace at a time** — two would write over each other. Parallelism comes
-from having several workspaces; the ceiling across all of them is
-`MAX_PARALLEL_SESSIONS`.
+from having several workspaces; the *execution* ceiling across running and
+paused sessions is `MAX_PARALLEL_SESSIONS`. The trigger poller may hold more
+workspaces than that so assigned work can wait its turn (queued or paused)
+without losing comments to the lookback window — capped at
+`MAX_QUEUE_WORKSPACES` (default: five times the parallel ceiling). Free
+workspaces are reused or re-pointed before any queue-only workspace is
+created; a queued session still waits for a real execution slot before it
+starts.
 
 Workspaces the runner creates for triggered work are named after it —
 `issue-812-oom-on-startup`, `pr-772-add-an-agent-runner` — which is also what
@@ -201,8 +209,8 @@ survive a restart, and both are visible to whoever finds the runner stopped.
 
 | Control | What it does |
 |---|---|
-| **Stop new sessions** (draining) | Nothing new starts. What is running finishes, and a paused session may still resume. |
-| **Pause everything** | Running sessions are paused on the next pass and the capacity goes back to the platform. Nothing is cancelled: resuming picks the work up mid-task. |
+| **Stop new sessions** (draining) | Nothing new starts. What is running finishes, and a paused session may still resume. Assigned work still queues. |
+| **Pause everything** | Running sessions are paused on the next pass and the capacity goes back to the platform. Nothing is cancelled: resuming picks the work up mid-task. Assigned work and analysis still queue so nothing is lost while the runner is stopped. |
 | **Sessions at once** | A ceiling for now, overriding the configured one. Zero drains without pausing. |
 
 ## What the agent is told, and changing it
@@ -264,7 +272,8 @@ has a default that is right for this deployment.
 | `LOGOS_AGENT_DEFAULT_MODEL` | — | Model when a session does not name one. Optional: with exactly one local model reachable, that one is the default |
 | `LOGOS_AGENT_TRIGGERS_ENABLED` | `true` | Kill switch for reacting to the repository |
 | `LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC` | `0` | UTC hour of the nightly re-analysis of linked team repositories whose branch head moved; `-1` turns it off |
-| `LOGOS_AGENT_MAX_PARALLEL_SESSIONS` | `10` | Hard ceiling on concurrent sessions |
+| `LOGOS_AGENT_MAX_PARALLEL_SESSIONS` | `10` | Hard ceiling on concurrent (running + paused) sessions |
+| `LOGOS_AGENT_MAX_QUEUE_WORKSPACES` | `0` (= 5× parallel) | Cap on live workspaces holding waiting triggered work |
 | `LOGOS_AGENT_START_BELOW_LOAD` | `0.60` | Start only below this load |
 | `LOGOS_AGENT_PAUSE_ABOVE_LOAD` | `0.85` | Pause at or above this load |
 | `LOGOS_AGENT_SESSION_MEMORY_MB` | `4096` | Per-session memory ceiling |
@@ -421,8 +430,9 @@ anyway: GitHub only assigns collaborators.
 Only a **changes-requested** review is work — an approval or a plain comment
 is not, and an approval submitted after a change request withdraws it.
 Comments are read from where the last complete pass stopped — a mark kept in
-the database, so a question asked while the runner was paused is still found
-when it comes back. Assignments and reviews are read from the repository's
+the database. A pause still queues what it finds, so a question asked while
+the runner is stopped becomes a waiting session rather than sitting only in
+the lookback window. Assignments and reviews are read from the repository's
 current state and need no window; comments are a stream, so a fresh
 deployment starts with the last 24 hours and no pass ever reaches back
 further than a week.
