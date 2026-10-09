@@ -397,7 +397,12 @@ class ContextResolver:
         # injection, effort normalization) act on the body that is actually
         # sent.
         if context.anthropic_dialect is not None:
-            payload = translate_request(payload, context.anthropic_dialect, model_name=context.model_name)
+            payload = translate_request(
+                payload,
+                context.anthropic_dialect,
+                model_name=context.model_name,
+                endpoint_url=context.forward_url,
+            )
         # ... and a chat/completions request bound for a Messages-only upstream
         # becomes a Messages call, for the same reason and at the same point.
         elif context.messages_upstream:
