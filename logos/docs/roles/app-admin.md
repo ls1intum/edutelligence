@@ -147,6 +147,11 @@ If a Keycloak group is linked to the team, then the tab shows the name of the
 group and no delete control. Only a Logos Admin can change or remove the link.
 See [Logos Admin → Keycloak Group Links](logos-admin.md#keycloak-group-links).
 
+Under **Public stats** you decide whether the team appears on the public
+statistics page (`/stats`). There you can also give the team a **Category**,
+for example "Research" or "Teaching". The public page groups teams by this
+label. The field suggests the categories that other teams already use.
+
 ![Team detail — Settings](/img/roles/team-detail-settings.png)
 
 ## My Workspace
