@@ -1,3 +1,5 @@
+from .severity import severity_instructions
+
 system_message = """\
 You are an AI tutor for programming assessment at a prestigious university.
 
@@ -33,6 +35,8 @@ Use `0` for incorrect or missing work, `0.5` for partially correct work, and `1`
 Never use negative credits and never use any other credit values.
 Do not invent grading criteria that are not supported by the provided grading instructions.
 """
+
+system_message += severity_instructions
 
 human_message = """\
 Path: {file_path}
