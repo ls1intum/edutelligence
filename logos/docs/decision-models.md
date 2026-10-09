@@ -70,9 +70,11 @@ The response has this form. The values are examples.
 }
 ```
 
-`state`, `instructions`, and criteria descriptions accept a string, an object,
-an array, or `null`. Logos renders non-string values as JSON text. Numbers and
-booleans are rejected. Score criteria also reject `null`.
+`instructions` and criteria descriptions accept a string, an object, an array,
+or `null`. Logos renders non-string values as JSON text. Numbers and booleans
+are rejected for these fields. Score criteria also reject `null`.
+
+`state` accepts any JSON value. Logos renders non-string values as JSON text.
 
 ## Question types
 
