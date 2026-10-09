@@ -15,6 +15,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langdetect import DetectorFactory, detect
+from langdetect.detector_factory import init_factory
 from langdetect.lang_detect_exception import LangDetectException
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
@@ -76,6 +77,12 @@ logger = get_logger(__name__)
 # the same deck always resolves to the same language across runs. This is a
 # correctness property, not a deployment tunable, so it is not configurable.
 DetectorFactory.seed = 0
+# Load the language profiles now, while the module import holds the import lock.
+# langdetect loads them lazily on the first detect() call, and that loading is not
+# thread-safe: parallel ingestion runs right after a start would see a partly loaded
+# profile set and detect English slides as Catalan, Danish or French (or fail and
+# fall back to the default), which stamps a wrong language on the chunks.
+init_factory()
 
 
 def detect_course_language(page_texts: list[str]) -> str:
