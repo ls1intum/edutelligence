@@ -35,6 +35,31 @@ describe('searchable single-select', () => {
     return { fixture, trigger, overlay };
   }
 
+  it('names the trigger with the filter label and selected summary', async () => {
+    const { fixture, trigger } = await render();
+    expect(trigger.getAttribute('aria-label')).toBe('Filter by team: All teams');
+    expect(trigger.getAttribute('aria-haspopup')).toBe('dialog');
+    fixture.componentInstance.value.set('2');
+    fixture.detectChanges();
+    expect(trigger.getAttribute('aria-label')).toBe('Filter by team: beta-team');
+    fixture.destroy();
+  });
+
+  it('opens a labelled dialog of native option buttons', async () => {
+    const { fixture, overlay } = await render();
+    const dialog = overlay.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute('aria-label')).toBe('Teams filter');
+    expect(overlay.querySelector('[role="listbox"]')).toBeNull();
+    const options = Array.from(
+      overlay.querySelectorAll<HTMLButtonElement>('.searchable-select-option'),
+    );
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.every((button) => button.getAttribute('role') === null)).toBe(true);
+    expect(options[0].getAttribute('aria-current')).toBe('true');
+    fixture.destroy();
+  });
+
   it('searches long labels and picks one option', async () => {
     const { fixture, overlay, trigger } = await render();
     const search = overlay.querySelector<HTMLInputElement>('input[type="search"]')!;
@@ -50,7 +75,7 @@ describe('searchable single-select', () => {
     fixture.detectChanges();
     expect(fixture.componentInstance.value()).toBe('2');
     expect(trigger.textContent).toContain('beta-team');
-    expect(overlay.querySelector('[role="listbox"]')).toBeNull();
+    expect(overlay.querySelector('[role="dialog"]')).toBeNull();
     fixture.destroy();
   });
 
@@ -76,7 +101,7 @@ describe('searchable single-select', () => {
     fixture.detectChanges();
     expect(document.activeElement).toBe(trigger);
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
-    expect(overlay.querySelector('[role="listbox"]')).toBeNull();
+    expect(overlay.querySelector('[role="dialog"]')).toBeNull();
     fixture.destroy();
   });
 

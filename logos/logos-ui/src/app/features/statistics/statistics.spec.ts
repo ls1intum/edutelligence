@@ -426,7 +426,9 @@ describe('selector placement on the requests tab', () => {
     // feed state selector remains for lifecycle buckets ...
     expect(scope.querySelectorAll('app-searchable-select')).toHaveLength(3);
     expect(scope.querySelector('[aria-label="Filter by outcome"]')).toBeNull();
-    expect(el.querySelectorAll('[aria-label="Filter by provider"]')).toHaveLength(1);
+    expect(
+      el.querySelectorAll('[aria-label^="Filter by provider"]'),
+    ).toHaveLength(1);
     // ... and the recent-requests panel carries no selectors of its own.
     const feedPanel = Array.from(el.querySelectorAll('app-stats-chart-panel')).find(
       (p) => p.textContent?.includes('Recent requests'),

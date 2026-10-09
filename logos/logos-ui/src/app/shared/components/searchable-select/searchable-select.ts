@@ -27,6 +27,10 @@ export class SearchableSelectComponent {
     const value = this.value();
     return this.options().find((option) => option.value === value)?.label ?? this.emptyLabel();
   });
+  readonly triggerAriaLabel = computed(() => {
+    const base = this.ariaLabel() ?? `Filter by ${this.label().toLowerCase()}`;
+    return `${base}: ${this.summary()}`;
+  });
 
   private emptyLabel(): string {
     return this.options().find((option) => option.value === '')?.label ?? `All ${this.label().toLocaleLowerCase()}`;

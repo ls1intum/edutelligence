@@ -3,9 +3,9 @@
   class="searchable-select-trigger"
   cdkOverlayOrigin
   #origin="cdkOverlayOrigin"
-  [attr.aria-label]="ariaLabel() ?? ('Filter by ' + label().toLowerCase())"
+  [attr.aria-label]="triggerAriaLabel()"
   [attr.aria-expanded]="opened()"
-  aria-haspopup="listbox"
+  aria-haspopup="dialog"
   [disabled]="disabled()"
   [title]="summary()"
   (click)="toggle()"
@@ -26,7 +26,7 @@
 >
   <div
     class="searchable-select-menu"
-    role="listbox"
+    role="dialog"
     cdkTrapFocus
     [cdkTrapFocusAutoCapture]="true"
     [attr.aria-label]="label() + ' filter'"
@@ -44,8 +44,7 @@
         <button
           type="button"
           class="searchable-select-option"
-          role="option"
-          [attr.aria-selected]="option.value === value()"
+          [attr.aria-current]="option.value === value() ? 'true' : null"
           [class.searchable-select-option--selected]="option.value === value()"
           [disabled]="option.disabled ?? false"
           [title]="option.label"
