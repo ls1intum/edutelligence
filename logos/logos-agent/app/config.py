@@ -141,16 +141,9 @@ class Settings:
     agent_api_key: str = os.getenv("LOGOS_AGENT_API_KEY", "")
     # Webservice base URL for internal session-key mint/revoke.
     webservice_url: str = os.getenv("LOGOS_WEBSERVICE_URL", "http://logos-webservice:8081")
-    # Mint a short-lived Logos API key per session (issue #1205). Off by
-    # default so a deployment keeps today's standing-key gateway injection
-    # until operators turn the feature on.
+    # Mint one Logos API key per session. Off by default so a deployment keeps
+    # today's standing-key gateway injection until operators turn the feature on.
     session_api_key_mint: bool = _bool("LOGOS_AGENT_SESSION_API_KEY_MINT", False)
-    # Extra lifetime beyond the session wall-clock budget (or the cap when
-    # there is no session timeout).
-    session_api_key_ttl_margin_s: int = _int("LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S", 300)
-    # Hard ceiling on a minted session key's TTL (also the budget used when
-    # session_timeout_s is 0). Sessions that outlive this are not refreshed.
-    session_api_key_ttl_cap_s: int = _int("LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S", 86400)
     # When minting fails, fall back to gateway injection of the standing key.
     # Off by default: a mint failure refuses to start the session.
     session_api_key_fallback: bool = _bool("LOGOS_AGENT_SESSION_API_KEY_FALLBACK", False)

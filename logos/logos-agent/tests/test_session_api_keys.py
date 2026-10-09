@@ -1,4 +1,4 @@
-"""Short-lived Logos session keys for the agent runner."""
+"""Logos session keys for the agent runner."""
 
 from __future__ import annotations
 
@@ -7,34 +7,6 @@ from dataclasses import replace
 import httpx
 import pytest
 from app import capacity, session_api_keys, sessions
-
-
-def test_session_key_ttl_uses_timeout_plus_margin_and_cap(monkeypatch):
-    monkeypatch.setattr(
-        session_api_keys,
-        "settings",
-        replace(
-            session_api_keys.settings,
-            session_timeout_s=600,
-            session_api_key_ttl_margin_s=300,
-            session_api_key_ttl_cap_s=86400,
-        ),
-    )
-    assert session_api_keys.session_key_ttl_s() == 900
-
-
-def test_session_key_ttl_uses_cap_when_no_session_timeout(monkeypatch):
-    monkeypatch.setattr(
-        session_api_keys,
-        "settings",
-        replace(
-            session_api_keys.settings,
-            session_timeout_s=0,
-            session_api_key_ttl_margin_s=300,
-            session_api_key_ttl_cap_s=3600,
-        ),
-    )
-    assert session_api_keys.session_key_ttl_s() == 3600
 
 
 @pytest.mark.asyncio
@@ -60,7 +32,6 @@ async def test_mint_posts_to_webservice_without_logging_key(monkeypatch, caplog)
                 json={
                     "id": 42,
                     "key_value": "lg-session-secret",
-                    "expires_at": "2099-01-01T00:00:00Z",
                     "parent_api_key_id": 7,
                 },
             )
@@ -74,9 +45,6 @@ async def test_mint_posts_to_webservice_without_logging_key(monkeypatch, caplog)
             webservice_url="http://webservice:8081",
             internal_secret="secret",
             agent_api_key="lg-parent",
-            session_timeout_s=100,
-            session_api_key_ttl_margin_s=10,
-            session_api_key_ttl_cap_s=86400,
         ),
     )
 
@@ -85,8 +53,10 @@ async def test_mint_posts_to_webservice_without_logging_key(monkeypatch, caplog)
 
     assert minted.id == 42
     assert minted.key_value == "lg-session-secret"
+    assert minted.parent_api_key_id == 7
     assert captured["url"].endswith("/internal/session_api_keys")
     assert captured["json"]["parent_key_value"] == "lg-parent"
+    assert "ttl_seconds" not in captured["json"]
     assert "lg-session-secret" not in caplog.text
 
 
@@ -186,3 +156,127 @@ async def test_mint_failure_with_fallback_returns_none(monkeypatch):
 
     monkeypatch.setattr(sessions.session_api_keys, "mint", boom)
     assert await manager._mint_session_logos_key(12) is None
+
+
+@pytest.mark.asyncio
+async def test_janitor_revokes_orphaned_minted_keys(monkeypatch):
+    manager = sessions.SessionManager()
+    manager._minted_api_key_ids.add(99)
+    monkeypatch.setattr(
+        sessions,
+        "settings",
+        replace(sessions.settings, session_api_key_mint=True),
+    )
+
+    async def orphans():
+        return [99, 100]
+
+    revoked: list[int] = []
+
+    async def capture_revoke(key_id: int) -> None:
+        revoked.append(key_id)
+
+    monkeypatch.setattr(sessions.db, "orphaned_session_api_key_ids", orphans)
+    monkeypatch.setattr(sessions.session_api_keys, "revoke", capture_revoke)
+
+    await manager._janitor_session_api_keys()
+
+    assert revoked == [99, 100]
+    assert 99 not in manager._minted_api_key_ids
+
+
+@pytest.mark.asyncio
+async def test_janitor_skips_when_minting_disabled(monkeypatch):
+    manager = sessions.SessionManager()
+    monkeypatch.setattr(
+        sessions,
+        "settings",
+        replace(sessions.settings, session_api_key_mint=False),
+    )
+    called = False
+
+    async def orphans():
+        nonlocal called
+        called = True
+        return [1]
+
+    monkeypatch.setattr(sessions.db, "orphaned_session_api_key_ids", orphans)
+    await manager._janitor_session_api_keys()
+    assert not called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_path",
+    ["settle_success", "settle_failure", "cancel", "settle_race_loss"],
+)
+async def test_terminal_paths_revoke_session_key(monkeypatch, terminal_path):
+    manager = sessions.SessionManager()
+    manager._session_logos_keys[7] = "lg-session"
+    manager._minted_api_key_ids.add(42)
+    revoked: list[tuple[int, int | None]] = []
+
+    async def capture_revoke(session_id: int, key_id: int | None = None) -> None:
+        revoked.append((session_id, key_id if key_id is None else int(key_id)))
+        manager._session_logos_keys.pop(session_id, None)
+        if key_id is not None:
+            manager._minted_api_key_ids.discard(int(key_id))
+
+    monkeypatch.setattr(manager, "_revoke_session_logos_key", capture_revoke)
+
+    if terminal_path == "cancel":
+        session = {"id": 7, "status": "running", "session_api_key_id": 42, "container_id": None}
+
+        async def get_session(sid):
+            return session if sid == 7 else None
+
+        async def transition_session(sid, status, **fields):
+            return True
+
+        async def add_event(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
+        monkeypatch.setattr(sessions.db, "transition_session", transition_session)
+        monkeypatch.setattr(sessions.db, "add_event", add_event)
+        assert await manager.cancel(7) is True
+        assert revoked == [(7, 42)]
+        return
+
+    session = {"id": 7, "status": "running", "session_api_key_id": 42}
+
+    async def get_session(sid):
+        return dict(session)
+
+    async def transition_session(sid, status, **fields):
+        if terminal_path == "settle_race_loss":
+            return False
+        session["status"] = status.value
+        return True
+
+    async def add_event(*args, **kwargs):
+        return None
+
+    async def cleanup(sid):
+        return None
+
+    monkeypatch.setattr(sessions.db, "get_session", get_session)
+    monkeypatch.setattr(sessions.db, "transition_session", transition_session)
+    monkeypatch.setattr(sessions.db, "add_event", add_event)
+    monkeypatch.setattr(manager, "_cleanup_container", cleanup)
+    monkeypatch.setattr(manager, "_read_result", lambda sid: {})
+    monkeypatch.setattr(manager, "_finalize", lambda sid: _true())
+
+    if terminal_path == "settle_success":
+        await manager._settle(7, exit_code=0, error=None)
+    elif terminal_path == "settle_failure":
+        await manager._settle(7, exit_code=1, error="boom")
+    else:
+        # Non-zero exit skips finalization and races on the terminal transition.
+        await manager._settle(7, exit_code=1, error="race")
+
+    assert revoked == [(7, 42)]
+
+
+async def _true():
+    return True

@@ -157,7 +157,7 @@ def _epoch(stamp: object) -> float | None:
 # id, which installation it serves, and the key material it was minted
 # with — is part of the key: a caller that swaps credentials must not
 # inherit somebody else's token.
-_cache: dict[tuple[str, str, bytes], tuple[str, float]] = {}
+_cache: dict[tuple[str, str, str, bytes], tuple[str, float]] = {}
 # A lock per event loop: asyncio primitives remember the loop that first
 # used them, and a test suite starts a fresh loop per test.
 _lock: tuple[asyncio.AbstractEventLoop, asyncio.Lock] | None = None

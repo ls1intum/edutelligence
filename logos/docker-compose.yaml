@@ -561,13 +561,11 @@ services:
       LOGOS_AGENT_REQUIRED_ROLE: "${LOGOS_AGENT_REQUIRED_ROLE:-logos_admin}"
 
       # The standing Logos key for the runner. When session-key minting is on,
-      # each session gets a short-lived clone; this key stays on the runner
-      # and is what the gateway injects only for the placeholder path.
+      # each session gets its own clone for the session lifetime; this key stays
+      # on the runner and is what the gateway injects only for the placeholder path.
       LOGOS_AGENT_API_KEY: "${LOGOS_AGENT_API_KEY:-}"
       LOGOS_AGENT_SESSION_API_KEY_MINT: "${LOGOS_AGENT_SESSION_API_KEY_MINT:-false}"
       LOGOS_AGENT_SESSION_API_KEY_FALLBACK: "${LOGOS_AGENT_SESSION_API_KEY_FALLBACK:-false}"
-      LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S: "${LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S:-300}"
-      LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S: "${LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S:-86400}"
       LOGOS_AGENT_DEFAULT_MODEL: "${LOGOS_AGENT_DEFAULT_MODEL:-}"
 
       # Sessions run in this image, on this network, under these ceilings.

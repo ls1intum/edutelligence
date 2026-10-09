@@ -215,7 +215,12 @@ async def test_a_token_with_little_life_left_is_reminted(monkeypatch, rsa_key):
     # Seed a cached token that has already fallen below the refresh margin —
     # a freshly minted answer that short is refused, so the remint path is
     # exercised from the cache boundary.
-    identity = (_APP_ID, _REPO, hashlib.sha256(pem.encode("utf-8")).digest())
+    identity = (
+        _APP_ID,
+        _REPO,
+        _REPO.strip().lower(),
+        hashlib.sha256(pem.encode("utf-8")).digest(),
+    )
     github_tokens._cache[identity] = ("ghs-first", time.time() + 60)
     calls = fake_github(
         monkeypatch,

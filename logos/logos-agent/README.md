@@ -259,12 +259,10 @@ a default that is right for this deployment.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LOGOS_AGENT_API_KEY` | — | Standing Logos key for the runner. **Required.** Sessions use a short-lived clone when minting is on. |
+| `LOGOS_AGENT_API_KEY` | — | Standing Logos key for the runner. **Required.** Sessions use one clone per session when minting is on. |
 | `LOGOS_WEBSERVICE_URL` | `http://logos-webservice:8081` | Where the runner mints and revokes session API keys |
-| `LOGOS_AGENT_SESSION_API_KEY_MINT` | `false` | Mint a short-lived Logos key per session instead of gateway-injecting the standing key |
+| `LOGOS_AGENT_SESSION_API_KEY_MINT` | `false` | Mint one Logos key per session instead of gateway-injecting the standing key |
 | `LOGOS_AGENT_SESSION_API_KEY_FALLBACK` | `false` | If minting fails, keep gateway injection of the standing key; otherwise the session does not start |
-| `LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S` | `300` | Extra lifetime beyond the session timeout (or the cap) |
-| `LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S` | `86400` | Hard ceiling on a minted session key's TTL; also the budget when there is no session timeout |
 | `LOGOS_AGENT_GITHUB_TOKEN` | — | The agent account's token. **Required** unless the GitHub App fields are set (then ignored) |
 | `LOGOS_AGENT_GITHUB_LOGIN` | `LogosOSSAgent` | The account every credential must belong to; with a GitHub App, that app's bot user |
 | `LOGOS_AGENT_GITHUB_APP_ID` | — | The app's id. With the key below, replaces the personal tokens — the service mints short-lived installation tokens on demand |
@@ -366,20 +364,19 @@ The boundary is the platform's own key scoping: a Logos key reaches exactly
 the deployments its permissions grant. **Give the standing agent key local
 providers only.**
 
-### Short-lived Logos session keys
+### Logos session keys
 
 By default the gateway still injects `LOGOS_AGENT_API_KEY` when a session
 sends the placeholder credential. Set `LOGOS_AGENT_SESSION_API_KEY_MINT=true`
-to mint a short-lived clone of that key for each session instead:
+to mint one clone of that key for each session instead:
 
-- TTL is the session wall-clock budget (`LOGOS_AGENT_SESSION_TIMEOUT_S`) plus
-  `LOGOS_AGENT_SESSION_API_KEY_TTL_MARGIN_S`, capped by
-  `LOGOS_AGENT_SESSION_API_KEY_TTL_CAP_S` (default 24 h). When there is no
-  session timeout, the cap is the lifetime. Sessions that outlive the key are
-  not refreshed in this version — raise the cap or set a timeout.
+- One key per session. The key lives as long as the agent session. The runner
+  revokes it when the session ends — success, failure, cancel, or timeout.
+- A janitor runs on startup and on each scheduler pass. It revokes orphan
+  minted keys whose session is no longer running (terminal state or missing
+  row). It never touches standing keys.
 - The minted key inherits the standing key's team, settings, priority and
-  permissions. It cannot mint further keys. The runner revokes it when the
-  session ends, cancels, or crashes.
+  permissions. It cannot mint further keys.
 - Mint failures refuse to start the session unless
   `LOGOS_AGENT_SESSION_API_KEY_FALLBACK=true`, which keeps gateway injection
   of the standing key.

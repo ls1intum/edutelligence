@@ -417,6 +417,7 @@ class SessionManager:
         await docker_engine.ensure_network(settings.session_egress_network)
         await docker_engine.ensure_volume(settings.artifact_volume, labels={"logos.agent": "artifacts"})
         await self._reconcile()
+        await self._janitor_session_api_keys()
         await self.resume_check_watches()
         await self.resume_retries()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop(), name="agent-scheduler")
@@ -737,6 +738,14 @@ class SessionManager:
             except Exception:
                 logger.exception("taking up failed requests again failed")
             try:
+                # Minted Logos keys whose session is no longer running —
+                # crash recovery when settle/cancel could not revoke.
+                await self._janitor_session_api_keys()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("revoking orphaned session API keys failed")
+            try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=settings.scheduler_interval_s)
             except asyncio.TimeoutError:
                 pass
@@ -764,7 +773,7 @@ class SessionManager:
         return frozenset(ids)
 
     async def _mint_session_logos_key(self, session_id: int) -> str | None:
-        """Mint a short-lived Logos key for the agent phase, or None to use the gateway placeholder.
+        """Mint a Logos key for the agent phase, or None to use the gateway placeholder.
 
         Returns the key value to put in the session env when minting succeeds.
         Raises SessionApiKeyError when minting is required and fails without fallback.
@@ -801,6 +810,24 @@ class SessionManager:
             return
         self._minted_api_key_ids.discard(int(resolved))
         await session_api_keys.revoke(int(resolved))
+
+    async def _janitor_session_api_keys(self) -> None:
+        """Revoke minted Logos keys whose session is no longer running.
+
+        Idempotent crash safety: settle and cancel already revoke on the happy
+        path; this covers keys left active after a runner crash or a lost
+        race. Never touches standing keys (no ``parent_api_key_id``).
+        """
+        if not settings.session_api_key_mint:
+            return
+        try:
+            orphans = await db.orphaned_session_api_key_ids()
+        except Exception as exc:
+            logger.warning("could not list orphaned session API keys: %s", exc)
+            return
+        for key_id in orphans:
+            self._minted_api_key_ids.discard(int(key_id))
+            await session_api_keys.revoke(int(key_id))
 
     async def scheduler_pass(self) -> None:
         # Permissions first, then the measurement they describe: a key moved
@@ -2303,7 +2330,9 @@ class SessionManager:
                 logger.warning("settlement of session %s found the row in %r; not recording it", session_id, status)
                 if status in {state.value for state in TERMINAL_STATUSES}:
                     # Cancelled or already settled: the row is finished and
-                    # the container is a leftover.
+                    # the container is a leftover. Revoke if a key remains.
+                    session_row = (await db.get_session(session_id)) or {}
+                    await self._revoke_session_logos_key(session_id, session_row.get("session_api_key_id"))
                     await self._cleanup_container(session_id)
                 else:
                     # Paused, or starting again: the session is alive and
@@ -2329,6 +2358,8 @@ class SessionManager:
                         "session %s was claimed by another actor before finalization; only cleaning up",
                         session_id,
                     )
+                    session_row = (await db.get_session(session_id)) or {}
+                    await self._revoke_session_logos_key(session_id, session_row.get("session_api_key_id"))
                     await self._cleanup_container(session_id)
                     return
             # The row is already finalizing: a restart interrupted the first
@@ -2375,11 +2406,14 @@ class SessionManager:
             # kicks off for an exited container. The session already belongs
             # to that actor: give the container back, but emit no status
             # event, dispatch no deploy, and take no screenshots for a
-            # session whose state is already final.
+            # session whose state is already final. Still revoke the session
+            # key if it remains: cancel may have won without seeing the id.
             logger.warning(
                 "settlement of session %s lost the race to another transition; only cleaning up",
                 session_id,
             )
+            session_row = (await db.get_session(session_id)) or {}
+            await self._revoke_session_logos_key(session_id, session_row.get("session_api_key_id"))
             await self._cleanup_container(session_id)
             return
         await db.add_event(
