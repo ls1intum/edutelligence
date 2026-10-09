@@ -158,6 +158,29 @@ def coerce_upstream_error(status_code: int, body: Any) -> tuple[int, dict]:
     return status_code, {"error": error_obj}
 
 
+def upstream_error_message(body: Any) -> str | None:
+    """Return the error message an upstream put in its response body.
+
+    Accepts an OpenAI-shape ``{"error": {"message": ...}}`` body, a plain
+    ``{"error": "..."}`` body, or a plain-text body. The message is trimmed to
+    500 characters like ``coerce_upstream_error`` does. Returns ``None`` when
+    the body carries no message, so the caller can fall back to its own
+    description.
+    """
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict):
+            error = error.get("message")
+    else:
+        error = body
+    if not isinstance(error, str) or not error.strip():
+        return None
+    message = error.strip()
+    if len(message) > 500:
+        message = message[:497] + "..."
+    return message
+
+
 # ── Response builders ─────────────────────────────────────────────────────────
 
 
