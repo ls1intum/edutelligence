@@ -17,7 +17,7 @@ tiktoken = "0.14.0"
 pydantic = "2.13.4"
 prospector = { version = "1.19.1", extras = ["with_mypy"] }
 types-requests = "2.33.0.20260712"
-pytest-asyncio = "0.26.0"
+pytest-asyncio = "1.4.0"
 
 [tool.poetry.group.test.dependencies]
 pytest = "8.2.0"
