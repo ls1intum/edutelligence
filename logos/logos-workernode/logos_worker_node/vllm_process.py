@@ -108,6 +108,7 @@ def resolve_model_snapshot(
     *,
     token: str | None = None,
     revision: str | None = None,
+    local_files_only: bool | None = None,
 ) -> str:
     """Local snapshot directory of a Hugging Face model, downloading it when missing.
 
@@ -115,6 +116,10 @@ def resolve_model_snapshot(
     ``HF_TOKEN`` (worker env plus ``vllm_config.env_overrides``); when omitted,
     the worker process environment is used. ``revision`` is the pin vLLM loads
     via ``--revision``, when present.
+
+    ``local_files_only`` defaults to try the cache first, then download. Pass
+    ``False`` to force a network fetch (e.g. when a cached snapshot is only a
+    partial tree and referenced adapter files are still missing).
     """
     if Path(model).is_dir():
         return str(Path(model).resolve())
@@ -125,10 +130,39 @@ def resolve_model_snapshot(
     kwargs: dict[str, Any] = {"repo_id": model, "cache_dir": cache_dir, "token": effective_token}
     if revision:
         kwargs["revision"] = revision
+    if local_files_only is False:
+        return snapshot_download(**kwargs)
     try:
         return snapshot_download(**kwargs, local_files_only=True)
     except Exception:
         return snapshot_download(**kwargs)
+
+
+def _placeholder_targets(cmd: list[str], snapshot: str) -> list[Path]:
+    """Paths under the snapshot that ``{model_path}`` expansions must resolve to.
+
+    For ``jev-decision={model_path}/adapter_vllm`` the target is
+    ``<snapshot>/adapter_vllm``. A bare ``{model_path}`` is the snapshot root
+    that ``snapshot_download`` already returned, so it is not listed. Trailing
+    path characters stop at whitespace or ``,;=``.
+    """
+    targets: list[Path] = []
+    for arg in cmd:
+        start = 0
+        while True:
+            pos = arg.find(MODEL_PATH_PLACEHOLDER, start)
+            if pos < 0:
+                break
+            after = arg[pos + len(MODEL_PATH_PLACEHOLDER) :]
+            rel = ""
+            for ch in after:
+                if ch in " \t,;=":
+                    break
+                rel += ch
+            if rel:
+                targets.append(Path(f"{snapshot}{rel}") if rel.startswith("/") else Path(snapshot) / rel)
+            start = pos + len(MODEL_PATH_PLACEHOLDER)
+    return targets
 
 
 def expand_model_path(
@@ -142,12 +176,20 @@ def expand_model_path(
     Lets per-model ``extra_args`` reference files shipped inside the checkpoint,
     e.g. ``--lora-modules jev-decision={model_path}/adapter_vllm``.
     ``token`` is the effective lane ``HF_TOKEN`` after ``_build_env``.
+
+    A cached HF snapshot can be only a partial tree (for example a metadata
+    lookup that wrote ``config.json`` alone). Before the expanded command is
+    accepted, every path that ``{model_path}`` points at must exist; missing
+    files are downloaded at the requested revision.
     """
     if not any(MODEL_PATH_PLACEHOLDER in arg for arg in cmd):
         return cmd
     from logos_worker_node.calibration import extract_revision_arg
 
-    snapshot = resolve_model_snapshot(model, hf_home, token=token, revision=extract_revision_arg(cmd))
+    revision = extract_revision_arg(cmd)
+    snapshot = resolve_model_snapshot(model, hf_home, token=token, revision=revision)
+    if not Path(model).is_dir() and not all(path.exists() for path in _placeholder_targets(cmd, snapshot)):
+        snapshot = resolve_model_snapshot(model, hf_home, token=token, revision=revision, local_files_only=False)
     return [arg.replace(MODEL_PATH_PLACEHOLDER, snapshot) for arg in cmd]
 
 
