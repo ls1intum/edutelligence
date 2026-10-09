@@ -547,24 +547,34 @@ async def test_logosnode_sync_stamps_the_response_before_post_provider_processin
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("upstream_body", "upstream_message"),
+    ("status_code", "upstream_body", "upstream_message", "result_status"),
     [
         (
+            400,
             {"error": {"message": "This model's maximum context length is 40960 tokens.", "code": 400}},
             "This model's maximum context length is 40960 tokens.",
+            "error",
         ),
-        ("Bad Request: unsupported input", "Bad Request: unsupported input"),
-        ({"error": {"message": "invalid timeout value", "code": 400}}, "invalid timeout value"),
+        (400, "Bad Request: unsupported input", "Bad Request: unsupported input", "error"),
+        (400, {"error": {"message": "invalid timeout value", "code": 400}}, "invalid timeout value", "error"),
+        (
+            504,
+            {"error": {"message": "engine did not answer in time", "code": 504}},
+            "engine did not answer in time",
+            "timeout",
+        ),
     ],
-    ids=["openai-shape", "plain-text", "message-names-timeout"],
+    ids=["openai-shape", "plain-text", "message-names-timeout", "gateway-timeout"],
 )
-async def test_logosnode_sync_error_records_the_upstream_message(monkeypatch, upstream_body, upstream_message):
+async def test_logosnode_sync_error_records_the_upstream_message(
+    monkeypatch, status_code, upstream_body, upstream_message, result_status
+):
     """A worker that answers with an error status but no ``error`` field must
     still record the upstream's own message, not only the status code. Text in
     that message must not make the HTTP error settle as a timeout."""
 
     async def fake_send_command(**kwargs):  # noqa: ARG001
-        return {"status_code": 400, "body": upstream_body, "headers": {}}
+        return {"status_code": status_code, "body": upstream_body, "headers": {}}
 
     enqueued = []
 
@@ -585,7 +595,7 @@ async def test_logosnode_sync_error_records_the_upstream_message(monkeypatch, up
     )
     monkeypatch.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=fake_send_command), raising=False)
     monkeypatch.setattr(main, "write_queue", _FakeWriteQueueFactory(), raising=False)
-    pipeline, _c, _r = _make_pipeline()
+    pipeline, completion_calls, _r = _make_pipeline()
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     context = SimpleNamespace(
@@ -613,11 +623,13 @@ async def test_logosnode_sync_error_records_the_upstream_message(monkeypatch, up
         },
     )
 
-    assert response.status_code == 400
+    recorded_error = f"logosnode infer returned HTTP {status_code}: {upstream_message}"
+    assert response.status_code == status_code
     assert json.loads(response.body)["error"]["message"] == upstream_message
     terminal = next(args for args in enqueued if args[0] is main._persist_terminal_response)
-    assert terminal[8] == "error"
-    assert terminal[9] == f"logosnode infer returned HTTP 400: {upstream_message}"
+    assert terminal[8] == result_status
+    assert terminal[9] == recorded_error
+    assert [call["error_message"] for call in completion_calls] == [recorded_error]
 
 
 @pytest.mark.asyncio

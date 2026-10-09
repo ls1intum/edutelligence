@@ -2637,6 +2637,8 @@ async def _sync_response(
             # mentions a timeout cannot turn an HTTP error into a timeout.
             if upstream_error_detail and exec_result.error == upstream_error_detail[0]:
                 exec_result.error = upstream_error_detail[1]
+                if error_message == upstream_error_detail[0]:
+                    error_message = exec_result.error
 
         if exec_result.success and context.provider_type == "cloud":
             response_payload, _ = _response_with_cost(
