@@ -64,6 +64,7 @@ import { LaneHealthPanel } from './components/lane-health-panel/lane-health-pane
 import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 import { MultiSelectComponent } from '../../shared/components/multi-select/multi-select';
+import { SearchableSelectComponent } from '../../shared/components/searchable-select/searchable-select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
 import { StatisticsService } from './services/statistics.service';
 import { RequestVolumeChartComponent, ChartTooltip } from './components/request-volume-chart/request-volume-chart';
@@ -118,6 +119,7 @@ type ProviderGlassRow = {
     LaneMemoryPieComponent,
     SelectComponent,
     MultiSelectComponent,
+    SearchableSelectComponent,
     RecentRequests,
     RequestVolumeChartComponent,
     SparklineComponent,
@@ -217,7 +219,6 @@ export class Statistics implements OnInit, OnDestroy {
   readonly filterUserId = signal<number | null>(null);
   readonly filterTeamId = signal<number | null>(null);
   readonly filterProviderId = signal<number | null>(null);
-  readonly errorsOnly = signal(false);
 
   // Every loadScopeOptions bumps this; a response that resolves for an older
   // value is stale — its range or team moved on while the request was in
@@ -229,8 +230,7 @@ export class Statistics implements OnInit, OnDestroy {
     () =>
       this.filterUserId() !== null ||
       this.filterTeamId() !== null ||
-      this.filterProviderId() !== null ||
-      this.errorsOnly(),
+      this.filterProviderId() !== null,
   );
 
   // Both lists carry their request count, so the dropdown says which entries
@@ -263,11 +263,6 @@ export class Statistics implements OnInit, OnDestroy {
     })),
   ]);
 
-  readonly outcomeFilterOptions: AppSelectOption[] = [
-    { value: '', label: 'All outcomes' },
-    { value: 'errors', label: 'Errors only' },
-  ];
-
   /**
    * Nobody in the selected team sent anything in this range, so the requester
    * dropdown has nothing but its "everyone" entry. Worth saying outright — an
@@ -292,8 +287,6 @@ export class Statistics implements OnInit, OnDestroy {
     return id === null ? '' : String(id);
   });
 
-  readonly selectedOutcomeValue = computed(() => (this.errorsOnly() ? 'errors' : ''));
-
   /** What the active filter narrows to, for the label above the KPI strip. */
   readonly filterLabel = computed(() => {
     const parts: string[] = [];
@@ -311,7 +304,6 @@ export class Statistics implements OnInit, OnDestroy {
         this.feedProviders().find((p) => p.id === providerId)?.label ?? `provider ${providerId}`,
       );
     }
-    if (this.errorsOnly()) parts.push('errors only');
     return parts.join(' · ');
   });
 
@@ -320,7 +312,9 @@ export class Statistics implements OnInit, OnDestroy {
       userId: this.filterUserId(),
       teamId: this.filterTeamId(),
       providerId: this.filterProviderId(),
-      errorsOnly: this.errorsOnly(),
+      // Outcomes are no longer a page-scope control — the feed's state filter
+      // covers error/finished buckets. Keep the wire field for the socket.
+      errorsOnly: false,
     };
   }
 
@@ -1015,14 +1009,6 @@ export class Statistics implements OnInit, OnDestroy {
     void this.loadScopeOptions();
   }
 
-  setErrorsOnlyFilter(value: string | null): void {
-    const next = value === 'errors';
-    if (next === this.errorsOnly()) return;
-    this.errorsOnly.set(next);
-    this.applyScope();
-    void this.loadScopeOptions();
-  }
-
   /**
    * Reset every selector in the page-top filter row: the page scope and the
    * feed-only selections. Each group is only re-sent when it was active — an
@@ -1037,7 +1023,6 @@ export class Statistics implements OnInit, OnDestroy {
       this.filterUserId.set(null);
       this.filterTeamId.set(null);
       this.filterProviderId.set(null);
-      this.errorsOnly.set(false);
       this.applyScope();
       void this.loadScopeOptions();
     }
