@@ -1,16 +1,19 @@
 // Color token definitions for statistics dashboard
 // These tokens are defined in src/styles/_tokens.scss
 
-// Diagram/series colors — shades of the active theme's own primary ramp, so
-// they follow whichever styles/_tokens-*.scss file is active. Status colors
+// Diagram/series colors — the categorical chart tokens of the active theme
+// (styles/_tokens.scss), eight hues in a fixed order so neighbouring series
+// stay distinguishable, also for colour-blind readers. Status colors
 // (success/warning/error/info) stay fixed across themes; these don't.
 export const ICON_COLOR_VARS: string[] = [
-  '--color-primary-300',
-  '--color-primary-400',
-  '--color-primary-500',
-  '--color-primary-600',
-  '--color-primary-700',
-  '--color-primary-800',
+  '--color-series-1',
+  '--color-series-2',
+  '--color-series-3',
+  '--color-series-4',
+  '--color-series-5',
+  '--color-series-6',
+  '--color-series-7',
+  '--color-series-8',
 ];
 
 /**
@@ -28,7 +31,7 @@ export function cssVar(token: string): string {
  * @returns CSS rgb function with color token
  */
 export function seriesColor(index: number): string {
-  return cssVar(ICON_COLOR_VARS[index % 6]);
+  return cssVar(ICON_COLOR_VARS[index % ICON_COLOR_VARS.length]);
 }
 
 /**
@@ -63,11 +66,14 @@ export const STATUS_COLOR: Record<'success' | 'error' | 'timeout' | 'pending', s
 };
 
 /**
- * Chart role colors for different data series types (theme-reactive; see
- * ICON_COLOR_VARS above).
+ * Chart role colors for different data series types (theme-reactive). A
+ * two-part split like local vs. cloud stays in the brand violet, as on the
+ * public stats page: a strong step for local, a light one for cloud. Total
+ * takes a third step so the KPI cards stay apart; categorical hues are only
+ * for charts with more than two series.
  */
 export const CHART_ROLE = {
-  total: cssVar('--color-primary-700'),
-  cloud: cssVar('--color-primary-500'),
-  local: cssVar('--color-primary-300'),
+  total: cssVar('--color-primary-800'),
+  cloud: cssVar('--color-primary-200'),
+  local: cssVar('--color-primary-600'),
 };
