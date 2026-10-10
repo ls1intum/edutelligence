@@ -24,7 +24,9 @@
 
   &__arc {
     cursor: pointer;
-    transition: opacity 0.15s ease, transform 0.15s ease;
+    transition:
+      opacity 0.15s ease,
+      transform 0.15s ease;
     transform-origin: 100px 100px;
 
     &--hovered {
@@ -101,6 +103,16 @@
     &--dimmed {
       opacity: var(--opacity-overlay);
     }
+
+    &--off {
+      opacity: var(--opacity-dimmed);
+    }
+  }
+
+  &__legend-toggle {
+    margin: 0;
+    flex-shrink: 0;
+    cursor: pointer;
   }
 
   &__legend-dot {

@@ -3,12 +3,10 @@ import { PublicStats, PublicTeamStats } from './public-stats.service';
 import {
   MAX_NAMED_TEAM_SLICES,
   OTHER_SLICE_COLOR,
-  buildPieGeometry,
   formatAverage,
   formatCount,
   keyTypeSlices,
   laneSlices,
-  pieSlicePath,
   teamSlices,
   windowLabel,
   ChartSlice,
@@ -38,68 +36,6 @@ function stats(overrides: Partial<PublicStats> = {}): PublicStats {
 // L x1 y1 A r r 0 largeArc sweep x2 y2 Z — groups 1-2 the start point, 5 the
 // large-arc flag, 7-8 the end point. The literal 0 is the SVG arc rotation.
 const WEDGE = /L ([^ ]+) ([^ ]+) A ([^ ]+) ([^ ]+) 0 ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) Z/;
-
-describe('pieSlicePath', () => {
-  it('starts at the top and sweeps clockwise', () => {
-    // A quarter slice from 12 o'clock ends at 3 o'clock.
-    const path = pieSlicePath(100, 100, 92, 0, Math.PI / 2);
-    expect(path).toMatch(/^M 100 100 L /);
-    expect(path).toContain(' A 92 92 0 0 1 ');
-    expect(path).toContain('192 100');
-    expect(path).toMatch(/Z$/);
-  });
-
-  it('clamps a full circle just short of 360° so the arc does not collapse', () => {
-    const path = pieSlicePath(100, 100, 92, 0, Math.PI * 2);
-    const m = path.match(WEDGE);
-    expect(m).not.toBeNull();
-    // Large-arc flag set, and the wedge is not degenerate: the end point is a
-    // hair before the start point, not on top of it.
-    expect(m![5]).toBe('1');
-    expect(m![1] + ' ' + m![2]).not.toEqual(m![7] + ' ' + m![8]);
-  });
-
-  it('flags large arcs past a half turn', () => {
-    expect(pieSlicePath(0, 0, 10, 0, Math.PI * 1.5)).toContain(' A 10 10 0 1 1 ');
-    expect(pieSlicePath(0, 0, 10, 0, Math.PI / 2)).toContain(' A 10 10 0 0 1 ');
-  });
-});
-
-describe('buildPieGeometry', () => {
-  const slices: ChartSlice[] = [
-    { key: 'a', label: 'A', value: 3, color: 'var(--series-1)', hidden: false },
-    { key: 'b', label: 'B', value: 1, color: 'var(--series-2)', hidden: false },
-  ];
-
-  it('computes shares of the visible total', () => {
-    const geometry = buildPieGeometry(slices);
-    expect(geometry.map((g) => g.percent)).toEqual([75, 25]);
-    expect(geometry.every((g) => g.path.startsWith('M 100 100 L '))).toBe(true);
-  });
-
-  it('drops hidden and zero-value slices and re-partitions the rest', () => {
-    const hidden: ChartSlice[] = [...slices, { key: 'c', label: 'C', value: 0, color: 'x', hidden: false }].map(
-      (s) => ({ ...s })
-    );
-    hidden[0].hidden = true;
-    const geometry = buildPieGeometry(hidden);
-    expect(geometry.map((g) => g.slice.key)).toEqual(['b']);
-    expect(geometry[0].percent).toBe(100);
-  });
-
-  it('returns nothing when every slice is hidden', () => {
-    const allHidden = slices.map((s) => ({ ...s, hidden: true }));
-    expect(buildPieGeometry(allHidden)).toEqual([]);
-  });
-
-  it('keeps slice order and the percentages add up to the whole pie', () => {
-    const geometry = buildPieGeometry(slices);
-    expect(geometry.map((g) => g.slice.key)).toEqual(['a', 'b']);
-    const sum = geometry.reduce((acc, g) => acc + g.percent, 0);
-    expect(sum).toBeGreaterThanOrEqual(99); // rounding may lose at most a point
-    expect(sum).toBeLessThanOrEqual(101);
-  });
-});
 
 describe('teamSlices', () => {
   it('orders by request count, then name, and assigns colors from the fixed slot order', () => {

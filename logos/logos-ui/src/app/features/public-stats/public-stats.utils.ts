@@ -20,14 +20,6 @@ export interface ChartSlice {
   caption?: string;
 }
 
-/** A chart slice with its drawn geometry. */
-export interface PieGeometry {
-  slice: ChartSlice;
-  path: string;
-  /** Share of the visible total, rounded to whole percent. */
-  percent: number;
-}
-
 /**
  * How many teams get a hue of their own. Categorical hues are assigned in
  * fixed order and never cycled, so the first team past this cap — like every
@@ -36,47 +28,6 @@ export interface PieGeometry {
 export const MAX_NAMED_TEAM_SLICES = 8;
 
 export const OTHER_SLICE_COLOR = 'var(--series-other)';
-
-/**
- * The wedge of a pie from startAngle to endAngle (radians, 0 = top,
- * clockwise). A single full turn is clamped just short of 2π — a 360° arc
- * has no distinct endpoints and collapses to nothing.
- */
-export function pieSlicePath(cx: number, cy: number, r: number, startAngle: number, endAngle: number): string {
-  const safeEnd = Math.min(endAngle, startAngle + 2 * Math.PI - 0.0001);
-  const a1 = startAngle - Math.PI / 2;
-  const a2 = safeEnd - Math.PI / 2;
-  const largeArc = safeEnd - startAngle > Math.PI ? 1 : 0;
-  const x1 = cx + r * Math.cos(a1);
-  const y1 = cy + r * Math.sin(a1);
-  const x2 = cx + r * Math.cos(a2);
-  const y2 = cy + r * Math.sin(a2);
-  return `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`;
-}
-
-/**
- * Geometry for the slices that are actually on screen: hidden and zero-value
- * slices are dropped, and percentages are shares of what remains — hiding a
- * team re-partitions the pie, it does not punch a hole in it.
- */
-export function buildPieGeometry(slices: ChartSlice[], cx = 100, cy = 100, r = 92): PieGeometry[] {
-  const visible = slices.filter((s) => !s.hidden && s.value > 0);
-  const total = visible.reduce((sum, s) => sum + s.value, 0);
-  if (total === 0) return [];
-
-  let angle = 0;
-  return visible.map((slice) => {
-    const fraction = slice.value / total;
-    const start = angle;
-    const end = angle + fraction * 2 * Math.PI;
-    angle = end;
-    return {
-      slice,
-      path: pieSlicePath(cx, cy, r, start, end),
-      percent: Math.round(fraction * 100),
-    };
-  });
-}
 
 function teamLabel(team: PublicTeamStats): string {
   return team.team_name && team.team_name.length > 0 ? team.team_name : 'No team';

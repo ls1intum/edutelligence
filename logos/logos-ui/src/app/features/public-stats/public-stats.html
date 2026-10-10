@@ -108,11 +108,18 @@
             tick it again to bring it back. {{ windowCaption() }}.
           </p>
         </div>
-        <app-public-stats-pie
-          [slices]="teamSlices()"
-          title="Requests per team"
-          (toggleSlice)="onToggleTeam($event)"
-        />
+        @if (teamSlices().length === 0) {
+          <app-stats-empty-state message="No successful requests yet." />
+        } @else {
+          <app-stats-vram-donut
+            [data]="teamDonut()"
+            [toggleable]="true"
+            centerTop="teams"
+            [centerMiddle]="teamSlices().length + ''"
+            valueSuffix=" req"
+            (toggleSlice)="onToggleTeam($event)"
+          />
+        }
       </div>
 
       <div class="chart-column">

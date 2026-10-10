@@ -3,7 +3,8 @@ import { Router } from '@angular/router';
 import { Logo } from '../../shared/components/logo/logo';
 import { ThemeToggle } from '../../shared/components/theme-toggle/theme-toggle';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
-import { PublicStatsPie } from './public-stats.pie';
+import { DonutSlice, VramDonutComponent } from '../statistics/components/vram-donut/vram-donut';
+import { EmptyState } from '../statistics/components/empty-state/empty-state';
 import { PublicStatsSplit } from './public-stats.split';
 import { PublicStatsTrend } from './public-stats.trend';
 import {
@@ -50,7 +51,7 @@ interface UsageRow {
 @Component({
   selector: 'app-public-stats',
   standalone: true,
-  imports: [Logo, ThemeToggle, ErrorMessageComponent, PublicStatsPie, PublicStatsSplit, PublicStatsTrend],
+  imports: [Logo, ThemeToggle, ErrorMessageComponent, EmptyState, VramDonutComponent, PublicStatsSplit, PublicStatsTrend],
   templateUrl: './public-stats.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './public-stats.scss',
@@ -72,6 +73,10 @@ export class PublicStats implements OnInit {
   error = signal('');
   loading = signal(true);
   teamSlices = signal<ChartSlice[]>([]);
+  /** The team slices as the shared donut draws them; hidden ones stay in its legend. */
+  readonly teamDonut = computed<DonutSlice[]>(() =>
+    this.teamSlices().map((s) => ({ value: s.value, color: s.color, text: s.label, hidden: s.hidden }))
+  );
   keySlices = signal<ChartSlice[]>([]);
   laneSlices = signal<ChartSlice[]>([]);
   laneTokenSlices = signal<ChartSlice[]>([]);
@@ -146,8 +151,8 @@ export class PublicStats implements OnInit {
    * colors the remaining teams wear do not move, so the chart never repaints
    * while the reader curates it.
    */
-  onToggleTeam(key: string): void {
-    this.teamSlices.update((slices) => slices.map((s) => (s.key === key ? { ...s, hidden: !s.hidden } : s)));
+  onToggleTeam(index: number): void {
+    this.teamSlices.update((slices) => slices.map((s, i) => (i === index ? { ...s, hidden: !s.hidden } : s)));
   }
 
   signIn(): void {
