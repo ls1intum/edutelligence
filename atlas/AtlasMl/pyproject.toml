@@ -7,8 +7,8 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.13"
-fastapi = "^0.141.1"
-uvicorn = "^0.32.1"
+fastapi = "^0.143.0"
+uvicorn = "^0.54.0"
 weaviate-client = "^4.21.0"
 datasets = "^3.5.0"
 sentence-transformers = "^5.0.0"
@@ -16,7 +16,7 @@ pydantic-settings = "^2.8.1"
 matplotlib = "^3.10.1"
 scipy = "^1.15.2"
 apscheduler = "^3.11.2"
-openai = "==1.93.0"
+openai = "==1.109.1"
 sentry-sdk = {extras = ["fastapi"], version = "^2.34.1"}
 markdown = "^3.8.2"
 bs4 = "^0.0.2"
@@ -49,13 +49,13 @@ torch = ">=2.13.0"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
 pytest-cov = "^6.0.0"
-ruff = "^0.3.0"
+ruff = "^0.16.0"
 black = "^26.3.1"
 
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8.3.5"
-pytest-asyncio = "^0.25.3"
+pytest-asyncio = "^0.26.0"
 httpx = "^0.28.1"
 
 [build-system]
