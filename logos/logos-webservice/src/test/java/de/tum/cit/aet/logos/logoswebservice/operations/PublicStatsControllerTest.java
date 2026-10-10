@@ -37,6 +37,8 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
     // No scheduled rollup pass: the seed reads usage from log_entry and must
     // not have its rows rolled up halfway through a test.
     "logos.stats.rollup.refresh-cron=-",
+    // Every test reads figures its own seed just wrote.
+    "logos.public-stats.cache-ttl=0s",
     "logos.auth.roles.logos-admin=itg-admin",
     "logos.auth.roles.app-admin=chair-member",
     "logos.auth.sync-debounce-minutes=5"

@@ -5,7 +5,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,18 +14,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-import de.tum.cit.aet.logos.logoswebservice.configuration.entity.ProviderType;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.AgentSessionDayProjection;
-import de.tum.cit.aet.logos.logoswebservice.operations.repository.KeyTypeRequestCountProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
-import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderTypeRequestCountProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.PublicUsageRowProjection;
-import de.tum.cit.aet.logos.logoswebservice.operations.repository.TeamRequestCountProjection;
 
 @Service
 public class StatsService {
@@ -129,76 +123,19 @@ public class StatsService {
         String window = normalizePublicStatsDays(days);
         Timestamp since = resolvePublicStatsSince(days);
 
-        long students = logEntryRepository.countActiveStudentsOnPublicTeams(since);
-        long studentRequests =
-            logEntryRepository.countSuccessfulRequestsFromActiveStudentsOnPublicTeams(since);
-        long teams = teamRepository.countByShowOnPublicStatsTrue();
-
-        List<Map<String, Object>> requestsPerTeam = new ArrayList<>();
-        long successfulRequests = 0;
-        for (TeamRequestCountProjection row : logEntryRepository.countSuccessfulByTeam(since)) {
-            Map<String, Object> team = new LinkedHashMap<>();
-            team.put("team_id", row.getTeamId());
-            team.put("team_name", row.getTeamName());
-            team.put("requests", row.getRequests());
-            requestsPerTeam.add(team);
-            successfulRequests += row.getRequests();
-        }
-
-        Map<String, Long> requestsByKeyType = new LinkedHashMap<>();
-        for (ApiKeyType type : ApiKeyType.values()) {
-            requestsByKeyType.put(type.name(), 0L);
-        }
-        // Rows whose API key was deleted land here so the key-type split still
-        // adds up to successful_requests.
-        requestsByKeyType.put("unknown", 0L);
-        for (KeyTypeRequestCountProjection row : logEntryRepository.countSuccessfulByKeyType(since)) {
-            String keyType = row.getKeyType() == null ? "unknown" : row.getKeyType();
-            requestsByKeyType.merge(keyType, row.getRequests(), Long::sum);
-        }
-
-        // ProviderType.logosnode is the self-hosted lane; everything else with
-        // a known provider is a forwarded cloud deployment. Deleted providers
-        // (provider_id SET NULL) keep an explicit unknown bucket so the lane
-        // chart still matches the headline total.
-        Map<String, Long> localCloud = new LinkedHashMap<>();
-        localCloud.put("local", 0L);
-        localCloud.put("cloud", 0L);
-        localCloud.put("unknown", 0L);
-        for (ProviderTypeRequestCountProjection row : logEntryRepository.countSuccessfulByProviderType(since)) {
-            String providerType = row.getProviderType();
-            String lane;
-            if (providerType == null || "unknown".equals(providerType)) {
-                lane = "unknown";
-            } else if (ProviderType.logosnode.name().equals(providerType)) {
-                lane = "local";
-            } else {
-                lane = "cloud";
-            }
-            localCloud.merge(lane, row.getRequests(), Long::sum);
-        }
-
-        double averageRequestsPerUser =
-            students == 0 ? 0.0 : Math.round(studentRequests * 100.0 / students) / 100.0;
-
         Map<String, Object> stats = new LinkedHashMap<>();
         stats.put("days", window);
-        stats.put("students", students);
-        stats.put("teams", teams);
-        stats.put("successful_requests", successfulRequests);
-        stats.put("average_requests_per_user", averageRequestsPerUser);
-        stats.put("requests_per_team", requestsPerTeam);
-        stats.put("requests_by_key_type", requestsByKeyType);
-        stats.put("local_cloud_requests", localCloud);
+        stats.put("teams", teamRepository.countByShowOnPublicStatsTrue());
 
-        // Distributions, shares and monthly series come from one row set
-        // (day x team x user x lane x model), read from log_entry on the same
-        // predicate as the headline totals above, so they describe the same
-        // requests. The monthly series and first-session marker ignore the
-        // window, hence the all-time read.
-        List<PublicUsageRowProjection> allRows = logEntryRepository.findPublicUsageRows(null);
+        // Every request figure comes from one row set (day x team x user x key
+        // type x lane x model), read in a single pass over all successes: the
+        // monthly series and regular-activity counts need all of time, and the
+        // rows inside the window are flagged rather than read again.
+        List<PublicUsageRowProjection> allRows = logEntryRepository.findPublicUsageRows(since);
         List<PublicUsageRowProjection> windowRows =
-            since == null ? allRows : logEntryRepository.findPublicUsageRows(since);
+            allRows.stream().filter(r -> Boolean.TRUE.equals(r.getInWindow())).toList();
+        PublicUsageSummary.putHeadline(stats, windowRows);
+
         List<AgentSessionDayProjection> allAgentDays = logEntryRepository.findAgentSessionDays(null);
         List<AgentSessionDayProjection> windowAgentDays =
             since == null ? allAgentDays : logEntryRepository.findAgentSessionDays(since);

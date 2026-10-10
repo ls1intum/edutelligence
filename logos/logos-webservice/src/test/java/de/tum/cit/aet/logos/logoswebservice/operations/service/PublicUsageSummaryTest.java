@@ -21,7 +21,10 @@ class PublicUsageSummaryTest {
     private record Row(String day, Integer teamId, String category, Integer userId, Boolean student,
                        String lane, String model, Long requests, Long tokens) implements PublicUsageRowProjection {
         @Override public String getDay() { return day; }
+        @Override public Boolean getInWindow() { return true; }
         @Override public Integer getTeamId() { return teamId; }
+        @Override public String getTeamName() { return "team-" + teamId; }
+        @Override public String getKeyType() { return userId == null ? "application" : "developer"; }
         @Override public String getCategory() { return category; }
         @Override public Integer getUserId() { return userId; }
         @Override public Boolean getStudent() { return student; }
@@ -52,6 +55,30 @@ class PublicUsageSummaryTest {
         PublicUsageSummary.putAll(stats, List.copyOf(window), List.copyOf(all), List.copyOf(windowAgent),
             List.copyOf(allAgent), TODAY);
         return stats;
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void headlineFiguresAddUpFromTheSameRows() {
+        // Team 2 leads; application traffic (no user) counts in the totals but
+        // not in the per-student average; a non-student person is no student.
+        List<Row> rows = List.of(
+            row("2026-10-01", 1, 7, "local", "m", 4, 40),
+            row("2026-10-01", 2, null, "cloud", "m", 6, 60),
+            new Row("2026-10-02", 2, "Research", 8, false, "unknown", "m", 1L, 1L));
+        Map<String, Object> stats = new LinkedHashMap<>();
+        PublicUsageSummary.putHeadline(stats, List.copyOf(rows));
+
+        assertThat(stats.get("successful_requests")).isEqualTo(11L);
+        assertThat(stats.get("students")).isEqualTo(1L);
+        assertThat(stats.get("average_requests_per_user")).isEqualTo(4.0);
+        assertThat((Map<String, Long>) stats.get("requests_by_key_type"))
+            .containsEntry("developer", 5L).containsEntry("application", 6L).containsEntry("unknown", 0L);
+        assertThat((Map<String, Long>) stats.get("local_cloud_requests"))
+            .containsEntry("local", 4L).containsEntry("cloud", 6L).containsEntry("unknown", 1L);
+        List<Map<String, Object>> perTeam = (List<Map<String, Object>>) stats.get("requests_per_team");
+        assertThat(perTeam).extracting(t -> t.get("team_id")).containsExactly(2, 1);
+        assertThat(perTeam.get(0)).containsEntry("team_name", "team-2").containsEntry("requests", 7L);
     }
 
     @Test

@@ -161,7 +161,9 @@ Example changeset:
 
 ## Public stats (`GET /public/stats`)
 
-Unauthenticated aggregates for the `/stats` page. Rate-limited per source IP.
+Unauthenticated aggregates for the `/stats` page. Rate-limited per source IP, and
+cached per window for `logos.public-stats.cache-ttl` (default `PT5M`, `0s` turns
+the cache off), so figures can be a few minutes old.
 
 Query parameter `days` (default `30`): `7`, `30`, `90`, `365`, or `all`. Applied to
 every request-derived figure (per-team, key type, lane, active students, average).
@@ -175,8 +177,9 @@ those with no traffic in the window). `students` are distinct active users with
 role `app_developer` (admins count as staff) who made at least one successful
 request on an opted-in team inside the window.
 
-Usage figures on the same opted-in teams, read from the hourly rollup plus the
-live tail of `log_entry`:
+Every request figure — the totals above and the usage figures below — comes
+from one pass over the successful `log_entry` rows of the opted-in teams, ranged
+on `timestamp_request`, so they all count the same requests:
 
 | Field | Window | Meaning |
 |-------|--------|---------|
