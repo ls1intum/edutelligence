@@ -287,6 +287,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                     ELSE NULLIF(le.environment, '-')
                END AS environment,
                tk.prompt_tokens AS promptTokens,
+               tk.estimated_prompt_tokens AS estimatedPromptTokens,
                tk.completion_tokens AS completionTokens,
                tk.total_tokens AS totalTokens,
                c.cost_micro_cents AS costMicroCents
@@ -297,9 +298,10 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         LEFT JOIN users u ON u.id = le.user_id
         LEFT JOIN api_keys k ON k.id = le.api_key_id
         LEFT JOIN LATERAL (
-            SELECT MAX(CASE WHEN tt.name = 'prompt_tokens'     THEN ut.token_count END) AS prompt_tokens,
-                   MAX(CASE WHEN tt.name = 'completion_tokens' THEN ut.token_count END) AS completion_tokens,
-                   MAX(CASE WHEN tt.name = 'total_tokens'      THEN ut.token_count END) AS total_tokens
+            SELECT MAX(CASE WHEN tt.name = 'prompt_tokens'            THEN ut.token_count END) AS prompt_tokens,
+                   MAX(CASE WHEN tt.name = 'estimated_prompt_tokens'  THEN ut.token_count END) AS estimated_prompt_tokens,
+                   MAX(CASE WHEN tt.name = 'completion_tokens'        THEN ut.token_count END) AS completion_tokens,
+                   MAX(CASE WHEN tt.name = 'total_tokens'             THEN ut.token_count END) AS total_tokens
             FROM usage_tokens ut
             JOIN token_types tt ON tt.id = ut.type_id
             WHERE ut.log_entry_id = le.id
