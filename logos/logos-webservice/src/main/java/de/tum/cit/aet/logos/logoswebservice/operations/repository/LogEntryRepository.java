@@ -51,7 +51,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * that stays private, vanishes from both the pie and the headline total.
      * {@code since} is null for the all-time window; otherwise ranged on
      * {@code timestamp_request} under {@code idx_log_entry_success_timestamp_request}
-     * (060).
+     * (057).
      */
     @Transactional(readOnly = true)
     @Query(value = """

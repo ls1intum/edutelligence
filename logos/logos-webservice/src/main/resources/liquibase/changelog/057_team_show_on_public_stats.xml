@@ -9,7 +9,7 @@
          appear on /public/stats. Default false so nothing is published until
          someone turns the flag on. Totals on that page are scoped to the same
          set (never leak names or counts of non-selected teams). -->
-    <changeSet id="060-team-show-on-public-stats" author="logos">
+    <changeSet id="057-team-show-on-public-stats" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="teams" columnName="show_on_public_stats"/></not>
         </preConditions>
@@ -28,7 +28,7 @@
          column; this partial index keeps the success-only scan off the full
          history of errors and timeouts. CONCURRENTLY so writers are not
          blocked while logos-webservice is redeployed. -->
-    <changeSet id="060-log-entry-success-timestamp-request-index" author="logos" runInTransaction="false">
+    <changeSet id="057-log-entry-success-timestamp-request-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
             <not><indexExists tableName="log_entry" indexName="idx_log_entry_success_timestamp_request"/></not>
         </preConditions>

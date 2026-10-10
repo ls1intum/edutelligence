@@ -9,7 +9,7 @@
          "Applications", "Research", "Teaching"). The set of categories is
          whatever admins type in team settings; the page groups opted-in
          teams by it and shows teams without one as uncategorized. -->
-    <changeSet id="061-team-public-category" author="logos">
+    <changeSet id="058-team-public-category" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="teams" columnName="public_category"/></not>
         </preConditions>
