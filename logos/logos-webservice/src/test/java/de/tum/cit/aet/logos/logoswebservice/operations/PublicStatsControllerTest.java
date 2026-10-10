@@ -37,8 +37,6 @@ import de.tum.cit.aet.logos.logoswebservice.TestJwt;
     // No scheduled rollup pass: the seed reads usage from log_entry and must
     // not have its rows rolled up halfway through a test.
     "logos.stats.rollup.refresh-cron=-",
-    // Every test reads figures its own seed just wrote.
-    "logos.public-stats.cache-ttl=0s",
     "logos.auth.roles.logos-admin=itg-admin",
     "logos.auth.roles.app-admin=chair-member",
     "logos.auth.sync-debounce-minutes=5"
@@ -310,5 +308,36 @@ class PublicStatsControllerTest {
            .andExpect(jsonPath("$.requests_per_team[1].team_name").value("kc-team"))
            .andExpect(jsonPath("$.requests_by_key_type.application").value(2))
            .andExpect(jsonPath("$.local_cloud_requests.cloud").value(4));
+    }
+
+    @Test
+    @Sql(scripts = "/sql/seed-public-stats-orphan.sql", executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(scripts = "/sql/cleanup-public-stats-orphan.sql", executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    void orphanKeyAndProviderSuccessCountsUnderUnknown() throws Exception {
+        // 9108 succeeded on published team 2001 and its API key and its
+        // provider were deleted afterwards (both ids SET NULL). The headline
+        // and both splits keep counting it; each split carries it under its
+        // unknown bucket, so both still sum to successful_requests. With an
+        // inner join on the key or the provider the row would drop out of a
+        // split and the split would no longer agree with the headline.
+        mvc.perform(get("/public/stats"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.days").value("30"))
+           .andExpect(jsonPath("$.students").value(0))
+           .andExpect(jsonPath("$.teams").value(1))
+           .andExpect(jsonPath("$.successful_requests").value(1))
+           .andExpect(jsonPath("$.average_requests_per_user").value(0.0))
+           .andExpect(jsonPath("$.requests_per_team.length()").value(1))
+           .andExpect(jsonPath("$.requests_per_team[0].team_id").value(2001))
+           .andExpect(jsonPath("$.requests_per_team[0].requests").value(1))
+           .andExpect(jsonPath("$.requests_by_key_type.developer").value(0))
+           .andExpect(jsonPath("$.requests_by_key_type.application").value(0))
+           .andExpect(jsonPath("$.requests_by_key_type.service").value(0))
+           .andExpect(jsonPath("$.requests_by_key_type.unknown").value(1))
+           .andExpect(jsonPath("$.local_cloud_requests.local").value(0))
+           .andExpect(jsonPath("$.local_cloud_requests.cloud").value(0))
+           .andExpect(jsonPath("$.local_cloud_requests.unknown").value(1))
+           .andExpect(jsonPath("$.tokens").value(0));
     }
 }

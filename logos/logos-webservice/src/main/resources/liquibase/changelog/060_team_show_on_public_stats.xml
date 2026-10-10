@@ -9,7 +9,7 @@
          appear on /public/stats. Default false so nothing is published until
          someone turns the flag on. Totals on that page are scoped to the same
          set (never leak names or counts of non-selected teams). -->
-    <changeSet id="057-team-show-on-public-stats" author="logos">
+    <changeSet id="060-team-show-on-public-stats" author="logos">
         <preConditions onFail="MARK_RAN">
             <not><columnExists tableName="teams" columnName="show_on_public_stats"/></not>
         </preConditions>
@@ -23,25 +23,22 @@
         </rollback>
     </changeSet>
 
-    <!-- Every public stats figure comes from one pass over the successful
-         rows of opted-in teams (LogEntryRepository#findPublicUsageRows). This
-         partial index carries every column that pass reads, so it runs as an
-         index-only scan (~60 MB) instead of reading the log_entry heap, which
-         the request payloads make about a gigabyte on production. Measured on
-         production data: ~2.4 s to ~1.0 s. CONCURRENTLY so writers are not
+    <!-- Public stats filters successful rows by timestamp_request (rolling
+         window). idx_log_entry_timestamp_request (012) already covers that
+         column; this partial index keeps the success-only scan off the full
+         history of errors and timeouts. CONCURRENTLY so writers are not
          blocked while logos-webservice is redeployed. -->
-    <changeSet id="057-log-entry-public-stats-index" author="logos" runInTransaction="false">
+    <changeSet id="060-log-entry-success-timestamp-request-index" author="logos" runInTransaction="false">
         <preConditions onFail="MARK_RAN">
-            <not><indexExists tableName="log_entry" indexName="idx_log_entry_public_stats"/></not>
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_success_timestamp_request"/></not>
         </preConditions>
         <sql>
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_log_entry_public_stats
-                ON log_entry (team_id, timestamp_request)
-                INCLUDE (id, user_id, api_key_id, provider_id, model_id, model_name)
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_log_entry_success_timestamp_request
+                ON log_entry (timestamp_request)
                 WHERE result_status = 'success';
         </sql>
         <rollback>
-            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_public_stats;</sql>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_success_timestamp_request;</sql>
         </rollback>
     </changeSet>
 

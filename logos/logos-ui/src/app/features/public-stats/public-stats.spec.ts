@@ -35,8 +35,8 @@ describe('PublicStats page', () => {
     // Active people, regular users, published teams, requests, tokens, per-student average.
     expect(values).toEqual(['0', '0', '2', '5', '0', '1.2']);
     expect(root.textContent).toContain('last 30 days');
-    // Every donut legend row carries its count, so no number rides on color alone.
-    expect(root.querySelectorAll('.vram-donut__legend-item')).toHaveLength(2);
+    // Every pie legend row carries its count, so no number rides on color alone.
+    expect(root.querySelectorAll('.pie-legend .legend-item')).toHaveLength(2);
   });
 
   it('shows the growth chart, the usage table and the Logos Agent figures', async () => {
@@ -144,13 +144,12 @@ describe('PublicStats page', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
-    expect(root.querySelectorAll('.vram-donut__svg path')).toHaveLength(2);
-    root.querySelector<HTMLInputElement>('.vram-donut__legend input[type="checkbox"]')!.click();
+    expect(root.querySelectorAll('.pie-svg path')).toHaveLength(2);
+    root.querySelector<HTMLInputElement>('.pie-legend input[type="checkbox"]')!.click();
     fixture.detectChanges();
-    expect(root.querySelectorAll('.vram-donut__svg path')).toHaveLength(1);
+    expect(root.querySelectorAll('.pie-svg path')).toHaveLength(1);
     // The hidden team keeps its dimmed legend row, still tickable back in.
-    expect(root.querySelectorAll('.vram-donut__legend-item')).toHaveLength(2);
-    expect(root.querySelector('.vram-donut__legend-item--off')).not.toBeNull();
+    expect(root.querySelector('.pie-legend .legend-item.off')).not.toBeNull();
   });
 
   it('explains what a service key is next to the key-type split', async () => {

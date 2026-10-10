@@ -20,14 +20,14 @@
         />
       }
 
-      @for (slice of computedSlices; track slice.dataIndex) {
+      @for (slice of computedSlices; track $index) {
         <path
           [attr.d]="getArcPath(slice)"
           [style.fill]="slice.color"
-          [class.vram-donut__arc--hovered]="isHovered(slice.dataIndex)"
-          [class.vram-donut__arc--dimmed]="isAnyHovered() && !isHovered(slice.dataIndex)"
+          [class.vram-donut__arc--hovered]="isHovered($index)"
+          [class.vram-donut__arc--dimmed]="isAnyHovered() && !isHovered($index)"
           class="vram-donut__arc"
-          (mouseenter)="onSliceHover(slice.dataIndex)"
+          (mouseenter)="onSliceHover($index)"
           (mouseleave)="onSliceLeave()"
         />
       }
@@ -35,7 +35,7 @@
 
     <!-- Center label overlay -->
     <div class="vram-donut__center" aria-live="polite">
-      @if (hoveredSlice; as hs) {
+      @if (hoveredIndex() !== null && computedSlices[hoveredIndex()!]; as hs) {
         <span class="vram-donut__center-top">{{ hs.text }}</span>
         <span class="vram-donut__center-middle">{{ formatValue(hs.value) }}</span>
         <span class="vram-donut__center-bottom">{{ hs.percentage }}%</span>
@@ -54,39 +54,23 @@
   </div>
 
   <!-- Legend -->
-  @if (legendSlices.length > 0) {
+  @if (computedSlices.length > 0) {
     <ul class="vram-donut__legend" role="list">
-      @for (slice of legendSlices; track slice.dataIndex) {
+      @for (slice of computedSlices; track $index) {
         <li
           class="vram-donut__legend-item"
-          [class.vram-donut__legend-item--hovered]="isHovered(slice.dataIndex)"
-          [class.vram-donut__legend-item--dimmed]="isAnyHovered() && !isHovered(slice.dataIndex)"
-          [class.vram-donut__legend-item--off]="slice.hidden"
-          (mouseenter)="onSliceHover(slice.dataIndex)"
+          [class.vram-donut__legend-item--hovered]="isHovered($index)"
+          [class.vram-donut__legend-item--dimmed]="isAnyHovered() && !isHovered($index)"
+          (mouseenter)="onSliceHover($index)"
           (mouseleave)="onSliceLeave()"
         >
-          @if (toggleable) {
-            <input
-              type="checkbox"
-              class="vram-donut__legend-toggle"
-              [id]="'vram-donut-toggle-' + slice.dataIndex"
-              [checked]="!slice.hidden"
-              (change)="toggle(slice.dataIndex)"
-              [attr.aria-label]="'Show ' + slice.text + ' in the chart'"
-            />
-          }
           <span
             class="vram-donut__legend-dot"
             [style.background]="slice.color"
             aria-hidden="true"
           ></span>
           <span class="vram-donut__legend-text">{{ slice.text }}</span>
-          <span class="vram-donut__legend-value"
-            >{{ formatValue(slice.value) }}
-            @if (toggleable && slice.percentage !== undefined) {
-              ({{ slice.percentage }}%)
-            }
-          </span>
+          <span class="vram-donut__legend-value">{{ formatValue(slice.value) }}</span>
         </li>
       }
     </ul>

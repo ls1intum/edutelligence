@@ -16,7 +16,6 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.function.Function;
 
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.AgentSessionDayProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.PublicUsageRowProjection;
 
@@ -85,64 +84,6 @@ final class PublicUsageSummary {
         stats.put("regular_activity", regularActivity(allRows, today));
         stats.put("monthly", monthly(allRows, allAgentDays, today));
         stats.put("agent", agent(windowAgentDays, allAgentDays));
-    }
-
-    /**
-     * Active students, successful requests, the per-student average and the
-     * per-team, key-type and lane splits of the window's rows. The splits keep
-     * an explicit {@code unknown} bucket (deleted key or provider) so each adds
-     * up to {@code successful_requests}; the average divides only the
-     * active-student cohort's successes, so automated traffic does not
-     * inflate it.
-     */
-    static void putHeadline(Map<String, Object> stats, List<PublicUsageRowProjection> windowRows) {
-        long successfulRequests = 0;
-        long studentRequests = 0;
-        Set<Integer> students = new HashSet<>();
-        Map<Integer, String> teamNames = new HashMap<>();
-        Map<Integer, Long> teamRequests = new HashMap<>();
-        Map<String, Long> byKeyType = new LinkedHashMap<>();
-        for (ApiKeyType type : ApiKeyType.values()) {
-            byKeyType.put(type.name(), 0L);
-        }
-        byKeyType.put("unknown", 0L);
-        Map<String, Long> byLane = new LinkedHashMap<>();
-        byLane.put("local", 0L);
-        byLane.put("cloud", 0L);
-        byLane.put("unknown", 0L);
-
-        for (PublicUsageRowProjection row : windowRows) {
-            long requests = requests(row);
-            successfulRequests += requests;
-            if (row.getUserId() != null && Boolean.TRUE.equals(row.getStudent())) {
-                students.add(row.getUserId());
-                studentRequests += requests;
-            }
-            teamNames.put(row.getTeamId(), row.getTeamName());
-            teamRequests.merge(row.getTeamId(), requests, Long::sum);
-            byKeyType.merge(row.getKeyType() == null ? "unknown" : row.getKeyType(), requests, Long::sum);
-            byLane.merge(lane(row), requests, Long::sum);
-        }
-
-        List<Map<String, Object>> perTeam = new ArrayList<>();
-        teamRequests.entrySet().stream()
-            .sorted(Comparator.<Map.Entry<Integer, Long>>comparingLong(e -> -e.getValue())
-                .thenComparing(e -> Objects.requireNonNullElse(teamNames.get(e.getKey()), "")))
-            .forEach(e -> {
-                Map<String, Object> team = new LinkedHashMap<>();
-                team.put("team_id", e.getKey());
-                team.put("team_name", teamNames.get(e.getKey()));
-                team.put("requests", e.getValue());
-                perTeam.add(team);
-            });
-
-        stats.put("students", (long) students.size());
-        stats.put("successful_requests", successfulRequests);
-        stats.put("average_requests_per_user",
-            students.isEmpty() ? 0.0 : Math.round(studentRequests * 100.0 / students.size()) / 100.0);
-        stats.put("requests_per_team", perTeam);
-        stats.put("requests_by_key_type", byKeyType);
-        stats.put("local_cloud_requests", byLane);
     }
 
     private static long requests(PublicUsageRowProjection row) {

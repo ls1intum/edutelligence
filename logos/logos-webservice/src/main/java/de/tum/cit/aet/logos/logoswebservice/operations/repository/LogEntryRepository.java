@@ -43,65 +43,153 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     java.util.Optional<RequestPayloadProjection> findRequestPayloads(@Param("requestId") String requestId);
 
     /**
-     * Successful usage on opted-in teams, one row per UTC day, team, user, key
-     * type, serving lane and model, flagged whether it falls inside the
-     * selected window. Every request figure of the public stats page — the
-     * headline totals and splits, the distributions and the monthly series —
-     * is derived from this one row set, so they all count the same requests
-     * at the same freshness.
+     * Successful requests per opted-in team, for the public stats page.
      *
-     * <p>Read live from log_entry, not from the hourly rollup: the rollup
-     * buckets on forwarding time, carries no key type and lags behind late
-     * successes. Days and the window both follow {@code timestamp_request};
-     * {@code since} is exact, null meaning all time.
-     *
-     * <p>Shaped for one pass over the successes (about a million rows on
-     * production, ~1 s): an index-only scan of
-     * {@code idx_log_entry_public_stats} (057), tokens through a hash join on
-     * usage_tokens rather than a per-row lookup, and the inner aggregate groups
-     * on raw ids only. Names, roles, key types and lanes are joined onto the
-     * few thousand groups afterwards. {@code user_id} is null for application
-     * and service keys and for inactive users; {@code student} is true for
-     * active users with role {@code app_developer}. A deleted key or provider
-     * keeps its requests under {@code unknown}.
+     * <p>Only settled successes on teams with {@code show_on_public_stats}
+     * are counted — the page never names or includes a team an admin has not
+     * published. Inner join on that flag so a success with no team, or a team
+     * that stays private, vanishes from both the pie and the headline total.
+     * {@code since} is null for the all-time window; otherwise ranged on
+     * {@code timestamp_request} under {@code idx_log_entry_success_timestamp_request}
+     * (060).
      */
     @Transactional(readOnly = true)
     @Query(value = """
-        WITH agg AS (
-            SELECT (le.timestamp_request AT TIME ZONE 'UTC')::date                      AS day,
-                   (CAST(:since AS TIMESTAMPTZ) IS NULL
-                    OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))              AS in_window,
-                   le.team_id, le.user_id, le.api_key_id, le.provider_id, le.model_id, le.model_name,
-                   COUNT(*)                                                              AS requests,
-                   SUM(ut.token_count)                                                   AS tokens
-            FROM log_entry le
-            INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
-            LEFT JOIN usage_tokens ut ON ut.log_entry_id = le.id
-                 AND ut.type_id IN (SELECT id FROM token_types WHERE name = 'total_tokens')
-            WHERE le.result_status = 'success'
-            GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
-        )
-        SELECT to_char(a.day, 'YYYY-MM-DD')                                   AS day,
-               a.in_window                                                    AS inWindow,
-               a.team_id                                                      AS teamId,
-               t.name                                                         AS teamName,
-               t.public_category                                              AS category,
-               u.id                                                           AS userId,
-               COALESCE(u.role = 'app_developer', FALSE)                      AS student,
-               COALESCE(ak.key_type::text, 'unknown')                         AS keyType,
+        SELECT le.team_id AS teamId,
+               t.name     AS teamName,
+               COUNT(*)   AS requests
+        FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
+        WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
+        GROUP BY le.team_id, t.name
+        ORDER BY COUNT(*) DESC, t.name
+        """, nativeQuery = true)
+    List<TeamRequestCountProjection> countSuccessfulByTeam(@Param("since") Timestamp since);
+
+    /**
+     * Successful requests by API key type, for the public stats page.
+     *
+     * <p>Scoped to opted-in teams so the key-type split matches the headline
+     * total. Left join on the key so a success whose key was later deleted
+     * (api_key_id SET NULL) still counts under {@code unknown}.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COALESCE(ak.key_type::text, 'unknown') AS keyType,
+               COUNT(*)                               AS requests
+        FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
+        LEFT JOIN api_keys ak ON ak.id = le.api_key_id
+        WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
+        GROUP BY COALESCE(ak.key_type::text, 'unknown')
+        """, nativeQuery = true)
+    List<KeyTypeRequestCountProjection> countSuccessfulByKeyType(@Param("since") Timestamp since);
+
+    /**
+     * Successful requests by provider type, for the public stats page.
+     *
+     * <p>Scoped to opted-in teams. Left join on the provider so a success
+     * whose provider was later deleted (provider_id SET NULL) still counts
+     * under {@code unknown}.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COALESCE(p.provider_type::text, 'unknown') AS providerType,
+               COUNT(*)                                   AS requests
+        FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
+        LEFT JOIN providers p ON p.id = le.provider_id
+        WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
+        GROUP BY COALESCE(p.provider_type::text, 'unknown')
+        """, nativeQuery = true)
+    List<ProviderTypeRequestCountProjection> countSuccessfulByProviderType(@Param("since") Timestamp since);
+
+    /**
+     * Distinct active students (role {@code app_developer}; admins are staff)
+     * who made at least one successful request on an opted-in team inside the
+     * window — the public page's "active students".
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(DISTINCT le.user_id)
+        FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
+        INNER JOIN users u ON u.id = le.user_id AND u.is_active = TRUE AND u.role = 'app_developer'
+        WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
+        """, nativeQuery = true)
+    long countActiveStudentsOnPublicTeams(@Param("since") Timestamp since);
+
+    /**
+     * Successful requests from the same active-user cohort as
+     * {@link #countActiveStudentsOnPublicTeams} — numerator for the public
+     * page's per-student average. Application/service traffic (no user) and
+     * inactive users stay out so the average is not inflated by automated
+     * or deactivated accounts.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT COUNT(*)
+        FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
+        INNER JOIN users u ON u.id = le.user_id AND u.is_active = TRUE AND u.role = 'app_developer'
+        WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
+        """, nativeQuery = true)
+    long countSuccessfulRequestsFromActiveStudentsOnPublicTeams(@Param("since") Timestamp since);
+
+    /**
+     * Successful usage on opted-in teams, one row per UTC day, team, user,
+     * serving lane and model, from {@code since} on ({@code null} = all time).
+     * The public stats page derives every distribution, share and monthly
+     * series from these rows.
+     *
+     * <p>Reads {@code log_entry} directly, with the same predicate as the
+     * headline totals above (settled success, opted-in team, ranged on
+     * {@code timestamp_request}), so the headline and the usage figures count
+     * the same requests at the same freshness. The hourly rollup is not used
+     * here: it buckets on forwarding time and lags a finishing request by up
+     * to a refresh pass, which made the two sets disagree at the window
+     * boundary. {@code user_id} is null for application and service keys;
+     * {@code student} is true for active users with role {@code app_developer}.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT to_char(COALESCE(le.timestamp_request, le.timestamp_forwarding, le.timestamp_response)
+                           AT TIME ZONE 'UTC', 'YYYY-MM-DD')                   AS day,
+               le.team_id                                                      AS teamId,
+               t.public_category                                               AS category,
+               u.id                                                            AS userId,
+               COALESCE(u.role = 'app_developer', FALSE)                       AS student,
                CASE WHEN p.provider_type IS NULL THEN 'unknown'
                     WHEN p.provider_type = 'logosnode' THEN 'local'
-                    ELSE 'cloud' END                                          AS lane,
-               COALESCE(m.name, a.model_name)                                 AS model,
-               SUM(a.requests)::bigint                                        AS requests,
-               COALESCE(SUM(a.tokens), 0)::bigint                             AS tokens
-        FROM agg a
-        INNER JOIN teams t ON t.id = a.team_id
-        LEFT JOIN users u ON u.id = a.user_id AND u.is_active = TRUE
-        LEFT JOIN api_keys ak ON ak.id = a.api_key_id
-        LEFT JOIN providers p ON p.id = a.provider_id
-        LEFT JOIN models m ON m.id = a.model_id
-        GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+                    ELSE 'cloud' END                                           AS lane,
+               COALESCE(m.name, le.model_name)                                 AS model,
+               COUNT(*)::bigint                                                AS requests,
+               COALESCE(SUM(tok.total_tokens), 0)::bigint                      AS tokens
+        FROM log_entry le
+        INNER JOIN teams t ON t.id = le.team_id AND t.show_on_public_stats = TRUE
+        LEFT JOIN LATERAL (
+            SELECT SUM(ut.token_count) AS total_tokens
+            FROM usage_tokens ut
+            JOIN token_types tt ON tt.id = ut.type_id
+            WHERE ut.log_entry_id = le.id AND tt.name = 'total_tokens'
+        ) tok ON TRUE
+        LEFT JOIN users u ON u.id = le.user_id AND u.is_active = TRUE
+        LEFT JOIN providers p ON p.id = le.provider_id
+        LEFT JOIN models m ON m.id = le.model_id
+        WHERE le.result_status = 'success'
+          AND (CAST(:since AS TIMESTAMPTZ) IS NULL
+               OR le.timestamp_request >= CAST(:since AS TIMESTAMPTZ))
+        GROUP BY 1, 2, 3, 4, 5, 6, 7
         """, nativeQuery = true)
     List<PublicUsageRowProjection> findPublicUsageRows(@Param("since") Timestamp since);
 
