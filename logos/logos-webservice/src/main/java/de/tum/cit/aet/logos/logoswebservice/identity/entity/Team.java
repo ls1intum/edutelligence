@@ -33,6 +33,16 @@ public class Team {
     // keeps applying as before. Set by Logos admins only.
     private Integer priority;
 
+    // When true, this team's name and successful-request counts appear on the
+    // public stats page. Default false: nothing is published until an admin
+    // opts the team in via team settings.
+    @Column(nullable = false)
+    private boolean showOnPublicStats = false;
+
+    // Free-text group the public stats page sorts this team into (for
+    // example "Research"). Null = uncategorized.
+    private String publicCategory;
+
     public Integer getId() { return id; }
     public String getName() { return name; }
     public Integer getDefaultCloudRpmLimit() { return defaultCloudRpmLimit; }
@@ -43,6 +53,8 @@ public class Team {
     public Long getTeamMonthlyBudgetMicroCents() { return teamMonthlyBudgetMicroCents; }
     public Integer getPriority() { return priority; }
     public String getKeycloakGroup() { return keycloakGroup; }
+    public boolean isShowOnPublicStats() { return showOnPublicStats; }
+    public String getPublicCategory() { return publicCategory; }
     public void setName(String name) { this.name = name; }
     public void setDefaultCloudRpmLimit(Integer v) { this.defaultCloudRpmLimit = v; }
     public void setDefaultCloudTpmLimit(Integer v) { this.defaultCloudTpmLimit = v; }
@@ -52,4 +64,6 @@ public class Team {
     public void setTeamMonthlyBudgetMicroCents(Long v) { this.teamMonthlyBudgetMicroCents = v; }
     public void setPriority(Integer v) { this.priority = v; }
     public void setKeycloakGroup(String keycloakGroup) { this.keycloakGroup = keycloakGroup; }
+    public void setShowOnPublicStats(boolean v) { this.showOnPublicStats = v; }
+    public void setPublicCategory(String v) { this.publicCategory = v; }
 }

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Public stats opt-in: only teams an admin selects in team settings
+         appear on /public/stats. Default false so nothing is published until
+         someone turns the flag on. Totals on that page are scoped to the same
+         set (never leak names or counts of non-selected teams). -->
+    <changeSet id="060-team-show-on-public-stats" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="teams" columnName="show_on_public_stats"/></not>
+        </preConditions>
+        <addColumn tableName="teams">
+            <column name="show_on_public_stats" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="teams" columnName="show_on_public_stats"/>
+        </rollback>
+    </changeSet>
+
+    <!-- Public stats filters successful rows by timestamp_request (rolling
+         window). idx_log_entry_timestamp_request (012) already covers that
+         column; this partial index keeps the success-only scan off the full
+         history of errors and timeouts. CONCURRENTLY so writers are not
+         blocked while logos-webservice is redeployed. -->
+    <changeSet id="060-log-entry-success-timestamp-request-index" author="logos" runInTransaction="false">
+        <preConditions onFail="MARK_RAN">
+            <not><indexExists tableName="log_entry" indexName="idx_log_entry_success_timestamp_request"/></not>
+        </preConditions>
+        <sql>
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_log_entry_success_timestamp_request
+                ON log_entry (timestamp_request)
+                WHERE result_status = 'success';
+        </sql>
+        <rollback>
+            <sql>DROP INDEX CONCURRENTLY IF EXISTS idx_log_entry_success_timestamp_request;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

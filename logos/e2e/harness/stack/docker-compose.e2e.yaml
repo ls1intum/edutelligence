@@ -273,6 +273,12 @@ services:
       - "traefik.http.routers.ws-identity.service=ws-svc"
       - "traefik.http.routers.ws-identity.middlewares=strip-api"
       - "traefik.http.routers.ws-identity.priority=200"
+      # Unauthenticated aggregates; priority 200 beats the orchestrator /api catch-all.
+      - "traefik.http.routers.ws-public-stats.rule=Path(`/api/public/stats`)"
+      - "traefik.http.routers.ws-public-stats.entrypoints=web8080"
+      - "traefik.http.routers.ws-public-stats.service=ws-svc"
+      - "traefik.http.routers.ws-public-stats.middlewares=strip-api"
+      - "traefik.http.routers.ws-public-stats.priority=200"
       - "traefik.http.routers.ws-config.rule=PathPrefix(`/api/logosdb`)"
       - "traefik.http.routers.ws-config.entrypoints=web8080"
       - "traefik.http.routers.ws-config.service=ws-svc"

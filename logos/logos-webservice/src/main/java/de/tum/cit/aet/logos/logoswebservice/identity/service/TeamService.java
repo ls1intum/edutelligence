@@ -208,6 +208,8 @@ public class TeamService {
             // Same field as the teams list: needed so the application-keys SLO
             // column can show what an unset (inherited) key is actually served as.
             teamMap.put("priority", team.getPriority());
+            teamMap.put("show_on_public_stats", team.isShowOnPublicStats());
+            teamMap.put("public_category", team.getPublicCategory());
 
             List<Map<String, Object>> members = memberRepository.findActiveById_TeamId(teamId).stream()
                 .flatMap(m -> userRepository.findById(m.getId().getUserId()).stream().map(user -> {
@@ -241,6 +243,8 @@ public class TeamService {
             if (body.default_local_tpm_limit() != null) team.setDefaultLocalTpmLimit(body.default_local_tpm_limit());
             if (body.default_monthly_budget_micro_cents() != null) team.setDefaultMonthlyBudgetMicroCents(body.default_monthly_budget_micro_cents());
             if (body.team_monthly_budget_micro_cents() != null) team.setTeamMonthlyBudgetMicroCents(body.team_monthly_budget_micro_cents());
+            if (body.show_on_public_stats() != null) team.setShowOnPublicStats(body.show_on_public_stats());
+            if (body.public_category() != null) team.setPublicCategory(normalizePublicCategory(body.public_category()));
             teamRepository.save(team);
             auditLog.record("team.limits_updated", "team", team.getId(), team.getId(), before, limitsSnapshot(team));
             return new TeamResponseDTO(team.getId(), team.getName());
@@ -255,7 +259,30 @@ public class TeamService {
         m.put("default_local_tpm_limit", team.getDefaultLocalTpmLimit());
         m.put("default_monthly_budget_micro_cents", team.getDefaultMonthlyBudgetMicroCents());
         m.put("team_monthly_budget_micro_cents", team.getTeamMonthlyBudgetMicroCents());
+        m.put("show_on_public_stats", team.isShowOnPublicStats());
+        m.put("public_category", team.getPublicCategory());
         return m;
+    }
+
+    /** Longest public category label; longer input is rejected rather than cut. */
+    public static final int PUBLIC_CATEGORY_MAX_LENGTH = 64;
+
+    /** Trims the label; blank means "no category". */
+    static String normalizePublicCategory(String raw) {
+        String trimmed = raw.strip();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        if (trimmed.length() > PUBLIC_CATEGORY_MAX_LENGTH) {
+            throw new IllegalArgumentException(
+                "public_category must be at most " + PUBLIC_CATEGORY_MAX_LENGTH + " characters");
+        }
+        return trimmed;
+    }
+
+    /** Categories already in use, for the team settings picker. */
+    public List<String> publicCategories() {
+        return teamRepository.findDistinctPublicCategories();
     }
 
     @Transactional

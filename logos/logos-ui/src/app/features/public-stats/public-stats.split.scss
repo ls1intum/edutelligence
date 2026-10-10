@@ -1,0 +1,82 @@
+.split-empty {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-md);
+  padding: 1rem 0;
+}
+
+// Thin proportional bar. The 2px gaps are the surface between segments — the
+// same rule as the pie's wedge rings — and the overflow clip rounds the data
+// ends.
+.split-bar {
+  display: flex;
+  gap: 2px;
+  height: 0.9rem;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgb(var(--color-background-200));
+
+  .segment {
+    min-width: 0.25rem;
+    transition: opacity 120ms ease;
+
+    &:hover {
+      opacity: 0.85;
+    }
+  }
+}
+
+.split-legend {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.legend-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 8px;
+  font-size: var(--font-size-md);
+
+  .swatch {
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 4px;
+    flex-shrink: 0;
+    margin-top: 0.3rem;
+  }
+
+  .legend-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+
+  .name {
+    color: rgb(var(--color-typography-0));
+  }
+
+  .caption {
+    color: rgb(var(--color-typography-500));
+    font-size: var(--font-size-sm);
+    line-height: 1.35;
+  }
+
+  .value {
+    margin-left: auto;
+    color: rgb(var(--color-typography-500));
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    padding-top: 0.05rem;
+  }
+
+  &:hover,
+  &.highlighted {
+    background: rgb(var(--color-background-100));
+  }
+}

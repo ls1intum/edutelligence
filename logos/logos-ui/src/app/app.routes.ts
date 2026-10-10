@@ -12,6 +12,11 @@ export const routes: Routes = [
     loadComponent: () => import('./core/auth/pages/login/login').then(m => m.Login),
   },
   {
+    path: 'stats',
+    title: 'Stats · Logos',
+    loadComponent: () => import('./features/public-stats/public-stats').then(m => m.PublicStats),
+  },
+  {
     path: '',
     canActivate: [authGuard],
     loadComponent: () => import('./core/layout/shell/shell').then(m => m.Shell),

@@ -1,0 +1,33 @@
+@if (points.length === 0 || max === 0) {
+  <p class="trend-empty">No usage yet.</p>
+} @else {
+  <div class="trend" role="img" [attr.aria-label]="label + '. ' + readout">
+    <span class="trend-max">{{ formatCompact(max) }}</span>
+    <div class="trend-plot">
+      @for (bar of bars; track bar.point.key) {
+        <div
+          class="trend-slot"
+          [class.marked]="bar.marked"
+          [attr.title]="bar.point.label + ': ' + formatCount(bar.point.value)"
+          (mouseenter)="hovered.set(bar.point.key)"
+          (mouseleave)="hovered.set(null)"
+        >
+          @if (bar.marked) {
+            <span class="trend-marker-label">{{ markerLabel }}</span>
+          }
+          <span
+            class="trend-bar"
+            [class.highlighted]="hovered() === bar.point.key"
+            [style.height.%]="bar.percent"
+          ></span>
+        </div>
+      }
+    </div>
+    <div class="trend-axis" aria-hidden="true">
+      @for (bar of bars; track bar.point.key) {
+        <span class="trend-month">{{ bar.labelled ? bar.point.label : '' }}</span>
+      }
+    </div>
+  </div>
+  <p class="trend-readout" aria-hidden="true">{{ readout }}</p>
+}

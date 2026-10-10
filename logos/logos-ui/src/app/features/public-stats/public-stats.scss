@@ -1,0 +1,314 @@
+@use 'styles/glass' as *;
+
+// Two color systems, each for one job:
+//
+// * --series-*: identity of many nominal things (teams, models, categories).
+//   A muted version of the validated categorical palette: same hues in the
+//   same order (the order is what keeps neighbors apart for color-blind
+//   readers), OKLCH chroma capped at 0.13 so the page reads calm. Validated
+//   per theme against the shell surface; never cycled past slot 8, and the
+//   overflow "Other" slice takes no hue at all.
+// * --duo-*: two or three parts of one whole (local vs. cloud, key types)
+//   and single-series charts (growth), in steps of the brand violet. The
+//   primary scale reverses in dark mode, so these stay strong-on-surface in
+//   both themes without their own dark overrides.
+.public-stats-page {
+  --series-1: #407ac4;
+  --series-2: #d87754;
+  --series-3: #32ad7c;
+  --series-4: #e2a648;
+  --series-5: #e37fa4;
+  --series-6: #377e33;
+  --series-7: #4a4294;
+  --series-8: #c9645e;
+  --series-other: #898781;
+  --duo-1: rgb(var(--color-primary-600));
+  --duo-2: rgb(var(--color-primary-200));
+  --duo-3: rgb(var(--color-primary-400));
+
+  position: relative;
+  min-height: 100vh;
+  padding: 1.5rem;
+  background: rgb(var(--shell-background));
+
+  > * {
+    max-width: 64rem;
+    margin-inline: auto;
+  }
+}
+
+:host-context([data-theme='dark']) .public-stats-page {
+  --series-1: #4d88d3;
+  --series-2: #c76846;
+  --series-3: #199e70;
+  --series-4: #bf8222;
+  --series-5: #c56282;
+  --series-6: #377e33;
+  --series-7: #9087e1;
+  --series-8: #d97270;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 0 1.5rem;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.brand-name {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--logo-name-color));
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.window-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin: 0 0 1.25rem;
+}
+
+.window-bar-label {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.window-segments {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: rgb(var(--color-background-200));
+}
+
+.window-segment {
+  border: none;
+  background: transparent;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover {
+    color: rgb(var(--color-typography-0));
+  }
+
+  &.active {
+    background: rgb(var(--color-background-0));
+    color: rgb(var(--color-typography-0));
+    box-shadow: 0 0 0 1px rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  }
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 3rem 0;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-md);
+}
+
+.loading-pulse {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 50%;
+  background: rgb(var(--color-skeleton-fill) / var(--opacity-soft));
+  animation: loading-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes loading-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+// ── KPI tiles ─────────────────────────────────────────────────────────────────
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+
+  @media (max-width: 48rem) {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.kpi-tile {
+  @include glass-surface;
+  padding: 1.1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.kpi-value {
+  font-size: var(--font-size-3xl);
+  font-weight: var(--font-weight-bold);
+  color: rgb(var(--color-typography-0));
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.kpi-label {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-md);
+}
+
+.kpi-window {
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+}
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 1rem;
+  align-items: start;
+
+  @media (max-width: 56rem) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chart-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.chart-panel {
+  @include glass-surface;
+  padding: 1.25rem;
+}
+
+.chart-panel-head {
+  margin-bottom: 1rem;
+}
+
+.chart-title {
+  margin: 0 0 0.25rem;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+}
+
+.chart-hint {
+  margin: 0 0 0.75rem;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+}
+
+.chart-panel:has(.chart-panel-head) .chart-title {
+  margin-bottom: 0.75rem;
+}
+
+.page-footnote {
+  margin: 1.5rem 0 0;
+  color: rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+
+// ── Sections added below the request breakdowns ─────────────────────────────
+
+.section {
+  margin-top: 1rem;
+}
+
+.charts-grid.even {
+  grid-template-columns: 1fr 1fr;
+
+  @media (max-width: 56rem) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.split-gap {
+  margin-top: 1.25rem;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-md);
+
+  th,
+  td {
+    padding: 0.45rem 0.25rem;
+    text-align: right;
+    border-bottom: 1px solid rgb(var(--glass-stroke) / var(--glass-stroke-opacity));
+  }
+
+  th[scope='row'],
+  thead th:first-child {
+    text-align: left;
+    font-weight: var(--font-weight-normal);
+    color: rgb(var(--color-typography-500));
+  }
+
+  thead th {
+    color: rgb(var(--color-typography-500));
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  td {
+    color: rgb(var(--color-typography-0));
+    font-weight: var(--font-weight-semibold);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.table-note {
+  margin-top: 0.75rem;
+}
+
+.mini-kpis {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+.mini-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}

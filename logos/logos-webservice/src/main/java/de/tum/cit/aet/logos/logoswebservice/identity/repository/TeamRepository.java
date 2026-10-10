@@ -81,4 +81,15 @@ public interface TeamRepository extends JpaRepository<Team, Integer> {
         """)
     int adoptIfUnlinked(@Param("id") Integer id, @Param("expectedName") String expectedName,
                         @Param("group") String group);
+
+    /** Teams an admin opted into the public stats page. */
+    long countByShowOnPublicStatsTrue();
+
+    /** Distinct public stats categories in use, alphabetically. */
+    @Query("""
+        SELECT DISTINCT t.publicCategory FROM Team t
+        WHERE t.publicCategory IS NOT NULL
+        ORDER BY t.publicCategory
+        """)
+    List<String> findDistinctPublicCategories();
 }

@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
@@ -172,6 +173,13 @@ public class TeamController {
     @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
     public ResponseEntity<?> listKeycloakGroups(@RequestAttribute("authContext") AuthContext auth) {
         return ResponseEntity.ok(groupDirectory.list());
+    }
+
+    /** Public stats categories already in use, for the team settings picker. */
+    @GetMapping("/public-categories")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<List<String>> listPublicCategories() {
+        return ResponseEntity.ok(teamService.publicCategories());
     }
 
     @PostMapping("/{teamId}/members")

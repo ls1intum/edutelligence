@@ -26,6 +26,7 @@ describe('parseProviderCap', () => {
 describe('SettingsTabComponent — Keycloak link', () => {
   const updateTeamKeycloakGroup = vi.fn();
   const getKeycloakGroups = vi.fn();
+  const getPublicCategories = vi.fn();
 
   function teamDetail(overrides: Partial<TeamDetail> = {}): TeamDetail {
     return {
@@ -42,6 +43,8 @@ describe('SettingsTabComponent — Keycloak link', () => {
       priority: null,
       managed: false,
       keycloak_group: null,
+      show_on_public_stats: false,
+      public_category: null,
       ...overrides,
     };
   }
@@ -50,6 +53,7 @@ describe('SettingsTabComponent — Keycloak link', () => {
     vi.clearAllMocks();
     updateTeamKeycloakGroup.mockResolvedValue(undefined);
     getKeycloakGroups.mockResolvedValue({ available: false, groups: [] });
+    getPublicCategories.mockResolvedValue([]);
     TestBed.configureTestingModule({
       providers: [
         {
@@ -57,6 +61,7 @@ describe('SettingsTabComponent — Keycloak link', () => {
           useValue: {
             updateTeamKeycloakGroup,
             getKeycloakGroups,
+            getPublicCategories,
             updateTeamLimits: vi.fn(),
             deleteTeam: vi.fn(),
             getTeamProviderBudgets: vi.fn().mockResolvedValue([]),

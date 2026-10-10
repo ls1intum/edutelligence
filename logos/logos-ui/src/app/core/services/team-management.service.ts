@@ -50,6 +50,11 @@ export class TeamManagementService {
     return firstValueFrom(this.http.get<KeycloakGroupDirectory>('/api/teams/keycloak-groups'));
   }
 
+  /** Public stats categories other teams already use, for the category picker. */
+  getPublicCategories(): Promise<string[]> {
+    return firstValueFrom(this.http.get<string[]>('/api/teams/public-categories'));
+  }
+
   deleteTeam(id: number): Promise<void> {
     return firstValueFrom(this.http.delete<void>(`/api/teams/${id}`));
   }

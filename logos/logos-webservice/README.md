@@ -12,6 +12,8 @@ Browser / logos-ui / API clients
       │                                            cloud named-model → Azure/OpenAI directly
       │                                            local / mixed → reverse-proxy to orchestrator
       ├── /api/me, /api/users, /api/teams      → logos-webservice (priority 200, strip /api)
+      ├── /api/public/stats?days=…              → logos-webservice (priority 200, strip /api;
+      │                                            opted-in teams only; default days=30)
       ├── /api/logosdb/*                        → logos-webservice (priority 200, strip /api)
       ├── /api/admin/*                          → logos-webservice (priority 200, strip /api)
       ├── /api/ws/stats, /api/ws/stats/v2       → logos-webservice (priority 200, strip /api)
@@ -156,6 +158,36 @@ Example changeset:
     </changeSet>
 </databaseChangeLog>
 ```
+
+## Public stats (`GET /public/stats`)
+
+Unauthenticated aggregates for the `/stats` page. Rate-limited per source IP.
+
+Query parameter `days` (default `30`): `7`, `30`, `90`, `365`, or `all`. Applied to
+every request-derived figure (per-team, key type, lane, active students, average).
+
+**Totals stay consistent with what is shown:** only teams with
+`teams.show_on_public_stats = true` (set in team settings) appear by name, and
+their traffic alone feeds `successful_requests`, the key-type and lane splits,
+and the active-student count. Non-selected teams are never named and never
+folded into those totals. `teams` is the count of opted-in teams (including
+those with no traffic in the window). `students` are distinct active users with
+role `app_developer` (admins count as staff) who made at least one successful
+request on an opted-in team inside the window.
+
+Usage figures on the same opted-in teams, read from the hourly rollup plus the
+live tail of `log_entry`:
+
+| Field | Window | Meaning |
+|-------|--------|---------|
+| `tokens`, `local_cloud_tokens` | `days` | Tokens of successful requests, total and by lane. |
+| `active_persons`, `active_teams` | `days` | People (any role) and teams with a successful request. |
+| `usage_per_person`, `usage_per_team` | `days` | Median and 90th percentile of requests, tokens and active days. Per-person values are `null` (`suppressed: true`) below five active people. |
+| `categories` | `days` | Requests, tokens and active teams per `teams.public_category` (free text set in team settings; `null` = uncategorized). |
+| `models` | `days` | Top models (`all`, `local`, `cloud`) by requests, with tokens; the tail is one `other` row. |
+| `regular_activity` | last 4 complete weeks | People and teams active in at least 3 / all 4 weeks. |
+| `monthly` | all time | Active teams, people, students, requests, tokens and Logos Agent sessions per UTC month. |
+| `agent` | `days` | Logos Agent sessions, distinct starters, successes and pull requests. |
 
 ## Adding a new endpoint
 

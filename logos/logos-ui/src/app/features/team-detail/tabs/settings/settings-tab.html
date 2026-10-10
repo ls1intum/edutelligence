@@ -1,5 +1,49 @@
 <div class="settings-tab">
 
+  <p class="section-label">PUBLIC STATS</p>
+  <p class="settings-hint">
+    When enabled, this team's name and successful-request counts appear on the public
+    <a href="/stats" target="_blank" rel="noopener">stats page</a>. Off by default.
+    Use Save Settings below to apply.
+  </p>
+
+  <div class="settings-card">
+    <label class="settings-checkbox" for="s-public-stats">
+      <input
+        id="s-public-stats"
+        type="checkbox"
+        [checked]="showOnPublicStats()"
+        (change)="showOnPublicStats.set($any($event.target).checked)"
+        [disabled]="!canEdit || saveLoading()"
+      />
+      <span>Show this team on the public stats page</span>
+    </label>
+
+    <div class="settings-field settings-field--spaced">
+      <label class="field-label" for="s-public-category">Category</label>
+      <input
+        id="s-public-category"
+        class="field-input"
+        type="text"
+        list="s-public-category-options"
+        maxlength="64"
+        placeholder="e.g. Research, leave blank for uncategorized"
+        [value]="publicCategory()"
+        (input)="publicCategory.set($any($event.target).value)"
+        [disabled]="!canEdit || saveLoading()"
+        autocomplete="off"
+      />
+      <datalist id="s-public-category-options">
+        @for (category of publicCategoryOptions(); track category) {
+          <option [value]="category"></option>
+        }
+      </datalist>
+      <p class="settings-hint settings-hint--field">
+        The public stats page groups teams by this label. Pick one other teams use, or type a new one.
+      </p>
+    </div>
+  </div>
+
   <p class="section-label">OVERALL TEAM LIMITS</p>
   <p class="settings-hint">
     Caps combined spend across members' personal keys. Application keys have their own budgets and
