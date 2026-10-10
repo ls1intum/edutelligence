@@ -88,6 +88,7 @@ from logos.middleware import APIPrefixStripperMiddleware
 from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.effort_normalization import adapt_payload_after_effort_rejection, parse_effort_rejection
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, queue_role_rank
@@ -333,7 +334,7 @@ def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> N
 def _is_timeout_failure(
     *,
     timed_out: bool = False,
-    error: Optional[str] = None,
+    error: Any = None,
     status_code: Optional[int] = None,
 ) -> bool:
     """Whether a failed execution should settle as ``timeout``, not ``error``.
@@ -342,13 +343,16 @@ def _is_timeout_failure(
     used to leave ``timed_out`` stuck at False, so worker command timeouts,
     HTTP 504s, and error text that named a timeout all landed as ``error`` —
     which is why the statistics Status chart's Timeout row stayed at zero.
+
+    ``error`` is usually text, but the executor passes an OpenAI-shaped error
+    body's ``error`` object through as a dict, so it is read as text either way.
     """
     if timed_out:
         return True
     if status_code == 504:
         return True
     if error:
-        lowered = error.lower()
+        lowered = str(error).lower()
         if "timeout" in lowered or "timed out" in lowered:
             return True
     return False
@@ -2152,6 +2156,39 @@ async def _chunks_with_arrival(source):
             await pump
 
 
+def _int_or(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _upstream_error_text(body: Any) -> Any:
+    """The text of an upstream error body, for recognising an effort rejection.
+
+    Covers the OpenAI shape and vLLM's flat ``{"object": "error", "message": ...}``,
+    falling back to the body itself.
+    """
+    message = upstream_error_message(body)
+    if message is None and isinstance(body, dict) and isinstance(body.get("message"), str):
+        message = body["message"]
+    return message or body
+
+
+def _is_effort_rejection_body(chunk: Any) -> bool:
+    """Whether a stream's first chunk is an upstream error body rejecting the reasoning effort.
+
+    A worker forwards an upstream error status as the raw error body in the
+    first chunk. Only a bare JSON body counts: an event-stream chunk is model
+    output, whatever its text says.
+    """
+    try:
+        text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk or "")
+    except Exception:
+        return False
+    return text.lstrip().startswith("{") and parse_effort_rejection(text) is not None
+
+
 async def _streaming_response(
     context,
     payload,
@@ -2315,6 +2352,9 @@ async def _streaming_response(
     # another node (#815 phase 1). A mid-flight failure re-dispatches the
     # request at RESUME priority on a peer node and continues the generation
     # after the partial answer, so the caller sees a pause (#815 phase 2).
+    # An upstream error status is buffered by the registry and surfaces as an
+    # UpstreamStreamError before anything is committed, so a rejected reasoning
+    # effort is resent once from the pre-commit open below.
     if context.provider_type == "logosnode" and context.lane_id:
         stream_payload = set_payload_field(prepared_payload, "stream", True)
         if not is_audio_upload_path(request_path or ""):
@@ -2449,6 +2489,28 @@ async def _streaming_response(
         # helper's CancelledError path.
         try:
             first_chunks, open_iter, open_error = await _open_logosnode_stream(context, stream_payload)
+            if isinstance(open_error, UpstreamStreamError):
+                # An upstream that rejects the reasoning effort names the
+                # levels it supports; resend once with the effort rewritten
+                # onto them. Nothing has reached the client yet. Both payloads
+                # are adapted so a later resume continues with the same effort.
+                rejection = _upstream_error_text(open_error.body)
+                adapted_stream = adapt_payload_after_effort_rejection(
+                    stream_payload, getattr(context, "model_name", None), rejection
+                )
+                if adapted_stream is not None:
+                    logger.warning(
+                        "Upstream rejected the reasoning effort for %s; resending once with it adapted",
+                        getattr(context, "model_name", None),
+                    )
+                    stream_payload = adapted_stream
+                    prepared_payload = (
+                        adapt_payload_after_effort_rejection(
+                            prepared_payload, getattr(context, "model_name", None), rejection
+                        )
+                        or prepared_payload
+                    )
+                    first_chunks, open_iter, open_error = await _open_logosnode_stream(context, stream_payload)
         except asyncio.CancelledError:
             _release()
             raise
@@ -2940,11 +3002,47 @@ async def _streaming_response(
             _pipeline.record_provider_call(request_id, at=stream_status.dispatch_at)
 
     try:
-        while True:
-            chunk = await chunk_iter.__anext__()
-            held_chunks.append(chunk)
-            if gate.has_output(chunk):
+        for effort_attempt in range(2):
+            try:
+                while True:
+                    chunk = await chunk_iter.__anext__()
+                    held_chunks.append(chunk)
+                    if gate.has_output(chunk):
+                        break
                 break
+            except UpstreamStreamError as exc:
+                # An upstream that rejects the reasoning effort names the
+                # levels it supports; resend once with the effort rewritten
+                # onto them. Nothing has reached the client yet, and the
+                # retry's dispatch replaces this one's in the stats. The
+                # resend keeps the retry deadline of the first dispatch.
+                adapted = (
+                    None
+                    if effort_attempt
+                    else adapt_payload_after_effort_rejection(
+                        prepared_payload, getattr(context, "model_name", None), _upstream_error_text(exc.body)
+                    )
+                )
+                if adapted is None:
+                    raise
+                logger.warning(
+                    "Upstream rejected the reasoning effort for %s; resending once with it adapted",
+                    getattr(context, "model_name", None),
+                )
+                prepared_payload = adapted
+                stream_status = StreamingExecutionStatus()
+                chunk_iter = _pipeline.executor.execute_streaming(
+                    context.forward_url,
+                    headers,
+                    prepared_payload,
+                    on_headers=process_headers,
+                    status=stream_status,
+                    timeout=stream_timeout_s,
+                    deadline_at=stream_deadline_at,
+                    emit_recovery_frames=False,
+                )
+                gate = _SsePreCommitGate(not is_audio_upload_path(request_path or ""))
+                held_chunks.clear()
     except UpstreamStreamError as exc:
         logger.error(
             "Pre-stream error from upstream (model_id=%s, provider_id=%s): HTTP %s",
@@ -3389,6 +3487,41 @@ async def _sync_response(
                         deadline_at=deadline_at,
                         on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
                     )
+                    # An upstream that rejects the reasoning effort names the
+                    # levels it supports; resend once with the effort rewritten
+                    # onto them. The resend re-stamps the provider call.
+                    adapted = (
+                        adapt_payload_after_effort_rejection(
+                            prepared_payload,
+                            getattr(context, "model_name", None),
+                            _upstream_error_text(rpc_result.get("body")),
+                        )
+                        if isinstance(rpc_result, dict) and _int_or(rpc_result.get("status_code"), 200) >= 400
+                        else None
+                    )
+                    if adapted is not None:
+                        logger.warning(
+                            "Upstream rejected the reasoning effort for %s; resending once with it adapted",
+                            getattr(context, "model_name", None),
+                        )
+                        prepared_payload = adapted
+                        sync_payload = force_non_streaming_payload(prepared_payload)
+                        rpc_result = await _logosnode_registry.send_command(
+                            provider_id=provider_id,
+                            action="infer",
+                            params={
+                                "lane_id": context.lane_id,
+                                "payload": sync_payload,
+                                "request_path": request_path,
+                            },
+                            timeout_seconds=(
+                                retry_budget.execution_timeout_s(_LOGOSNODE_INFER_TIMEOUT_SECONDS)
+                                if retry_budget is not None
+                                else _LOGOSNODE_INFER_TIMEOUT_SECONDS
+                            ),
+                            deadline_at=deadline_at,
+                            on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
+                        )
                 # The full response is in hand the moment send_command returns;
                 # capture it before the perf merge and body decoding below,
                 # which are logos work that must stay out of the provider's
@@ -3505,6 +3638,35 @@ async def _sync_response(
                 timeout=cloud_timeout_s,
                 deadline_at=retry_budget.deadline_at if retry_budget is not None else None,
             )
+            # The effort rejection again (see the streaming paths above): one
+            # resend, bounded by what is left of the retry deadline like the
+            # first call.
+            adapted = (
+                adapt_payload_after_effort_rejection(
+                    prepared_payload,
+                    getattr(context, "model_name", None),
+                    (
+                        _upstream_error_text(exec_result.response)
+                        if exec_result.response is not None
+                        else exec_result.error
+                    ),
+                )
+                if not exec_result.success and exec_result.status_code is not None
+                else None
+            )
+            if adapted is not None:
+                logger.warning(
+                    "Upstream rejected the reasoning effort for %s; resending once with it adapted",
+                    getattr(context, "model_name", None),
+                )
+                prepared_payload = adapted
+                exec_result = await _pipeline.executor.execute_sync(
+                    context.forward_url,
+                    headers,
+                    prepared_payload,
+                    timeout=retry_budget.execution_timeout_s(None) if retry_budget is not None else None,
+                    deadline_at=retry_budget.deadline_at if retry_budget is not None else None,
+                )
             # The executor captured both instants where they belong: the
             # dispatch after its request preparation (the multipart decode for
             # file uploads) and the response before its body parsing — both of
