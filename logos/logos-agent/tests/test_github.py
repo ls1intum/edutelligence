@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import jwt
 import pytest
-from app import github
+from app import github, github_tokens
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +22,24 @@ def _clean_verified_login(monkeypatch):
     # verify_identities remembers the API's spelling of the account in the
     # module; every test starts from a service that has not verified yet.
     monkeypatch.setattr(github, "_verified_login", None)
+
+
+@pytest.fixture()
+def app_key():
+    """A generated App RSA keypair: the private PEM is the credential."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+    return key, pem
+
+
+@pytest.fixture()
+def app_pem(app_key):
+    """A generated app private key, the way an environment would carry it."""
+    return app_key[1]
 
 
 class FakeResponse:
@@ -488,6 +509,232 @@ class TestAgentIdentity:
         assert all("is not configured" in note for note in notes)
 
 
+class TestAppIdentity:
+    """The same check when the agent account runs as a GitHub App.
+
+    The deployment then holds no personal access token of the account at
+    all: one credential kind — the minted installation token — serves both
+    the runner and the containers, and the account it authenticates as is
+    the app's bot user, so the configured login is that spelling.
+    Installation tokens cannot answer GET /user; the check asks /app and
+    /app/installations/{id} with the App JWT instead.
+    """
+
+    @staticmethod
+    def _app(monkeypatch, pem, *, login="LogosOSSAgent[bot]", mint="ghs-minted", app_id="41234", installation_id="815"):
+        monkeypatch.setattr(
+            github,
+            "settings",
+            replace(
+                github.settings,
+                github_login=login,
+                github_token="",
+                session_github_token="",
+                github_app_id=app_id,
+                github_app_private_key=pem,
+                github_app_installation_id=installation_id,
+            ),
+        )
+
+        async def minted_token(**kwargs):
+            return mint
+
+        monkeypatch.setattr(github.github_tokens, "installation_token", minted_token)
+        return mint
+
+    @staticmethod
+    def _app_identity_client(
+        monkeypatch,
+        *,
+        app_id=41234,
+        slug="LogosOSSAgent",
+        installation_app_id=41234,
+        installation_id=815,
+        mint="ghs-minted",
+        app_error=None,
+        installation_error=None,
+    ):
+        """Stub /app and /app/installations/{id} (both App JWT); never /user."""
+        seen: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None, params=None):
+                token = (headers or {}).get("Authorization", "").removeprefix("Bearer ")
+                seen.append((url, token))
+                if url.endswith("/app"):
+                    if isinstance(app_error, Exception):
+                        raise app_error
+                    if app_error is not None:
+                        return FakeResponse(app_error, {}, text="app lookup failed")
+                    return FakeResponse(200, {"id": app_id, "slug": slug})
+                if "/repos/" in url and url.endswith("/installation"):
+                    return FakeResponse(200, {"id": installation_id, "app_id": installation_app_id})
+                if f"/app/installations/{installation_id}" in url and not url.endswith("/access_tokens"):
+                    if isinstance(installation_error, Exception):
+                        raise installation_error
+                    if installation_error is not None:
+                        return FakeResponse(installation_error, {}, text="installation lookup failed")
+                    return FakeResponse(200, {"app_id": installation_app_id, "id": installation_id})
+                return FakeResponse(401, {}, text="Bad credentials")
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+        return seen
+
+    async def test_the_minted_token_is_checked_against_the_bot_account(self, monkeypatch, app_key):
+        key, pem = app_key
+        mint = self._app(monkeypatch, pem)
+        seen = self._app_identity_client(monkeypatch, mint=mint)
+
+        notes = await github.verify_identities()
+
+        # /app and /app/installations/{id} with the App JWT — never the
+        # user-only /user endpoint, and never the nonexistent /installation.
+        assert [url for url, _ in seen] == [
+            "https://api.github.com/app",
+            "https://api.github.com/app/installations/815",
+        ]
+        for _, bearer in seen:
+            claims = jwt.decode(
+                bearer,
+                key.public_key(),
+                algorithms=["RS256"],
+                options={"verify_exp": False, "verify_iat": False},
+            )
+            assert claims["iss"] == "41234"
+        assert notes == ["GitHub App installation token authenticates as LogosOSSAgent[bot]"]
+        assert github._verified_login == "LogosOSSAgent[bot]"
+
+    async def test_a_bot_user_that_is_not_the_configured_account_stops_the_service(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem, login="LogosOSSAgent[bot]")
+        self._app_identity_client(monkeypatch, slug="SomeOtherApp")
+
+        with pytest.raises(github.IdentityError, match="SomeOtherApp\\[bot\\]"):
+            await github.verify_identities()
+
+    async def test_a_token_of_another_apps_installation_stops_the_service(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem)
+        self._app_identity_client(monkeypatch, installation_app_id=99999)
+
+        with pytest.raises(github.IdentityError, match="99999"):
+            await github.verify_identities()
+
+    async def test_a_key_signing_for_another_app_stops_the_service(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem, app_id="41234")
+        self._app_identity_client(monkeypatch, app_id=55555)
+
+        with pytest.raises(github.IdentityError, match="55555"):
+            await github.verify_identities()
+
+    async def test_a_mint_failure_is_a_note_not_a_stop(self, monkeypatch, app_pem):
+        # A mint that fails at startup is a degraded start, like an
+        # unreachable API: the finalizer checks the same thing inside the
+        # container before it pushes.
+        self._app(monkeypatch, app_pem)
+
+        async def broken(**kwargs):
+            raise github_tokens.CredentialError("could not reach the GitHub API")
+
+        monkeypatch.setattr(github.github_tokens, "installation_token", broken)
+        self._app_identity_client(monkeypatch)
+
+        notes = await github.verify_identities()
+
+        assert any("could not be verified" in note for note in notes)
+
+    async def test_an_unreachable_api_is_a_note_not_a_stop(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem)
+        self._app_identity_client(monkeypatch, app_error=RuntimeError("no route to host"))
+
+        notes = await github.verify_identities()
+
+        assert any("could not be verified" in note for note in notes)
+
+    async def test_helper_token_retries_verification_after_degraded_startup(self, monkeypatch, app_pem):
+        # A startup network failure leaves the service running without a
+        # remembered bot login. Once GitHub recovers, a helper must not get a
+        # token until the App check succeeds — and a mismatched bot login
+        # must still stop delivery (the finalizer cannot catch it).
+        self._app(monkeypatch, app_pem, login="LogosOSSAgent[bot]")
+        self._app_identity_client(monkeypatch, app_error=RuntimeError("no route to host"))
+
+        notes = await github.verify_identities()
+
+        assert any("could not be verified" in note for note in notes)
+        assert github._verified_login is None
+
+        self._app_identity_client(monkeypatch, slug="SomeOtherApp")
+
+        with pytest.raises(github.IdentityError, match="SomeOtherApp\\[bot\\]"):
+            await github.ensure_app_identity_verified()
+
+        assert github._verified_login is None
+
+    async def test_helper_token_verifies_on_recovery_after_degraded_startup(self, monkeypatch, app_pem):
+        self._app(monkeypatch, app_pem, login="LogosOSSAgent[bot]")
+        self._app_identity_client(monkeypatch, app_error=RuntimeError("no route to host"))
+
+        await github.verify_identities()
+        assert github._verified_login is None
+
+        self._app_identity_client(monkeypatch, slug="LogosOSSAgent")
+
+        await github.ensure_app_identity_verified()
+
+        assert github._verified_login == "LogosOSSAgent[bot]"
+        # A second call must not repeat the App checks.
+        seen = self._app_identity_client(monkeypatch, slug="LogosOSSAgent")
+        await github.ensure_app_identity_verified()
+        assert seen == []
+
+    async def test_stale_personal_tokens_are_ignored_with_the_app_configured(self, monkeypatch, app_pem):
+        # A migration keeps the old tokens set for a while: the app must
+        # win, or the standing credential is back in the picture the moment
+        # somebody calls with it.
+        mint = self._app(monkeypatch, app_pem)
+        monkeypatch.setattr(github, "settings", replace(github.settings, github_token="stale-pat"))
+        seen = self._app_identity_client(monkeypatch, mint=mint)
+
+        await github.verify_identities()
+
+        assert len(seen) == 2
+        assert seen[0][1] == seen[1][1]  # both authenticated with the App JWT
+        assert all("/user" not in url for url, _ in seen)
+        assert all(not url.endswith("/installation") or "/app/installations/" in url for url, _ in seen)
+
+    async def test_the_runner_acts_with_the_minted_token(self, monkeypatch, app_pem):
+        mint = self._app(monkeypatch, app_pem)
+        calls: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                calls.append({"url": url, "headers": headers or {}})
+                return FakeResponse(201)
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+
+        await github.dispatch_dev_deploy(image_tag="pr-772")
+
+        assert calls[0]["headers"]["Authorization"] == f"Bearer {mint}"
+
+
 class TestListingPagination:
     """Long threads must not hide their newest entries.
 
@@ -775,7 +1022,7 @@ class TestReactionsAndReplies:
                 return False
 
             async def post(self, url, headers=None, json=None):
-                sent.append({"url": url, "json": json})
+                sent.append({"url": url, "headers": headers, "json": json})
                 return FakeResponse(status, payload or {"html_url": "https://github.com/x/y#c1"})
 
         monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
@@ -814,6 +1061,22 @@ class TestReactionsAndReplies:
 
         assert sent[0]["url"].endswith("/pulls/772/comments/3910035243/replies")
         assert sent[0]["json"] == {"body": "the answer"}
+
+    async def test_an_inline_review_sends_authorization_headers(self, monkeypatch):
+        # create_pull_review must await _headers(); a bare call hands HTTPX a
+        # coroutine and every inline-review delivery fails before the request.
+        sent = self._capture(monkeypatch, status=200, payload={"html_url": "https://github.com/x/y#r1"})
+
+        url = await github.create_pull_review(
+            772,
+            "summary",
+            [{"path": "a.py", "line": 12, "body": "nits"}],
+            commit_id="abc123",
+        )
+
+        assert sent[0]["url"].endswith("/pulls/772/reviews")
+        assert sent[0]["headers"]["Authorization"] == "Bearer tok"
+        assert url == "https://github.com/x/y#r1"
 
 
 class TestReviewSupersession:

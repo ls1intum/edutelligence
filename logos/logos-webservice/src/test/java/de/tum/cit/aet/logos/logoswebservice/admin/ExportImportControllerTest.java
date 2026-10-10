@@ -154,6 +154,68 @@ class ExportImportControllerTest {
     }
 
     @Test
+    void importExport_restoresRunningSessionApiKeyAssociation() throws Exception {
+        // A running session linked to a minted key must stay linked after a
+        // same-instance export/import; clearing the association would let the
+        // janitor revoke the still-active key as an orphan.
+        Integer parentKeyId = jdbc.queryForObject(
+            "SELECT id FROM api_keys WHERE key_value = 'dev-key-1'", Integer.class);
+        Integer mintedKeyId = jdbc.queryForObject("""
+            INSERT INTO api_keys (
+                key_value, name, key_type, user_id, team_id, is_active, parent_api_key_id
+            ) VALUES (
+                'minted-session-key-roundtrip', 'session mint', 'developer', 1001, 2001, true, ?
+            ) RETURNING id
+            """, Integer.class, parentKeyId);
+
+        Integer workspaceId = jdbc.queryForObject("""
+            INSERT INTO agent_workspaces (name, base_branch, volume_name, created_by, ephemeral)
+            VALUES ('export-import-session-key-ws', 'main', 'export-import-session-key-vol', 'test', FALSE)
+            RETURNING id
+            """, Integer.class);
+        Integer sessionId = jdbc.queryForObject("""
+            INSERT INTO agent_sessions (
+                workspace_id, task, status, created_by, open_pull_request, deploy_to_dev,
+                screenshot_paths, no_push, session_api_key_id, trigger_kind
+            ) VALUES (?, 'running with minted key', 'running', 'test', FALSE, FALSE, '[]'::jsonb, TRUE, ?, 'manual')
+            RETURNING id
+            """, Integer.class, workspaceId, mintedKeyId);
+
+        MvcResult exportResult = mvc.perform(post("/logosdb/export")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andReturn();
+
+        String exportBody = exportResult.getResponse().getContentAsString();
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> exportData =
+            objectMapper.readValue(exportBody, java.util.Map.class);
+        Object tableData = exportData.get("result");
+        String importBody = objectMapper.writeValueAsString(
+            java.util.Map.of("json_data", tableData));
+
+        mvc.perform(post("/logosdb/import")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content(importBody))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.result").value("Import successful"));
+
+        Integer restoredKeyId = jdbc.queryForObject(
+            "SELECT session_api_key_id FROM agent_sessions WHERE id = ?", Integer.class, sessionId);
+        org.assertj.core.api.Assertions.assertThat(restoredKeyId).isNotNull();
+        String restoredKeyValue = jdbc.queryForObject(
+            "SELECT key_value FROM api_keys WHERE id = ?", String.class, restoredKeyId);
+        org.assertj.core.api.Assertions.assertThat(restoredKeyValue)
+            .isEqualTo("minted-session-key-roundtrip");
+        Integer restoredParent = jdbc.queryForObject(
+            "SELECT parent_api_key_id FROM api_keys WHERE id = ?", Integer.class, restoredKeyId);
+        org.assertj.core.api.Assertions.assertThat(restoredParent).isNotNull();
+    }
+
+    @Test
     void import_clearsCollidingAnalysisSessionIdsAcrossRepositories() throws Exception {
         mvc.perform(post("/admin/teams/2001/repositories")
                 .with(TestJwt.logosAdmin())

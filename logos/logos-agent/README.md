@@ -261,14 +261,22 @@ labels things differently.
 
 ## Configuration
 
-Two variables are required — a Logos key and a GitHub token. Everything else
-has a default that is right for this deployment.
+Two things are required — a Logos key and a credential for the agent
+account: either a GitHub token or a GitHub App (below). Everything else has
+a default that is right for this deployment.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `LOGOS_AGENT_API_KEY` | — | Logos key sessions call models with. **Required.** |
-| `LOGOS_AGENT_GITHUB_TOKEN` | — | The agent account's token. **Required.** |
-| `LOGOS_AGENT_GITHUB_LOGIN` | `LogosOSSAgent` | The account every token must belong to |
+| `LOGOS_AGENT_API_KEY` | — | Standing Logos key for the runner. **Required.** Sessions use one clone per session when minting is on. |
+| `LOGOS_WEBSERVICE_URL` | `http://logos-webservice:8081` | Where the runner mints and revokes session API keys |
+| `LOGOS_AGENT_SESSION_API_KEY_MINT` | `false` | Mint one Logos key per session instead of gateway-injecting the standing key |
+| `LOGOS_AGENT_SESSION_API_KEY_FALLBACK` | `false` | If minting fails, keep gateway injection of the standing key; otherwise the session does not start |
+| `LOGOS_AGENT_GITHUB_TOKEN` | — | The agent account's token. **Required** unless the GitHub App fields are set (then ignored) |
+| `LOGOS_AGENT_GITHUB_LOGIN` | `LogosOSSAgent` | The account every credential must belong to; with a GitHub App, that app's bot user |
+| `LOGOS_AGENT_GITHUB_APP_ID` | — | The app's id. With the key below, replaces the personal tokens — the service mints short-lived installation tokens on demand |
+| `LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY` | — | The app's private key: the PEM, or its base64 for a one-line value |
+| `LOGOS_AGENT_GITHUB_INSTALLATION_ID` | resolved from the repository | The app's installation on this repository |
+| `LOGOS_AGENT_GITHUB_TOKEN_TTL_S` | `1800` | How long a minted token may live, in seconds; GitHub caps it at `3600`, and the token is re-minted before it lapses |
 | `LOGOS_AGENT_DEFAULT_MODEL` | — | Model when a session does not name one. Optional: with exactly one local model reachable, that one is the default |
 | `LOGOS_AGENT_TRIGGERS_ENABLED` | `true` | Kill switch for reacting to the repository |
 | `LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC` | `0` | UTC hour of the nightly re-analysis of linked team repositories whose branch head moved; `-1` turns it off |
@@ -280,7 +288,7 @@ has a default that is right for this deployment.
 | `LOGOS_AGENT_SESSION_CPUS` | `2` | Per-session CPU ceiling |
 | `LOGOS_AGENT_SESSION_TIMEOUT_S` | `0` | Wall-clock ceiling per session; `0` is none, which is the default |
 | `LOGOS_AGENT_SESSION_MODEL_URL` | `http://logos-agent-gateway` | Where sessions send model traffic — a gateway that exposes only the orchestrator's `/v1` model surface, so a session never reaches the rest of the internal network |
-| `LOGOS_AGENT_SESSION_GITHUB_TOKEN` | falls back to the token above | Given to containers; best without `workflow` scope |
+| `LOGOS_AGENT_SESSION_GITHUB_TOKEN` | falls back to the token above | Given to containers; best without `workflow` scope; ignored when the GitHub App fields are set |
 | `LOGOS_AGENT_DEPLOY_ENABLED` | `false` | Whether dev deploys may be dispatched at all |
 | `LOGOS_AGENT_REQUIRED_ROLE` | `logos_admin` | Realm role required to drive agents |
 
@@ -291,7 +299,37 @@ Everything this service does on GitHub happens as one account —
 comments are visibly the platform's own, whose access is withdrawn in one
 place, and which owns nothing a human contributor owns.
 
-A classic personal access token from that account needs exactly two scopes:
+**A GitHub App, if you can.** A token of the account is a standing door: it
+stays usable until somebody revokes it, and a log line, transcript, or
+environment dump that names it publishes it for that whole span. A GitHub
+App is the other way to hold the same access. The service keeps only the
+app's *signing key*, which cannot act on its own, and mints an installation
+token on demand — a bearer credential that lives at most an hour and is
+re-minted automatically before the previous one lapses. What reaches a
+container is a minted token, so a credential that is published by accident
+stops being one within its own lifetime.
+
+Run it: create the app, give it these repository permissions — Contents,
+Pull requests, and Issues *read and write*; Checks *read*; Actions *read
+and write* — the runner dispatches the dev deploy and reads its runs, and
+no other permission grants those; Workflows *read and write*; Metadata
+*read* — plus Organisation members *read* if the deployment uses
+`LOGOS_AGENT_TRUSTED_TEAMS`, install it on the repository, and set
+`LOGOS_AGENT_GITHUB_APP_ID` and `LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY` (the
+installation id is optional — the service resolves it from the repository
+at the first mint). Set `LOGOS_AGENT_GITHUB_LOGIN` to the app's bot user,
+for example `LogosOSSAgent[bot]`; while the app is configured the personal
+tokens are ignored.
+
+One difference from the two-token setup: one kind of token then serves every
+phase, and it carries the app's full permissions, including dispatching a
+deploy. The scope boundary a second token without `workflow` used to give is
+gone, so the finalizer enforces the part that matters itself — the same
+enforcement the one-token setup relies on.
+
+Personal access tokens work too, for a deployment that does not run the
+account as an app. A classic personal access token from that account needs
+exactly two scopes:
 
 - **`repo`** — push branches, open pull requests, read commit status and checks.
 - **`workflow`** — dispatch the dev deploy, and let a session change files
@@ -303,10 +341,15 @@ administration. Outside the token, the account needs write access to the
 repository, and — if the organisation enforces SAML — the token authorised
 for it.
 
-The account is not taken on trust. Both tokens are checked against it when
-the service starts, and a token belonging to somebody else stops the service
-rather than committing agent work under that person's name. The finalizer
-checks again inside the container, immediately before it pushes.
+The account is not taken on trust. Every credential is checked against it
+when the service starts, and one belonging to somebody else stops the service
+rather than committing agent work under that person's name. With personal
+access tokens that is `GET /user`. With a GitHub App the runner checks the
+App JWT against `GET /app` (App id and bot user) and
+`GET /app/installations/{id}` (installation belongs to that App). Installation
+tokens cannot answer `/user`. The finalizer then proves the installation
+token works with `GET /installation/repositories` and a numeric repository
+count — it does not re-bind the App id.
 
 **Two tokens if you can.** A second token of the same account *without*
 `workflow` scope, given to session containers, means a session cannot dispatch
@@ -327,9 +370,34 @@ an alias of one, and not because the agent key was granted a cloud provider
 by mistake.
 
 The boundary is the platform's own key scoping: a Logos key reaches exactly
-the deployments its permissions grant, and the gateway replaces whatever
-credential a session sends with that key. **Give the agent key local
+the deployments its permissions grant. **Give the standing agent key local
 providers only.**
+
+### Logos session keys
+
+By default the gateway still injects `LOGOS_AGENT_API_KEY` when a session
+sends the placeholder credential. The agent gateway reads the same
+`LOGOS_AGENT_SESSION_API_KEY_MINT` / `LOGOS_AGENT_SESSION_API_KEY_FALLBACK`
+flags as the runner: when minting is required without fallback, missing or
+placeholder Authorization is rejected (401) instead of injecting the standing
+key. Set `LOGOS_AGENT_SESSION_API_KEY_MINT=true` to mint one clone of that key
+for each session instead:
+
+- One key per session. The key lives as long as the agent session. The runner
+  revokes it when the session ends — success, failure, cancel, or timeout.
+- A janitor runs on startup and on each scheduler pass. It revokes orphan
+  minted keys whose session is no longer running (terminal state or missing
+  row). It never touches standing keys.
+- The minted key inherits the standing key's team, settings, priority and
+  permissions. It cannot mint further keys.
+- Mint failures refuse to start the session unless
+  `LOGOS_AGENT_SESSION_API_KEY_FALLBACK=true`, which keeps gateway injection
+  of the standing key.
+- Capacity accounting still attributes minted traffic to the runner: the
+  discounted load reading sums the standing key id and every minted session
+  key id still in flight.
+
+Key values are never logged.
 
 The runner refuses to assume that was done. It reads what the key can
 actually reach and gates on the answer:

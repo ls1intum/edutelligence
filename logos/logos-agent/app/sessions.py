@@ -30,7 +30,19 @@ from typing import Any
 
 import httpx
 
-from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
+from . import (
+    attachments,
+    capacity,
+    controls,
+    conventions,
+    db,
+    docker_engine,
+    github,
+    github_tokens,
+    model_policy,
+    session_api_keys,
+    triggers,
+)
 from .config import INTERRUPTION_FILE, REPLY_DIR, REPLY_FILE, REVIEW_COMMENTS_FILE, REVIEWED_SHA_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
@@ -223,6 +235,35 @@ def state_dir(session_id: int) -> Path:
     return Path(settings.state_root) / str(session_id)
 
 
+async def _session_github_token() -> str:
+    """The credential a trusted helper container may hold.
+
+    The configured personal access token, or — when the deployment runs the
+    agent account as a GitHub App — a token minted for this run. A container
+    must never hold the account's standing credential, and a minted one
+    stops being a credential a little while after the container is gone.
+    The minted token must outlive the helper's wall-clock budget: the
+    credential is fixed in the container environment and cannot be refreshed
+    from the runner's cache while the helper runs.
+
+    In App mode the bot login must already have been verified (or verified
+    on retry after a degraded startup) before a token is minted: the
+    finalizer cannot detect a login mismatch via
+    ``GET /installation/repositories``.
+    """
+    if settings.github_app_id and settings.github_app_private_key:
+        await github.ensure_app_identity_verified()
+        return await github_tokens.installation_token(
+            app_id=settings.github_app_id,
+            private_key=settings.github_app_private_key,
+            installation_id=settings.github_app_installation_id,
+            repo_slug=settings.repo_slug,
+            ttl_s=settings.github_token_ttl_s,
+            min_remaining_s=settings.helper_timeout_s + github_tokens.HELPER_STARTUP_OVERHEAD_S,
+        )
+    return settings.session_github_token
+
+
 def _give_to_session_user(path: Path) -> None:
     """Hand a host-side artefact path to the unprivileged session user.
 
@@ -358,6 +399,10 @@ class SessionManager:
         # Distinct from `_own_api_key_id()` below — caching on the method name
         # would shadow the coroutine and crash every scheduler pass.
         self._cached_own_api_key_id: int | None = None
+        # Minted session Logos key values by session id (never logged).
+        self._session_logos_keys: dict[int, str] = {}
+        # Minted key ids still attributed to this runner for capacity discount.
+        self._minted_api_key_ids: set[int] = set()
         # Set once the session image has been seen on this host.
         self._image_present = False
 
@@ -372,6 +417,7 @@ class SessionManager:
         await docker_engine.ensure_network(settings.session_egress_network)
         await docker_engine.ensure_volume(settings.artifact_volume, labels={"logos.agent": "artifacts"})
         await self._reconcile()
+        await self._janitor_session_api_keys()
         await self.resume_check_watches()
         await self.resume_retries()
         self._scheduler_task = asyncio.create_task(self._scheduler_loop(), name="agent-scheduler")
@@ -478,6 +524,10 @@ class SessionManager:
         settlement, so a later cancel or cleanup can still reach the
         credential-bearing agent.
         """
+        # Capacity discount must know minted keys before the first scheduler
+        # pass: after a restart this process's set is empty, but recovered
+        # containers still use those keys.
+        await self._restore_minted_api_key_ids()
         live: dict[int, dict[str, Any]] = {}
         try:
             for container in await docker_engine.list_managed_containers():
@@ -692,6 +742,14 @@ class SessionManager:
             except Exception:
                 logger.exception("taking up failed requests again failed")
             try:
+                # Minted Logos keys whose session is no longer running —
+                # crash recovery when settle/cancel could not revoke.
+                await self._janitor_session_api_keys()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("revoking orphaned session API keys failed")
+            try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=settings.scheduler_interval_s)
             except asyncio.TimeoutError:
                 pass
@@ -710,6 +768,90 @@ class SessionManager:
         if self._cached_own_api_key_id is None:
             self._cached_own_api_key_id = await db.agent_key_id(settings.agent_api_key)
         return self._cached_own_api_key_id
+
+    def _own_api_key_ids(self) -> frozenset[int]:
+        """Standing key id plus minted session key ids still in flight."""
+        ids = set(self._minted_api_key_ids)
+        # The standing id is added by callers via own_api_key_id; this set is
+        # only the children so a missing standing id does not empty the sum.
+        return frozenset(ids)
+
+    async def _restore_minted_api_key_ids(self) -> None:
+        """Rebuild capacity-discount ids from surviving sessions after a restart."""
+        restored: set[int] = set()
+        for status in (
+            SessionStatus.STARTING,
+            SessionStatus.RUNNING,
+            SessionStatus.PAUSED,
+            SessionStatus.FINALIZING,
+        ):
+            try:
+                rows = await db.sessions_in_status(status)
+            except Exception as exc:
+                logger.warning("could not restore minted API key ids from %s sessions: %s", status.value, exc)
+                continue
+            for row in rows:
+                key_id = row.get("session_api_key_id")
+                if key_id is not None:
+                    restored.add(int(key_id))
+        self._minted_api_key_ids = restored
+        if restored:
+            logger.info("restored %s minted session API key id(s) after restart", len(restored))
+
+    async def _mint_session_logos_key(self, session_id: int) -> str | None:
+        """Mint a Logos key for the agent phase, or None to use the gateway placeholder.
+
+        Returns the key value to put in the session env when minting succeeds.
+        Raises SessionApiKeyError when minting is required and fails without fallback.
+        The webservice creates the key and links ``agent_sessions.session_api_key_id``
+        in one transaction; a failed association rolls the key back.
+        """
+        if not settings.session_api_key_mint:
+            return None
+        try:
+            minted = await session_api_keys.mint(session_id=session_id, parent_key_value=settings.agent_api_key)
+        except session_api_keys.SessionApiKeyError:
+            if settings.session_api_key_fallback:
+                logger.warning(
+                    "session %s: Logos session-key mint failed; falling back to standing-key gateway injection",
+                    session_id,
+                )
+                return None
+            raise
+        self._session_logos_keys[session_id] = minted.key_value
+        self._minted_api_key_ids.add(minted.id)
+        return minted.key_value
+
+    async def _revoke_session_logos_key(self, session_id: int, key_id: int | None = None) -> None:
+        """Revoke a minted session key and drop local tracking."""
+        self._session_logos_keys.pop(session_id, None)
+        resolved = key_id
+        if resolved is None:
+            row = await db.get_session(session_id)
+            if row and row.get("session_api_key_id") is not None:
+                resolved = int(row["session_api_key_id"])
+        if resolved is None:
+            return
+        self._minted_api_key_ids.discard(int(resolved))
+        await session_api_keys.revoke(int(resolved))
+
+    async def _janitor_session_api_keys(self) -> None:
+        """Revoke minted Logos keys whose session is no longer running.
+
+        Idempotent crash safety: settle and cancel already revoke on the happy
+        path; this covers keys left active after a runner crash or a lost
+        race. Runs even when minting is disabled so earlier orphans are not
+        left usable indefinitely. Never touches standing keys (no
+        ``parent_api_key_id``).
+        """
+        try:
+            orphans = await db.orphaned_session_api_key_ids()
+        except Exception as exc:
+            logger.warning("could not list orphaned session API keys: %s", exc)
+            return
+        for key_id in orphans:
+            self._minted_api_key_ids.discard(int(key_id))
+            await session_api_keys.revoke(int(key_id))
 
     async def scheduler_pass(self) -> None:
         # Permissions first, then the measurement they describe: a key moved
@@ -759,6 +901,7 @@ class SessionManager:
             lane=policy.lane(),
             ours=_ours_by_model(running, policy),
             own_api_key_id=own_key,
+            own_api_key_ids=self._own_api_key_ids(),
         )
         self._last_reading = measured
 
@@ -818,6 +961,7 @@ class SessionManager:
                         lane=policy.lane(),
                         ours=_ours_by_model(resumed, policy),
                         own_api_key_id=own_key,
+                        own_api_key_ids=self._own_api_key_ids(),
                     )
                     if not capacity.resume_decision(reading)[0]:
                         break
@@ -1207,6 +1351,20 @@ class SessionManager:
             except Exception as exc:
                 logger.info("could not record what session %s was told: %s", sid, exc)
 
+            try:
+                logos_key = await self._mint_session_logos_key(sid)
+            except session_api_keys.SessionApiKeyError as exc:
+                await self._settle(
+                    sid,
+                    exit_code=None,
+                    error=(
+                        f"could not mint a short-lived Logos session key: {exc}. "
+                        "Set LOGOS_AGENT_SESSION_API_KEY_FALLBACK=true to allow "
+                        "the standing key via the gateway, or fix minting."
+                    ),
+                )
+                return
+
             container_id = await docker_engine.create_session_container(
                 name=container_name(sid),
                 image=settings.workspace_image,
@@ -1216,6 +1374,7 @@ class SessionManager:
                     continuing=continuing,
                     images=images,
                     notes=notes,
+                    logos_api_key=logos_key,
                 ),
                 workspace_volume=workspace["volume_name"],
                 artifact_host_path=artifact_host_path,
@@ -1357,18 +1516,23 @@ class SessionManager:
         continuing: bool = False,
         images: list[str] | None = None,
         notes: str = "",
+        logos_api_key: str | None = None,
     ) -> dict[str, str]:
         """The environment the untrusted agent phase runs with.
 
-        Nothing reusable: no GitHub token (the helper phases do the
-        authenticated work), no model credential (the gateway injects it —
-        the placeholder only keeps the CLI from refusing to start without a
-        token). No workflow scope, no production URL, no internal secret.
+        Nothing reusable for GitHub (helpers hold those tokens). The Logos
+        model credential is either a short-lived session key (when minting is
+        on) or the gateway placeholder that keeps the standing key out of the
+        container. No workflow scope, no production URL, no internal secret.
         """
         # The policy resolves what "no model named" means — the configured
         # default, or the single local model of a one-model deployment — and
         # it has already refused anything that is not served locally.
         model = model_policy.current().resolve(session.get("model"))
+        # Prefer an explicit mint for this launch; fall back to a value still
+        # held for the session (retry paths) or the gateway placeholder.
+        logos_token = logos_api_key or self._session_logos_keys.get(int(session["id"]))
+        auth_token = logos_token or "injected-by-logos-agent-gateway"
         env = {
             "LOGOS_SESSION_PHASE": "agent",
             # Set when the preparation restored this workspace's earlier
@@ -1390,7 +1554,7 @@ class SessionManager:
             # gateway replaces whatever credential the container sends with
             # the real one — the container holds none.
             "ANTHROPIC_BASE_URL": settings.session_model_url,
-            "ANTHROPIC_AUTH_TOKEN": "injected-by-logos-agent-gateway",
+            "ANTHROPIC_AUTH_TOKEN": auth_token,
             "ANTHROPIC_API_KEY": "",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "LOGOS_SESSION_ID": str(session["id"]),
@@ -1577,8 +1741,10 @@ class SessionManager:
         # otherwise the helper uses anonymous HTTPS.
         is_analysis = str(session.get("trigger_kind") or "") == "analysis"
         team_repo_id = session.get("team_repository_id")
-        if settings.session_github_token and not is_analysis:
-            env["GITHUB_TOKEN"] = settings.session_github_token
+        if not is_analysis:
+            token = await _session_github_token()
+            if token:
+                env["GITHUB_TOKEN"] = token
 
         # Per-link deploy keys: write via the runner-mounted artifact root
         # (same volume the helper binds at /artifacts). Never write through
@@ -1717,10 +1883,28 @@ class SessionManager:
             # sentence about the request beats a commit titled after the
             # first line of its task.
             "LOGOS_SESSION_SUBJECT": _fallback_subject(session),
+            # When set, the finalizer proves the push token still works as
+            # an installation credential via GET /installation/repositories
+            # instead of the user-only GET /user — an installation token
+            # cannot answer the latter. App identity is pinned by the runner.
+            "LOGOS_AGENT_GITHUB_APP_ID": (
+                settings.github_app_id if settings.github_app_id and settings.github_app_private_key else ""
+            ),
         }
-        if settings.session_github_token:
-            env["GITHUB_TOKEN"] = settings.session_github_token
-            env["GH_TOKEN"] = settings.session_github_token
+        try:
+            token = await _session_github_token()
+        except (github_tokens.CredentialError, github.IdentityError) as exc:
+            # The row already holds the finalizing state, and this
+            # settlement is the one that would clear it: a mint or identity
+            # failure that escapes here leaves the session finalizing forever
+            # and its workspace occupied. Fail through the ordinary path
+            # instead.
+            logger.warning("could not obtain a push token for session %s: %s", session_id, exc)
+            self._last_helper_output[session_id] = f"could not obtain a GitHub credential: {exc}"
+            return False
+        if token:
+            env["GITHUB_TOKEN"] = token
+            env["GH_TOKEN"] = token
         code = await self._run_helper(
             phase="finalize",
             session_id=session_id,
@@ -2170,7 +2354,9 @@ class SessionManager:
                 logger.warning("settlement of session %s found the row in %r; not recording it", session_id, status)
                 if status in {state.value for state in TERMINAL_STATUSES}:
                     # Cancelled or already settled: the row is finished and
-                    # the container is a leftover.
+                    # the container is a leftover. Revoke if a key remains.
+                    session_row = (await db.get_session(session_id)) or {}
+                    await self._revoke_session_logos_key(session_id, session_row.get("session_api_key_id"))
                     await self._cleanup_container(session_id)
                 else:
                     # Paused, or starting again: the session is alive and
@@ -2196,6 +2382,8 @@ class SessionManager:
                         "session %s was claimed by another actor before finalization; only cleaning up",
                         session_id,
                     )
+                    session_row = (await db.get_session(session_id)) or {}
+                    await self._revoke_session_logos_key(session_id, session_row.get("session_api_key_id"))
                     await self._cleanup_container(session_id)
                     return
             # The row is already finalizing: a restart interrupted the first
@@ -2242,11 +2430,14 @@ class SessionManager:
             # kicks off for an exited container. The session already belongs
             # to that actor: give the container back, but emit no status
             # event, dispatch no deploy, and take no screenshots for a
-            # session whose state is already final.
+            # session whose state is already final. Still revoke the session
+            # key if it remains: cancel may have won without seeing the id.
             logger.warning(
                 "settlement of session %s lost the race to another transition; only cleaning up",
                 session_id,
             )
+            session_row = (await db.get_session(session_id)) or {}
+            await self._revoke_session_logos_key(session_id, session_row.get("session_api_key_id"))
             await self._cleanup_container(session_id)
             return
         await db.add_event(
@@ -2259,6 +2450,7 @@ class SessionManager:
             },
         )
         session_row = (await db.get_session(session_id)) or {}
+        await self._revoke_session_logos_key(session_id, session_row.get("session_api_key_id"))
 
         if result.get("pr_url"):
             await db.add_event(session_id, EventKind.PULL_REQUEST, {"url": result["pr_url"]})
@@ -3323,11 +3515,12 @@ class SessionManager:
         if launch is not None:
             launch.cancelled = True
         await db.add_event(session_id, EventKind.STATUS, {"status": "cancelled"})
-        # The credential-bearing helper first: a finalizer mid-push would
-        # otherwise keep committing, pushing, or opening a pull request after
-        # the API has already reported the session cancelled. It is tracked
-        # per session rather than read from the supervisor because restart
-        # reconciliation finalizes without one.
+        # Stop credential-bearing containers BEFORE revoking the Logos key.
+        # Awaiting revocation first (webservice timeout can be ~15s) would
+        # leave a finalizer free to keep committing, pushing, or opening a
+        # pull request after the API has already reported cancelled. The
+        # helper is tracked per session rather than read from the supervisor
+        # because restart reconciliation finalizes without one.
         helper = self._helpers.pop(session_id, None)
         if helper is not None:
             # Wait for the create to settle before anything else: a cancel
@@ -3397,6 +3590,9 @@ class SessionManager:
                 await docker_engine.remove_container(container_id)
             except Exception:
                 logger.warning("could not remove the container of cancelled session %s", session_id)
+        # Best-effort after containers are stopped: a slow revoke must not
+        # delay killing the credential-bearing helper / agent.
+        await self._revoke_session_logos_key(session_id, session.get("session_api_key_id"))
         return True
 
 

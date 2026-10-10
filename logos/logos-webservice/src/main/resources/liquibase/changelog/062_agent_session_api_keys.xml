@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Session API keys for the agent runner.
+
+         Standing keys keep parent_api_key_id NULL. A minted session key
+         stores the parent it clones; the runner revokes it when the session
+         ends (and a janitor revokes orphans after a crash). -->
+    <changeSet id="062-api-key-session-parent" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="api_keys" columnName="parent_api_key_id"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE api_keys
+                ADD COLUMN parent_api_key_id INTEGER NULL
+                    REFERENCES api_keys(id) ON DELETE CASCADE;
+            CREATE INDEX IF NOT EXISTS idx_api_keys_parent
+                ON api_keys (parent_api_key_id)
+                WHERE parent_api_key_id IS NOT NULL;
+        ]]></sql>
+        <rollback>
+            <sql><![CDATA[
+                DROP INDEX IF EXISTS idx_api_keys_parent;
+                ALTER TABLE api_keys DROP COLUMN IF EXISTS parent_api_key_id;
+            ]]></sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="062-agent-session-api-key" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="agent_sessions" columnName="session_api_key_id"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE agent_sessions
+                ADD COLUMN session_api_key_id INTEGER NULL
+                    REFERENCES api_keys(id) ON DELETE SET NULL;
+        ]]></sql>
+        <rollback>
+            <sql>ALTER TABLE agent_sessions DROP COLUMN IF EXISTS session_api_key_id;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

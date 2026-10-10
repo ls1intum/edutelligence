@@ -142,6 +142,35 @@ async def agent_key_id(key_value: str) -> int | None:
     return int(row[0]) if row is not None else None
 
 
+async def orphaned_session_api_key_ids() -> list[int]:
+    """Active minted session keys whose session is terminal or gone.
+
+    A minted key has ``parent_api_key_id`` set. It is an orphan when no
+    non-terminal ``agent_sessions`` row still points at it — the session
+    finished, was cancelled, or the row is missing. Standing keys
+    (``parent_api_key_id`` NULL) are never returned.
+    """
+    async with sessionmaker()() as db:
+        rows = (
+            await db.execute(
+                text("""
+                    SELECT ak.id
+                      FROM api_keys ak
+                     WHERE ak.parent_api_key_id IS NOT NULL
+                       AND ak.is_active = true
+                       AND NOT EXISTS (
+                             SELECT 1
+                               FROM agent_sessions s
+                              WHERE s.session_api_key_id = ak.id
+                                AND s.status = ANY(:active)
+                           )
+                    """),
+                {"active": [s.value for s in ACTIVE_STATUSES]},
+            )
+        ).all()
+    return [int(row[0]) for row in rows]
+
+
 async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     """Every model deployment the given Logos key is permitted to use."""
     async with sessionmaker()() as db:
@@ -854,6 +883,7 @@ _SESSION_SELECT = """
            s.reply_target, s.reaction_target,
            s.priority, s.priority_reason, s.environment_notes,
            s.repo_url, s.repo_slug, s.team_repository_id,
+           s.session_api_key_id,
            t.name AS team_name,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
@@ -1437,6 +1467,7 @@ async def update_session(session_id: int, **fields: Any) -> None:
         # anybody still owes that.
         "checks_sha",
         "checks_watch",
+        "session_api_key_id",
     }
     unknown = set(fields) - allowed
     if unknown:

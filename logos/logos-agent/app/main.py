@@ -80,7 +80,17 @@ async def lifespan(_app: FastAPI):
     policy = await model_policy.refresh()
     if not policy.ok:
         logger.error("no session will start until the model policy is satisfied: %s", policy.detail)
-    if settings.session_github_token and settings.session_github_token == settings.github_token:
+    if settings.github_app_id and settings.github_app_private_key:
+        # One minted credential kind serves both phases, and it carries the
+        # app's full permissions: the finalizer — not the token's scope — is
+        # what keeps a session from pushing a workflow file.
+        note = (
+            "GitHub App mode: the runner and the sessions act with short-lived " "installation tokens minted on demand"
+        )
+        if settings.github_token:
+            note += "; the personal access tokens, if set, are ignored"
+        logger.info(note)
+    elif settings.session_github_token and settings.session_github_token == settings.github_token:
         logger.warning(
             "session containers get the runner's own GitHub token: it can dispatch "
             "workflows and edit workflow files. Issue a second token of the same "
@@ -186,6 +196,7 @@ async def get_capacity(_: Principal = Depends(require_agent_operator)) -> Capaci
     reading = await capacity.read_load(
         lane=model_policy.current().lane(),
         own_api_key_id=own_key,
+        own_api_key_ids=manager._own_api_key_ids(),
         discount_own=False,
     )
     counts = await db.count_sessions_by_status()

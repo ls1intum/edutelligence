@@ -563,7 +563,7 @@ class TestPermissionsRevokedMidFlight:
         async def refresh():
             return revoked
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             # The lane an invalid policy hands over is empty, and an empty
             # lane is refused rather than measured.
             assert lane == frozenset()
@@ -1332,6 +1332,245 @@ class TestAgentPhaseIsolation:
         # Only the agent container is a supervised session.
         assert supervised == [(7, "cid-7")]
 
+    async def test_a_github_app_gives_the_helper_a_minted_token(self, monkeypatch, tmp_path):
+        # The deployment runs the agent account as a GitHub App: the helper
+        # receives a token minted for the run, never a standing credential —
+        # and the agent phase still receives nothing at all.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        app_settings = replace(
+            patched,
+            github_app_id="41234",
+            github_app_private_key="an-app-key",
+            session_github_token="",
+        )
+        monkeypatch.setattr(sessions, "settings", app_settings)
+        # Startup already verified the bot login; helpers must not mint
+        # without that gate having succeeded.
+        monkeypatch.setattr(sessions.github, "_verified_login", "LogosOSSAgent[bot]")
+        mints: list = []
+
+        async def minted(**kwargs):
+            mints.append(kwargs)
+            return "ghs-minted"
+
+        monkeypatch.setattr(sessions.github_tokens, "installation_token", minted)
+        created: list = []
+        container_ids = iter(["cid-prepare", "cid-7"])
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return next(container_ids)
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "ensure_volume", noop)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+        monkeypatch.setattr(sessions.SessionManager, "_supervise", lambda *_args, **_kwargs: None)
+
+        await sessions.manager._launch(self.SESSION)
+
+        prepare, agent = created
+        assert prepare["env"]["GITHUB_TOKEN"] == "ghs-minted"
+        assert "GITHUB_TOKEN" not in agent["env"]
+        assert "GH_TOKEN" not in agent["env"]
+        # The mint is asked for this repository, with the configured
+        # lifetime and enough remaining life for the helper's timeout —
+        # the standing session token, though it could still be set, is not
+        # in the picture at all.
+        assert len(mints) == 1
+        assert mints[0]["app_id"] == "41234"
+        assert mints[0]["repo_slug"] == app_settings.repo_slug
+        assert mints[0]["ttl_s"] == app_settings.github_token_ttl_s
+        assert mints[0]["min_remaining_s"] == (
+            app_settings.helper_timeout_s + sessions.github_tokens.HELPER_STARTUP_OVERHEAD_S
+        )
+
+    async def test_the_finalizer_receives_a_minted_token_in_app_mode(self, monkeypatch, tmp_path):
+        # One token kind serves every phase, so it carries the app's full
+        # permissions — including the ones that dispatch deploys. The
+        # scope boundary a separate session token gets from GitHub must
+        # then come from the finalizer itself, not from the credential.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        app_settings = replace(
+            patched, github_app_id="41234", github_app_private_key="an-app-key", session_github_token=""
+        )
+        monkeypatch.setattr(sessions, "settings", app_settings)
+        monkeypatch.setattr(sessions.github, "_verified_login", "LogosOSSAgent[bot]")
+        mints: list = []
+
+        async def minted(**kwargs):
+            mints.append(kwargs)
+            return "ghs-minted"
+
+        monkeypatch.setattr(sessions.github_tokens, "installation_token", minted)
+        created: list = []
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_wait(_cid, **_kwargs):
+            return 0
+
+        async def fake_remove(_cid, **_kwargs):
+            pass
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", fake_wait)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", fake_remove)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", self._async_value(True))
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        helper = created[0]
+        assert helper["env"]["GITHUB_TOKEN"] == "ghs-minted"
+        assert helper["env"]["GH_TOKEN"] == "ghs-minted"
+        assert helper["env"]["LOGOS_AGENT_WORKFLOW_CHANGES"] == "deny"
+        assert helper["env"]["LOGOS_AGENT_GITHUB_APP_ID"] == "41234"
+        assert len(mints) == 1
+        assert mints[0]["min_remaining_s"] == (
+            app_settings.helper_timeout_s + sessions.github_tokens.HELPER_STARTUP_OVERHEAD_S
+        )
+
+    async def test_a_failed_remint_during_finalization_settles_the_session_failed(self, monkeypatch, tmp_path):
+        # By the time finalization mints, the row already claims FINALIZING.
+        # A CredentialError that escapes would kill the supervisor with the
+        # row finalizing forever and its workspace occupied. The mint must
+        # fail through the ordinary path instead.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        app_settings = replace(
+            patched, github_app_id="41234", github_app_private_key="an-app-key", session_github_token=""
+        )
+        monkeypatch.setattr(sessions, "settings", app_settings)
+        monkeypatch.setattr(sessions.github, "_verified_login", "LogosOSSAgent[bot]")
+        created: list = []
+        transitions: list = []
+        events: list = []
+
+        async def broken_mint(**_kwargs):
+            raise sessions.github_tokens.CredentialError("could not reach the GitHub API")
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_transition(_sid, target, **fields):
+            transitions.append((target, fields))
+            return True
+
+        async def fake_event(_sid, _kind, payload):
+            events.append(payload)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.github_tokens, "installation_token", broken_mint)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert created == []
+        assert transitions[0][0] is SessionStatus.FINALIZING
+        target, fields = transitions[1]
+        assert target is SessionStatus.FAILED
+        assert "finalization failed" in fields["error"]
+        assert "could not obtain a GitHub credential" in fields["error"]
+        assert "could not reach the GitHub API" in fields["error"]
+        assert events[0]["status"] == "failed"
+
+    async def test_a_mismatched_bot_login_after_degraded_startup_settles_failed(self, monkeypatch, tmp_path):
+        # Startup left App identity unverified; recovery finds the wrong bot
+        # login. Finalization must settle failed without handing the helper a
+        # token — IdentityError must not escape past FINALIZING.
+        from app import sessions
+
+        patched = self._patch_base(monkeypatch, tmp_path)
+        app_settings = replace(
+            patched, github_app_id="41234", github_app_private_key="an-app-key", session_github_token=""
+        )
+        monkeypatch.setattr(sessions, "settings", app_settings)
+        monkeypatch.setattr(sessions.github, "_verified_login", None)
+        created: list = []
+        transitions: list = []
+        events: list = []
+        mints: list = []
+
+        async def reject_identity():
+            raise sessions.github.IdentityError(
+                "GitHub App installation token authenticates as 'SomeOtherApp[bot]', "
+                "not as the configured agent account 'LogosOSSAgent[bot]'."
+            )
+
+        async def minted(**kwargs):
+            mints.append(kwargs)
+            return "ghs-should-not-mint"
+
+        async def fake_create(**kwargs):
+            created.append(kwargs)
+            return "cid-finalize"
+
+        async def fake_transition(_sid, target, **fields):
+            transitions.append((target, fields))
+            return True
+
+        async def fake_event(_sid, _kind, payload):
+            events.append(payload)
+
+        async def noop(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr(sessions.github, "ensure_app_identity_verified", reject_identity)
+        monkeypatch.setattr(sessions.github_tokens, "installation_token", minted)
+        monkeypatch.setattr(sessions.docker_engine, "create_session_container", fake_create)
+        monkeypatch.setattr(sessions.docker_engine, "start_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "wait_container", noop)
+        monkeypatch.setattr(sessions.docker_engine, "remove_container", noop)
+        monkeypatch.setattr(sessions.db, "get_session", self._async_value(self.ROW))
+        monkeypatch.setattr(sessions.db, "get_workspace", self._async_value(self.WORKSPACE))
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", fake_event)
+
+        await sessions.manager._settle(7, exit_code=0, error=None)
+
+        assert created == []
+        assert mints == []
+        assert transitions[0][0] is SessionStatus.FINALIZING
+        target, fields = transitions[1]
+        assert target is SessionStatus.FAILED
+        assert "could not obtain a GitHub credential" in fields["error"]
+        assert "SomeOtherApp" in fields["error"]
+        assert events[0]["status"] == "failed"
+
     async def test_a_successful_settlement_runs_the_trusted_finalizer(self, monkeypatch, tmp_path):
         # The agent phase pushed nothing: with a clean agent exit, settlement
         # runs the finalize helper — the container that commits, pushes, and
@@ -1388,6 +1627,7 @@ class TestAgentPhaseIsolation:
         assert helper["name"] == "logos-agent-finalize-7"
         assert helper["env"]["LOGOS_SESSION_PHASE"] == "finalize"
         assert helper["env"]["GITHUB_TOKEN"] == "ghp-session-token"
+        assert helper["env"]["LOGOS_AGENT_GITHUB_APP_ID"] == ""
         assert helper["env"]["GH_TOKEN"] == "ghp-session-token"
         assert helper["env"]["LOGOS_REPO_URL"] == patched.repo_url
         assert helper["env"]["LOGOS_SESSION_OPEN_PR"] == "1"
@@ -1653,7 +1893,7 @@ class TestAgentPhaseIsolation:
         paused: list = []
         events: list = []
 
-        async def fake_reading(_timeout_s=5.0, lane=None, ours=None, own_api_key_id=None):
+        async def fake_reading(_timeout_s=5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
 
         async def fake_in_status(status):
@@ -2617,7 +2857,7 @@ class TestOverlappingAdmission:
         decided_loads: list = []
         real_start_decision = capacity.start_decision
 
-        async def fake_read_load(lane=None, ours=None, own_api_key_id=None):
+        async def fake_read_load(lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             # A pass takes two readings of one moment — the platform's, and
             # the platform's minus this runner's share — so only the first
             # of the pair advances the prepared sequence.
@@ -5160,7 +5400,7 @@ class TestTheDiscountedReadingAsksForTheKey:
 
         calls: list = []
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             calls.append((ours is not None, own_api_key_id))
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5208,7 +5448,7 @@ class TestAdmissionMeasuresTheRightLane:
         async def refresh():
             return policy
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             lanes.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5245,7 +5485,7 @@ class TestAdmissionMeasuresTheRightLane:
 
         readings: list = []
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             readings.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5511,7 +5751,7 @@ class TestAPausedSessionThatCannotComeBack:
         settled: list = []
         resumed: list = []
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def container_state(_container_id):
@@ -5566,7 +5806,7 @@ class TestAPausedSessionThatCannotComeBack:
 
         admitted: list = []
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, own_api_key_ids=None):
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def in_status(status):
@@ -5690,15 +5930,18 @@ class TestASessionThatRanOutOfTime:
         async def add_event(*_args, **_kwargs):
             return None
 
+        async def get_session(_session_id):
+            # Supervision polls the row for an external cancel; a live
+            # session is not cancelled, so the budget path can finish.
+            return {"status": "running", "error": None}
+
         async def settle(_self, session_id, *, exit_code, error):
             settled.append((session_id, exit_code, error))
 
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
-        monkeypatch.setattr(
-            sessions.db, "get_session", lambda *_a, **_k: asyncio.sleep(0, result={"status": "running", "error": None})
-        )
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
 
@@ -5740,12 +5983,13 @@ class TestNoClockUnlessSomebodyAsksForOne:
         async def nothing(*_args, **_kwargs):
             return None
 
+        async def get_session(_session_id):
+            return {"status": "running", "error": None}
+
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", nothing)
-        monkeypatch.setattr(
-            sessions.db, "get_session", lambda *_a, **_k: asyncio.sleep(0, result={"status": "running", "error": None})
-        )
+        monkeypatch.setattr(sessions.db, "get_session", get_session)
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
         real_sleep = asyncio.sleep

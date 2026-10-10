@@ -133,12 +133,20 @@ class Settings:
     # of a Logos key: the scheduler_state payload carries cluster internals
     # (queue depth, lane state) that a user key must not be able to read.
     internal_secret: str = os.getenv("LOGOS_INTERNAL_SECRET", "")
-    # The Logos key: the session gateway injects it into the agent's model
-    # calls. It is what makes agent traffic ordinary, accounted Logos
-    # traffic — give it LOW priority and a token budget so agent work never
-    # outranks a user at the scheduler. It no longer enters a session
-    # container at all.
+    # The Logos key: the runner's standing credential for control-plane work
+    # (capacity attribution, model policy). When session-key minting is on,
+    # each session gets a short-lived clone instead of this value; the
+    # gateway still injects this key only when the session sends the
+    # placeholder (feature off or explicit fallback).
     agent_api_key: str = os.getenv("LOGOS_AGENT_API_KEY", "")
+    # Webservice base URL for internal session-key mint/revoke.
+    webservice_url: str = os.getenv("LOGOS_WEBSERVICE_URL", "http://logos-webservice:8081")
+    # Mint one Logos API key per session. Off by default so a deployment keeps
+    # today's standing-key gateway injection until operators turn the feature on.
+    session_api_key_mint: bool = _bool("LOGOS_AGENT_SESSION_API_KEY_MINT", False)
+    # When minting fails, fall back to gateway injection of the standing key.
+    # Off by default: a mint failure refuses to start the session.
+    session_api_key_fallback: bool = _bool("LOGOS_AGENT_SESSION_API_KEY_FALLBACK", False)
     # Which model drives a session that does not name one. Optional: when it
     # is unset and the key reaches exactly one locally served model, that one
     # is the default — a single-model deployment then needs no model
@@ -258,20 +266,37 @@ class Settings:
     # supposed to be recognisable and revocable as one identity: one account
     # whose pushes, pull requests, and comments are visibly the platform's
     # own, whose access can be withdrawn in one place, and which owns nothing
-    # a human contributor owns. Both tokens are checked against it at
+    # a human contributor owns. The tokens are checked against it at
     # startup, and the finalizer checks again inside the container before it
     # pushes — a token belonging to a person would otherwise commit agent
-    # work under that person's name.
+    # work under that person's name. With a GitHub App the account is the
+    # app's bot user, so this is that spelling.
     github_login: str = os.getenv("LOGOS_AGENT_GITHUB_LOGIN", "LogosOSSAgent")
+    # The account's standing credential as a GitHub App, the one-time-token
+    # way to run it: the service keeps only the app's signing key and mints
+    # short-lived installation tokens on demand (app/github_tokens.py), so
+    # no bearer credential longer outlives its lifetime, and a token
+    # published by accident stops being one within it. When both fields
+    # below are set, the personal access tokens are ignored.
+    github_app_id: str = os.getenv("LOGOS_AGENT_GITHUB_APP_ID", "")
+    # The app's private key: the PEM, or its base64 for a one-line value.
+    github_app_private_key: str = os.getenv("LOGOS_AGENT_GITHUB_APP_PRIVATE_KEY", "")
+    # The installation of the app on the repository. Optional: when absent
+    # the service resolves it from the repository at the first mint.
+    github_app_installation_id: str = os.getenv("LOGOS_AGENT_GITHUB_INSTALLATION_ID", "")
+    # How long a minted token may live. GitHub caps it at an hour; the
+    # service re-mints before it lapses either way.
+    github_token_ttl_s: int = _int("LOGOS_AGENT_GITHUB_TOKEN_TTL_S", 1800)
     # Held by this service only. Needs `workflow` scope to dispatch the dev
-    # deploy; it is never passed into a session container.
+    # deploy; it is never passed into a session container. Ignored when the
+    # GitHub App fields are set.
     github_token: str = os.getenv("LOGOS_AGENT_GITHUB_TOKEN", "")
     # Handed to session containers. Best issued as a second token of the same
     # account without `workflow` scope, so a session cannot dispatch a deploy
     # or edit a workflow file even if it tries. Falling back to the runner's
     # token keeps a one-token deployment working — the runner says so at
     # startup, because that fallback gives up the scope boundary between the
-    # two phases.
+    # two phases. Ignored when the GitHub App fields are set.
     session_github_token: str = os.getenv("LOGOS_AGENT_SESSION_GITHUB_TOKEN", "") or os.getenv(
         "LOGOS_AGENT_GITHUB_TOKEN", ""
     )
@@ -341,11 +366,18 @@ class Settings:
     def session_token_is_runner_token(self) -> bool:
         """Whether session containers hold the runner's own token.
 
-        True when no separate session token was configured. The token then
-        carries `workflow` scope, so the scope boundary between the agent
-        phase and the runner is gone and the finalizer enforces the part
-        that matters — CI files — by itself.
+        With a GitHub App there is one kind of credential at all — a minted
+        installation token — and it carries the app's full permissions,
+        including the ones that dispatch deploys, so the finalizer enforces
+        the part that matters — CI files — by itself.
+
+        With personal access tokens it is true when no separate session
+        token was configured. The token then carries `workflow` scope, so
+        the scope boundary between the agent phase and the runner is gone
+        and the finalizer enforces the part that matters by itself.
         """
+        if self.github_app_id and self.github_app_private_key:
+            return True
         return bool(self.session_github_token) and self.session_github_token == self.github_token
 
     @property
