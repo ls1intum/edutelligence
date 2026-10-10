@@ -6,7 +6,7 @@ authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
 # athena = { path = "../athena", develop = true }
 athena = { path = "../../../athena", develop = true }
@@ -18,8 +18,8 @@ tiktoken = "0.14.0"
 nltk = "3.10.3"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.33.0.20260712"
-pydantic = "2.13.4"
+types-requests = "2.33.0.20261006"
+pydantic = "2.14.0"
 prospector = { version = "1.19.1", extras = ["with_mypy"] }
 
 [tool.poetry.group.test.dependencies]

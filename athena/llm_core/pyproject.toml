@@ -6,14 +6,14 @@ authors = ["Felix Dietrich <felixtj.dietrich@tum.de>"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 athena = { path = "../athena", develop = true }
-langsmith = "0.11.0"
-langchain = "1.3.15"
+langsmith = "0.14.7"
+langchain = "1.4.4"
 langchain-ollama = "1.1.0"
-langchain-openai = "1.5.2"
-openai = "3.3.0"
-python-dotenv = "1.2.3"
+langchain-openai = "1.7.0"
+openai = "3.28.0"
+python-dotenv = "1.2.4"
 tiktoken = "0.14.0"
 #langfuse = "^3.3.0"
 
