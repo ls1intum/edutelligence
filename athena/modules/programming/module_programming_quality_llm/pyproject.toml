@@ -6,7 +6,7 @@ authors = ["Aniruddh Zaveri <aniruddh.zaveri@tum.de>", "Konrad Weiß <konrad2002
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = "3.11.*"
+python = "3.14.*"
 # if you have local changes in the common Athena module, use the line below. Otherwise, please use a VCS stable version. Also, a version with tag = "" is possible.
 # athena = { path = "../athena", develop = true }
 athena = { path = "../../../athena", develop = true }
@@ -15,12 +15,12 @@ llm_core = { path = "../../../llm_core", develop = true }
 langchain-community = "0.4.2" # this is required for the GitLoader import and should be removed as soon as this is migrated to custom Git implementation
 gitpython = "3.1.59"
 tiktoken = "0.14.0"
-python-dotenv = "1.2.3"
+python-dotenv = "1.2.4"
 nltk = "3.10.3"
 
 [tool.poetry.group.dev.dependencies]
-types-requests = "2.33.0.20260712"
-pydantic = "2.13.4"
+types-requests = "2.33.0.20261006"
+pydantic = "2.14.0"
 prospector = { version = "1.19.1", extras = ["with_mypy"] }
 
 [tool.poetry.group.test.dependencies]
