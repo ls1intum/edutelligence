@@ -38,6 +38,8 @@ from logos.anthropic_compat.common import (
     error_body,
     is_chat_completions_path,
     is_messages_path,
+    is_responses_path,
+    sse,
     strip_billing_header_from_payload,
 )
 from logos.anthropic_compat.messages_api import MessagesStreamTranslator, from_message, to_messages
@@ -49,11 +51,14 @@ __all__ = [
     "MessagesStreamTranslator",
     "UpstreamDialect",
     "dialect_for",
+    "error_body",
     "forward_path_for",
     "from_message",
     "is_chat_completions_path",
     "is_messages_path",
+    "is_responses_path",
     "serves_only_messages",
+    "sse",
     "stream_translator",
     "strip_billing_header_from_payload",
     "to_messages",

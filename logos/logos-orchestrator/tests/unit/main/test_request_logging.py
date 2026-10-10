@@ -186,6 +186,7 @@ def _make_pipeline(
     completion_calls=None,
     release_calls=None,
     sync_payloads=None,
+    sync_deadlines=None,
     provider_response_calls=None,
     provider_call_calls=None,
     stream_dispatch_stamps=None,
@@ -193,13 +194,15 @@ def _make_pipeline(
     completion_calls = completion_calls if completion_calls is not None else []
     release_calls = release_calls if release_calls is not None else []
     sync_payloads = sync_payloads if sync_payloads is not None else []
+    sync_deadlines = sync_deadlines if sync_deadlines is not None else []
     provider_response_calls = provider_response_calls if provider_response_calls is not None else []
     provider_call_calls = provider_call_calls if provider_call_calls is not None else []
     stream_dispatch_stamps = stream_dispatch_stamps if stream_dispatch_stamps is not None else []
 
     class DummyExecutor:
-        async def execute_sync(self, url, headers, payload):  # noqa: ARG002
+        async def execute_sync(self, url, headers, payload, timeout=None, deadline_at=None):  # noqa: ARG002
             sync_payloads.append(payload)
+            sync_deadlines.append(deadline_at)
             return sync_result
 
         async def execute_streaming(
@@ -209,6 +212,9 @@ def _make_pipeline(
             payload,
             on_headers=None,
             status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
         ):  # noqa: ARG002
             if status is not None:
                 # Mirror the real executor: the dispatch instant is captured
@@ -226,8 +232,11 @@ def _make_pipeline(
                 status.error = terminal_status_error
 
     class DummyScheduler:
-        def release(self, model_id, provider_id, provider_type, request_id):
+        def release(self, model_id, provider_id, provider_type, request_id, *, reevaluate: bool = True):  # noqa: ARG002
             release_calls.append((model_id, provider_id, provider_type, request_id))
+
+        def reevaluate_model_queues(self, model_name: str):  # noqa: ARG002
+            return None
 
     class DummyPipeline:
         executor = DummyExecutor()
@@ -260,7 +269,9 @@ def _make_pipeline(
         def write_completion(request_id, fields):  # noqa: ARG002
             return None
 
-    return DummyPipeline(), completion_calls, release_calls
+    pipeline = DummyPipeline()
+    pipeline.sync_deadlines = sync_deadlines
+    return pipeline, completion_calls, release_calls
 
 
 @pytest.mark.asyncio
@@ -296,7 +307,13 @@ async def test_streaming_response_logs_usage_when_sse_events_are_split(monkeypat
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -372,7 +389,13 @@ async def test_a_stream_read_to_the_end_stamps_the_last_chunk_arrival(monkeypatc
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -434,7 +457,13 @@ async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         42,
         12,
@@ -449,8 +478,11 @@ async def test_a_stream_that_fails_stamps_the_failure_instant_not_the_last_chunk
             "is_cold_start": False,
         },
     )
-    with pytest.raises(RuntimeError, match="died mid-stream"):
-        await _read_stream_response(response)
+    # Mid-stream logosnode failures are recovered into dialect error frames
+    # rather than re-raised out of the body iterator, so the client sees a
+    # terminal error event; the stamp still lands at the failure instant.
+    body = await _read_stream_response(response)
+    assert "died mid-stream" in body
 
     # The failure is stamped at the failure instant the pump captured upstream:
     # a real instant, at/after the last chunk's arrival (the stalled interval
@@ -901,7 +933,13 @@ async def test_streaming_local_response_logs_cached_token_details(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._streaming_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-1", anthropic_dialect=None, messages_upstream=False),
+        SimpleNamespace(
+            provider_id=12,
+            provider_type="logosnode",
+            lane_id="lane-1",
+            anthropic_dialect=None,
+            messages_upstream=False,
+        ),
         {"messages": [{"role": "user", "content": "hi"}]},
         43,
         12,
@@ -1030,7 +1068,12 @@ async def test_sync_response_settles_cost_on_the_queued_write(monkeypatch):
     monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
 
     response = await main._sync_response(
-        SimpleNamespace(provider_type="logosnode", lane_id="lane-a", model_name="local-model", anthropic_dialect=None),
+        SimpleNamespace(
+            provider_type="logosnode",
+            lane_id="lane-a",
+            model_name="local-model",
+            anthropic_dialect=None,
+        ),
         {"model": "local-model", "messages": [{"role": "user", "content": "hi"}]},
         45,
         12,
@@ -1556,9 +1599,11 @@ async def test_http_sse_response_delimits_recovery_after_partial_first_chunk(mon
     body = await _read_stream_response(response)
 
     assert response.headers["content-type"] == "text/event-stream"
-    assert body.startswith(partial.decode() + "\n\ndata: ")
-    recovery_frames = body[len(partial) + 2 :]
-    error_frame, terminal_frame, trailing = recovery_frames.split("\n\n")
+    # The incomplete upstream remnant is discarded, not forwarded ahead of
+    # the synthetic recovery frames — concatenating it with the error event
+    # would corrupt the client's SSE parse.
+    assert partial.decode() not in body
+    error_frame, terminal_frame, trailing = body.split("\n\n")
     error_payload = json.loads(error_frame.removeprefix("data: "))
     assert error_payload["error"]["message"] == "failed to record first token"
     assert terminal_frame == "data: [DONE]"

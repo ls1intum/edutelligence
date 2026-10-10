@@ -5,15 +5,17 @@ Backend execution - makes HTTP calls to AI providers.
 The Executor is a pure HTTP client that makes streaming or synchronous requests.
 """
 
+import asyncio
 import datetime
 import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 import httpx
 
-from logos.errors import UpstreamStreamError, coerce_upstream_error
+from logos.errors import RetryDeadlineExceeded, UpstreamStreamError, coerce_upstream_error
 from logos.request_content import (
     force_non_streaming_payload,
     httpx_multipart_parts,
@@ -79,6 +81,9 @@ class Executor:
         on_headers: Optional[Callable[[Dict[str, str]], None]] = None,
         on_response_start: Optional[Callable[[int, Dict[str, str]], None]] = None,
         status: Optional[StreamingExecutionStatus] = None,
+        timeout: Optional[float] = None,
+        deadline_at: Optional[float] = None,
+        emit_recovery_frames: bool = True,
     ) -> AsyncIterator[bytes]:
         """
         Execute streaming HTTP request and yield response chunks.
@@ -92,6 +97,31 @@ class Executor:
                 any chunks are yielded; allows callers to detect non-2xx early.
             status: Optional mutable terminal status populated when a transport
                 failure occurs after response bytes have already been yielded.
+            timeout: Optional transport bound in seconds (a read timeout: the
+                longest gap between chunks). ``None`` (the default, used by the
+                proxy path and the initial dispatch) is unbounded; a retry
+                passes the time left in its deadline so a stalled stream cannot
+                run past the overall budget.
+            deadline_at: Optional absolute monotonic deadline for the whole
+                execution. The httpx timeout is a per-operation bound — a
+                slow open, a drip-fed error body, and a stream that keeps
+                delivering can each run past the deadline without tripping
+                it — so the deadline is one wall over the entire call: the
+                stream open and the error-body read are clamped to the time
+                left (see ``_bounded_by_deadline``) and the chunk loop
+                checks it on every read (see ``_until_deadline``); a spent
+                deadline raises ``RetryDeadlineExceeded`` in whichever
+                phase it lands.
+            emit_recovery_frames: Whether to append the best-effort
+                Chat Completions recovery frames (a new error frame plus
+                ``data: [DONE]``) when a transport failure lands after the
+                first byte. A caller that owns its own terminal passes
+                ``False`` and takes the error back: the /v1/responses
+                streamer must end the stream in a ``response.failed`` event
+                the executor cannot build without the accumulated response,
+                and the resource-mode streamer needs pre-commit failures as
+                exceptions so the internal retry can re-dispatch before the
+                response is committed.
 
         Yields:
             Upstream response bytes without reconstructing their framing.
@@ -114,13 +144,21 @@ class Executor:
         logger.info(f"Streaming request to {url}")
 
         request_kwargs = self._request_kwargs(payload)
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             if status is not None:
                 # Inside the entered client, immediately before the send: client
                 # construction/setup is logos work, and a client that fails to
                 # open never reaches this stamp.
                 status.dispatch_at = datetime.datetime.now(datetime.timezone.utc)
-            async with client.stream("POST", url, headers=headers, **request_kwargs) as resp:
+            stream = client.stream("POST", url, headers=headers, **request_kwargs)
+            # Entering the context is the request itself — connect, send,
+            # wait for the response headers — so the wall bounds it too,
+            # not only the chunk loop below: under the per-phase httpx
+            # timeouts a slow open would run to its own end, past the
+            # retry deadline. If the enter itself fails, the context never
+            # opened and there is nothing to close.
+            resp = await self._bounded_by_deadline(stream.__aenter__(), deadline_at)
+            try:
                 resp_headers = dict(resp.headers)
                 if on_response_start:
                     on_response_start(resp.status_code, resp_headers)
@@ -128,11 +166,14 @@ class Executor:
                     on_headers(resp_headers)
 
                 if resp.status_code >= 400:
-                    # Collect full error body before yielding anything.
-                    # Raise UpstreamStreamError so the caller can decide:
+                    # Collect full error body before yielding anything —
+                    # under the same wall: a drip-fed body resets the read
+                    # timeout on every byte, so only the absolute deadline
+                    # can cut it. Raise UpstreamStreamError so the caller
+                    # can decide:
                     # - return a proper JSONResponse with the correct HTTP status, or
                     # - fall back to an SSE error frame if already mid-stream.
-                    body_bytes = await resp.aread()
+                    body_bytes = await self._bounded_by_deadline(resp.aread(), deadline_at)
                     try:
                         body = json.loads(body_bytes)
                     except json.JSONDecodeError:
@@ -148,33 +189,99 @@ class Executor:
                     # Preserve upstream byte framing. SSE uses blank lines to
                     # delimit events, and local providers may stream NDJSON;
                     # reconstructing either format line-by-line changes it.
-                    async for chunk in resp.aiter_bytes():
+                    async for chunk in self._until_deadline(resp.aiter_bytes(), deadline_at):
                         if chunk:
                             yielded_bytes = True
                             yield chunk
                 except Exception as exc:
                     # Before the first byte, propagate the failure so the caller
-                    # can still return an HTTP error. Afterwards, append only
-                    # protocol-compatible recovery frames; non-SSE streams
-                    # terminate without introducing foreign framing.
+                    # can still return an HTTP error. Afterwards the bytes are
+                    # unretractable: record the failure, then either append
+                    # protocol-compatible recovery frames or hand the error
+                    # back to a caller that owns its own terminal; non-SSE
+                    # streams terminate without introducing foreign framing.
                     logger.error(f"Mid-stream error from {url}: {exc}")
                     if not yielded_bytes:
                         raise
                     if status is not None:
                         status.error = str(exc)
                         status.error_at = datetime.datetime.now(datetime.timezone.utc)
+                    if not emit_recovery_frames:
+                        # The caller ends the stream in its own dialect — the
+                        # Chat Completions frame it would receive here is
+                        # protocol noise to it.
+                        raise
                     if not is_sse:
                         return
                     _, error_body = coerce_upstream_error(500, {"error": str(exc)})
                     yield b"\n\n"
                     yield f"data: {json.dumps(error_body)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
+            finally:
+                # The wall or an error may have left the response open. The
+                # httpx stream context only closes it on exit and never
+                # suppresses, so a plain exit is the right cleanup on every
+                # path.
+                await stream.__aexit__(None, None, None)
+
+    @staticmethod
+    async def _until_deadline(chunks: AsyncIterator[bytes], deadline_at: Optional[float]) -> AsyncIterator[bytes]:
+        """Yield the stream's chunks, failing when the absolute deadline elapses.
+
+        The httpx timeout bounds the gap between chunks, not the run: a stream
+        that keeps delivering can never trip it and would run past the retry
+        deadline. The deadline is therefore checked and clamped on every read
+        of the whole iteration — a single absolute wall, never reset by
+        activity — and a spent one raises ``RetryDeadlineExceeded`` instead of
+        waiting out the next chunk.
+        """
+        iterator = chunks.__aiter__()
+        while True:
+            wait_s = None
+            if deadline_at is not None:
+                wait_s = deadline_at - time.monotonic()
+                if wait_s <= 0:
+                    raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+            try:
+                chunk = await asyncio.wait_for(iterator.__anext__(), timeout=wait_s)
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError:
+                raise RetryDeadlineExceeded("stream execution passed its retry deadline") from None
+            yield chunk
+
+    @staticmethod
+    async def _bounded_by_deadline(awaitable, deadline_at: Optional[float]):
+        """Run a single awaitable under the absolute retry deadline.
+
+        The stream open (connect, send, response headers) and the non-2xx
+        error-body read are single awaits, and the httpx timeout is
+        per-phase: a slow open, and a drip-fed body whose read bound
+        resets on every byte, can each run past the deadline without
+        tripping it. Clamped to the time left, a spent deadline raises
+        ``RetryDeadlineExceeded`` — the same identity the chunk loop
+        fails with, so the caller's terminal handling sees one kind of
+        wall no matter which phase it lands in. ``None`` (proxy path /
+        initial dispatch) leaves the await unbounded, as the timeout
+        itself is.
+        """
+        if deadline_at is None:
+            return await awaitable
+        remaining = deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise RetryDeadlineExceeded("stream execution passed its retry deadline")
+        try:
+            return await asyncio.wait_for(awaitable, timeout=remaining)
+        except asyncio.TimeoutError:
+            raise RetryDeadlineExceeded("stream execution passed its retry deadline") from None
 
     async def execute_sync(
         self,
         url: str,
         headers: Dict[str, str],
         payload: Dict[str, Any],
+        timeout: Optional[float] = None,
+        deadline_at: Optional[float] = None,
     ) -> ExecutionResult:
         """
         Execute synchronous (non-streaming) HTTP request.
@@ -183,6 +290,19 @@ class Executor:
             url: Full URL to make request to
             headers: HTTP headers (including auth, content-type, etc.)
             payload: Request body (existing stream fields are forced to False)
+            timeout: Optional transport bound in seconds. ``None`` (the
+                default, used by the proxy path and the initial dispatch)
+                leaves the call unbounded so a long generation or cold start
+                can run to completion; a retry passes the time left in its
+                deadline so it cannot outlive the overall budget.
+            deadline_at: Optional absolute wall (monotonic seconds) over the
+                whole execution. The ``timeout`` above bounds each httpx
+                operation, not the run — the read bound resets after every
+                body chunk, so a drip-fed response can stretch past the
+                retry deadline forever. The deadline is checked once as a
+                single wall over the complete POST (connect, send, body
+                read) and a spent one fails the request as
+                ``RetryDeadlineExceeded``.
 
         Returns:
             ExecutionResult containing response body, usage stats, and headers
@@ -204,16 +324,34 @@ class Executor:
         try:
             request_kwargs = self._request_kwargs(payload)
             async with httpx.AsyncClient() as client:
+                # The deadline is a single absolute wall over the whole POST;
+                # the per-operation httpx timeout cannot play that role
+                # because its read bound resets after every body chunk.
+                remaining = deadline_at - time.monotonic() if deadline_at is not None else None
+                if remaining is not None and remaining <= 0:
+                    raise RetryDeadlineExceeded("sync execution passed its retry deadline")
                 # Inside the entered client, immediately before/after the send:
                 # a client that fails to open leaves dispatch_at unset, and
                 # teardown after response_at stays out of the provider window.
                 dispatch_at = datetime.datetime.now(datetime.timezone.utc)
-                response = await client.post(
+                post = client.post(
                     url,
                     headers=headers,
-                    timeout=None,  # No timeout to handle long-running LLM requests and cold starts
+                    # None (proxy path / initial dispatch) keeps the call
+                    # unbounded for long-running LLM requests and cold starts;
+                    # a retry passes its remaining deadline.
+                    timeout=timeout,
                     **request_kwargs,
                 )
+                if remaining is None:
+                    response = await post
+                else:
+                    try:
+                        response = await asyncio.wait_for(post, timeout=remaining)
+                    except asyncio.TimeoutError:
+                        # wait_for's own timeout is the wall, not a transport
+                        # failure — keep the deadline's identity.
+                        raise RetryDeadlineExceeded("sync execution passed its retry deadline") from None
                 response_at = datetime.datetime.now(datetime.timezone.utc)
 
             logger.debug(f"Response status: {response.status_code}, headers: {dict(response.headers)}")
@@ -274,6 +412,20 @@ class Executor:
                 response_at=response_at,
             )
 
+        except RetryDeadlineExceeded:
+            # A spent deadline is terminal, not a transport hiccup: the
+            # budget cannot be refilled, so the request ends here with the
+            # wall named instead of being second-guessed as a flaky node
+            # worth re-dispatching.
+            logger.error(f"Sync request to {url} passed its retry deadline")
+            return ExecutionResult(
+                success=False,
+                response=None,
+                error="sync execution passed its retry deadline",
+                usage={},
+                is_streaming=False,
+                status_code=504,
+            )
         except Exception as e:
             logger.error(f"Exception during request to {url}: {type(e).__name__}: {e}")
             return ExecutionResult(
