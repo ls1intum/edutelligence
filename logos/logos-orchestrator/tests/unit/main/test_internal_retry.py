@@ -2243,6 +2243,163 @@ async def test_cloud_responses_discards_incomplete_sse_before_failed_event(retry
 
 
 @pytest.mark.asyncio
+async def test_ndjson_first_record_arrives_before_upstream_eof(retry_env):
+    """A local provider streams NDJSON — each record ends at a single
+    newline, never at the SSE blank line the pre-commit gate waits for.
+    The gate must select its framing from the upstream's content type and
+    open on the first record; gating an NDJSON stream on SSE event ends
+    buffers every record until EOF, so a long-lived stream never delivers
+    its output."""
+    import asyncio
+    import json
+
+    record1 = json.dumps({"id": "r1", "choices": [{"delta": {"content": "first"}}]}).encode() + b"\n"
+    record2 = json.dumps({"id": "r2", "choices": [{"delta": {"content": "second"}}]}).encode() + b"\n"
+    release = asyncio.Event()
+
+    class _NdjsonExecutor:
+        async def execute_streaming(
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
+        ):  # noqa: ARG002
+            if on_headers:
+                on_headers({"content-type": "application/x-ndjson"})
+            yield record1
+            # The upstream stays open after the first record.
+            await release.wait()
+            yield record2
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _NdjsonExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    # Gating the stream on SSE event ends would make this call itself block
+    # until EOF — the stream is still open here, so a timeout is the
+    # regression.
+    response = await asyncio.wait_for(
+        main._streaming_response(
+            SimpleNamespace(
+                provider_id=1,
+                provider_type="local",
+                forward_url="https://provider.test/v1/chat/completions",
+                anthropic_dialect=None,
+                messages_upstream=False,
+                model_name="stub-model",
+            ),
+            {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]},
+            None,
+            1,
+            27,
+            -1,
+            {},
+            {"request_id": "req-ndjson", "provider_type": "local"},
+            request_path="v1/chat/completions",
+        ),
+        timeout=5.0,
+    )
+    assert isinstance(response, StreamingResponse)
+
+    # The first record is on the wire while the upstream is still open —
+    # the pre-commit peek stopped at it instead of draining to EOF.
+    first = await asyncio.wait_for(response.body_iterator.__anext__(), timeout=5.0)
+    assert first == record1
+    release.set()
+    rest = b"".join([part async for part in response.body_iterator])
+    assert rest == record2
+
+
+@pytest.mark.asyncio
+async def test_local_sse_discards_fragmented_event_before_error_frame(retry_env):
+    """A local SSE stream has no cost enricher — its chunks were forwarded
+    to the client directly, so a fragment of the next event could already
+    be on the wire when the transport failed and the synthetic error frame
+    was spliced onto it: invalid JSON, and the error hidden from the
+    client. Buffer complete events for every HTTP SSE stream and discard
+    the unfinished one before the recovery frame."""
+    import json
+
+    content = b'data: {"id": "c1", "choices": [{"delta": {"content": "ok"}}]}\n\n'
+    # A complete content event, then the next event cut off mid-JSON.
+    incomplete = b'data: {"choices":[{"delta":{"content":"par'
+
+    class _FragmentedLocalExecutor:
+        async def execute_streaming(
+            self,
+            url,
+            headers,
+            payload,
+            on_headers=None,
+            status=None,
+            timeout=None,
+            deadline_at=None,
+            emit_recovery_frames=True,
+        ):  # noqa: ARG002
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            yield content
+            yield incomplete
+            raise RuntimeError("upstream disconnected")
+
+    pipeline = _FakePipeline([_ok_cloud_result()])
+    pipeline.executor = _FragmentedLocalExecutor()
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+
+    response = await main._streaming_response(
+        SimpleNamespace(
+            provider_id=1,
+            provider_type="local",
+            forward_url="https://provider.test/v1/chat/completions",
+            anthropic_dialect=None,
+            messages_upstream=False,
+            model_name="stub-model",
+        ),
+        {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-local-fragment", "provider_type": "local"},
+        request_path="v1/chat/completions",
+    )
+    assert isinstance(response, StreamingResponse)
+    body = b"".join([part async for part in response.body_iterator])
+
+    # The complete event reached the client...
+    assert content in body
+    # ...and the unfinished one appears neither on its own nor glued to the
+    # error.
+    assert incomplete not in body
+    assert b'"content":"par' not in body
+    frames = [frame for frame in body.split(b"\n\n") if frame]
+    err_frames = [frame for frame in frames if frame.startswith(b"data: {") and b'"error"' in frame]
+    assert len(err_frames) == 1, "the error must stand on its own, not spliced onto the fragment"
+    error = json.loads(err_frames[0][len(b"data: ") :])
+    assert error["error"]["message"] == "upstream disconnected"
+    # The stream closes with the chat terminal the client is reading.
+    assert body.endswith(b"data: [DONE]\n\n")
+
+
+@pytest.mark.asyncio
 async def test_sync_logosnode_deadline_returns_504_timeout(retry_env):
     """``send_command`` raising ``RetryDeadlineExceeded`` must settle as a
     terminal 504 timeout through the normal bookkeeping — not escape
@@ -2351,114 +2508,3 @@ async def test_async_job_logosnode_deadline_records_timeout(retry_env):
     assert isinstance(result, dict)
     assert result["status_code"] == 504
     assert settled and settled[0]["result_status"] == "timeout"
-
-
-def _local_http_context():
-    return SimpleNamespace(
-        provider_id=1,
-        provider_type="local",
-        forward_url="http://local.test/v1/chat/completions",
-        anthropic_dialect=None,
-        messages_upstream=False,
-        model_name="stub-model",
-    )
-
-
-async def _local_streaming_response(retry_env, executor):
-    pipeline = _FakePipeline([_ok_result()])
-    pipeline.executor = executor
-    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
-    retry_env.setattr(
-        main,
-        "_context_resolver",
-        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
-        raising=False,
-    )
-    return await main._streaming_response(
-        _local_http_context(),
-        {"messages": [{"role": "user", "content": "hi"}]},
-        None,
-        1,
-        27,
-        -1,
-        {},
-        {"request_id": "req-local", "provider_type": "local"},
-        retry_budget=_retry_budget_one_failure_left(),
-    )
-
-
-@pytest.mark.asyncio
-async def test_an_ndjson_stream_is_forwarded_while_the_upstream_is_still_open(retry_env):
-    """NDJSON records end in a single newline, so the SSE pre-commit gate never
-    sees a blank-line event end. The upstream's media type says it is not SSE:
-    the first record must commit the response instead of waiting for EOF."""
-    import asyncio
-
-    release = asyncio.Event()
-
-    class _NdjsonExecutor:
-        async def execute_streaming(
-            self, url, headers, payload, on_headers=None, status=None, **kwargs
-        ):  # noqa: ARG002
-            if on_headers:
-                on_headers({"content-type": "application/x-ndjson"})
-            yield b'{"response":"hel"}\n'
-            await release.wait()  # the upstream stays open
-            yield b'{"response":"lo","done":true}\n'
-
-    response = await asyncio.wait_for(_local_streaming_response(retry_env, _NdjsonExecutor()), timeout=2)
-    try:
-        assert isinstance(response, StreamingResponse)
-        first = await asyncio.wait_for(response.body_iterator.__anext__(), timeout=2)
-        assert b'"hel"' in first
-    finally:
-        release.set()
-        await response.body_iterator.aclose()
-
-
-@pytest.mark.asyncio
-async def test_a_local_sse_failure_mid_line_does_not_splice_the_error_into_a_fragment(retry_env):
-    """A local HTTP SSE stream that dies after half a ``data:`` line must not
-    have the synthetic error frame appended to that fragment: only complete
-    events reach the client, the fragment is dropped, and the error frame
-    starts on an event boundary."""
-
-    class _TruncatedSseExecutor:
-        async def execute_streaming(
-            self, url, headers, payload, on_headers=None, status=None, **kwargs
-        ):  # noqa: ARG002
-            if on_headers:
-                on_headers({"content-type": "text/event-stream"})
-            yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
-            yield b'data: {"partial_marker":'
-            raise RuntimeError("connection reset")
-
-    response = await _local_streaming_response(retry_env, _TruncatedSseExecutor())
-    assert isinstance(response, StreamingResponse)
-    out = b"".join([chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator])
-
-    assert b'"content":"ok"' in out
-    assert b"partial_marker" not in out
-    assert b"connection reset" in out
-    assert out.rstrip().endswith(b"data: [DONE]")
-    # The complete event and the error frame are each separated by a blank line.
-    assert out.count(b"\n\n") >= 3
-
-
-@pytest.mark.asyncio
-async def test_a_local_sse_stream_without_a_final_separator_still_delivers_its_last_event(retry_env):
-    """A clean close right after the last line (no blank-line terminator) is
-    flushed, not lost with the event buffer."""
-
-    class _NoSeparatorExecutor:
-        async def execute_streaming(
-            self, url, headers, payload, on_headers=None, status=None, **kwargs
-        ):  # noqa: ARG002
-            if on_headers:
-                on_headers({"content-type": "text/event-stream"})
-            yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
-            yield b"data: [DONE]"
-
-    response = await _local_streaming_response(retry_env, _NoSeparatorExecutor())
-    out = b"".join([chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator])
-    assert out.endswith(b"data: [DONE]")

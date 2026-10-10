@@ -1934,24 +1934,14 @@ class _SsePreCommitGate:
       in doubt.
 
     Binary (audio-upload) streams are never gated: their payload is not SSE
-    and every byte is output.
+    and every byte is output. Non-SSE text streams (an NDJSON response) are
+    passed in with ``text_stream=False`` for the same reason — a record ends
+    at a single newline, never at the blank line the gate waits for.
     """
 
     def __init__(self, text_stream: bool):
         self._text_stream = text_stream
         self._buf = bytearray()  # trailing bytes awaiting a blank-line event end
-
-    def observe_media_type(self, media_type: str) -> None:
-        """Release the gate for an upstream that is known not to speak SSE.
-
-        The response headers arrive with the first pull, after the gate is
-        built. A stream that declares another media type (NDJSON, plain text)
-        has no blank-line event boundary, so waiting for one would hold every
-        record until the upstream closes; each chunk is output as it comes.
-        An absent media type keeps the SSE rules — in doubt, the gate holds.
-        """
-        if media_type and media_type != "text/event-stream":
-            self._text_stream = False
 
     def has_output(self, chunk) -> bool:
         """Feed a transport chunk; True once a complete SSE event proves that
@@ -3000,8 +2990,22 @@ async def _streaming_response(
     # its blank-line terminator, so the gate decides only on complete SSE
     # events (see ``_SsePreCommitGate``). Binary (audio-upload) streams are
     # never gated — every byte is output.
-    gate = _SsePreCommitGate(not is_audio_upload_path(request_path or ""))
+    #
+    # The gate must match the stream's framing, and the framing is the
+    # upstream's: an NDJSON record ends at a single newline and never at the
+    # blank line the SSE gate waits for, so gating an NDJSON stream on SSE
+    # event ends holds every record until EOF and a long-lived stream never
+    # delivers. The content type is only known once the executor has seen
+    # the response headers — before the first body chunk, so the gate is
+    # created on that first chunk, not here.
+    gate: Optional[_SsePreCommitGate] = None
     held_chunks: list = []
+
+    def _new_gate() -> _SsePreCommitGate:
+        media_type = upstream_stream_headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        return _SsePreCommitGate(
+            media_type in {"", "text/event-stream"} and not is_audio_upload_path(request_path or "")
+        )
 
     def _stamp_provider_call():
         # The executor captures the dispatch instant after its request
@@ -3018,8 +3022,11 @@ async def _streaming_response(
             try:
                 while True:
                     chunk = await chunk_iter.__anext__()
+                    if gate is None:
+                        # The executor's on_headers callback fired before this
+                        # chunk, so the upstream's content type is known.
+                        gate = _new_gate()
                     held_chunks.append(chunk)
-                    gate.observe_media_type(_media_type_of(upstream_stream_headers))
                     if gate.has_output(chunk):
                         break
                 break
@@ -3054,7 +3061,7 @@ async def _streaming_response(
                     deadline_at=stream_deadline_at,
                     emit_recovery_frames=False,
                 )
-                gate = _SsePreCommitGate(not is_audio_upload_path(request_path or ""))
+                gate = None
                 held_chunks.clear()
     except UpstreamStreamError as exc:
         logger.error(
@@ -3113,6 +3120,22 @@ async def _streaming_response(
             if context.provider_type == "cloud" and upstream_media_type in {"", "text/event-stream"}
             else None
         )
+        # The LogosNode path withholds incomplete SSE events for every text
+        # stream; the HTTP path did so only through the cloud cost enricher,
+        # so a local SSE stream forwarded a fragment and a later failure
+        # spliced the recovery frame onto it — invalid JSON on a chat frame,
+        # an error the client never parses. Withhold complete events for
+        # every HTTP SSE stream, cloud or local: a transport failure can
+        # land between a complete event and the next one's first bytes, and
+        # the synthetic recovery frame must start on a blank line, not in
+        # the middle of a data line. Non-SSE bodies (NDJSON, audio) pass
+        # through unbuffered — an NDJSON record ends at a single newline the
+        # SSE terminator would never see.
+        sse_events = (
+            _SseEventBuffer()
+            if upstream_media_type in {"", "text/event-stream"} and not is_audio_upload_path(request_path or "")
+            else None
+        )
         # A request forwarded to an upstream that speaks the other dialect
         # comes back as the other dialect's event stream, and the client's SSE
         # parser only understands its own.
@@ -3122,16 +3145,6 @@ async def _streaming_response(
             translated_stream = stream_translator(context.anthropic_dialect, model_name=context.model_name)
         else:
             translated_stream = None
-        # A local HTTP upstream's SSE reaches the client chunk by chunk. A
-        # transport failure after half a ``data:`` line would then have the
-        # synthetic error frame appended to that fragment, which is invalid
-        # JSON and hides the error — so complete events only are released, as
-        # the cloud path already does through its cost enricher.
-        local_sse = (
-            _SseEventBuffer()
-            if cost_enricher is None and translated_stream is None and upstream_media_type == "text/event-stream"
-            else None
-        )
         error_message = None
         ttft_recorded = False
         # The provider's last byte is the last chunk off the upstream (or the
@@ -3153,8 +3166,6 @@ async def _streaming_response(
         provider_response_stamped = False
 
         async def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
-            if local_sse is not None:
-                return list(local_sse.feed(chunk))
             if cost_enricher is None:
                 return [chunk]
             # A settled usage frame triggers a synchronous pricing DB lookup; run
@@ -3173,6 +3184,11 @@ async def _streaming_response(
             """
             stream_log.feed(chunk)
             return translated_stream.feed(chunk) if translated_stream else [chunk]
+
+        def _outgoing_events(chunk: bytes | str) -> list[bytes | str]:
+            if sse_events is None:
+                return [chunk] if chunk else []
+            return sse_events.feed(chunk)
 
         # Same live view the logosnode path publishes to — a cloud request is
         # just as opaque while it runs, and the page shows both together.
@@ -3202,9 +3218,10 @@ async def _streaming_response(
                     # chunks use the pump's recorded arrival.
                     last_chunk_at = stream_first_byte_at if first_chunk_pending else arrival
                     first_chunk_pending = False
-                    for outgoing_chunk in await enriched_chunks(chunk):
-                        for client_chunk in client_chunks(outgoing_chunk):
-                            yield client_chunk
+                    for event in _outgoing_events(chunk):
+                        for outgoing_chunk in await enriched_chunks(event):
+                            for client_chunk in client_chunks(outgoing_chunk):
+                                yield client_chunk
                     _live_streams.update(request_id, stream_log.streamed_tokens())
                     if chunk and not ttft_recorded:
                         if log_id:
@@ -3225,23 +3242,22 @@ async def _streaming_response(
                 else:
                     _pipeline.record_provider_response(request_id, at=last_chunk_at)
                 provider_response_stamped = True
-            if local_sse is not None:
-                if stream_status.error is not None:
-                    local_sse.discard()
-                    stream_log.discard_pending()
-                else:
-                    for remnant in local_sse.flush():
-                        for client_chunk in client_chunks(remnant):
-                            yield client_chunk
-            if cost_enricher:
+            if stream_status.error is not None:
                 # A mid-stream transport failure the executor swallowed ends
                 # here with stream_status.error set: discard any unfinished
                 # SSE remnant rather than flushing it ahead of the recovery
-                # terminal the translator emits below.
-                if stream_status.error is not None:
+                # terminal the translator (or the error frame) emits below.
+                if sse_events is not None:
+                    sse_events.discard()
+                if cost_enricher:
                     cost_enricher.discard()
-                    stream_log.discard_pending()
-                else:
+                stream_log.discard_pending()
+            else:
+                for event in (sse_events.finish() if sse_events else []):
+                    for outgoing_chunk in await enriched_chunks(event):
+                        for client_chunk in client_chunks(outgoing_chunk):
+                            yield client_chunk
+                if cost_enricher:
                     for outgoing_chunk in cost_enricher.finish():
                         for client_chunk in client_chunks(outgoing_chunk):
                             yield client_chunk
@@ -3279,10 +3295,13 @@ async def _streaming_response(
             # An unfinished SSE remnant must not ride into the synthetic
             # recovery event — discard it (and the log parser's matching
             # fragment) so ``response.failed`` / the error frame starts clean.
+            # The event buffer, not the log parser, is what holds the bytes
+            # already committed to the client: clearing only the parser left
+            # a local SSE stream's forwarded fragment glued to the error.
+            if sse_events is not None:
+                sse_events.discard()
             if cost_enricher:
                 cost_enricher.discard()
-            if local_sse is not None:
-                local_sse.discard()
             stream_log.discard_pending()
             # Once bytes have reached the client, only SSE can carry the
             # synthetic error frame without corrupting its protocol — and it
@@ -5121,11 +5140,6 @@ def _deployments_for_keepalive_gate(body: dict, auth: "AuthContext", deployments
     return narrowed or list(deployments)
 
 
-def _media_type_of(headers: Dict[str, str]) -> str:
-    """The lower-cased media type of a (lower-cased-key) header map, or ""."""
-    return str(headers.get("content-type", "")).split(";", 1)[0].strip().lower()
-
-
 def _sse_event_end(buf: bytearray) -> int:
     """Exclusive end index of the first complete SSE event in ``buf``, or -1.
 
@@ -5174,15 +5188,21 @@ class _SseEventBuffer:
             del self._pending[:end]
         return events
 
+    def finish(self) -> list[bytes]:
+        """Flush a trailing remnant once the stream has ended cleanly.
+
+        A well-formed SSE stream ends on a blank line, so this is normally
+        empty; an upstream that cuts off mid-event still hands its last
+        bytes to the client rather than swallowing them.
+        """
+        if not self._pending:
+            return []
+        remainder = bytes(self._pending)
+        self._pending.clear()
+        return [remainder]
+
     def discard(self) -> None:
         self._pending.clear()
-
-    def flush(self) -> list[bytes]:
-        """The unfinished remnant of a stream that ended cleanly — an upstream
-        may close right after its last line without a blank-line separator."""
-        rest = bytes(self._pending)
-        self._pending.clear()
-        return [rest] if rest else []
 
 
 def _error_frames(path: str, status: int, body: Any) -> list:
