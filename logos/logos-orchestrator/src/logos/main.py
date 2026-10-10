@@ -220,6 +220,16 @@ _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
+# Retry hint sent with a 429 when a request spent its whole queue-wait window
+# without getting a lane. The queue is by definition still under pressure when
+# that happens, so the hint is a modest backoff rather than a computed drain
+# time; clients with a retry policy (including Claude Code's auto-mode
+# classifier, which honours overload-retry since v2.1.243) get a bounded
+# wait-and-retry instead of an opaque 503. It only helps callers that are
+# still connected when the timeout fires — a caller that already disconnected
+# never sees it, which is why the wait window itself is bounded to something a
+# client will actually wait for (DEFAULT_QUEUE_WAIT_TIMEOUT_S).
+_QUEUE_TIMEOUT_RETRY_AFTER_S = 30
 _cloud_model_sync: Optional[CloudModelSyncService] = None
 
 
@@ -3160,12 +3170,15 @@ async def _execute_proxy_mode(
     request_path: Optional[str] = None,
     priority: int = 1,
     required_provider_id: Optional[int] = None,
+    ingress_at: Optional[float] = None,
 ):
     """
     Direct model execution: skip classification, reuse scheduling/SDI, resolve auth from DB.
 
     Resolves the requested model from the DB (access-controlled by logos_key), then reuses the
-    resource-mode pipeline with allowed_models restricted to that model.
+    resource-mode pipeline with allowed_models restricted to that model. The request still goes
+    through the same queue, so ``ingress_at`` is forwarded exactly like in resource mode: the
+    queue-wait budget starts at ingress, not at the (skipped) classification.
     """
     requested_model_name = str(body.get("model") or "").strip()
     if not requested_model_name:
@@ -3231,6 +3244,7 @@ async def _execute_proxy_mode(
         skip_laura=True,
         priority=priority,
         required_provider_id=required_provider_id,
+        ingress_at=ingress_at,
     )
 
 
@@ -3247,6 +3261,7 @@ async def _execute_resource_mode(
     skip_laura: bool = False,
     priority: int = 1,
     required_provider_id: Optional[int] = None,
+    ingress_at: Optional[float] = None,
 ):
     """
     Execute request in RESOURCE mode (classification + scheduling).
@@ -3307,6 +3322,7 @@ async def _execute_resource_mode(
         team_priority=auth.team_priority,
         role_rank=queue_role_rank(auth.key_type, auth.user_role),
         api_key_id=auth.api_key_id,
+        ingress_at=ingress_at,
     )
 
     # Deferred logs must exist before the pipeline's enqueue identity UPDATE
@@ -3328,6 +3344,37 @@ async def _execute_resource_mode(
             scheduling_stats=result.scheduling_stats,
             result_status="timeout" if _is_timeout_failure(error=error_msg) else "error",
         )
+        if getattr(result, "queue_timeout_s", None) is not None:
+            # Queue-wait timeout is overload, not unavailability: the lanes
+            # are fine, the request just could not get one within its wait
+            # window. Answer 429 + Retry-After so a client with a retry
+            # policy retries with a bounded backoff instead of surfacing an
+            # opaque 503 (the failure mode that makes Claude Code's
+            # auto-classifier block tool execution). The hint reaches only
+            # callers still connected when the window closes — the rest gave
+            # up earlier and the bounded window (see
+            # DEFAULT_QUEUE_WAIT_TIMEOUT_S) exists so as few as possible are
+            # in that second group.
+            if is_async_job:
+                _, err_body = coerce_upstream_error(429, {"error": error_msg})
+                return {
+                    "status_code": 429,
+                    "data": err_body,
+                    # Carried through the job result so the polling endpoint
+                    # can re-serve the header (see get_job_status).
+                    "headers": {"Retry-After": str(_QUEUE_TIMEOUT_RETRY_AFTER_S)},
+                }
+            # Return, do not raise: the _record_log_failure call above already
+            # recorded the "timeout" result status, and raising would funnel
+            # through route_and_execute's HTTPException handler, which
+            # re-records the same log row as "error". Build the body with the
+            # same helper _http_exception_handler uses for a string detail, so
+            # the response keeps the project's OpenAI error shape.
+            return openai_error_response(
+                429,
+                error_msg,
+                headers={"Retry-After": str(_QUEUE_TIMEOUT_RETRY_AFTER_S)},
+            )
         if is_async_job:
             return {"status_code": 503, "data": {"error": error_msg}}
         else:
@@ -3366,6 +3413,7 @@ async def _execute_resource_mode(
                     return {
                         "status_code": 429,
                         "data": {"error": f"Rate limit exceeded: {reason}"},
+                        "headers": {"Retry-After": str(RateLimitConfig.window_seconds)},
                     }
                 # Retry-After: the limiter uses a sliding 60s window, so the
                 # budget is guaranteed to have room again after one window.
@@ -3513,6 +3561,7 @@ async def route_and_execute(
     request_id: Optional[str] = None,
     priority: int = 1,
     required_provider_id: Optional[int] = None,
+    ingress_at: Optional[float] = None,
 ):
     """
     Route request to PROXY or RESOURCE mode and execute.
@@ -3582,7 +3631,9 @@ async def route_and_execute(
 
     response = None
     try:
-        # PROXY mode (body["model"] specified → direct forwarding)
+        # PROXY mode (body["model"] specified → direct forwarding). The
+        # ingress stamp goes with it: model-specified requests queue the
+        # same way, so the client budget is spent identically.
         if body.get("model"):
             response = await _execute_proxy_mode(
                 body=body,
@@ -3595,6 +3646,7 @@ async def route_and_execute(
                 request_path=path,
                 priority=priority,
                 required_provider_id=required_provider_id,
+                ingress_at=ingress_at,
             )
 
         else:
@@ -3610,6 +3662,7 @@ async def route_and_execute(
                 request_path=path,
                 priority=priority,
                 required_provider_id=required_provider_id,
+                ingress_at=ingress_at,
             )
         return response
     except HTTPException as exc:
@@ -4287,6 +4340,11 @@ async def handle_sync_request(path: str, request: Request):
     priority is derived from the authenticated API key's default_priority
     (falling back to the policy-level priority inside the pipeline).
     """
+    # The queue-wait window is a whole-request budget: stamp ingress before
+    # auth/DB/reconnect work so the scheduler only waits with the client
+    # budget that is still left (see remaining_queue_wait_s).
+    ingress_at = time.monotonic()
+
     # Batch API operations (file uploads, batch jobs) carry no model to
     # classify or schedule, so they bypass the per-request pipeline and are
     # forwarded to a Batch-capable cloud provider the key may use.
@@ -4361,6 +4419,7 @@ async def handle_sync_request(path: str, request: Request):
             log_id=log_id,
             request_id=request_id,
             required_provider_id=required_provider_id,
+            ingress_at=ingress_at,
         )
         # A streaming request commits its response immediately and stays alive
         # with keepalives while it is processed: the scheduling wait and the
