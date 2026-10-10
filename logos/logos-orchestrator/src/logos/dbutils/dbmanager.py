@@ -3226,10 +3226,12 @@ class DBManager:
                 SELECT ak.id, ak.key_value, ak.name, ak.key_type, ak.team_id, ak.user_id,
                        ak.environment, ak.log, ak.settings, ak.default_priority,
                        u.role,
-                       t.priority AS team_priority
+                       t.priority AS team_priority,
+                       akr.rank AS admin_queue_rank
                 FROM api_keys ak
                          LEFT JOIN users u ON u.id = ak.user_id
                          LEFT JOIN teams t ON t.id = ak.team_id
+                         LEFT JOIN application_key_queue_ranks akr ON akr.api_key_id = ak.id
                 WHERE ak.id = :api_key_id AND ak.is_active = true
                 """),
                 {"api_key_id": int(api_key_id)},
@@ -4073,6 +4075,10 @@ class DBManager:
         headers=None,
         request_id: Optional[str] = None,
         timeout_s: Optional[float] = None,
+        workflow_tag: Optional[str] = None,
+        workflow_id: Optional[int] = None,
+        workflow_step_id: Optional[int] = None,
+        request_slo: Optional[str] = None,
     ) -> tuple[dict, int]:
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         payload_str = _json_for_jsonb(input_payload) if log_level == "FULL" and input_payload else None
@@ -4082,9 +4088,11 @@ class DBManager:
             text("""
                  INSERT INTO log_entry (timestamp_request, api_key_id, team_id, user_id,
                                         environment, client_ip,
-                                        input_payload, headers, privacy_level, request_id, timeout_s)
+                                        input_payload, headers, privacy_level, request_id, timeout_s,
+                                        workflow_tag, workflow_id, workflow_step_id, request_slo)
                  VALUES (:ts, :aki, :tid, :uid, :env,
-                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid, :timeout_s)
+                         :ip, :payload, :headers, CAST(:privacy AS logging_enum), :rid, :timeout_s,
+                         :workflow_tag, :workflow_id, :workflow_step_id, :request_slo)
                  RETURNING id
                  """),
             {
@@ -4099,6 +4107,10 @@ class DBManager:
                 "privacy": log_level,
                 "rid": request_id,
                 "timeout_s": timeout_s,
+                "workflow_tag": workflow_tag,
+                "workflow_id": workflow_id,
+                "workflow_step_id": workflow_step_id,
+                "request_slo": request_slo,
             },
         ).fetchone()
         self.session.commit()
@@ -4116,6 +4128,10 @@ class DBManager:
         headers=None,
         request_id: Optional[str] = None,
         timeout_s: Optional[float] = None,
+        workflow_tag: Optional[str] = None,
+        workflow_id: Optional[int] = None,
+        workflow_step_id: Optional[int] = None,
+        request_slo: Optional[str] = None,
     ) -> Optional[int]:
         """Insert a log row, or return the id of an existing one for ``request_id``.
 
@@ -4140,6 +4156,10 @@ class DBManager:
                 headers=headers,
                 request_id=request_id,
                 timeout_s=timeout_s,
+                workflow_tag=workflow_tag,
+                workflow_id=workflow_id,
+                workflow_step_id=workflow_step_id,
+                request_slo=request_slo,
             )
             return int(result["log-id"]) if status == 200 else None
         except sqlalchemy.exc.IntegrityError as exc:
@@ -4566,10 +4586,12 @@ class DBManager:
                         ak.is_active,
                         ak.use_custom_permissions,
                         u.role,
-                        t.priority AS team_priority
+                        t.priority AS team_priority,
+                        akr.rank AS admin_queue_rank
                  FROM api_keys ak
                           LEFT JOIN users u ON u.id = ak.user_id
                           LEFT JOIN teams t ON t.id = ak.team_id
+                          LEFT JOIN application_key_queue_ranks akr ON akr.api_key_id = ak.id
                  WHERE ak.key_value = :kv
                    AND ak.is_active = true
                  """),
@@ -4580,13 +4602,86 @@ class DBManager:
             return None
 
         data = dict(row._mapping)
-        # The joined columns (u.role, t.team_priority) are part of the auth
-        # context now: queue ordering needs the caller's role as a tiebreak
-        # and the team's admin-set priority as its queue level. Callers that
-        # only want key data ignore the extra keys.
+        # The joined columns (u.role, t.team_priority, akr.rank) are part of
+        # the auth context now: queue ordering needs the caller's role as a
+        # tiebreak, the team's admin-set priority as its queue level, and the
+        # optional application-key admin rank for cross-team ordering.
+        # Callers that only want key data ignore the extra keys.
         # The role is also used to distinguish the admin proxy-mode resolver
         # from the permission-scoped in-memory resolver.
         return data
+
+    def lookup_workflow_tag(self, tag: str, team_id: Optional[int]) -> Optional[Dict[str, Any]]:
+        """Resolve a workflow/step tag of ``team_id`` to attribution + SLO for a request.
+
+        Prefers a matching ``ai_workflow_steps.tag`` whose parent workflow is
+        not soft-deleted and not ``ignored``. Falls back to ``ai_workflows.tag``
+        under the same filters (workflows themselves have no SLO — ``slo`` is
+        then None). Step SLO prefers ``confirmed_slo`` over ``recommended_slo``.
+        Only each repository's latest succeeded analysis counts — the one the
+        Workflows tab shows — so ignoring, deleting, or renaming a tag there
+        is not undone by a superseded copy. Another team's tag never matches.
+
+        Returns:
+            Dict with ``workflow_id``, ``step_id``, ``slo``, or None when no
+            live tag of the team matches.
+        """
+        if not tag or team_id is None:
+            return None
+        params = {"tag": tag, "team_id": int(team_id)}
+        step_row = self.session.execute(
+            text("""
+                 SELECT s.workflow_id AS workflow_id,
+                        s.id AS step_id,
+                        COALESCE(s.confirmed_slo, s.recommended_slo) AS slo
+                 FROM ai_workflow_steps s
+                          JOIN ai_workflows w ON w.id = s.workflow_id
+                          JOIN ai_workflow_analyses a ON a.id = w.analysis_id
+                 WHERE s.tag = :tag
+                   AND a.team_id = :team_id
+                   AND a.id = (
+                         SELECT latest.id FROM ai_workflow_analyses latest
+                          WHERE latest.team_repository_id = a.team_repository_id
+                            AND latest.status = 'succeeded'
+                          ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                          LIMIT 1
+                       )
+                   AND w.deleted_at IS NULL
+                   AND w.status <> 'ignored'
+                 ORDER BY w.id DESC, s.id
+                 LIMIT 1
+                 """),
+            params,
+        ).fetchone()
+        if step_row:
+            return dict(step_row._mapping)
+
+        workflow_row = self.session.execute(
+            text("""
+                 SELECT w.id AS workflow_id,
+                        CAST(NULL AS INTEGER) AS step_id,
+                        CAST(NULL AS TEXT) AS slo
+                 FROM ai_workflows w
+                          JOIN ai_workflow_analyses a ON a.id = w.analysis_id
+                 WHERE w.tag = :tag
+                   AND a.team_id = :team_id
+                   AND a.id = (
+                         SELECT latest.id FROM ai_workflow_analyses latest
+                          WHERE latest.team_repository_id = a.team_repository_id
+                            AND latest.status = 'succeeded'
+                          ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                          LIMIT 1
+                       )
+                   AND w.deleted_at IS NULL
+                   AND w.status <> 'ignored'
+                 ORDER BY w.id DESC
+                 LIMIT 1
+                 """),
+            params,
+        ).fetchone()
+        if workflow_row:
+            return dict(workflow_row._mapping)
+        return None
 
     def get_team_budget_usage(self, team_id: int, month_start: str) -> int:
         row = self.session.execute(

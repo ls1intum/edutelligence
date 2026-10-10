@@ -364,6 +364,10 @@ class ExportImportControllerTest {
         rec.put("reviewed_by", null);
         rec.put("reviewed_at", null);
         recommendations.add(rec);
+        // Exports from before workflow steps, benchmarks and key queue ranks.
+        tableData.remove("ai_workflow_steps");
+        tableData.remove("ai_workflow_benchmarks");
+        tableData.remove("application_key_queue_ranks");
 
         String importBody = objectMapper.writeValueAsString(
             java.util.Map.of("json_data", tableData));
@@ -385,5 +389,9 @@ class ExportImportControllerTest {
             .contains("latency")
             .contains("quality")
             .contains("price");
+
+        String workflowStatus = jdbc.queryForObject(
+            "SELECT status FROM ai_workflows WHERE id = 9102", String.class);
+        org.assertj.core.api.Assertions.assertThat(workflowStatus).isEqualTo("active");
     }
 }

@@ -37,18 +37,23 @@ class _Conn:
         *,
         link_slug: str = "acme/repo",
         previous=None,
-        previous_workflows=None,
         analysed_commit=None,
         decisions=None,
+        previous_workflows=None,
+        previous_steps=None,
+        team_tags=None,
     ):
         self.statements: list[tuple[str, dict]] = []
         self.previous = previous or []
         self.previous_workflows = previous_workflows or []
+        self.previous_steps = previous_steps or []
+        self.team_tags = team_tags or []
         # start_id -> decision row; by default a reviewed row is its own decision.
         self.decisions = decisions
         self.analysed_commit = analysed_commit
         self._next_analysis_id = 9
         self._next_workflow_id = 100
+        self._next_step_id = 500
         self.link_slug = link_slug
 
     async def __aenter__(self):
@@ -69,6 +74,10 @@ class _Conn:
             return _Result([dict(p) for p in self.previous_workflows])
         if "FROM ai_llm_call_recommendations r" in text_sql:
             return _Result([dict(p) for p in self.previous])
+        if "WITH current_analyses" in text_sql:
+            return _Result([{"tag": t} for t in self.team_tags])
+        if "FROM ai_workflow_steps s WHERE s.workflow_id = ANY" in text_sql:
+            return _Result([dict(p) for p in self.previous_steps if p["workflow_id"] in params["ids"]])
         if "SELECT commit_sha FROM ai_workflow_analyses" in text_sql:
             return _Result(self.analysed_commit)
         if "FROM team_repositories" in text_sql and "SELECT" in text_sql:
@@ -83,6 +92,10 @@ class _Conn:
             wid = self._next_workflow_id
             self._next_workflow_id += 1
             return _Result(wid)
+        if "INSERT INTO ai_workflow_steps" in text_sql:
+            sid = self._next_step_id
+            self._next_step_id += 1
+            return _Result(sid)
         return _Result(None)
 
     async def commit(self):
@@ -157,10 +170,14 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
     assert any("INSERT INTO ai_workflow_analyses" in sql for sql in kinds)
     assert any("INSERT INTO ai_workflows" in sql for sql in kinds)
     assert any("FOR UPDATE" in sql for sql in kinds)
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["tag"] is None
+    assert not any("INSERT INTO ai_workflow_steps" in sql for sql, _ in conn.statements)
     rec = next(p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql)
     assert rec["file_path"] == "src/llm.py"
     assert rec["slo"] == "ux-critical"
     assert rec["workflow_id"] == 100
+    assert rec["step_id"] is None
     assert rec["team_id"] == 7
     assert json.loads(rec["flags"]) == {"night_heavy": False}
     assert json.loads(rec["priority"]) == ["latency", "quality", "price"]
@@ -169,6 +186,248 @@ async def test_upsert_analysis_from_temp_json(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn2))
     await analysis_ingest.ingest_session({"id": 5, "team_repository_id": 11, "repo_slug": "acme/repo"})
     assert any("INSERT INTO ai_workflows" in sql for sql, _ in conn2.statements)
+
+
+async def test_upsert_persists_workflow_tag_and_steps(monkeypatch):
+    payload = {
+        "commit_sha": "abc123",
+        "workflows": [
+            {
+                "name": "checkout",
+                "trigger_summary": "pay click",
+                "diagram_mermaid": "flowchart TD\n  A-->B",
+                "sort_order": 0,
+                "tag": " Checkout.Pay!! ",
+                "steps": [
+                    {
+                        "name": "score",
+                        "sort_order": 0,
+                        "tag": "Checkout/Score",
+                        "recommended_slo": "ux-critical",
+                        "objective_priority": ["latency", "quality"],
+                    },
+                    {
+                        "name": "summarize",
+                        "tag": "",
+                        "recommended_slo": "ux-background",
+                    },
+                    {"sort_order": 9},  # nameless → skipped
+                ],
+            }
+        ],
+        "recommendations": [
+            {
+                "workflow": "checkout",
+                "step": "score",
+                "file_path": "src/pay.py",
+                "start_line": 4,
+                "recommended_slo": "ux-critical",
+            },
+            {
+                "workflow": "checkout",
+                "step": "missing-step",
+                "file_path": "src/other.py",
+                "start_line": 8,
+                "recommended_slo": "ux-high-prio",
+            },
+        ],
+    }
+    conn = _Conn()
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    await analysis_ingest.upsert_analysis(session_id=5, team_repository_id=11, payload=payload)
+
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["tag"] == "checkoutpay"
+    steps = [p for sql, p in conn.statements if "INSERT INTO ai_workflow_steps" in sql]
+    assert len(steps) == 2
+    assert steps[0]["name"] == "score"
+    assert steps[0]["tag"] == "checkoutscore"
+    assert steps[0]["slo"] == "ux-critical"
+    assert json.loads(steps[0]["priority"]) == ["latency", "quality", "price"]
+    assert steps[0]["sort_order"] == 0
+    assert steps[1]["name"] == "summarize"
+    assert steps[1]["tag"] is None
+    assert steps[1]["slo"] == "ux-background"
+    assert steps[1]["sort_order"] == 1
+
+    recs = [p for sql, p in conn.statements if "INSERT INTO ai_llm_call_recommendations" in sql]
+    assert recs[0]["step_id"] == 500
+    assert recs[0]["workflow_id"] == 100
+    assert recs[1]["step_id"] is None
+
+
+async def test_upsert_rejects_duplicate_step_names_on_reanalysis(monkeypatch):
+    # Two same-named steps must not both inherit one predecessor's confirmed SLO.
+    conn = _Conn(
+        previous_workflows=[
+            {"id": 40, "name": "checkout", "status": "active", "deleted_at": None, "tag": "checkout"},
+        ],
+        previous_steps=[
+            {
+                "workflow_id": 40,
+                "name": "score",
+                "tag": "owner-score",
+                "confirmed_slo": "ux-background",
+                "confirmed_objective_priority": '["price", "quality", "latency"]',
+            },
+        ],
+    )
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    payload = {
+        "commit_sha": "dupes",
+        "workflows": [
+            {
+                "name": "checkout",
+                "tag": "checkout",
+                "steps": [
+                    {"name": "score", "tag": "score-a", "recommended_slo": "ux-critical"},
+                    {"name": " score ", "tag": "score-b", "recommended_slo": "ux-high-prio"},
+                ],
+            }
+        ],
+        "recommendations": [],
+    }
+    await analysis_ingest.upsert_analysis(session_id=9, team_repository_id=11, payload=payload)
+
+    steps = [p for sql, p in conn.statements if "INSERT INTO ai_workflow_steps" in sql]
+    assert len(steps) == 1
+    assert steps[0]["name"] == "score"
+    assert steps[0]["tag"] == "owner-score"
+    assert steps[0]["confirmed_slo"] == "ux-background"
+    assert steps[0]["slo"] == "ux-critical"
+
+
+async def test_upsert_tolerates_nonnumeric_sort_order(monkeypatch):
+    conn = _Conn()
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    payload = {
+        "commit_sha": "bad-order",
+        "workflows": [
+            {
+                "name": "checkout",
+                "sort_order": "not-a-number",
+                "steps": [
+                    {"name": "score", "sort_order": "first", "recommended_slo": "ux-critical"},
+                    {"name": "summarize", "sort_order": 3, "recommended_slo": "ux-background"},
+                ],
+            }
+        ],
+        "recommendations": [],
+    }
+    await analysis_ingest.upsert_analysis(session_id=10, team_repository_id=11, payload=payload)
+
+    wf = next(p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql)
+    assert wf["sort_order"] == 0
+    steps = [p for sql, p in conn.statements if "INSERT INTO ai_workflow_steps" in sql]
+    assert steps[0]["sort_order"] == 0
+    assert steps[1]["sort_order"] == 3
+
+
+async def test_upsert_carries_workflow_lifecycle_and_step_confirmation(monkeypatch):
+    conn = _Conn(
+        previous_workflows=[
+            {"id": 40, "name": "checkout", "status": "ignored", "deleted_at": None, "tag": "owner-tag"},
+        ],
+        previous_steps=[
+            {
+                "workflow_id": 40,
+                "name": "score",
+                "tag": "owner-score",
+                "confirmed_slo": "ux-background",
+                "confirmed_objective_priority": '["price", "quality", "latency"]',
+            },
+            {
+                "workflow_id": 40,
+                "name": "summarize",
+                "tag": None,
+                "confirmed_slo": None,
+                "confirmed_objective_priority": None,
+            },
+        ],
+    )
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    payload = {
+        "commit_sha": "def456",
+        "workflows": [
+            {
+                "name": "checkout",
+                "tag": "checkout",
+                "steps": [
+                    {"name": "score", "tag": "score", "recommended_slo": "ux-critical"},
+                    {"name": "summarize", "tag": "summarize", "recommended_slo": "ux-background"},
+                ],
+            },
+            {"name": "search", "tag": "search", "steps": []},
+        ],
+        "recommendations": [],
+    }
+    await analysis_ingest.upsert_analysis(session_id=6, team_repository_id=11, payload=payload)
+
+    workflows = [p for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql]
+    assert workflows[0]["status"] == "ignored"
+    assert workflows[0]["tag"] == "owner-tag"
+    assert workflows[1]["status"] == "active"
+    assert workflows[1]["deleted_at"] is None
+    assert workflows[1]["tag"] == "search"
+    steps = [p for sql, p in conn.statements if "INSERT INTO ai_workflow_steps" in sql]
+    assert steps[0]["tag"] == "owner-score"
+    assert steps[0]["slo"] == "ux-critical"
+    assert steps[0]["confirmed_slo"] == "ux-background"
+    assert json.loads(steps[0]["confirmed_priority"]) == ["price", "quality", "latency"]
+    assert steps[1]["tag"] == "summarize"
+    assert steps[1]["confirmed_slo"] is None
+    assert steps[1]["confirmed_priority"] is None
+
+
+async def test_upsert_keeps_tags_unique_across_the_team(monkeypatch):
+    conn = _Conn(
+        team_tags=["checkout", "checkout-score"],
+        previous_workflows=[{"id": 41, "name": "search", "status": "active", "deleted_at": None, "tag": "search"}],
+    )
+    monkeypatch.setattr(db, "sessionmaker", lambda: (lambda: conn))
+    payload = {
+        "commit_sha": "abc",
+        "workflows": [
+            {
+                "name": "checkout",
+                "tag": "checkout",
+                "steps": [
+                    {"name": "score", "tag": "checkout-score"},
+                    {"name": "rescore", "tag": "checkout-score"},
+                ],
+            },
+            # Another new workflow may not take the carried-over tag of "search".
+            {"name": "finder", "tag": "search"},
+            {"name": "search", "tag": "renamed"},
+        ],
+        "recommendations": [],
+    }
+    await analysis_ingest.upsert_analysis(session_id=8, team_repository_id=11, payload=payload)
+
+    lock = next(p for sql, p in conn.statements if "pg_advisory_xact_lock" in sql)
+    assert lock == {"team_id": 7}
+    workflows = [p["tag"] for sql, p in conn.statements if "INSERT INTO ai_workflows" in sql]
+    assert workflows == ["checkout-2", "search-2", "search"]
+    steps = [p["tag"] for sql, p in conn.statements if "INSERT INTO ai_workflow_steps" in sql]
+    assert steps == ["checkout-score-2", "checkout-score-3"]
+
+
+def test_unique_workflow_tag_survives_truncation():
+    long_tag = "w" * 80
+    taken = {long_tag}
+    first = analysis_ingest.unique_workflow_tag(long_tag, taken)
+    second = analysis_ingest.unique_workflow_tag(long_tag, taken)
+    assert len(first) <= 80 and len(second) <= 80
+    assert len({long_tag, first, second}) == 3
+    assert analysis_ingest.unique_workflow_tag(None, taken) is None
+
+
+def test_normalize_workflow_tag():
+    assert analysis_ingest.normalize_workflow_tag(None) is None
+    assert analysis_ingest.normalize_workflow_tag("  ") is None
+    assert analysis_ingest.normalize_workflow_tag(" Checkout.Pay ") == "checkoutpay"
+    assert analysis_ingest.normalize_workflow_tag("a" * 100) == "a" * 80
+    assert analysis_ingest.normalize_workflow_tag("OK-Step_1") == "ok-step1"
 
 
 async def test_upsert_honours_the_legacy_sla_key_of_older_sessions(tmp_path, monkeypatch):

@@ -75,11 +75,20 @@ roles. An App Admin can manage only App Developers.
 
 ## Teams
 
-This page shows the teams, their owners and their members. A team that gets its
-members from Keycloak has a lock badge. The badge shows the name of the linked
-group.
+This page shows the teams, their owners and their members. The **Priority**
+column of each team sets the queue level of that team's traffic (1–10, or
+Default). A team that gets its members from Keycloak has a lock badge. The
+badge shows the name of the linked group.
 
 ![Teams page](/img/roles/logos-admin-team-management.png)
+
+Below the team list, Logos Admins also see **Queue order**. This is an ordered
+ranking of application keys across teams. Rank 1 is served first when SLO or
+priority buckets tie. For example, `testapp1-prod` can outrank
+`testapp2-prod`, while `testapp1-staging` stays below `testapp2-test`. Move
+keys up or down, remove them from the ranking, or add an unranked application
+key from any team. Keys that are not in the list keep their usual team and
+per-key priority only.
 
 ### Keycloak Group Links
 

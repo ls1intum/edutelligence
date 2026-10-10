@@ -142,6 +142,10 @@ class AuthContext:
     # 0 = not set. Dominates the policy-level priority; the key's own
     # default_priority still wins over it.
     team_priority: int = 0
+    # Logos-admin cross–application-key queue rank (lower = higher priority
+    # within equal raw_priority). None when the key is unranked. Folded into
+    # role_rank via pipeline.effective_queue_role_rank.
+    admin_queue_rank: Optional[int] = None
     cloud_rl: Optional[dict] = None
     local_rl: Optional[dict] = None
     # Request-scoped, set by auth_parse_log: the proxy-mode model resolution
@@ -155,6 +159,16 @@ class AuthContext:
     # between the admin bypass (SQL, sees every model) and the in-memory
     # resolution over the key's permitted deployments .
     role: Optional[str] = None
+    # Request-scoped attribution from X-Logos-SLO / X-Logos-Workflow-Tag,
+    # filled by auth_parse_log so the pipeline can elevate priority without a
+    # second tag lookup.
+    request_slo: Optional[str] = None
+    workflow_tag: Optional[str] = None
+    workflow_id: Optional[int] = None
+    workflow_step_id: Optional[int] = None
+    # Step SLO from the workflow-tag lookup (None when only a workflow tag
+    # matched, or when no tag was sent). Used for priority elevation.
+    tag_slo: Optional[str] = None
 
 
 def _resolve_batch_credential(credential: str) -> Optional[Dict[str, Any]]:
@@ -201,6 +215,8 @@ def _auth_context_from_key_row(row: Dict[str, Any]) -> AuthContext:
         user_role=row.get("role"),
         # NULL (admin never set one) or no team both read as 0 = not set.
         team_priority=row.get("team_priority") or 0,
+        # Absent when the key is unranked or the lookup did not join ranks.
+        admin_queue_rank=row.get("admin_queue_rank"),
         # Absent on the batch-credential row shape (get_api_key_by_id selects
         # no users join): None routes resolution to the permitted set, which
         # is exactly what the SQL fallback computes for non-admins.

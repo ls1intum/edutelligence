@@ -3847,3 +3847,43 @@ def test_a_provider_batch_checks_the_budget_of_its_provider():
     with pytest.raises(HTTPException) as exc:
         batch_api._check_batch_budget(_BudgetDB(), auth, {"execution": "provider", "provider_id": 4})
     assert exc.value.status_code == 402
+
+
+def test_local_batch_auth_keeps_application_key_queue_rank(monkeypatch):
+    """Application-key batches stay LOW but retain admin queue-rank tiebreaks."""
+    from logos.pipeline.pipeline import effective_queue_role_rank
+
+    class _RankDB:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get_api_key_by_id(self, api_key_id):
+            return {
+                "id": api_key_id,
+                "key_value": f"lg-{api_key_id}",
+                "name": f"app-{api_key_id}",
+                "key_type": "application",
+                "team_id": OWN_TEAM,
+                "user_id": None,
+                "environment": "test",
+                "log": "BILLING",
+                "settings": {},
+                "default_priority": 10,
+                "role": None,
+                "team_priority": 0,
+                "admin_queue_rank": 1 if api_key_id == 101 else 2,
+            }
+
+    monkeypatch.setattr(batch_local, "DBManager", _RankDB)
+    higher = batch_local.auth_context_for_key(101)
+    lower = batch_local.auth_context_for_key(102)
+    assert higher.default_priority == batch_local.LOCAL_BATCH_PRIORITY
+    assert lower.default_priority == batch_local.LOCAL_BATCH_PRIORITY
+    assert higher.admin_queue_rank == 1
+    assert lower.admin_queue_rank == 2
+    assert effective_queue_role_rank(
+        higher.key_type, higher.user_role, higher.admin_queue_rank
+    ) > effective_queue_role_rank(lower.key_type, lower.user_role, lower.admin_queue_rank)
