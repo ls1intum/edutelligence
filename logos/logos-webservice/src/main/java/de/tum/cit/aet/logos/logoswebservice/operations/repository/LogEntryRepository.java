@@ -201,11 +201,13 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * <p>Only sessions of an opted-in team count: a session belongs to a team
      * through its repository, and a session with no team repository (or one of
      * a private team) is never published. The starter leaves this query only
-     * as a hash, enough to count distinct people; automation identities
-     * ({@code logos-agent (trigger)}, {@code logos-agent (analysis)}) and the
-     * runner's automatic retries ({@code the runner}) come back with a null
-     * starter, so their sessions still count but they are never counted as a
-     * person. No task text, names or repositories are read.
+     * as a hash, enough to count distinct people. Every identity the platform
+     * itself writes — the GitHub trigger and analysis passes
+     * ({@code logos-agent (trigger)}, {@code logos-agent (analysis)}), the
+     * runner's re-queued attempts ({@code the runner}) and the workflow-analysis
+     * sessions ({@code team-<id>}) — comes back with a null starter, so its
+     * sessions still count but it is never counted as a person; a real starter
+     * is anyone else's name. No task text, names or repositories are read.
      */
     @Transactional(readOnly = true)
     @Query(value = """
@@ -213,7 +215,9 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
                COUNT(*)::bigint                                       AS sessions,
                COUNT(*) FILTER (WHERE a.status = 'succeeded')::bigint  AS succeeded,
                COUNT(a.pr_url)::bigint                                AS pullRequests,
-               CASE WHEN a.created_by LIKE 'logos-agent (%' OR a.created_by = 'the runner' THEN NULL
+               CASE WHEN a.created_by LIKE 'logos-agent (%)'
+                        OR a.created_by = 'the runner'
+                        OR a.created_by ~ '^team-[0-9]+$' THEN NULL
                     ELSE md5(a.created_by) END                        AS starter
         FROM agent_sessions a
         INNER JOIN team_repositories tr ON tr.id = a.team_repository_id

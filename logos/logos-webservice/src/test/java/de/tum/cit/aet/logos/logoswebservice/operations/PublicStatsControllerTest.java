@@ -197,14 +197,15 @@ class PublicStatsControllerTest {
          executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
     @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
     void agentFiguresPublishOptedInTeamsOnlyAndCountPeopleNotAutomation() throws Exception {
-        // 7 days: the published team's human session (9821), its trigger
-        // session (9822) and the runner's automatic retry (9826) count; 9823
-        // (private team), 9824 (no repository) and 9825 (an hour before the
-        // window start) do not. The trigger identity and the retry add
-        // sessions but are not people.
+        // 7 days: the published team's human session (9821) and the
+        // platform-written sessions — trigger (9822), the runner's re-queued
+        // attempt (9826) and the workflow-analysis session (9827) — count;
+        // 9823 (private team), 9824 (no repository) and 9825 (an hour before
+        // the window start) do not. The three automation identities add
+        // sessions but none of them is a person, so users stays at 1.
         mvc.perform(get("/public/stats").param("days", "7"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.agent.sessions").value(3))
+           .andExpect(jsonPath("$.agent.sessions").value(4))
            .andExpect(jsonPath("$.agent.users").value(1))
            .andExpect(jsonPath("$.agent.succeeded").value(1))
            .andExpect(jsonPath("$.agent.pull_requests").value(1));
@@ -213,7 +214,7 @@ class PublicStatsControllerTest {
         // the repository-less session stay out.
         mvc.perform(get("/public/stats").param("days", "all"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.agent.sessions").value(4))
+           .andExpect(jsonPath("$.agent.sessions").value(5))
            .andExpect(jsonPath("$.agent.users").value(1));
     }
 
