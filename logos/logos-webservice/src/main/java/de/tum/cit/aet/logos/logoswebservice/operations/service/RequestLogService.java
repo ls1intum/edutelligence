@@ -186,9 +186,8 @@ public class RequestLogService {
                 m.put("api_key_name", p.getApiKeyName());
                 m.put("api_key_type", p.getApiKeyType());
                 m.put("environment", p.getEnvironment());
-                m.put("prompt_tokens", p.getPromptTokens());
-                m.put("completion_tokens", p.getCompletionTokens());
-                m.put("total_tokens", p.getTotalTokens());
+                putTokenCounts(m, p.getPromptTokens(), p.getEstimatedPromptTokens(),
+                    p.getCompletionTokens(), p.getTotalTokens());
                 m.put("cost_microcents", p.getCostMicroCents());
                 return m;
             })
@@ -386,5 +385,28 @@ public class RequestLogService {
 
     private static String ts(Instant t) {
         return t != null ? t.toString() : null;
+    }
+
+    /**
+     * Fill the token fields a request row shows.
+     *
+     * <p>When the upstream never reported {@code prompt_tokens} (typical of a
+     * failed request with no usage), the orchestrator stores a body-derived
+     * stand-in as {@code estimated_prompt_tokens}. Surface that as the prompt
+     * count and mark it estimated so the page keeps the same tilde it used
+     * while the request was live. Measured prompt tokens always win.
+     */
+    static void putTokenCounts(Map<String, Object> m, Long promptTokens, Long estimatedPromptTokens,
+                               Long completionTokens, Long totalTokens) {
+        boolean estimated = promptTokens == null && estimatedPromptTokens != null;
+        Long prompt = promptTokens != null ? promptTokens : estimatedPromptTokens;
+        m.put("prompt_tokens", prompt);
+        m.put("prompt_estimated", estimated);
+        m.put("completion_tokens", completionTokens);
+        Long total = totalTokens;
+        if (total == null && (prompt != null || completionTokens != null)) {
+            total = (prompt != null ? prompt : 0L) + (completionTokens != null ? completionTokens : 0L);
+        }
+        m.put("total_tokens", total);
     }
 }

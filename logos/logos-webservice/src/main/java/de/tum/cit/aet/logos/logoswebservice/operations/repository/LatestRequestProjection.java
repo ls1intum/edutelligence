@@ -26,6 +26,8 @@ public interface LatestRequestProjection {
     String getApiKeyType();
     String getEnvironment();
     Long getPromptTokens();
+    /** Body-derived stand-in when the upstream never reported prompt_tokens. */
+    Long getEstimatedPromptTokens();
     Long getCompletionTokens();
     Long getTotalTokens();
     Long getCostMicroCents();

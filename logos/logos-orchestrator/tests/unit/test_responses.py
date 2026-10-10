@@ -88,6 +88,34 @@ def test_failed_request_does_not_add_flat_request_charge():
     assert "billed_requests" not in usage
 
 
+def test_failed_request_keeps_estimated_prompt_tokens():
+    """A disconnect with no usage still stores the live-feed prompt estimate.
+
+    Settled error rows used to drop the only input figure the page had shown
+    while the request ran. The estimate is a separate token type so pricing
+    (which reads prompt_tokens) cannot bill it.
+    """
+    usage = main._usage_tokens_from_payload(
+        {"error": {"message": "Server disconnected without sending a response."}},
+        {"messages": [{"role": "user", "content": "hello"}]},
+        "v1/embeddings",
+        billable_request=False,
+    )
+    assert "prompt_tokens" not in usage
+    assert usage["estimated_prompt_tokens"] == 3
+
+
+def test_measured_prompt_tokens_are_not_replaced_by_an_estimate():
+    usage = main._usage_tokens_from_payload(
+        {"usage": {"prompt_tokens": 40, "completion_tokens": 5, "total_tokens": 45}},
+        {"messages": [{"role": "user", "content": "hello"}]},
+        "v1/chat/completions",
+        billable_request=False,
+    )
+    assert usage["prompt_tokens"] == 40
+    assert "estimated_prompt_tokens" not in usage
+
+
 def test_extract_token_usage_normalizes_anthropic_messages():
     out = extract_token_usage(
         {
