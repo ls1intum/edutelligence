@@ -495,6 +495,47 @@ class ProviderControllerTest {
     }
 
     @Test
+    void drainLane_rejectsNonAdmin() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/drain")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void drainLane_requiresProviderAndLane() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/drain")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/drain")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+    }
+
+    @Test
+    void drainLane_forwardsSnakeCaseBodyToWorkerAdminClient() throws Exception {
+        when(workerAdminClient.drainLane(6001, "planner-Qwen_Qwen3.8-27B"))
+            .thenReturn(ResponseEntity.ok(Map.of("status", "slept")));
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/drain")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"planner-Qwen_Qwen3.8-27B\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.status").value("slept"));
+
+        verify(workerAdminClient).drainLane(6001, "planner-Qwen_Qwen3.8-27B");
+    }
+
+    @Test
     void stopCalibration_bindsSnakeCaseProviderIdFromRequestBody() throws Exception {
         // StopCalibrationRequestDTO.providerId() must actually be populated
         // from the UI's snake_case "provider_id" body — a prior review
