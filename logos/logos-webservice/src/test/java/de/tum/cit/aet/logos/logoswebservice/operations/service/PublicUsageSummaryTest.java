@@ -46,10 +46,11 @@ class PublicUsageSummaryTest {
 
     private static Map<String, Object> summarize(List<? extends PublicUsageRowProjection> window,
                                                  List<? extends PublicUsageRowProjection> all,
-                                                 List<? extends AgentSessionDayProjection> agent,
-                                                 LocalDate windowStart) {
+                                                 List<? extends AgentSessionDayProjection> windowAgent,
+                                                 List<? extends AgentSessionDayProjection> allAgent) {
         Map<String, Object> stats = new LinkedHashMap<>();
-        PublicUsageSummary.putAll(stats, List.copyOf(window), List.copyOf(all), List.copyOf(agent), windowStart, TODAY);
+        PublicUsageSummary.putAll(stats, List.copyOf(window), List.copyOf(all), List.copyOf(windowAgent),
+            List.copyOf(allAgent), TODAY);
         return stats;
     }
 
@@ -68,14 +69,14 @@ class PublicUsageSummaryTest {
         for (int user = 1; user <= 4; user++) {
             four.add(row("2026-10-01", 1, user, "local", "m", user * 10L, user * 100L));
         }
-        Map<String, Object> hidden = (Map<String, Object>) summarize(four, four, List.of(), null).get("usage_per_person");
+        Map<String, Object> hidden = (Map<String, Object>) summarize(four, four, List.of(), List.of()).get("usage_per_person");
         assertThat(hidden.get("suppressed")).isEqualTo(true);
         assertThat(hidden.get("requests")).isNull();
 
         List<Row> five = new ArrayList<>(four);
         five.add(row("2026-10-01", 1, 5, "local", "m", 50, 500));
         five.add(row("2026-10-02", 1, 5, "local", "m", 50, 500));
-        Map<String, Object> shown = (Map<String, Object>) summarize(five, five, List.of(), null).get("usage_per_person");
+        Map<String, Object> shown = (Map<String, Object>) summarize(five, five, List.of(), List.of()).get("usage_per_person");
         assertThat(shown.get("suppressed")).isEqualTo(false);
         assertThat(shown.get("count")).isEqualTo(5);
         assertThat((Map<String, Double>) shown.get("requests")).containsEntry("median", 30.0);
@@ -88,7 +89,7 @@ class PublicUsageSummaryTest {
         List<Row> rows = List.of(
             row("2026-10-01", 1, null, "cloud", "m", 40, 400),
             row("2026-10-01", 1, 7, "local", "m", 2, 20));
-        Map<String, Object> stats = summarize(rows, rows, List.of(), null);
+        Map<String, Object> stats = summarize(rows, rows, List.of(), List.of());
         assertThat(stats.get("active_persons")).isEqualTo(1);
         assertThat(((Map<String, Object>) stats.get("usage_per_person")).get("count")).isEqualTo(1);
         Map<String, Object> perTeam = (Map<String, Object>) stats.get("usage_per_team");
@@ -104,7 +105,7 @@ class PublicUsageSummaryTest {
         for (int i = 0; i < 10; i++) {
             rows.add(row("2026-10-01", 1, null, i % 2 == 0 ? "local" : "cloud", "model-" + i, 100 - i, 1));
         }
-        Map<String, Object> models = (Map<String, Object>) summarize(rows, rows, List.of(), null).get("models");
+        Map<String, Object> models = (Map<String, Object>) summarize(rows, rows, List.of(), List.of()).get("models");
         List<Map<String, Object>> all = (List<Map<String, Object>>) models.get("all");
         assertThat(all).hasSize(PublicUsageSummary.MAX_NAMED_MODELS + 1);
         assertThat(all.get(0).get("model")).isEqualTo("model-0");
@@ -123,7 +124,7 @@ class PublicUsageSummaryTest {
             new Row("2026-10-01", 2, "Teaching", null, false, "local", "m", 9L, 1L),
             new Row("2026-10-01", 3, "Teaching", null, false, "local", "m", 1L, 1L));
         List<Map<String, Object>> categories =
-            (List<Map<String, Object>>) summarize(rows, rows, List.of(), null).get("categories");
+            (List<Map<String, Object>>) summarize(rows, rows, List.of(), List.of()).get("categories");
         assertThat(categories).hasSize(2);
         assertThat(categories.get(0)).containsEntry("category", "Teaching").containsEntry("teams", 2)
             .containsEntry("requests", 10L);
@@ -146,7 +147,7 @@ class PublicUsageSummaryTest {
         rows.add(row("2026-09-06", 4, 4, "local", "m", 1, 1));
 
         Map<String, Object> regular =
-            (Map<String, Object>) summarize(List.of(), rows, List.of(), null).get("regular_activity");
+            (Map<String, Object>) summarize(List.of(), rows, List.of(), List.of()).get("regular_activity");
         assertThat(regular.get("from")).isEqualTo("2026-09-07");
         assertThat(regular.get("to")).isEqualTo("2026-10-04");
         assertThat(regular.get("persons_any")).isEqualTo(2);
@@ -168,7 +169,7 @@ class PublicUsageSummaryTest {
             new AgentDay("2026-10-02", 1L, 0L, 0L, "b"));
 
         List<Map<String, Object>> monthly =
-            (List<Map<String, Object>>) summarize(List.of(), rows, agent, null).get("monthly");
+            (List<Map<String, Object>>) summarize(List.of(), rows, agent, agent).get("monthly");
         assertThat(monthly).extracting(m -> m.get("month"))
             .containsExactly("2026-07", "2026-08", "2026-09", "2026-10");
         assertThat(monthly.get(0)).containsEntry("requests", 15L).containsEntry("local_requests", 10L)
@@ -180,13 +181,32 @@ class PublicUsageSummaryTest {
     @Test
     @SuppressWarnings("unchecked")
     void agentFiguresFollowTheWindowButKeepTheFirstSessionDay() {
-        List<AgentDay> agent = List.of(
+        // The query cuts the window at the exact timestamp; only the all-time
+        // read still carries the September session.
+        List<AgentDay> all = List.of(
             new AgentDay("2026-09-03", 2L, 1L, 1L, "a"),
             new AgentDay("2026-10-01", 4L, 3L, 2L, "b"));
+        List<AgentDay> window = List.of(all.get(1));
         Map<String, Object> windowed =
-            (Map<String, Object>) summarize(List.of(), List.of(), agent, LocalDate.parse("2026-09-20")).get("agent");
+            (Map<String, Object>) summarize(List.of(), List.of(), window, all).get("agent");
         assertThat(windowed).containsEntry("sessions", 4L).containsEntry("users", 1)
             .containsEntry("succeeded", 3L).containsEntry("pull_requests", 2L)
             .containsEntry("first_session_day", "2026-09-03");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void automationSessionsCountAsSessionsButNeverAsPeople() {
+        // A null starter is an automation identity: its sessions add up, the
+        // people count stays with the verified human starters.
+        List<AgentDay> days = List.of(
+            new AgentDay("2026-10-01", 3L, 2L, 1L, null),
+            new AgentDay("2026-10-01", 1L, 1L, 0L, "human"));
+        Map<String, Object> stats = summarize(List.of(), List.of(), days, days);
+        Map<String, Object> agent = (Map<String, Object>) stats.get("agent");
+        assertThat(agent).containsEntry("sessions", 4L).containsEntry("users", 1);
+        List<Map<String, Object>> monthly = (List<Map<String, Object>>) stats.get("monthly");
+        assertThat(monthly.get(monthly.size() - 1))
+            .containsEntry("agent_sessions", 4L).containsEntry("agent_users", 1);
     }
 }

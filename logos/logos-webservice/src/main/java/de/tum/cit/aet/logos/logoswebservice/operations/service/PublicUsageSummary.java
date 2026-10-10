@@ -52,8 +52,8 @@ final class PublicUsageSummary {
     static void putAll(Map<String, Object> stats,
                        List<PublicUsageRowProjection> windowRows,
                        List<PublicUsageRowProjection> allRows,
-                       List<AgentSessionDayProjection> agentDays,
-                       LocalDate windowStartDay,
+                       List<AgentSessionDayProjection> windowAgentDays,
+                       List<AgentSessionDayProjection> allAgentDays,
                        LocalDate today) {
         long tokens = 0;
         Map<String, Long> laneTokens = new LinkedHashMap<>();
@@ -82,8 +82,8 @@ final class PublicUsageSummary {
         stats.put("categories", categories(windowRows));
         stats.put("models", models(windowRows));
         stats.put("regular_activity", regularActivity(allRows, today));
-        stats.put("monthly", monthly(allRows, agentDays, today));
-        stats.put("agent", agent(agentDays, windowStartDay));
+        stats.put("monthly", monthly(allRows, allAgentDays, today));
+        stats.put("agent", agent(windowAgentDays, allAgentDays));
     }
 
     private static long requests(PublicUsageRowProjection row) {
@@ -293,7 +293,9 @@ final class PublicUsageSummary {
             MonthAccumulator m = months.computeIfAbsent(YearMonth.from(LocalDate.parse(day.getDay())),
                 k -> new MonthAccumulator());
             m.agentSessions += day.getSessions() == null ? 0 : day.getSessions();
-            m.agentStarters.add(day.getStarter());
+            if (day.getStarter() != null) {
+                m.agentStarters.add(day.getStarter());
+            }
         }
 
         List<Map<String, Object>> result = new ArrayList<>();
@@ -330,27 +332,30 @@ final class PublicUsageSummary {
     }
 
     /**
-     * Logos Agent figures for the window (whole UTC days from
-     * {@code windowStartDay}; null = all time) and the day of the first
-     * session ever.
+     * Logos Agent figures for the window and the day of the first published
+     * session ever. The window days are already cut at the exact window start
+     * by the query; {@code users} counts verified human starters only (a null
+     * starter is an automation identity and still adds to the sessions).
      */
-    private static Map<String, Object> agent(List<AgentSessionDayProjection> days, LocalDate windowStartDay) {
+    private static Map<String, Object> agent(List<AgentSessionDayProjection> windowDays,
+                                             List<AgentSessionDayProjection> allDays) {
         long sessions = 0;
         long succeeded = 0;
         long pullRequests = 0;
         Set<String> starters = new HashSet<>();
-        String first = null;
-        for (AgentSessionDayProjection day : days) {
-            if (first == null || day.getDay().compareTo(first) < 0) {
-                first = day.getDay();
-            }
-            if (windowStartDay != null && LocalDate.parse(day.getDay()).isBefore(windowStartDay)) {
-                continue;
-            }
+        for (AgentSessionDayProjection day : windowDays) {
             sessions += Objects.requireNonNullElse(day.getSessions(), 0L);
             succeeded += Objects.requireNonNullElse(day.getSucceeded(), 0L);
             pullRequests += Objects.requireNonNullElse(day.getPullRequests(), 0L);
-            starters.add(day.getStarter());
+            if (day.getStarter() != null) {
+                starters.add(day.getStarter());
+            }
+        }
+        String first = null;
+        for (AgentSessionDayProjection day : allDays) {
+            if (first == null || day.getDay().compareTo(first) < 0) {
+                first = day.getDay();
+            }
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("sessions", sessions);

@@ -247,6 +247,19 @@ describe('usage helpers', () => {
     expect(slices[0].caption).toContain('3 teams');
   });
 
+  it('keeps a category or model named "other" apart from the synthetic remainder', () => {
+    const categories = categorySlices([
+      { category: 'other', teams: 1, requests: 30, tokens: 10 },
+      { category: null, teams: 1, requests: 20, tokens: 10 },
+    ]);
+    expect(new Set(categories.map((s) => s.key)).size).toBe(categories.length);
+    const models = modelSlices([
+      { model: 'other', requests: 10, tokens: 75, other: false },
+      { model: null, requests: 5, tokens: 25, other: true },
+    ]);
+    expect(new Set(models.map((s) => s.key)).size).toBe(models.length);
+  });
+
   it('labels the model long tail and carries each token share', () => {
     const slices = modelSlices([
       { model: 'big', requests: 10, tokens: 75, other: false },

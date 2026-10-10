@@ -191,6 +191,57 @@ class PublicStatsControllerTest {
     }
 
     @Test
+    @Sql(scripts = {"/sql/seed-public-stats.sql", "/sql/seed-public-stats-extra.sql"},
+         executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(scripts = {"/sql/cleanup-public-stats-extra.sql", "/sql/cleanup-public-stats.sql"},
+         executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    void agentFiguresPublishOptedInTeamsOnlyAndCountPeopleNotAutomation() throws Exception {
+        // 7 days: the published team's human session (9821) and its trigger
+        // session (9822) count; 9823 (private team), 9824 (no repository) and
+        // 9825 (an hour before the window start) do not. The trigger identity
+        // adds a session but is not a person.
+        mvc.perform(get("/public/stats").param("days", "7"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.agent.sessions").value(2))
+           .andExpect(jsonPath("$.agent.users").value(1))
+           .andExpect(jsonPath("$.agent.succeeded").value(1))
+           .andExpect(jsonPath("$.agent.pull_requests").value(1));
+
+        // All time keeps the older published session; the private team's and
+        // the repository-less session stay out.
+        mvc.perform(get("/public/stats").param("days", "all"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.agent.sessions").value(3))
+           .andExpect(jsonPath("$.agent.users").value(1));
+    }
+
+    @Test
+    @Sql(scripts = {"/sql/seed-public-stats.sql", "/sql/seed-public-stats-extra.sql"},
+         executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    @Sql(scripts = {"/sql/cleanup-public-stats-extra.sql", "/sql/cleanup-public-stats.sql"},
+         executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD)
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    void headlineAndUsageFiguresAgreeAtTheWindowBoundary() throws Exception {
+        // 9111 was requested just before the 7-day boundary and forwarded
+        // after it. Both the headline total and the usage figures range on the
+        // request timestamp, so neither counts it; with days=30 both do.
+        mvc.perform(get("/public/stats").param("days", "7"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.successful_requests").value(3))
+           .andExpect(jsonPath("$.categories[0].requests").value(3))
+           .andExpect(jsonPath("$.models.all[0].requests").value(3))
+           .andExpect(jsonPath("$.tokens").value(180));
+
+        mvc.perform(get("/public/stats").param("days", "30"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.successful_requests").value(4))
+           .andExpect(jsonPath("$.categories[0].requests").value(4))
+           .andExpect(jsonPath("$.models.all[0].requests").value(4))
+           .andExpect(jsonPath("$.tokens").value(191));
+    }
+
+    @Test
     void rejectsUnknownDaysValue() throws Exception {
         mvc.perform(get("/public/stats").param("days", "14"))
            .andExpect(status().isBadRequest());

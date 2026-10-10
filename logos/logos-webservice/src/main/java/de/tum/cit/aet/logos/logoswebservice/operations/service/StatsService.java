@@ -21,6 +21,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRep
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
+import de.tum.cit.aet.logos.logoswebservice.operations.repository.AgentSessionDayProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.KeyTypeRequestCountProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ProviderTypeRequestCountProjection;
@@ -191,16 +192,18 @@ public class StatsService {
         stats.put("local_cloud_requests", localCloud);
 
         // Distributions, shares and monthly series come from one row set
-        // (day x team x user x lane x model) so they describe the same requests.
-        Timestamp now = Timestamp.from(Instant.now());
-        Timestamp beginning = Timestamp.from(Instant.EPOCH);
-        List<PublicUsageRowProjection> allRows = logEntryRepository.findPublicUsageRows(beginning, now);
+        // (day x team x user x lane x model), read from log_entry on the same
+        // predicate as the headline totals above, so they describe the same
+        // requests. The monthly series and first-session marker ignore the
+        // window, hence the all-time read.
+        List<PublicUsageRowProjection> allRows = logEntryRepository.findPublicUsageRows(null);
         List<PublicUsageRowProjection> windowRows =
-            since == null ? allRows : logEntryRepository.findPublicUsageRows(since, now);
-        LocalDate today = now.toInstant().atZone(ZoneOffset.UTC).toLocalDate();
-        LocalDate windowStartDay = since == null ? null : since.toInstant().atZone(ZoneOffset.UTC).toLocalDate();
-        PublicUsageSummary.putAll(stats, windowRows, allRows, logEntryRepository.findAgentSessionDays(),
-            windowStartDay, today);
+            since == null ? allRows : logEntryRepository.findPublicUsageRows(since);
+        List<AgentSessionDayProjection> allAgentDays = logEntryRepository.findAgentSessionDays(null);
+        List<AgentSessionDayProjection> windowAgentDays =
+            since == null ? allAgentDays : logEntryRepository.findAgentSessionDays(since);
+        LocalDate today = Instant.now().atZone(ZoneOffset.UTC).toLocalDate();
+        PublicUsageSummary.putAll(stats, windowRows, allRows, windowAgentDays, allAgentDays, today);
         return stats;
     }
 }

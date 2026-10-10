@@ -234,7 +234,7 @@ export function categorySlices(categories: PublicCategoryStats[]): ChartSlice[] 
     `${teams} ${teams === 1 ? 'team' : 'teams'} · ${formatCompact(tokens)} tokens`;
 
   const slices: ChartSlice[] = named.slice(0, MAX_NAMED_TEAM_SLICES).map((c, index) => ({
-    key: `category:${c.category}`,
+    key: `category:named:${c.category}`,
     label: c.category!,
     caption: caption(c.teams, c.tokens),
     value: c.requests,
@@ -245,7 +245,7 @@ export function categorySlices(categories: PublicCategoryStats[]): ChartSlice[] 
   if (rest.length > 0) {
     const label = named.length > MAX_NAMED_TEAM_SLICES ? 'Other categories' : 'Uncategorized';
     slices.push({
-      key: 'category:other',
+      key: 'category:remainder',
       label,
       caption: caption(
         rest.reduce((sum, c) => sum + c.teams, 0),
@@ -269,7 +269,7 @@ export function modelSlices(models: PublicModelStats[]): ChartSlice[] {
   return models
     .filter((m) => m.requests > 0)
     .map((m, index) => ({
-      key: m.other ? 'model:other' : `model:${m.model}`,
+      key: m.other ? 'model:remainder' : `model:named:${m.model}`,
       label: m.other ? 'Other models' : (m.model ?? 'Unknown model'),
       caption: `${percentOf(m.tokens, totalTokens)}% of tokens`,
       value: m.requests,
