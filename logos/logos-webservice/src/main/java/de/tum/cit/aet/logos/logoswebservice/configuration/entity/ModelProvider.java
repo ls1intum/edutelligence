@@ -1,5 +1,8 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration.entity;
 
+import java.math.BigDecimal;
+import java.time.Instant;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -26,14 +29,49 @@ public class ModelProvider {
     private String apiKey;
     private String endpoint;
 
+    // Auto-derived L/A/C/Q metrics for this model-provider pair. The unit of
+    // derivedCostUsd depends on the provider type: USD per million tokens for
+    // cloud pairs (catalogue blend), USD per request for local pairs
+    // (VRAM x latency proxy). Only the cloud unit is commensurable across
+    // pairs, so the model-level cost ranking uses cloud pairs only.
+    // Populated by ModelMetricsService via native UPDATE; updatable=false so
+    // an ordinary JPA flush of a stale pair entity (e.g. connectModelProvider
+    // editing key/endpoint) cannot restore derived values overwritten by a
+    // concurrent derivation or provider-type invalidation.
+    // NULL until enough data has been observed.
+    @Column(updatable = false)
+    private Integer derivedTtftMs;
+    @Column(updatable = false)
+    private Integer derivedTotalLatencyMs;
+    @Column(updatable = false)
+    private Integer derivedTpotMs;
+    @Column(updatable = false)
+    private BigDecimal derivedCostUsd;
+    @Column(updatable = false)
+    private Integer derivedSamples = 0;
+    @Column(updatable = false)
+    private Instant derivedUpdatedAt;
+
     public Integer getId() { return id; }
     public Integer getProviderId() { return providerId; }
     public Integer getModelId() { return modelId; }
     public String getApiKey() { return apiKey; }
     public String getEndpoint() { return endpoint; }
+    public Integer getDerivedTtftMs() { return derivedTtftMs; }
+    public Integer getDerivedTotalLatencyMs() { return derivedTotalLatencyMs; }
+    public Integer getDerivedTpotMs() { return derivedTpotMs; }
+    public BigDecimal getDerivedCostUsd() { return derivedCostUsd; }
+    public Integer getDerivedSamples() { return derivedSamples; }
+    public Instant getDerivedUpdatedAt() { return derivedUpdatedAt; }
 
     public void setProviderId(Integer providerId) { this.providerId = providerId; }
     public void setModelId(Integer modelId) { this.modelId = modelId; }
     public void setApiKey(String apiKey) { this.apiKey = apiKey; }
     public void setEndpoint(String endpoint) { this.endpoint = endpoint; }
+    public void setDerivedTtftMs(Integer derivedTtftMs) { this.derivedTtftMs = derivedTtftMs; }
+    public void setDerivedTotalLatencyMs(Integer derivedTotalLatencyMs) { this.derivedTotalLatencyMs = derivedTotalLatencyMs; }
+    public void setDerivedTpotMs(Integer derivedTpotMs) { this.derivedTpotMs = derivedTpotMs; }
+    public void setDerivedCostUsd(BigDecimal derivedCostUsd) { this.derivedCostUsd = derivedCostUsd; }
+    public void setDerivedSamples(Integer derivedSamples) { this.derivedSamples = derivedSamples; }
+    public void setDerivedUpdatedAt(Instant derivedUpdatedAt) { this.derivedUpdatedAt = derivedUpdatedAt; }
 }

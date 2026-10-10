@@ -17,4 +17,5 @@ public interface ModelWithPriceProjection {
     BigDecimal getInputUsdPerMillion();
     BigDecimal getOutputUsdPerMillion();
     Instant getLastUsedAt();
+    String getWeightOverridesText();
 }
