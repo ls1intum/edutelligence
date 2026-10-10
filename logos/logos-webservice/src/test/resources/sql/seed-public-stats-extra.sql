@@ -44,4 +44,8 @@ VALUES
    TRUE, FALSE, '[]'::jsonb, FALSE, NULL, NULL),
   -- an hour older than the 7-day window start, on the published team
   (9825, 9801, 't', 'succeeded', 'alice', NOW() - INTERVAL '7 days' - INTERVAL '1 hour',
+   TRUE, FALSE, '[]'::jsonb, FALSE, 9811, NULL),
+  -- the runner's automatic retry of a failed analysis on the published team:
+  -- it keeps the team repository, so it is a session, not another person
+  (9826, 9801, 't', 'failed', 'the runner', NOW() - INTERVAL '90 minutes',
    TRUE, FALSE, '[]'::jsonb, FALSE, 9811, NULL);
