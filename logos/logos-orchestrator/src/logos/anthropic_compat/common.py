@@ -80,8 +80,8 @@ def is_reasoning_model(model_name: Optional[str]) -> bool:
 
     The two families take mutually exclusive parameter sets on
     chat/completions, and getting it wrong is a 400 before the model sees
-    anything: a reasoning model rejects ``max_tokens``, ``temperature`` and
-    ``top_p``, while everything older rejects ``reasoning_effort``. Only the
+    anything: a reasoning model rejects ``temperature`` and ``top_p``, while
+    everything older rejects ``reasoning_effort``. Only the
     name is available to decide — the served name, with any vendor prefix
     stripped.
     """
@@ -89,13 +89,35 @@ def is_reasoning_model(model_name: Optional[str]) -> bool:
     return bool(_REASONING_MODEL_RE.match(name))
 
 
-def wants_max_completion_tokens(model_name: Optional[str]) -> bool:
-    """Whether this model needs ``max_completion_tokens`` on chat/completions.
+# First Azure OpenAI api-version whose chat/completions schema accepts
+# ``max_completion_tokens``. Older versions (e.g. 2024-02-01, which GPT-4 Turbo
+# deployments still use) define only ``max_tokens`` and answer 400 otherwise.
+_MAX_COMPLETION_TOKENS_MIN_API_VERSION = "2024-09-01"
 
-    Anthropic requires ``max_tokens`` on every request, so the translation
-    always has a value to forward; only its name differs by model family.
+
+def wants_max_completion_tokens(endpoint_url: Optional[str]) -> bool:
+    """Whether the upstream URL's chat surface wants ``max_completion_tokens``.
+
+    Anthropic requires ``max_tokens`` on every Messages request, so the
+    translation always has a value to forward; only its name differs by the
+    upstream operation the request is posted to. ``chat/completions`` takes
+    the modern name; the legacy text ``completions`` endpoint still takes
+    ``max_tokens``. The URL decides — not the model name — because the same
+    deployment id can serve either surface and a new family is invisible to a
+    name regex. One URL detail narrows it: an Azure ``api-version`` older than
+    2024-09-01 predates ``max_completion_tokens`` and keeps ``max_tokens``.
     """
-    return is_reasoning_model(model_name)
+    path, _, query = (endpoint_url or "").partition("?")
+    path = path.rstrip("/")
+    if path.endswith("/completions") and not path.endswith("/chat/completions"):
+        return False
+    for param in query.split("&"):
+        name, _, value = param.partition("=")
+        if name == "api-version" and re.match(r"\d{4}-\d{2}-\d{2}", value):
+            return value[:10] >= _MAX_COMPLETION_TOKENS_MIN_API_VERSION
+    # No usable URL or no api-version (OpenAI itself): the caller is already
+    # translating into the chat/completions dialect, which wants the modern name.
+    return True
 
 
 def new_message_id(upstream_id: Any) -> str:

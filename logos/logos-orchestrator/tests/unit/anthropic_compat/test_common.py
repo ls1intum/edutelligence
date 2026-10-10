@@ -7,7 +7,13 @@ therefore forwarded verbatim — see the call site in
 ``pipeline.context_resolver.ContextResolver.prepare_headers_and_payload``.
 """
 
-from logos.anthropic_compat.common import strip_billing_header, strip_billing_header_from_payload
+import pytest
+
+from logos.anthropic_compat.common import (
+    strip_billing_header,
+    strip_billing_header_from_payload,
+    wants_max_completion_tokens,
+)
 
 _MARKER = "x-anthropic-billing-header: cc_version=2.1.276.791; cc_entrypoint=cli; "
 _PROMPT = "You are Claude Code, Anthropic's official CLI for Claude."
@@ -124,3 +130,27 @@ def test_strip_billing_header_from_payload_preserves_everything_else():
     assert result["messages"] == [{"role": "user", "content": "hi"}]
     assert result["max_tokens"] == 200
     assert result["stream"] is True
+
+
+@pytest.mark.parametrize(
+    "endpoint_url,expected",
+    [
+        ("https://api.openai.com/v1/chat/completions", True),
+        (
+            "https://ase.openai.azure.com/openai/deployments/gpt-6-luna/chat/completions"
+            "?api-version=2025-01-01-preview",
+            True,
+        ),
+        ("https://api.openai.com/v1/completions", False),
+        ("https://api.openai.com/v1/completions?foo=1", False),
+        # Azure api-versions before 2024-09-01 predate max_completion_tokens.
+        ("https://x.openai.azure.com/openai/deployments/turbo/chat/completions?api-version=2024-02-01", False),
+        ("https://x.openai.azure.com/openai/deployments/turbo/chat/completions?api-version=2024-08-01-preview", False),
+        ("https://x.openai.azure.com/openai/deployments/m/chat/completions?api-version=2024-09-01-preview", True),
+        ("https://x.openai.azure.com/openai/deployments/m/chat/completions?api-version=2025-01-01-preview", True),
+        (None, True),
+        ("", True),
+    ],
+)
+def test_wants_max_completion_tokens_follows_the_endpoint_path(endpoint_url, expected):
+    assert wants_max_completion_tokens(endpoint_url) is expected
