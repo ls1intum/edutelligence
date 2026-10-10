@@ -1941,6 +1941,18 @@ class _SsePreCommitGate:
         self._text_stream = text_stream
         self._buf = bytearray()  # trailing bytes awaiting a blank-line event end
 
+    def observe_media_type(self, media_type: str) -> None:
+        """Release the gate for an upstream that is known not to speak SSE.
+
+        The response headers arrive with the first pull, after the gate is
+        built. A stream that declares another media type (NDJSON, plain text)
+        has no blank-line event boundary, so waiting for one would hold every
+        record until the upstream closes; each chunk is output as it comes.
+        An absent media type keeps the SSE rules — in doubt, the gate holds.
+        """
+        if media_type and media_type != "text/event-stream":
+            self._text_stream = False
+
     def has_output(self, chunk) -> bool:
         """Feed a transport chunk; True once a complete SSE event proves that
         generated output has started, False while only metadata (or an
@@ -3007,6 +3019,7 @@ async def _streaming_response(
                 while True:
                     chunk = await chunk_iter.__anext__()
                     held_chunks.append(chunk)
+                    gate.observe_media_type(_media_type_of(upstream_stream_headers))
                     if gate.has_output(chunk):
                         break
                 break
@@ -3109,6 +3122,16 @@ async def _streaming_response(
             translated_stream = stream_translator(context.anthropic_dialect, model_name=context.model_name)
         else:
             translated_stream = None
+        # A local HTTP upstream's SSE reaches the client chunk by chunk. A
+        # transport failure after half a ``data:`` line would then have the
+        # synthetic error frame appended to that fragment, which is invalid
+        # JSON and hides the error — so complete events only are released, as
+        # the cloud path already does through its cost enricher.
+        local_sse = (
+            _SseEventBuffer()
+            if cost_enricher is None and translated_stream is None and upstream_media_type == "text/event-stream"
+            else None
+        )
         error_message = None
         ttft_recorded = False
         # The provider's last byte is the last chunk off the upstream (or the
@@ -3130,6 +3153,8 @@ async def _streaming_response(
         provider_response_stamped = False
 
         async def enriched_chunks(chunk: bytes | str) -> list[bytes | str]:
+            if local_sse is not None:
+                return list(local_sse.feed(chunk))
             if cost_enricher is None:
                 return [chunk]
             # A settled usage frame triggers a synchronous pricing DB lookup; run
@@ -3200,6 +3225,14 @@ async def _streaming_response(
                 else:
                     _pipeline.record_provider_response(request_id, at=last_chunk_at)
                 provider_response_stamped = True
+            if local_sse is not None:
+                if stream_status.error is not None:
+                    local_sse.discard()
+                    stream_log.discard_pending()
+                else:
+                    for remnant in local_sse.flush():
+                        for client_chunk in client_chunks(remnant):
+                            yield client_chunk
             if cost_enricher:
                 # A mid-stream transport failure the executor swallowed ends
                 # here with stream_status.error set: discard any unfinished
@@ -3248,6 +3281,8 @@ async def _streaming_response(
             # fragment) so ``response.failed`` / the error frame starts clean.
             if cost_enricher:
                 cost_enricher.discard()
+            if local_sse is not None:
+                local_sse.discard()
             stream_log.discard_pending()
             # Once bytes have reached the client, only SSE can carry the
             # synthetic error frame without corrupting its protocol — and it
@@ -5086,6 +5121,11 @@ def _deployments_for_keepalive_gate(body: dict, auth: "AuthContext", deployments
     return narrowed or list(deployments)
 
 
+def _media_type_of(headers: Dict[str, str]) -> str:
+    """The lower-cased media type of a (lower-cased-key) header map, or ""."""
+    return str(headers.get("content-type", "")).split(";", 1)[0].strip().lower()
+
+
 def _sse_event_end(buf: bytearray) -> int:
     """Exclusive end index of the first complete SSE event in ``buf``, or -1.
 
@@ -5136,6 +5176,13 @@ class _SseEventBuffer:
 
     def discard(self) -> None:
         self._pending.clear()
+
+    def flush(self) -> list[bytes]:
+        """The unfinished remnant of a stream that ended cleanly — an upstream
+        may close right after its last line without a blank-line separator."""
+        rest = bytes(self._pending)
+        self._pending.clear()
+        return [rest] if rest else []
 
 
 def _error_frames(path: str, status: int, body: Any) -> list:

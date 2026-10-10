@@ -2351,3 +2351,114 @@ async def test_async_job_logosnode_deadline_records_timeout(retry_env):
     assert isinstance(result, dict)
     assert result["status_code"] == 504
     assert settled and settled[0]["result_status"] == "timeout"
+
+
+def _local_http_context():
+    return SimpleNamespace(
+        provider_id=1,
+        provider_type="local",
+        forward_url="http://local.test/v1/chat/completions",
+        anthropic_dialect=None,
+        messages_upstream=False,
+        model_name="stub-model",
+    )
+
+
+async def _local_streaming_response(retry_env, executor):
+    pipeline = _FakePipeline([_ok_result()])
+    pipeline.executor = executor
+    retry_env.setattr(main, "_pipeline", pipeline, raising=False)
+    retry_env.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(prepare_headers_and_payload=lambda context, payload: ({}, payload)),
+        raising=False,
+    )
+    return await main._streaming_response(
+        _local_http_context(),
+        {"messages": [{"role": "user", "content": "hi"}]},
+        None,
+        1,
+        27,
+        -1,
+        {},
+        {"request_id": "req-local", "provider_type": "local"},
+        retry_budget=_retry_budget_one_failure_left(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_ndjson_stream_is_forwarded_while_the_upstream_is_still_open(retry_env):
+    """NDJSON records end in a single newline, so the SSE pre-commit gate never
+    sees a blank-line event end. The upstream's media type says it is not SSE:
+    the first record must commit the response instead of waiting for EOF."""
+    import asyncio
+
+    release = asyncio.Event()
+
+    class _NdjsonExecutor:
+        async def execute_streaming(
+            self, url, headers, payload, on_headers=None, status=None, **kwargs
+        ):  # noqa: ARG002
+            if on_headers:
+                on_headers({"content-type": "application/x-ndjson"})
+            yield b'{"response":"hel"}\n'
+            await release.wait()  # the upstream stays open
+            yield b'{"response":"lo","done":true}\n'
+
+    response = await asyncio.wait_for(_local_streaming_response(retry_env, _NdjsonExecutor()), timeout=2)
+    try:
+        assert isinstance(response, StreamingResponse)
+        first = await asyncio.wait_for(response.body_iterator.__anext__(), timeout=2)
+        assert b'"hel"' in first
+    finally:
+        release.set()
+        await response.body_iterator.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_local_sse_failure_mid_line_does_not_splice_the_error_into_a_fragment(retry_env):
+    """A local HTTP SSE stream that dies after half a ``data:`` line must not
+    have the synthetic error frame appended to that fragment: only complete
+    events reach the client, the fragment is dropped, and the error frame
+    starts on an event boundary."""
+
+    class _TruncatedSseExecutor:
+        async def execute_streaming(
+            self, url, headers, payload, on_headers=None, status=None, **kwargs
+        ):  # noqa: ARG002
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
+            yield b'data: {"partial_marker":'
+            raise RuntimeError("connection reset")
+
+    response = await _local_streaming_response(retry_env, _TruncatedSseExecutor())
+    assert isinstance(response, StreamingResponse)
+    out = b"".join([chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator])
+
+    assert b'"content":"ok"' in out
+    assert b"partial_marker" not in out
+    assert b"connection reset" in out
+    assert out.rstrip().endswith(b"data: [DONE]")
+    # The complete event and the error frame are each separated by a blank line.
+    assert out.count(b"\n\n") >= 3
+
+
+@pytest.mark.asyncio
+async def test_a_local_sse_stream_without_a_final_separator_still_delivers_its_last_event(retry_env):
+    """A clean close right after the last line (no blank-line terminator) is
+    flushed, not lost with the event buffer."""
+
+    class _NoSeparatorExecutor:
+        async def execute_streaming(
+            self, url, headers, payload, on_headers=None, status=None, **kwargs
+        ):  # noqa: ARG002
+            if on_headers:
+                on_headers({"content-type": "text/event-stream"})
+            yield b'data: {"id":"c1","choices":[{"delta":{"content":"ok"}}]}\n\n'
+            yield b"data: [DONE]"
+
+    response = await _local_streaming_response(retry_env, _NoSeparatorExecutor())
+    out = b"".join([chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator])
+    assert out.endswith(b"data: [DONE]")
