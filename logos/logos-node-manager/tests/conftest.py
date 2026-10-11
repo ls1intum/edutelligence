@@ -1,8 +1,8 @@
 """Test doubles for the node manager.
 
 ``FakeDocker`` simulates the part of the Docker engine that a deployment sees: one worker container, local images with
-names, a registry to pull from, and a script for how a freshly created container behaves over time. ``FakeClock``
-makes the waits in the checks cost no real time.
+or without a name, a registry to pull from, and a script for how a freshly created container behaves over time.
+``FakeClock`` makes the waits in the checks cost no real time.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import pytest
 from logos_node_manager.config import Settings
 from logos_node_manager.deployer import Deployer
 from logos_node_manager.docker_ops import ContainerInfo
+from logos_node_manager.errors import DockerError
 from logos_node_manager.runner import CommandResult
 from logos_node_manager.state import Deployment, StateStore
 
@@ -47,6 +48,8 @@ class FakeDocker:
     def __init__(self) -> None:
         # name -> image id, on this host
         self.images: dict[str, str] = {f"{REPO}:latest": OLD}
+        # Images that lost their last name and are still on the host. ``docker images`` lists them as <none>.
+        self.unnamed: set[str] = set()
         # name -> image id, in the registry
         self.registry: dict[str, str] = {f"{REPO}:latest": NEW, f"{REPO}:v2": NEW}
         self._ids = count(1)
@@ -74,7 +77,22 @@ class FakeDocker:
         self.failed_up_removes_container = False
         self.logs = "worker log line"
         self.calls: list[tuple] = []
+        # The images that were actually deleted. ``calls`` also holds the attempts that the engine refused.
         self.removed: list[str] = []
+
+    # ------------------------------------------------------------------ what a test can look at
+
+    def host_images(self) -> set[str]:
+        """Every image on this host, with or without a name."""
+        return set(self.images.values()) | self.unnamed
+
+    def _name(self, ref: str, image_id: str) -> None:
+        """Point a name at an image. The image it pointed to before stays on the host, unnamed if that was its last."""
+        before = self.images.get(ref)
+        self.images[ref] = image_id
+        self.unnamed.discard(image_id)
+        if before and before != image_id and before not in self.images.values():
+            self.unnamed.add(before)
 
     # ------------------------------------------------------------------ the Docker interface
 
@@ -85,7 +103,7 @@ class FakeDocker:
         ref = f"{REPO}:{tag}"
         if ref not in self.registry:
             return CommandResult(("pull",), 1, stderr=f"manifest for {ref} not found")
-        self.images[ref] = self.registry[ref]
+        self._name(ref, self.registry[ref])
         return CommandResult(("pull",), 0)
 
     def image_ref(self, tag: str) -> str:
@@ -96,13 +114,25 @@ class FakeDocker:
 
     def tag(self, source: str, target: str) -> None:
         self.calls.append(("tag", source, target))
-        self.images[target] = source if source.startswith("sha256:") else self.images[source]
+        image_id = source if source in self.host_images() else self.images.get(source)
+        if image_id is None:
+            raise DockerError(f"docker tag failed: No such image: {source}")
+        self._name(target, image_id)
 
     def remove_image(self, image_id: str) -> bool:
+        """``docker rmi <id>``: the engine refuses while a container uses the image or while it has several names."""
         self.calls.append(("remove_image", image_id))
-        self.removed.append(image_id)
-        for ref in [ref for ref, known in self.images.items() if known == image_id]:
+        if image_id not in self.host_images():
+            return False
+        if self.container_info is not None and self.container_info.image_id == image_id:
+            return False
+        names = [ref for ref, known in self.images.items() if known == image_id]
+        if len(names) > 1:
+            return False
+        for ref in names:
             del self.images[ref]
+        self.unnamed.discard(image_id)
+        self.removed.append(image_id)
         return True
 
     def container_logs(self, lines: int = 40) -> str:

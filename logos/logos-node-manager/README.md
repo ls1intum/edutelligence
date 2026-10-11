@@ -9,9 +9,9 @@ A deployment is one request to run a given image tag. The daemon takes requests 
 
 | Phase | What happens |
 |---|---|
-| `pulling` | Notes the running container and keeps its image under the name `<image>:previous`. Pulls the new image. If the pull fails, nothing else happens and the running container is not touched. |
+| `pulling` | Notes the running container, then pulls the new image. If the pull fails, nothing else happens and the running container is not touched. |
 | `draining` | Reserved. This version passes through it without waiting. |
-| `swapping` | Runs `docker compose up -d --no-deps` for the worker service. Compose recreates the container when its image or its configuration changed. If nothing changed, the deployment ends as `unchanged`. |
+| `swapping` | If the new image differs from the running one, keeps the running image under the name `<image>:previous`. Then runs `docker compose up -d --no-deps` for the worker service. Compose recreates the container when its image or its configuration changed. If nothing changed, the deployment ends as `unchanged`. |
 | `verifying` | Waits until the container is healthy and stays healthy for the stability window (60 s). It fails if the container exits, restarts, reports `unhealthy`, runs another image, or is not healthy after 10 minutes. |
 | `rolling_back` | Runs the previous image again. It points the compose image name back at it and recreates the container without a pull, then runs the same check. |
 
@@ -36,6 +36,22 @@ The check uses what Docker shows from outside: the container runs, its health ch
 runs the expected image. The health check of the worker only shows that the worker started and answers on its port. It
 does not show that the worker connected to the orchestrator or loaded its models. The manager has no way to ask the
 worker for that yet.
+
+### Images on the host
+
+Docker keeps every image it has pulled, so a host that is updated often fills up. When a deployment has ended, the
+manager removes the two images it no longer needs:
+
+* the image that the name `previous` pointed to before this deployment, which is now two versions old;
+* the image that the deployment pulled, if no container runs it. This is the failed release after a rollback or a
+  failed swap.
+
+Nothing is removed before the end, because a rollback may still need the images. The previous version always stays.
+After a failed rollback every image stays, so that a person can repair the host by hand. A deployment that ends at a
+failed pull, or as `unchanged`, removes nothing.
+
+The manager removes an image by its ID (`docker rmi`), so an image that a container uses, or that has more than one
+name, stays. A problem during the removal is logged and does not change the result of the deployment.
 
 ## Use
 
@@ -106,8 +122,8 @@ A missing, malformed or non-positive timeout falls back to its default.
   limits.
 * `docker compose config` is only called with `--images`. Its normal output contains the resolved environment, which
   holds secrets. No output of it is logged, and neither is the environment of a command.
-* The manager never runs a global image prune. After a success it removes only the image that the name `previous`
-  pointed to before the deployment, if no container uses it.
+* The manager never runs a global image prune. When a deployment has ended it removes only the images listed under
+  "Images on the host", by ID.
 
 ## Tests
 
@@ -121,11 +137,14 @@ The unit tests need no Docker. `FakeDocker` in `tests/conftest.py` simulates the
 
 `tests/smoke/run-smoke.sh` runs the real manager container against a dummy worker, with real Docker, a local registry
 and no GPU. It covers a normal deployment, a broken release that is rolled back, a tag that does not exist, a deployment
-with nothing to change, and a manager that restarts in the middle of a deployment. It needs a running Docker engine and
-network access to pull the base images.
+with nothing to change, a manager that restarts in the middle of a deployment, and a later release that removes the
+image from two versions back. After each of them it counts the images on the host, to see that none is left without a
+purpose. It needs a running Docker engine and network access to pull the base images.
 
 ## Limits of this version
 
 * Running requests are not waited for. A deployment replaces the container at once, as a manual `docker compose up`
   does.
+* The removal of old images starts after the result is saved. `deploy --wait` can return a moment before it ends, and a
+  manager that stops in between leaves those images on the host. `docker rmi` removes them.
 * The image is published to the project registry only, not to the public GHCR mirror.

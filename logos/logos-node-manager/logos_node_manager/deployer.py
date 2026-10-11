@@ -4,6 +4,8 @@ A deployment moves through the phases of ``Phase``. Every step is safe to repeat
 phase changes. If the manager stops in the middle, for example because Docker recreates its own container, the next
 start picks the record up and works out from the phase and from what Docker shows where to continue.
 
+Images are removed when the deployment has ended and not earlier: until then a rollback may still need them.
+
 The ``draining`` phase is a place holder. A later version waits there for the running requests of the node to finish.
 """
 
@@ -56,7 +58,7 @@ class Deployer:
     # ------------------------------------------------------------------ Driver
 
     def process(self, deployment: Deployment) -> Deployment:
-        """Run the deployment to its end. Raises ``Interrupted`` if the daemon is asked to stop first."""
+        """Run the deployment to its end and clean up. Raises ``Interrupted`` if the daemon is asked to stop first."""
         if deployment.started_at is None:
             deployment.started_at = self._now()
         steps = {
@@ -72,6 +74,7 @@ class Deployer:
                 raise Interrupted()
             # Each step either moves the record to another phase or finishes it, so the loop always makes progress.
             steps[deployment.phase](deployment)
+        self._clean_up(deployment)
         return deployment
 
     # ------------------------------------------------------------------ Record helpers
@@ -118,30 +121,45 @@ class Deployer:
     # ------------------------------------------------------------------ Steps
 
     def _begin(self, deployment: Deployment) -> None:
-        """Note what runs now and keep its image under a name of its own."""
+        """Note what runs now."""
         current = self.docker.container()
         if current is not None:
             deployment.previous_container_id = current.id
             deployment.previous_running = current.running
             deployment.previous_image_id = current.image_id
             deployment.previous_image_ref = current.image_ref
-            self._keep_previous(deployment)
             note = f"running {current.image_ref} ({short_id(current.image_id)}); deploying tag {deployment.tag}"
         else:
             note = f"no worker container yet; deploying tag {deployment.tag}"
         self._advance(deployment, Phase.PULLING, note)
 
     def _keep_previous(self, deployment: Deployment) -> None:
+        """Give the image of the running container the name ``<image>:previous``, just before its container goes.
+
+        A pull can move the tag of that image to the new one. Without a name of its own the old image would be a plain
+        unnamed image once its container is gone, and ``docker image prune`` takes those. The name moves only here, so
+        a deployment that ends before the swap leaves every name as it was.
+        """
+        previous = deployment.previous_image_id
         ref = deployment.previous_image_ref or ""
+        if not previous or previous == deployment.target_image_id:
+            # There was no container, or the container keeps its image.
+            return
         if not ref or ref.startswith("sha256:"):
             # A container made from a bare image ID has no name to derive "previous" from.
             return
         name, _ = split_image_ref(ref)
         kept = f"{name}:{PREVIOUS_TAG}"
-        stale = self.docker.image_id(kept)
-        if stale and stale != deployment.previous_image_id:
-            deployment.stale_image_id = stale
-        self.docker.tag(deployment.previous_image_id, kept)
+        held = self.docker.image_id(kept)
+        if held == previous:
+            # An earlier run of this step already moved the name.
+            return
+        if held:
+            # The image that loses the name is removed when the deployment ends. The record is saved before the name
+            # moves, so that a stop in between does not lose track of it.
+            deployment.stale_image_id = held
+            self.store.save(deployment)
+        self.docker.tag(previous, kept)
 
     def _pull(self, deployment: Deployment) -> None:
         result = self.docker.pull(deployment.tag)
@@ -195,6 +213,7 @@ class Deployer:
             self._advance(deployment, Phase.VERIFYING, "the container was already replaced")
             return
 
+        self._keep_previous(deployment)
         result = self.docker.up(deployment.tag)
         after = self.docker.container()
 
@@ -247,10 +266,6 @@ class Deployer:
         self._fail_over(deployment, FailureKind.VERIFY_FAILED, result.reason)
 
     def _succeed(self, deployment: Deployment) -> None:
-        # The image that "previous" pointed to before this deployment is now two versions old.
-        stale = deployment.stale_image_id
-        if stale and stale not in (deployment.previous_image_id, deployment.target_image_id):
-            self.docker.remove_image(stale)
         self._finish(deployment, Outcome.SUCCEEDED, message=f"now running {deployment.target_image_ref}")
 
     def _rollback(self, deployment: Deployment) -> None:
@@ -277,3 +292,35 @@ class Deployer:
                 FailureKind.ROLLBACK_FAILED,
                 f"{deployment.message}. The rollback failed too: {result.reason}.",
             )
+
+    # ------------------------------------------------------------------ Clean-up
+
+    def _clean_up(self, deployment: Deployment) -> None:
+        """Remove the images that this deployment leaves without a purpose.
+
+        These are the image that the name ``previous`` pointed to before (now two versions old) and the image that was
+        pulled but does not run. An image that a container uses, or that is the previous version, stays. After a failed
+        rollback every image stays, because a person may need them to repair the host.
+
+        The record is already saved when this runs. A problem here is logged and does not change the result.
+        """
+        if deployment.failure is FailureKind.ROLLBACK_FAILED:
+            logger.info("Deployment %s: the images stay on the host because the rollback failed", deployment.id)
+            return
+        removed = []
+        try:
+            current = self.docker.container()
+            needed = {deployment.previous_image_id, current.image_id if current else None}
+            for image_id in dict.fromkeys((deployment.stale_image_id, deployment.target_image_id)):
+                if image_id and image_id not in needed and self.docker.remove_image(image_id):
+                    removed.append(short_id(image_id))
+        except Exception:  # noqa: BLE001 - the deployment is over; a clean-up problem must not change its result
+            logger.warning(
+                "Deployment %s: the clean-up failed; images may stay on the host", deployment.id, exc_info=True
+            )
+            return
+        logger.info(
+            "Deployment %s: clean-up finished, %s",
+            deployment.id,
+            f"removed {', '.join(removed)}" if removed else "nothing removed",
+        )

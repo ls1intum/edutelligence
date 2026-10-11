@@ -99,7 +99,8 @@ class Deployment:
     previous_running: bool | None = None
     previous_image_id: str | None = None
     previous_image_ref: str | None = None
-    # The image that the "previous" name pointed to before this deployment. It is removed after a success.
+    # The image that the "previous" name pointed to until this deployment moved it to the image above. It is removed
+    # when the deployment has ended.
     stale_image_id: str | None = None
 
     target_image_ref: str | None = None

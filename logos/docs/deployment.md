@@ -114,10 +114,14 @@ The check uses the health check of Docker. It shows that the worker started and
 answers on its port. It does not show that the worker is connected to the
 orchestrator. It also does not show that the models are loaded.
 
-The node manager keeps the previous worker image on the host. It writes the
-record of each deployment to the directory `node-manager/` in the worker
-directory. The image `logos-node-manager` is in the deployment registry only. It
-is not in the public mirror.
+The node manager keeps the previous worker image on the host. When a deployment
+ends, the node manager removes the image that is two versions old. It also
+removes the image of a release that does not run. If the rollback fails, the node
+manager removes no image.
+
+The node manager writes the record of each deployment to the directory
+`node-manager/` in the worker directory. The image `logos-node-manager` is in the
+deployment registry only. It is not in the public mirror.
 
 CAUTION: On a host with the node manager, do not run `docker compose up` for the
 worker service. Use the node manager instead.

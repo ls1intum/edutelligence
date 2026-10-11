@@ -1,8 +1,9 @@
 """Start the previous version again.
 
-Before a deployment pulls anything, the manager notes the image of the running container and keeps it under the name
-``<image>:previous``. A pull moves a tag such as ``latest`` to the new image, so without this the old image would have
-no name and nothing to find it by. The rollback does not need the registry: the old image is already on the host.
+The manager notes the image of the running container when a deployment starts, and keeps it under the name
+``<image>:previous`` just before it replaces the container. A pull moves a tag such as ``latest`` to the new image, so
+without this the old image would have no name once its container is gone. The rollback does not need the registry: the
+old image is already on the host, and the record holds its ID.
 """
 
 from __future__ import annotations
