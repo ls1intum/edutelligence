@@ -57,7 +57,9 @@ async def predict_and_parse(
 
     # Run the model and parse the output
     if selected_model.supports_structured_output():
-        structured_output_llm = llm_model.with_structured_output(pydantic_object, method="json_mode")
+        structured_output_llm = llm_model.with_structured_output(
+            pydantic_object, method=selected_model.structured_output_method()
+        )
     elif selected_model.supports_function_calling():
         structured_output_llm = llm_model.with_structured_output(pydantic_object)
     else:

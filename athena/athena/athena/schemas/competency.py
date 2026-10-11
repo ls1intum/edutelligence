@@ -1,4 +1,5 @@
 from abc import ABC
+from typing import Optional
 
 from pydantic import field_validator, ConfigDict, Field
 
@@ -11,7 +12,7 @@ class Competency(Schema, ABC):
     id: int = Field(examples=[1])
     title: str = Field("", description="The title of the competency.", examples=["Competency 1"])
     description: str = Field("", description="The description of the competency.", examples=["Competency 1 description"])
-    taxonomy: CompetencyTaxonomy = Field(None, description="The taxonomy of the competency.")
+    taxonomy: Optional[CompetencyTaxonomy] = Field(None, description="The taxonomy of the competency.")
 
     meta: dict = Field(default_factory=dict, examples=[{"internal_id": "5"}])
 

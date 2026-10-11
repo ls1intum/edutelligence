@@ -33,3 +33,12 @@ class ModelConfig(BaseModel, ABC):
         Indicates whether this model supports producing structured output
         """
         pass
+
+    def structured_output_method(self) -> str:
+        """
+        The `method` passed to `with_structured_output()` when
+        `supports_structured_output()` is True. Providers that need
+        schema-constrained decoding instead of generic JSON mode
+        (e.g. Ollama) can override this.
+        """
+        return "json_mode"
