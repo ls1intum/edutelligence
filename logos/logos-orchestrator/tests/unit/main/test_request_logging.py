@@ -1453,6 +1453,7 @@ async def test_http_streaming_terminal_error_is_recorded(monkeypatch, terminal_e
             "usage_tokens": {
                 "billed_input_characters": 2,
                 "billed_output_characters": 7,
+                "estimated_prompt_tokens": 2,
             },
         }
     ]
@@ -1669,8 +1670,9 @@ async def test_sync_response_error_skips_ttft_and_records_error(monkeypatch):
             "result_status": "error",
             "error_message": "bad request",
             "cold_start": False,
-            # Failed requests do not receive the flat successful-request charge.
-            "usage_tokens": {"billed_input_characters": 3},
+            # Failed requests do not receive the flat successful-request charge,
+            # but keep the body-derived input estimate for the request feed.
+            "usage_tokens": {"billed_input_characters": 3, "estimated_prompt_tokens": 3},
         }
     ]
     assert release_calls == [(10, 1, "cloud", "req-sync-error")]

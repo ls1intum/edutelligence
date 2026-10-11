@@ -28,7 +28,7 @@ class RequestLogServiceTokenCountsTest {
         assertThat(row.get("prompt_tokens")).isEqualTo(1200L);
         assertThat(row.get("prompt_estimated")).isEqualTo(true);
         assertThat(row.get("completion_tokens")).isNull();
-        assertThat(row.get("total_tokens")).isEqualTo(1200L);
+        assertThat(row.get("total_tokens")).isNull();
     }
 
     @Test

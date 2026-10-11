@@ -404,7 +404,8 @@ public class RequestLogService {
         m.put("prompt_estimated", estimated);
         m.put("completion_tokens", completionTokens);
         Long total = totalTokens;
-        if (total == null && (prompt != null || completionTokens != null)) {
+        // An estimated prompt must not turn into a total that reads as measured.
+        if (total == null && !estimated && (prompt != null || completionTokens != null)) {
             total = (prompt != null ? prompt : 0L) + (completionTokens != null ? completionTokens : 0L);
         }
         m.put("total_tokens", total);

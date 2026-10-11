@@ -337,7 +337,7 @@ class RequestLogControllerTest {
            .andExpect(jsonPath("$.requests[0].request_id").value("req-state-error"))
            .andExpect(jsonPath("$.requests[0].prompt_tokens").value(1200))
            .andExpect(jsonPath("$.requests[0].prompt_estimated").value(true))
-           .andExpect(jsonPath("$.requests[0].total_tokens").value(1200));
+           .andExpect(jsonPath("$.requests[0].total_tokens").doesNotExist());
     }
 
     @Test
