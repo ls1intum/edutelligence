@@ -82,6 +82,60 @@ pass `--build-arg GIT_SHA=$(git rev-parse HEAD)`. For a pull-request build, the
 version is the commit of the pull request. The image is that pull request merged
 into `main` as of the build.
 
+### Update a worker node with the node manager
+
+The node manager is an optional service on a worker host. It replaces the worker
+container with a new image. It then checks the new container. If the new
+container does not become healthy, the node manager starts the previous version
+again.
+
+A worker uses the node manager if its entry in the matrix of the deploy workflow
+has `node-manager: true`. For such a worker, the workflow does these steps:
+
+1. The workflow writes `COMPOSE_PROFILES=node-manager` to the `.env` file of the
+   worker.
+2. The workflow pulls and starts the `logos-node-manager` service.
+3. The workflow sends a deploy request to the node manager and waits for the
+   result.
+
+The node manager does the work on the host. If the connection of the workflow
+ends, the deployment continues.
+
+The result of a deployment is one of these values:
+
+| Result | Meaning |
+|---|---|
+| `succeeded` | The new container is healthy and stays healthy for 60 s. |
+| `unchanged` | The container already runs the requested image. |
+| `rolled_back` | The new container failed. The previous version runs again. |
+| `failed` | The deployment failed. The message gives the reason. |
+
+The check uses the health check of Docker. It shows that the worker started and
+answers on its port. It does not show that the worker is connected to the
+orchestrator. It also does not show that the models are loaded.
+
+The node manager keeps the previous worker image on the host. It writes the
+record of each deployment to the directory `node-manager/` in the worker
+directory. The image `logos-node-manager` is in the deployment registry only. It
+is not in the public mirror.
+
+CAUTION: On a host with the node manager, do not run `docker compose up` for the
+worker service. Use the node manager instead.
+
+To use the node manager on a host without the deploy workflow, do these steps:
+
+1. If the registry needs a login, run `docker login` on the host.
+2. Add `COMPOSE_PROFILES=node-manager` to the `.env` file of the worker.
+3. In the worker directory, run `docker compose up -d logos-node-manager`.
+
+To send a deploy request, run this command:
+
+```bash
+docker exec logos-node-manager node-manager deploy --id manual-1 --tag latest --wait
+```
+
+To see the latest deployment, run `docker exec logos-node-manager node-manager status`.
+
 ## Security & rate limiting
 
 The API surface of the orchestrator has tiers:

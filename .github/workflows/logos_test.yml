@@ -95,6 +95,32 @@ jobs:
           coverage xml
         working-directory: logos/logos-orchestrator
 
+  test-node-manager:
+    name: Test Node Manager
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python -e ".[dev]"
+        working-directory: logos/logos-node-manager
+
+      - name: Run tests
+        # No Docker engine is needed: the tests replace it with a simulation.
+        run: .venv/bin/python -m pytest -q --tb=short
+        working-directory: logos/logos-node-manager
+
   test-webservice:
     name: Test Webservice
     runs-on: ubuntu-latest

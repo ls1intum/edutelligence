@@ -1,0 +1,58 @@
+"""Start the previous version again.
+
+Before a deployment pulls anything, the manager notes the image of the running container and keeps it under the name
+``<image>:previous``. A pull moves a tag such as ``latest`` to the new image, so without this the old image would have
+no name and nothing to find it by. The rollback does not need the registry: the old image is already on the host.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Callable
+
+from logos_node_manager.config import Settings
+from logos_node_manager.docker_ops import Docker, split_image_ref
+from logos_node_manager.errors import DockerError
+from logos_node_manager.state import Deployment
+from logos_node_manager.verify import VerifyResult, verify_container
+
+
+def restore_previous(
+    docker: Docker,
+    settings: Settings,
+    deployment: Deployment,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    should_stop: Callable[[], bool] = lambda: False,
+) -> VerifyResult:
+    """Recreate the container from the image that ran before, and check that it runs.
+
+    Every step can be repeated, so a rollback that was cut short can run again from the start.
+    """
+    if not deployment.previous_image_id:
+        return VerifyResult(False, "there is no previous version to restore")
+
+    # Compose starts the image that its own reference names. Point that reference at the old image again, then let
+    # Compose recreate the container without a pull, which would fetch the new image again.
+    _, previous_tag = split_image_ref(deployment.previous_image_ref or "")
+    tag = previous_tag or "latest"
+    try:
+        reference = docker.image_ref(tag)
+        docker.tag(deployment.previous_image_id, reference)
+    except DockerError as exc:
+        return VerifyResult(False, str(exc))
+
+    result = docker.up(tag, recreate=True, pull_never=True)
+    if not result.ok:
+        return VerifyResult(False, f"docker compose up failed: {result.tail()}")
+
+    return verify_container(
+        docker,
+        settings,
+        expected_image_id=deployment.previous_image_id,
+        timeout_s=settings.rollback_verify_timeout_s,
+        clock=clock,
+        sleep=sleep,
+        should_stop=should_stop,
+    )
