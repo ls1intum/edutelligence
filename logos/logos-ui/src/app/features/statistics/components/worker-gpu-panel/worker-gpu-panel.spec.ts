@@ -399,7 +399,7 @@ describe('WorkerGpuPanel unified-memory memory bars', () => {
     fixture.componentRef.setInput('activeProvider', 'w-a');
   });
 
-  it('hides the device Memory bar when device_mode is metal', () => {
+  it('draws no GPU card when device_mode is metal (the unified donut shows the pool)', () => {
     fixture.componentRef.setInput('providerLatestSamples', {
       'w-a': {
         scheduler_signals: {
@@ -419,12 +419,12 @@ describe('WorkerGpuPanel unified-memory memory bars', () => {
 
     expect(panel.isUnifiedMemory).toBe(true);
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('Apple M3 Pro');
+    expect(text).not.toContain('Apple M3 Pro');
     expect(text).not.toContain('28.0 GB');
-    expect(text).not.toContain('Memory');
+    expect(fixture.nativeElement.querySelector('.gpu-map__card')).toBeNull();
   });
 
-  it('keeps the device Memory bar for non-Metal workers', () => {
+  it('draws a GPU card for non-Metal workers', () => {
     fixture.componentRef.setInput('providerLatestSamples', {
       'w-a': {
         scheduler_signals: {
@@ -441,7 +441,7 @@ describe('WorkerGpuPanel unified-memory memory bars', () => {
 
     expect(panel.isUnifiedMemory).toBe(false);
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('Memory');
+    expect(fixture.nativeElement.querySelector('.gpu-map__card')).not.toBeNull();
     expect(text).toContain('28.0 GB');
   });
 });

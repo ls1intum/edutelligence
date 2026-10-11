@@ -345,18 +345,12 @@
 
       @if (!vramReady()) {
         <div class="stats-glass-row">
-          <div class="stats-panel-row">
-            <app-stats-chart-panel title="VRAM utilization" subtitle="Memory across local providers.">
-              <app-stats-skeleton variant="donut" />
-            </app-stats-chart-panel>
-            <app-stats-chart-panel title="RAM utilization" subtitle="Host memory across local providers.">
-              <app-stats-skeleton variant="donut" />
-            </app-stats-chart-panel>
-            <app-stats-chart-panel title="Lane health" subtitle="Per-lane runtime state, KV cache, and TTFT.">
-              <app-stats-skeleton variant="lane" />
-            </app-stats-chart-panel>
-            <app-stats-chart-panel title="Workers &amp; GPUs" subtitle="Per-device hardware metrics from local providers.">
+          <div class="stats-panel-stack">
+            <app-stats-chart-panel title="GPUs &amp; memory" subtitle="Which lane sits on which GPU.">
               <app-stats-skeleton variant="gpu" />
+            </app-stats-chart-panel>
+            <app-stats-chart-panel title="Lanes" subtitle="Runtime state, KV cache, and time to first token per lane.">
+              <app-stats-skeleton variant="lane" />
             </app-stats-chart-panel>
           </div>
         </div>
@@ -386,99 +380,15 @@
                 }
               </div>
 
-              <div class="stats-panel-row">
-
-                @if (row.unifiedMemory) {
-                  <!-- Unified memory (Apple Silicon) has one pool, not two: a
-                       VRAM pie and a RAM pie would describe the same bytes from
-                       two angles. The pool is the host's physical RAM, split by
-                       the lanes' model weights the same way a card's VRAM is
-                       split by its lanes. -->
-                  <app-stats-chart-panel
-                    title="Unified memory"
-                    [subtitle]="row.name + ' · unified memory'"
-                  >
-                    @if (row.unifiedTotalMb > 0) {
-                      <app-stats-lane-memory-pie
-                        metric="unified"
-                        [lanes]="row.lanes"
-                        [totalMb]="row.unifiedTotalMb"
-                        [freeMb]="row.unifiedFreeMb"
-                      />
-                    } @else {
-                      <app-stats-empty-state message="No memory data yet." />
-                    }
-                  </app-stats-chart-panel>
-                } @else {
-                  <app-stats-chart-panel
-                    title="VRAM utilization"
-                    [subtitle]="row.name + (row.modelsLoaded
-                      ? ' · ' + row.modelsLoaded + ' model' + (row.modelsLoaded === 1 ? '' : 's') + ' loaded'
-                      : '')"
-                  >
-                    @if (row.hasLanes) {
-                      <app-stats-lane-memory-pie
-                        metric="vram"
-                        [lanes]="row.lanes"
-                        [totalMb]="row.totalVramMb"
-                        [freeMb]="row.freeVramMb"
-                      />
-                    } @else if (!row.fallbackVramPie.length) {
-                      <app-stats-empty-state message="No memory data yet." />
-                    } @else {
-                      <app-stats-vram-donut
-                        [data]="row.fallbackVramPie"
-                        centerTop="used"
-                        [centerMiddle]="row.vramUsedGb.toFixed(1) + ' GB'"
-                        [centerBottom]="'of ' + row.vramTotalGb.toFixed(1) + ' GB'"
-                        valueSuffix=" GB"
-                        [valueDecimals]="2"
-                      />
-                    }
-                  </app-stats-chart-panel>
-
-                  <!-- Host RAM gets the same per-model breakdown as the GPU memory
-                       beside it: sleeping lanes keep their weights in it and the
-                       worker's model cache draws from it, so which model is holding the
-                       host's memory is as real a question as it is for the card. -->
-                  <app-stats-chart-panel
-                    title="RAM utilization"
-                    [subtitle]="row.name + ' · host memory'"
-                  >
-                    @if (!row.ram.reported) {
-                      <app-stats-empty-state message="This provider does not report host RAM." />
-                    } @else {
-                      <app-stats-lane-memory-pie
-                        metric="ram"
-                        [lanes]="row.hasLaneRam ? row.lanes : {}"
-                        [totalMb]="row.ram.totalMb"
-                        [freeMb]="row.ram.freeMb"
-                      />
-                    }
-                  </app-stats-chart-panel>
-                }
-
+              <!-- One row per provider: where the lanes sit (a card per GPU, lanes
+                   drawn onto it, coloured by state), then the lane list with its
+                   actions beside the host-RAM donut. -->
+              <div class="stats-panel-stack">
                 <app-stats-chart-panel
-                  title="Lane health"
-                  subtitle="Per-lane runtime state, KV cache, and TTFT."
-                >
-                  <span panelRight>
-                    @if (row.laneCount > 0) {
-                      <span class="stats-panel-badge">
-                        {{ row.laneCount }} lane{{ row.laneCount === 1 ? '' : 's' }}
-                      </span>
-                    }
-                  </span>
-                  <app-stats-lane-health-panel
-                    [lanesByProvider]="lanesByProvider()"
-                    [providerMeta]="vramProviderMetaByName()"
-                    [selectedProvider]="row.name"
-                  />
-                </app-stats-chart-panel>
-
-                <app-stats-chart-panel
-                  title="Workers &amp; GPUs"
-                  subtitle="Per-device hardware metrics from local providers."
+                  title="GPUs &amp; memory"
+                  [subtitle]="row.name + (row.modelsLoaded
+                    ? ' · ' + row.modelsLoaded + ' model' + (row.modelsLoaded === 1 ? '' : 's') + ' loaded'
+                    : '')"
                 >
                   <app-stats-worker-gpu-panel
                     [providerLatestSamples]="latestSampleByProvider()"
@@ -490,6 +400,55 @@
                   />
                 </app-stats-chart-panel>
 
+
+                <div class="stats-lanes-row">
+                  <div class="stats-lanes-row__lanes">
+                  <app-stats-chart-panel
+                    title="Lanes"
+                    subtitle="Runtime state, KV cache, and time to first token per lane."
+                  >
+                    <span panelRight>
+                      @if (row.laneCount > 0) {
+                        <span class="stats-panel-badge">
+                          {{ row.laneCount }} lane{{ row.laneCount === 1 ? '' : 's' }}
+                        </span>
+                      }
+                    </span>
+                    <app-stats-lane-health-panel
+                      [lanesByProvider]="lanesByProvider()"
+                      [providerMeta]="vramProviderMetaByName()"
+                      [selectedProvider]="row.name"
+                    />
+                  </app-stats-chart-panel>
+                  </div>
+                  @if (row.unifiedMemory && row.unifiedTotalMb > 0) {
+                    <app-stats-chart-panel
+                      class="stats-memory-row__ram"
+                      title="Unified memory"
+                      [subtitle]="row.name + ' · one pool for CPU and GPU'"
+                    >
+                      <app-stats-lane-memory-pie
+                        metric="unified"
+                        [lanes]="row.lanes"
+                        [totalMb]="row.unifiedTotalMb"
+                        [freeMb]="row.unifiedFreeMb"
+                      />
+                    </app-stats-chart-panel>
+                  } @else if (!row.unifiedMemory && row.ram.reported) {
+                    <app-stats-chart-panel
+                      class="stats-memory-row__ram"
+                      title="RAM utilization"
+                      [subtitle]="row.name + ' · host memory'"
+                    >
+                      <app-stats-lane-memory-pie
+                        metric="ram"
+                        [lanes]="row.hasLaneRam ? row.lanes : {}"
+                        [totalMb]="row.ram.totalMb"
+                        [freeMb]="row.ram.freeMb"
+                      />
+                    </app-stats-chart-panel>
+                  }
+                </div>
               </div>
             </div>
           }

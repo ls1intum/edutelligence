@@ -16,7 +16,7 @@ import type { Subscription } from 'rxjs';
 
 import { StatsWebsocketService } from './services/stats-websocket.service';
 
-import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './statistics.constants';
+import { CHART_ROLE, getLaneStateColor, MEMORY_FREE_COLOR, MEMORY_OTHER_COLOR, seriesColor, STATUS_COLOR } from './statistics.constants';
 
 import {
   applyTimeSeriesLabels,
@@ -1537,12 +1537,12 @@ export class Statistics implements OnInit, OnDestroy {
       ...modelSlices,
       {
         value: otherUsedGb,
-        color: CHART_ROLE.total,
+        color: MEMORY_OTHER_COLOR,
         text: modelSlices.length > 0 ? 'Other used' : 'Used',
       },
       {
         value: remainingGb,
-        color: seriesColor(3),
+        color: MEMORY_FREE_COLOR,
         text: 'Free',
       },
     ].filter((s) => s.value > 0);

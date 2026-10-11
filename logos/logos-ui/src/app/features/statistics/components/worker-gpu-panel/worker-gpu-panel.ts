@@ -18,6 +18,7 @@ import {
 } from '../../statistics.models';
 import { extractProviderHostRamMb, formatUptime } from '../../statistics.utils';
 import { EmptyState } from '../empty-state/empty-state';
+import { GpuMapComponent } from '../gpu-map/gpu-map';
 
 type CalibrateState =
   | { kind: 'idle' }
@@ -46,7 +47,7 @@ export function formatMb(mb: number): string {
 @Component({
   selector: 'app-stats-worker-gpu-panel',
   standalone: true,
-  imports: [CommonModule, EmptyState],
+  imports: [CommonModule, EmptyState, GpuMapComponent],
   templateUrl: './worker-gpu-panel.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './worker-gpu-panel.scss',
@@ -153,6 +154,33 @@ export class WorkerGpuPanel implements OnChanges {
     const fromSignal = this.latestSample?.scheduler_signals?.provider?.devices;
     if (Array.isArray(fromSignal) && fromSignal.length) return fromSignal;
     return [];
+  }
+
+  /**
+   * The cards to draw: real devices, or one aggregate card when the worker
+   * reports only totals (no nvidia-smi), so a lane is never drawn onto nothing.
+   */
+  get mapDevices(): DeviceInfo[] {
+    if (this.devices.length > 0 || this.isUnifiedMemory) return this.devices;
+    const total = this.syntheticTotalMb();
+    if (total <= 0) return [];
+    return [
+      {
+        device_id: 'aggregate',
+        kind: 'derived',
+        name: 'All GPUs (aggregate)',
+        memory_used_mb: this.syntheticUsedMb(),
+        memory_total_mb: total,
+        memory_free_mb: this.syntheticFreeMb(),
+        utilization_percent: null,
+        temperature_celsius: null,
+        power_draw_watts: null,
+      },
+    ];
+  }
+
+  get activeLanesMap(): Record<string, LaneSignalData> {
+    return this.lanesByProvider[this.resolvedActiveProvider ?? ''] ?? {};
   }
 
   get providerSignals() {

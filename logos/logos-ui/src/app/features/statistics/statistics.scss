@@ -280,6 +280,35 @@
   flex-shrink: 0;
 }
 
+// Provider panels stack full width: the GPU map and the lane list both need the room.
+.stats-panel-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  > * {
+    min-width: 0;
+  }
+}
+
+// Lanes take the room, the RAM donut sits beside them and wraps below on narrow screens.
+.stats-lanes-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.stats-lanes-row__lanes {
+  flex: 3 1 480px;
+  min-width: 0;
+}
+
+.stats-memory-row__ram {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+
 // ── Three-column panel layout ─────────────────────────────────────────────────
 .stats-panel-row {
   display: flex;

@@ -35,6 +35,15 @@ export function seriesColor(index: number): string {
 }
 
 /**
+ * Memory that belongs to no lane. One colour each, used by every memory chart
+ * (donuts and GPU cards): they are neutral on purpose, so they can never be
+ * mistaken for a lane state or a model series, and "free" reads the same wherever
+ * it appears.
+ */
+export const MEMORY_OTHER_COLOR = 'rgb(var(--color-typography-500) / 0.55)';
+export const MEMORY_FREE_COLOR = 'rgb(var(--color-typography-500) / 0.18)';
+
+/**
  * Maps lane state to a color token.
  * @param state - The lane state (case-insensitive)
  * @returns CSS rgb function with the appropriate color token
