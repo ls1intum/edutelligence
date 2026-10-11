@@ -474,12 +474,27 @@ class TestFinalizer:
 
     BRANCH = "logos-agent/ws/session-9"
 
+    @staticmethod
+    def _record_base(workspace: Path, origin: Path, ref: str = "main") -> None:
+        """The preparation's record, written where the finalizer reads it.
+
+        These tests reach the finalizer without running the preparation, so
+        they write what the preparation would have written: the commit the
+        working tree was checked out from — the base's tip for a fresh
+        session, the branch's own tip for a round that continues it.
+        """
+        directory = workspace / ".session"
+        directory.mkdir(parents=True, exist_ok=True)
+        sha = _git("--git-dir", str(origin), "rev-parse", ref, cwd=workspace).stdout.strip()
+        (directory / "base-sha").write_text(sha)
+
     def test_the_finalizer_rebuilds_metadata_and_pushes_the_work(self, tmp_path, monkeypatch):
         workspace = tmp_path / "ws"
         workspace.mkdir()
         origin = _make_origin(workspace)
         checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
         _patch_workspace(monkeypatch, workspace)
+        self._record_base(workspace, origin)
 
         assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
 
@@ -525,29 +540,39 @@ class TestFinalizer:
         assert parent == base
         assert not marker.exists(), "a planted hook or credential helper ran in the finalizer"
 
-    def test_a_retried_session_pushes_against_the_base_not_the_previous_tip(self, tmp_path, monkeypatch):
+    def test_a_retried_session_sits_on_the_round_it_continues(self, tmp_path, monkeypatch):
         # The remote branch exists from an earlier run of the same session.
-        # Re-finalizing must not build on that tip: the diff belongs to the
-        # base, and the force-with-lease push must verify against the tip it
-        # just fetched, not blind over it.
+        # The second run is prepared from that branch — it is what the
+        # preparation's record says — so the new commit is anchored on the
+        # earlier tip, not on the base's fresh fetch (which would present the
+        # first round's own work as this round's deletions), and the
+        # force-with-lease push verifies against the tip it just fetched.
         workspace = tmp_path / "ws"
         workspace.mkdir()
         origin = _make_origin(workspace)
         checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
         _patch_workspace(monkeypatch, workspace)
+        self._record_base(workspace, origin)
 
         assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
         commit_and_push(self.BRANCH, "a long enough task description")
+        first_tip = _git("--git-dir", str(origin), "rev-parse", self.BRANCH, cwd=workspace).stdout.strip()
 
-        # A second run of the session: new work in the same working copy.
+        # A second run of the session: new work in the same working copy,
+        # prepared from the branch the first run left behind.
         (checkout / "app.py").write_text("print('second run')\n")
+        self._record_base(workspace, origin, ref=self.BRANCH)
         assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
         assert commit_and_push(self.BRANCH, "a long enough task description") == 1
 
-        # Two commits on the remote branch, and the second one sits on the
-        # base — the first run's tip is gone, not a parent.
+        # The second commit sits on the first: a round starts where its
+        # preparation checked out, and what the earlier round changed is
+        # visible in the history rather than rewritten away. The base is at
+        # the bottom of the line.
         log = _git("--git-dir", str(origin), "log", "--format=%s", self.BRANCH, cwd=workspace).stdout.splitlines()
-        assert len(log) == 2 and log[1] == "base"
+        assert len(log) == 3 and log[2] == "base"
+        parent = _git("--git-dir", str(origin), "rev-parse", f"{self.BRANCH}^", cwd=workspace).stdout.strip()
+        assert parent == first_tip
         remote_file = _git("--git-dir", str(origin), "show", f"{self.BRANCH}:app.py", cwd=workspace).stdout
         assert remote_file == "print('second run')\n"
         assert not marker.exists()
@@ -570,6 +595,7 @@ class TestFinalizer:
         origin = _make_origin(workspace)
         checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
         _patch_workspace(monkeypatch, workspace)
+        self._record_base(workspace, origin)
         self._patch_finalize_env(monkeypatch, tmp_path, f"file://{origin}", self.BRANCH)
 
         result = Result()
@@ -591,18 +617,18 @@ class TestFinalizer:
         origin = _make_origin(workspace)
         checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
         _patch_workspace(monkeypatch, workspace)
+        self._record_base(workspace, origin)
         self._patch_finalize_env(monkeypatch, tmp_path, f"file://{origin}", self.BRANCH)
 
         first = Result()
         run_finalize(first)
         assert first.data["committed"] is True
 
-        # Second run: the working copy goes back to the base content, so
-        # there is nothing to commit — the remote branch keeps the first
-        # run's commit. (The rebuild wiped the local main ref, so the base
-        # is fetched fresh into FETCH_HEAD.)
-        _git("fetch", "--quiet", "origin", "main", cwd=checkout)
-        _git("checkout", "FETCH_HEAD", "--", ".", cwd=checkout)
+        # Second run: prepared from the branch the first run left behind,
+        # and the agent changed nothing — the working copy is exactly what
+        # that preparation checked out, so there is nothing to commit, and
+        # the remote branch keeps the first run's commit.
+        self._record_base(workspace, origin, ref=self.BRANCH)
         second = Result()
         run_finalize(second)
 
@@ -625,10 +651,13 @@ class TestFinalizer:
         origin = _make_origin(workspace)
         checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
         _patch_workspace(monkeypatch, workspace)
+        self._record_base(workspace, origin)
 
         assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
         commit_and_push(self.BRANCH, "a long enough task description")
 
+        # A round that continues the branch is prepared from its tip.
+        self._record_base(workspace, origin, ref=self.BRANCH)
         assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
 
         tip = _git("--git-dir", str(origin), "rev-parse", self.BRANCH, cwd=workspace).stdout.strip()
@@ -681,6 +710,401 @@ class TestFinalizer:
         assert (other / ".git" / "config").is_file()
         assert _git("config", "--get", "user.name", cwd=other).stdout.strip() == "other repo"
         assert _git("config", "--get", "remote.origin.url", cwd=checkout).stdout.strip() == REPO_URL
+
+
+class TestTheBaseMovingDuringTheSession:
+    """The commit, not the fetch, meets the base where it is now.
+
+    The finalizer anchors the branch on the commit the preparation checked
+    out and rebases the work onto the base's fresh tip. The old order —
+    anchor on the fresh fetch and commit the tree on top of it — turned
+    everything the base merged in the meantime into the session's
+    deletions: a push that reverted other people's merged work.
+    """
+
+    BRANCH = "logos-agent/ws/session-1211"
+
+    @staticmethod
+    def _move_main(origin: Path, tmp_path: Path, touch: str | None = None) -> str:
+        """A commit lands on main while the session works."""
+        mover = tmp_path / "main-mover"
+        subprocess.run(["git", "clone", "--quiet", str(origin), str(mover)], check=True)
+        _git("config", "user.name", "someone else", cwd=mover)
+        _git("config", "user.email", "other@example.com", cwd=mover)
+        if touch == "app.py":
+            (mover / "app.py").write_text("print('moved')\n")
+        else:
+            (mover / "iris").mkdir()
+            (mover / "iris" / "moved.py").write_text("moved = True\n")
+        _git("add", "-A", cwd=mover)
+        _git("commit", "--quiet", "-m", "merged while the session worked", cwd=mover)
+        _git("push", "--quiet", "origin", "main", cwd=mover)
+        return _git("rev-parse", "HEAD", cwd=mover).stdout.strip()
+
+    def test_a_moved_base_is_carried_into_the_push_not_reverted(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        TestFinalizer._record_base(workspace, origin)
+
+        # main moves while the session works: a change lands on the remote
+        # that the session's tree does not have.
+        main_tip = self._move_main(origin, tmp_path)
+
+        assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
+        assert commit_and_push(self.BRANCH, "a long enough task description") == 1
+
+        # The pushed branch carries the work the base merged in the
+        # meantime...
+        moved = _git("--git-dir", str(origin), "show", f"{self.BRANCH}:iris/moved.py", cwd=workspace).stdout
+        assert moved == "moved = True\n"
+        # ...and the session's own diff is the only change on top of it.
+        assert _git("--git-dir", str(origin), "rev-parse", "main", cwd=workspace).stdout.strip() == main_tip
+        parent = _git("--git-dir", str(origin), "rev-parse", f"{self.BRANCH}^", cwd=workspace).stdout.strip()
+        assert parent == main_tip
+        diff = _git("--git-dir", str(origin), "diff", "--name-only", "main", self.BRANCH, cwd=workspace).stdout
+        assert diff.split() == ["app.py"]
+
+    def test_a_moved_base_the_work_conflicts_with_fails_the_session(self, tmp_path, monkeypatch):
+        # A conflict is not something the finalizer may resolve on the
+        # agent's behalf: the session fails loudly rather than push a change
+        # the base cannot take.
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        TestFinalizer._record_base(workspace, origin)
+
+        # main moves on the very line the session edited.
+        self._move_main(origin, tmp_path, touch="app.py")
+
+        assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
+
+        with pytest.raises(RuntimeError, match="conflicts"):
+            commit_and_push(self.BRANCH, "a long enough task description")
+
+        # The rebase is aborted: nothing is left half-done in the checkout,
+        # and nothing reached the remote.
+        assert not (checkout / ".git" / "rebase-merge").exists()
+        absent = subprocess.run(
+            ["git", "--git-dir", str(origin), "rev-parse", "--verify", "--quiet", self.BRANCH],
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+        )
+        assert absent.returncode != 0
+
+    def test_a_missing_base_record_fails_the_finalizer(self, tmp_path, monkeypatch):
+        # No record is not a base: anchoring on a guess is how a push comes
+        # to delete other people's work.
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+
+        with pytest.raises(RuntimeError, match="did not record the base"):
+            finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token")
+
+    def test_a_base_record_that_is_not_a_commit_is_refused(self, tmp_path, monkeypatch):
+        # The record sits where the agent can write. An answer that is not a
+        # commit of this repository is refused instead of worked around.
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        (workspace / ".session").mkdir()
+        (workspace / ".session" / "base-sha").write_text("f" * 40)
+
+        with pytest.raises(RuntimeError, match="not a commit of this repository"):
+            finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token")
+
+
+class TestTheDeletionGuard:
+    """A push that deletes what the base carries is made only on the
+    transcript's word for it.
+
+    A stale or corrupted working tree ages: it shows up as deletions, and a
+    deletion the agent never made is how a tree reverts the base branch's
+    own work into a pull request.
+    """
+
+    BRANCH = "logos-agent/ws/session-del"
+
+    @staticmethod
+    def _origin_with_a_second_file(workspace: Path) -> Path:
+        origin = _make_origin(workspace)
+        mover = workspace / "mover"
+        subprocess.run(["git", "clone", "--quiet", str(origin), str(mover)], check=True)
+        _git("config", "user.name", "base", cwd=mover)
+        _git("config", "user.email", "base@example.com", cwd=mover)
+        (mover / "other.txt").write_text("carried by the base\n")
+        _git("add", "other.txt", cwd=mover)
+        _git("commit", "--quiet", "-m", "second file", cwd=mover)
+        _git("push", "--quiet", "origin", "main", cwd=mover)
+        return origin
+
+    @staticmethod
+    def _plant_deleting(workspace: Path, origin: Path, branch: str) -> tuple[Path, Path, Path]:
+        checkout, home, marker = _plant_agent_phase(workspace, origin, branch)
+        (checkout / "other.txt").unlink()
+        return checkout, home, marker
+
+    @staticmethod
+    def _env(monkeypatch, tmp_path: Path, origin: Path, branch: str, *, touched: str | None) -> None:
+        monkeypatch.setenv("LOGOS_SESSION_BRANCH", branch)
+        monkeypatch.setenv("LOGOS_SESSION_TASK", "a long enough task description")
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp-test-token")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(artifacts))
+        if touched is not None:
+            (artifacts / run_session.TOUCHED_FILE).write_text(touched)
+
+    def test_a_deletion_the_agent_did_not_make_is_refused(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = self._origin_with_a_second_file(workspace)
+        checkout, home, marker = self._plant_deleting(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        TestFinalizer._record_base(workspace, origin)
+        self._env(monkeypatch, tmp_path, origin, self.BRANCH, touched="app.py\n")
+
+        assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
+
+        with pytest.raises(RuntimeError, match="other.txt"):
+            commit_and_push(self.BRANCH, "a long enough task description")
+
+        absent = subprocess.run(
+            ["git", "--git-dir", str(origin), "rev-parse", "--verify", "--quiet", self.BRANCH],
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+        )
+        assert absent.returncode != 0, "a deletion the transcript does not account for was pushed"
+
+    def test_a_deletion_the_agent_made_is_pushed(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = self._origin_with_a_second_file(workspace)
+        checkout, home, marker = self._plant_deleting(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        TestFinalizer._record_base(workspace, origin)
+        self._env(monkeypatch, tmp_path, origin, self.BRANCH, touched="app.py\nother.txt\n")
+
+        assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
+        assert commit_and_push(self.BRANCH, "a long enough task description") == 2
+
+        absent = subprocess.run(
+            ["git", "--git-dir", str(origin), "rev-parse", "--verify", "--quiet", f"{self.BRANCH}:other.txt"],
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+        )
+        assert absent.returncode != 0, "the agent's own deletion did not reach the remote"
+
+    def test_a_deletion_without_the_transcripts_account_is_refused(self, tmp_path, monkeypatch):
+        # An empty list is an answer (nothing edited); a missing one is not
+        # (something removed it). A deletion with no list at all is
+        # accounted for by nobody.
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = self._origin_with_a_second_file(workspace)
+        checkout, home, marker = self._plant_deleting(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        TestFinalizer._record_base(workspace, origin)
+        self._env(monkeypatch, tmp_path, origin, self.BRANCH, touched=None)
+
+        assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
+
+        with pytest.raises(RuntimeError, match="cannot be read"):
+            commit_and_push(self.BRANCH, "a long enough task description")
+
+    def test_a_change_without_deletions_needs_no_account(self, tmp_path, monkeypatch):
+        # The guard reads the list only when there is a deletion to account
+        # for: a plain change goes out without it.
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        TestFinalizer._record_base(workspace, origin)
+        self._env(monkeypatch, tmp_path, origin, self.BRANCH, touched=None)
+
+        assert finalize_checkout(f"file://{origin}", "main", self.BRANCH, "ghp-test-token") is True
+        assert commit_and_push(self.BRANCH, "a long enough task description") == 1
+
+
+class TestWhatTheTranscriptShowsTouched:
+    """Which files the agent edited, read out of the transcript.
+
+    The finalizer's deletion guard asks of the tree it commits which of the
+    files it removes the agent actually edited; the transcript is the only
+    answer the untrusted phase may give, and this is where it is read.
+    """
+
+    def test_the_tools_that_edit_are_the_tools_that_count(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(run_session, "CHECKOUT", tmp_path / "repo")
+        run_session._touched_files.clear()
+        repo = tmp_path / "repo"
+        try:
+            run_session._render_event(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "editing now"},
+                            {
+                                "type": "tool_use",
+                                "id": "a",
+                                "name": "Edit",
+                                "input": {"file_path": str(repo / "app.py")},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "b",
+                                "name": "Write",
+                                "input": {"file_path": str(repo / "new.py")},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "c",
+                                "name": "NotebookEdit",
+                                "input": {"notebook_path": str(repo / "nb.ipynb")},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "d",
+                                "name": "Bash",
+                                "input": {"command": "rm -f other.txt"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "e",
+                                "name": "Read",
+                                "input": {"file_path": str(repo / "app.py")},
+                            },
+                        ]
+                    },
+                }
+            )
+
+            # Edit, Write and NotebookEdit count; a shell command and a read
+            # do not: the question is what the transcript shows the agent
+            # editing, and only the editing tools say that.
+            assert run_session._touched_files == {"app.py", "new.py", "nb.ipynb"}
+        finally:
+            run_session._touched_files.clear()
+
+    def test_the_agent_phase_hands_the_list_to_the_finalizer(self, tmp_path, monkeypatch):
+        artifacts = tmp_path / "artifacts"
+        monkeypatch.setenv("LOGOS_ARTIFACT_DIR", str(artifacts))
+        monkeypatch.setenv("LOGOS_SESSION_TASK", "do the thing")
+        monkeypatch.setenv("LOGOS_SESSION_BRANCH", "a/branch")
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gateway.invalid")
+        monkeypatch.setattr(run_session, "CHECKOUT", tmp_path / "repo")
+        monkeypatch.setattr(run_session, "run_agent", lambda _task: {"usage": {"input_tokens": 1, "output_tokens": 2}})
+        run_session._touched_files.clear()
+        try:
+            run_session._note_touched_file({"name": "Edit", "input": {"file_path": str(tmp_path / "repo" / "app.py")}})
+            run_session.run_agent_phase(Result())
+        finally:
+            run_session._touched_files.clear()
+
+        # Written after the agent exited: the list is the harness's, and the
+        # finalizer — a later container — reads it from the artefacts.
+        assert (artifacts / run_session.TOUCHED_FILE).read_text() == "app.py\n"
+
+
+class TestASettledPullRequest:
+    """A push to a branch whose pull request is done does not happen.
+
+    A round that pushed to a branch whose pull request was merged or closed
+    meanwhile would open a duplicate of finished work; the finalizer checks
+    the state with the token it carries and stops, saying so in the
+    session's end state.
+    """
+
+    BRANCH = "logos-agent/ws/session-settled"
+
+    @staticmethod
+    def _gh(monkeypatch, *, returncode: int = 0, payload: str = ""):
+        calls: list[list[str]] = []
+        original = run_session.run
+
+        def fake(cmd, *, cwd=None, check=True, quiet=False):
+            calls.append(cmd)
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return subprocess.CompletedProcess(cmd, returncode, stdout=payload, stderr="")
+            return original(cmd, cwd=cwd, check=check, quiet=quiet)
+
+        monkeypatch.setattr(run_session, "run", fake)
+        return calls
+
+    def test_no_slug_is_nothing_to_be_settled_by(self, monkeypatch):
+        self._gh(monkeypatch)
+        monkeypatch.delenv("LOGOS_REPO_SLUG", raising=False)
+
+        assert run_session._pull_request_settled("a/branch") is None
+
+    def test_a_branch_with_no_pull_request_is_open_work(self, monkeypatch):
+        # No pull request for this branch — a first round has nothing to be
+        # settled by — or gh could not answer: either way the push itself
+        # will say so.
+        self._gh(monkeypatch, returncode=1)
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "org/repo")
+
+        assert run_session._pull_request_settled("a/branch") is None
+
+    def test_an_open_pull_request_is_open_work(self, monkeypatch):
+        self._gh(monkeypatch, payload='{"state": "OPEN", "merged": false}')
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "org/repo")
+
+        assert run_session._pull_request_settled("a/branch") is None
+
+    def test_a_merged_pull_request_is_settled(self, monkeypatch):
+        self._gh(monkeypatch, payload='{"state": "CLOSED", "merged": true}')
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "org/repo")
+
+        assert run_session._pull_request_settled("a/branch") == "merged"
+
+    def test_a_closed_pull_request_is_settled_by_its_state(self, monkeypatch):
+        self._gh(monkeypatch, payload='{"state": "CLOSED", "merged": false}')
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "org/repo")
+
+        assert run_session._pull_request_settled("a/branch") == "closed"
+
+    def test_a_settled_pull_request_is_cancelled_without_a_push(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        origin = _make_origin(workspace)
+        checkout, home, marker = _plant_agent_phase(workspace, origin, self.BRANCH)
+        _patch_workspace(monkeypatch, workspace)
+        TestFinalizer._patch_finalize_env(monkeypatch, tmp_path, f"file://{origin}", self.BRANCH)
+        monkeypatch.setenv("LOGOS_REPO_SLUG", "org/repo")
+        calls = self._gh(monkeypatch, payload='{"state": "CLOSED", "merged": true}')
+
+        result = Result()
+        run_finalize(result)
+
+        # Nothing was pushed or committed...
+        assert result.data["committed"] is False
+        assert result.data["files_changed"] == 0
+        assert result.data["pushed_sha"] is None
+        assert not any(cmd[:2] == ["git", "push"] for cmd in calls)
+        absent = subprocess.run(
+            ["git", "--git-dir", str(origin), "rev-parse", "--verify", "--quiet", self.BRANCH],
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+        )
+        assert absent.returncode != 0
+        # ...and the end state says why.
+        assert "merged" in str(result.data["error"])
 
 
 class TestPushIdentity:
@@ -1335,6 +1759,10 @@ class TestWhatTheAgentIsTold:
 
         assert "Environment notes" in prompt
         assert "pre-commit run --files" in prompt
+        # The checks are named as the first real verification for what the
+        # sandbox cannot build, and a quoted failure is authoritative.
+        assert "first real verification" in prompt
+        assert "cannot open CI logs" in prompt
 
     def test_the_images_are_named_either_way(self, monkeypatch):
         monkeypatch.setenv("LOGOS_SESSION_ENVIRONMENT_NOTES", "")

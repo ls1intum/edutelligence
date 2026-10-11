@@ -2072,13 +2072,28 @@ class SessionManager:
             await self._checks_settled(int(session["id"]))
             return
         logger.info("the checks of session %s did not pass; taking the work up again", session.get("id"))
+        # The note's cap is on the check summary; the failing checks' own
+        # output rides on top of it, because that is the part a session
+        # inside the sandbox cannot read — the summary says which check
+        # failed, the output says why, and for a Java or Angular change the
+        # why is a compile or type error only the log carries.
+        failure = await github.check_failure_details(pushed_sha)
+        quoted = f"> {detail[:1500]}"
+        if failure:
+            quoted += "\n\nWhat the failing checks report:\n\n" + "\n".join(
+                f"> {line}" for line in failure.splitlines()
+            )
         taken = await self.take_up_again(
             session,
             note=(
-                f"Your last change to `{branch}` is on the pull request, and its checks did not pass. "
-                f"This is that same piece of work, one round later:\n\n> {detail[:1500]}\n\n"
-                "Fix what the checks are complaining about. The linters CI runs are installed in "
-                "this image, so you can run them on what you changed before you finish."
+                f"Your last change to `{branch}` is on the pull request, and its checks did not pass.\n\n"
+                f"{quoted}\n\n"
+                "You cannot open CI logs from here — what is quoted above is what the runner "
+                "could read of them. For Java and Angular changes the pull request's checks "
+                "are the first real compile and type verification, so what they report is what "
+                "is broken: fix it, and do not call a failing check unrelated without saying "
+                "what in the quoted output made you decide that. The linters CI runs are "
+                "installed in this image, so you can run them on what you changed before you finish."
             ),
         )
         if taken is not None or not await self._may_try_again(session):
@@ -2097,6 +2112,26 @@ class SessionManager:
 
         Returns the new session's id, or None when it was not taken up.
         """
+        branch = str(session.get("branch_name") or "")
+        if branch:
+            # A pull request that was merged or closed while the work was
+            # being redone is not work to be redone: pushing to its branch
+            # would open a duplicate of finished work. The finalizer checks
+            # the same state before it pushes, so a lookup that fails here
+            # (GitHub briefly unreachable) fails open rather than losing
+            # the follow-up.
+            try:
+                pull = await github.pull_request_for_head(branch, repo_slug=session.get("repo_slug"))
+            except Exception as exc:
+                logger.info("could not check the pull request of %s before taking it up: %s", branch, exc)
+                pull = None
+            if pull is not None and str(pull.get("state") or "open").lower() != "open":
+                logger.info(
+                    "not taking %s up again: its pull request is %s, so there is nothing left to push to",
+                    session.get("id"),
+                    pull.get("state"),
+                )
+                return None
         ref = str(session.get("trigger_ref") or "")
         if ref:
             try:

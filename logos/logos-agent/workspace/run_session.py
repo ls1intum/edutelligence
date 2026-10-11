@@ -48,6 +48,11 @@ COMMIT_FILE = "commit.txt"
 # Where the agent writes what it wants said back on the thread. The runner
 # posts it; the name is kept in step with the runner's own REPLY_FILE.
 REPLY_FILE = "reply.md"
+# Where the agent phase records what the transcript shows the agent editing.
+# The finalizer's deletion guard reads it back; it is the agent's directory
+# in both phases, which is why the finalizer only trusts it after the agent
+# phase has finished writing it.
+TOUCHED_FILE = "touched-files.txt"
 
 
 def log(message: str) -> None:
@@ -156,6 +161,27 @@ def _install_git_askpass(token: str) -> None:
 # and beside the home rather than inside it. The home is wiped at the start
 # of every session on purpose; this is the one thing worth carrying across.
 MEMORY = WORKSPACE / ".memory"
+
+# Where the session's own state lives: on the workspace volume, beside the
+# checkout rather than inside it, so git never sees it, and in neither the
+# home (wiped every session) nor the artefact directory (the agent phase
+# overwrites it). The preparation and the finalization are separate
+# containers; the volume is what they share, and this is how one tells the
+# other where the working tree started.
+
+
+def _read_session_state(name: str) -> str:
+    try:
+        return (WORKSPACE / ".session" / name).read_text().strip()
+    except OSError:
+        return ""
+
+
+def _write_session_state(name: str, value: str) -> None:
+    directory = WORKSPACE / ".session"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(value)
+
 
 # What the CLI keeps a conversation in, under the agent's home.
 _TRANSCRIPTS = ".claude/projects"
@@ -482,6 +508,7 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
     _configure_git_identity()
     # -B so a retried session reuses its branch name instead of failing.
     run(["git", "checkout", "-B", branch], cwd=CHECKOUT)
+    _record_base_sha()
 
     # With the branch checked out, `HEAD` is the tip the session is to be
     # diffed against the default branch from, so this is the same ref the
@@ -491,6 +518,22 @@ def prepare_checkout(repo_url: str, base_branch: str, branch: str, token: str) -
     # toward.
     if default_available:
         _deepen_until_merge_base(default)
+
+
+def _record_base_sha() -> None:
+    """Remember the commit the working tree was checked out from.
+
+    The finalizer anchors the session's branch on this commit rather than on
+    a fresh fetch of the base branch — see `finalize_checkout` for why a
+    fresh anchor reverts the base. Written where the finalizer's container
+    can find it and git cannot see it. The agent may tamper with the file;
+    the finalizer checks its answer is a commit of this repository and fails
+    the session rather than work around one that is not.
+    """
+    sha = _ref_sha("HEAD")
+    if not sha:
+        raise RuntimeError("could not read the commit the preparation checked out")
+    _write_session_state("base-sha", sha)
 
 
 def agent_login() -> str:
@@ -558,9 +601,14 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     can intercept it.
 
     Unlike preparation, the working tree itself is kept — it is the
-    session's work. The branch is re-anchored on a fresh fetch of the base
-    branch: the rebuild removed its ref, and a retried session must push a
-    diff against the base, not build on a previous run's tip. The index is
+    session's work. The branch is re-anchored on the commit the
+    *preparation* recorded, not on a fresh fetch of the base branch: the
+    tree is the base as it stood when the session started plus the agent's
+    edits, and anchoring it on a newer base would present everything the
+    base merged in the meantime as this session's deletions — the push
+    would revert other people's merged work. The new base is met instead at
+    the commit, where the work is rebased onto it (a conflict there fails
+    the session rather than pushing something unmergeable). The index is
     aligned with the branch without touching a single file.
 
     Returns False when there is no working copy to finalize: the agent left
@@ -587,9 +635,21 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     # nothing the agent planted can run before it is installed.
     _install_git_askpass(token)
     run(["git", "fetch", "--depth", "50", "origin", base_branch], cwd=CHECKOUT)
-    # Re-anchor the session's branch on the base it was given (the rebuild
-    # removed its ref, see above).
-    run(["git", "update-ref", f"refs/heads/{branch}", "FETCH_HEAD"], cwd=CHECKOUT, quiet=True)
+    new_base = _ref_sha("FETCH_HEAD")
+    if not new_base:
+        raise RuntimeError(f"could not read the tip of {base_branch} after fetching it")
+    # Where the base branch has moved to while the session worked. The
+    # commit, not the fetch, is what meets it: the work is rebased onto
+    # this, and a conflict there fails the session loudly.
+    _write_session_state("new-base-sha", new_base)
+    # Re-anchor the session's branch (the rebuild removed its ref, see
+    # above) on the commit the working tree was checked out from — the
+    # preparation's record, not the base's fresh tip. The tree is the old
+    # base plus the agent's edits; an anchor at the new tip would turn
+    # everything the base merged in the meantime into this session's
+    # deletions.
+    base = _recorded_base_sha()
+    run(["git", "update-ref", f"refs/heads/{branch}", base], cwd=CHECKOUT, quiet=True)
     # Bring the remote branch back as a ref of this checkout when a previous
     # run left one: the rebuild removed its tracking ref, and without an
     # explicit destination the fetch would leave the tip in FETCH_HEAD alone,
@@ -610,6 +670,39 @@ def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) 
     run(["git", "reset"], cwd=CHECKOUT, quiet=True)
     _configure_git_identity()
     return True
+
+
+def _recorded_base_sha() -> str:
+    """The commit this session's working tree started from, as recorded.
+
+    The preparation writes it, and the finalizer anchors the branch on it
+    rather than on the base's fresh tip — the difference between a push
+    that carries the session's work and one that reverts everything the
+    base merged in the meantime. The record sits on the workspace volume,
+    which is the agent's to write, so an answer that is not a commit of
+    this repository is refused instead of worked around: a wrong anchor
+    costs a pull request that deletes other people's work, and a guess
+    here is how that pull request gets made.
+    """
+    sha = _read_session_state("base-sha")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise RuntimeError(
+            "the preparation did not record the base commit of this checkout "
+            "(or the record is no longer readable); the finalizer will not "
+            "anchor the branch on a guess"
+        )
+    process = run(
+        ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
+        cwd=CHECKOUT,
+        check=False,
+        quiet=True,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"the recorded base commit {sha[:7]} is not a commit of this "
+            "repository; the finalizer will not anchor the branch on it"
+        )
+    return sha
 
 
 def build_prompt(task: str) -> str:
@@ -657,6 +750,16 @@ def build_prompt(task: str) -> str:
         "is often absent: try once, and if it is not there say so in your "
         "final message rather than spending turns looking for a way round "
         "it.\n"
+        "- The pull request's checks are the first real verification for what "
+        "this sandbox cannot build: the services' dependencies are not "
+        "installed, so a Java change is not compiled and an Angular change is "
+        "not type-checked here, and the checks are where that shows. If you "
+        "come back to a piece of work with the output of failing checks "
+        "quoted into your task, that output is authoritative — you cannot "
+        "open CI logs from here, so what is quoted is all there is to read. "
+        "Fix what it names, and do not call a failing check unrelated to "
+        "your change without saying which line of the output made you "
+        "decide that.\n"
         "- Lint what you changed: from the top of the checkout, `pre-commit "
         "run --files <the files you changed>`. Same command and same pinned "
         "hooks as CI, installed in this image, no network needed. Which hooks "
@@ -974,6 +1077,7 @@ def _render_event(event: dict) -> None:
                 print(block["text"].strip(), flush=True)
             elif block.get("type") == "tool_use":
                 print(_tool_line(block), flush=True)
+                _note_touched_file(block)
         _report_usage(message)
     elif kind == "result":
         subtype = event.get("subtype", "")
@@ -1055,6 +1159,60 @@ def _short_path(value: object) -> str:
     return _one_line(text[len(prefix) :] if text.startswith(prefix) else text)
 
 
+# What the transcript shows the agent editing, as the repository reads the
+# paths. The finalizer's deletion guard asks of the tree it commits which of
+# the files it removes the agent actually edited, and the transcript is the
+# only answer the untrusted phase may give — this is where it is read.
+# Collected from the tool calls rather than from `git status`: the status
+# says what the tree *is*, and the question is who put it there.
+_TOUCHING_TOOLS = ("Edit", "Write", "NotebookEdit")
+_touched_files: set[str] = set()
+
+
+def _note_touched_file(block: dict) -> None:
+    """Remember the file a tool call edits, if it edits one."""
+    if block.get("name") not in _TOUCHING_TOOLS:
+        return
+    args = block.get("input")
+    if not isinstance(args, dict):
+        return
+    raw = str(args.get("file_path") or args.get("notebook_path") or "").strip()
+    if not raw:
+        return
+    prefix = f"{CHECKOUT}/"
+    _touched_files.add(raw[len(prefix) :] if raw.startswith(prefix) else raw)
+
+
+def _write_touched_files() -> None:
+    """Hand the list to the finalizer, which reads it back from the artefacts.
+
+    Written after the agent has exited, so the list is the harness's rather
+    than the agent's to write — and written even when empty, because an
+    empty list (the agent edited no file) is an answer the finalizer must be
+    able to tell from a missing one.
+    """
+    directory = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts"))
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / TOUCHED_FILE).write_text("".join(f"{path}\n" for path in sorted(_touched_files)))
+    except OSError as exc:
+        fail(f"could not record the files the agent touched: {exc}")
+
+
+def _touched_files_from_artifacts() -> set[str] | None:
+    """The finalizer's read of what the agent edited: paths, or None if unreadable.
+
+    None is not the same as an empty set. Empty is the agent phase's answer —
+    nothing edited — and None is the file missing, which is a reason on its
+    own to refuse a push that deletes anything.
+    """
+    path = Path(os.environ.get("LOGOS_ARTIFACT_DIR", "/artifacts")) / TOUCHED_FILE
+    try:
+        return {line.strip() for line in path.read_text().splitlines() if line.strip()}
+    except OSError:
+        return None
+
+
 def usage_totals(usage: dict[str, object]) -> tuple[int, int, float]:
     """Extract token counts and cost from the agent's result event."""
     tokens = usage.get("usage") or {}
@@ -1133,18 +1291,100 @@ def _refuse_workflow_changes(files: list[str]) -> None:
     )
 
 
+def _refuse_unexplained_deletions() -> None:
+    """Refuse a push that deletes files the agent's transcript does not show it editing.
+
+    A stale or corrupted working tree shows up as deletions: it ages, it never
+    creates — and a deletion the agent never made is the signature of a tree
+    that would revert the base branch's own work into the session's pull
+    request. Modifications are deliberately not guarded: hooks and build tools
+    change files without a tool call, and there is no way to tell those apart.
+    """
+    base = _read_session_state("base-sha")
+    if not re.fullmatch(r"[0-9a-f]{40}", base):
+        return  # the finalizer already refused such a push; nothing left to check
+    process = run(
+        ["git", "diff", "--name-only", "--diff-filter=D", base],
+        cwd=CHECKOUT,
+        check=False,
+        quiet=True,
+    )
+    deleted = [line.strip() for line in (process.stdout or "").splitlines() if line.strip()]
+    if not deleted:
+        return
+    touched = _touched_files_from_artifacts()
+    if touched is None:
+        raise RuntimeError(
+            "the change deletes files, but the list of what the agent edited "
+            "cannot be read; refusing to push a deletion that cannot be "
+            "accounted for"
+        )
+    unexplained = sorted(path for path in deleted if path not in touched)
+    if not unexplained:
+        return
+    shown = ", ".join(unexplained[:5])
+    more = f" and {len(unexplained) - 5} more" if len(unexplained) > 5 else ""
+    raise RuntimeError(
+        f"the change deletes {shown}{more}, which the agent's transcript does "
+        "not show it editing. A push that removes what the base branch carries "
+        "is not made: that is how a stale working tree reverts other people's "
+        "merged work"
+    )
+
+
+def _rebase_onto_new_base() -> None:
+    """Meet the base branch where it is now, with the committed work on top.
+
+    The branch is anchored on the commit the tree started from, so when the
+    base moved during the session its fresh tip is not yet in the branch's
+    history. Replaying the session's commit onto the tip is what keeps the
+    push from presenting the base's own in-between work as this session's
+    deletions. A conflict between the two is a session that fails loudly, with
+    the rebase aborted so nothing is left half-done in the checkout.
+    """
+    new_base = _read_session_state("new-base-sha")
+    if not re.fullmatch(r"[0-9a-f]{40}", new_base):
+        return
+    head = _ref_sha("HEAD")
+    if head and head == new_base:
+        return
+    process = run(
+        ["git", "merge-base", "--is-ancestor", new_base, "HEAD"],
+        cwd=CHECKOUT,
+        check=False,
+        quiet=True,
+    )
+    if process.returncode == 0:
+        # Already on the line of the base's tip: a later round whose earlier
+        # commit already met it.
+        return
+    try:
+        run(["git", "rebase", new_base], cwd=CHECKOUT)
+    except RuntimeError as exc:
+        run(["git", "rebase", "--abort"], cwd=CHECKOUT, check=False, quiet=True)
+        raise RuntimeError(
+            "the base branch moved while the session was working, and the "
+            "change conflicts with what it pulled in; the session is failing "
+            "rather than pushing a change the base cannot take"
+        ) from exc
+
+
 def commit_and_push(branch: str, task: str) -> int:
     files = changed_files()
     if not files:
         log("agent produced no changes; nothing to commit")
         return 0
     _refuse_workflow_changes(files)
+    _refuse_unexplained_deletions()
 
     log(f"committing {len(files)} changed file(s)")
     run(["git", "add", "-A"], cwd=CHECKOUT)
     # One line, and nothing else. What the change is belongs in the subject;
     # why it was made belongs in the pull request, where people read it.
     run(["git", "commit", "-m", _commit_subject(task)], cwd=CHECKOUT)
+    # The commit sits on the base the preparation checked out; the base has
+    # moved since, and the push must not carry the gap as deletions.
+    _rebase_onto_new_base()
     run(["git", "push", "--force-with-lease", "origin", branch], cwd=CHECKOUT)
     return len(files)
 
@@ -1328,6 +1568,43 @@ def _pr_reviewers() -> list[str]:
     return [name.strip() for name in os.environ.get("LOGOS_SESSION_PR_REVIEWERS", "").split(",") if name.strip()]
 
 
+def _pull_request_settled(branch: str) -> str | None:
+    """How the branch's pull request was settled meanwhile, if it was.
+
+    Returns ``"merged"`` or the pull request's closed state, or None when
+    there is nothing to stop for. A round that pushes to a branch whose
+    pull request is already merged or closed does not update finished work:
+    it opens a duplicate of it, or writes to the words of a closed one. The
+    work is done; the session says so and stops. Checked with the scoped
+    token this phase carries, which also means the answer is the
+    repository's own, not one the agent phase could have written.
+    """
+    slug = os.environ.get("LOGOS_REPO_SLUG", "").strip()
+    if not slug:
+        return None
+    process = run(
+        ["gh", "pr", "view", branch, "--repo", slug, "--json", "state,merged"],
+        cwd=CHECKOUT,
+        check=False,
+        quiet=True,
+    )
+    if process.returncode != 0:
+        # No pull request for this branch yet — a first round has nothing to
+        # be settled by — or gh could not answer, in which case the push
+        # itself will say so. Either way there is no settled work to stop
+        # for.
+        return None
+    try:
+        info = json.loads(process.stdout)
+    except ValueError:
+        return None
+    if info.get("state") != "OPEN" or info.get("merged"):
+        state = "merged" if info.get("merged") else f"{info.get('state').lower()}"
+        log(f"the pull request for this branch is no longer open ({state}); not pushing")
+        return state
+    return None
+
+
 def run_prepare(result: Result) -> None:
     """Trusted phase one: bring the working copy to a trusted state.
 
@@ -1363,6 +1640,9 @@ def run_agent_phase(result: Result) -> None:
 
     tokens_in, tokens_out, cost = usage_totals(usage)
     result.data.update(tokens_in=tokens_in, tokens_out=tokens_out, cost_usd=cost)
+    # The agent is done, so what the transcript shows it edited is settled —
+    # and the finalizer, a later container, can read it from the artefacts.
+    _write_touched_files()
     # Screenshots are the runner's job, taken after settlement: a
     # session's own view of the dev environment is stale the moment its
     # deploy is queued, and the runner is the one that knows when the
@@ -1401,6 +1681,23 @@ def run_finalize(result: Result) -> None:
             result.data.update(json.loads(path.read_text()))
         except Exception as exc:
             log(f"ignoring unreadable result file from the agent phase: {exc}")
+
+    # A pull request that was merged or closed while this session ran is no
+    # longer work to push to: the work is done, and a push here would open a
+    # duplicate of it rather than refresh it. Cancelled, not failed — the
+    # session did what it could and the repository already carries the
+    # answer — so the run ends clean with the reason in its end state.
+    settled = _pull_request_settled(branch)
+    if settled:
+        result.data["error"] = (
+            f"the pull request for this branch was {settled} while the session "
+            "was working, so there was nothing to push; the work is already "
+            "in the repository"
+        )
+        result.data["committed"] = False
+        result.data["files_changed"] = 0
+        result.data["pushed_sha"] = None
+        return
 
     count = commit_and_push(branch, task) if finalize_checkout(repo_url, base_branch, branch, token) else 0
     result.data["files_changed"] = count
