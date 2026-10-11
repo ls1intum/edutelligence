@@ -113,7 +113,10 @@ export class GpuMapComponent {
   }
 
   private placement(lane: LaneSignalData): number[] {
-    const parsed = parseGpuIndices(lane.effective_gpu_devices || lane.gpu_devices);
+    const raw = (lane.effective_gpu_devices || lane.gpu_devices || '').trim();
+    // Workers report "all" for a lane that may use every device (the Mac worker does).
+    if (raw.toLowerCase() === 'all') return this.devices.map((_, i) => i);
+    const parsed = parseGpuIndices(raw);
     if (parsed.length) return parsed;
     // A single-GPU worker can only mean that card.
     return this.devices.length === 1 ? [0] : [];

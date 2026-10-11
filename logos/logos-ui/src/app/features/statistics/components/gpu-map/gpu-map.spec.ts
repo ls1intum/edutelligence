@@ -91,6 +91,15 @@ describe('GpuMapComponent', () => {
     expect(multi.unplacedLanes.map((l) => l.laneId)).toEqual(['a']);
   });
 
+  it('reads "all" as every GPU of the worker', () => {
+    const cmp = create({
+      devices: [device(40_000), device(40_000)],
+      lanes: { a: lane({ gpu_devices: 'all', effective_gpu_devices: 'all', effective_vram_mb: 80_000 }) },
+    });
+    expect(cmp.cards.map((c) => c.segments.length)).toEqual([1, 1]);
+    expect(cmp.unplacedLanes).toEqual([]);
+  });
+
   it('orders lanes busiest state first', () => {
     const cmp = create({
       devices: [device(90_000)],
