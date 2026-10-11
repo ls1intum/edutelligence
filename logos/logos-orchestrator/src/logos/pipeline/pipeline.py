@@ -19,6 +19,7 @@ from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
+from logos.request_slo import resolve_request_slo
 from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
@@ -119,25 +120,6 @@ def queue_role_rank(key_type: Optional[str], user_role: Optional[str]) -> int:
     if user_role in ("app_admin", "logos_admin"):
         return 1
     return 0
-
-
-def is_background_app(headers: Dict[str, str]) -> bool:
-    """True when the caller marked the request as background app traffic.
-
-    Claude Code sends ``x-app: cli`` for interactive sessions and
-    ``x-app: cli-bg`` for its background agents; only the latter is
-    flagged. Those background calls (e.g. the auto-permission classifier)
-    are latency-sensitive — they block the agent's next step — so the queue
-    gives them bounded precedence at the same priority level
-    (``SchedulingRequest.background_app``): the dispatch interleave keeps a
-    fast lane for them without letting a steady flagged stream starve
-    ordinary same-priority traffic. The comparison is
-    case-insensitive in both name and value, as HTTP headers are.
-    """
-    for name, value in headers.items():
-        if name.lower() == "x-app" and value.strip().lower() == "cli-bg":
-            return True
-    return False
 
 
 @dataclass
@@ -304,7 +286,12 @@ class RequestPipeline:
             if top_name:
                 self._demand_tracker.record_request(top_name)
 
-        # 2. Scheduling
+        # 2. Scheduling — the request SLO (logos.request_slo) is resolved
+        # against the candidate priority, which resolve_queue_priority
+        # already set to the key/team/policy SLO value: the queue bucket
+        # stays the key's SLO, and only the same-bucket fast lane (today
+        # x-app: cli-bg) layers on top of it.
+        request_slo = resolve_request_slo(request.headers, priority_int)
         scheduling_request = SchedulingRequest(
             request_id=request_id,
             classified_models=classification_result.candidates,
@@ -313,7 +300,7 @@ class RequestPipeline:
             timeout_s=request.payload.get("timeout_s"),
             required_provider_id=request.required_provider_id,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
-            background_app=is_background_app(request.headers),
+            slo_fast_lane=request_slo.fast_lane,
             # Absolute ingress stamp, not a precomputed remainder: the
             # scheduler recomputes what is left of the client window at wait
             # time, so the synchronous scheduling phase in between (which can
