@@ -1287,6 +1287,9 @@ def spawn_vllm(
 
     env = os.environ.copy()
     env["VLLM_SERVER_DEV_MODE"] = "1"
+    # The probe's GPU slice is measured with nvidia-smi indices; number CUDA's
+    # devices the same way, as the serving lane does.
+    env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     # Keep venv tools (ninja etc.) visible even outside activated venv
     vllm_dir = str(Path(vllm_binary).resolve().parent)
     env["PATH"] = f"{vllm_dir}{os.pathsep}{env.get('PATH', '')}"
