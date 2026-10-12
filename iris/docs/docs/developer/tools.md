@@ -68,9 +68,17 @@ The agent sees only the inner function's **name** and **docstring**. The outer f
 
 ### Context Tools
 
-| Tool                  | File                     | Description                                          |
-| --------------------- | ------------------------ | ---------------------------------------------------- |
-| `switch_chat_context` | `switch_chat_context.py` | Move the chat to another exercise, lecture or course |
+| Tool                                  | File                         | Description                                                      |
+| ------------------------------------- | ---------------------------- | ---------------------------------------------------------------- |
+| `switch_chat_context`                 | `switch_chat_context.py`     | Move the chat to another exercise, lecture or course             |
+| `read_students_current_position`      | `current_view_content.py`    | Read the lecture material at the position the student is viewing |
+| `point_out_relevant_lecture_position` | `combined_view_point_out.py` | Move the student's combined view to a slide page or video moment |
+
+The latter two exist only when the request carries a viewing context. `read_students_current_position` reads material that `ChatPipeline` resolved before the agent ran, and `point_out_relevant_lecture_position` is the only tool that changes what the student sees. Their mechanics are documented in [viewing context](./viewing-context.md) and [client commands](./client-commands.md); what follows here is how they fit the tool contract.
+
+`point_out_relevant_lecture_position` is the second tool after `switch_chat_context` with an effect outside the context window, and unlike that one it takes effect **within** the run: it sends a command to Artemis and blocks until Artemis reports whether the client carried it out. That is why its return string distinguishes "moved", "already there" and "not applied" — an agent that claimed to have opened a slide that never opened is the one failure the student sees immediately.
+
+Both tools read shared mutable state (`state.current_view_storage`) rather than values captured when they were built, because a successful point-out invalidates what the other tool would otherwise keep reporting as the student's current position.
 
 `switch_chat_context` is the only tool that changes something outside the LLM's context window, and it does so indirectly. It takes a mode and an entity ID, validates them against the course data on the DTO, and records the result through a callback:
 
@@ -171,6 +179,8 @@ Three providers gate on flags that `ChatPipeline.prepare_state()` computes once 
 | `allow_memiris_tool` | User opt-in and existing memories                       | `provide_memory_search`, `provide_find_similar_memories` |
 
 `prepare_state()` exists because the first two are Weaviate round trips that both the system prompt and the tool list depend on. Resolving them once, concurrently, before either is built avoids querying twice per request.
+
+The two viewing-context tools gate on `state.lecture_contexts`, which `prepare_state()` also fills. Both additionally require `allow_lecture_tool`: a viewing context must not become a way around the gate that decides whether this course has lecture content at all. `provide_combined_view_point_out()` resolves the context through `get_combined_view_context()`, the same function the `can_point_out_in_combined_view` prompt flag derives from, so the prompt can never advertise a tool the provider withheld.
 
 One provider bypasses the whole mechanism: when `prepare_state()` detects MCQ intent, `get_tools()` returns an empty list, because the agent only has to write a short intro while the MCQ sub-pipeline runs in parallel.
 

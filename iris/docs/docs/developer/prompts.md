@@ -14,6 +14,7 @@ All prompts live under `src/iris/pipeline/prompts/`:
 prompts/
 ├── templates/                                 # Jinja2 templates for system prompts
 │   ├── chat_system_prompt.j2                  # The system prompt of every student chat
+│   ├── chat_turn_context.j2                   # Per-message viewing context, sent after the chat history
 │   ├── exercise_chat_guide_prompt.j2
 │   ├── mcq_generation_prompt.j2
 │   ├── autonomous_tutor_system_prompt.j2
@@ -46,30 +47,30 @@ Pipelines use **Jinja2 templates** (`.j2` files) for their system prompts. These
 
 The template is a sequence of blocks in a fixed order. Some are unconditional, others render only when the request carries the data they describe:
 
-| Block               | Condition                      | Content                                                             |
-| ------------------- | ------------------------------ | ------------------------------------------------------------------- |
-| Language            | `user_language`                | Answer in the student's language                                    |
-| Introduction        | always                         | The Iris persona                                                    |
-| Guidelines          | always                         | Scaffolding rules, what not to reveal                               |
-| Course meta         | always                         | Course name                                                         |
-| Lecture meta        | `lecture_name`                 | The active lecture                                                  |
-| Exercise meta       | `exercise_id`                  | Title, problem statement, dates, programming language or submission |
-| Examples            | always                         | Worked examples of good and bad answers                             |
-| Tool instructions   | always                         | How and when to reach for tools                                     |
-| Context switching   | `not mcq_parallel`             | When and how to call `switch_chat_context`                          |
-| Exercise scenarios  | `programming_language`         | Build failures, failing tests, stuck students                       |
-| Lecture retrieval   | `allow_lecture_tool`           | How to retrieve and cite lecture content                            |
-| FAQ retrieval       | `allow_faq_tool`               | How to use FAQ answers                                              |
-| Memory              | `allow_memiris_tool`           | How to use and create memories                                      |
-| Competencies        | `has_competencies`             | How to talk about competencies                                      |
-| Exercises           | `has_exercises`                | How to talk about the course exercises                              |
-| Metrics             | `metrics_enabled`              | How to interpret student analytics                                  |
-| Chat history        | `has_chat_history`             | How to treat earlier turns                                          |
-| Proactive events    | `event`                        | Behavior for build-failure and stalled-progress events              |
-| MCQ generation      | course and lecture modes       | How to produce multiple-choice questions                            |
-| Support level       | `support_level`                | How much help the instructor allows                                 |
-| Custom instructions | `custom_instructions`          | The instructor's own additions                                      |
-| Current date & view | always / `current_view_blocks` | The date, and the slide or video the student has open               |
+| Block                   | Condition                        | Content                                                                  |
+| ----------------------- | -------------------------------- | ------------------------------------------------------------------------ |
+| Language                | `user_language`                  | Answer in the student's language                                         |
+| Introduction            | always                           | The Iris persona                                                         |
+| Guidelines              | always                           | Scaffolding rules, what not to reveal                                    |
+| Course meta             | always                           | Course name                                                              |
+| Lecture meta            | `lecture_name`                   | The active lecture                                                       |
+| Exercise meta           | `exercise_id`                    | Title, problem statement, dates, programming language or submission      |
+| Examples                | always                           | Worked examples of good and bad answers                                  |
+| Tool instructions       | always                           | How and when to reach for tools                                          |
+| Context switching       | `not mcq_parallel`               | When and how to call `switch_chat_context`                               |
+| Exercise scenarios      | `programming_language`           | Build failures, failing tests, stuck students                            |
+| Lecture retrieval       | `allow_lecture_tool`             | How to retrieve and cite lecture content, and which page number to quote |
+| Combined-view point-out | `can_point_out_in_combined_view` | When and how to move the student's slides or video                       |
+| FAQ retrieval           | `allow_faq_tool`                 | How to use FAQ answers                                                   |
+| Memory                  | `allow_memiris_tool`             | How to use and create memories                                           |
+| Competencies            | `has_competencies`               | How to talk about competencies                                           |
+| Exercises               | `has_exercises`                  | How to talk about the course exercises                                   |
+| Metrics                 | `metrics_enabled`                | How to interpret student analytics                                       |
+| Chat history            | `has_chat_history`               | How to treat earlier turns                                               |
+| Proactive events        | `event`                          | Behavior for build-failure and stalled-progress events                   |
+| MCQ generation          | course and lecture modes         | How to produce multiple-choice questions                                 |
+| Support level           | `support_level`                  | How much help the instructor allows                                      |
+| Custom instructions     | `custom_instructions`            | The instructor's own additions                                           |
 
 `build_system_message()` assembles the render context from the DTO and from the flags that `prepare_state()` resolved:
 
@@ -93,6 +94,19 @@ return self.system_prompt_template.render(template_context)
 ```
 
 Note that most blocks key off **data presence**, not off `chat_mode`. `chat_mode` appears in exactly one place, the context switching block, where the agent has to be told which kind of context is currently active. Everything else follows from the entity fields, which keeps the prompt correct after a context switch without a special case.
+
+### The Student's Current Position
+
+Not every block the agent reads lives in the system prompt. Blocks whose content changes from message to message are rendered from a second template, `chat_turn_context.j2`, and sent as a system message **after** the chat history. The system prompt is the start of the cached prefix and has to stay byte-identical across the turns of a session, so a per-message value cannot live in it without invalidating that cache on every turn.
+
+`current_view_blocks` is one of those blocks. It names the slide page or video moment the student currently has open, when the request carried a viewing context and the material at that position is indexed:
+
+```text
+The student is currently viewing page 4 of the lecture slides of the lecture unit
+Concurrency (lecture unit ID: 31).
+```
+
+The block names the position but never reproduces the material at it. The agent therefore learns _where_ the student is on every turn, and learns _what is there_ only if it calls `read_students_current_position`. [Viewing context](./viewing-context.md) explains why the material is kept behind a tool, and why this block names that tool only when it was actually registered.
 
 ### The Context Switching Block
 
@@ -159,6 +173,8 @@ Feedbacks (from automated tests):
 ```
 
 These are loaded and formatted using Python's `str.format()` or passed directly to LangChain prompt templates.
+
+The three citation prompts are the one group where the wording is part of a wire format: `citation_prompt.txt` tells the model to copy the provided ids verbatim, and `citation_keyword_prompt.txt` and `citation_summary_prompt.txt` forbid the characters that delimit a citation's fields. See [citations](./citations.md).
 
 ## How Prompts Are Assembled
 
