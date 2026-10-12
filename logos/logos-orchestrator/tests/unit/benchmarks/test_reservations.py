@@ -92,6 +92,7 @@ def test_scheduler_does_not_reserve_capacity_for_production(lease):
 @pytest.mark.parametrize("cancelled", [False, True])
 async def test_benchmark_completion_or_cancellation_releases_reservation(lease, cancelled):
     import asyncio
+
     import logos as main
 
     task = asyncio.create_task(asyncio.sleep(0))
