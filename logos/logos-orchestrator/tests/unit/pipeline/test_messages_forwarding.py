@@ -184,7 +184,7 @@ async def test_non_messages_routes_are_untouched(monkeypatch):
 @pytest.mark.asyncio
 async def test_workernode_request_is_never_translated(monkeypatch):
     class DummyRegistry:
-        async def select_lane_for_model(self, provider_id, model_name):  # noqa: ARG002
+        async def select_lane_for_model(self, provider_id, model_name, *, request_id=None):  # noqa: ARG002
             return {"lane_id": "lane-1"}
 
     with _patched_db(monkeypatch, _auth_info(provider_type="logosnode", cloud_provider_type=None, api_key=None)):
@@ -377,7 +377,7 @@ async def test_upstreams_that_serve_chat_completions_are_left_alone(monkeypatch)
     assert payload == CHAT_BODY
 
     class DummyRegistry:
-        async def select_lane_for_model(self, provider_id, model_name):  # noqa: ARG002
+        async def select_lane_for_model(self, provider_id, model_name, *, request_id=None):  # noqa: ARG002
             return {"lane_id": "lane-1"}
 
     with _patched_db(monkeypatch, _auth_info(provider_type="logosnode", cloud_provider_type=None, api_key=None)):

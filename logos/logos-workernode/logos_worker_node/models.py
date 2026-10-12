@@ -931,6 +931,7 @@ class LaneStatus(BaseModel):
 
 
 class WorkerRuntimeStatus(BaseModel):
+    supports_benchmark_restart: bool = True
     worker_name: str
     worker_id: str
     service_version: str

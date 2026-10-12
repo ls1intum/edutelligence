@@ -95,6 +95,10 @@ public class OrchestratorWorkerAdminClient {
         return post("/internal/model_benchmarks/datasets/" + operation, body);
     }
 
+    public ResponseEntity<Map> nightlyBenchmark(String operation, Map<String, Object> body) {
+        return post("/internal/model_benchmarks/nightly/" + operation, body);
+    }
+
     public ResponseEntity<Map> benchmarkLimits(Map<String, Object> body) {
         return post("/internal/model_benchmarks/limits", body);
     }

@@ -1,6 +1,6 @@
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from logos.benchmarks.configuration import BenchmarkBatch, BenchmarkSettings
 from logos.dbutils.dbmodules import ThresholdLevel
@@ -8,6 +8,16 @@ from logos.dbutils.dbmodules import ThresholdLevel
 
 class LogosKeyModel(BaseModel):
     logos_key: str
+
+
+class NightlyStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_provider_id: int = Field(gt=0)
+
+
+class NightlyUpdateRequest(NightlyStatusRequest):
+    enabled: StrictBool
+    expected_enabled: StrictBool
 
 
 class WebSearchRequest(BaseModel):

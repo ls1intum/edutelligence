@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 import httpx
 
 from logos.benchmarks.configuration import BenchmarkSettings, ServingOverrides
+from logos.benchmarks.nightly import PROGRESS
+from logos.benchmarks.nightly_store import write_progress
 
 DATASET = "openai/gsm8k"
 _SECRET_KEYS = {"api_key", "apikey", "authorization", "password", "secret", "token"}
@@ -403,6 +405,8 @@ async def run_benchmark_job(
             try:
                 with DBManager() as db:
                     active = db.touch_model_benchmark_job(job_id)
+                if job_id in PROGRESS and PROGRESS[job_id].measuring:
+                    write_progress(job_id, PROGRESS[job_id].completed, PROGRESS[job_id].total)
             except Exception:
                 active = False
             session_current = worker_session_is_current is None or worker_session_is_current()
@@ -441,6 +445,9 @@ async def run_benchmark_job(
                 JobStatus.RUNNING.value,
                 result_payload={**progress, "stage": "benchmarking", "started_samples": 0, "total_samples": samples},
             )
+
+        if job_id in PROGRESS:
+            PROGRESS[job_id].start_measurement()
 
         with tempfile.TemporaryDirectory(prefix="logos-guidellm-") as directory:
             workdir = Path(directory)

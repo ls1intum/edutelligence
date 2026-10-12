@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+ <changeSet id="057-nightly-benchmarks" author="logos">
+  <sql>
+   CREATE TABLE nightly_benchmarks (
+     model_provider_id integer PRIMARY KEY,
+     enabled boolean NOT NULL DEFAULT false,
+     last_run_date date,
+     status text NOT NULL DEFAULT 'disabled',
+     report jsonb NOT NULL DEFAULT '[]'::jsonb,
+     recovery jsonb,
+     updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+  </sql>
+  <rollback><sql>DROP TABLE nightly_benchmarks;</sql></rollback>
+ </changeSet>
+</databaseChangeLog>

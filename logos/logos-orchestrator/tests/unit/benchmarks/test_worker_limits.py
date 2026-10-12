@@ -87,6 +87,9 @@ def test_unknown_gpu_inventory_does_not_invent_a_limit():
 
 @pytest.mark.parametrize("batch", [False, True])
 async def test_impossible_benchmark_is_rejected_before_job_creation(monkeypatch, batch):
+    from logos.benchmarks import nightly_store
+
+    monkeypatch.setattr(nightly_store, "manual_admission", lambda db: True)
     import importlib
 
     main = importlib.import_module("logos.main")

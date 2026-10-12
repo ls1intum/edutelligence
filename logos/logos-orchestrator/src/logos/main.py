@@ -45,6 +45,8 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_token,
 )
+from logos.benchmarks.nightly_scheduler import NightlyScheduler
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.billing.budget import check_monthly_budget
 from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
@@ -56,7 +58,7 @@ from logos.client_tags import ClientTagCancellationMiddleware
 from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
-from logos.dbutils.dbrequest import *
+from logos.dbutils.dbrequest import *  # noqa: F401,F403 - compatibility exports for callers
 from logos.dbutils.types import (
     Deployment,
     get_unique_models_from_deployments,
@@ -141,6 +143,7 @@ def _forget_benchmark_task(job_id: int, task: asyncio.Task) -> None:
     _benchmark_tasks.discard(task)
     _benchmark_tasks_by_job.pop(job_id, None)
     _benchmark_sessions_by_job.pop(job_id, None)
+    benchmark_reservations.release(job_id)
 
 
 def _cancel_benchmark_job(job_id: int, reason: str) -> bool:
@@ -220,6 +223,8 @@ _logosnode_registry = LogosNodeRuntimeRegistry(
 _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
+_nightly_scheduler: Optional[NightlyScheduler] = None
+_pipeline: Optional[RequestPipeline] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 _cloud_model_sync: Optional[CloudModelSyncService] = None
 
@@ -735,6 +740,8 @@ async def lifespan(app: FastAPI):
         if batch_task:
             batch_task.cancel()
             await asyncio.gather(batch_task, return_exceptions=True)
+    if _nightly_scheduler:
+        await _nightly_scheduler.stop()
     benchmark_tasks = list(_benchmark_tasks)
     for task in benchmark_tasks:
         task.cancel()
@@ -1289,11 +1296,10 @@ async def start_pipeline():
         facade=_logosnode_facade,
         config=CalibrationConfig.from_env(),
     )
-    await _calibration_orchestrator.start()
-    logger.info(
-        "Calibration orchestrator started (enabled=%s)",
-        _calibration_orchestrator._config.enabled,
-    )
+    global _nightly_scheduler
+    _nightly_scheduler = NightlyScheduler(_logosnode_registry, _capacity_planner)
+    await _nightly_scheduler.start()
+    logger.info("Nightly benchmark scheduler started; schedules require explicit admin opt-in")
 
     # Azure deployment auto-sync: discover deployed models and upsert them into
     # the DB on startup and every 24h. Runs after facade registration so its
@@ -1897,6 +1903,7 @@ async def _streaming_response(
             return _logosnode_registry.send_stream_command(
                 provider_id=provider_id,
                 action="infer_stream",
+                request_id=request_id,
                 params={
                     "lane_id": context.lane_id,
                     "payload": stream_payload,
@@ -2575,6 +2582,7 @@ async def _sync_response(
                     rpc_result = await _logosnode_registry.send_command(
                         provider_id=provider_id,
                         action="infer",
+                        request_id=request_id,
                         params={
                             "lane_id": context.lane_id,
                             "payload": sync_payload,
@@ -2605,6 +2613,7 @@ async def _sync_response(
                         rpc_result = await _logosnode_registry.send_command(
                             provider_id=provider_id,
                             action="infer",
+                            request_id=request_id,
                             params={
                                 "lane_id": context.lane_id,
                                 "payload": sync_payload,
@@ -5105,10 +5114,11 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
 # and is included last, so no route of another router can be shadowed by it.
 # Add new routers above that line.
 
-from logos.routers import admin, internal, logosnode, monitoring, user_facing  # noqa: E402
+from logos.routers import admin, internal, logosnode, monitoring, nightly_benchmarks, user_facing  # noqa: E402
 
 app.include_router(monitoring.router)
 app.include_router(internal.router)
+app.include_router(nightly_benchmarks.router)
 app.include_router(logosnode.router)
 app.include_router(admin.router)
 app.include_router(user_facing.router)

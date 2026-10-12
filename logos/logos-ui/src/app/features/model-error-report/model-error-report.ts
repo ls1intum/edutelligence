@@ -9,6 +9,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { NgClass } from '@angular/common';
+import { NightlyBenchmarks } from './nightly-benchmarks';
 import { BenchmarkRunFailure } from './benchmark-run-failure';
 import { BenchmarkComparison } from './benchmark-comparison';
 import { BenchmarkBatchEditor } from './benchmark-batch-editor';
@@ -629,6 +630,7 @@ const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
     BenchmarkBatchEditor,
     BenchmarkComparison,
     BenchmarkRunFailure,
+    NightlyBenchmarks,
     ScrollingModule,
     ErrorMessageComponent,
     ModelAccess,

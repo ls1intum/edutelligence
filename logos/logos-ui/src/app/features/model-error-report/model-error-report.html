@@ -524,6 +524,12 @@
             </span>
           </div>
 
+          @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+            @if (pair.provider_type === 'logosnode') {
+              <app-nightly-benchmarks [pairId]="pair.model_provider_id" [providerName]="pair.provider_name" />
+            }
+          }
+
           <details class="performance-glossary">
             <summary>
               <span>
@@ -674,7 +680,7 @@
                       @if (benchmarkConfirmPairId() === pair.model_provider_id) {
                         <section class="benchmark-start-notice" [id]="'benchmark-notice-' + pair.model_provider_id" aria-label="Confirm benchmark start" (keydown.escape)="benchmarkConfirmPairId.set(null)">
                           <strong>{{ benchmarkTotalRuns() }} {{ benchmarkTotalRuns() === 1 ? 'run' : 'runs' }} on {{ pair.provider_name }}</strong>
-                          <p>The benchmark runs alongside other requests. Concurrent traffic can affect measured performance.</p>
+                          <p>The selected model lanes are reserved for this benchmark. Other requests use available alternatives or wait.</p>
                           @if (hasServingOverrides()) { <p>The selected vLLM settings may reload the model and remain active after the run.</p> }
                           @if (benchmarkBatch()) { <p>Start the entire batch once. No confirmation is needed between runs.</p> }
                           <button type="button" class="benchmark-cancel-button" (click)="benchmarkConfirmPairId.set(null)">Edit settings</button>
