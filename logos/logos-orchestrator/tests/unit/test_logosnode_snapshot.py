@@ -90,3 +90,24 @@ def test_scheduler_signals_carry_gpu_index_health_and_faults():
         (0, "faulted", "GPU requires reset"),
         (2, "ok", ""),
     ]
+
+
+def test_scheduler_signals_carry_the_gpus_a_lane_occupies():
+    from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+
+    signals = _build_logosnode_scheduler_signals(
+        {
+            "lanes": [
+                {
+                    "lane_id": "a",
+                    "model": "m",
+                    "gpu_devices": "1,0",
+                    "effective_gpu_devices": "1,0",
+                    "occupied_gpu_devices": "1",
+                }
+            ],
+            "devices": {},
+        }
+    )
+
+    assert signals["lanes"]["a"]["occupied_gpu_devices"] == "1"

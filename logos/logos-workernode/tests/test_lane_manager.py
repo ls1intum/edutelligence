@@ -3992,3 +3992,18 @@ async def test_apply_lanes_replans_after_rollback_restores_the_original_floor(mo
     # The restart re-planned for the replacement model, and the post-rollback
     # re-plan saw the RESTORED model — its footprint is the final floor.
     assert replan_models == ["org/small", "org/big"]
+
+
+@pytest.mark.parametrize(
+    ("selector", "gpu_count", "occupied"),
+    [
+        ("1,0", 1, "1"),  # visibility list: a TP=1 engine runs on the first entry
+        ("2,3", 2, "2,3"),
+        ("0", 1, "0"),
+        ("all", 1, ""),
+        ("", 1, ""),
+        ("1", 2, ""),  # fewer GPUs than the engine needs: unknown
+    ],
+)
+def test_occupied_gpu_devices_takes_the_first_visible_gpus(selector: str, gpu_count: int, occupied: str) -> None:
+    assert LaneManager._occupied_gpu_devices(selector, gpu_count) == occupied  # noqa: SLF001

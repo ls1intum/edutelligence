@@ -913,6 +913,11 @@ class LaneStatus(BaseModel):
     flash_attention: bool = False
     gpu_devices: str = ""
     effective_gpu_devices: str = ""
+    # The GPUs the lane's engine actually runs on (nvidia-smi indices): the
+    # first tensor × pipeline parallel entries of a numeric selector, which
+    # only lists the GPUs the lane can see. Empty when that is not known, e.g.
+    # for "all".
+    occupied_gpu_devices: str = ""
     sleep_mode_enabled: bool = False
     sleep_state: Literal["unsupported", "unknown", "awake", "sleeping"] = "unsupported"
     active_requests: int = Field(default=0, ge=0)

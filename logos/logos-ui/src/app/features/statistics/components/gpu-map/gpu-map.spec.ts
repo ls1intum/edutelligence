@@ -75,13 +75,38 @@ describe('GpuMapComponent', () => {
   it('splits a tensor-parallel lane evenly across its cards', () => {
     const cmp = create({
       devices: [device(40_000), device(40_000)],
-      lanes: { tp: lane({ gpu_devices: '0,1', effective_gpu_devices: '0,1', effective_vram_mb: 80_000 }) },
+      lanes: {
+        tp: lane({
+          gpu_devices: '0,1',
+          effective_gpu_devices: '0,1',
+          occupied_gpu_devices: '0,1',
+          effective_vram_mb: 80_000,
+        }),
+      },
     });
     for (const card of cmp.cards) {
       expect(card.segments[0].mb).toBe(40_000);
       expect(card.segments[0].shared).toBe(true);
       expect(card.otherMb).toBe(0);
     }
+  });
+
+  it('draws a lane only on the GPUs it occupies, not every GPU it can see', () => {
+    // A TP=1 lane started with "1,0" runs on GPU 1 alone.
+    const cmp = create({
+      devices: [device(0), device(40_000)].map((d, i) => ({ ...d, index: i })),
+      lanes: { a: lane({ gpu_devices: '1,0', effective_gpu_devices: '1,0', occupied_gpu_devices: '1' }) },
+    });
+    expect(cmp.cards.map((c) => c.segments.map((s) => [s.mb, s.shared]))).toEqual([[], [[40_000, false]]]);
+  });
+
+  it('leaves a lane unplaced when the worker does not know which GPUs it occupies', () => {
+    const cmp = create({
+      devices: [device(0), device(0)],
+      lanes: { a: lane({ gpu_devices: '1,0', effective_gpu_devices: '1,0', occupied_gpu_devices: '' }) },
+    });
+    expect(cmp.cards.every((c) => c.segments.length === 0)).toBe(true);
+    expect(cmp.unplacedLanes.map((l) => l.laneId)).toEqual(['a']);
   });
 
   it('puts a lane without placement on the only GPU, and lists it as unplaced on several', () => {

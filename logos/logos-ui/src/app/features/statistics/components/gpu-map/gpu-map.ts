@@ -137,15 +137,21 @@ export class GpuMapComponent {
   }
 
   /**
-   * The GPUs a lane occupies. "all" (and a blank selector) only says which GPUs
-   * the lane could see — a single-GPU lane started that way uses one of them,
-   * and the worker does not say which — so on a worker with several GPUs it
-   * stays unplaced rather than drawn across every card.
+   * The GPUs a lane occupies. A selector ("all", "1,0") only says which GPUs
+   * the lane can see; the engine runs on the first ones it needs, which the
+   * worker reports as occupied_gpu_devices. Where that is unknown the lane
+   * stays unplaced on a worker with several GPUs rather than being drawn
+   * across cards it may not hold.
    */
   private placement(lane: LaneSignalData): number[] {
-    const raw = (lane.effective_gpu_devices || lane.gpu_devices || '').trim();
-    const parsed = parseGpuIndices(raw);
-    if (parsed.length) return parsed;
+    if (lane.occupied_gpu_devices !== undefined) {
+      const occupied = parseGpuIndices(lane.occupied_gpu_devices);
+      if (occupied.length) return occupied;
+    } else {
+      // Older samples: only a selector naming one GPU says where the lane runs.
+      const parsed = parseGpuIndices((lane.effective_gpu_devices || lane.gpu_devices || '').trim());
+      if (parsed.length === 1) return parsed;
+    }
     // A single-GPU worker can only mean that card.
     const gpus = this.devices.filter((d) => !this.isPool(d));
     return gpus.length === 1 ? [this.gpuIndex(gpus[0], this.devices.indexOf(gpus[0]))] : [];

@@ -117,6 +117,12 @@ export type LaneSignalData = {
   gpu_devices: string | null;
   effective_gpu_devices: string | null;
   /**
+   * The GPUs the lane's engine runs on. The two selectors above only list the
+   * GPUs it can see: "1,0" with one GPU runs on GPU 1 alone. Empty when the
+   * worker does not know; absent on samples that predate it.
+   */
+  occupied_gpu_devices?: string;
+  /**
    * Worker-reported concurrency: the lane's full-context KV budget parsed
    * from the vLLM startup log (guaranteed minimum; 0 until the log is parsed).
    */

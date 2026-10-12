@@ -572,6 +572,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "sleep_state": lane.get("sleep_state"),
             "gpu_devices": str(lane.get("gpu_devices") or ""),
             "effective_gpu_devices": str(lane.get("effective_gpu_devices") or ""),
+            # The GPUs the engine runs on; the selectors above only say which
+            # it can see. Empty when the worker does not know.
+            "occupied_gpu_devices": str(lane.get("occupied_gpu_devices") or ""),
             "num_parallel": _safe_int(lane.get("num_parallel")) or 0,
             "active_requests": active_requests,
             "effective_vram_mb": _safe_float(lane.get("effective_vram_mb")) or 0.0,

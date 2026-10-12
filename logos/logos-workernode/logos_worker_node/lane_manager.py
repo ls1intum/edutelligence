@@ -1999,6 +1999,19 @@ class LaneManager:
         return result
 
     @staticmethod
+    def _occupied_gpu_devices(selector: str | None, gpu_count: int) -> str:
+        """The GPUs an engine started with *selector* as CUDA_VISIBLE_DEVICES runs on.
+
+        The engine takes the first *gpu_count* visible devices in the order the
+        selector lists them, so "1,0" with one GPU means GPU 1. Anything but a
+        numeric list naming enough GPUs gives "" (unknown).
+        """
+        parts = [part.strip() for part in (selector or "").split(",")]
+        if gpu_count < 1 or not parts or not all(part.isdigit() for part in parts) or len(parts) < gpu_count:
+            return ""
+        return ",".join(str(int(part)) for part in parts[:gpu_count])
+
+    @staticmethod
     def _lane_gpu_set(gpu_devices: str | None) -> frozenset[int] | None:
         """Return the GPU indices a lane occupies, or ``None`` for "all".
 
@@ -3456,6 +3469,7 @@ class LaneManager:
             host_ram_source = source
 
         effective_gpu_devices = ""
+        occupied_gpu_devices = ""
         routing_url = f"http://127.0.0.1:{handle.port}"
         inference_endpoint = "/v1/chat/completions"
         sleep_mode_enabled = False
@@ -3477,6 +3491,11 @@ class LaneManager:
             flash_attention = lc.flash_attention
             gpu_devices = lc.gpu_devices
             effective_gpu_devices = lc.gpu_devices or self._global_config.gpu_devices
+            try:
+                gpu_count = lc.vllm_config.parallel_gpu_count if lc.vllm_config else 1
+            except ValueError:
+                gpu_count = 0
+            occupied_gpu_devices = self._occupied_gpu_devices(effective_gpu_devices, gpu_count)
             if lc.vllm_config:
                 sleep_mode_enabled = bool(lc.vllm_config.enable_sleep_mode)
                 backend_metrics = lc.vllm_config.model_dump(mode="json")
@@ -3558,6 +3577,7 @@ class LaneManager:
             flash_attention=flash_attention,
             gpu_devices=gpu_devices,
             effective_gpu_devices=effective_gpu_devices,
+            occupied_gpu_devices=occupied_gpu_devices,
             sleep_mode_enabled=sleep_mode_enabled,
             sleep_state=sleep_state,
             active_requests=active_requests,
