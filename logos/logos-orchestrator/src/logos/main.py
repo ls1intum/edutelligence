@@ -3520,9 +3520,10 @@ async def route_and_execute(
     This is the main entry point for all request handling. It decides between two execution modes:
 
     **PROXY MODE** (when body["model"] is specified):
-    - Bypasses classification/scheduling pipeline
-    - Forwards directly to the specified provider
-    - User has full control over model/provider selection
+    - Pins the request to the named model (access-checked against the key)
+    - Skips only the classification ranking (Laura)
+    - Still runs the scheduler across that model's deployments: privacy
+      filtering, policy thresholds, ETTFT scoring, queueing, capacity planner
 
     **RESOURCE MODE** (when body["model"] is NOT specified):
     - Full pipeline: Classification → Scheduling → Execution
@@ -3531,7 +3532,7 @@ async def route_and_execute(
 
     Routing logic:
     - Case 1: No deployments available → 404 error
-    - Case 2: body["model"] specified → PROXY mode (direct forwarding)
+    - Case 2: body["model"] specified → PROXY mode (model pinned, no classification)
     - Case 3: no body["model"] → RESOURCE mode (classification + scheduling)
 
     Args:
