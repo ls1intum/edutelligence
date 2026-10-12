@@ -28,6 +28,7 @@ from logos.benchmarks.guidellm_runner import (
     run_benchmark_job,
 )
 from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
 from logos.client_tags import cancel as cancel_client_tag
 from logos.dbutils.dbmanager import DBManager
@@ -592,6 +593,8 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             raise HTTPException(
                 status_code=400, detail="Serving overrides require a Logos worker with capacity planning"
             )
+        if provider_type == "logosnode" and _main._capacity_planner is None:
+            raise HTTPException(status_code=503, detail="Benchmark lane preparation is unavailable")
         endpoint = str(target.get("target") or "").strip()
         if provider_type != "logosnode" and not endpoint.startswith(("http://", "https://")):
             raise HTTPException(status_code=409, detail="Provider-model pair has no valid endpoint")
@@ -722,6 +725,8 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             **({"batch_progress": progress, "finalize": finalize} if progress else {}),
         )
 
+    if is_internal_worker_benchmark:
+        benchmark_reservations.reserve(provider_id, model_name, job_id)
     task = asyncio.create_task(run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data))
     _background_tasks.add(task)
     _benchmark_tasks.add(task)
@@ -819,6 +824,12 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
         default_priority=1,
     )
     request_id = secrets.token_urlsafe(16)
+    try:
+        benchmark_reservations.register_request(
+            int(target["provider_id"]), str(target["model_name"]), job_id, request_id
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     with DBManager() as db:
         log_result, _ = db.log_usage(
             api_key_id=None,

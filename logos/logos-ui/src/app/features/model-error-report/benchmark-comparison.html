@@ -24,7 +24,7 @@
         · max {{ baselineSettings()['max_output_tokens'] }} tokens</p>
       <details class="comparison-details">
         <summary>Comparison details</summary>
-        <p>Each box summarizes repeated runs of the same configuration. The line is the median, the box spans Q1–Q3, whiskers extend to the last values within 1.5 × IQR, and dots mark outliers. A single run appears as a line. Only the X-axis parameter changes; other recorded settings match the reference.
+        <p>Each box summarizes repeated runs of the same configuration. The line is the median, the box spans Q1–Q3, whiskers extend to the last values within 1.5 × IQR, and dots mark outliers. A single run appears as a filled point. Only the X-axis parameter changes; other recorded settings match the reference.
           {{ excludedCount() }} runs excluded. Seed {{ baselineSettings()['seed'] }}. Cache state and other traffic may still differ.</p>
         <p>TTFT: time to first token. TTLT: total response time (GuideLLM request latency).
           Each Y-axis fits its own measurements with 10% padding above and below. Both latency metrics are arithmetic means across successful requests. Output: GuideLLM’s aggregate output token rate. — means not captured.</p>
@@ -48,6 +48,9 @@
                   <div class="parameter-group">
                     @if (group.box; as box) {
                       <div class="box-track" tabindex="0" role="img" [attr.aria-label]="chart.label + ' ' + group.parameter + ': ' + boxLabel(box)" [title]="boxLabel(box)">
+                        @if (box.count === 1) {
+                          <span class="single-value" [style.bottom.%]="position(box.median, chart.scale)"></span>
+                        } @else {
                         <span class="whisker" [style.bottom.%]="position(box.low, chart.scale)" [style.height.%]="(box.high - box.low) / chart.scale.span * 100"></span>
                         <span class="whisker-cap" [style.bottom.%]="position(box.low, chart.scale)"></span>
                         <span class="whisker-cap" [style.bottom.%]="position(box.high, chart.scale)"></span>
@@ -55,6 +58,7 @@
                         <span class="median" [style.bottom.%]="position(box.median, chart.scale)"></span>
                         @for (outlier of box.outliers; track outlier) {
                           <span class="outlier" [style.bottom.%]="position(outlier, chart.scale)"></span>
+                        }
                         }
                       </div>
                       <small class="run-count">n = {{ box.count }}@if (box.count < group.rows.length) { / {{ group.rows.length }}}</small>
@@ -75,7 +79,7 @@
       }
     </div>
 
-    <p class="box-legend">Auto-scaled per chart · box: middle 50% · line: median · dots: outliers · n: runs</p>
+    <p class="box-legend">Auto-scaled per chart · filled point: single run · box: middle 50% · line: median · dots: outliers · n: runs</p>
     <details class="run-details" (toggle)="showRuns.set($any($event.target).open)">
       <summary>Individual runs ({{ selected().length }})</summary>
     @if (showRuns()) {

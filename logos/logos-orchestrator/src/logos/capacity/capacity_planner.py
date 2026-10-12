@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Callable, Dict, List, Optional
 
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.latency_store import LatencyStore
@@ -883,6 +884,8 @@ class CapacityPlanner:
                     # a cold load takes ~90s, so a calibration session can start
                     # after this action was planned. Acting on the stale verdict
                     # would place the very lane the guard exists to prevent.
+                    if benchmark_reservations.owner(action.provider_id, action.model_name) is not None:
+                        continue
                     if not self._is_plannable(action.provider_id):
                         logger.info(
                             "Dropping planned %s on worker=%s model=%s lane=%s: "
@@ -1190,12 +1193,13 @@ class CapacityPlanner:
         model_name: str,
         timeout_seconds: float = 600.0,
     ) -> bool:
-        """Prepare a benchmark model alongside other requests using normal capacity handling."""
+        """Prepare a benchmark model and drain existing traffic before measurement."""
         if self._registry and not self._registry.has_received_first_status(provider_id):
             raise RuntimeError(f"Worker {provider_id} has not reported its status yet. Retry after it connects.")
 
         target = self._pick_request_target_lane(provider_id, model_name)
         if target is not None and self._benchmark_lane_is_ready(target):
+            await self._drain_benchmark_lane(provider_id, model_name, target.lane_id, timeout_seconds)
             return True
         if target is not None and target.runtime_state == "starting":
             await self._wait_for_benchmark_lane_ready(provider_id, model_name, timeout_seconds)
@@ -1208,7 +1212,21 @@ class CapacityPlanner:
         if target is None or not self._benchmark_lane_is_ready(target):
             state = target.runtime_state if target is not None else "missing"
             raise RuntimeError(f"Benchmark model '{model_name}' on worker {provider_id} is not ready (state: {state}).")
+        await self._drain_benchmark_lane(provider_id, model_name, target.lane_id, timeout_seconds)
         return True
+
+    async def _drain_benchmark_lane(
+        self, provider_id: int, model_name: str, lane_id: str, timeout_seconds: float
+    ) -> None:
+        if benchmark_reservations.owner(provider_id, model_name) is None:
+            return
+        deadline = time.monotonic() + timeout_seconds
+        while self._facade.model_inflight_requests(provider_id, model_name) > 0:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Timed out waiting for existing requests on the benchmark lane to finish")
+            await asyncio.sleep(0.2)
+        if not await self._drain_lane(provider_id, lane_id, max(0, deadline - time.monotonic())):
+            raise RuntimeError("Timed out waiting for existing requests on the benchmark lane to finish")
 
     async def prepare_configured_benchmark_lane(
         self,
@@ -1226,13 +1244,30 @@ class CapacityPlanner:
             overrides, worker_limits(self._registry.peek_runtime_snapshot(provider_id), model_name)
         )
 
-        if not await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds):
-            return False
         target = self._pick_request_target_lane(provider_id, model_name)
+        recovering = False
+        if target is None:
+            target = next(
+                (
+                    lane
+                    for lane in self._safe_get_lanes(provider_id)
+                    if lane.model_name == model_name and lane.runtime_state in {"error", "stopped"}
+                ),
+                None,
+            )
+            recovering = target is not None
+        # A failed lane must receive the corrected configuration before another
+        # startup attempt; starting the old configuration can fail indefinitely.
+        if not recovering:
+            if not await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds):
+                return False
+            target = self._pick_request_target_lane(provider_id, model_name)
         if target is None:
             raise RuntimeError(
                 f"Benchmark model '{model_name}' disappeared from worker {provider_id} before reconfiguration."
             )
+        if recovering:
+            await self._drain_benchmark_lane(provider_id, model_name, target.lane_id, timeout_seconds)
         async with self._lane_lock(provider_id, target.lane_id):
             snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
             lane = next(
@@ -1249,7 +1284,7 @@ class CapacityPlanner:
             validate_worker_overrides(overrides, worker_limits(snapshot, model_name))
             current = config.get("vllm_config") or {}
             updated = apply_serving_overrides(current, overrides)
-            if updated == current:
+            if updated == current and not recovering:
                 return True
             self._mark_lane_cold(provider_id, target.lane_id)
             try:
@@ -8564,6 +8599,11 @@ class CapacityPlanner:
         terminal state: a failure of a planner-owned load of the model must
         reach the operator's poll as well.
         """
+        if (
+            action.action in {"stop", "sleep_l1", "sleep_l2", "reconfigure_kv_cache"}
+            and benchmark_reservations.owner(action.provider_id, action.model_name) is not None
+        ):
+            return False
         confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds, deadline=deadline)
         if action.action == "load":
             self._settle_manual_load_outcome(action.provider_id, action.model_name, action.lane_id, confirmed)

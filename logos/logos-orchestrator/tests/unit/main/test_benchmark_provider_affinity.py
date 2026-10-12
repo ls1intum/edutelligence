@@ -424,7 +424,13 @@ async def test_internal_benchmark_request_is_visible_in_request_logs(monkeypatch
     )
     monkeypatch.setattr(internal_mod, "_execute_cancelling_on_disconnect", execute)
 
-    response = await internal_mod.internal_model_benchmark_completion(7, "chat/completions", request)
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    benchmark_reservations.reserve(20, "org/model", 7)
+    try:
+        response = await internal_mod.internal_model_benchmark_completion(7, "chat/completions", request)
+    finally:
+        benchmark_reservations.release(7)
 
     assert response == "response"
     assert logged == [

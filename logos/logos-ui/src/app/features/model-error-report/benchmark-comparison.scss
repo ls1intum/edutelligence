@@ -70,3 +70,5 @@ tbody tr:hover { background: rgb(var(--color-surface-50)); }
   figcaption { gap: 8px; }
   figcaption strong { font-size: 20px; }
 }
+
+.single-value { position: absolute; left: 50%; width: 12px; height: 12px; border-radius: 50%; transform: translate(-50%, 50%); background: currentColor; }
