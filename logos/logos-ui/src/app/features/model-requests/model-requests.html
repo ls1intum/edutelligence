@@ -28,7 +28,7 @@
         <button 
           type="button" 
           class="btn btn-link p-0 ms-1 align-baseline" 
-          (click)="showHelpImage.update(v => !v)" 
+          (click)="showHelpImage.set(!showHelpImage())" 
           aria-label="Help">
           (?)
         </button>
