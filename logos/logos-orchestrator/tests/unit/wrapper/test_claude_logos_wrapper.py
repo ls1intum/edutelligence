@@ -58,8 +58,11 @@ def _model_entry(name: str, window: Optional[int]) -> Dict[str, Any]:
 class _StubGateway:
     """A Logos-shaped gateway: the model list, warmup, and Messages."""
 
-    def __init__(self, models: list[Dict[str, Any]]):
+    def __init__(self, models: list[Dict[str, Any]], anthropic_ids: Optional[list[str]] = None):
         self.models = models
+        # The ids of the Anthropic-shaped listing; by default claude-<id> for
+        # every model, as Logos advertises them.
+        self.anthropic_ids = anthropic_ids
         self.requests: list[Dict[str, Any]] = []
         self._server: Optional[ThreadingHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
@@ -99,6 +102,23 @@ class _StubGateway:
             def do_GET(self):  # noqa: N802 - BaseHTTPRequestHandler's spelling
                 self._record()
                 if self.path == "/v1/models":
+                    if self.headers.get("anthropic-version"):
+                        # The Anthropic shape Claude Code reads: every id carries
+                        # the claude- prefix it needs to show a gateway model.
+                        if stub.anthropic_ids:
+                            data = [{"type": "model", "id": i, "display_name": i} for i in stub.anthropic_ids]
+                        else:
+                            data = [
+                                {
+                                    "type": "model",
+                                    "id": f"claude-{m['id']}",
+                                    "display_name": m["id"],
+                                    "max_input_tokens": m.get("max_model_len"),
+                                }
+                                for m in stub.models
+                            ]
+                        self._send(200, json.dumps({"data": data, "has_more": False}).encode())
+                        return
                     self._send(200, json.dumps({"object": "list", "data": stub.models}).encode())
                     return
                 # The wrapper fetches this to notice a newer revision; a 404 is
@@ -187,6 +207,13 @@ record = {
             "ANTHROPIC_AUTH_TOKEN",
             "ANTHROPIC_API_KEY",
             "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            "ANTHROPIC_SMALL_FAST_MODEL",
+            "CLAUDE_CODE_SUBAGENT_MODEL",
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
             "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
@@ -481,3 +508,145 @@ def test_check_makes_no_inference_request(gateway, tmp_path):
     _run(_env(gateway, tmp_path), "--check")
     assert not [entry for entry in gateway.requests if entry["path"] == "/v1/messages"]
     assert not [entry for entry in gateway.requests if entry["path"].endswith("/warmup")]
+
+
+# ── no pinned model: every slot still names a Logos model ───────────────────
+
+MODEL_SLOTS = (
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+)
+
+
+@pytest.fixture
+def mixed_gateway() -> Iterator[_StubGateway]:
+    """A key that sees an embedding model first, as Logos lists models by id."""
+    stub = _StubGateway(
+        [
+            _model_entry("Qwen/Qwen3-Embedding-8B", 32768),
+            _model_entry("Qwen/Qwen3-Reranker-8B", 40960),
+            _model_entry("openai/gpt-oss-120b", 131072),
+            _model_entry(MODEL, WIDE_WINDOW),
+        ]
+    )
+    stub.start()
+    try:
+        yield stub
+    finally:
+        stub.stop()
+
+
+def _unpinned_launch(gateway: _StubGateway, tmp_path: Path, fake_claude: Path, **extra: str) -> Dict[str, Any]:
+    record = tmp_path / "record.json"
+    env = _env(gateway, tmp_path, fake_claude_dir=fake_claude, record=record, **extra)
+    env["LOGOS_MODEL"] = ""
+    # Whatever the developer's shell carries must not leak into the session.
+    env["ANTHROPIC_MODEL"] = "claude-opus-5-5"
+    env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "claude-haiku-4-5-20251001"
+    result = _run(env, "-p", "hi")
+    assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    return {"env": json.loads(record.read_text())["env"], "stderr": result.stderr}
+
+
+def test_unpinned_launch_points_every_slot_at_a_logos_chat_model(mixed_gateway, tmp_path, fake_claude):
+    """Without a pin, no slot falls back to an Anthropic id Logos does not serve.
+
+    Claude Code sends some requests on its own (the session title among them)
+    with the model of a slot rather than the one /model picked; left unset,
+    that was the claude-opus-5-5 saved in the user's settings.json.
+    """
+    launch = _unpinned_launch(mixed_gateway, tmp_path, fake_claude)
+    env = launch["env"]
+    for slot in MODEL_SLOTS:
+        # Embeddings and rerankers listed first are skipped; the id is the
+        # claude- prefixed one /model shows, so both name the same entry.
+        assert env[slot] == "claude-openai/gpt-oss-120b", slot
+    assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+    assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] is None
+    assert "claude-openai/gpt-oss-120b to start with" in launch["stderr"]
+
+
+def test_unpinned_launch_starts_on_the_configured_default(mixed_gateway, tmp_path, fake_claude):
+    launch = _unpinned_launch(mixed_gateway, tmp_path, fake_claude, LOGOS_DEFAULT_MODEL=MODEL)
+    for slot in MODEL_SLOTS:
+        assert launch["env"][slot] == f"claude-{MODEL}", slot
+
+
+def test_unpinned_launch_ignores_a_default_logos_does_not_serve(mixed_gateway, tmp_path, fake_claude):
+    launch = _unpinned_launch(mixed_gateway, tmp_path, fake_claude, LOGOS_DEFAULT_MODEL="claude-opus-5-5")
+    for slot in MODEL_SLOTS:
+        assert launch["env"][slot] == "claude-openai/gpt-oss-120b", slot
+    assert "LOGOS_DEFAULT_MODEL=claude-opus-5-5 is not served here" in launch["stderr"]
+
+
+def _gateway_with(anthropic_ids: list[str]) -> _StubGateway:
+    stub = _StubGateway([_model_entry(MODEL, WIDE_WINDOW)], anthropic_ids=anthropic_ids)
+    stub.start()
+    return stub
+
+
+def test_unpinned_launch_skips_image_generation_models(tmp_path, fake_claude):
+    """An image model listed first must not take every slot: it cannot answer Messages."""
+    stub = _gateway_with(["claude-dall-e-3", "claude-gpt-image-1", f"claude-{MODEL}"])
+    try:
+        launch = _unpinned_launch(stub, tmp_path, fake_claude)
+    finally:
+        stub.stop()
+    for slot in MODEL_SLOTS:
+        assert launch["env"][slot] == f"claude-{MODEL}", slot
+
+
+def test_unpinned_launch_prefers_the_exact_default_over_its_claude_form(tmp_path, fake_claude):
+    """Logos lists "foo" unprefixed when a model "claude-foo" exists; listing order must not decide."""
+    stub = _gateway_with(["claude-foo", "foo"])
+    try:
+        exact = _unpinned_launch(stub, tmp_path, fake_claude, LOGOS_DEFAULT_MODEL="foo")
+        prefixed = _unpinned_launch(stub, tmp_path, fake_claude, LOGOS_DEFAULT_MODEL="claude-foo")
+    finally:
+        stub.stop()
+    for slot in MODEL_SLOTS:
+        assert exact["env"][slot] == "foo", slot
+        assert prefixed["env"][slot] == "claude-foo", slot
+
+
+NARROW_WINDOW = 32768
+
+
+@pytest.fixture
+def narrow_first_gateway() -> Iterator[_StubGateway]:
+    """A 32k chat model listed before a wide one, as Logos orders by id."""
+    stub = _StubGateway([_model_entry("a-small-chat", NARROW_WINDOW), _model_entry(MODEL, WIDE_WINDOW)])
+    stub.start()
+    try:
+        yield stub
+    finally:
+        stub.stop()
+
+
+def test_unpinned_launch_passes_over_a_window_too_narrow_for_the_first_request(
+    narrow_first_gateway, tmp_path, fake_claude
+):
+    """32768 tokens cannot hold the ~13000-token opening prompt plus the 20000 reserved for the reply."""
+    launch = _unpinned_launch(narrow_first_gateway, tmp_path, fake_claude)
+    for slot in MODEL_SLOTS:
+        assert launch["env"][slot] == f"claude-{MODEL}", slot
+
+
+def test_a_smaller_reply_reservation_makes_the_narrow_model_usable(narrow_first_gateway, tmp_path, fake_claude):
+    launch = _unpinned_launch(narrow_first_gateway, tmp_path, fake_claude, LOGOS_MAX_OUTPUT_TOKENS="4096")
+    assert launch["env"]["ANTHROPIC_MODEL"] == "claude-a-small-chat"
+
+
+def test_with_only_narrow_models_the_first_chat_model_is_still_chosen(tmp_path, fake_claude):
+    stub = _StubGateway([_model_entry("a-small-chat", NARROW_WINDOW), _model_entry("b-small-chat", NARROW_WINDOW)])
+    stub.start()
+    try:
+        launch = _unpinned_launch(stub, tmp_path, fake_claude)
+    finally:
+        stub.stop()
+    assert launch["env"]["ANTHROPIC_MODEL"] == "claude-a-small-chat"

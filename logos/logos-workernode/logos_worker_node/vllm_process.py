@@ -99,6 +99,221 @@ def effective_gmu(vllm_config: VllmConfig) -> float:
     return GMU_AUTO_FLOOR
 
 
+MODEL_PATH_PLACEHOLDER = "{model_path}"
+
+
+_ADAPTER_CONFIG_NAME = "adapter_config.json"
+_ADAPTER_WEIGHT_NAMES = ("adapter_model.safetensors", "adapter_model.bin")
+
+
+def resolve_model_snapshot(
+    model: str,
+    hf_home: str | None,
+    *,
+    token: str | None = None,
+    revision: str | None = None,
+    local_files_only: bool | None = None,
+    allow_patterns: list[str] | None = None,
+) -> str:
+    """Local snapshot directory of a Hugging Face model, downloading it when missing.
+
+    A local directory is returned unchanged. ``token`` is the effective lane
+    ``HF_TOKEN`` (worker env plus ``vllm_config.env_overrides``); when omitted,
+    the worker process environment is used. ``revision`` is the pin vLLM loads
+    via ``--revision``, when present.
+
+    ``local_files_only`` defaults to try the cache first, then download. Pass
+    ``False`` to force a network fetch (e.g. when a cached snapshot is only a
+    partial tree and referenced adapter files are still missing).
+    ``allow_patterns`` narrows a forced download to specific files under the
+    snapshot (for example a LoRA adapter directory).
+    """
+    if Path(model).is_dir():
+        return str(Path(model).resolve())
+    from huggingface_hub import snapshot_download
+
+    cache_dir = os.path.join(hf_home, "hub") if hf_home else None
+    effective_token = token if token is not None else (os.environ.get("HF_TOKEN") or None)
+    kwargs: dict[str, Any] = {"repo_id": model, "cache_dir": cache_dir, "token": effective_token}
+    if revision:
+        kwargs["revision"] = revision
+    if allow_patterns:
+        kwargs["allow_patterns"] = allow_patterns
+    if local_files_only is False:
+        return snapshot_download(**kwargs)
+    try:
+        return snapshot_download(**kwargs, local_files_only=True)
+    except Exception:
+        return snapshot_download(**kwargs)
+
+
+def _placeholder_rel_suffix(arg: str, start: int) -> tuple[str, int]:
+    """Return the path suffix after ``{model_path}`` at ``start``, and the next search index."""
+    pos = arg.find(MODEL_PATH_PLACEHOLDER, start)
+    if pos < 0:
+        return "", -1
+    after = arg[pos + len(MODEL_PATH_PLACEHOLDER) :]
+    rel = ""
+    for ch in after:
+        if ch in " \t,;=":
+            break
+        rel += ch
+    return rel, pos + len(MODEL_PATH_PLACEHOLDER)
+
+
+def _placeholder_targets(cmd: list[str], snapshot: str) -> list[Path]:
+    """Paths under the snapshot that ``{model_path}`` expansions must resolve to.
+
+    For ``jev-decision={model_path}/adapter_vllm`` the target is
+    ``<snapshot>/adapter_vllm``. A bare ``{model_path}`` is the snapshot root
+    that ``snapshot_download`` already returned, so it is not listed. Trailing
+    path characters stop at whitespace or ``,;=``.
+    """
+    targets: list[Path] = []
+    for arg in cmd:
+        start = 0
+        while True:
+            rel, start = _placeholder_rel_suffix(arg, start)
+            if start < 0:
+                break
+            if rel:
+                targets.append(Path(f"{snapshot}{rel}") if rel.startswith("/") else Path(snapshot) / rel)
+    return targets
+
+
+def _lora_module_targets(cmd: list[str], snapshot: str) -> set[Path]:
+    """``{model_path}`` expansions that are values of ``--lora-modules``."""
+    targets: set[Path] = set()
+    pending_value = False
+    for arg in cmd:
+        scan = arg
+        if pending_value:
+            pending_value = False
+        elif arg == "--lora-modules":
+            pending_value = True
+            continue
+        elif arg.startswith("--lora-modules="):
+            scan = arg.split("=", 1)[1]
+        else:
+            continue
+        start = 0
+        while True:
+            rel, start = _placeholder_rel_suffix(scan, start)
+            if start < 0:
+                break
+            if rel:
+                targets.add(Path(f"{snapshot}{rel}") if rel.startswith("/") else Path(snapshot) / rel)
+    return targets
+
+
+def _is_lora_adapter_target(path: Path, *, used_as_lora_module: bool) -> bool:
+    """True when ``path`` is (or should be) a LoRA adapter directory."""
+    if used_as_lora_module:
+        return True
+    return (path / _ADAPTER_CONFIG_NAME).is_file()
+
+
+def _adapter_is_complete(path: Path) -> bool:
+    """True when ``path`` has ``adapter_config.json`` and supported adapter weights."""
+    if not path.is_dir():
+        return False
+    if not (path / _ADAPTER_CONFIG_NAME).is_file():
+        return False
+    return any((path / name).is_file() for name in _ADAPTER_WEIGHT_NAMES)
+
+
+def _placeholder_target_ready(path: Path, *, used_as_lora_module: bool) -> bool:
+    """Existence check; LoRA adapter dirs also need config + weights."""
+    if _is_lora_adapter_target(path, used_as_lora_module=used_as_lora_module):
+        return _adapter_is_complete(path)
+    return path.exists()
+
+
+def _adapter_allow_patterns(cmd: list[str], snapshot: str, incomplete: list[Path]) -> list[str] | None:
+    """Narrow a forced download to incomplete LoRA adapter dirs when that is sufficient."""
+    if not incomplete:
+        return None
+    snapshot_path = Path(snapshot)
+    lora_targets = _lora_module_targets(cmd, snapshot)
+    patterns: list[str] = []
+    for path in incomplete:
+        if not _is_lora_adapter_target(path, used_as_lora_module=path in lora_targets):
+            return None
+        try:
+            rel = path.relative_to(snapshot_path).as_posix()
+        except ValueError:
+            return None
+        patterns.append(f"{rel}/**")
+        patterns.append(rel)
+    return patterns or None
+
+
+def _incomplete_placeholder_targets(cmd: list[str], snapshot: str) -> list[Path]:
+    lora_targets = _lora_module_targets(cmd, snapshot)
+    return [
+        path
+        for path in _placeholder_targets(cmd, snapshot)
+        if not _placeholder_target_ready(path, used_as_lora_module=path in lora_targets)
+    ]
+
+
+def _adapter_missing_detail(path: Path) -> str:
+    missing: list[str] = []
+    if not (path / _ADAPTER_CONFIG_NAME).is_file():
+        missing.append(_ADAPTER_CONFIG_NAME)
+    if not any((path / name).is_file() for name in _ADAPTER_WEIGHT_NAMES):
+        missing.append(" or ".join(_ADAPTER_WEIGHT_NAMES))
+    return ", ".join(missing) if missing else "required adapter files"
+
+
+def expand_model_path(
+    cmd: list[str],
+    model: str,
+    hf_home: str | None,
+    token: str | None = None,
+) -> list[str]:
+    """Replace ``{model_path}`` in vLLM arguments with the model's local snapshot directory.
+
+    Lets per-model ``extra_args`` reference files shipped inside the checkpoint,
+    e.g. ``--lora-modules jev-decision={model_path}/adapter_vllm``.
+    ``token`` is the effective lane ``HF_TOKEN`` after ``_build_env``.
+
+    A cached HF snapshot can be only a partial tree (for example a metadata
+    lookup that wrote ``config.json`` alone, or an adapter directory without
+    weights). Before the expanded command is accepted, every path that
+    ``{model_path}`` points at must exist; LoRA adapter targets must also
+    include ``adapter_config.json`` and ``adapter_model.safetensors`` or
+    ``adapter_model.bin``. Missing files are downloaded at the requested
+    revision.
+    """
+    if not any(MODEL_PATH_PLACEHOLDER in arg for arg in cmd):
+        return cmd
+    from logos_worker_node.calibration import extract_revision_arg
+
+    revision = extract_revision_arg(cmd)
+    snapshot = resolve_model_snapshot(model, hf_home, token=token, revision=revision)
+    if not Path(model).is_dir():
+        incomplete = _incomplete_placeholder_targets(cmd, snapshot)
+        if incomplete:
+            allow_patterns = _adapter_allow_patterns(cmd, snapshot, incomplete)
+            snapshot = resolve_model_snapshot(
+                model,
+                hf_home,
+                token=token,
+                revision=revision,
+                local_files_only=False,
+                allow_patterns=allow_patterns,
+            )
+            still_missing = _incomplete_placeholder_targets(cmd, snapshot)
+            if still_missing:
+                details = "; ".join(f"{path}: missing {_adapter_missing_detail(path)}" for path in still_missing)
+                raise FileNotFoundError(
+                    f"Hugging Face snapshot for {model!r} is still missing files required by "
+                    f"{{model_path}} expansions after download ({details})"
+                )
+    return [arg.replace(MODEL_PATH_PLACEHOLDER, snapshot) for arg in cmd]
+
+
 def _env_ready_timeout() -> int:
     """Ready-wait timeout, configurable via ``LOGOS_VLLM_READY_TIMEOUT_S``.
 
@@ -455,6 +670,15 @@ class VllmProcessHandle:
         self._require_c_compiler()
         self._require_nvcc(lane_config)
         env = self._build_env(lane_config)
+        if any(MODEL_PATH_PLACEHOLDER in arg for arg in cmd):
+            hf_home = env.get("HF_HOME") or os.environ.get("HF_HOME")
+            # Pass the lane's effective HF_TOKEN (incl. vc.env_overrides), not
+            # only the worker process env — gated snapshots otherwise fail
+            # here while the vLLM child would have received the token.
+            hf_token = env.get("HF_TOKEN")
+            cmd = await asyncio.get_running_loop().run_in_executor(
+                None, expand_model_path, cmd, lane_config.model, hf_home, hf_token
+            )
 
         logger.info(
             "[%s] Spawning vLLM (port=%d, model=%s)",

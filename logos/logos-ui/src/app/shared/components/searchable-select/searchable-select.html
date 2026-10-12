@@ -1,0 +1,60 @@
+<button
+  type="button"
+  class="searchable-select-trigger"
+  cdkOverlayOrigin
+  #origin="cdkOverlayOrigin"
+  [attr.aria-label]="triggerAriaLabel()"
+  [attr.aria-expanded]="opened()"
+  aria-haspopup="dialog"
+  [disabled]="disabled()"
+  [title]="summary()"
+  (click)="toggle()"
+>
+  <span>{{ summary() }}</span>
+  <i class="pi pi-chevron-down" aria-hidden="true"></i>
+</button>
+<ng-template
+  cdkConnectedOverlay
+  [cdkConnectedOverlayOrigin]="origin"
+  [cdkConnectedOverlayOpen]="opened()"
+  [cdkConnectedOverlayHasBackdrop]="true"
+  [cdkConnectedOverlayPush]="true"
+  [cdkConnectedOverlayViewportMargin]="8"
+  cdkConnectedOverlayBackdropClass="cdk-overlay-transparent-backdrop"
+  (backdropClick)="opened.set(false)"
+  (overlayKeydown)="$event.key === 'Escape' && opened.set(false)"
+>
+  <div
+    class="searchable-select-menu"
+    role="dialog"
+    cdkTrapFocus
+    [cdkTrapFocusAutoCapture]="true"
+    [attr.aria-label]="label() + ' filter'"
+  >
+    <input
+      type="search"
+      cdkFocusInitial
+      [attr.aria-label]="'Search ' + label().toLowerCase()"
+      [placeholder]="'Search ' + label().toLowerCase() + '…'"
+      [value]="query()"
+      (input)="query.set($any($event.target).value)"
+    />
+    <div class="searchable-select-options">
+      @for (option of matches(); track option.value) {
+        <button
+          type="button"
+          class="searchable-select-option"
+          [attr.aria-current]="option.value === value() ? 'true' : null"
+          [class.searchable-select-option--selected]="option.value === value()"
+          [disabled]="option.disabled ?? false"
+          [title]="option.label"
+          (click)="select(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      } @empty {
+        <p>No matching {{ label().toLowerCase() }}.</p>
+      }
+    </div>
+  </div>
+</ng-template>

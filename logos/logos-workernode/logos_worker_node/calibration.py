@@ -1296,6 +1296,20 @@ def spawn_vllm(
         env["HF_HOME"] = hf_home
         logger.info("  HF_HOME=%s (tmpfs RAM cache)", hf_home)
 
+    # Per-model env_overrides (e.g. a gated-repo HF_TOKEN) win over the worker
+    # process env, matching the serving lane's _build_env order.
+    overrides = plan.get("env_overrides") if isinstance(plan.get("env_overrides"), dict) else {}
+    for key, value in overrides.items():
+        env[str(key)] = str(value)
+
+    # Expand ``{model_path}`` the same way serving does, with this probe's
+    # effective cache, token, and ``--revision`` pin — otherwise LoRA args
+    # like ``jev-decision={model_path}/adapter_vllm`` reach Popen unchanged.
+    from logos_worker_node.vllm_process import MODEL_PATH_PLACEHOLDER, expand_model_path
+
+    if any(MODEL_PATH_PLACEHOLDER in arg for arg in cmd):
+        cmd = expand_model_path(cmd, str(plan["model"]), env.get("HF_HOME"), token=env.get("HF_TOKEN"))
+
     # NCCL P2P: disabled by default (PCIe-only assumed).
     # Set nccl_p2p_available=True for NVLink setups.
     if not nccl_p2p_available:

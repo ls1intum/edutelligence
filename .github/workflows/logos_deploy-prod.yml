@@ -44,6 +44,10 @@ jobs:
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
             node-manager: false
+          - environment: "Logos Worker - hochbruegge-vm-1"
+            compose-file: ./logos/logos-workernode/docker-compose.yml
+            base-path: /opt/logos-workernode
+            node-manager: false
     environment:
       name: ${{ matrix.environment }}
     steps:

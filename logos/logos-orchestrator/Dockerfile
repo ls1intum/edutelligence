@@ -15,7 +15,7 @@ RUN apt-get update \
 
 # Install uv – a drop-in pip replacement written in Rust (10-100× faster)
 # Pinned to a specific version to mitigate supply-chain risk (update explicitly)
-COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.24 /uv /usr/local/bin/uv
 
 # Create an isolated virtual-env that we will copy into the runtime image
 RUN uv venv /opt/venv

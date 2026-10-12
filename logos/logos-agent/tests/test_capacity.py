@@ -39,6 +39,73 @@ def loaded(active: int, capacity_: int, queue_depth: int = 0) -> dict:
     }
 
 
+class TestRealSlots:
+    """A deployment has as many slots as its lanes guarantee, not as many as
+    the scheduler's loose ledger ceiling allows. Production read three
+    workers at twenty slots each — one of them offline — while the two live
+    lanes had two slots apiece: 18% load on a model with users queueing."""
+
+    @staticmethod
+    def _deployment(active: int, *, lane_parallel: int | None, loaded_: bool = True) -> dict:
+        model = {"model_name": "qwen", "active": active, "max_capacity": 20, "queue_depth": 0, "loaded": loaded_}
+        if lane_parallel is not None:
+            model["lane_parallel"] = lane_parallel
+        return model
+
+    def _fleet(self, *deployments: dict) -> dict:
+        return {
+            "queue_total": 0,
+            "logosnode": {
+                "providers": {str(i): {"name": f"node-{i}", "models": {"1": d}} for i, d in enumerate(deployments)}
+            },
+        }
+
+    def test_the_lanes_guaranteed_concurrency_is_the_slot_count(self):
+        payload = self._fleet(
+            self._deployment(2, lane_parallel=2),
+            self._deployment(2, lane_parallel=2),
+            self._deployment(0, lane_parallel=0, loaded_=False),
+        )
+
+        reading = capacity.parse_scheduler_state(payload)
+
+        assert reading.total_slots == 4
+        assert reading.busy_slots == 4
+        assert reading.load == 1.0
+
+    def test_the_ledger_ceiling_stands_in_until_a_lane_reports(self):
+        reading = capacity.parse_scheduler_state(self._fleet(self._deployment(2, lane_parallel=0)))
+        assert reading.total_slots == 20
+
+        reading = capacity.parse_scheduler_state(self._fleet(self._deployment(2, lane_parallel=None)))
+        assert reading.total_slots == 20
+
+    def test_requests_beyond_the_guarantee_still_count_as_ours(self):
+        """A lane may run more than it guarantees. Clipping the running count
+        to the slots before reconciling ownership left the agent's own waiter
+        looking like a user's, and the runner paused itself."""
+        model = self._deployment(4, lane_parallel=2)
+        model["active_by_api_key"] = {"7": 4}
+        model["queued_by_api_key"] = {}
+        model["scheduler_signals"] = {"requests_running_current": 3, "queue_waiting_current": 1}
+
+        reading = capacity.parse_scheduler_state(self._fleet(model), own_api_key_id=7)
+
+        assert reading.queue_total == 0
+        assert reading.busy_slots == 0
+        assert reading.total_slots == 2
+        assert capacity.pause_decision(reading)[0] is False
+
+    def test_busy_slots_never_exceed_the_total(self):
+        model = self._deployment(3, lane_parallel=2)
+        model["scheduler_signals"] = {"requests_running_current": 3}
+
+        reading = capacity.parse_scheduler_state(self._fleet(model))
+
+        assert reading.busy_slots == 2
+        assert reading.load == 1.0
+
+
 class TestParseSchedulerState:
     def test_idle_fleet_reads_as_zero_load(self):
         reading = capacity.parse_scheduler_state(scheduler_state([loaded(0, 8)]))
@@ -259,16 +326,16 @@ class TestTheLaneWeAreServedBy:
         assert reading.reclaimable is False
         assert reading.load == 1.0
 
-    def test_a_queue_anywhere_still_counts(self):
-        # Models share GPUs: somebody waiting on another one is somebody
-        # this runner should get out of the way of.
+    def test_a_queue_on_another_local_model_does_not_count(self):
+        # Only the used local model decides. A backlog on a model this
+        # runner never touches is not a person waiting for its lane.
         payload = self.fleet((97, "Qwen/Qwen3.8-27B", 0, True), (37, "openai/gpt-oss-120b", 0, True))
         payload["logosnode"]["providers"]["15"]["models"]["37"]["queue_depth"] = 3
 
         reading = capacity.parse_scheduler_state(payload, lane=self.OURS)
 
-        assert reading.queue_total == 3
-        assert reading.saturated
+        assert reading.queue_total == 0
+        assert not reading.saturated
 
     def test_a_sleeping_lane_falls_back_to_the_fleet(self):
         # Nothing of ours is resident, so there is nothing of ours to
@@ -997,21 +1064,20 @@ class TestTheCloudIsNotAGpu:
         assert reading.queue_total == 2
         assert capacity.pause_decision(reading)[0]
 
-    def test_a_queue_on_a_model_this_runner_does_not_use_still_counts(self):
-        # Local models share GPUs: somebody waiting on the reranker is
-        # somebody this runner should get out of the way of, even though it
-        # will never be served by it.
+    def test_a_queue_on_a_model_this_runner_does_not_use_is_ignored(self):
+        # Only the used local model decides. The fleet-wide queue_total (99)
+        # is cloud-or-other noise; the reranker's backlog is not this lane.
         payload = scheduler_state([loaded(0, 8), loaded(0, 8, queue_depth=4)], queue_total=99)
         payload["logosnode"]["providers"]["1"]["models"]["1"]["model_name"] = "reranker"
 
         reading = capacity.parse_scheduler_state(payload, lane=frozenset({("1", "0")}))
 
-        assert reading.queue_total == 4
+        assert reading.queue_total == 0
+        assert not capacity.pause_decision(reading)[0]
 
     def test_a_queue_on_a_sleeping_local_model_counts_too(self):
-        # Waking a lane takes the VRAM the running sessions are sitting on,
-        # so a request waiting for a model that is asleep is a request
-        # waiting for a GPU.
+        # Without a lane filter the whole local fleet is in scope: a request
+        # waiting for a model that is asleep is a request waiting for a GPU.
         payload = scheduler_state([loaded(0, 8)], queue_total=0)
         payload["logosnode"]["providers"]["1"]["models"]["9"] = {
             "model_name": "cold",
@@ -1026,6 +1092,22 @@ class TestTheCloudIsNotAGpu:
         assert reading.queue_total == 2
         # And it still holds no slots.
         assert reading.total_slots == 8
+
+    def test_a_sleeping_off_lane_model_does_not_count(self):
+        # With a lane, an asleep model we cannot reach is ignored — same as
+        # any other off-lane backlog.
+        payload = scheduler_state([loaded(0, 8)], queue_total=0)
+        payload["logosnode"]["providers"]["1"]["models"]["9"] = {
+            "model_name": "cold",
+            "active": 0,
+            "max_capacity": 32,
+            "queue_depth": 2,
+            "loaded": False,
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=frozenset({("1", "0")}))
+
+        assert reading.queue_total == 0
 
     def test_the_ledger_s_backlog_survives_an_empty_engine_queue(self):
         # The engine's empty wait list is one queue stage, the ledger's
@@ -1066,3 +1148,88 @@ class TestTheCloudIsNotAGpu:
         reading = capacity.parse_scheduler_state(payload)
 
         assert reading.queue_total == 5
+
+
+class TestOwnSlotsAreVisible:
+    """The page colours agent slots apart from other production traffic."""
+
+    LANE = frozenset({("15", "97")})
+
+    def test_own_slots_are_reported_without_discounting_load(self):
+        model = {
+            "model_name": "Qwen/Qwen3.8-27B",
+            "active": 5,
+            "active_by_api_key": {"7": 2, "9": 3},
+            "queue_depth": 0,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 5.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, own_api_key_id=7, discount_own=False)
+
+        assert reading.own_slots == 2
+        assert reading.busy_slots == 5
+        assert reading.load == 0.5
+
+    def test_lagging_engine_sample_keeps_one_slot_population(self):
+        # Ledger: 2 of ours + 18 others = 20. Engine sample still shows only
+        # the 18 others. Own and busy must share that ledger population, or
+        # the page reports 2 agent / 16 other / 2 free.
+        model = {
+            "model_name": "Qwen/Qwen3.8-27B",
+            "active": 20,
+            "active_by_api_key": {"7": 2},
+            "queue_depth": 0,
+            "max_capacity": 20,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 18.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, own_api_key_id=7, discount_own=False)
+
+        assert reading.own_slots == 2
+        assert reading.busy_slots == 20
+        assert reading.total_slots == 20
+        own = max(0, min(reading.own_slots, reading.busy_slots))
+        other = max(0, reading.busy_slots - own)
+        free = max(0, reading.total_slots - own - other)
+        assert (own, other, free) == (2, 18, 0)
+
+    def test_discount_still_removes_own_share_for_pause(self):
+        model = {
+            "model_name": "Qwen/Qwen3.8-27B",
+            "active": 5,
+            "active_by_api_key": {"7": 2, "9": 3},
+            "queue_depth": 0,
+            "max_capacity": 10,
+            "loaded": True,
+            "scheduler_signals": {
+                "requests_running_current": 5.0,
+                "queue_waiting_current": 0.0,
+            },
+        }
+        payload = {
+            "queue_total": 0,
+            "logosnode": {"providers": {"15": {"models": {"97": model}}}},
+        }
+
+        reading = capacity.parse_scheduler_state(payload, lane=self.LANE, own_api_key_id=7)
+
+        assert reading.own_slots == 2
+        assert reading.busy_slots == 3
+        assert reading.load == 0.3

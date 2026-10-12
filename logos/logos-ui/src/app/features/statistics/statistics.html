@@ -36,47 +36,37 @@
     <div class="stats-header__controls">
       <!-- Scope. Sits with the time range because it does the same kind of job:
            both narrow every request-derived panel on the page at once. Every
-           selector on the page lives in this row — the two feed-only ones
-           (models, state) included, so nothing filters from inside a panel.
+           selector on the page lives in this row — the feed-only state filter
+           included, so nothing filters from inside a panel.
            One Clear resets the whole row. -->
       <div class="stats-scope">
-        <app-select
+        <app-searchable-select
           class="stats-scope__select"
+          label="Teams"
           [options]="teamFilterOptions()"
           [value]="selectedTeamValue()"
-          [compact]="true"
           ariaLabel="Filter by team"
           (valueChange)="setTeamFilter($event)"
         />
-        <app-select
+        <app-searchable-select
           class="stats-scope__select"
+          label="Requesters"
           [options]="userFilterOptions()"
           [value]="selectedUserValue()"
-          [compact]="true"
           [disabled]="noRequestersInScope()"
           ariaLabel="Filter by requester"
           (valueChange)="setUserFilter($event)"
         />
-        <app-select
+        <app-searchable-select
           class="stats-scope__select"
+          label="Providers"
           [options]="providerFilterOptions()"
           [value]="selectedProviderValue()"
-          [compact]="true"
           ariaLabel="Filter by provider"
           (valueChange)="setProviderFilter($event)"
         />
-        <app-select
-          class="stats-scope__select"
-          [options]="outcomeFilterOptions"
-          [value]="selectedOutcomeValue()"
-          [compact]="true"
-          ariaLabel="Filter by outcome"
-          (valueChange)="setErrorsOnlyFilter($event)"
-        />
-        <!-- Feed-only: they narrow the recent-requests list, not the KPI cards
-             and charts, which keep summarising the full team/user/provider
-             scope above. The provider multi-select that used to sit next to
-             them is the page's provider filter one row up, deduplicated. -->
+        <!-- Models narrow the whole page, like the three filters above. The
+             state filter after it narrows the recent-requests list alone. -->
         <app-multi-select
           class="stats-scope__select"
           label="Models"
@@ -245,7 +235,6 @@
           [filterUserId]="filterUserId()"
           [filterTeamId]="filterTeamId()"
           [filterProviderId]="filterProviderId()"
-          [filterErrorsOnly]="errorsOnly()"
           [filterStatus]="feedStatus()"
           [filterModelIds]="feedModelIds()"
         />

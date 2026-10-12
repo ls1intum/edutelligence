@@ -106,7 +106,7 @@ jobs:
           # Literal was copied from; without this the label drifts behind the
           # pin. Only the label is bumped — whether the tuple itself gained a
           # value is a review question, and runtime normalization is
-          # drift-proof either way (unknown values fall back to the family
+          # drift-proof either way (unknown values fall back to the learned scale's
           # default). Non-fatal: a missing label must not block the pin bump.
           sed -i -E "s|^(# Snapshot of vLLM )[^ ]+('s ChatCompletionRequest\.reasoning_effort Literal,)$|\1$VERSION\2|" "$EFFORT_MODULE"
           if grep -Fq "# Snapshot of vLLM $VERSION's ChatCompletionRequest" "$EFFORT_MODULE"; then
@@ -182,7 +182,7 @@ jobs:
 
           Bumps the version in the `VLLM_PIP_SPEC` build arg default in `{dockerfile}` to v{version} — extras carried by the pin (e.g. `[audio]`, which the speech-to-text endpoints need) are preserved — and the `VLLM_REASONING_EFFORT_VALUES` snapshot label in `{effort_module}` alongside it. Torch and FlashInfer are resolved from vLLM's own dependency pins at build time, so no other changes are needed.
 
-          Please check the release notes for new `ChatCompletionRequest.reasoning_effort` values: only the label is bumped automatically, the tuple is not. Runtime normalization is unaffected either way — unknown values fall back to the template family's default.
+          Please check the release notes for new `ChatCompletionRequest.reasoning_effort` values: only the label is bumped automatically, the tuple is not. A new value must be placed in `EFFORT_LEVELS` (a unit test checks this); runtime normalization is unaffected either way — unknown values fall back to the learned scale's default.
 
           ## Release notes
 

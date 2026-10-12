@@ -2239,6 +2239,83 @@ class TestYieldingReallyYields:
         assert order[1] == ("disconnect", sessions.settings.session_network, "cid-7")
         assert ("transition", SessionStatus.PAUSED) in order
 
+    async def test_a_paused_sessions_in_flight_requests_are_ended(self, monkeypatch):
+        """Cutting the network ends nothing the gateway can see: the frozen
+        client sends no close, and its generations would hold their slots
+        until they finish. The orchestrator ends them by the address the
+        gateway tagged them with — read before the detach takes it away."""
+        from app import sessions
+
+        order: list = []
+
+        async def fake_pause(cid, **_kwargs):
+            order.append(("pause", cid))
+            return True
+
+        async def fake_ip(cid, network):
+            order.append(("address", cid, network))
+            return "172.30.0.5"
+
+        async def fake_disconnect(network, cid):
+            order.append(("disconnect", network, cid))
+            return True
+
+        async def fake_cancel(address, **_kwargs):
+            order.append(("cancel", address))
+            return 2
+
+        async def noop(*_args, **_kwargs):
+            return True
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "container_ip", fake_ip)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", fake_disconnect)
+        monkeypatch.setattr(sessions.upstream, "cancel_client_requests", fake_cancel)
+        monkeypatch.setattr(sessions.db, "transition_session", noop)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.SessionManager()._pause(self.ROW, "users are queueing")
+
+        network = sessions.settings.session_network
+        assert order == [
+            ("pause", "cid-7"),
+            ("address", "cid-7", network),
+            ("disconnect", network, "cid-7"),
+            ("cancel", "172.30.0.5"),
+        ]
+
+    async def test_a_session_whose_address_cannot_be_read_is_still_paused(self, monkeypatch):
+        from app import sessions
+
+        transitions: list = []
+        cancelled: list = []
+
+        async def broken_inspect(_cid, _network):
+            raise RuntimeError("docker said no")
+
+        async def fake_cancel(address, **_kwargs):
+            cancelled.append(address)
+            return 0
+
+        async def fake_transition(_sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def ok(*_args, **_kwargs):
+            return True
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", ok)
+        monkeypatch.setattr(sessions.docker_engine, "container_ip", broken_inspect)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", ok)
+        monkeypatch.setattr(sessions.upstream, "cancel_client_requests", fake_cancel)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", ok)
+
+        await sessions.SessionManager()._pause(self.ROW, "users are queueing")
+
+        assert transitions == [SessionStatus.PAUSED]
+        assert cancelled == []
+
     async def test_a_pause_docker_refused_does_not_move_the_row(self, monkeypatch):
         from app import sessions
 
@@ -2496,6 +2573,47 @@ class TestOverlappingAdmission:
         # The ceiling is two: the second pass must see the first one's
         # launches and find no room, not admit another full batch.
         assert sorted(launched) == [1, 2]
+
+    async def test_queue_only_workspaces_still_wait_for_an_execution_slot(self, monkeypatch, tmp_path):
+        # Extra workspaces beyond max_parallel_sessions may hold queued
+        # sessions while the runner is paused, but the scheduler still
+        # refuses to start once running+paused fill the execution ceiling.
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        reading = capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)
+        claimed: list = []
+        # Workspace 2 is a queue-only hold beyond the parallel ceiling.
+        queue = [{"id": 2, "workspace_id": 2, "model": None}]
+
+        async def ceiling_of_one():
+            return {"mode": "running", "mode_reason": "", "max_parallel": 1, "updated_by": "tobias"}
+
+        async def fake_in_status(status):
+            if status.value == "running":
+                return [{"id": 1, "workspace_id": 1}]
+            return []
+
+        async def fake_claim(_limit, *, include_triggered: bool = True):
+            claimed.append(1)
+            return []
+
+        async def peek(*, include_triggered: bool = True):
+            return queue[0] if queue else None
+
+        monkeypatch.setattr(controls.db, "get_controls", ceiling_of_one)
+        controls.forget()
+        monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
+        monkeypatch.setattr(sessions.db, "next_queued_session", peek)
+        monkeypatch.setattr(sessions.db, "count_active_trigger_sessions", self._async_value(0))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+
+        await sessions.SessionManager().scheduler_pass()
+
+        assert claimed == []
 
     async def test_one_fresh_reading_admits_at_most_one_session(self, monkeypatch, tmp_path):
         # A single below-threshold reading must not claim every open slot:

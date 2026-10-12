@@ -21,3 +21,17 @@ safe for an instance that is open to the internet.
 
 For CORS, use exact origins with the scheme and the port. Do not use `*` with
 browser requests that send credentials. Do not put `.env` in source control.
+
+## Provider endpoints
+
+Logos sends a provider's credentials only over HTTPS. Plain HTTP is allowed
+only on loopback (`localhost`, `127.0.0.1`, `::1`). If a provider has an API
+key and its endpoint is plain HTTP on another host, Logos refuses the request
+and logs `Refusing to send the credentials of provider … over an insecure
+transport`.
+
+To use an upstream on another host, put it behind HTTPS (for example behind
+Traefik with a certificate). An upstream that needs no credentials is not
+affected: when the provider has no API key, Logos forwards over plain HTTP.
+Worker nodes (`logosnode` providers) connect over their own websocket and are
+not affected either.

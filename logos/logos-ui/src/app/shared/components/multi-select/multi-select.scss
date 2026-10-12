@@ -8,13 +8,18 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
   max-width: 200px;
-  padding: 6px 12px;
+  height: 32px;
+  padding: 0 12px;
   border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
   border-radius: 8px;
   background: rgb(var(--input-fill) / var(--input-fill-opacity));
   color: rgb(var(--color-typography-0));
   font: inherit;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
 
   span {

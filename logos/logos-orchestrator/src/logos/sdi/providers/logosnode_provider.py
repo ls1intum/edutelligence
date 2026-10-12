@@ -161,6 +161,13 @@ class LogosNodeDataProvider:
 
         data = self._fetch_ps_data()
         if data is None:
+            # Neither a live worker session nor a reachable /api/ps: the
+            # worker is offline, and an offline worker has nothing loaded.
+            # Keeping the last known set here left a disconnected worker
+            # reporting resident models — and their slots — indefinitely.
+            with self._lock:
+                self._loaded_models = {}
+                self._last_refresh = now
             return
 
         models = data.get("models", [])
@@ -418,6 +425,24 @@ class LogosNodeDataProvider:
             else:
                 capacity, source = self.DEFAULT_PARALLEL_CAPACITY, "default"
         return capacity, source
+
+    def get_lane_parallel(self, model_id: int) -> int:
+        """The concurrency the model's live lanes guarantee, summed.
+
+        This is each lane's ``num_parallel`` — what vLLM can serve at full
+        context, and the slot count the lane pages show. Deliberately not
+        what the scheduler dispatches against (see
+        :meth:`_get_runtime_parallel_capacity`); it is the figure for a
+        consumer that must yield before the engine starts queueing, such as
+        the agent runner. Zero when no lane reports it yet.
+        """
+        total = 0
+        for lane in self._routable_lanes(model_id) or []:
+            try:
+                total += max(0, int(lane.get("num_parallel") or 0))
+            except (TypeError, ValueError):
+                continue
+        return total
 
     def get_model_status(self, model_id: int) -> ModelStatus:
         self.refresh_data()
@@ -1149,6 +1174,7 @@ class LogosNodeDataProvider:
             return self._model_active.get(model_id, 0)
 
     def get_debug_state(self) -> Dict[int, Dict[str, Any]]:
+        online = self._runtime_registry is None or self._peek_snapshot() is not None
         with self._lock:
             models = {}
             for model_id, model_name in self._model_id_to_name.items():
@@ -1177,8 +1203,11 @@ class LogosNodeDataProvider:
                     },
                     "max_capacity": max_capacity,
                     "capacity_source": capacity_source,
+                    "lane_parallel": self.get_lane_parallel(model_id),
                     "queue_depth": queue_state.total,
-                    "loaded": model_name in self._loaded_models,
+                    # A worker without a live session is offline, whatever
+                    # the last refresh left in `_loaded_models`.
+                    "loaded": online and model_name in self._loaded_models,
                     "scheduler_signals": recent_signals,
                     "admission": self.evaluate_admission(model_id).to_dict(),
                 }

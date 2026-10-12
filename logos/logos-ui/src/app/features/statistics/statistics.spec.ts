@@ -311,6 +311,12 @@ describe('recent request model and state filters', () => {
     page.component.liveFeedTotal.set(12);
     page.component.setFeedModelFilter(['5001', '5002']);
     expect(page.component.requestFeedTotal()).toBeNull();
+    // A model selection narrows the whole page: the cards and charts are
+    // blanked until the server answers for it.
+    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith(null, [5001, 5002], []);
+    expect(page.component.statsPending()).toBe(true);
+    page.component.statsPending.set(false);
+    // The state bucket narrows the request list alone.
     page.component.setFeedStatusFilter('running');
     expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith('running', [5001, 5002], []);
     expect(page.ws.setScope).not.toHaveBeenCalled();
@@ -421,14 +427,21 @@ describe('selector placement on the requests tab', () => {
     // page scope ...
     expect(scope.querySelector('app-multi-select')).not.toBeNull();
     expect(scope.querySelector('select[aria-label="Filter requests by state"]')).not.toBeNull();
-    // ... the provider filter appears exactly once on the page (the row's
-    // single-select, not a second multi-select beside the feed) ...
-    expect(el.querySelectorAll('select[aria-label="Filter by provider"]')).toHaveLength(1);
+    // ... team / requester / provider are searchable single-selects (not a
+    // second multi-select beside the feed), and outcomes are gone — only the
+    // feed state selector remains for lifecycle buckets ...
+    expect(scope.querySelectorAll('app-searchable-select')).toHaveLength(3);
+    expect(scope.querySelector('[aria-label="Filter by outcome"]')).toBeNull();
+    expect(
+      el.querySelectorAll('[aria-label^="Filter by provider"]'),
+    ).toHaveLength(1);
     // ... and the recent-requests panel carries no selectors of its own.
     const feedPanel = Array.from(el.querySelectorAll('app-stats-chart-panel')).find(
       (p) => p.textContent?.includes('Recent requests'),
     );
     expect(feedPanel).toBeDefined();
-    expect(feedPanel?.querySelectorAll('app-select, app-multi-select')).toHaveLength(0);
+    expect(
+      feedPanel?.querySelectorAll('app-select, app-multi-select, app-searchable-select'),
+    ).toHaveLength(0);
   });
 });

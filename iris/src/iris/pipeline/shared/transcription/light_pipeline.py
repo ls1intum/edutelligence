@@ -91,14 +91,17 @@ class LightTranscriptionPipeline:
             ]
 
         # Stage: Detect slide changes
-        self.callback.update()
+        self.callback.update(
+            stage_name="aligning-slides", stage_progress=0, stage_total=len(segments)
+        )
 
-        def on_slide_detection_progress(labeled: int, total: int) -> None:
-            del labeled, total
+        def on_slide_detection_progress(checked: int, total: int) -> None:
             raise_if_cancelled(
                 self.cancel_event, lecture_unit_id, "during slide detection"
             )
-            self.callback.update()
+            self.callback.update(
+                stage_name="aligning-slides", stage_progress=checked, stage_total=total
+            )
 
         slide_timestamps = detect_slide_timestamps(
             video_path=self.video_path,

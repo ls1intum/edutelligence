@@ -228,10 +228,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             case "set_timeline_range" -> handleSetTimelineRange(session, state, msg);
             case "set_scope" -> handleSetScope(session, state, msg);
             case "set_feed_status" -> handleSetFeedStatus(session, state, msg);
-            case "set_feed_filters" -> {
-                applyFeedIds(state, msg);
-                handleSetFeedStatus(session, state, msg);
-            }
+            case "set_feed_filters" -> handleSetFeedFilters(session, state, msg);
             case "set_interest" -> handleSetInterest(session, state, msg);
             case "ping" -> send(session, Map.of("type", "pong"));
         }
@@ -344,6 +341,25 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
      * and a state filter does not change what they describe. A forced feed push
      * is enough — no delta turns the unfiltered rows into the filtered ones.
      */
+    /**
+     * The state bucket narrows the feed alone; the model selection narrows the
+     * whole page, aggregates included, so a changed model set is handled like
+     * a scope change: the aggregates are re-pushed for it, not just the rows.
+     */
+    private void handleSetFeedFilters(WebSocketSession session, SessionState state, Map<String, Object> msg) {
+        List<Integer> previousModels = state.feedModelIds;
+        applyFeedIds(state, msg);
+        if (previousModels.equals(state.feedModelIds)) {
+            handleSetFeedStatus(session, state, msg);
+            return;
+        }
+        applyFeedStatus(state, msg);
+        if (!state.wantsRequests()) return;
+        state.prevScopeSig = "";
+        pushTimelineInit(session, state);
+        pushRequests(session, state, true);
+    }
+
     private void handleSetFeedStatus(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         applyFeedStatus(state, msg);
         if (!state.wantsRequests()) return;
@@ -595,7 +611,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         try {
             Map<String, Object> stats = statsService.getRequestLogStats(
                 state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly,
+                state.feedModelIds);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n ? n.intValue() : 60;
 
             send(session, Map.of("type", "timeline_init", "payload", stats));
@@ -620,7 +637,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
             Map<String, Object> stats = statsService.getRequestLogStats(
                 state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly,
+                state.feedModelIds);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
                 ? n.intValue() : state.bucketSeconds;
             send(session, Map.of("type", "stats", "payload", stats));
@@ -659,7 +677,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             if (state.hasFeedFilter()) {
                 String scopeSig = requestLogService.scopeMovementSig(
                     state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                    state.scopeProviderId, state.scopeErrorsOnly);
+                    state.scopeProviderId, state.scopeErrorsOnly, state.feedModelIds);
                 if (scopeSig != null && !scopeSig.equals(state.prevScopeSig)) {
                     // The first probe after a fresh baseline (init, scope or
                     // range change re-pushed the aggregates moments ago) just

@@ -11,7 +11,7 @@ RUN apt-get update \
 
 # Pinned like the orchestrator's build, so a uv release cannot change what
 # lands in the image without an explicit bump here.
-COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.24 /uv /usr/local/bin/uv
 
 RUN uv venv /opt/venv
 ENV VIRTUAL_ENV=/opt/venv

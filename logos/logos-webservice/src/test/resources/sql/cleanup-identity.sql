@@ -42,6 +42,10 @@ WHERE team_id IN (2001, 2002)
    );
 DELETE FROM team_members
 WHERE team_id IN (2001, 2002)
+   OR team_id IN (
+        SELECT id FROM teams
+        WHERE name IN ('new-team', 'linked-team', 'owner-linked-team', 'dup-linked-team')
+   )
    OR user_id IN (
         SELECT id FROM users
         WHERE id IN (1001, 1002, 1003, 1004, 1005, 1006)
@@ -54,7 +58,11 @@ WHERE team_id IN (2001, 2002)
            )
            OR lower(email) IN ('legacy-admin@test.com', 'fresh@tum.de', 'newbie@tum.de')
    );
-DELETE FROM teams WHERE id IN (2001, 2002) OR name = 'repo-link-foreign';
+-- Teams the controller tests create through the API: nothing else removes
+-- them, and a leftover row changes the full team listing the sort test asserts.
+DELETE FROM teams
+WHERE id IN (2001, 2002)
+   OR name IN ('repo-link-foreign', 'new-team', 'linked-team', 'owner-linked-team', 'dup-linked-team');
 DELETE FROM users
 WHERE id IN (1001, 1002, 1003, 1004, 1005, 1006)
    OR keycloak_id IN (

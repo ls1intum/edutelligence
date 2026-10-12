@@ -297,3 +297,61 @@ def test_request_events_carry_the_key_from_start_to_completion(monkeypatch):
     facade.on_request_complete("r1", was_cold_start=False, duration_ms=10.0, provider_id=13)
     assert provider.get_active_count(1) == 0
     assert provider.get_debug_state()[1]["active_by_api_key"] == {}
+
+
+# ---------------------------------------------------------------------------
+# What the lanes guarantee, and what an offline worker holds
+# ---------------------------------------------------------------------------
+
+
+class _OfflineRegistry:
+    """A registry the worker has disconnected from: no session, no snapshot."""
+
+    @staticmethod
+    def peek_runtime_snapshot(provider_id: int):  # noqa: ARG004
+        return None
+
+
+def test_lane_parallel_is_what_the_live_lanes_guarantee(monkeypatch):
+    """The scheduler's ledger stays loose; the debug state also reports the
+    concurrency the lanes guarantee, so a consumer that must yield before the
+    engine queues can measure against the slots the lane pages show."""
+    provider = _provider(monkeypatch, [_lane("m", 2), _lane("m", 3), _lane("m", 4, runtime_state="stopped")])
+
+    state = provider.get_debug_state()[1]
+    assert state["lane_parallel"] == 5
+    assert state["max_capacity"] > state["lane_parallel"]
+
+
+def test_lane_parallel_is_zero_until_a_lane_reports_it(monkeypatch):
+    provider = _provider(monkeypatch, [_lane("m", 0)])
+
+    assert provider.get_debug_state()[1]["lane_parallel"] == 0
+
+
+def test_an_offline_worker_reports_nothing_loaded(monkeypatch):
+    """A worker that disconnected keeps no resident model: counting its last
+    known lanes made an offline node's slots look free."""
+    provider = _provider(monkeypatch, [{**_lane("m", 2), "loaded_models": [{"name": "m"}]}])
+    provider.refresh_data()
+    assert provider.get_debug_state()[1]["loaded"] is True
+
+    provider._runtime_registry = _OfflineRegistry()
+
+    state = provider.get_debug_state()[1]
+    assert state["loaded"] is False
+    assert state["lane_parallel"] == 0
+
+
+def test_an_unreachable_worker_forgets_its_loaded_models(monkeypatch):
+    provider = _provider(monkeypatch, [{**_lane("m", 2), "loaded_models": [{"name": "m"}]}])
+    provider.refresh_data()
+    assert "m" in provider._loaded_models
+
+    provider._runtime_registry = _OfflineRegistry()
+    monkeypatch.setattr(type(provider), "_fetch_ps_data", lambda self: None)
+    provider._last_refresh = 0
+
+    provider.refresh_data()
+
+    assert provider._loaded_models == {}

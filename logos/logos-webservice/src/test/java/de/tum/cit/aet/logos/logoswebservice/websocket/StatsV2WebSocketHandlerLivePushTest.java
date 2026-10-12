@@ -74,7 +74,7 @@ class StatsV2WebSocketHandlerLivePushTest {
         vramService = mock(VramService.class);
         requestLogService = mock(RequestLogService.class);
         statsService = mock(RequestLogStatsService.class);
-        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean()))
+        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn(Map.of("bucketSeconds", 60));
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));

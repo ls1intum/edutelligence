@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import pytest
 from app import docker_engine
-from app.docker_engine import DockerError
+
+# `container_ip` is taken at import: the suite stubs the module attribute
+# for the session tests.
+from app.docker_engine import DockerError, container_ip
 
 
 class _FakeResponse:
@@ -217,3 +220,33 @@ class TestThawingSomethingThatIsAlreadyRunning:
 
         with pytest.raises(docker_engine.DockerError):
             await docker_engine.unpause_container("cid")
+
+
+class TestContainerIp:
+    async def test_reads_the_address_on_the_named_network(self, monkeypatch):
+        async def fake_inspect(_cid):
+            return {
+                "NetworkSettings": {
+                    "Networks": {
+                        "logos-agent-net": {"IPAddress": "172.30.0.5"},
+                        "bridge": {"IPAddress": "172.17.0.9"},
+                    }
+                }
+            }
+
+        monkeypatch.setattr(docker_engine, "inspect_container", fake_inspect)
+        assert await container_ip("cid", "logos-agent-net") == "172.30.0.5"
+
+    async def test_a_container_off_the_network_has_no_address(self, monkeypatch):
+        async def fake_inspect(_cid):
+            return {"NetworkSettings": {"Networks": {"logos-agent-net": {"IPAddress": ""}}}}
+
+        monkeypatch.setattr(docker_engine, "inspect_container", fake_inspect)
+        assert await container_ip("cid", "logos-agent-net") is None
+
+    async def test_a_gone_container_has_no_address(self, monkeypatch):
+        async def gone(_cid):
+            return None
+
+        monkeypatch.setattr(docker_engine, "inspect_container", gone)
+        assert await container_ip("cid", "logos-agent-net") is None

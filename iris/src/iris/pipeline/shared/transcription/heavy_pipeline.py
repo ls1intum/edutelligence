@@ -89,7 +89,10 @@ class HeavyTranscriptionPipeline:
 
         # Stage 1: Download video
         raise_if_cancelled(self.cancel_event, lecture_unit_id, "before video download")
-        self.callback.update()
+        # Stage fields are sticky across updates, so a stage without a counter clears it explicitly
+        self.callback.update(
+            stage_name="downloading", stage_progress=None, stage_total=None
+        )
         logger.info("%s Downloading video to %s", prefix, self.storage.video_path)
         if video_source_type == VideoSourceType.YOUTUBE:
             yt_cfg = settings.transcription
@@ -123,7 +126,9 @@ class HeavyTranscriptionPipeline:
         raise_if_cancelled(
             self.cancel_event, lecture_unit_id, "before audio extraction"
         )
-        self.callback.update()
+        self.callback.update(
+            stage_name="extracting-audio", stage_progress=None, stage_total=None
+        )
         extract_audio(
             self.storage.video_path,
             self.storage.audio_path,
@@ -138,7 +143,10 @@ class HeavyTranscriptionPipeline:
         # Note: the orchestrator sends a checkpoint update for this stage so it can
         # attach the checkpoint data atomically in the same HTTP call.
         raise_if_cancelled(self.cancel_event, lecture_unit_id, "before whisper")
-        self.callback.update()
+        # The chunk count is only known once the first chunk completes
+        self.callback.update(
+            stage_name="transcribing", stage_progress=0, stage_total=None
+        )
 
         def on_chunk_complete(chunks_done: int, total_chunks: int) -> None:
             """Heartbeat: notify Artemis after each Whisper chunk completes.
@@ -146,11 +154,14 @@ class HeavyTranscriptionPipeline:
             This keeps the Hazelcast job token alive and gives the UI
             accurate progress during long transcriptions.
             """
-            del chunks_done, total_chunks
             raise_if_cancelled(
                 self.cancel_event, lecture_unit_id, "during whisper transcription"
             )
-            self.callback.update()
+            self.callback.update(
+                stage_name="transcribing",
+                stage_progress=chunks_done,
+                stage_total=total_chunks,
+            )
 
         transcription = self.whisper_client.transcribe(
             self.storage.audio_path,

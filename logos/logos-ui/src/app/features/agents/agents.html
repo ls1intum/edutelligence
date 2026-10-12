@@ -11,15 +11,29 @@
       <div
         class="capacity__meter"
         role="img"
-        [attr.aria-label]="'Platform load ' + loadPercent() + ' percent'"
+        [attr.aria-label]="slotAriaLabel()"
       >
-        <div class="capacity__fill" [style.width.%]="loadPercent()"></div>
+        @for (slot of slotCells(); track $index) {
+          <span
+            class="capacity__slot"
+            [class.capacity__slot--agent]="slot === 'agent'"
+            [class.capacity__slot--other]="slot === 'other'"
+            [class.capacity__slot--free]="slot === 'free'"
+          ></span>
+        }
       </div>
       <div class="capacity__facts">
         <span class="capacity__load">{{ loadPercent() }}% platform load</span>
-        <span class="capacity__slots"
-          >{{ cap.busy_slots }}/{{ cap.total_slots }} serving slots busy</span
-        >
+        <span class="capacity__slots">
+          {{ cap.busy_slots }}/{{ cap.total_slots }} slots on the local model
+          @if (cap.total_slots > 0) {
+            ·
+            <span class="capacity__legend capacity__legend--agent">{{ cap.own_slots }} agent</span>
+            ·
+            <span class="capacity__legend capacity__legend--other">{{ cap.other_slots }} other</span>
+            · {{ freeSlots() }} free
+          }
+        </span>
         <span class="capacity__sessions">
           <!-- The ceiling belongs to what runs. The queue is not capped:
                waiting work is what the ceiling exists to produce. -->

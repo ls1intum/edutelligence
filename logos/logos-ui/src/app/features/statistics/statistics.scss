@@ -106,21 +106,21 @@
   }
 }
 
-// ── Scope (team / requester / provider / outcome) ─────────────────────────────
+// ── Scope (team / requester / provider / models / state) ──────────────────────
 
 .stats-scope {
   display: flex;
   align-items: center;
   gap: 8px;
-  // All six selectors stay on one line — wrapping them into a 2×3 grid was the
+  // All five selectors stay on one line — wrapping them into a grid was the
   // regression this row was fixed against.
   flex-wrap: nowrap;
   flex: 0 0 auto;
   min-width: 0;
 }
 
-// Size to the label, not a shared flex basis — a fixed 170px basis left empty
-// host width beside short labels ("All teams") and looked like uneven gaps.
+// Cap every selector so long team / model labels cannot push neighbours off
+// the row. Triggers inside searchable / multi-select also cap at 200px.
 .stats-scope__select {
   flex: 0 0 auto;
   width: max-content;
@@ -481,9 +481,10 @@
   }
 }
 
-// The six scope selectors plus the time-range bar only sit on one line from
+// The five scope selectors plus the time-range bar only sit on one line from
 // about 1500px up; below that the time range drops under the filter row
-// instead of squeezing it. The filters themselves stay on one line.
+// instead of squeezing it. The filters themselves stay on one line and keep
+// their 200px cap so long labels still ellipsize instead of overlapping.
 @media (max-width: 1500px) {
   .stats-header__controls {
     flex-wrap: wrap;
@@ -497,7 +498,7 @@
   .stats-scope__select {
     flex: 1 1 0;
     width: auto;
-    max-width: none;
+    max-width: 200px;
   }
 
   .stats-time-range {
@@ -514,7 +515,7 @@
     padding: 24px 16px 32px;
   }
 
-  // Six compact selectors on one phone-width row clip their labels; wrap to
+  // Five compact selectors on one phone-width row clip their labels; wrap to
   // two columns so the request filters stay usable without changing tablet+.
   .stats-scope {
     flex-wrap: wrap;
@@ -522,6 +523,7 @@
 
   .stats-scope__select {
     flex: 1 1 calc(50% - 8px);
+    max-width: none;
   }
 
   .stats-kpi-strip > * {
