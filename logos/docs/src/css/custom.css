@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&display=swap");
-
 /* Logos product brand: violet primary (#7C3AED) from logos-ui tokens. */
 :root {
   --ifm-color-primary: #7c3aed;
@@ -9,9 +7,9 @@
   --ifm-color-primary-light: #8b5cf6;
   --ifm-color-primary-lighter: #a78bfa;
   --ifm-color-primary-lightest: #c4b5fd;
-  --ifm-font-family-base: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --ifm-font-family-base: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
   --ifm-code-font-size: 95%;
-  --ifm-heading-font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --ifm-heading-font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
 }
 
 [data-theme="dark"] {

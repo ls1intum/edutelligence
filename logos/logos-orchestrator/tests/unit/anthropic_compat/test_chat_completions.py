@@ -49,14 +49,37 @@ def test_system_blocks_become_a_leading_system_message():
     )
     assert result["messages"][0] == {"role": "system", "content": "You are Claude Code.\n\nBe brief."}
     assert result["messages"][1] == {"role": "user", "content": "hi"}
-    assert result["max_tokens"] == 64
-
-
-def test_reasoning_models_get_max_completion_tokens():
-    # OpenAI and Azure reject max_tokens for the o-series and gpt-5 family.
-    result = to_chat_completions({"model": "gpt-5.6-luna", "max_tokens": 64, "messages": []})
     assert result["max_completion_tokens"] == 64
-    assert "max_tokens" not in result
+
+
+@pytest.mark.parametrize(
+    "endpoint_url,cap",
+    [
+        # The upstream URL decides the cap name, not the model: chat/completions
+        # wants max_completion_tokens, the legacy text completions endpoint and
+        # Azure api-versions before 2024-09-01 (GPT-4 Turbo's 2024-02-01) still
+        # want max_tokens.
+        (
+            "https://ase.openai.azure.com/openai/deployments/gpt-6-luna/chat/completions"
+            "?api-version=2025-01-01-preview",
+            "max_completion_tokens",
+        ),
+        (
+            "https://ase.openai.azure.com/openai/deployments/turbo/chat/completions" "?api-version=2024-02-01",
+            "max_tokens",
+        ),
+        ("https://api.openai.com/v1/chat/completions", "max_completion_tokens"),
+        ("https://api.openai.com/v1/completions", "max_tokens"),
+    ],
+)
+def test_output_cap_follows_endpoint_url(endpoint_url, cap):
+    result = to_chat_completions(
+        {"model": "gpt-6-luna", "max_tokens": 64, "messages": []},
+        endpoint_url=endpoint_url,
+    )
+    assert result[cap] == 64
+    other = "max_tokens" if cap == "max_completion_tokens" else "max_completion_tokens"
+    assert other not in result
 
 
 def test_top_k_and_metadata_are_dropped():
@@ -205,7 +228,7 @@ def test_the_two_openai_families_get_mutually_exclusive_parameters():
 
     older = to_chat_completions({**request, "model": "gpt-4.1-nano"})
     assert older["temperature"] == 0.3 and older["top_p"] == 0.9
-    assert older["max_tokens"] == 8
+    assert older["max_completion_tokens"] == 8
     assert older["stop"] == ["END"]
     assert older["messages"][0] == {"role": "system", "content": "Be brief."}
     assert "reasoning_effort" not in older

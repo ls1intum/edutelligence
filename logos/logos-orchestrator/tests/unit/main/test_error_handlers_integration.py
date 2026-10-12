@@ -121,6 +121,15 @@ def _stub_db(monkeypatch):
         def get_team_budget_usage(self, team_id, start):
             return 0
 
+        def get_team_provider_budget(self, team_id, provider_id):
+            return False, None
+
+        def get_team_default_budget_usage(self, team_id, month_start):
+            return 0
+
+        def get_team_provider_budget_usage(self, team_id, provider_id, month_start):
+            return 0
+
         def get_user_by_api_key(self, key_value):
             return None
 

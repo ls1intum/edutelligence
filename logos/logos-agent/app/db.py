@@ -125,6 +125,23 @@ async def agent_key_exists(key_value: str) -> bool:
     return row is not None
 
 
+async def agent_key_id(key_value: str) -> int | None:
+    """The platform id of the runner's key, or ``None`` if it does not resolve.
+
+    The orchestrator splits a model's in-flight requests by this id, so the
+    runner discounts the requests its own sessions — and the subagents those
+    sessions start — are actually making, rather than guessing one per session.
+    """
+    async with sessionmaker()() as db:
+        row = (
+            await db.execute(
+                text("SELECT id FROM api_keys WHERE key_value = :key_value AND is_active = true"),
+                {"key_value": key_value},
+            )
+        ).first()
+    return int(row[0]) if row is not None else None
+
+
 async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     """Every model deployment the given Logos key is permitted to use."""
     async with sessionmaker()() as db:

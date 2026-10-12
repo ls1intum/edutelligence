@@ -5,7 +5,7 @@ numpy==2.5.3
 matplotlib==3.11.2
 
 # prepare_benchmark.py only
-datasets==5.0.1
+datasets==5.1.0
 
 # GPU nodes only (install there with: pip install nvidia-ml-py)
 # nvidia-ml-py>=12.0

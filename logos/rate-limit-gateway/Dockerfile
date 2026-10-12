@@ -11,7 +11,7 @@
 # fills in the ${LOGOS_*} values that entrypoint.sh guarantees, and
 # entrypoint.sh renders the IP whitelist from the deployment's .env before
 # nginx starts.
-FROM nginx:1.28-alpine
+FROM nginx:1.31-alpine
 
 # The shared include and the rendered whitelist live OUTSIDE conf.d:
 # nginx auto-includes conf.d/*.conf in the *http* context, so a file with

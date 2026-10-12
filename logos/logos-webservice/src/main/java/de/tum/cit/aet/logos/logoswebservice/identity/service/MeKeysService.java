@@ -2,6 +2,7 @@ package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.ModelAccessDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
@@ -45,10 +47,13 @@ public class MeKeysService {
 
     private final ApiKeyRepository apiKeyRepository;
     private final OrchestratorModelWindowClient modelWindowClient;
+    private final AuditLogService auditLog;
 
-    public MeKeysService(ApiKeyRepository apiKeyRepository, OrchestratorModelWindowClient modelWindowClient) {
+    public MeKeysService(ApiKeyRepository apiKeyRepository, OrchestratorModelWindowClient modelWindowClient,
+                         AuditLogService auditLog) {
         this.apiKeyRepository = apiKeyRepository;
         this.modelWindowClient = modelWindowClient;
+        this.auditLog = auditLog;
     }
 
     public List<Map<String, Object>> getKeysForUser(int userId) {
@@ -93,8 +98,11 @@ public class MeKeysService {
             // enumeration.
             return Optional.empty();
         }
+        String previous = key.getLog() == null ? null : key.getLog().name();
         key.setLog(LogLevel.valueOf(level));
         apiKeyRepository.save(key);
+        auditLog.record("api_key.log_level_changed", "api_key", keyId, key.getTeamId(),
+            Collections.singletonMap("log", previous), Map.of("log", level));
         return Optional.of(Map.of("result", "Log level updated to " + level));
     }
 

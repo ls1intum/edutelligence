@@ -8,6 +8,7 @@ from iris.domain.data.exam_dto import ExamDTO
 from iris.domain.data.exercise_with_submissions_dto import (
     ExerciseWithSubmissionsDTO,
 )
+from iris.domain.data.lecture_dto import PyrisLectureDTO
 from iris.domain.data.programming_exercise_dto import ProgrammingLanguage
 
 
@@ -37,6 +38,7 @@ class CourseDTO(BaseModel):
     exercises: List[ExerciseWithSubmissionsDTO] = Field(alias="exercises", default=[])
     exams: List[ExamDTO] = Field(alias="exams", default=[])
     competencies: List[CompetencyDTO] = Field(alias="competencies", default=[])
+    lectures: List[PyrisLectureDTO] = Field(alias="lectures", default=[])
     student_analytics_dashboard_enabled: bool = Field(
         alias="studentAnalyticsDashboardEnabled", default=False
     )

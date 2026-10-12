@@ -206,6 +206,16 @@ class AutonomousTutorPipeline(
             state.llm.completion_args.top_logprobs = DEFAULT_TOP_LOGPROBS
             logger.info("Using logprob confidence strategy | model=%s", model_id)
 
+    def build_turn_context_message(
+        self,
+        state: AgentPipelineExecutionState[
+            AutonomousTutorPipelineExecutionDTO, Variant
+        ],
+    ) -> str:
+        """Return the current date; it goes after the history to keep the prefix cacheable."""
+        del state
+        return f"Current Date: {get_current_utc_datetime_string()}"
+
     def build_system_message(
         self,
         state: AgentPipelineExecutionState[
@@ -216,7 +226,6 @@ class AutonomousTutorPipeline(
         has_discussion = post.answers and len(post.answers) > 0
 
         template_context = {
-            "current_date": get_current_utc_datetime_string(),
             "allow_lecture_tool": should_allow_lecture_tool(
                 state.db, state.dto.course.id
             ),

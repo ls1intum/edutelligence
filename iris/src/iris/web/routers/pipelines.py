@@ -420,6 +420,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
             )
             sources = retriever.search(
                 query=dto.query,
+                base_url=dto.settings.artemis_base_url,
                 limit=dto.limit,
                 course_ids=dto.course_ids,
                 exclude_course_ids=dto.exclude_course_ids,
@@ -450,6 +451,7 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
         try:
             result = pipeline(
                 query=dto.query,
+                base_url=dto.settings.artemis_base_url,
                 limit=dto.limit,
                 intent=intent,
                 access_context=dto.access_context,

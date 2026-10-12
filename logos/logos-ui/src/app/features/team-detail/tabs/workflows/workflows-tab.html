@@ -21,9 +21,11 @@
   </div>
 
   <p class="section-hint">
-    Activity diagrams plus SLA and objective-priority recommendations from the
-    latest succeeded analysis of each linked repository. Objective priority is
-    an ordered list of latency, quality, and price (most important first).
+    Activity diagrams plus SLO and objective-priority recommendations from the
+    latest succeeded analysis of each linked repository. Owners can edit a
+    diagram's Mermaid; later analyses keep that edit and propose a newer
+    diagram beside it when the agent finds a change. Objective priority is an
+    ordered list of latency, quality, and price (most important first).
     Confirmations can update an application key's queue priority;
     recommendations never take effect until you review them.
   </p>
@@ -44,7 +46,7 @@
         }
       </select>
       <span class="key-picker-hint">
-        Accept and Override set this key's queue priority from the confirmed SLA.
+        Accept and Override set this key's queue priority from the confirmed SLO.
         Defaults to the highest-priority key.
       </span>
     </div>
@@ -95,13 +97,106 @@
         @for (wf of workflowsForRepo(repo); track wf.id) {
           <article class="workflow-card">
             <div class="workflow-head">
-              <h3 class="workflow-name">{{ wf.name }}</h3>
+              <div class="workflow-title-row">
+                <h3 class="workflow-name">{{ wf.name }}</h3>
+                <div class="workflow-badges">
+                  @if (wf.diagram_set_by_owner) {
+                    <span class="meta-chip" title="You edited this diagram; re-analyses keep it">Edited</span>
+                  }
+                  @if (wf.proposed_diagram_mermaid) {
+                    <span class="flag-badge" title="The latest analysis proposed a different diagram">
+                      Agent update
+                    </span>
+                  }
+                </div>
+                @if (canEdit && !isEditingDiagram(wf)) {
+                  <button
+                    type="button"
+                    class="btn-secondary btn-sm"
+                    [disabled]="savingDiagramId() != null || reviewingProposalId() != null"
+                    (click)="startEditDiagram(wf)"
+                  >
+                    Edit diagram
+                  </button>
+                }
+              </div>
               @if (wf.trigger_summary) {
                 <p class="trigger-summary">{{ wf.trigger_summary }}</p>
               }
             </div>
-            @if (wf.diagram_mermaid) {
-              <pre class="mermaid">{{ diagramSource(wf) }}</pre>
+
+            @if (isEditingDiagram(wf)) {
+              <div class="diagram-editor">
+                <label class="diagram-editor-label" [attr.for]="'diagram-edit-' + wf.id">
+                  Mermaid source
+                </label>
+                <textarea
+                  class="diagram-editor-input"
+                  [id]="'diagram-edit-' + wf.id"
+                  rows="10"
+                  [ngModel]="diagramDraft()[wf.id] ?? ''"
+                  (ngModelChange)="setDiagramDraft(wf.id, $event)"
+                  [disabled]="savingDiagramId() === wf.id"
+                ></textarea>
+                <div class="diagram-editor-actions">
+                  <button
+                    type="button"
+                    class="btn-primary btn-sm"
+                    [disabled]="savingDiagramId() != null"
+                    (click)="saveDiagram(wf)"
+                  >
+                    @if (savingDiagramId() === wf.id) {
+                      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                    }
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-secondary btn-sm"
+                    [disabled]="savingDiagramId() === wf.id"
+                    (click)="cancelEditDiagram()"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            } @else if (wf.diagram_mermaid) {
+              <pre class="mermaid" [attr.data-diagram-source]="diagramSource(wf)">{{ diagramSource(wf) }}</pre>
+            }
+
+            @if (wf.proposed_diagram_mermaid && !isEditingDiagram(wf)) {
+              <div class="diagram-proposal">
+                <div class="diagram-proposal-head">
+                  <p class="diagram-proposal-title">Agent proposed update</p>
+                  @if (canEdit) {
+                    <div class="diagram-proposal-actions">
+                      <button
+                        type="button"
+                        class="btn-primary btn-sm"
+                        [disabled]="reviewingProposalId() != null || savingDiagramId() != null"
+                        (click)="reviewDiagramProposal(wf, 'accept')"
+                      >
+                        @if (reviewingProposalId() === wf.id) {
+                          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+                        }
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-secondary btn-sm"
+                        [disabled]="reviewingProposalId() != null || savingDiagramId() != null"
+                        (click)="reviewDiagramProposal(wf, 'dismiss')"
+                      >
+                        Keep mine
+                      </button>
+                    </div>
+                  }
+                </div>
+                <pre
+                  class="mermaid mermaid--proposal"
+                  [attr.data-diagram-source]="proposedDiagramSource(wf)"
+                >{{ proposedDiagramSource(wf) }}</pre>
+              </div>
             }
           </article>
         }
@@ -157,7 +252,7 @@
                     }
                   </div>
                   <div class="cell-recommended" role="cell" data-label="Recommended">
-                    <span class="sla-badge">{{ rec.recommended_sla }}</span>
+                    <span class="slo-badge">{{ rec.recommended_slo }}</span>
                     <ol class="priority-list" [attr.aria-label]="'Objective priority for recommendation ' + rec.id">
                       @for (key of priorityFor(rec); track key; let i = $index) {
                         <li class="priority-chip">
@@ -196,20 +291,29 @@
                     <span class="status-badge status-badge--{{ rec.review_status }}">
                       {{ rec.review_status }}
                     </span>
-                    @if (rec.confirmed_sla) {
-                      <span class="sla-badge sla-badge--muted">{{ rec.confirmed_sla }}</span>
+                    @if (rec.confirmed_slo) {
+                      <span class="slo-badge slo-badge--muted">{{ rec.confirmed_slo }}</span>
+                    }
+                    @if (rec.review_carried_over) {
+                      <p class="previous-decision">Kept from the previous analysis</p>
+                    } @else if (rec.review_status === 'pending' && rec.previous; as prev) {
+                      <!-- A re-analysis proposes; the earlier decision stays until reviewed. -->
+                      <p class="previous-decision" title="Last decision on this call site">
+                        Was {{ prev.review_status }}: {{ prev.slo }} ·
+                        {{ prev.objective_priority.join(' › ') }}
+                      </p>
                     }
                   </div>
                   <div class="cell-actions" role="cell" data-label="">
                     @if (canEdit && rec.review_status === 'pending') {
                       <select
                         class="field-select"
-                        [attr.aria-label]="'Override SLA for recommendation ' + rec.id"
-                        [ngModel]="overrideSla()[rec.id] ?? rec.recommended_sla"
-                        (ngModelChange)="setOverrideSla(rec.id, $event)"
+                        [attr.aria-label]="'Override SLO for recommendation ' + rec.id"
+                        [ngModel]="overrideSlo()[rec.id] ?? rec.recommended_slo"
+                        (ngModelChange)="setOverrideSlo(rec.id, $event)"
                         [disabled]="reviewingId() === rec.id"
                       >
-                        @for (opt of slaOptions; track opt.value) {
+                        @for (opt of sloOptions; track opt.value) {
                           <option [value]="opt.value" [title]="opt.hint">{{ opt.label }}</option>
                         }
                       </select>

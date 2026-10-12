@@ -177,11 +177,27 @@
   margin-bottom: 10px;
 }
 
+.workflow-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
 .workflow-name {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
   color: rgb(var(--color-typography-0));
+}
+
+.workflow-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
 }
 
 .trigger-summary {
@@ -189,6 +205,62 @@
   font-size: var(--font-size-sm);
   color: rgb(var(--color-typography-500));
   line-height: 1.4;
+}
+
+.diagram-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.diagram-editor-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
+}
+
+.diagram-editor-input {
+  width: 100%;
+  min-height: 10rem;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgb(var(--input-border) / var(--input-border-opacity));
+  background: rgb(var(--input-fill) / var(--input-fill-opacity));
+  color: rgb(var(--color-typography-0));
+  font-size: var(--font-size-xs);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.diagram-editor-actions,
+.diagram-proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.diagram-proposal {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgb(var(--nav-item-text) / var(--opacity-faint));
+}
+
+.diagram-proposal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.diagram-proposal-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(var(--color-typography-0));
 }
 
 .mermaid {
@@ -209,6 +281,16 @@
     max-width: 100%;
     height: auto;
   }
+
+  // Mermaid's dark theme paints opaque node fills; keep the SVG background
+  // transparent so the card chrome shows through without a washed-out slab.
+  :host-context([data-theme='dark']) & svg {
+    background: transparent;
+  }
+
+  &--proposal {
+    opacity: 0.92;
+  }
 }
 
 .recs-section {
@@ -222,7 +304,7 @@
   @media (min-width: 769px) {
     app-data-table {
       display: block;
-      min-width: 63rem;
+      min-width: 66rem;
     }
   }
 }
@@ -243,7 +325,8 @@
   min-width: 0;
   font-size: var(--font-size-sm);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  word-break: break-all;
+  // Break at "/" or "-" first; only a segment too long for the cell is split.
+  overflow-wrap: anywhere;
 
   a {
     color: rgb(var(--color-text-accent));
@@ -264,7 +347,7 @@
   white-space: normal;
 }
 
-.sla-badge {
+.slo-badge {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
@@ -434,4 +517,15 @@
     justify-content: flex-start;
     width: 100%;
   }
+}
+
+.previous-decision {
+  margin: 4px 0 0;
+  font-size: var(--font-size-2xs);
+  color: rgb(var(--nav-item-text));
+}
+
+.workflow-card .mermaid {
+  display: flex;
+  justify-content: center;
 }

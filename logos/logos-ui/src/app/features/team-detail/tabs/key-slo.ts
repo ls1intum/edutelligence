@@ -1,7 +1,7 @@
 /**
- * Service-level agreements for an application key's queued traffic.
+ * Service-level objectives for an application key's queued traffic.
  *
- * An SLA is a presentation of `api_keys.default_priority`, the per-key queue
+ * An SLO is a presentation of `api_keys.default_priority`, the per-key queue
  * priority the orchestrator resolves in `pipeline.resolve_queue_priority` — a
  * field of its own, separate from the Logos-admin-set `teams.priority`. There
  * are exactly three tiers a key can promise, and they carry the values the
@@ -9,26 +9,26 @@
  * (unset) inherits the team's or the policy's priority and is shown as such
  * rather than as one of the three choices.
  */
-export type KeySla = 'ux-critical' | 'ux-high-prio' | 'ux-background';
+export type KeySlo = 'ux-critical' | 'ux-high-prio' | 'ux-background';
 
 /** The `default_priority` written for each tier. */
-export const SLA_PRIORITY: Record<KeySla, number> = {
+export const SLO_PRIORITY: Record<KeySlo, number> = {
   'ux-critical': 10,
   'ux-high-prio': 5,
   'ux-background': 1,
 };
 
 /** The tier a key gets when nobody has chosen one and nothing is inherited. */
-export const DEFAULT_SLA: KeySla = 'ux-high-prio';
+export const DEFAULT_SLO: KeySlo = 'ux-high-prio';
 
-export interface SlaOption {
-  value: KeySla;
+export interface SloOption {
+  value: KeySlo;
   label: string;
   /** What the tier promises, shown as the select's tooltip. */
   hint: string;
 }
 
-export const SLA_OPTIONS: readonly SlaOption[] = [
+export const SLO_OPTIONS: readonly SloOption[] = [
   {
     value: 'ux-critical',
     label: 'ux-critical',
@@ -47,8 +47,8 @@ export const SLA_OPTIONS: readonly SlaOption[] = [
 ] as const;
 
 /** Hint when a key has no priority of its own and follows the team/policy. */
-export const INHERITED_SLA_HINT =
-  "No per-key SLA — the team's or the policy's priority applies until an owner picks a tier.";
+export const INHERITED_SLO_HINT =
+  "No per-key SLO — the team's or the policy's priority applies until an owner picks a tier.";
 
 /** True when the key has no priority of its own (0 / null / unset). */
 export function isUnsetPriority(priority: number | null | undefined): boolean {
@@ -62,10 +62,10 @@ export function isUnsetPriority(priority: number | null | undefined): boolean {
  * tier, which matches what the queue does: the orchestrator's `Priority.from_int`
  * recognises 1, 5 and 10 and buckets every other number as NORMAL.
  */
-export function slaOfPriority(priority: number | null | undefined): KeySla {
-  if (priority === SLA_PRIORITY['ux-critical']) return 'ux-critical';
-  if (priority === SLA_PRIORITY['ux-background']) return 'ux-background';
-  return DEFAULT_SLA;
+export function sloOfPriority(priority: number | null | undefined): KeySlo {
+  if (priority === SLO_PRIORITY['ux-critical']) return 'ux-critical';
+  if (priority === SLO_PRIORITY['ux-background']) return 'ux-background';
+  return DEFAULT_SLO;
 }
 
 /**
@@ -73,24 +73,24 @@ export function slaOfPriority(priority: number | null | undefined): KeySla {
  * `Priority.from_int`: an unset key follows the team's priority when set,
  * otherwise the default NORMAL tier.
  */
-export function effectiveSla(
+export function effectiveSlo(
   keyPriority: number | null | undefined,
   teamPriority?: number | null,
-): KeySla {
-  if (!isUnsetPriority(keyPriority)) return slaOfPriority(keyPriority);
-  if (teamPriority) return slaOfPriority(teamPriority);
-  return DEFAULT_SLA;
+): KeySlo {
+  if (!isUnsetPriority(keyPriority)) return sloOfPriority(keyPriority);
+  if (teamPriority) return sloOfPriority(teamPriority);
+  return DEFAULT_SLO;
 }
 
-/** Sort rank of a tier — lower sorts first, so the strictest SLA is on top. */
-export function slaRank(sla: KeySla): number {
-  return SLA_OPTIONS.findIndex((o) => o.value === sla);
+/** Sort rank of a tier — lower sorts first, so the strictest SLO is on top. */
+export function sloRank(slo: KeySlo): number {
+  return SLO_OPTIONS.findIndex((o) => o.value === slo);
 }
 
-export function slaLabel(sla: KeySla): string {
-  return SLA_OPTIONS.find((o) => o.value === sla)?.label ?? sla;
+export function sloLabel(slo: KeySlo): string {
+  return SLO_OPTIONS.find((o) => o.value === slo)?.label ?? slo;
 }
 
-export function slaHint(sla: KeySla): string {
-  return SLA_OPTIONS.find((o) => o.value === sla)?.hint ?? '';
+export function sloHint(slo: KeySlo): string {
+  return SLO_OPTIONS.find((o) => o.value === slo)?.hint ?? '';
 }

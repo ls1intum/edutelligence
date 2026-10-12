@@ -187,6 +187,7 @@ export interface VramV2Provider {
   last_heartbeat?: string | null;
   connected_at?: string | null;
   worker_started_at?: string | null;
+  worker_version_checksum?: string | null;
   devices?: DeviceInfo[];
   data: VramV2Sample[];
 }
@@ -238,8 +239,16 @@ export type VramProviderMeta = {
   last_heartbeat?: string | null;
   connected_at?: string | null;
   worker_started_at?: string | null;
+  worker_version_checksum?: string | null;
   calibrating?: boolean;
 };
+
+/**
+ * What a worker's header shows for its build; see describeWorkerVersion.
+ * `hint` is the sentence in the card behind the chip's info icon, and `commit`
+ * the full commit that card shows (null when there is none).
+ */
+export type WorkerVersionChip = { label: string; hint: string; commit: string | null };
 
 // VramProviderPayload from logos-ui-old/app/statistics.tsx lines 68-108
 export type VramProviderPayload = {

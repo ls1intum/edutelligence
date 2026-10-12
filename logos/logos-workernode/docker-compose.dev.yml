@@ -13,6 +13,9 @@ services:
         # endpoints cannot decode any upload (see the pin comment there).
         VLLM_PIP_SPEC: ${VLLM_PIP_SPEC:-vllm[audio]}
         NCCL_PIP_SPEC: ${NCCL_PIP_SPEC:-}
+        # Shown as the worker's version on the Statistics page; "unknown" unless
+        # exported, e.g. GIT_SHA=$(git rev-parse HEAD) docker compose … --build
+        GIT_SHA: ${GIT_SHA:-unknown}
     container_name: logos-workernode
     init: true
     restart: unless-stopped

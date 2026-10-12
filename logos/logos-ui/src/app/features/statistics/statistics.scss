@@ -106,33 +106,26 @@
   }
 }
 
-// ── Scope (team / requester / provider / outcome) ─────────────────────────────
+// ── Scope (team / requester / provider / models / state) ──────────────────────
 
 .stats-scope {
   display: flex;
   align-items: center;
   gap: 8px;
-  // The four filters must stay on one line — wrapping them into a 2×2 grid
-  // (especially once provider + outcome joined the row) was the regression.
+  // All five selectors stay on one line — wrapping them into a grid was the
+  // regression this row was fixed against.
   flex-wrap: nowrap;
   flex: 0 0 auto;
   min-width: 0;
 }
 
-// Size to the label, not a shared flex basis — a fixed 170px basis left empty
-// host width beside short labels ("All teams") and looked like uneven gaps.
+// Cap every selector so long team / model labels cannot push neighbours off
+// the row. Triggers inside searchable / multi-select also cap at 200px.
 .stats-scope__select {
   flex: 0 0 auto;
   width: max-content;
   max-width: 200px;
   min-width: 0;
-}
-
-// The feed's state filter, in the recent-requests panel header. Its entries are
-// short, so a cap only guards against the title wrapping on a narrow panel.
-.stats-feed-status {
-  min-width: 0;
-  max-width: 160px;
 }
 
 .stats-scope__note {
@@ -271,6 +264,8 @@
 }
 
 .stats-glass-row__header {
+  // The version card hangs off this on a phone (see version-hint.scss).
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -310,6 +305,11 @@
   .pi {
     font-size: var(--font-size-xs);
   }
+}
+
+// The commit a worker was built from reads like a hash, so it is set in monospace.
+.stats-panel-badge__mono {
+  font-family: var(--font-family-mono, monospace);
 }
 
 // ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────
@@ -481,8 +481,11 @@
   }
 }
 
-@media (max-width: 900px) {
-  // Time range drops under the filter row; the four filters stay on one line.
+// The five scope selectors plus the time-range bar only sit on one line from
+// about 1500px up; below that the time range drops under the filter row
+// instead of squeezing it. The filters themselves stay on one line and keep
+// their 200px cap so long labels still ellipsize instead of overlapping.
+@media (max-width: 1500px) {
   .stats-header__controls {
     flex-wrap: wrap;
     align-items: flex-start;
@@ -495,7 +498,7 @@
   .stats-scope__select {
     flex: 1 1 0;
     width: auto;
-    max-width: none;
+    max-width: 200px;
   }
 
   .stats-time-range {
@@ -510,6 +513,17 @@
 @media (max-width: 768px) {
   .stats-page {
     padding: 24px 16px 32px;
+  }
+
+  // Five compact selectors on one phone-width row clip their labels; wrap to
+  // two columns so the request filters stay usable without changing tablet+.
+  .stats-scope {
+    flex-wrap: wrap;
+  }
+
+  .stats-scope__select {
+    flex: 1 1 calc(50% - 8px);
+    max-width: none;
   }
 
   .stats-kpi-strip > * {
@@ -527,5 +541,3 @@
     }
   }
 }
-
-.stats-feed-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }

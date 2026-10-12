@@ -563,7 +563,7 @@ class TestPermissionsRevokedMidFlight:
         async def refresh():
             return revoked
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             # The lane an invalid policy hands over is empty, and an empty
             # lane is refused rather than measured.
             assert lane == frozenset()
@@ -1394,6 +1394,9 @@ class TestAgentPhaseIsolation:
         # This row opens a pull request but is not an issue session, so there
         # is no assigned issue to close: the body stays empty.
         assert helper["env"]["LOGOS_SESSION_CLOSES"] == ""
+        # Fresh pull requests ask Claudia by default; the finalizer reads
+        # the list rather than hard-coding a login in the session image.
+        assert helper["env"]["LOGOS_SESSION_PR_REVIEWERS"] == "Claudia-Anthropica"
         assert helper["network"] == patched.session_egress_network
         assert helper["labels"] == {"logos.agent.helper": "finalize"}
         # The helper is a one-shot: created, waited on, removed.
@@ -1650,7 +1653,7 @@ class TestAgentPhaseIsolation:
         paused: list = []
         events: list = []
 
-        async def fake_reading(_timeout_s=5.0, lane=None, ours=None):
+        async def fake_reading(_timeout_s=5.0, lane=None, ours=None, own_api_key_id=None):
             return capacity.Reading(load=0.99, busy_slots=10, total_slots=10, queue_total=0, ok=True)
 
         async def fake_in_status(status):
@@ -2236,6 +2239,83 @@ class TestYieldingReallyYields:
         assert order[1] == ("disconnect", sessions.settings.session_network, "cid-7")
         assert ("transition", SessionStatus.PAUSED) in order
 
+    async def test_a_paused_sessions_in_flight_requests_are_ended(self, monkeypatch):
+        """Cutting the network ends nothing the gateway can see: the frozen
+        client sends no close, and its generations would hold their slots
+        until they finish. The orchestrator ends them by the address the
+        gateway tagged them with — read before the detach takes it away."""
+        from app import sessions
+
+        order: list = []
+
+        async def fake_pause(cid, **_kwargs):
+            order.append(("pause", cid))
+            return True
+
+        async def fake_ip(cid, network):
+            order.append(("address", cid, network))
+            return "172.30.0.5"
+
+        async def fake_disconnect(network, cid):
+            order.append(("disconnect", network, cid))
+            return True
+
+        async def fake_cancel(address, **_kwargs):
+            order.append(("cancel", address))
+            return 2
+
+        async def noop(*_args, **_kwargs):
+            return True
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "container_ip", fake_ip)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", fake_disconnect)
+        monkeypatch.setattr(sessions.upstream, "cancel_client_requests", fake_cancel)
+        monkeypatch.setattr(sessions.db, "transition_session", noop)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.SessionManager()._pause(self.ROW, "users are queueing")
+
+        network = sessions.settings.session_network
+        assert order == [
+            ("pause", "cid-7"),
+            ("address", "cid-7", network),
+            ("disconnect", network, "cid-7"),
+            ("cancel", "172.30.0.5"),
+        ]
+
+    async def test_a_session_whose_address_cannot_be_read_is_still_paused(self, monkeypatch):
+        from app import sessions
+
+        transitions: list = []
+        cancelled: list = []
+
+        async def broken_inspect(_cid, _network):
+            raise RuntimeError("docker said no")
+
+        async def fake_cancel(address, **_kwargs):
+            cancelled.append(address)
+            return 0
+
+        async def fake_transition(_sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def ok(*_args, **_kwargs):
+            return True
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", ok)
+        monkeypatch.setattr(sessions.docker_engine, "container_ip", broken_inspect)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", ok)
+        monkeypatch.setattr(sessions.upstream, "cancel_client_requests", fake_cancel)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", ok)
+
+        await sessions.SessionManager()._pause(self.ROW, "users are queueing")
+
+        assert transitions == [SessionStatus.PAUSED]
+        assert cancelled == []
+
     async def test_a_pause_docker_refused_does_not_move_the_row(self, monkeypatch):
         from app import sessions
 
@@ -2494,6 +2574,47 @@ class TestOverlappingAdmission:
         # launches and find no room, not admit another full batch.
         assert sorted(launched) == [1, 2]
 
+    async def test_queue_only_workspaces_still_wait_for_an_execution_slot(self, monkeypatch, tmp_path):
+        # Extra workspaces beyond max_parallel_sessions may hold queued
+        # sessions while the runner is paused, but the scheduler still
+        # refuses to start once running+paused fill the execution ceiling.
+        from app import capacity, controls, sessions
+
+        monkeypatch.setattr(sessions, "settings", replace(sessions.settings, artifact_root=str(tmp_path)))
+        reading = capacity.Reading(load=0.0, busy_slots=0, total_slots=4, queue_total=0, ok=True)
+        claimed: list = []
+        # Workspace 2 is a queue-only hold beyond the parallel ceiling.
+        queue = [{"id": 2, "workspace_id": 2, "model": None}]
+
+        async def ceiling_of_one():
+            return {"mode": "running", "mode_reason": "", "max_parallel": 1, "updated_by": "tobias"}
+
+        async def fake_in_status(status):
+            if status.value == "running":
+                return [{"id": 1, "workspace_id": 1}]
+            return []
+
+        async def fake_claim(_limit, *, include_triggered: bool = True):
+            claimed.append(1)
+            return []
+
+        async def peek(*, include_triggered: bool = True):
+            return queue[0] if queue else None
+
+        monkeypatch.setattr(controls.db, "get_controls", ceiling_of_one)
+        controls.forget()
+        monkeypatch.setattr(sessions.capacity, "read_load", self._async_value(reading))
+        monkeypatch.setattr(sessions.db, "sessions_in_status", fake_in_status)
+        monkeypatch.setattr(sessions.db, "claim_queued_sessions", fake_claim)
+        monkeypatch.setattr(sessions.db, "claim_session", _claim_one(fake_claim))
+        monkeypatch.setattr(sessions.db, "next_queued_session", peek)
+        monkeypatch.setattr(sessions.db, "count_active_trigger_sessions", self._async_value(0))
+        monkeypatch.setattr(sessions.db, "add_event", self._async_value(None))
+
+        await sessions.SessionManager().scheduler_pass()
+
+        assert claimed == []
+
     async def test_one_fresh_reading_admits_at_most_one_session(self, monkeypatch, tmp_path):
         # A single below-threshold reading must not claim every open slot:
         # a whole batch admitted at once would move a small fleet from zero
@@ -2573,7 +2694,7 @@ class TestOverlappingAdmission:
         decided_loads: list = []
         real_start_decision = capacity.start_decision
 
-        async def fake_read_load(lane=None, ours=None):
+        async def fake_read_load(lane=None, ours=None, own_api_key_id=None):
             # A pass takes two readings of one moment — the platform's, and
             # the platform's minus this runner's share — so only the first
             # of the pair advances the prepared sequence.
@@ -5102,6 +5223,40 @@ class TestResumeCeiling:
         assert resumed == ["cid-1", "cid-2"]
 
 
+class TestTheDiscountedReadingAsksForTheKey:
+    """The per-key discount is only as good as the id it asks for.
+
+    The pass resolves the platform id of the runner's key once and hands it
+    to the reading that subtracts the runner's own share — a session's
+    subagents included. The measured reading asks for nothing, because
+    admission keeps everything it sees.
+    """
+
+    async def test_only_the_discounted_reading_carries_the_key(self, monkeypatch):
+        from app import capacity, sessions
+
+        calls: list = []
+
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
+            calls.append((ours is not None, own_api_key_id))
+            return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
+
+        async def none(_status):
+            return []
+
+        monkeypatch.setattr(capacity, "read_load", read_load)
+        monkeypatch.setattr(sessions.db, "sessions_in_status", none)
+        # A fresh manager: the shared singleton's admission lock is bound to
+        # whichever test's event loop first contended on it.
+        monkeypatch.setattr(sessions, "manager", sessions.SessionManager())
+
+        await sessions.manager.scheduler_pass()
+
+        # Two readings of one moment: the measured one keeps everything, and
+        # the discounted one is the one that knows whose key this is.
+        assert calls == [(False, None), (True, 7)]
+
+
 class TestAdmissionMeasuresTheRightLane:
     """A queued session on a saturated model must not enter on an idle one.
 
@@ -5130,7 +5285,7 @@ class TestAdmissionMeasuresTheRightLane:
         async def refresh():
             return policy
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             lanes.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5167,7 +5322,7 @@ class TestAdmissionMeasuresTheRightLane:
 
         readings: list = []
 
-        async def read_load(timeout_s: float = 5.0, lane=None, ours=None):
+        async def read_load(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             readings.append(lane)
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
@@ -5433,7 +5588,7 @@ class TestAPausedSessionThatCannotComeBack:
         settled: list = []
         resumed: list = []
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def container_state(_container_id):
@@ -5488,7 +5643,7 @@ class TestAPausedSessionThatCannotComeBack:
 
         admitted: list = []
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None):
+        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None):
             return capacity.Reading(load=0.0, busy_slots=0, total_slots=20, queue_total=0, ok=True)
 
         async def in_status(status):
@@ -5618,6 +5773,9 @@ class TestASessionThatRanOutOfTime:
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", add_event)
+        monkeypatch.setattr(
+            sessions.db, "get_session", lambda *_a, **_k: asyncio.sleep(0, result={"status": "running", "error": None})
+        )
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
 
@@ -5662,6 +5820,9 @@ class TestNoClockUnlessSomebodyAsksForOne:
         monkeypatch.setattr(sessions.docker_engine, "container_state", state)
         monkeypatch.setattr(sessions.docker_engine, "stop_container", stop)
         monkeypatch.setattr(sessions.db, "add_event", nothing)
+        monkeypatch.setattr(
+            sessions.db, "get_session", lambda *_a, **_k: asyncio.sleep(0, result={"status": "running", "error": None})
+        )
         monkeypatch.setattr(sessions.SessionManager, "_settle", settle)
         monkeypatch.setattr(sessions.SessionManager, "_collect_logs", lambda *_a, **_k: asyncio.sleep(0))
         real_sleep = asyncio.sleep
@@ -6435,3 +6596,179 @@ async def test_cancel_from_supervisor_task_still_removes_container(monkeypatch):
     assert outcome["ok"] is True
     assert outcome["removed"] == ["ctr-9"]
     assert 9 not in sessions.manager._supervisors
+
+
+class TestRequestedReviewDelivery:
+    """A review the agent was asked for lands as a review with inline comments.
+
+    The remarks sit on the lines they are about. Where GitHub cannot place
+    them, they are said as one ordinary answer, so nothing the review found
+    is lost.
+    """
+
+    ROW = {
+        "id": 31,
+        "trigger_kind": "review-request",
+        "trigger_ref": "pr-772-review-requested-wasnertobias-event-1",
+        "reply_target": "issue:772",
+        "reply_posted_at": None,
+        "status": "succeeded",
+    }
+
+    SHA = "0123456789abcdef0123456789abcdef01234567"
+
+    def install(self, monkeypatch, tmp_path, *, refuse=None, already=False, sha=SHA):
+        from app import github, sessions
+
+        recorded = TestReviewReplyDelivery().install(monkeypatch, tmp_path, self.ROW)
+        recorded["reviews"] = []
+        recorded["commits"] = []
+        if sha:
+            (tmp_path / "state" / "31").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "state" / "31" / "reviewed-sha").write_text(sha + "\n")
+
+        async def fake_create(number, body, comments, *, commit_id):
+            if refuse is not None:
+                raise github.GitHubError("refused", status=refuse)
+            recorded["commits"].append(commit_id)
+            recorded["reviews"].append((number, body, comments))
+            return "https://github.com/x/y/pull/772#pullrequestreview-1"
+
+        async def fake_contains(_number, _marker):
+            return already
+
+        monkeypatch.setattr(sessions.github, "create_pull_review", fake_create)
+        monkeypatch.setattr(sessions.github, "pull_review_contains", fake_contains)
+        return recorded
+
+    @staticmethod
+    def write(tmp_path, *, summary=None, comments=None):
+        directory = tmp_path / "31"
+        directory.mkdir(parents=True, exist_ok=True)
+        if summary is not None:
+            (directory / "reply.md").write_text(summary)
+        if comments is not None:
+            (directory / "review-comments.json").write_text(
+                comments if isinstance(comments, str) else json.dumps(comments)
+            )
+
+    async def test_inline_comments_are_posted_as_one_review(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path)
+        self.write(
+            tmp_path,
+            summary="One real problem.",
+            comments=[{"path": "app/x.py", "line": 12, "body": "This drops the error."}],
+        )
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == [
+            (
+                772,
+                "One real problem.\n\n" + sessions._answer_marker(31),
+                [{"path": "app/x.py", "line": 12, "body": "This drops the error."}],
+            )
+        ]
+        assert recorded["summaries"] == []
+        assert recorded["attempts"] == [(31, True)]
+        # Anchored to the commit that was read, not to whatever the head is now.
+        assert recorded["commits"] == [self.SHA]
+
+    async def test_without_the_reviewed_commit_the_comments_are_said_as_text(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, sha="")
+        self.write(tmp_path, summary="Summary.", comments=[{"path": "a.py", "line": 3, "body": "wrong"}])
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == []
+        assert recorded["summaries"] == [(772, "Summary.\n\n**`a.py:3`**\n\nwrong\n\n" + sessions._answer_marker(31))]
+
+    async def test_comments_github_cannot_place_are_said_as_text(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, refuse=422)
+        self.write(
+            tmp_path,
+            summary="One real problem.",
+            comments=[{"path": "app/x.py", "line": 999, "body": "This drops the error."}],
+        )
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == [
+            (
+                772,
+                "One real problem.\n\n**`app/x.py:999`**\n\nThis drops the error.\n\n" + sessions._answer_marker(31),
+            )
+        ]
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_a_failed_post_is_retried_rather_than_said_as_text(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, refuse=502)
+        self.write(tmp_path, summary="ok", comments=[{"path": "a.py", "line": 1, "body": "b"}])
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["summaries"] == []
+        assert recorded["attempts"] == [(31, False)]
+
+    async def test_a_review_already_posted_is_not_posted_again(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path, already=True)
+        self.write(tmp_path, summary="ok", comments=[{"path": "a.py", "line": 1, "body": "b"}])
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == []
+        assert recorded["attempts"] == [(31, True)]
+
+    async def test_without_inline_comments_it_is_an_ordinary_answer(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path)
+        self.write(tmp_path, summary="Looks right; I checked the migration and the tests.")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == []
+        assert recorded["summaries"] == [
+            (772, "Looks right; I checked the migration and the tests.\n\n" + sessions._answer_marker(31))
+        ]
+
+    async def test_an_entry_without_a_line_is_still_said(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path)
+        self.write(
+            tmp_path,
+            summary="Two things.",
+            comments=[
+                {"path": "a.py", "line": 3, "body": "placed"},
+                {"path": "README.md", "body": "the whole section is stale"},
+            ],
+        )
+
+        await sessions.SessionManager()._post_reply(31)
+
+        number, body, comments = recorded["reviews"][0]
+        assert comments == [{"path": "a.py", "line": 3, "body": "placed"}]
+        assert "**`README.md`**\n\nthe whole section is stale" in body
+        assert body.startswith("Two things.")
+
+    async def test_a_comments_file_that_is_not_json_is_still_said(self, monkeypatch, tmp_path):
+        from app import sessions
+
+        recorded = self.install(monkeypatch, tmp_path)
+        self.write(tmp_path, summary="Summary.", comments="a.py:3 this is wrong")
+
+        await sessions.SessionManager()._post_reply(31)
+
+        assert recorded["reviews"] == []
+        assert "a.py:3 this is wrong" in recorded["summaries"][0][1]

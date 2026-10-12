@@ -1,5 +1,7 @@
+import { vi } from 'vitest';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
+import { TeamManagementService } from '../../core/services/team-management.service';
 import { AgentService } from '../../core/services/agent.service';
 import {
   ACTIVE_SESSION_STATUSES,
@@ -12,7 +14,7 @@ import {
   AgentWorkspace,
   isActive,
 } from '../../shared/models/agent.model';
-import { Agents } from './agents';
+import { Agents, scaleSlotCounts } from './agents';
 
 /**
  * The agents page groups the list into "active" and "finished", and it only
@@ -53,6 +55,8 @@ const CAPACITY: AgentCapacity = {
   load: 0.25,
   total_slots: 4,
   busy_slots: 1,
+  own_slots: 1,
+  other_slots: 0,
   sessions_running: 1,
   sessions_queued: 0,
   sessions_paused: 0,
@@ -145,12 +149,16 @@ describe('Agents', () => {
   let fixture: ComponentFixture<Agents>;
   let component: Agents;
   let agentService: FakeAgentService;
+  const teamService = { analyzeAllRepositories: vi.fn() };
 
   beforeEach(async () => {
     agentService = new FakeAgentService();
     await TestBed.configureTestingModule({
       imports: [Agents],
-      providers: [{ provide: AgentService, useValue: agentService }],
+      providers: [
+        { provide: AgentService, useValue: agentService },
+        { provide: TeamManagementService, useValue: teamService },
+      ],
     }).compileComponents();
     fixture = TestBed.createComponent(Agents);
     component = fixture.componentInstance;
@@ -267,6 +275,40 @@ describe('Agents', () => {
     });
   });
 
+  describe('slot strip', () => {
+    it('scales categories proportionally when total exceeds the cell limit', () => {
+      // Truncating in category order would render 60 agent / 4 other / 0 free
+      // and contradict the legend. Proportional scaling keeps every non-zero
+      // category visible.
+      expect(scaleSlotCounts([60, 20, 20], 64)).toEqual([38, 13, 13]);
+      expect(scaleSlotCounts([60, 20, 20], 64).reduce((a, b) => a + b, 0)).toBe(64);
+    });
+
+    it('keeps every non-zero category at least one cell', () => {
+      expect(scaleSlotCounts([100, 1, 1], 64)).toEqual([62, 1, 1]);
+    });
+
+    it('passes counts through when they already fit', () => {
+      expect(scaleSlotCounts([2, 1, 1], 64)).toEqual([2, 1, 1]);
+    });
+
+    it('renders a proportional strip for a capacity above the cell limit', async () => {
+      agentService.getCapacity = async () => ({
+        ...CAPACITY,
+        total_slots: 100,
+        busy_slots: 80,
+        own_slots: 60,
+        other_slots: 20,
+      });
+      await component.refresh();
+      const cells = component.slotCells();
+      expect(cells.length).toBe(64);
+      expect(cells.filter((c) => c === 'agent').length).toBe(38);
+      expect(cells.filter((c) => c === 'other').length).toBe(13);
+      expect(cells.filter((c) => c === 'free').length).toBe(13);
+    });
+  });
+
   describe('grouping', () => {
     it('keeps a finalizing session in the active group', async () => {
       // the application server counts finalizing as active (it still occupies the
@@ -283,6 +325,27 @@ describe('Agents', () => {
 
       expect(component.activeSessions().map((s) => s.id)).toEqual([1]);
       expect(component.finishedSessions().map((s) => s.id)).toEqual([2]);
+    });
+  });
+
+  describe('analyze all repositories', () => {
+    it('queues every repository and says how many', async () => {
+      teamService.analyzeAllRepositories.mockResolvedValue({
+        queued: 14,
+        already_in_flight: 1,
+        message: '14 analyses queued, 1 already in flight',
+      });
+      await component.analyzeAllRepositories();
+      expect(teamService.analyzeAllRepositories).toHaveBeenCalledTimes(1);
+      expect(component.analyzeAllMessage()).toBe('14 analyses queued, 1 already in flight');
+      expect(component.analyzingAll()).toBe(false);
+    });
+
+    it('reports a failure instead of a count', async () => {
+      teamService.analyzeAllRepositories.mockRejectedValue(new Error('boom'));
+      await component.analyzeAllRepositories();
+      expect(component.analyzeAllMessage()).toBeNull();
+      expect(component.error()).toBeTruthy();
     });
   });
 

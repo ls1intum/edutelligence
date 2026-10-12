@@ -83,6 +83,9 @@ class SchedulingRequest:
     # (api key + actual prompt prefix), deepest block first. Used for
     # prefix-cache-aware placement; empty/None means "route as before".
     affinity_keys: Optional[List[str]] = None
+    # The caller's key. Carried so in-flight capacity can be split by who is
+    # holding it: a model's busy figure alone cannot say whose requests fill it.
+    api_key_id: Optional[int] = None
 
 
 class SchedulerInterface(ABC):

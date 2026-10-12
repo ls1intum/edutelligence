@@ -17,6 +17,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
@@ -39,6 +40,7 @@ class TeamMembershipServiceTest {
     @Mock UserRepository userRepository;
     @Mock TeamRepository teamRepository;
     @Mock ApiKeyFactory apiKeyFactory;
+    @Mock AuditLogService auditLog;
     @InjectMocks TeamMembershipService service;
 
     private User user;

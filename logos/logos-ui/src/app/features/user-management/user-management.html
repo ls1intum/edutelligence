@@ -441,33 +441,7 @@
   size="xl"
 >
   <div class="dialog-body">
-    @if (!importResult()) {
-      <p class="import-hint">
-        Required columns: <code>prename, name, email, team</code><br />
-        If the team name doesn't exist it will be created automatically.
-      </p>
-
-      <div class="file-picker-row">
-        <button
-          type="button"
-          class="btn-secondary"
-          [disabled]="importLoading()"
-          (click)="pickCsvFile()"
-        >
-          <i class="pi pi-file" aria-hidden="true"></i> Choose File
-        </button>
-        <span class="file-name">{{ importFileName() ?? 'No file selected' }}</span>
-      </div>
-
-      @if (importError()) {
-        <app-error-message [message]="importError()!" />
-      }
-      @if (importLoading()) {
-        <div class="import-loading">
-          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Importing…
-        </div>
-      }
-    } @else {
+    @if (importResult()) {
       <div class="import-summary">
         <span class="import-stat import-stat--created"
           >Created: {{ importResult()!.summary.created }}</span
@@ -481,8 +455,8 @@
       </div>
 
       <app-data-table
-        [columns]="['USER', 'API KEY', 'TEAM', 'STATUS', 'ERROR']"
-        gridCols="1.4fr 1.4fr 0.9fr 80px 1fr"
+        [columns]="['USER', 'STATUS', 'ERROR']"
+        gridCols="1.6fr 100px 1fr"
         class="import-result-table"
       >
         @for (row of importResult()!.rows; track $index) {
@@ -491,8 +465,6 @@
               <span class="import-user-email">{{ row.email }}</span>
               <span class="import-user-username">{{ row.username }}</span>
             </div>
-            <div class="import-key-cell" role="cell" data-label="API Key">{{ row.apiKey }}</div>
-            <div role="cell" data-label="Team">{{ row.team }}</div>
             <div class="import-status-cell" role="cell" data-label="Status">
               <span class="import-status" [class]="importStatusClass(row.status)">{{ row.status }}</span>
             </div>
@@ -500,50 +472,180 @@
           </div>
         }
       </app-data-table>
+    } @else if (!importReady()) {
+      <p class="import-hint">
+        Upload a CSV, then choose which columns hold the first name, last name and email, and
+        pick the rows to add. Imported users are created without a team — add them to a team's
+        members afterwards.
+      </p>
+
+      <div class="file-picker-row">
+        <button
+          type="button"
+          class="btn-secondary"
+          [disabled]="importPreviewLoading()"
+          (click)="pickCsvFile()"
+        >
+          <i class="pi pi-file" aria-hidden="true"></i> Choose File
+        </button>
+        <span class="file-name">{{ importFileName() ?? 'No file selected' }}</span>
+      </div>
+
+      @if (importPreviewLoading()) {
+        <div class="import-loading">
+          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Reading file…
+        </div>
+      }
+      @if (importError()) {
+        <app-error-message [message]="importError()!" />
+      }
+    } @else {
+      <div class="import-mapping">
+        <div class="form-field">
+          <label class="field-label" for="map-prename">First Name</label>
+          <select
+            id="map-prename"
+            class="field-input"
+            [ngModel]="importMapping().prename"
+            (ngModelChange)="setMappingField('prename', $event)"
+            [disabled]="importLoading()"
+          >
+            <option value="">— Not set —</option>
+            @for (col of importColumns(); track $index) {
+              <option [value]="$index">{{ col }}</option>
+            }
+          </select>
+        </div>
+        <div class="form-field">
+          <label class="field-label" for="map-name">Last Name</label>
+          <select
+            id="map-name"
+            class="field-input"
+            [ngModel]="importMapping().name"
+            (ngModelChange)="setMappingField('name', $event)"
+            [disabled]="importLoading()"
+          >
+            <option value="">— Not set —</option>
+            @for (col of importColumns(); track $index) {
+              <option [value]="$index">{{ col }}</option>
+            }
+          </select>
+        </div>
+        <div class="form-field">
+          <label class="field-label" for="map-email">Email</label>
+          <select
+            id="map-email"
+            class="field-input"
+            [ngModel]="importMapping().email"
+            (ngModelChange)="setMappingField('email', $event)"
+            [disabled]="importLoading()"
+          >
+            <option value="">— Not set —</option>
+            @for (col of importColumns(); track $index) {
+              <option [value]="$index">{{ col }}</option>
+            }
+          </select>
+        </div>
+      </div>
+
+      <div class="import-toolbar">
+        <span class="import-count">
+          {{ importSummary().selected }} of {{ importSummary().total }} rows selected —
+          <span class="import-stat import-stat--created">{{ importSummary().toCreate }} to create</span>,
+          <span class="import-stat import-stat--existing"
+            >{{ importSummary().existing }} already exist</span
+          >
+        </span>
+        <span class="import-toolbar__actions">
+          <button
+            type="button"
+            class="btn-link"
+            [disabled]="importLoading()"
+            (click)="selectAllRows()"
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            class="btn-link"
+            [disabled]="importLoading()"
+            (click)="deselectAllRows()"
+          >
+            Deselect all
+          </button>
+        </span>
+      </div>
+
+      <div class="import-preview-scroll">
+        <app-data-table
+          [columns]="['', ...importColumns(), 'STATUS']"
+          [gridCols]="importPreviewGrid()"
+        >
+          @for (row of importRows(); track $index) {
+            <div
+              class="table-row import-preview-row"
+              role="row"
+              [class.import-preview-row--existing]="rowStatus($index) === 'existing'"
+            >
+              <div class="col-select" role="cell" data-label="Include">
+                <input
+                  type="checkbox"
+                  class="import-row-cb"
+                  [checked]="isRowSelected($index)"
+                  [disabled]="importLoading()"
+                  (change)="toggleRow($index)"
+                  [attr.aria-label]="'Include row ' + ($index + 1)"
+                />
+              </div>
+              @for (cell of row; track $index) {
+                <div class="import-preview-cell" role="cell" [attr.data-label]="importColumns()[$index]">
+                  {{ cell }}
+                </div>
+              }
+              <div class="import-status-cell" role="cell" data-label="Status">
+                <span
+                  class="import-status"
+                  [class]="rowStatus($index) === 'existing' ? 'status-existing' : 'status-new'"
+                >
+                  {{ rowStatus($index) === 'existing' ? 'Existing' : 'New' }}
+                </span>
+              </div>
+            </div>
+          }
+        </app-data-table>
+      </div>
+
+      @if (importError()) {
+        <app-error-message [message]="importError()!" />
+      }
     }
   </div>
 
   <div class="modal-footer" modal-footer>
-    @if (!importResult()) {
+    @if (importResult()) {
+      <button class="btn-primary" type="button" (click)="closeImportDialog()">Done</button>
+    } @else {
       <button
         class="btn-secondary"
         type="button"
-        [disabled]="importLoading()"
+        [disabled]="importLoading() || importPreviewLoading()"
         (click)="closeImportDialog()"
       >
         Cancel
       </button>
-    }
-    @if (!importResult()) {
-      <button
-        class="btn-primary"
-        type="button"
-        [disabled]="!importFile() || importLoading()"
-        (click)="submitImport()"
-      >
-        @if (importLoading()) {
-          <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
-        }
-        Upload
-      </button>
-    }
-    @if (importResult()) {
-      <button
-        class="btn-secondary"
-        type="button"
-        [disabled]="!importResult()!.rows.some(r => r.apiKey)"
-        (click)="copyImportCsv()"
-      >
-        {{ importCopied() ? 'Copied!' : 'Copy Credentials' }}
-      </button>
-    }
-    @if (importResult()) {
-      <button class="btn-secondary" type="button" (click)="downloadImportCsv()">
-        Download CSV
-      </button>
-    }
-    @if (importResult()) {
-      <button class="btn-primary" type="button" (click)="closeImportDialog()">Done</button>
+      @if (importReady()) {
+        <button
+          class="btn-primary"
+          type="button"
+          [disabled]="!importValid() || importLoading()"
+          (click)="submitImport()"
+        >
+          @if (importLoading()) {
+            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+          }
+          Import {{ importSummary().selected }} user{{ importSummary().selected === 1 ? '' : 's' }}
+        </button>
+      }
     }
   </div>
 </app-modal-form>

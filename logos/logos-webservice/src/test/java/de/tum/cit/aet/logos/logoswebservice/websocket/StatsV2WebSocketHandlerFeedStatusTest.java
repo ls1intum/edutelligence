@@ -69,7 +69,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         vramService = mock(VramService.class);
         requestLogService = mock(RequestLogService.class);
         statsService = mock(RequestLogStatsService.class);
-        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean()))
+        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn(Map.of("bucketSeconds", 60));
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));
@@ -157,7 +157,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
 
         // A stable scope: the probe repeats its fingerprint, and the feed
         // counts its one queued row.
-        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn("6;2026-08-29T21:00:00Z");
         when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(1L);
 
@@ -182,7 +182,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         // Out-of-bucket traffic moves — the scope's newest event advances
         // while the queued page is untouched, so the feed's own signature
         // stays put and only the probe reports it.
-        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn("6;2026-08-29T21:05:00Z");
         ReflectionTestUtils.setField(handler, "globalTick", 30);
         invokeTick();
@@ -196,7 +196,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
     void the_bucket_count_is_recounted_only_when_the_row_set_moves() throws Exception {
         connectAndInit();
 
-        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn("1;2026-08-29T21:00:00Z");
         when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any())).thenReturn(1L);
 
@@ -223,7 +223,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         verify(requestLogService, times(1)).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any());
     }
     @Test
-    void modelAndProviderSelectionsFilterOnlyTheFeedAndSurviveInit() throws Exception {
+    void modelSelectionScopesThePageProviderSelectionOnlyTheFeedAndBothSurviveInit() throws Exception {
         servedRows = List.of(row("req-selected", 10));
         when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any()))
             .thenReturn(23L);
@@ -231,11 +231,22 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         clearInvocations(statsService);
         handler.handleMessage(session, new TextMessage(
             "{\"action\":\"set_feed_filters\",\"status\":\"finished\",\"model_ids\":[5001,5002],\"provider_ids\":[6001,6002]}"));
-        assertThat(pushedTypes()).containsExactly("requests");
+        // The model selection narrows the whole page: the aggregates are
+        // re-pushed for it (timeline_init), then the feed rows follow.
+        assertThat(pushedTypes()).containsExactly("timeline_init", "requests");
         verify(requestLogService).getLatestRequests(any(), any(), any(), any(), any(), eq(false),
             eq("finished"), any(), any(), eq(10), eq(false), eq(List.of(5001, 5002)), eq(List.of(6001, 6002)));
-        assertThat(objectMapper.readTree(sent.getFirst().getPayload()).path("payload").path("total").asLong()).isEqualTo(23);
-        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean());
+        verify(statsService).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(),
+            eq(List.of(5001, 5002)));
+        assertThat(objectMapper.readTree(sent.get(1).getPayload()).path("payload").path("total").asLong()).isEqualTo(23);
+
+        // A state-only change keeps the aggregates where they are.
+        clearInvocations(statsService);
+        sent.clear();
+        handler.handleMessage(session, new TextMessage(
+            "{\"action\":\"set_feed_filters\",\"status\":\"queued\",\"model_ids\":[5001,5002],\"provider_ids\":[6001,6002]}"));
+        assertThat(pushedTypes()).containsExactly("requests");
+        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any());
 
         clearInvocations(requestLogService);
         handler.handleMessage(session, new TextMessage(
@@ -248,7 +259,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
     void selectionTotalsRefreshWhenOlderRowsMoveButNotOnTokenGrowth() throws Exception {
         connectAndInit();
         servedRows = List.of(row("req-selected", 10));
-        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn("20;event-1");
         when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any()))
             .thenReturn(20L);
@@ -260,7 +271,7 @@ class StatsV2WebSocketHandlerFeedStatusTest {
         verify(requestLogService, never()).countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any());
         sent.clear();
 
-        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean()))
+        when(requestLogService.scopeMovementSig(any(), any(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn("21;event-2");
         when(requestLogService.countFeedRows(any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any()))
             .thenReturn(21L);

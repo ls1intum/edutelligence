@@ -183,8 +183,10 @@ class _SentinelGateStreamHandler:
 
     def __call__(self, delta):
         if delta is None:
+            was_streaming = self._streaming
             self._buffer = ""
-            if self._streaming:
+            self._streaming = False
+            if was_streaming:
                 self._downstream(None)
             return
         if self._streaming:
@@ -574,6 +576,8 @@ class GlobalSearchPipeline(SubPipeline):
         exclude_course_ids: list[int] | None = None,
         stream_handler=None,
         stage_handler: Callable[[str, list[str]], None] | None = None,
+        *,
+        base_url: str,
         **_kwargs,
     ) -> GlobalSearchResponseDTO:
         """
@@ -606,6 +610,8 @@ class GlobalSearchPipeline(SubPipeline):
                               signal, same as before this parameter existed.
         :return: An answer with source references.
         """
+        if not isinstance(base_url, str) or not base_url.strip():
+            raise ValueError("base_url must be a nonblank string")
         # Guard: skip the full LLM pipeline for navigation queries
         if intent is None:
             intent = classify_intent(query)
@@ -613,6 +619,7 @@ class GlobalSearchPipeline(SubPipeline):
         if intent == SearchIntent.SKIP_AI:
             sources = self.retriever.search(
                 query=query,
+                base_url=base_url,
                 limit=limit,
                 course_ids=course_ids,
                 exclude_course_ids=exclude_course_ids,
@@ -631,6 +638,7 @@ class GlobalSearchPipeline(SubPipeline):
             course_ids,
             exclude_course_ids,
             stage_handler,
+            base_url=base_url,
         )
         if not sources:
             logger.info("[global-search] outcome=no_sources query=%r", query[:120])
@@ -839,6 +847,8 @@ class GlobalSearchPipeline(SubPipeline):
         course_ids: list[int] | None = None,
         exclude_course_ids: list[int] | None = None,
         stage_handler: Callable[[str, list[str]], None] | None = None,
+        *,
+        base_url: str,
     ) -> list["LectureSearchResultDTO | EntitySourceDTO"]:
         """Candidate retrieval with the instruct query embedding.
 
@@ -860,6 +870,7 @@ class GlobalSearchPipeline(SubPipeline):
         t_retrieval = time.perf_counter()
         sources = self.retriever.search(
             query=query,
+            base_url=base_url,
             limit=limit,
             alpha=0.5,
             course_ids=course_ids,
@@ -875,6 +886,7 @@ class GlobalSearchPipeline(SubPipeline):
             )
             sources = self.retriever.search(
                 query=query,
+                base_url=base_url,
                 limit=limit,
                 alpha=0.1,
                 course_ids=course_ids,

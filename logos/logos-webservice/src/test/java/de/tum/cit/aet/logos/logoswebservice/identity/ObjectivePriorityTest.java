@@ -9,13 +9,13 @@ import org.junit.jupiter.api.Test;
 class ObjectivePriorityTest {
 
     @Test
-    void forSlaUsesLatencyFirstForUxCritical() {
-        assertEquals(List.of("latency", "quality", "price"), ObjectivePriority.forSla("ux-critical"));
+    void forSloUsesLatencyFirstForUxCritical() {
+        assertEquals(List.of("latency", "quality", "price"), ObjectivePriority.forSlo("ux-critical"));
     }
 
     @Test
-    void forSlaUsesPriceFirstForBackground() {
-        assertEquals(List.of("price", "quality", "latency"), ObjectivePriority.forSla("ux-background"));
+    void forSloUsesPriceFirstForBackground() {
+        assertEquals(List.of("price", "quality", "latency"), ObjectivePriority.forSlo("ux-background"));
     }
 
     @Test
