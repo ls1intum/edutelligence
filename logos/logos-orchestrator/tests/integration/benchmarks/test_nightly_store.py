@@ -130,3 +130,29 @@ def test_deleted_deployment_keeps_recovery_and_disables_future_runs(database):
     store.disable_missing_target(31)
     assert store.status(31)["enabled"] is False
     assert store.rows()[0]["recovery"] == {"provider_id": 20}
+
+
+def test_two_pair_rotation_persists_across_restart_failure_and_disable(database):
+    engine, _ = database
+    for pair in (31, 32, 33, 34):
+        store.set_enabled(pair, True, False)
+    first = date(2026, 10, 13)
+    with store.cluster_lock():
+        assert store.claim(31, first)
+        assert store.claim(32, first)
+        assert not store.claim(33, first)
+    store.save(31, "failed", [], None)
+    store.set_enabled(31, False, True)
+    engine.dispose()  # New connections must see the consumed nightly quota.
+    assert store.claimed_today(first) == 2
+    with store.cluster_lock():
+        assert not store.claim(33, first)
+    second = date(2026, 10, 14)
+    waiting = [row["model_provider_id"] for row in store.rows() if row["enabled"]]
+    assert waiting == [33, 34, 32]
+    with store.cluster_lock():
+        assert store.claim(waiting[0], second)
+        assert store.claim(waiting[1], second)
+        assert not store.claim(waiting[2], second)
+    store.set_enabled(31, True, False)
+    assert [row["model_provider_id"] for row in store.rows()] == [31, 32, 33, 34]

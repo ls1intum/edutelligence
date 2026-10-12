@@ -5,6 +5,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import text
 
+from logos.benchmarks.nightly import MAX_PAIRS_PER_NIGHT
 from logos.dbutils.dbmanager import DBManager, _init_engine
 
 LOCK_ID = 125500301
@@ -87,20 +88,29 @@ def set_enabled(pair_id: int, enabled: bool, expected: bool) -> dict:
 
 
 def claim(pair_id: int, day) -> bool:
+    """Claim one pair under the caller's cluster lock; failures still consume a slot."""
     with DBManager() as db:
         claimed = bool(
             db.session.execute(
                 text(
                     "UPDATE nightly_benchmarks SET last_run_date = :day, status = 'running', report = '[]'::jsonb "
                     "WHERE model_provider_id = :id AND enabled AND recovery IS NULL "
-                    "AND (last_run_date IS NULL OR last_run_date < :day)"
+                    "AND (last_run_date IS NULL OR last_run_date < :day) "
+                    "AND (SELECT COUNT(*) FROM nightly_benchmarks WHERE last_run_date = :day) < :limit"
                 ),
-                {"id": pair_id, "day": day},
+                {"id": pair_id, "day": day, "limit": MAX_PAIRS_PER_NIGHT},
             ).rowcount
         )
 
         db.session.commit()
         return claimed
+
+
+def claimed_today(day) -> int:
+    with DBManager() as db:
+        return db.session.execute(
+            text("SELECT COUNT(*) FROM nightly_benchmarks WHERE last_run_date = :day"), {"day": day}
+        ).scalar_one()
 
 
 def save(pair_id: int, state: str, report: list, recovery: dict | None) -> None:

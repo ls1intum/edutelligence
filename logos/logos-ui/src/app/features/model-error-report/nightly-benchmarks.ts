@@ -79,7 +79,7 @@ export class NightlyBenchmarks implements OnChanges, OnDestroy {
 
   statusLabel(value: string): string {
     const labels: Record<string, string> = {
-      scheduled: 'Waiting for tonight', preparing: 'Preparing worker', running: 'Benchmark in progress',
+      scheduled: 'Waiting in nightly rotation', unavailable: 'Waiting for an available worker', preparing: 'Preparing worker', running: 'Benchmark in progress',
       completed: 'Finished — see results', disabled: 'Deactivated', success: 'Successful', failed: 'Failed',
       stalled: 'Stopped after five minutes without progress', preparation_timeout: 'Preparation timed out',
       window_closed: 'No new runs after 04:50', window_closed_below_half: 'Stopped at 05:00 below 50% complete',
@@ -100,7 +100,7 @@ export class NightlyBenchmarks implements OnChanges, OnDestroy {
 
   get confirmationMessage(): string {
     return this.enabling
-      ? `Enable nightly benchmarks for this model on ${this.providerName}? Starts are allowed 03:00–04:50 Europe/Berlin. At 05:00, the current run continues only if at least 50% of requests have completed. Five minutes without output or completed requests stops it, with at most one retry before 04:50. One worker is reserved at a time; another healthy worker must remain available. The fixed workload is GSM8K, 50 requests, 512 max output tokens and concurrency 4. Current settings are the baseline; only known sequence and batch-token limits vary by ±25%. Original settings are restored afterwards. These runs use their own fixed plan, independent of the manual editor.`
+      ? `Add this model on ${this.providerName} to the nightly rotation? Each night selects up to two enabled model/worker pairs, never-tested pairs first, then the oldest previous run. Unavailable pairs are skipped. Starts are allowed 03:00–04:50 Europe/Berlin. At 05:00, the current run continues only if at least 50% of requests have completed. Five minutes without output or completed requests stops it, with at most one retry before 04:50. One worker is reserved at a time; another healthy worker must remain available. The fixed workload is GSM8K, 50 requests, 512 max output tokens and concurrency 4. Current settings are the baseline; only known sequence and batch-token limits vary by ±25%. Original settings are restored afterwards. These runs use their own fixed plan, independent of the manual editor.`
       : `Disable nightly benchmarks for this model on ${this.providerName}? Future runs will stop. An active nightly run will be cancelled and its original settings restored before the worker returns to production.`;
   }
 

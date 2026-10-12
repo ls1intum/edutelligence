@@ -16,6 +16,7 @@ BERLIN = ZoneInfo("Europe/Berlin")
 STALL_SECONDS = 300
 PREPARATION_SECONDS = 900
 POLL_SECONDS = 1
+MAX_PAIRS_PER_NIGHT = 2
 
 
 def local_now() -> datetime:

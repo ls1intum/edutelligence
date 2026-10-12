@@ -150,3 +150,61 @@ async def test_failed_initial_drain_releases_worker_without_restart(scheduler):
     assert scheduler.saved[-1][1] == "failed"
     assert scheduler.saved[-1][3] is None
     assert benchmark_reservations.allows(20, "model", "production")
+
+
+@pytest.fixture
+def rotation(scheduler, monkeypatch):
+    rows = [
+        {"model_provider_id": pair, "enabled": True, "last_run_date": None, "recovery": None, "report": []}
+        for pair in (31, 32, 33)
+    ]
+    claimed = set()
+    monkeypatch.setattr(module.store, "rows", lambda: rows)
+    monkeypatch.setattr(module.store, "cluster_lock", MagicMock())
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda: False)
+    monkeypatch.setattr(module.store, "claimed_today", lambda day: len(claimed))
+
+    def claim(pair, day):
+        if pair in claimed:
+            return False
+        claimed.add(pair)
+        return True
+
+    monkeypatch.setattr(module.store, "claim", claim)
+    scheduler.run_schedule = AsyncMock(return_value=True)
+    scheduler.target_lane = MagicMock()
+    return rows, claimed
+
+
+async def test_rotation_admits_two_pairs_sequentially_and_keeps_daily_cap(scheduler, rotation):
+    _, claimed = rotation
+    await scheduler.tick()
+    await scheduler.tick()
+    assert claimed == {31, 32}
+    assert [call.args[0] for call in scheduler.run_schedule.await_args_list] == [31, 32]
+
+
+async def test_unavailable_pair_does_not_consume_a_nightly_slot(scheduler, rotation):
+    _, claimed = rotation
+    scheduler.target_lane.side_effect = [RuntimeError("Worker is offline"), None, None]
+    await scheduler.tick()
+    assert claimed == {32, 33}
+    assert scheduler.saved[0][1] == "unavailable"
+
+
+async def test_all_pending_recovery_precedes_any_new_pair(scheduler, rotation):
+    rows, claimed = rotation
+    rows[2]["recovery"] = {"provider_id": 20}
+    scheduler.restore.side_effect = RuntimeError("Worker is offline")
+    await scheduler.tick()
+    assert claimed == set()
+    scheduler.run_schedule.assert_not_awaited()
+
+
+async def test_daily_quota_never_blocks_pending_recovery(scheduler, rotation):
+    rows, claimed = rotation
+    rows[2]["recovery"] = {"provider_id": 20}
+    claimed.update({31, 32})
+    await scheduler.tick()
+    scheduler.restore.assert_awaited_once()
+    scheduler.run_schedule.assert_not_awaited()

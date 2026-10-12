@@ -11,6 +11,22 @@ Schedules are off by default and persist in PostgreSQL. The nightly plan is inde
 of the manual benchmark editor. Disabling a schedule cancels its active run and
 restores the worker before it returns to production.
 
+## Automatic pair rotation
+
+Each night admits at most two enabled model/worker pairs, sequentially. Pairs
+that have never run come first, followed by the oldest previous attempt, with
+pair ID as a stable tie-breaker. Offline or otherwise unavailable pairs are
+skipped before admission and do not consume a slot. Disabled pairs are excluded.
+
+The quota counts admitted pairs, including failed or cancelled plans. All
+parameter configurations and the bounded retry belong to the same pair's slot.
+The count persists across application restarts and disabling/re-enabling a
+schedule cannot reset it. The next Berlin calendar date has a fresh quota.
+
+The 04:50 admission cutoff can leave fewer than two pairs tested. Remaining
+pairs keep their priority for the next night. Recovery of an interrupted worker
+always happens before selection, even when tonight's quota is already full.
+
 ## Time and failure policy
 
 All times use `Europe/Berlin`, including daylight-saving changes.

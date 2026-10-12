@@ -9,7 +9,15 @@ from starlette.requests import Request
 
 from logos.benchmarks import nightly_store as store
 from logos.benchmarks.guidellm_runner import extract_serving_configuration
-from logos.benchmarks.nightly import LEASE_CHECK, NIGHTLY_CONTEXT, NightlyStopped, can_start, local_now, parameter_plan
+from logos.benchmarks.nightly import (
+    LEASE_CHECK,
+    MAX_PAIRS_PER_NIGHT,
+    NIGHTLY_CONTEXT,
+    NightlyStopped,
+    can_start,
+    local_now,
+    parameter_plan,
+)
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
 from logos.dbutils.dbmanager import DBManager
@@ -73,9 +81,25 @@ class NightlyScheduler:
                         # Keep the node excluded and do not take a second node.
                         logger.exception("Nightly worker recovery requires attention")
                         return
-                if not can_start(local_now()) or store.has_active_benchmarks():
+            # Recover every reserved worker before considering the oldest untested pair.
+            for row in schedules:
+                pair_id = row["model_provider_id"]
+                day = local_now().date()
+                if (
+                    not can_start(local_now())
+                    or store.has_active_benchmarks()
+                    or store.claimed_today(day) >= MAX_PAIRS_PER_NIGHT
+                ):
                     return
-                if not row["enabled"] or not store.claim(pair_id, local_now().date()):
+                if not row["enabled"] or row["last_run_date"] == day:
+                    continue
+                try:
+                    self.target_lane(pair_id)
+                except RuntimeError as exc:
+                    # An unavailable worker must not use one of tonight's slots.
+                    store.save(pair_id, "unavailable", [{"status": "skipped", "reason": str(exc)[:1000]}], None)
+                    continue
+                if not store.claim(pair_id, day):
                     continue
                 # Detect a lost session lock before touching a worker.
                 if not store.lock_held(connection):
@@ -127,33 +151,40 @@ class NightlyScheduler:
         if not await self.planner.prepare_benchmark_lane(provider_id, recovery["model"], timeout_seconds=900):
             raise RuntimeError("Restored production model is not ready")
 
+    def target_lane(self, pair_id):
+        """Resolve and validate a currently usable model/worker pair."""
+        with DBManager() as db:
+            target = db.get_model_provider_benchmark_target(pair_id)
+        if not target:
+            store.disable_missing_target(pair_id)
+            raise RuntimeError("The scheduled model/worker deployment no longer exists")
+        if target["provider_type"] != "logosnode":
+            raise RuntimeError("Nightly benchmarks require a Logos worker")
+        pid, model = int(target["provider_id"]), str(target["model_name"])
+        if not self.healthy(pid) or not any(
+            other != pid and self.healthy(other) for other in self.registry.active_provider_ids()
+        ):
+            raise RuntimeError("Need the selected worker and another healthy worker for production")
+        snapshot = self.registry.peek_runtime_snapshot(pid)
+        if not (snapshot.get("runtime") or {}).get("supports_benchmark_restart"):
+            raise RuntimeError("Update this worker before enabling nightly benchmarks")
+        lanes = (snapshot.get("runtime") or {}).get("lanes", [])
+        target_lanes = [lane for lane in lanes if lane.get("model") == model]
+        if len(target_lanes) != 1 or not (target_lanes[0].get("lane_config") or {}).get("vllm"):
+            raise RuntimeError("Nightly tuning requires exactly one existing vLLM lane for this model")
+        lane = target_lanes[0]
+        if lane.get("runtime_state") not in {"loaded", "running"} or lane.get("sleep_state") == "sleeping":
+            raise RuntimeError("Nightly tuning requires the production model to be loaded and awake")
+        return target, snapshot, lane
+
     async def run_schedule(self, pair_id, connection):
         report = []
         recovery = None
         state = "completed"
         try:
-            with DBManager() as db:
-                target = db.get_model_provider_benchmark_target(pair_id)
-            if not target:
-                store.disable_missing_target(pair_id)
-                raise RuntimeError("The scheduled model/worker deployment no longer exists")
-            if target["provider_type"] != "logosnode":
-                raise RuntimeError("Nightly benchmarks require a Logos worker")
+            target, snapshot, lane = self.target_lane(pair_id)
             pid, model = int(target["provider_id"]), str(target["model_name"])
-            if not self.healthy(pid) or not any(
-                other != pid and self.healthy(other) for other in self.registry.active_provider_ids()
-            ):
-                raise RuntimeError("Need the selected worker and another healthy worker for production")
-            snapshot = self.registry.peek_runtime_snapshot(pid)
-            if not (snapshot.get("runtime") or {}).get("supports_benchmark_restart"):
-                raise RuntimeError("Update this worker before enabling nightly benchmarks")
             lanes = (snapshot.get("runtime") or {}).get("lanes", [])
-            target_lanes = [lane for lane in lanes if lane.get("model") == model]
-            if len(target_lanes) != 1 or not (target_lanes[0].get("lane_config") or {}).get("vllm"):
-                raise RuntimeError("Nightly tuning requires exactly one existing vLLM lane for this model")
-            lane = target_lanes[0]
-            if lane.get("runtime_state") not in {"loaded", "running"} or lane.get("sleep_state") == "sleeping":
-                raise RuntimeError("Nightly tuning requires the production model to be loaded and awake")
             current = extract_serving_configuration(snapshot, model)
             plan = parameter_plan(current)
             recovery = {
