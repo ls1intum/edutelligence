@@ -41,6 +41,13 @@ the error reports and the scheduling statistics of the model.
 
 ![Models page](/img/roles/logos-admin-models.png)
 
+### Model benchmarks
+
+Open the model's **Performance** tab to configure and start a benchmark.
+Logos reserves the selected model lanes during a worker benchmark.
+The [Model Benchmarks guide](../admin/model-benchmarks.md) explains the confirmation dialog, single-run charts, batches and failed-model retries.
+It includes desktop and mobile screenshots.
+
 ## Providers
 
 This page shows each provider that the deployment knows. These are cloud

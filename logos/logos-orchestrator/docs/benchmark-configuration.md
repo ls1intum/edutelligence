@@ -15,51 +15,11 @@ The dialog explains whether the target model lanes will be reserved.
 It also explains that changed vLLM settings remain active after the run.
 External provider benchmarks run alongside other requests; their traffic can affect the measurements.
 
-## Screenshots
+## User guide and screenshots
 
-These full-page screenshots show the actual Performance component with synthetic
-example data. They omit the authenticated application shell and live services.
-They demonstrate the interface; they do not verify execution on a GPU worker.
-Image URLs are pinned to a specific screenshot commit.
-
-### Desktop: settings and a single result
-
-The page shows the selected worker, dataset and sample settings above the start
-action. Both comparison charts contain a filled point and `n = 1` for one measured
-run. The result does not need a second repetition to appear.
-
-![Desktop Performance page with benchmark settings and single-run comparison points](https://gist.githubusercontent.com/Tim0x54/72219bc2b43197e7ddbeeae1029c6fd4/raw/86590c8c73b36a555202752af495cdd7f7dbba13/logos-pr-desktop.png)
-
-### Desktop: confirmation
-
-**Review & start benchmark** opens the shared confirmation dialog. The message
-explains reservation of the selected model lanes and when production traffic can
-use them again. **Start benchmark** submits the job; **Cancel** closes the dialog.
-
-![Desktop benchmark confirmation dialog explaining temporary lane reservation](https://gist.githubusercontent.com/Tim0x54/72219bc2b43197e7ddbeeae1029c6fd4/raw/86590c8c73b36a555202752af495cdd7f7dbba13/logos-pr-desktop-dialog.png)
-
-### Mobile: settings and a single result
-
-At a 375px viewport, the settings and comparison charts stack vertically. The
-single-run points and their `n = 1` labels remain visible.
-
-<details>
-<summary>Show the full mobile Performance page</summary>
-
-![Mobile Performance page at 375px with vertically stacked single-run charts](https://gist.githubusercontent.com/Tim0x54/72219bc2b43197e7ddbeeae1029c6fd4/raw/86590c8c73b36a555202752af495cdd7f7dbba13/logos-pr-mobile.png)
-
-</details>
-
-### Mobile: confirmation
-
-The mobile dialog contains the same reservation message and confirmation actions.
-
-<details>
-<summary>Show the full mobile page with the confirmation dialog</summary>
-
-![Mobile benchmark confirmation dialog at 375px](https://gist.githubusercontent.com/Tim0x54/72219bc2b43197e7ddbeeae1029c6fd4/raw/86590c8c73b36a555202752af495cdd7f7dbba13/logos-pr-mobile-dialog.png)
-
-</details>
+The published [Model Benchmarks guide](../../docs/admin/model-benchmarks.md)
+contains the user workflow and desktop/mobile screenshots. This document keeps
+API details and implementation references for orchestrator development.
 
 ## Automatic lane reservation
 

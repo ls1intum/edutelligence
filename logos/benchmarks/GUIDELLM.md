@@ -35,9 +35,9 @@ The desktop example shows the run settings and one completed measurement as a
 filled point in each comparison chart. It uses synthetic data in the actual UI
 component, without live services or the authenticated application shell.
 
-![Benchmark settings and single-run results on desktop](https://gist.githubusercontent.com/Tim0x54/72219bc2b43197e7ddbeeae1029c6fd4/raw/86590c8c73b36a555202752af495cdd7f7dbba13/logos-pr-desktop.png)
+![Benchmark settings and single-run results on desktop](../docs/static/img/benchmarks/performance-desktop.png)
 
-See the [desktop and mobile screenshots](../logos-orchestrator/docs/benchmark-configuration.md#screenshots)
+See the [desktop and mobile screenshots](../docs/admin/model-benchmarks.md)
 for the complete page and confirmation dialog in both viewport sizes.
 
 The commands below remain available for local diagnosis and manual imports.

@@ -13,6 +13,7 @@ const sidebars: SidebarsConfig = {
     { type: "doc", id: "deployment", label: "Deployment" },
     { type: "doc", id: "admin/configuration", label: "Configuration" },
     { type: "doc", id: "admin/worker-node", label: "Worker Nodes" },
+    { type: "doc", id: "admin/model-benchmarks", label: "Model Benchmarks" },
     { type: "doc", id: "admin/operations", label: "Operations and Troubleshooting" },
   ],
   developerSidebar: [

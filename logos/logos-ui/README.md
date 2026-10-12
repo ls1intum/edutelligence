@@ -89,9 +89,9 @@ The shared confirmation dialog explains the temporary reservation before a job
 starts. This screenshot uses synthetic data in the actual component, without
 live services or the authenticated application shell.
 
-![Shared benchmark confirmation dialog on desktop](https://gist.githubusercontent.com/Tim0x54/72219bc2b43197e7ddbeeae1029c6fd4/raw/86590c8c73b36a555202752af495cdd7f7dbba13/logos-pr-desktop-dialog.png)
+![Shared benchmark confirmation dialog on desktop](../docs/static/img/benchmarks/confirmation-desktop.png)
 
-See the [desktop and mobile screenshot walkthrough](../logos-orchestrator/docs/benchmark-configuration.md#screenshots)
+See the [desktop and mobile screenshot walkthrough](../docs/admin/model-benchmarks.md)
 for the settings, comparison charts and 375px layouts.
 
 ## Additional Resources

@@ -16,5 +16,5 @@ reservation lifecycle, configuration persistence, implementation entry points,
 and Dev verification steps. The guide also explains the single-run charts and
 confirmation flow in the web application.
 
-The [screenshot walkthrough](docs/benchmark-configuration.md#screenshots) shows
+The [screenshot walkthrough](../docs/admin/model-benchmarks.md) shows
 single-run results and the confirmation dialog on desktop and mobile.
