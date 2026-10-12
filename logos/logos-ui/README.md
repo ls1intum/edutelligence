@@ -83,6 +83,17 @@ See [Configurable model benchmarks](../logos-orchestrator/docs/benchmark-configu
 for reservation behavior, failed-model preparation, batch cancellation and Dev checks.
 See [GuideLLM → Logos](../benchmarks/GUIDELLM.md) for the separate command-line runner.
 
+### Benchmark confirmation preview
+
+The shared confirmation dialog explains the temporary reservation before a job
+starts. This screenshot uses synthetic data in the actual component, without
+live services or the authenticated application shell.
+
+![Shared benchmark confirmation dialog on desktop](https://gist.githubusercontent.com/Tim0x54/72219bc2b43197e7ddbeeae1029c6fd4/raw/86590c8c73b36a555202752af495cdd7f7dbba13/logos-pr-desktop-dialog.png)
+
+See the [desktop and mobile screenshot walkthrough](../logos-orchestrator/docs/benchmark-configuration.md#screenshots)
+for the settings, comparison charts and 375px layouts.
+
 ## Additional Resources
 
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.

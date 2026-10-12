@@ -15,3 +15,6 @@ See [Configurable model benchmarks](docs/benchmark-configuration.md) for the API
 reservation lifecycle, configuration persistence, implementation entry points,
 and Dev verification steps. The guide also explains the single-run charts and
 confirmation flow in the web application.
+
+The [screenshot walkthrough](docs/benchmark-configuration.md#screenshots) shows
+single-run results and the confirmation dialog on desktop and mobile.
