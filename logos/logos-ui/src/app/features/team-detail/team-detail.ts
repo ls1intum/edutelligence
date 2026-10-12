@@ -177,6 +177,24 @@ export class TeamDetail implements OnInit {
     }
   }
 
+  /**
+   * Reload the team and its members, without the page-wide loading state:
+   * that state unmounts the active tab, and the Settings tab would lose the
+   * save confirmation it shows next to the control that asked for the
+   * reload. Its saves change team-level data and — with the Keycloak link —
+   * the memberships, never the keys or the model count, so the full load's
+   * extra fetches are not missed here.
+   */
+  async refreshTeam(): Promise<void> {
+    try {
+      const res = await this.teamService.getTeamWithMembers(this.teamId());
+      this.team.set(res.team);
+      this.members.set(res.members);
+    } catch {
+      // The data on screen stays as it was; the next full load corrects it.
+    }
+  }
+
   openEditName(): void {
     this.editNameValue.set(this.team()?.name ?? '');
     this.editNameError.set('');

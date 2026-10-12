@@ -32,8 +32,12 @@ public class WebConfig implements WebMvcConfigurer {
             // get_model_health and models_discovered authenticate API key /
             // internal secret in their controllers, not a JWT. The inference
             // gateway (/v1, /openai, /jobs) likewise uses Logos API keys.
+            // /stats answers anonymous visitors — permitting it in
+            // SecurityConfig is not enough while this interceptor still
+            // 401s every request without a JWT before it reaches the
+            // controller.
             .excludePathPatterns(
-                "/error", "/info", "/ws/**",
+                "/error", "/info", "/stats", "/ws/**",
                 "/logosdb/get_model_health", "/internal/models_discovered",
                 "/internal/gateway_relay_stats", "/internal/gateway_relay_stats/**",
                 "/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**");

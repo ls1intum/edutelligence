@@ -106,6 +106,45 @@ export class SettingsTabComponent implements OnChanges {
   linkError = signal('');
   linkSuccess = signal(false);
 
+  // ── Public statistics opt-in ────────────────────────────────────────────
+  publicStatsLoading = signal(false);
+  publicStatsError = signal('');
+  publicStatsSuccess = signal(false);
+  /**
+   * The checkbox's own state. Bounding it to a signal rather than
+   * team.share_public_stats is what lets a failed save put the box back:
+   * Angular re-binds a DOM property only when the bound value changed, so a
+   * native checkbox that the browser already flipped would stay flipped.
+   */
+  publicStatsChecked = signal(false);
+
+  /**
+   * Switches the team's successful requests into (or out of) the public
+   * statistics page. Saved on the toggle itself — there is no draft state to
+   * keep, unlike the limit fields above — and the team is reloaded so the
+   * checkbox reads back what the platform now stores.
+   */
+  async togglePublicStats(share: boolean): Promise<void> {
+    if (this.publicStatsLoading()) return;
+    this.publicStatsLoading.set(true);
+    this.publicStatsChecked.set(share);
+    this.publicStatsError.set('');
+    this.publicStatsSuccess.set(false);
+    try {
+      await this.teamService.setTeamPublicStats(this.teamId, share);
+      this.refresh.emit();
+      this.publicStatsSuccess.set(true);
+      setTimeout(() => this.publicStatsSuccess.set(false), 3000);
+    } catch {
+      // A failed save must not leave the box on the unsaved state: an
+      // unchecked box would read as "not shared" while the team still is.
+      this.publicStatsChecked.set(this.team.share_public_stats);
+      this.publicStatsError.set('Failed to update the public statistics setting, please try again.');
+    } finally {
+      this.publicStatsLoading.set(false);
+    }
+  }
+
   /** Suggestions minus the groups another team already holds — the link is unique. */
   availableKeycloakGroups(): KeycloakGroupOption[] {
     return this.keycloakGroupOptions()
@@ -151,6 +190,10 @@ export class SettingsTabComponent implements OnChanges {
     this.localRpm.set(this.team.default_local_rpm_limit?.toString() ?? '');
     this.localTpm.set(this.team.default_local_tpm_limit?.toString() ?? '');
     this.keycloakGroup.set(this.team.keycloak_group ?? '');
+    // A reload while a toggle is in flight must not clobber the box the
+    // user just flipped: the settled value lands with the reload that the
+    // successful toggle itself asks for.
+    if (!this.publicStatsLoading()) this.publicStatsChecked.set(this.team.share_public_stats);
   }
 
   /** Group suggestions for the link field; silently stays free text on failure. */

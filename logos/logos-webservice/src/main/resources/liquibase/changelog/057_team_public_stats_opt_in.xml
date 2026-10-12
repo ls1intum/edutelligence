@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Opt-in for the platform's public statistics page.
+
+         When true, the team's successful requests are part of the
+         unauthenticated GET /stats aggregates; when false (the default), none
+         of the team's request data reaches the page. NOT NULL with a false
+         default so every existing team stays private until a team owner or a
+         Logos admin opts it in explicitly — and so a reader of the column can
+         treat "absent" as "private" rather than guessing.
+
+         Only the opt-in bit is stored: the page's own content (successful
+         requests, per-model breakdown, volume over time) is derived from
+         log_entry at read time, so nothing team-specific has to be kept in
+         sync. -->
+    <changeSet id="057-team-public-stats-opt-in" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="teams" columnName="share_public_stats"/></not>
+        </preConditions>
+        <addColumn tableName="teams">
+            <column name="share_public_stats" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="teams" columnName="share_public_stats"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -20,6 +20,7 @@ import de.tum.cit.aet.logos.logoswebservice.identity.dto.CreateTeamRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamKeycloakGroupRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamMemberRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamPriorityRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamPublicStatsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateTeamRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.KeycloakGroupDirectoryService;
@@ -143,6 +144,30 @@ public class TeamController {
         return teamService.updateTeamPriority(teamId, priority)
             .<ResponseEntity<?>>map(ResponseEntity::ok)
             .orElse(ResponseEntity.status(404).body(null));
+    }
+
+    /**
+     * Switches the team's successful requests into (or out of) the
+     * unauthenticated public statistics page (GET /stats). The data shared is
+     * the team's own, so a team owner may make the call; like the other
+     * owner-scoped mutations, an app admin needs ownership.
+     */
+    @PatchMapping("/{teamId}/public-stats")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> updateTeamPublicStats(
+            @RequestAttribute("authContext") AuthContext auth,
+            @PathVariable Integer teamId,
+            @RequestBody UpdateTeamPublicStatsRequestDTO body) {
+        if (body.share_public_stats() == null) {
+            return ResponseEntity.status(400).body(Map.of(
+                "detail", "share_public_stats must be true or false"));
+        }
+        if (Role.APP_ADMIN.matches(auth.role()) && !teamService.isOwner(teamId, auth.userId())) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Insufficient permissions"));
+        }
+        return teamService.updateTeamPublicStats(teamId, body.share_public_stats())
+            .<ResponseEntity<?>>map(ResponseEntity::ok)
+            .orElse(ResponseEntity.status(404).body(Map.of("detail", "Team not found")));
     }
 
     /**
