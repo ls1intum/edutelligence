@@ -368,3 +368,19 @@ async def test_build_runtime_status_marks_disk_unavailable_when_it_cannot_be_rea
     assert runtime.disk is not None
     assert runtime.disk.source == "unavailable"
     assert runtime.disk.free_mb == 0.0
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_survives_an_io_error_while_resolving_the_cache_path(monkeypatch, tmp_path):
+    # A broken cache mount fails the path lookup itself, before any usage read.
+    def broken_exists(self):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr("logos_worker_node.runtime.Path.exists", broken_exists)
+    app = _make_app([], _NvidiaCollector())
+    app.state.hf_home = str(tmp_path / ".hf_cache")
+
+    runtime = await build_runtime_status(app)
+
+    assert runtime.disk is not None
+    assert runtime.disk.source == "unavailable"

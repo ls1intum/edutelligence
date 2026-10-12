@@ -1998,6 +1998,24 @@ class LaneManager:
             result.append(index)
         return result
 
+    async def _lane_occupied_gpu_devices(self, lc: LaneConfig, selector: str, gpu_count: int) -> str:
+        """The GPUs a lane's engine runs on, read from its final launch environment.
+
+        A model's env_overrides are applied after the selector at launch, so an
+        override of CUDA_VISIBLE_DEVICES decides which GPUs the engine sees, and
+        one of CUDA_DEVICE_ORDER breaks the nvidia-smi numbering the selector
+        relies on (that leaves the GPUs unknown).
+        """
+        overrides = lc.vllm_config.env_overrides if lc.vllm_config else {}
+        if overrides.get("CUDA_DEVICE_ORDER", "PCI_BUS_ID") != "PCI_BUS_ID":
+            return ""
+        if "CUDA_VISIBLE_DEVICES" in overrides:
+            # Taken literally by CUDA: only a numeric list resolves; "all" is
+            # not a CUDA value, and UUIDs or "" stay unknown.
+            visible = overrides["CUDA_VISIBLE_DEVICES"]
+            return "" if visible.strip().lower() == "all" else self._occupied_gpu_devices(visible, gpu_count)
+        return self._occupied_gpu_devices(selector, gpu_count, await self._complete_gpu_inventory())
+
     async def _complete_gpu_inventory(self) -> list[int] | None:
         """Every GPU index on this node, or None when the report may be missing one.
 
@@ -3525,9 +3543,7 @@ class LaneManager:
                 gpu_count = lc.vllm_config.parallel_gpu_count if lc.vllm_config else 1
             except ValueError:
                 gpu_count = 0
-            occupied_gpu_devices = self._occupied_gpu_devices(
-                effective_gpu_devices, gpu_count, await self._complete_gpu_inventory()
-            )
+            occupied_gpu_devices = await self._lane_occupied_gpu_devices(lc, effective_gpu_devices, gpu_count)
             if lc.vllm_config:
                 sleep_mode_enabled = bool(lc.vllm_config.enable_sleep_mode)
                 backend_metrics = lc.vllm_config.model_dump(mode="json")

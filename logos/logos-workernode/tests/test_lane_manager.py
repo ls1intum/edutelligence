@@ -4070,3 +4070,33 @@ async def test_complete_gpu_inventory_is_unknown_when_a_gpu_may_be_missing(
     devices: list[DeviceInfo], summary: dict[str, object]
 ) -> None:
     assert await _inventory_manager(devices, **summary)._complete_gpu_inventory() is None  # noqa: SLF001
+
+
+def _override_lane(gpu_devices: str, env_overrides: dict[str, str], tp: int = 1) -> LaneConfig:
+    return LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices=gpu_devices,
+        vllm_config=VllmConfig(tensor_parallel_size=tp, env_overrides=env_overrides),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gpu_devices", "env_overrides", "occupied"),
+    [
+        ("0", {}, "0"),
+        ("0", {"CUDA_VISIBLE_DEVICES": "1"}, "1"),  # the override decides what the engine sees
+        ("0", {"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}, ""),  # numbering no longer matches nvidia-smi
+        ("0", {"CUDA_DEVICE_ORDER": "PCI_BUS_ID"}, "0"),
+        ("0", {"CUDA_VISIBLE_DEVICES": "GPU-1234"}, ""),
+        ("0", {"CUDA_VISIBLE_DEVICES": "all"}, ""),
+        ("all", {}, "0"),  # complete inventory below
+    ],
+)
+async def test_lane_occupancy_follows_the_final_launch_environment(
+    gpu_devices: str, env_overrides: dict[str, str], occupied: str
+) -> None:
+    manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
+    lane = _override_lane(gpu_devices, env_overrides)
+    assert await manager._lane_occupied_gpu_devices(lane, gpu_devices, 1) == occupied  # noqa: SLF001

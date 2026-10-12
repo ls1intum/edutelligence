@@ -168,11 +168,12 @@ def _build_disk_summary(hf_home: str | None) -> DiskSummary:
     now = datetime.now(timezone.utc)
     if not hf_home:
         return DiskSummary(timestamp=now)
-    volume = existing_volume_path(hf_home)
     try:
-        usage = shutil.disk_usage(volume)
+        # Inside the try: resolving the path stats it, which fails with EIO on a
+        # broken cache mount just like the usage read does.
+        usage = shutil.disk_usage(existing_volume_path(hf_home))
     except OSError:
-        logger.debug("Could not read disk usage at %s", volume, exc_info=True)
+        logger.debug("Could not read disk usage for %s", hf_home, exc_info=True)
         return DiskSummary(timestamp=now, path=hf_home)
     mb = 1024 * 1024
     return DiskSummary(

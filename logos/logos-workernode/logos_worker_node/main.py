@@ -138,11 +138,10 @@ def _estimate_model_download_bytes(model_name: str) -> int | None:
 
 async def _models_that_fit_disk(missing: list[str], hf_home: str) -> list[str]:
     """Select missing models that fit on disk while keeping operational headroom."""
-    disk_path = existing_volume_path(hf_home)
     try:
-        usage = await asyncio.to_thread(shutil.disk_usage, disk_path)
+        usage = await asyncio.to_thread(lambda: shutil.disk_usage(existing_volume_path(hf_home)))
     except OSError:
-        logger.warning("Could not check free disk space at %s; skipping model prefetch", disk_path, exc_info=True)
+        logger.warning("Could not check free disk space for %s; skipping model prefetch", hf_home, exc_info=True)
         return []
 
     reserve_bytes = max(_PREFETCH_DISK_RESERVE_MIN_BYTES, int(usage.total * _PREFETCH_DISK_RESERVE_RATIO))

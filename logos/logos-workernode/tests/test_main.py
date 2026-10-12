@@ -91,6 +91,21 @@ async def test_prefetch_selection_fails_closed_when_disk_space_is_unavailable(tm
 
 
 @pytest.mark.asyncio
+async def test_prefetch_selection_skips_when_the_cache_path_cannot_be_resolved(tmp_path, monkeypatch) -> None:
+    def broken_exists(self):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr("logos_worker_node.runtime.Path.exists", broken_exists)
+    estimate_size = MagicMock(return_value=1)
+    monkeypatch.setattr(worker_main, "_estimate_model_download_bytes", estimate_size)
+
+    selected = await worker_main._models_that_fit_disk(["org/model"], str(tmp_path / ".hf_cache"))
+
+    assert selected == []
+    estimate_size.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_prefetch_downloads_only_models_selected_by_disk_budget(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(worker_main, "_models_that_fit_disk", AsyncMock(return_value=["fits"]))
     download = MagicMock()
