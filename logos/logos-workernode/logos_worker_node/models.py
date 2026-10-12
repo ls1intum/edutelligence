@@ -450,11 +450,12 @@ class WorkerConfig(BaseModel):
     prefetch_missing_models: bool = Field(
         default=True,
         description=(
-            "Download capability models that are missing from local storage at "
-            "startup. Runs in the background (non-blocking) via the HuggingFace "
-            "hub using HF_TOKEN, so the worker stays in zero-lane mode while "
-            "weights stream in. Set false to keep the old warn-only behavior "
-            "(e.g. air-gapped hosts that pre-stage weights out of band)."
+            "Download missing capability models at startup only when their full "
+            "Hugging Face snapshot fits available disk space, keeping at least "
+            "1 GiB or 5% of the volume free. Runs in the background (non-blocking) "
+            "via the HuggingFace hub using HF_TOKEN, so the worker stays in "
+            "zero-lane mode while weights stream in. Set false to keep the old "
+            "warn-only behavior (e.g. air-gapped hosts that pre-stage weights out of band)."
         ),
     )
     models_path: str = Field(

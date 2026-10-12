@@ -38,6 +38,69 @@ class _FakeGpuCollector:
         )
 
 
+def test_estimate_model_download_bytes_sums_the_full_hf_snapshot(monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    fake_api = MagicMock()
+    fake_api.model_info.return_value = SimpleNamespace(siblings=[SimpleNamespace(size=7), SimpleNamespace(size=5)])
+    with patch("huggingface_hub.HfApi", return_value=fake_api):
+        size_bytes = worker_main._estimate_model_download_bytes("org/model")
+
+    assert size_bytes == 12
+    fake_api.model_info.assert_called_once_with(
+        "org/model",
+        token=None,
+        files_metadata=True,
+        timeout=15.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_prefetch_selection_only_includes_models_that_fit_with_disk_reserve(tmp_path, monkeypatch) -> None:
+    gib = 1024**3
+    monkeypatch.setattr(
+        worker_main.shutil,
+        "disk_usage",
+        lambda path: SimpleNamespace(total=100 * gib, used=50 * gib, free=50 * gib),
+    )
+    sizes = {
+        "fits-first": 30 * gib,
+        "too-large": 20 * gib,
+        "fits-later": 15 * gib,
+        "unknown": None,
+    }
+    monkeypatch.setattr(worker_main, "_estimate_model_download_bytes", lambda model: sizes[model])
+
+    selected = await worker_main._models_that_fit_disk(
+        ["fits-first", "too-large", "fits-later", "unknown"],
+        str(tmp_path),
+    )
+
+    assert selected == ["fits-first", "fits-later"]
+
+
+@pytest.mark.asyncio
+async def test_prefetch_selection_fails_closed_when_disk_space_is_unavailable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(worker_main.shutil, "disk_usage", MagicMock(side_effect=OSError("disk unavailable")))
+    estimate_size = MagicMock(return_value=1)
+    monkeypatch.setattr(worker_main, "_estimate_model_download_bytes", estimate_size)
+
+    selected = await worker_main._models_that_fit_disk(["org/model"], str(tmp_path))
+
+    assert selected == []
+    estimate_size.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_downloads_only_models_selected_by_disk_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(worker_main, "_models_that_fit_disk", AsyncMock(return_value=["fits"]))
+    download = MagicMock()
+    monkeypatch.setattr(worker_main, "_download_one_model", download)
+
+    await worker_main._prefetch_missing_models(["fits", "does-not-fit"], str(tmp_path))
+
+    download.assert_called_once_with("fits", str(tmp_path))
+
+
 @pytest.mark.asyncio
 async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
     tmp_path,
