@@ -1,0 +1,102 @@
+<div class="public-stats-page">
+  <app-theme-toggle />
+
+  <header class="public-stats-header">
+    <app-logo [size]="48" />
+    <div class="public-stats-header__titles">
+      <h1 class="public-stats-title">Logos Public Statistics</h1>
+      <p class="public-stats-subtitle">
+        Successful requests of the teams that choose to share their usage.
+      </p>
+    </div>
+  </header>
+
+  <div class="public-stats-range" role="group" aria-label="Time range">
+    @for (range of RANGES; track range.days) {
+      <button
+        type="button"
+        class="public-stats-range__option"
+        [class.public-stats-range__option--active]="rangeDays() === range.days"
+        [disabled]="loading()"
+        (click)="setRange(range.days)"
+      >
+        {{ range.label }}
+      </button>
+    }
+  </div>
+
+  @if (loading()) {
+    <p class="public-stats-state">
+      <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Loading the statistics…
+    </p>
+  } @else if (loadError()) {
+    <p class="public-stats-state public-stats-state--error">
+      <i class="pi pi-exclamation-triangle" aria-hidden="true"></i> {{ loadError() }}
+    </p>
+  } @else if (data()) {
+    <div class="public-stats-range-label" aria-live="polite">{{ rangeLabel() }}</div>
+
+    <div class="public-stats-kpis">
+      <div class="public-stats-kpi glass-surface">
+        <div class="public-stats-kpi__value">{{ formatCount(data()?.totals.requests) }}</div>
+        <div class="public-stats-kpi__label">Successful requests</div>
+      </div>
+      <div class="public-stats-kpi glass-surface">
+        <div class="public-stats-kpi__value">{{ formatCount(data()?.totals.totalTokens) }}</div>
+        <div class="public-stats-kpi__label">Tokens served</div>
+      </div>
+      <div class="public-stats-kpi glass-surface">
+        <div class="public-stats-kpi__value">{{ formatCount(models.length) }}</div>
+        <div class="public-stats-kpi__label">Models in use</div>
+      </div>
+    </div>
+
+    @if (hasTraffic) {
+      <section class="public-stats-section glass-surface" aria-label="Daily requests">
+        <h2 class="public-stats-section__title">Successful requests per day</h2>
+        <div class="public-stats-chart" role="img" [attr.aria-label]="'Daily successful requests, ' + rangeLabel()">
+          @for (day of timeSeries; track day.timestamp) {
+            <div
+              class="public-stats-chart__bar"
+              [style.height.%]="barHeight(day.requests)"
+              [title]="formatDay(day.timestamp) + ': ' + formatCount(day.requests) + ' requests'"
+            ></div>
+          }
+        </div>
+        <div class="public-stats-chart__labels">
+          <span>{{ timeSeries.length ? formatDay(timeSeries[0].timestamp) : '' }}</span>
+          <span>{{ timeSeries.length ? formatDay(timeSeries[timeSeries.length - 1].timestamp) : '' }}</span>
+        </div>
+      </section>
+
+      <section class="public-stats-section glass-surface" aria-label="Models">
+        <h2 class="public-stats-section__title">Models</h2>
+        <ul class="public-stats-models">
+          @for (model of models; track modelTrackKey(model)) {
+            <li class="public-stats-model">
+              <span class="public-stats-model__name">{{ model.modelName }}</span>
+              <span class="public-stats-model__bar-track">
+                <span
+                  class="public-stats-model__bar"
+                  [style.width.%]="modelShare(model.requestCount)"
+                ></span>
+              </span>
+              <span class="public-stats-model__count">{{ formatCount(model.requestCount) }}</span>
+            </li>
+          }
+        </ul>
+      </section>
+    } @else {
+      <div class="public-stats-empty glass-surface">
+        <p>No shared usage in this period yet.</p>
+        <p class="public-stats-empty__hint">
+          The numbers appear here as soon as a team shares its successful requests and sends traffic.
+        </p>
+      </div>
+    }
+
+    <footer class="public-stats-footnote">
+      Only successful requests are counted; failures and in-flight requests are never part of this page.
+    </footer>
+  }
+</div>

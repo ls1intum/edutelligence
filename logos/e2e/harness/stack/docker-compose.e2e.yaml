@@ -273,6 +273,22 @@ services:
       - "traefik.http.routers.ws-identity.service=ws-svc"
       - "traefik.http.routers.ws-identity.middlewares=strip-api"
       - "traefik.http.routers.ws-identity.priority=200"
+      # The public statistics page: unauthenticated GET, answering only the
+      # successful requests of teams that opted in. Mirrors docker-compose.dev.yaml.
+      - "traefik.http.routers.ws-public-stats.rule=PathPrefix(`/api/stats`)"
+      - "traefik.http.routers.ws-public-stats.entrypoints=web8080"
+      - "traefik.http.routers.ws-public-stats.service=ws-svc"
+      - "traefik.http.routers.ws-public-stats.middlewares=strip-api"
+      - "traefik.http.routers.ws-public-stats.priority=200"
+      # The team page reads a team's keys and model grants from /api/admin/teams.
+      # Without this router the request falls through to the UI's catch-all and
+      # comes back as index.html, so the page reports "Failed to load team".
+      # Mirrors docker-compose.dev.yaml (minus its rate limit).
+      - "traefik.http.routers.ws-admin.rule=PathPrefix(`/api/admin`)"
+      - "traefik.http.routers.ws-admin.entrypoints=web8080"
+      - "traefik.http.routers.ws-admin.service=ws-svc"
+      - "traefik.http.routers.ws-admin.middlewares=strip-api"
+      - "traefik.http.routers.ws-admin.priority=200"
       - "traefik.http.routers.ws-config.rule=PathPrefix(`/api/logosdb`)"
       - "traefik.http.routers.ws-config.entrypoints=web8080"
       - "traefik.http.routers.ws-config.service=ws-svc"
