@@ -111,3 +111,27 @@ def test_scheduler_signals_carry_the_gpus_a_lane_occupies():
     )
 
     assert signals["lanes"]["a"]["occupied_gpu_devices"] == "1"
+
+
+def test_scheduler_signals_carry_the_disk_space_of_the_model_volume():
+    from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+
+    disk = {"source": "statvfs", "path": "/cache/.hf_cache", "total_mb": 1000.0, "used_mb": 600.0, "free_mb": 400.0}
+    provider = _build_logosnode_scheduler_signals({"lanes": [], "devices": {}, "disk": disk})["provider"]
+
+    assert provider["disk_total_mb"] == 1000.0
+    assert provider["disk_used_mb"] == 600.0
+    assert provider["disk_free_mb"] == 400.0
+    assert provider["disk_path"] == "/cache/.hf_cache"
+
+
+def test_scheduler_signals_leave_out_disk_space_that_is_unknown():
+    from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+
+    for runtime in (
+        {"lanes": [], "devices": {}},
+        {"lanes": [], "devices": {}, "disk": {"source": "unavailable", "total_mb": 0.0, "free_mb": 0.0}},
+    ):
+        provider = _build_logosnode_scheduler_signals(runtime)["provider"]
+        assert "disk_free_mb" not in provider
+        assert "disk_total_mb" not in provider

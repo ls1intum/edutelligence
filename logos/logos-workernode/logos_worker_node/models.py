@@ -862,6 +862,21 @@ class DeviceSummary(BaseModel):
     free_memory_mb: float = 0.0
 
 
+class DiskSummary(BaseModel):
+    """Space on the volume that holds the Hugging Face cache (model weights).
+
+    Shown per node on the statistics page and the reason the startup prefetch
+    skips models: a full disk stops downloads and lane starts alike.
+    """
+
+    timestamp: datetime
+    source: Literal["statvfs", "unavailable"] = "unavailable"
+    path: str = ""
+    total_mb: float = 0.0
+    used_mb: float = 0.0
+    free_mb: float = 0.0
+
+
 class HostMemorySummary(BaseModel):
     """Host-RAM telemetry independent of GPU memory.
 
@@ -961,6 +976,7 @@ class WorkerRuntimeStatus(BaseModel):
     devices: DeviceSummary
     gpu_devices: str = "all"
     host_memory: HostMemorySummary | None = None
+    disk: DiskSummary | None = None
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None

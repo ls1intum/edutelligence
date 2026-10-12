@@ -486,6 +486,16 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "runtime_modes": ["vllm"],
     }
 
+    # Space on the volume holding the worker's Hugging Face cache. Missing on
+    # workers that predate the report, zero-filled when it could not be read:
+    # both leave the fields out so the page shows no disk rather than 0 GB.
+    disk = runtime.get("disk") if isinstance(runtime.get("disk"), dict) else {}
+    if disk.get("source") == "statvfs" and (_safe_float(disk.get("total_mb")) or 0.0) > 0:
+        provider_signals["disk_total_mb"] = _safe_float(disk.get("total_mb"))
+        provider_signals["disk_used_mb"] = _safe_float(disk.get("used_mb"))
+        provider_signals["disk_free_mb"] = _safe_float(disk.get("free_mb"))
+        provider_signals["disk_path"] = str(disk.get("path") or "")
+
     raw_gpu_faults = devices.get("gpu_faults")
     provider_signals["gpu_faults"] = (
         [str(fault) for fault in raw_gpu_faults if fault] if isinstance(raw_gpu_faults, list) else []

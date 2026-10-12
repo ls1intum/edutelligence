@@ -24,7 +24,10 @@ import {
   describeWorkerVersion,
   extractProviderGpuFaults,
   formatTimeAgo,
+  extractProviderDiskMb,
   extractProviderHostRamMb,
+  formatStorageMb,
+  type ProviderDisk,
   extractProviderVramMb,
   formatPercent,
   formatRangeLabel,
@@ -99,6 +102,8 @@ type ProviderGlassRow = {
   freeVramMb: number;
   modelsLoaded: number;
   ram: { reported: boolean; totalMb: number; freeMb: number; usedMb: number };
+  /** Space on the model volume; not reported while the worker is offline. */
+  disk: ProviderDisk;
   hasLaneRam: boolean;
   /**
    * True when the worker runs on unified memory (Apple Silicon / Metal): the
@@ -413,6 +418,7 @@ export class Statistics implements OnInit, OnDestroy {
   }
 
   readonly formatTimeAgo = formatTimeAgo;
+  readonly formatStorageMb = formatStorageMb;
   readonly refreshing = signal(false);
   readonly resetZoomCounter = signal(0);
   readonly chartTooltip = signal<ChartTooltip | null>(null);
@@ -646,6 +652,9 @@ export class Statistics implements OnInit, OnDestroy {
         freeVramMb: vram.freeMb,
         modelsLoaded,
         ram,
+        disk: this._isProviderOnline(name)
+          ? extractProviderDiskMb(sample)
+          : extractProviderDiskMb(null),
         hasLaneRam: Object.values(lanes).some((l) => typeof l.host_ram_mb === 'number'),
         unifiedMemory,
         // The single pool is the host's physical RAM; the device reading is

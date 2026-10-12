@@ -330,3 +330,41 @@ async def test_build_runtime_status_keeps_the_faults_when_every_gpu_is_lost(monk
     assert runtime.devices.faulted_gpu_indices == [0]
     assert runtime.devices.total_memory_mb == 0.0
     assert runtime.devices.devices == []
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_reports_disk_space_of_the_hf_cache_volume(monkeypatch, tmp_path):
+    mb = 1024 * 1024
+    seen = []
+
+    def disk_usage(path):
+        seen.append(path)
+        return SimpleNamespace(total=1000 * mb, used=600 * mb, free=400 * mb)
+
+    monkeypatch.setattr("logos_worker_node.runtime.shutil.disk_usage", disk_usage)
+    app = _make_app([], _NvidiaCollector())
+    # The cache directory does not exist yet: measure the volume it will live on.
+    app.state.hf_home = str(tmp_path / "missing" / ".hf_cache")
+
+    runtime = await build_runtime_status(app)
+
+    assert seen == [tmp_path]
+    assert runtime.disk is not None
+    assert runtime.disk.source == "statvfs"
+    assert runtime.disk.path == app.state.hf_home
+    assert (runtime.disk.total_mb, runtime.disk.used_mb, runtime.disk.free_mb) == (1000.0, 600.0, 400.0)
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_marks_disk_unavailable_when_it_cannot_be_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "logos_worker_node.runtime.shutil.disk_usage", lambda path: (_ for _ in ()).throw(OSError("stale mount"))
+    )
+    app = _make_app([], _NvidiaCollector())
+    app.state.hf_home = str(tmp_path)
+
+    runtime = await build_runtime_status(app)
+
+    assert runtime.disk is not None
+    assert runtime.disk.source == "unavailable"
+    assert runtime.disk.free_mb == 0.0

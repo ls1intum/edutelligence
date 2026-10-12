@@ -180,6 +180,14 @@ export interface VramV2Sample {
       host_ram_total_mb?: number;
       host_ram_used_mb?: number;
       host_ram_available_mb?: number;
+      /**
+       * Space on the volume holding the worker's Hugging Face cache (MiB).
+       * Left out when the worker predates the report or could not read it.
+       */
+      disk_total_mb?: number;
+      disk_used_mb?: number;
+      disk_free_mb?: number;
+      disk_path?: string;
       lane_count?: number;
       active_requests?: number;
       loaded_lane_count?: number;

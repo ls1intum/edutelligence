@@ -510,6 +510,65 @@
   border: 1px solid rgb(var(--color-typography-500));
 }
 
+// ── Disk meter: free space on the model volume, at the end of the row header ──
+.stats-disk-meter {
+  --disk-color: var(--color-accent-cyan);
+
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px;
+  border-radius: 9999px;
+  border: 1px solid rgb(var(--disk-color) / var(--opacity-border));
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-500));
+  white-space: nowrap;
+
+  strong {
+    color: rgb(var(--color-typography-100));
+    font-weight: var(--font-weight-medium);
+  }
+
+  .pi {
+    font-size: var(--font-size-xs);
+    color: rgb(var(--disk-color));
+  }
+}
+
+.stats-disk-meter--low {
+  --disk-color: var(--color-warning);
+
+  background: rgb(var(--color-warning) / var(--opacity-soft));
+}
+
+.stats-disk-meter--critical {
+  --disk-color: var(--color-error);
+
+  background: rgb(var(--color-error) / var(--opacity-soft));
+}
+
+.stats-disk-meter__bar {
+  width: 64px;
+  height: 6px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: rgb(var(--color-typography-500) / 0.25);
+}
+
+.stats-disk-meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgb(var(--disk-color));
+}
+
+@media (max-width: 600px) {
+  .stats-disk-meter {
+    margin-left: 0;
+  }
+}
+
 // ── Range badge ───────────────────────────────────────────────────────────────
 .stats-range-badge {
   @include glass-surface;

@@ -407,6 +407,24 @@
                     <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Calibrating…
                   </span>
                 }
+                @if (row.disk.reported) {
+                  <span class="stats-disk-meter"
+                        [class.stats-disk-meter--low]="row.disk.level === 'low'"
+                        [class.stats-disk-meter--critical]="row.disk.level === 'critical'"
+                        [title]="'Model storage' + (row.disk.path ? ' (' + row.disk.path + ')' : '') + ': '
+                          + formatStorageMb(row.disk.usedMb) + ' used of ' + formatStorageMb(row.disk.totalMb)">
+                    <i class="pi" aria-hidden="true"
+                       [class.pi-database]="row.disk.level === 'ok'"
+                       [class.pi-exclamation-triangle]="row.disk.level !== 'ok'"></i>
+                    <span class="stats-disk-meter__text">
+                      Disk <strong>{{ formatStorageMb(row.disk.freeMb) }}</strong> free of {{ formatStorageMb(row.disk.totalMb) }}
+                    </span>
+                    <span class="stats-disk-meter__bar" role="meter" aria-label="Disk used"
+                          aria-valuemin="0" aria-valuemax="100" [attr.aria-valuenow]="row.disk.usedPct | number: '1.0-0'">
+                      <span class="stats-disk-meter__fill" [style.width.%]="row.disk.usedPct"></span>
+                    </span>
+                  </span>
+                }
               </div>
 
               @if (!row.online) {

@@ -31,7 +31,7 @@ from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.model_cache import ModelRamCache, _DisabledModelRamCache, create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import ProcessState, model_can_sleep
-from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary
+from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary, existing_volume_path
 
 logging.basicConfig(
     level=logging.INFO,
@@ -138,9 +138,7 @@ def _estimate_model_download_bytes(model_name: str) -> int | None:
 
 async def _models_that_fit_disk(missing: list[str], hf_home: str) -> list[str]:
     """Select missing models that fit on disk while keeping operational headroom."""
-    disk_path = Path(hf_home)
-    while not disk_path.exists() and disk_path != disk_path.parent:
-        disk_path = disk_path.parent
+    disk_path = existing_volume_path(hf_home)
     try:
         usage = await asyncio.to_thread(shutil.disk_usage, disk_path)
     except OSError:
@@ -1265,6 +1263,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Mac without LOGOS_WORKER_CACHE_ROOT that is not the worker models path.
     cache_root = _resolve_worker_cache_root(cfg)
     hf_home = os.environ.get("HF_HOME", "").strip() or os.path.join(cache_root, ".hf_cache")
+    # The heartbeat reports free space on this volume (statistics page).
+    app.state.hf_home = hf_home
     model_cache = create_model_cache(
         tmpfs_path=os.environ.get("LOGOS_TMPFS_CACHE_PATH", "").strip() or None,
         hf_home=hf_home,
