@@ -209,6 +209,26 @@ def test_plans_from_config_simple(tmp_path):
     assert plans[1]["model"] == "org/model-b"
 
 
+def test_plans_from_config_puts_worker_wide_args_before_the_models_own(tmp_path):
+    """Serving lanes get engines.vllm.global_extra_args first; the probe and
+    the calibration key must describe that same command line."""
+    cfg = {
+        "logos": {"capabilities_models": ["org/a", "org/b"]},
+        "engines": {
+            "vllm": {
+                "global_extra_args": ["--kv-cache-dtype", "fp8"],
+                "model_overrides": {"org/a": {"extra_args": ["--kv-cache-dtype", "auto"]}},
+            }
+        },
+    }
+    config_path = tmp_path / "config.yml"
+    config_path.write_text(yaml.safe_dump(cfg))
+
+    plans = {plan["model"]: plan for plan in plans_from_config(config_path)}
+    assert plans["org/a"]["extra_args"] == ["--kv-cache-dtype", "fp8", "--kv-cache-dtype", "auto"]
+    assert plans["org/b"]["extra_args"] == ["--kv-cache-dtype", "fp8"]
+
+
 def test_plans_from_config_with_overrides(tmp_path):
     cfg = {
         "logos": {

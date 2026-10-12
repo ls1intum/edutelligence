@@ -3768,7 +3768,9 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
     logos = raw.get("logos") or {}
     caps_raw = logos.get("capabilities_models") or []
     caps_overrides: dict[str, dict] = dict(logos.get("capabilities_overrides") or {})
-    vllm_model_overrides: dict[str, dict] = ((raw.get("engines") or {}).get("vllm") or {}).get("model_overrides") or {}
+    vllm_engine: dict[str, Any] = (raw.get("engines") or {}).get("vllm") or {}
+    vllm_model_overrides: dict[str, dict] = vllm_engine.get("model_overrides") or {}
+    global_args = [str(arg) for arg in (vllm_engine.get("global_extra_args") or [])]
 
     plans: list[dict[str, Any]] = []
     for entry in caps_raw:
@@ -3814,6 +3816,11 @@ def plans_from_config(config_path: Path) -> list[dict[str, Any]]:
             if k == "model" or k.startswith("_"):
                 continue
             plan.setdefault(k, v)
+
+        # Same order as the serving spawners: worker-wide flags first, so a
+        # model's own extra_args still win (argparse keeps the last one).
+        if global_args:
+            plan["extra_args"] = [*global_args, *(plan.get("extra_args") or [])]
 
         plans.append(plan)
 

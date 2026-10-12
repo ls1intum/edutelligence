@@ -55,8 +55,16 @@ def read_legacy_profiles(state_dir: Path) -> dict[str, Any] | None:
 
 
 def mark_legacy_profiles_migrated(state_dir: Path) -> None:
-    """Rename the files instead of deleting them, so a rollback can use them."""
+    """Rename the files instead of deleting them, so a rollback can use them.
+
+    A failed rename must not stop startup: Logos ignores a repeated import.
+    """
     for path in _legacy_files(state_dir):
-        if path.exists():
+        if not path.exists():
+            continue
+        try:
             path.rename(path.with_name(path.name + _MIGRATED_SUFFIX))
-            logger.info("Handed %s over to Logos; kept as %s%s", path, path.name, _MIGRATED_SUFFIX)
+        except OSError:
+            logger.warning("Handed %s over to Logos but could not rename it", path, exc_info=True)
+            continue
+        logger.info("Handed %s over to Logos; kept as %s%s", path, path.name, _MIGRATED_SUFFIX)

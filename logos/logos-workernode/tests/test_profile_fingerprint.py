@@ -130,3 +130,20 @@ def test_metal_versions_come_from_the_metal_binary(monkeypatch, tmp_path):
     assert serving_vllm_binary(cfg, "vllm") == "vllm"
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
     assert serving_vllm_binary(cfg, "vllm") == str(binary)
+
+
+def test_a_worker_wide_vllm_flag_changes_the_key(tmp_path):
+    import yaml
+
+    from logos_worker_node.calibration import plans_from_config
+
+    def _keyed(global_args):
+        path = tmp_path / "config.yml"
+        path.write_text(
+            yaml.safe_dump(
+                {"logos": {"capabilities_models": ["org/m"]}, "engines": {"vllm": {"global_extra_args": global_args}}}
+            )
+        )
+        return _key(plans_from_config(path)[0], [_gpu(0)])
+
+    assert _keyed([]) != _keyed(["--kv-cache-dtype", "fp8"])

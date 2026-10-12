@@ -45,3 +45,16 @@ def test_handed_over_files_are_renamed_not_deleted(tmp_path):
     assert not (tmp_path / "model_profiles.yml").exists()
     assert (tmp_path / "model_profiles.yml.migrated").exists()
     assert read_legacy_profiles(tmp_path) is None
+
+
+def test_a_failed_rename_does_not_stop_startup(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    (tmp_path / "model_profiles.yml").write_text("model_profiles: {}\n")
+
+    def _read_only(self, target):
+        raise PermissionError("read-only data directory")
+
+    monkeypatch.setattr(Path, "rename", _read_only)
+    mark_legacy_profiles_migrated(tmp_path)  # must not raise
+    assert (tmp_path / "model_profiles.yml").exists()
