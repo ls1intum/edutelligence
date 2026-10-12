@@ -174,7 +174,17 @@ export class SettingsTabComponent implements OnChanges {
   }
 
   ngOnChanges(changes: SimpleChanges): void {
-    if (this.team) this.resetForm();
+    if (this.team) {
+      const previous = changes['team']?.previousValue as TeamDetail | undefined;
+      // A reload that left every stored form value as it was (the public
+      // statistics toggle asks for one) must not overwrite what the admin has
+      // typed into the budget and limit fields but not saved yet.
+      if (previous && this.sameFormSource(previous, this.team)) {
+        this.syncPublicStatsChecked();
+      } else {
+        this.resetForm();
+      }
+    }
     if (this.teamId && changes['teamId']) void this.loadProviderBudgets();
     if (this.canLinkKeycloak && !this.keycloakGroupsRequested) {
       this.keycloakGroupsRequested = true;
@@ -190,10 +200,28 @@ export class SettingsTabComponent implements OnChanges {
     this.localRpm.set(this.team.default_local_rpm_limit?.toString() ?? '');
     this.localTpm.set(this.team.default_local_tpm_limit?.toString() ?? '');
     this.keycloakGroup.set(this.team.keycloak_group ?? '');
-    // A reload while a toggle is in flight must not clobber the box the
-    // user just flipped: the settled value lands with the reload that the
-    // successful toggle itself asks for.
+    this.syncPublicStatsChecked();
+  }
+
+  /**
+   * A reload while a toggle is in flight must not clobber the box the user
+   * just flipped: the settled value lands with the reload that the successful
+   * toggle itself asks for.
+   */
+  private syncPublicStatsChecked(): void {
     if (!this.publicStatsLoading()) this.publicStatsChecked.set(this.team.share_public_stats);
+  }
+
+  /** Whether two loads of the team store the same values for the form's fields. */
+  private sameFormSource(a: TeamDetail, b: TeamDetail): boolean {
+    return a.id === b.id
+      && a.team_monthly_budget_micro_cents === b.team_monthly_budget_micro_cents
+      && a.default_monthly_budget_micro_cents === b.default_monthly_budget_micro_cents
+      && a.default_cloud_rpm_limit === b.default_cloud_rpm_limit
+      && a.default_cloud_tpm_limit === b.default_cloud_tpm_limit
+      && a.default_local_rpm_limit === b.default_local_rpm_limit
+      && a.default_local_tpm_limit === b.default_local_tpm_limit
+      && (a.keycloak_group ?? '') === (b.keycloak_group ?? '');
   }
 
   /** Group suggestions for the link field; silently stays free text on failure. */

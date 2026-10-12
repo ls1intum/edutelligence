@@ -72,7 +72,7 @@
       <section class="public-stats-section glass-surface" aria-label="Models">
         <h2 class="public-stats-section__title">Models</h2>
         <ul class="public-stats-models">
-          @for (model of models; track model.modelName) {
+          @for (model of models; track modelTrackKey(model)) {
             <li class="public-stats-model">
               <span class="public-stats-model__name">{{ model.modelName }}</span>
               <span class="public-stats-model__bar-track">

@@ -68,7 +68,7 @@ describe('PublicStats', () => {
     component.ngOnInit();
 
     const request = http.expectOne(req => req.url.startsWith('/api/stats?start_date='));
-    request.flush('', { error: { status: 503, statusText: 'Service Unavailable' } });
+    request.flush('', { status: 503, statusText: 'Service Unavailable' });
     await settle();
 
     expect(component.data()).toBeNull();
@@ -191,5 +191,15 @@ describe('PublicStats', () => {
     // Month names plus day, joined by an en dash; the exact day depends on
     // the local time zone, so only the shape is asserted.
     expect(component.rangeLabel()).toMatch(/^[A-Z][a-z]{2} \d{1,2} – [A-Z][a-z]{2} \d{1,2}$/);
+  });
+
+  it('tracks a deleted model apart from a same-named live one', () => {
+    const live = { modelId: 3, modelName: 'gpt-4', requestCount: 1 };
+    const deleted = { modelId: null, modelName: 'gpt-4', requestCount: 1 };
+    expect(component.modelTrackKey(live)).not.toBe(component.modelTrackKey(deleted));
+  });
+
+  it('formats a UTC-midnight bucket as its own UTC day in any time zone', () => {
+    expect(component.formatDay(Date.UTC(2026, 1, 3))).toBe('Feb 3');
   });
 });

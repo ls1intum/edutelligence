@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.PublicStatsRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.PublicStatsTimeSeriesProjection;
@@ -43,6 +45,12 @@ public class PublicStatsService {
         this.publicStatsRepository = publicStatsRepository;
     }
 
+    /**
+     * One read-only snapshot for the whole aggregation: the totals, the model
+     * breakdown and the daily series come from three queries, and a request or
+     * opt-in change landing between them would make the figures disagree.
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Map<String, Object> getPublicStats(String startDate, String endDate) {
         ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
         ZonedDateTime endDt = endDate != null ? parseParameter(endDate, "end_date") : now;

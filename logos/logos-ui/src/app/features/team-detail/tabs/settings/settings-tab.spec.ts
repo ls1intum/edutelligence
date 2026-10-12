@@ -1,3 +1,4 @@
+import { SimpleChange } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 
 import { TeamManagementService } from '../../../../core/services/team-management.service';
@@ -311,6 +312,32 @@ describe('SettingsTabComponent — public statistics opt-in', () => {
     component.team = teamDetail({ share_public_stats: true });
     component.ngOnChanges({});
     expect(component.publicStatsChecked()).toBe(true);
+  });
+
+  it('keeps unsaved budget and limit edits when the toggle reloads the team', async () => {
+    const component = setup();
+    component.cloudRpm.set('42');
+    component.teamBudget.set('12.5');
+
+    await component.togglePublicStats(true);
+    const previous = component.team;
+    component.team = teamDetail({ share_public_stats: true });
+    component.ngOnChanges({ team: new SimpleChange(previous, component.team, false) });
+
+    expect(component.publicStatsChecked()).toBe(true);
+    expect(component.cloudRpm()).toBe('42');
+    expect(component.teamBudget()).toBe('12.5');
+  });
+
+  it('resets the form when the reload changes a stored value', () => {
+    const component = setup();
+    component.cloudRpm.set('42');
+
+    const previous = component.team;
+    component.team = teamDetail({ default_cloud_rpm_limit: 9 });
+    component.ngOnChanges({ team: new SimpleChange(previous, component.team, false) });
+
+    expect(component.cloudRpm()).toBe('9');
   });
 
   it('reports the failure and does not re-read the team', async () => {

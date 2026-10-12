@@ -89,6 +89,14 @@ export class PublicStats implements OnInit {
     return this.data()?.models ?? [];
   }
 
+  /**
+   * Live rows are tracked by model id; a deleted model has none, and its
+   * name must not collide with a same-named replacement that has one.
+   */
+  modelTrackKey(model: PublicStatsModel): string {
+    return model.modelId !== null ? `id:${model.modelId}` : `deleted:${model.modelName}`;
+  }
+
   get timeSeries(): PublicStatsDay[] {
     return this.data()?.timeSeries ?? [];
   }
@@ -118,7 +126,7 @@ export class PublicStats implements OnInit {
 
   formatDay(isoOrEpoch: string | number): string {
     const date = typeof isoOrEpoch === 'number' ? new Date(isoOrEpoch) : new Date(isoOrEpoch);
-    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(date);
+    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(date);
   }
 
   /** The chart's bar height for a day, scaled to the busiest day. */
