@@ -464,7 +464,7 @@ whole-process `VLLM_METAL_MEMORY_FRACTION`), no TP (single GPU), no sleep
 `residency_source="calibrated"`. The "Calibrate uncalibrated" admin action
 remains available on Metal nodes. The application no longer starts the automatic
 calibration timer; scheduled maintenance uses the opt-in
-[nightly benchmark rotation](../logos-orchestrator/docs/nightly-benchmarks.md).
+[nightly benchmark rotation](../docs/admin/nightly-benchmarks.md).
 
 `model_profile_overrides` remains available as a manual fallback (e.g. to
 pin a number before the automatic probe has run, or to work around a

@@ -5,7 +5,7 @@ The Models → Performance runner supports public Hugging Face datasets with a p
 ## Manual runs and nightly runs
 
 This guide describes the manual runner and its batches. The
-[nightly rotation](nightly-benchmarks.md) is a separate opt-in schedule on the
+[nightly rotation](../../docs/admin/nightly-benchmarks.md) is a separate opt-in schedule on the
 same Performance tab.
 
 | Behavior | Manual runner | Nightly rotation |

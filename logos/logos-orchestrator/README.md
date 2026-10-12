@@ -25,6 +25,6 @@ path reuses the existing GuideLLM job, inference logging and result storage.
 | `benchmarks/reservations.py` | Worker/model ownership and authenticated benchmark requests |
 | `routers/nightly_benchmarks.py` | Internal status and activation API |
 
-See the [nightly benchmark guide](docs/nightly-benchmarks.md) for the complete
+See the [nightly benchmark guide](../docs/admin/nightly-benchmarks.md) for the complete
 policy, operator workflow and test commands. See
 [configurable benchmarks](docs/benchmark-configuration.md) for manual runs.

@@ -46,6 +46,7 @@ the error reports and the scheduling statistics of the model.
 The **Performance** tab provides nightly benchmarks for each model/worker pair.
 Schedules are off by default. Activation requires an updated, connected worker.
 See [deployment requirements](../deployment.md#nightly-benchmarks) before activation.
+See the [nightly benchmark guide](../admin/nightly-benchmarks.md) for rotation, parameter values and recovery rules.
 
 1. Open a model from **Models**.
 2. Select **Performance**.

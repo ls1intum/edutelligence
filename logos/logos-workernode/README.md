@@ -158,5 +158,5 @@ pause. Restore worker connectivity and resolve the reported lane error; the
 scheduler then retries recovery. Disabling a schedule does not discard its
 recovery journal or release a worker whose original configuration is not ready.
 
-See the [nightly benchmark guide](../logos-orchestrator/docs/nightly-benchmarks.md)
+See the [nightly benchmark guide](../docs/admin/nightly-benchmarks.md)
 for rotation, progress rules and deployment validation.

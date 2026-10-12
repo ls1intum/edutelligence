@@ -1,3 +1,7 @@
+---
+title: Nightly Benchmarks
+---
+
 # Nightly benchmarks
 
 Logos admins enable or disable a nightly schedule for each model/worker pair on
@@ -13,10 +17,10 @@ restores the worker before it returns to production.
 
 ## Enable, inspect and disable a schedule
 
-See the [illustrated admin walkthrough](../../docs/roles/logos-admin.md#nightly-benchmarks)
+See the [illustrated admin walkthrough](../roles/logos-admin.md#nightly-benchmarks)
 for screenshots of the plan and both confirmation dialogs.
 
-![Example schedule with the model, parameter values and dataset previews](../../docs/static/img/roles/logos-admin-nightly-benchmarks.png)
+![Example schedule with the model, parameter values and dataset previews](../static/img/roles/logos-admin-nightly-benchmarks.png)
 
 1. Sign in as a Logos Admin and open **Models**.
 2. Open the model's **Model Details → Performance** tab.
@@ -43,17 +47,18 @@ review individual outcomes before comparing throughput.
 
 ## Automatic pair rotation
 
-Each night admits at most two enabled model/worker pairs, sequentially. Pairs
-that have never run come first, followed by the oldest previous attempt, with
-pair ID as a stable tie-breaker. Offline or otherwise unavailable pairs are
-skipped before admission and do not consume a slot. Disabled pairs are excluded.
+Each night admits at most 2 enabled model/worker pairs, one after the other.
+Pairs without a previous attempt come first, followed by the oldest previous attempt.
+The pair ID determines the order when previous attempt dates match.
+The scheduler skips unavailable pairs before admission; they do not consume a slot.
+The scheduler excludes disabled pairs.
 
 The quota counts admitted pairs, including failed or cancelled plans. All
 parameter configurations and the bounded retry belong to the same pair's slot.
 The count persists across application restarts and disabling/re-enabling a
 schedule cannot reset it. The next Berlin calendar date has a fresh quota.
 
-The 04:50 admission cutoff can leave fewer than two pairs tested. Remaining
+The 04:50 admission cutoff can leave fewer than 2 pairs tested. Remaining
 pairs keep their priority for the next night. Recovery of an interrupted worker
 always happens before selection, even when tonight's quota is already full.
 
@@ -68,24 +73,24 @@ All times use `Europe/Berlin`, including daylight-saving changes.
 - At or above 50%, let the current configuration finish. Do not start another
   configuration afterwards. The runner's two-hour measurement timeout remains
   an outer limit; the preparation budget is separate.
-- During measurement, five minutes without output content or a successful
+- During measurement, 5 minutes without output content or a successful
   request completion stops the run. Transport and lease heartbeats do not
   count. This watchdog also applies after 05:00.
-- A stalled run gets at most one retry with the same configuration, after a
+- A stalled run gets at most 1 retry with the same configuration, after a
   worker-lane restart, and only before 04:50. A second stall skips that
   configuration. Configuration errors are recorded and skipped without retry.
 - Preparation and warm-up have a separate 15-minute budget. Worker draining
   also has a 15-minute budget. Cleanup can finish after the nominal window.
 
-The watchdog polls once per second. The scheduler checks eligible schedules
-every 15 seconds. Neither is a real-time clock guarantee.
+The watchdog checks progress every 1 s. The scheduler checks eligible schedules
+every 15 s. These intervals do not guarantee an exact response time.
 
 ## Workload and parameter plan
 
-Each nightly plan starts with the current production configuration. Where
-explicit positive values are known, it tests `max_num_seqs` and
-`max_num_batched_tokens` at approximately 75% and 125% of their current values,
-changing only one parameter at a time. With sequence limit 16 and batch-token
+Each nightly plan starts with the current production configuration.
+If explicit positive values are known, then it tests `max_num_seqs` and
+`max_num_batched_tokens` at approximately 75% and 125% of their current values.
+It changes only 1 parameter at a time. With sequence limit 16 and batch-token
 limit 4096, the candidate configurations are:
 
 | Configuration | `max_num_seqs` | `max_num_batched_tokens` |
@@ -195,7 +200,7 @@ last successful measurement. The current pair limit is the code constant
 | `disabled` | The pair is excluded from future rotation. Check `recovery_required` before assuming cleanup is complete. |
 
 A restart, a failed run or an opt-in change does not clear the nightly quota.
-If fewer than two pairs run, check eligibility, existing manual jobs, recovery
+If fewer than 2 pairs run, check eligibility, existing manual jobs, recovery
 and the 04:50 cutoff. One long pair can use the available admission window.
 
 ## Validation

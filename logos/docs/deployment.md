@@ -123,7 +123,7 @@ The automatic calibration timer no longer starts with the application.
 Explicit calibration remains available.
 The old `LOGOS_CALIB_WINDOW_*` variables do not control nightly benchmarks.
 
-See the [nightly benchmark guide](https://github.com/ls1intum/edutelligence/blob/main/logos/logos-orchestrator/docs/nightly-benchmarks.md)
+See the [nightly benchmark guide](admin/nightly-benchmarks.md)
 for activation, the fixed workload, parameter values, API requests and diagnostic states.
 
 ## Security & rate limiting

@@ -30,7 +30,7 @@ benchmark editor. Changing that editor does not change the fixed nightly
 workload. **Latest nightly results** shows configuration outcomes and retries;
 successful measurements also appear in the existing performance comparison.
 
-See the [nightly benchmark guide](../logos-orchestrator/docs/nightly-benchmarks.md)
+See the [nightly benchmark guide](../docs/admin/nightly-benchmarks.md)
 for the fixed workload, time limits, recovery and deployment requirements.
 
 ## Development server

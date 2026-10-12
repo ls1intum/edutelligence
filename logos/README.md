@@ -30,7 +30,7 @@ confirmation. Schedules start disabled.
 - Restore the original worker configuration after the plan. Store results for
   review; do not automatically apply a winning configuration to production.
 
-See the [nightly benchmark guide](logos-orchestrator/docs/nightly-benchmarks.md)
+See the [nightly benchmark guide](docs/admin/nightly-benchmarks.md)
 for activation, selection, limits, deployment, recovery and API details. The
 [manual benchmark guide](logos-orchestrator/docs/benchmark-configuration.md)
 describes the separate dataset editor and benchmark batches.
