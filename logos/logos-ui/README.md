@@ -2,6 +2,34 @@
 
 This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 21.2.10.
 
+## Nightly benchmarks in Model Details
+
+A Logos Admin opens **Models → Model Details → Performance**. Each Logos worker
+pair has a **Nightly benchmarks** card above the manual benchmark editor.
+
+The card shows the model, **Parameters to be tested**, activation state and the
+latest schedule state. It lists concrete values from the status API. Unknown
+serving limits show **Current configuration only**. This preview reflects the
+current worker settings; the scheduler constructs the plan again at run start.
+
+Choose **Enable nightly runs…** and confirm **Enable nightly runs** to add the
+pair to the rotation. Choose **Disable nightly runs…** and confirm
+**Disable nightly runs** to remove it. **Cancel** leaves the saved state unchanged.
+The schedule remains active after closing the page. Disabling also cancels an
+active nightly run and restores the worker before production traffic resumes.
+
+The rotation selects up to two enabled pairs per night, with never-tested pairs
+first and the oldest previous attempt next. Selection is not a guarantee that
+every enabled pair runs tonight: worker availability and time limits still apply.
+
+The dataset selector and question previews below the card belong to the manual
+benchmark editor. Changing that editor does not change the fixed nightly
+workload. **Latest nightly results** shows configuration outcomes and retries;
+successful measurements also appear in the existing performance comparison.
+
+See the [nightly benchmark guide](../logos-orchestrator/docs/nightly-benchmarks.md)
+for the fixed workload, time limits, recovery and deployment requirements.
+
 ## Development server
 
 To start a local development server, run:

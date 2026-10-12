@@ -11,6 +11,31 @@ Schedules are off by default and persist in PostgreSQL. The nightly plan is inde
 of the manual benchmark editor. Disabling a schedule cancels its active run and
 restores the worker before it returns to production.
 
+## Enable, inspect and disable a schedule
+
+1. Sign in as a Logos Admin and open **Models**.
+2. Open the model's **Model Details → Performance** tab.
+3. Find the **Nightly benchmarks** card for the intended worker.
+4. Review **Model** and **Parameters to be tested**.
+5. Select **Enable nightly runs…**, then confirm **Enable nightly runs**.
+6. Check that the card shows **Nightly runs activated**.
+
+The schedule persists after a page reload or browser close. To remove the pair
+from rotation, select **Disable nightly runs…** and confirm **Disable nightly runs**.
+Cancelling either dialog leaves the saved state unchanged. Activation requires
+an updated, connected worker. Run admission also checks the lane and the other
+available workers.
+
+The card shows a plan for this pair, not a guaranteed reservation for tonight.
+The scheduler selects eligible pairs at runtime. The dataset editor and question
+previews below the card remain available for manual runs; they do not alter the
+nightly workload.
+
+The next day, expand **Latest nightly results** and inspect each configuration's
+outcome, attempt and benchmark ID. Use the performance comparison below for
+successful measurements. A finished plan can contain failed configurations;
+review individual outcomes before comparing throughput.
+
 ## Automatic pair rotation
 
 Each night admits at most two enabled model/worker pairs, sequentially. Pairs
@@ -55,8 +80,19 @@ every 15 seconds. Neither is a real-time clock guarantee.
 Each nightly plan starts with the current production configuration. Where
 explicit positive values are known, it tests `max_num_seqs` and
 `max_num_batched_tokens` at approximately 75% and 125% of their current values,
-changing only one parameter at a time. Invalid combinations are skipped. If
-these values are unknown, only the reference configuration runs.
+changing only one parameter at a time. With sequence limit 16 and batch-token
+limit 4096, the candidate configurations are:
+
+| Configuration | `max_num_seqs` | `max_num_batched_tokens` |
+|---|---:|---:|
+| Current configuration | 16 | 4096 |
+| Lower sequence limit | 12 | 4096 |
+| Higher sequence limit | 20 | 4096 |
+| Lower batch-token limit | 16 | 3072 |
+| Higher batch-token limit | 16 | 5120 |
+
+Invalid combinations are skipped. If these values are unknown, only the
+reference configuration runs.
 
 Every configuration uses GSM8K `main/test`, the `question` column, 50 requests,
 512 maximum output tokens, concurrent profile with concurrency 4, and seed 42.
@@ -113,6 +149,50 @@ A schedule retains its recovery journal independently of the model/provider
 deployment. Deleting a deployment must not delete the original settings needed
 to restore its worker. Schedules whose deployment no longer exists are disabled.
 
+## Status and activation API
+
+The webservice requires the `logos_admin` role for both endpoints. The web
+application uses the `/api` prefix; the webservice paths below omit that prefix.
+The orchestrator's corresponding `/internal/model_benchmarks/nightly/*` routes
+require the shared internal secret.
+
+| Webservice endpoint | Request |
+|---|---|
+| `POST /logosdb/model_benchmarks/nightly/status` | `{ "model_provider_id": 31 }` |
+| `POST /logosdb/model_benchmarks/nightly/configure` | `{ "model_provider_id": 31, "enabled": true, "expected_enabled": false }` |
+
+`model_provider_id` identifies a deployment pair, not a model ID or provider ID.
+To disable an enabled schedule, send `enabled: false` and `expected_enabled: true`.
+A stale expected state returns HTTP 409. Enabling also returns 409 if the worker
+lacks restart support or the pair still requires recovery.
+
+Status includes `enabled`, `status`, `last_run_date`, `report`,
+`recovery_required`, `plan` and `timezone`. A new, unsaved schedule can omit
+`last_run_date`. The raw recovery journal is not exposed. The activation response
+contains the saved status; use the status endpoint for the parameter plan.
+`last_run_date` records admission, including failed attempts, rather than the
+last successful measurement. The current pair limit is the code constant
+`MAX_PAIRS_PER_NIGHT = 2`, not a UI or environment setting.
+
+## Operational states
+
+| State | Meaning and next action |
+|---|---|
+| `scheduled` | Enabled and waiting in the rotation. Check the time window and other pairs' priority. |
+| `unavailable` | Admission skipped the pair. Read the report for worker, lane or capacity requirements. No nightly slot was consumed. |
+| `preparing` / `running` | The pair has a nightly slot. The scheduler reserves the worker and executes its plan. |
+| `completed` | The plan finished. Inspect individual outcomes; this does not mean every configuration succeeded. |
+| `window_closed` | No further configuration can start after 04:50. |
+| `window_closed_below_half` | The 05:00 check found fewer than 25 of 50 successful completions. |
+| `preparation_timeout` / `stalled` | Preparation exceeded its budget, or measurement stopped making progress. Inspect the attempt report. |
+| `recovery_required` | The original configuration is not ready. Resolve the worker error; keep the reservation and journal intact. |
+| `interrupted_recovered` | The scheduler restored a worker from its persisted recovery journal. |
+| `disabled` | The pair is excluded from future rotation. Check `recovery_required` before assuming cleanup is complete. |
+
+A restart, a failed run or an opt-in change does not clear the nightly quota.
+If fewer than two pairs run, check eligibility, existing manual jobs, recovery
+and the 04:50 cutoff. One long pair can use the available admission window.
+
 ## Validation
 
 Unit tests cover admission boundaries, daylight-saving transitions, the 50%
@@ -120,3 +200,20 @@ threshold, inactivity, disable, cancellation, retries and recovery. PostgreSQL
 integration tests in `tests/integration/benchmarks/test_nightly_store.py` use an
 explicit `NIGHTLY_TEST_DB_URL` and create an isolated temporary schema. They use
 the production database manager's transaction-close behavior.
+
+For a PostgreSQL integration run, use an isolated test database and the full
+orchestrator dependencies. Exclude the unit-test conftest, which replaces SQLAlchemy
+with stubs:
+
+```bash
+# From logos/logos-orchestrator; use a disposable database URL.
+NIGHTLY_TEST_DB_URL="$TEST_DATABASE_URL" \
+  uv run pytest --noconftest tests/integration/benchmarks/test_nightly_store.py -q
+```
+
+Before the first production activation, deploy the complete change to a test
+environment with supported workers. Validate an actual benchmark and stored
+result, the confirmation controls, quota rotation, cancellation, retry and
+restoration. Exercise 04:50 and both sides of the 05:00 threshold with a
+controlled test clock. Verify that other workers still accept production traffic.
+A UI or database test alone does not verify an overnight run on real GPU hardware.

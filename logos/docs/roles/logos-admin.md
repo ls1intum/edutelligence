@@ -39,6 +39,9 @@ capabilities and scheduling weights for each model. It also shows the Likert
 model to open its **Model Details** view. This view shows the request history,
 the error reports and the scheduling statistics of the model.
 
+The **Performance** tab also provides nightly benchmarks for model/worker pairs.
+See [Nightly benchmarks](../deployment.md#nightly-benchmarks) for deployment requirements and the link to the activation guide.
+
 ![Models page](/img/roles/logos-admin-models.png)
 
 ## Providers

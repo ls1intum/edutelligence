@@ -133,3 +133,30 @@ vLLM requirement:
 - Validation and test commands: [TESTING.md](TESTING.md)
 - Benchmark scripts and API collections: `tools/`
 - Research notes and benchmark outputs: `research/`
+
+## Nightly benchmark support
+
+The orchestrator selects and schedules nightly benchmarks. The worker does not
+need a cron job or a local time window. Its runtime status advertises
+`supports_benchmark_restart`; the activation API rejects workers without this
+capability. Deploy the worker update with the orchestrator update.
+
+Nightly tuning requires an existing, loaded and awake vLLM lane for the target
+model. Another healthy worker must remain available for production. The
+orchestrator reserves the selected worker and drains existing requests before
+measurement. Normal planner actions and manual lane changes cannot alter the
+reserved worker.
+
+The `reconfigure_lane` command accepts `force_restart: true`. This restarts a
+lane even when its settings are unchanged, for a stalled-run retry or final
+restoration. Successful replies confirm `restarted: true`. The orchestrator
+retains the original lane configuration in PostgreSQL and can recreate a lane
+that disappeared during a failed restart.
+
+If restoration fails, the worker remains reserved and further nightly plans
+pause. Restore worker connectivity and resolve the reported lane error; the
+scheduler then retries recovery. Disabling a schedule does not discard its
+recovery journal or release a worker whose original configuration is not ready.
+
+See the [nightly benchmark guide](../logos-orchestrator/docs/nightly-benchmarks.md)
+for rotation, progress rules and deployment validation.
