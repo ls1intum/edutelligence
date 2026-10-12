@@ -20,7 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
-import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
 
 /**
  * The orchestrator announces newly discovered models with the internal secret
@@ -51,7 +51,7 @@ class InternalModelControllerTest {
     @Autowired MockMvc mvc;
     @MockitoBean JwtDecoder jwtDecoder;
     // Mocked so the refreshes do not reach the live litellm catalog in tests.
-    @MockitoBean PriceUpdaterService priceUpdaterService;
+    @MockitoBean ModelMetricsService modelMetricsService;
     @MockitoBean ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
 
     @Test
@@ -63,7 +63,7 @@ class InternalModelControllerTest {
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.status").value("accepted"));
 
-        verify(priceUpdaterService).updatePricesForModelAsync(5002, "gpt-3.5");
+        verify(modelMetricsService).deriveAfterPriceRefreshAsync(5002);
         verify(modelCapabilitiesUpdaterService).updateCapabilitiesForModelAsync(5002, "gpt-3.5");
     }
 
@@ -75,7 +75,7 @@ class InternalModelControllerTest {
                 .content("{\"model_ids\": [5002]}"))
            .andExpect(status().isUnauthorized());
 
-        verifyNoInteractions(priceUpdaterService, modelCapabilitiesUpdaterService);
+        verifyNoInteractions(modelMetricsService, modelCapabilitiesUpdaterService);
     }
 
     @Test
@@ -85,6 +85,6 @@ class InternalModelControllerTest {
                 .content("{\"model_ids\": [5002]}"))
            .andExpect(status().isUnauthorized());
 
-        verifyNoInteractions(priceUpdaterService, modelCapabilitiesUpdaterService);
+        verifyNoInteractions(modelMetricsService, modelCapabilitiesUpdaterService);
     }
 }

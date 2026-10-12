@@ -1159,13 +1159,52 @@ class DBManager:
             for r in rows
         ]
 
-    def set_cloud_provider_type(self, provider_id: int, cloud_provider_type: str) -> None:
+    def set_cloud_provider_type(self, provider_id: int, cloud_provider_type: str) -> list[int]:
         """Set a cloud provider's type, but only while it is still unset.
 
         Guarded in SQL rather than by the caller so a concurrently-running
         operator edit wins: discovery fills in a blank, it never overrules a
         choice someone made.
+
+        Filling in a blank changes the cost unit of every pair of this
+        provider (USD per request while the type was unset -> USD per million
+        tokens once it is a named cloud type). The same locked mutation
+        protocol as the webservice's provider edit therefore applies: take
+        the provider derivation advisory lock, close open catalogue prices,
+        invalidate derived costs, then write the type. Affected model IDs are
+        queued for a webservice re-derivation and returned to the caller.
         """
+        # Must match ModelMetricsService.PROVIDER_DERIVATION_LOCK_KEY_BASE in
+        # logos-webservice: the webservice's type changes and in-flight cost
+        # derivations serialize on the same key.
+        provider_derivation_lock_key_base = 0x50524F564944
+        pid = int(provider_id)
+        self.session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": provider_derivation_lock_key_base + pid},
+        )
+        current = self.session.execute(
+            text("SELECT cloud_provider_type FROM providers WHERE id = :pid"),
+            {"pid": pid},
+        ).fetchone()
+        if current is None or current.cloud_provider_type is not None:
+            self.session.commit()
+            return []
+
+        # statement_timestamp(): same boundary stamp the webservice uses when
+        # closing prices under this lock (see TokenPriceRepository).
+        self.session.execute(
+            text("""
+                UPDATE token_prices
+                SET valid_to = statement_timestamp()
+                WHERE provider_id = :pid AND valid_to IS NULL
+                """),
+            {"pid": pid},
+        )
+        self.session.execute(
+            text("UPDATE model_provider SET derived_cost_usd = NULL WHERE provider_id = :pid"),
+            {"pid": pid},
+        )
         self.session.execute(
             text("""
                 UPDATE providers
@@ -1173,9 +1212,18 @@ class DBManager:
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = :pid AND cloud_provider_type IS NULL
                 """),
-            {"pid": int(provider_id), "value": str(cloud_provider_type)},
+            {"pid": pid, "value": str(cloud_provider_type)},
         )
+        model_ids = [
+            int(row.model_id)
+            for row in self.session.execute(
+                text("SELECT DISTINCT model_id FROM model_provider WHERE provider_id = :pid"),
+                {"pid": pid},
+            ).fetchall()
+        ]
+        self._queue_discovery_notifications(model_ids)
         self.session.commit()
+        return model_ids
 
     def sync_cloud_models(self, provider_id: int, model_names: list[str]) -> Dict[str, Any]:
         """Mirror a cloud upstream's model list into ``models`` + ``model_provider``.

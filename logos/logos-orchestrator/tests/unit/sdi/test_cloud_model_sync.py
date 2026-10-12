@@ -141,6 +141,7 @@ class DummyDB:
 
     def set_cloud_provider_type(self, provider_id, value):
         self.types[provider_id] = value
+        return []
 
     def get_pending_discovery_model_ids(self):
         return list(self.pending_discovery_ids)

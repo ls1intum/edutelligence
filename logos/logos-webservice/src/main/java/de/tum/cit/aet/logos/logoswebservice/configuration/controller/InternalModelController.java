@@ -15,24 +15,24 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
-import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 
 @RestController
 @RequestMapping("/internal")
 public class InternalModelController {
 
-    private final PriceUpdaterService priceUpdaterService;
+    private final ModelMetricsService modelMetricsService;
     private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final ModelRepository modelRepository;
     private final String internalSecret;
 
     public InternalModelController(
-            PriceUpdaterService priceUpdaterService,
+            ModelMetricsService modelMetricsService,
             ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
             ModelRepository modelRepository,
             @Value("${logos.orchestrator.internal-secret:}") String internalSecret) {
-        this.priceUpdaterService = priceUpdaterService;
+        this.modelMetricsService = modelMetricsService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.modelRepository = modelRepository;
         this.internalSecret = internalSecret;
@@ -53,7 +53,10 @@ public class InternalModelController {
         for (Integer modelId : modelIds) {
             if (modelId == null) continue;
             modelRepository.findById(modelId).ifPresent(model -> {
-                priceUpdaterService.updatePricesForModelAsync(model.getId(), model.getName());
+                // Catalogue price refresh then pair re-derivation: covers both
+                // freshly linked models and providers whose cloud type discovery
+                // just invalidated old-unit costs.
+                modelMetricsService.deriveAfterPriceRefreshAsync(model.getId());
                 modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(model.getId(), model.getName());
             });
         }

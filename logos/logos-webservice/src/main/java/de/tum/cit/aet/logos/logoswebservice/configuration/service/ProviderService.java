@@ -10,6 +10,8 @@ import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
@@ -27,6 +29,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelProvid
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderModelProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderProjection;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ProviderRepository;
+import de.tum.cit.aet.logos.logoswebservice.configuration.repository.TokenPriceRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
@@ -43,18 +46,24 @@ public class ProviderService {
 
     private final ProviderRepository providerRepository;
     private final ModelProviderRepository modelProviderRepository;
+    private final TokenPriceRepository tokenPriceRepository;
     private final OrchestratorNotificationService orchestratorNotificationService;
+    private final ModelMetricsService modelMetricsService;
     private final JdbcTemplate jdbc;
     private final AuditLogService auditLog;
 
     public ProviderService(ProviderRepository providerRepository,
                            ModelProviderRepository modelProviderRepository,
+                           TokenPriceRepository tokenPriceRepository,
                            OrchestratorNotificationService orchestratorNotificationService,
+                           ModelMetricsService modelMetricsService,
                            JdbcTemplate jdbc,
                            AuditLogService auditLog) {
         this.providerRepository = providerRepository;
         this.modelProviderRepository = modelProviderRepository;
+        this.tokenPriceRepository = tokenPriceRepository;
         this.orchestratorNotificationService = orchestratorNotificationService;
+        this.modelMetricsService = modelMetricsService;
         this.jdbc = jdbc;
         this.auditLog = auditLog;
     }
@@ -126,6 +135,14 @@ public class ProviderService {
 
     @Transactional
     public Map<String, Object> updateProvider(UpdateProviderRequestDTO req) {
+        // Provider has neither @Version nor @DynamicUpdate: a name/key edit that
+        // loaded the row before a concurrent type change would flush the stale
+        // cloud_provider_type back and skip the invalidation branch below
+        // (loaded type still matched the request). Take the provider lock
+        // before any read so every edit serializes with type changes and
+        // in-flight cost derivations, then load.
+        providerRepository.lockProviderDerivation(
+            ModelMetricsService.providerDerivationLockKey(req.providerId()));
         Provider p = providerRepository.findById(req.providerId())
             .orElseThrow(() -> new IllegalArgumentException("Provider not found: " + req.providerId()));
         Map<String, Object> before = providerSnapshot(p, false);
@@ -136,6 +153,7 @@ public class ProviderService {
         if (req.authName() != null) p.setAuthName(req.authName());
         if (req.authFormat() != null) p.setAuthFormat(req.authFormat());
         if (req.providerType() != null) p.setProviderType(parseProviderType(req.providerType()));
+        CloudProviderType oldType = p.getCloudProviderType();
         if (req.cloudProviderType() != null) p.setCloudProviderType(parseCloudProviderType(req.cloudProviderType()));
         if (req.privacyLevel() != null) {
             if (!VALID_PRIVACY_LEVELS.contains(req.privacyLevel())) {
@@ -145,6 +163,29 @@ public class ProviderService {
         }
         providerRepository.save(p);
         auditLog.record("provider.updated", "provider", p.getId(), null, before, providerSnapshot(p, apiKeyChanged));
+        if (p.getCloudProviderType() != oldType) {
+            // The type change redefines the unit of the pairs' persisted
+            // derived cost (USD per million tokens <-> USD per request), so
+            // every affected cost value is invalidated in this same
+            // transaction: a ranking that runs before the re-derivation sees
+            // NULL and can never read an old-unit value as the new one. The
+            // pairs are then re-derived (catalogue price refresh first) and
+            // the fleet re-ranked, after the commit. The provider lock is
+            // already held from the start of this edit.
+            //
+            // The catalogue price rows opened under the previous type are
+            // closed, not deleted: billing of requests made before the change
+            // still matches them, but the re-derivation can only read prices
+            // opened after the change. Without the boundary, a failed or
+            // empty catalogue refresh would leave the previous type's rows
+            // as the latest eligible prices and re-derive the cost from
+            // them.
+            tokenPriceRepository.closeCurrentPricesByProviderId(p.getId());
+            List<Integer> modelIds = modelProviderRepository.findByProviderId(p.getId()).stream()
+                .map(ModelProvider::getModelId).distinct().toList();
+            modelProviderRepository.invalidateDerivedCostByProviderId(p.getId());
+            rederiveAfterCommit(modelIds, true);
+        }
         // Base URL, key and cloud type all change what the upstream lists, so a
         // cloud provider is re-scraped on every edit.
         orchestratorNotificationService.notifyRefresh(false, p.getProviderType() == ProviderType.cloud);
@@ -177,14 +218,46 @@ public class ProviderService {
                     + " batch(es) running or not yet settled; they must finish and be metered "
                     + "before the provider can be deleted.");
         }
+        // The pair rows cascade-delete with the provider, which changes the
+        // best available latency/cost of every connected model. Collect the
+        // affected models before the cascade, and re-derive and re-rank them
+        // right away instead of leaving weights based on a pair that no
+        // longer exists until the daily job.
+        List<Integer> modelIds = modelProviderRepository.findByProviderId(providerId).stream()
+            .map(ModelProvider::getModelId).distinct().toList();
         Provider doomed = providerRepository.findById(providerId).orElse(null);
         providerRepository.deleteById(providerId);
         // Cascades the provider's team budget overrides away, so the deletion is part of the budget trail.
         if (doomed != null) {
             auditLog.record("provider.deleted", "provider", providerId, null, providerSnapshot(doomed, false), Map.of());
         }
+        rederiveAfterCommit(modelIds, false);
         orchestratorNotificationService.notifyRefresh(false);
         return Map.of("result", "Deleted Provider.");
+    }
+
+    /**
+     * Fire the async re-derivation only after the surrounding transaction
+     * committed: a worker that started earlier would race the commit, read
+     * the pre-update state, and re-derive the old values - so the type
+     * change would never land. Mirrors the connect/disconnect triggers,
+     * which likewise run only after the service (and its transaction) has
+     * returned.
+     */
+    private void rederiveAfterCommit(List<Integer> modelIds, boolean withPriceRefresh) {
+        if (modelIds.isEmpty()) return;
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                for (int modelId : modelIds) {
+                    if (withPriceRefresh) {
+                        modelMetricsService.deriveAfterPriceRefreshAsync(modelId);
+                    } else {
+                        modelMetricsService.deriveForModelAsync(modelId);
+                    }
+                }
+            }
+        });
     }
 
     @Transactional

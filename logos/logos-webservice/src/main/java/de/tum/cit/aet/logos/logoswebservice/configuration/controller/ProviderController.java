@@ -29,8 +29,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDT
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.StopCalibrationRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UpdateProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.WakeLaneRequestDTO;
-import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelMetricsService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ProviderService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
@@ -42,16 +42,22 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorWorkerAdmin
 public class ProviderController {
 
     private final ProviderService providerService;
-    private final PriceUpdaterService priceUpdaterService;
+    private final ModelMetricsService modelMetricsService;
     private final ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService;
     private final ModelRepository modelRepository;
     private final OrchestratorWorkerAdminClient workerAdminClient;
     private final OrchestratorModelSyncClient modelSyncClient;
     private final ObjectMapper objectMapper;
 
-    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService, ModelRepository modelRepository, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService,
+                              ModelMetricsService modelMetricsService,
+                              ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService,
+                              ModelRepository modelRepository,
+                              OrchestratorWorkerAdminClient workerAdminClient,
+                              OrchestratorModelSyncClient modelSyncClient,
+                              ObjectMapper objectMapper) {
         this.providerService = providerService;
-        this.priceUpdaterService = priceUpdaterService;
+        this.modelMetricsService = modelMetricsService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
         this.modelRepository = modelRepository;
         this.workerAdminClient = workerAdminClient;
@@ -103,12 +109,13 @@ public class ProviderController {
     public ResponseEntity<?> connectModelProvider(
             @RequestBody ConnectModelProviderRequestDTO req) {
         ResponseEntity<?> response = ResponseEntity.ok(providerService.connectModelProvider(req));
-        // A model only becomes priceable once it is linked to a cloud provider:
-        // before the link, updatePricesForModelAsync finds no cloud pair and
-        // skips. Without this trigger prices stayed absent until the next daily
-        // refresh, so freshly connected cloud models reported a cost of zero.
         if (req.modelId() != null) {
-            priceUpdaterService.updatePricesForModelAsync(req.modelId());
+            // A model only becomes priceable once it is linked to a cloud
+            // provider, and the new pair is a new latency/cost data source for
+            // its auto-derived weights. So the derivation runs right here, but
+            // only after the catalogue price refresh has committed - firing
+            // both in parallel would read empty token_prices and derive null.
+            modelMetricsService.deriveAfterPriceRefreshAsync(req.modelId());
             modelRepository.findById(req.modelId()).ifPresent(model ->
                 modelCapabilitiesUpdaterService.updateCapabilitiesForModelAsync(req.modelId(), model.getName()));
         }
@@ -120,7 +127,13 @@ public class ProviderController {
     public ResponseEntity<?> disconnectModelProvider(
             @RequestBody DisconnectModelProviderRequestDTO req) {
         try {
-            return ResponseEntity.ok(providerService.disconnectModelProvider(req));
+            ResponseEntity<?> response = ResponseEntity.ok(providerService.disconnectModelProvider(req));
+            // Losing a pair changes the best available latency/cost of the
+            // model, so the auto-derived weights are re-run.
+            if (req.modelId() != null) {
+                modelMetricsService.deriveForModelAsync(req.modelId());
+            }
+            return response;
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
         }
