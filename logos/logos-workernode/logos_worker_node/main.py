@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import sys
 import time
 from contextlib import asynccontextmanager, suppress
@@ -55,6 +56,8 @@ _LANE_MANAGER_SHUTDOWN_TIMEOUT = 90
 _HOST_RAM_SAFETY_MARGIN_MIN_MB = 8192.0
 _HOST_RAM_SAFETY_MARGIN_MAX_MB = 32768.0
 _HOST_RAM_SAFETY_MARGIN_RATIO = 0.05
+_PREFETCH_DISK_RESERVE_MIN_BYTES = 1024**3
+_PREFETCH_DISK_RESERVE_RATIO = 0.05
 
 
 def _host_ram_safety_margin_mb(total_host_ram_mb: float | None) -> float:
@@ -116,16 +119,72 @@ def _download_one_model(model_name: str, hf_home: str) -> None:
     )
 
 
+def _estimate_model_download_bytes(model_name: str) -> int | None:
+    """Return the size of the full HF snapshot, or None when it is unknown."""
+    from huggingface_hub import HfApi
+
+    info = HfApi().model_info(
+        model_name,
+        token=os.environ.get("HF_TOKEN") or None,
+        files_metadata=True,
+        timeout=15.0,
+    )
+    siblings = info.siblings or []
+    sizes = [getattr(sibling, "size", None) for sibling in siblings]
+    if not sizes or any(not isinstance(size, int) or isinstance(size, bool) or size < 0 for size in sizes):
+        return None
+    return sum(sizes)
+
+
+async def _models_that_fit_disk(missing: list[str], hf_home: str) -> list[str]:
+    """Select missing models that fit on disk while keeping operational headroom."""
+    disk_path = Path(hf_home)
+    while not disk_path.exists() and disk_path != disk_path.parent:
+        disk_path = disk_path.parent
+    try:
+        usage = await asyncio.to_thread(shutil.disk_usage, disk_path)
+    except OSError:
+        logger.warning("Could not check free disk space at %s; skipping model prefetch", disk_path, exc_info=True)
+        return []
+
+    reserve_bytes = max(_PREFETCH_DISK_RESERVE_MIN_BYTES, int(usage.total * _PREFETCH_DISK_RESERVE_RATIO))
+    remaining_bytes = max(0, usage.free - reserve_bytes)
+    selected: list[str] = []
+    for model_name in missing:
+        try:
+            size_bytes = await asyncio.to_thread(_estimate_model_download_bytes, model_name)
+        except Exception:
+            logger.warning("Could not determine download size for %s; skipping prefetch", model_name, exc_info=True)
+            continue
+        if size_bytes is None:
+            logger.warning("Download size for %s is unknown; skipping prefetch to protect disk space", model_name)
+        elif size_bytes <= remaining_bytes:
+            selected.append(model_name)
+            remaining_bytes -= size_bytes
+        else:
+            logger.info(
+                "Skipping prefetch for %s (%d bytes needed, %d bytes available after reserve)",
+                model_name,
+                size_bytes,
+                remaining_bytes,
+            )
+    return selected
+
+
 async def _prefetch_missing_models(missing: list[str], hf_home: str) -> None:
-    """Download missing capability models in the background, one at a time.
+    """Download missing models that fit on disk in the background, one at a time.
 
     Sequential to avoid saturating disk/network bandwidth. Each model is
     fetched in a worker thread so the event loop (heartbeats, lane commands)
     keeps running while large weights stream in. Failures are logged and do
     not abort the remaining downloads or worker startup.
     """
-    logger.info("Prefetching %d missing capability model(s): %s", len(missing), missing)
-    for model_name in missing:
+    models = await _models_that_fit_disk(missing, hf_home)
+    if len(models) < len(missing):
+        logger.info("Prefetching %d of %d missing capability model(s): %s", len(models), len(missing), models)
+    else:
+        logger.info("Prefetching %d missing capability model(s): %s", len(models), models)
+    for model_name in models:
         try:
             logger.info("Prefetch: downloading %s …", model_name)
             await asyncio.to_thread(_download_one_model, model_name, hf_home)
