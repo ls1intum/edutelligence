@@ -526,7 +526,7 @@
 
           @for (pair of benchmarkPairs(); track pair.model_provider_id) {
             @if (pair.provider_type === 'logosnode') {
-              <app-nightly-benchmarks [pairId]="pair.model_provider_id" [providerName]="pair.provider_name" />
+              <app-nightly-benchmarks [pairId]="pair.model_provider_id" [providerName]="pair.provider_name" [modelName]="model.name" />
             }
           }
 

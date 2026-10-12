@@ -2,7 +2,12 @@
 
 Logos admins enable or disable a nightly schedule for each model/worker pair on
 **Model Details → Performance**. Both actions require confirmation. Schedules
-are off by default and persist in PostgreSQL. The nightly plan is independent
+show the model and concrete parameter values to be tested, above the existing
+dataset editor and question previews. Unknown serving limits show a
+current-configuration-only plan. The preview reflects the worker's current
+settings; the scheduler builds the plan again when the nightly run starts.
+
+Schedules are off by default and persist in PostgreSQL. The nightly plan is independent
 of the manual benchmark editor. Disabling a schedule cancels its active run and
 restores the worker before it returns to production.
 

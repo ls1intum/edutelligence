@@ -8,6 +8,20 @@
       {{ state()?.enabled ? 'Disable nightly runs…' : 'Enable nightly runs…' }}
     </button>
   </div>
+  <dl class="nightly__plan">
+    <div><dt>Model</dt><dd>{{ modelName }}</dd></div>
+    <div>
+      <dt>Parameters to be tested</dt>
+      <dd>
+        @for (parameter of plannedParameters; track parameter.name) {
+          <div><code>{{ parameter.name }}</code>: {{ parameter.values }}</div>
+        } @empty {
+          {{ state()?.plan ? 'Current configuration only' : 'Loading plan…' }}
+        }
+        @if (plannedParameters.length) { <small>Current settings first, then one parameter at a time.</small> }
+      </dd>
+    </div>
+  </dl>
   <p>03:00–04:50 starts · Europe/Berlin · one worker at a time</p>
   <p>At 05:00: finish the current run at ≥50% complete; otherwise stop. Five minutes without progress stops the run.</p>
   @if (state(); as status) {

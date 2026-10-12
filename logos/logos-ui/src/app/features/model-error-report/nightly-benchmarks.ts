@@ -8,6 +8,7 @@ export interface NightlyStatus {
   status: string;
   recovery_required: boolean;
   last_run_date?: string;
+  plan?: { serving_overrides: Record<string, number | null> }[];
   report: { configuration?: number; attempt?: number; status: string; reason?: string; benchmark_id?: number; job_id?: number }[];
 }
 
@@ -21,6 +22,7 @@ export interface NightlyStatus {
 export class NightlyBenchmarks implements OnChanges, OnDestroy {
   @Input({ required: true }) pairId!: number;
   @Input({ required: true }) providerName!: string;
+  @Input({ required: true }) modelName!: string;
   private readonly http = inject(HttpClient);
   readonly state = signal<NightlyStatus | null>(null);
   readonly confirming = signal(false);
@@ -64,6 +66,17 @@ export class NightlyBenchmarks implements OnChanges, OnDestroy {
     }
   }
 
+  get plannedParameters(): { name: string; values: string }[] {
+    const plan = this.state()?.plan ?? [];
+    return ['max_num_seqs', 'max_num_batched_tokens'].flatMap(name => {
+      const values = [...new Set(plan.flatMap(run => {
+        const value = run.serving_overrides[name];
+        return typeof value === 'number' ? [value] : [];
+      }))].sort((a, b) => a - b);
+      return values.length ? [{ name, values: values.join(', ') }] : [];
+    });
+  }
+
   statusLabel(value: string): string {
     const labels: Record<string, string> = {
       scheduled: 'Waiting for tonight', preparing: 'Preparing worker', running: 'Benchmark in progress',
@@ -102,7 +115,7 @@ export class NightlyBenchmarks implements OnChanges, OnDestroy {
           model_provider_id: this.pairId, enabled: !this.expected, expected_enabled: this.expected,
         }));
       if (version !== this.version || this.destroyed) return;
-      this.state.set(state);
+      this.state.set({ ...state, plan: state.plan ?? this.state()?.plan });
       this.confirming.set(false);
       this.error.set(null);
     } catch (error) {
