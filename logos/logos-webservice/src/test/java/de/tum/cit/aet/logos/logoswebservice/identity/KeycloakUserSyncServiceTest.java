@@ -321,6 +321,39 @@ class KeycloakUserSyncServiceTest {
     }
 
     /**
+     * A minted session key carries the owner's user id and team, so it shows
+     * up in the reactivation like any other team key. Its lifetime belongs to
+     * the runner: the runner revoked it when the session ended, and reviving
+     * it here would make a credential the runner considered spent usable
+     * again — indefinitely while the runner is stopped.
+     */
+    @Test
+    void reEnabledUser_doesNotRegainARevokedSessionKey() {
+        Team team = linkTeamToGroup("kc-synced");
+        User member = syncService.syncFromClaims(claims(NEW_SUB, "synced", Set.of("kc-synced")));
+        ApiKey teamKey = apiKeyRepository
+            .findByUserIdAndTeamIdAndKeyType(member.getId(), team.getId(), ApiKeyType.developer)
+            .getFirst();
+
+        // A session key minted from the team key: same owner, same team, the
+        // parent marker set — and revoked when its session ended.
+        ApiKey sessionKey = apiKeyFactory.createDeveloperKey(member, team);
+        sessionKey.setParentApiKeyId(teamKey.getId());
+        sessionKey.setIsActive(false);
+        sessionKey = apiKeyRepository.saveAndFlush(sessionKey);
+
+        syncService.deactivateUser(userRepository.findById(member.getId()).orElseThrow());
+        syncService.syncFromClaims(claims(NEW_SUB, "synced", Set.of("kc-synced")));
+
+        assertThat(apiKeyRepository.findById(teamKey.getId()).orElseThrow().getIsActive())
+            .as("the team key comes back with the account")
+            .isTrue();
+        assertThat(apiKeyRepository.findById(sessionKey.getId()).orElseThrow().getIsActive())
+            .as("a revoked session key stays revoked")
+            .isFalse();
+    }
+
+    /**
      * Auto-provisioning adopts a same-named unlinked team rather than creating
      * a duplicate, which makes it a second writer of {@code keycloak_group}. It
      * has to lose against an admin who links that team first: read, check and

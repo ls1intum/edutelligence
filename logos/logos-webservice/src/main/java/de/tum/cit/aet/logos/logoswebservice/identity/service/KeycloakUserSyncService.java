@@ -171,8 +171,22 @@ public class KeycloakUserSyncService {
         return groups;
     }
 
+    /**
+     * Switches the account and every key it owns off, minted session keys
+     * included — the key rows are what the gateway and the janitor act on.
+     *
+     * <p>The user row is locked before the key sweep enumerates, in the same
+     * order SessionApiKeyService.mint holds it. A mint in flight therefore
+     * blocks on this lock and then re-checks the deactivated owner, or has
+     * already committed, in which case the sweep below sees its child. A
+     * sweep that enumerated first would commit around a concurrent mint and
+     * leave its child active, and nothing afterwards would notice: the
+     * gateway honours is_active alone and the orphan janitor only reaps keys
+     * of terminal sessions.
+     */
     @Transactional
     public void deactivateUser(User user) {
+        userRepository.findByIdForUpdate(user.getId());
         user.setActive(false);
         user.setLastSyncedAt(Instant.now());
         userRepository.save(user);
@@ -236,7 +250,8 @@ public class KeycloakUserSyncService {
 
     /**
      * Switches the user's keys back on when Keycloak re-enables their account —
-     * except the ones bound to a team they are no longer in.
+     * except the ones bound to a team they are no longer in, and except minted
+     * session keys.
      *
      * <p>A team key carries that team's model permissions and budget, and
      * nothing on the inference path re-checks membership, so reviving one for a
@@ -245,12 +260,18 @@ public class KeycloakUserSyncService {
      * deliberately removed. Membership they still hold revives its key here;
      * membership this very sync restores is handled by the join that follows.
      *
+     * <p>A session key carries the owner's user id and team, but its lifetime
+     * belongs to the runner, not the account: the runner revoked it when the
+     * session ended, and reviving it would make a credential the runner
+     * considered spent usable again — indefinitely while the runner is stopped.
+     *
      * <p>The caller holds every team named by these keys, so the membership
      * read below cannot be invalidated by an unlink between the check and the
      * commit. Must not be called without those locks.
      */
     private void reactivateUserKeys(User user) {
         apiKeyRepository.findByUserId(user.getId()).forEach(k -> {
+            if (k.getParentApiKeyId() != null) return;
             if (k.getTeamId() != null && !memberRepository.isMember(k.getTeamId(), user.getId())) return;
             k.setIsActive(true);
             apiKeyRepository.save(k);

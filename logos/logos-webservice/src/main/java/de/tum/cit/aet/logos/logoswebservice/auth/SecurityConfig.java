@@ -48,6 +48,10 @@ public class SecurityConfig {
                 // /info must be reachable before login — it tells the UI which
                 // Keycloak instance to talk to.
                 .requestMatchers(HttpMethod.GET, "/info").permitAll()
+                // The public statistics page is a showcase for visitors without
+                // a session; the controller answers only opted-in teams'
+                // successful requests, so nothing private needs a JWT here.
+                .requestMatchers(HttpMethod.GET, "/stats").permitAll()
                 // get_model_health is authenticated with a Logos API key in the
                 // controller — a key is not a JWT, so the resource-server chain
                 // must not run for this path.
@@ -55,6 +59,9 @@ public class SecurityConfig {
                 // models_discovered is authenticated with the internal secret in
                 // the controller — same reason: it is not a JWT.
                 .requestMatchers(HttpMethod.POST, "/internal/models_discovered").permitAll()
+                // Session API-key mint/revoke: internal secret in the controller.
+                .requestMatchers("/internal/session_api_keys", "/internal/session_api_keys/**")
+                    .permitAll()
                 // Per-replica StreamingResponseBody occupancy for the gateway
                 // concurrency benchmark. Counters only; not routed via Traefik.
                 .requestMatchers("/internal/gateway_relay_stats", "/internal/gateway_relay_stats/**")
@@ -204,6 +211,8 @@ public class SecurityConfig {
             }
             if ("/logosdb/get_model_health".equals(path)
                     || "/internal/models_discovered".equals(path)
+                    || path.equals("/internal/session_api_keys")
+                    || path.startsWith("/internal/session_api_keys/")
                     || path.equals("/internal/gateway_relay_stats")
                     || path.startsWith("/internal/gateway_relay_stats/")) {
                 return null;

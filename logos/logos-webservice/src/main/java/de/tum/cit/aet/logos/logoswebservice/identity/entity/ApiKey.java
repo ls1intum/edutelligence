@@ -52,6 +52,9 @@ public class ApiKey {
     @Column(nullable = false)
     private Boolean useCustomPermissions = false;
 
+    /** Null for standing keys; the parent standing key a session key clones. */
+    private Integer parentApiKeyId;
+
     public Integer getId() { return id; }
     public String getKeyValue() { return keyValue; }
     public String getName() { return name; }
@@ -64,6 +67,7 @@ public class ApiKey {
     public Integer getDefaultPriority() { return defaultPriority; }
     public Boolean getIsActive() { return isActive; }
     public Boolean getUseCustomPermissions() { return useCustomPermissions; }
+    public Integer getParentApiKeyId() { return parentApiKeyId; }
 
     public void setKeyValue(String keyValue) { this.keyValue = keyValue; }
     public void setName(String name) { this.name = name; }
@@ -76,4 +80,5 @@ public class ApiKey {
     public void setDefaultPriority(Integer defaultPriority) { this.defaultPriority = defaultPriority; }
     public void setIsActive(Boolean isActive) { this.isActive = isActive; }
     public void setUseCustomPermissions(Boolean useCustomPermissions) { this.useCustomPermissions = useCustomPermissions; }
+    public void setParentApiKeyId(Integer parentApiKeyId) { this.parentApiKeyId = parentApiKeyId; }
 }

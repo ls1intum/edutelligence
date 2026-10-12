@@ -76,7 +76,7 @@ class TeamMembershipServiceTest {
         when(memberRepository.findById(any())).thenReturn(Optional.empty());
         when(userRepository.findById(any())).thenReturn(Optional.of(user));
         when(teamRepository.findById(any())).thenReturn(Optional.of(team));
-        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyType(any(), any(), eq(ApiKeyType.developer)))
+        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(any(), any(), eq(ApiKeyType.developer)))
             .thenReturn(List.of());
 
         ApiKey fakeKey = new ApiKey();
@@ -119,7 +119,7 @@ class TeamMembershipServiceTest {
         inactiveKey.setKeyValue("lg-artemis-alice-old");
         inactiveKey.setIsActive(false);
 
-        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyType(any(), any(), eq(ApiKeyType.developer)))
+        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(any(), any(), eq(ApiKeyType.developer)))
             .thenReturn(List.of(inactiveKey));
 
         Optional<String> result = service.join(1, 10, false, TeamMemberSource.KEYCLOAK);
@@ -127,6 +127,30 @@ class TeamMembershipServiceTest {
         assertThat(result).isPresent().contains("lg-artemis-alice-old");
         assertThat(inactiveKey.getIsActive()).isTrue();
         verify(apiKeyFactory, never()).createDeveloperKey(any(), any());
+    }
+
+    @Test
+    void rejoin_revivesOnlyTheStandingKeyNotARevokedSessionKey() {
+        when(memberRepository.findById(any())).thenReturn(Optional.empty());
+        when(userRepository.findById(any())).thenReturn(Optional.of(user));
+        when(teamRepository.findById(any())).thenReturn(Optional.of(team));
+
+        // A session key for this owner and team exists, but it carries the
+        // parent marker, so the reactivation lookup must not even see it:
+        // its lifetime belongs to the runner, which revoked it.
+        ApiKey standingKey = new ApiKey();
+        standingKey.setKeyValue("lg-artemis-alice-standing");
+        standingKey.setIsActive(false);
+
+        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(any(), any(), eq(ApiKeyType.developer)))
+            .thenReturn(List.of(standingKey));
+
+        Optional<String> result = service.join(1, 10, false, TeamMemberSource.KEYCLOAK);
+
+        assertThat(result).isPresent().contains("lg-artemis-alice-standing");
+        assertThat(standingKey.getIsActive()).isTrue();
+        verify(apiKeyRepository).findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(1, 10, ApiKeyType.developer);
+        verify(apiKeyRepository, never()).findByUserIdAndTeamIdAndKeyType(1, 10, ApiKeyType.developer);
     }
 
     @Test
@@ -138,7 +162,7 @@ class TeamMembershipServiceTest {
         manual.setSource(TeamMemberSource.MANUAL);
         ApiKey existingKey = developerKey("lg-artemis-alice-existing");
         when(memberRepository.findById(new TeamMemberId(1, 10))).thenReturn(Optional.of(manual));
-        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyType(1, 10, ApiKeyType.developer))
+        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(1, 10, ApiKeyType.developer))
             .thenReturn(List.of(existingKey));
 
         Optional<String> result = service.join(1, 10, false, TeamMemberSource.KEYCLOAK);
@@ -161,7 +185,7 @@ class TeamMembershipServiceTest {
         keycloak.setSource(TeamMemberSource.KEYCLOAK);
         ApiKey existingKey = developerKey("lg-artemis-alice-existing");
         when(memberRepository.findById(new TeamMemberId(1, 10))).thenReturn(Optional.of(keycloak));
-        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyType(1, 10, ApiKeyType.developer))
+        when(apiKeyRepository.findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(1, 10, ApiKeyType.developer))
             .thenReturn(List.of(existingKey));
 
         Optional<String> result = service.join(1, 10, false, TeamMemberSource.MANUAL);

@@ -9,6 +9,8 @@ own branch name.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -711,6 +713,26 @@ class TestMentionMatching:
 
     def test_no_mention_is_no_mention(self):
         assert not triggers.mentions_agent("nothing to do with anyone")
+
+    def test_a_bot_login_is_matched_before_whitespace(self, monkeypatch):
+        # Bot logins end in `]`, which is not a word character, so `\b`
+        # after `]` would miss `@LogosOSSAgent[bot] please look`.
+        bot = f"{AGENT}[bot]"
+        monkeypatch.setattr(triggers, "settings", replace(triggers.settings, github_login=bot))
+
+        assert triggers.mentions_agent(f"hey @{bot} please look")
+
+    def test_a_bot_login_is_matched_at_end_of_text(self, monkeypatch):
+        bot = f"{AGENT}[bot]"
+        monkeypatch.setattr(triggers, "settings", replace(triggers.settings, github_login=bot))
+
+        assert triggers.mentions_agent(f"please look @{bot}")
+
+    def test_a_longer_bot_login_is_not_this_account(self, monkeypatch):
+        bot = f"{AGENT}[bot]"
+        monkeypatch.setattr(triggers, "settings", replace(triggers.settings, github_login=bot))
+
+        assert not triggers.mentions_agent(f"@{bot}Extra is a different account")
 
     def test_bots_are_recognised(self):
         assert triggers.is_bot("coderabbitai[bot]")
@@ -2580,3 +2602,65 @@ class TestAHeadThePassCouldNotRead:
 
         assert len(queued) == 1
         assert fake_db.created[0]["branch"] == "logos/agent/x/session-1"
+
+
+class TestPollerStartup:
+    """Whether the poller runs at all depends on whether it can act.
+
+    A poller with no credential of the agent account can only read, and
+    reading is not what it is for — so it does not start. A deployment that
+    has moved the account to a GitHub App keeps no personal token: the app
+    credential alone must be enough to start it.
+    """
+
+    @staticmethod
+    def _idle_poller(monkeypatch):
+        # The question under test is whether a polling task is created at
+        # all, not what a pass does — so a started poller has nothing to
+        # run against, and the pass stubbed in never talks to GitHub.
+        async def idle(_self):
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(triggers.TriggerPoller, "poll_once", idle)
+
+    async def test_app_credentials_start_the_poller(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(
+                triggers.settings,
+                github_token="",
+                session_github_token="",
+                github_app_id="41234",
+                github_app_private_key="an-app-key",
+            ),
+        )
+        poller = triggers.TriggerPoller()
+        self._idle_poller(monkeypatch)
+
+        with caplog.at_level(logging.INFO, logger="app.triggers"):
+            await poller.start()
+
+        assert poller._task is not None
+        assert any("watching" in message for message in caplog.messages)
+        await poller.stop()
+
+    async def test_no_credential_starts_no_poller(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            triggers,
+            "settings",
+            replace(
+                triggers.settings,
+                github_token="",
+                session_github_token="",
+                github_app_id="",
+                github_app_private_key="",
+            ),
+        )
+        poller = triggers.TriggerPoller()
+
+        with caplog.at_level(logging.WARNING, logger="app.triggers"):
+            await poller.start()
+
+        assert poller._task is None
+        assert any("no GitHub credential" in message for message in caplog.messages)

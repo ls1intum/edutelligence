@@ -522,10 +522,24 @@ def verify_token_identity(token: str) -> None:
     token swapped in the environment, or a runner that started before the
     token was rotated, would otherwise commit and open pull requests under
     a human contributor's name.
+
+    With a GitHub App the runner passes ``LOGOS_AGENT_GITHUB_APP_ID`` and the
+    check proves the installation token still works via
+    ``GET /installation/repositories`` — the documented endpoint for
+    installation tokens. There is no ``GET /installation`` REST endpoint, and
+    that repositories listing does not return ``app_id``; App and bot
+    identity are verified by the runner with the App JWT before this token
+    is handed over (this container does not hold the private key). With
+    personal access tokens the variable is empty and the ``/user`` login
+    check runs.
     """
-    expected = agent_login().lower()
+    app_id = (os.environ.get("LOGOS_AGENT_GITHUB_APP_ID") or "").strip()
+    if app_id:
+        endpoint, field = "installation/repositories", ".total_count"
+    else:
+        endpoint, field, expected = "user", ".login", agent_login().lower()
     result = subprocess.run(
-        ["gh", "api", "user", "--jq", ".login"],
+        ["gh", "api", endpoint, "--jq", field],
         cwd=str(CHECKOUT) if CHECKOUT.is_dir() else None,
         capture_output=True,
         text=True,
@@ -534,13 +548,24 @@ def verify_token_identity(token: str) -> None:
     )
     if result.returncode != 0:
         raise RuntimeError(f"could not establish the identity of the push token: {result.stderr.strip()[:200]}")
-    login = (result.stdout or "").strip()
-    if login.lower() != expected:
+    answered = (result.stdout or "").strip()
+    if app_id:
+        # A successful listing is enough: the runner already pinned the App
+        # with its JWT. Refuse an empty or non-numeric answer so a confused
+        # endpoint cannot pass silently.
+        if not answered.isdigit():
+            raise RuntimeError(
+                f"could not establish the identity of the push token: "
+                f"installation/repositories returned {answered!r}"
+            )
+        log("push token verified as a GitHub App installation token")
+        return
+    if answered.lower() != expected:
         raise RuntimeError(
-            f"the push token authenticates as '{login}', not as the agent account "
+            f"the push token authenticates as '{answered}', not as the agent account "
             f"'{agent_login()}'; refusing to push agent work under another identity"
         )
-    log(f"push token verified as {login}")
+    log(f"push token verified as {answered}")
 
 
 def finalize_checkout(repo_url: str, base_branch: str, branch: str, token: str) -> bool:

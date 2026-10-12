@@ -76,7 +76,11 @@ public class TeamMembershipService {
         auditLog.record("team.member_joined", "team_member", teamId + "/" + userId, teamId,
             before, snapshot(member));
 
-        List<ApiKey> existing = apiKeyRepository.findByUserIdAndTeamIdAndKeyType(userId, teamId, ApiKeyType.developer);
+        // Minted session keys clone the owner's user id and team, so they
+        // would appear here too; reviving one would hand back a credential
+        // whose lifetime the runner ended.
+        List<ApiKey> existing =
+            apiKeyRepository.findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(userId, teamId, ApiKeyType.developer);
         if (!existing.isEmpty()) {
             ApiKey key = existing.getFirst();
             key.setIsActive(true);
@@ -121,10 +125,22 @@ public class TeamMembershipService {
         }
     }
 
+    /**
+     * Removes the membership and switches off the team's developer keys,
+     * minted session keys included.
+     *
+     * <p>The membership row is locked before the key sweep enumerates, in the
+     * same order SessionApiKeyService.mint holds it: a mint that already
+     * committed is part of the sweep, and one in flight blocks on the lock
+     * and then re-checks the (now removed) membership instead of inserting a
+     * key for a team the user no longer belongs in — which the gateway would
+     * otherwise honour on is_active alone, and the orphan janitor would
+     * never reap while the session stays nonterminal.
+     */
     @Transactional
     public void leave(Integer userId, Integer teamId) {
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
-        Optional<TeamMember> existing = memberRepository.findById(memberId);
+        Optional<TeamMember> existing = memberRepository.findByIdForUpdate(memberId);
         memberRepository.deleteById(memberId);
         existing.ifPresent(m -> auditLog.record("team.member_removed", "team_member", teamId + "/" + userId, teamId,
             snapshot(m), absent()));
