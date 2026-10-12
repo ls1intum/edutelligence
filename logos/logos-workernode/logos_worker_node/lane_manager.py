@@ -1998,14 +1998,44 @@ class LaneManager:
             result.append(index)
         return result
 
+    async def _complete_gpu_inventory(self) -> list[int] | None:
+        """Every GPU index on this node, or None when the report may be missing one.
+
+        nvidia-smi leaves out GPUs whose memory it cannot read, so only a
+        report without faults, gaps or degraded readings is known to be whole.
+        """
+        if self._gpu_snapshot is None:
+            return None
+        try:
+            snapshot = await self._gpu_snapshot()
+        except Exception:
+            return None
+        if snapshot.mode != "nvidia" or snapshot.degraded_reason or snapshot.gpu_faults:
+            return None
+        indices: list[int] = []
+        for device in snapshot.devices:
+            index = device.extra.get("index") if isinstance(device.extra, dict) else None
+            if device.health != "ok" or not isinstance(index, int):
+                return None
+            indices.append(index)
+        if sorted(indices) != list(range(len(indices))):
+            return None
+        return indices
+
     @staticmethod
-    def _occupied_gpu_devices(selector: str | None, gpu_count: int) -> str:
+    def _occupied_gpu_devices(selector: str | None, gpu_count: int, all_gpus: list[int] | None = None) -> str:
         """The GPUs an engine started with *selector* as CUDA_VISIBLE_DEVICES runs on.
 
         The engine takes the first *gpu_count* visible devices in the order the
-        selector lists them, so "1,0" with one GPU means GPU 1. Anything but a
-        numeric list naming enough GPUs gives "" (unknown).
+        selector lists them, so "1,0" with one GPU means GPU 1. "all" sees every
+        GPU in PCI order, which is only known when *all_gpus* lists the node's
+        complete inventory. Anything else gives "" (unknown); a blank selector
+        may still inherit the parent's CUDA_VISIBLE_DEVICES.
         """
+        if (selector or "").strip().lower() == "all":
+            if all_gpus is None or gpu_count < 1 or len(all_gpus) < gpu_count:
+                return ""
+            return ",".join(str(index) for index in sorted(all_gpus)[:gpu_count])
         parts = [part.strip() for part in (selector or "").split(",")]
         if gpu_count < 1 or not parts or not all(part.isdigit() for part in parts) or len(parts) < gpu_count:
             return ""
@@ -3495,7 +3525,9 @@ class LaneManager:
                 gpu_count = lc.vllm_config.parallel_gpu_count if lc.vllm_config else 1
             except ValueError:
                 gpu_count = 0
-            occupied_gpu_devices = self._occupied_gpu_devices(effective_gpu_devices, gpu_count)
+            occupied_gpu_devices = self._occupied_gpu_devices(
+                effective_gpu_devices, gpu_count, await self._complete_gpu_inventory()
+            )
             if lc.vllm_config:
                 sleep_mode_enabled = bool(lc.vllm_config.enable_sleep_mode)
                 backend_metrics = lc.vllm_config.model_dump(mode="json")

@@ -109,9 +109,11 @@ describe('GpuMapComponent', () => {
     expect(cmp.unplacedLanes.map((l) => l.laneId)).toEqual(['a']);
   });
 
-  it('puts a lane without placement on the only GPU, and lists it as unplaced on several', () => {
+  it('lists a lane without placement as unplaced, even with one card reported', () => {
     const noPlacement = lane({ gpu_devices: null, effective_gpu_devices: null });
-    expect(create({ devices: [device(40_000)], lanes: { a: noPlacement } }).cards[0].segments.length).toBe(1);
+    const single = create({ devices: [device(40_000)], lanes: { a: noPlacement } });
+    expect(single.cards[0].segments).toEqual([]);
+    expect(single.unplacedLanes.map((l) => l.laneId)).toEqual(['a']);
 
     const multi = create({ devices: [device(40_000), device(0)], lanes: { a: noPlacement } });
     expect(multi.cards.every((c) => c.segments.length === 0)).toBe(true);
@@ -129,12 +131,24 @@ describe('GpuMapComponent', () => {
     expect(cmp.unplacedLanes.map((l) => l.laneId)).toEqual(['a']);
   });
 
-  it('places "all" on the only GPU of a single-GPU worker', () => {
+  it('does not take the only reported card for the GPU of an unknown lane', () => {
+    // GPU 0 dropped out of the report; the lane started with "all" may still
+    // hold it, so drawing it on GPU 1 would be wrong.
+    const cmp = create({
+      devices: [{ ...device(40_000), device_id: 'GPU-1', index: 1 }],
+      lanes: { a: lane({ gpu_devices: 'all', effective_gpu_devices: 'all', occupied_gpu_devices: '' }) },
+    });
+    expect(cmp.cards[0].segments).toEqual([]);
+    expect(cmp.unplacedLanes.map((l) => l.laneId)).toEqual(['a']);
+  });
+
+  it('places "all" where the worker reports it from a complete inventory', () => {
     const cmp = create({
       devices: [device(40_000)],
-      lanes: { a: lane({ gpu_devices: 'all', effective_gpu_devices: 'all' }) },
+      lanes: { a: lane({ gpu_devices: 'all', effective_gpu_devices: 'all', occupied_gpu_devices: '0' }) },
     });
     expect(cmp.cards[0].segments.map((s) => s.mb)).toEqual([40_000]);
+    expect(cmp.unplacedLanes).toEqual([]);
   });
 
   it('draws every lane onto an aggregate pool at its full footprint', () => {

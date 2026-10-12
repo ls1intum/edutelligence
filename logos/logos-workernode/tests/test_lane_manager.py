@@ -4007,3 +4007,66 @@ async def test_apply_lanes_replans_after_rollback_restores_the_original_floor(mo
 )
 def test_occupied_gpu_devices_takes_the_first_visible_gpus(selector: str, gpu_count: int, occupied: str) -> None:
     assert LaneManager._occupied_gpu_devices(selector, gpu_count) == occupied  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("selector", "gpu_count", "all_gpus", "occupied"),
+    [
+        ("all", 1, [0, 1, 2], "0"),
+        ("all", 2, [2, 0, 1], "0,1"),
+        ("all", 1, None, ""),  # incomplete inventory: unknown
+        ("all", 3, [0, 1], ""),
+        ("", 1, [0], ""),  # blank may inherit the parent's CUDA_VISIBLE_DEVICES
+        ("1,0", 1, [0, 1], "1"),
+    ],
+)
+def test_occupied_gpu_devices_resolves_all_only_from_a_complete_inventory(
+    selector: str, gpu_count: int, all_gpus: list[int] | None, occupied: str
+) -> None:
+    assert LaneManager._occupied_gpu_devices(selector, gpu_count, all_gpus) == occupied  # noqa: SLF001
+
+
+def _inventory_manager(devices: list[DeviceInfo], **summary: object) -> LaneManager:
+    async def snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc), mode="nvidia", nvidia_smi_available=True, devices=devices, **summary
+        )
+
+    manager = LaneManager.__new__(LaneManager)
+    manager._gpu_snapshot = snapshot  # noqa: SLF001
+    return manager
+
+
+def _inventory_gpu(index: int, health: str = "ok") -> DeviceInfo:
+    return DeviceInfo(
+        device_id=f"GPU-{index}",
+        kind="nvidia",
+        name="GPU",
+        memory_used_mb=0,
+        memory_total_mb=1000,
+        memory_free_mb=1000,
+        health=health,
+        extra={"index": index},
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_gpu_inventory_lists_every_index_of_a_whole_report() -> None:
+    manager = _inventory_manager([_inventory_gpu(1), _inventory_gpu(0)])
+    assert await manager._complete_gpu_inventory() == [1, 0]  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("devices", "summary"),
+    [
+        ([_inventory_gpu(1)], {}),  # GPU 0 left out of the report
+        ([_inventory_gpu(0)], {"degraded_reason": "gpu1: missing memory"}),  # GPU 1 left out
+        ([_inventory_gpu(0)], {"gpu_faults": ["gpu1 (GPU-1): GPU is lost"]}),
+        ([_inventory_gpu(0, "faulted"), _inventory_gpu(1)], {}),
+    ],
+)
+async def test_complete_gpu_inventory_is_unknown_when_a_gpu_may_be_missing(
+    devices: list[DeviceInfo], summary: dict[str, object]
+) -> None:
+    assert await _inventory_manager(devices, **summary)._complete_gpu_inventory() is None  # noqa: SLF001
