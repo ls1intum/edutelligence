@@ -94,7 +94,8 @@ public class GatewayCloudAccounting {
     @Transactional
     public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment, byte[] requestBody) {
         return admitAndReserve(key, deployment, requestBody,
-            GatewayLoggingLevel.resolve(null, key != null ? key.logLevel() : null));
+            GatewayLoggingLevel.resolve(null, key != null ? key.logLevel() : null),
+            GatewayRequestAttribution.EMPTY);
     }
 
     /**
@@ -106,12 +107,29 @@ public class GatewayCloudAccounting {
     @Transactional
     public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
                                    byte[] requestBody, String logLevel) {
+        return admitAndReserve(key, deployment, requestBody, logLevel,
+            GatewayRequestAttribution.EMPTY);
+    }
+
+    /**
+     * Check budget then insert an in-flight reservation with workflow attribution.
+     *
+     * @param logLevel the effective request logging level ({@code FULL} or {@code BILLING})
+     * @param attribution optional workflow / SLO headers resolved for this request
+     * @return log_entry id, or {@code null} when reservation amount is 0
+     */
+    @Transactional
+    public Integer admitAndReserve(GatewayKey key, GatewayDeployment deployment,
+                                   byte[] requestBody, String logLevel,
+                                   GatewayRequestAttribution attribution) {
         budgetService.enforceCloudBudget(key, deployment.providerId());
 
         if (reservationMicroCents <= 0) {
             return null;
         }
         String privacy = privacyLevel(logLevel);
+        GatewayRequestAttribution attr = attribution == null
+            ? GatewayRequestAttribution.EMPTY : attribution;
         String requestId = "gw-" + UUID.randomUUID();
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("request_id", requestId)
@@ -124,7 +142,11 @@ public class GatewayCloudAccounting {
             .addValue("settled", reservationMicroCents)
             .addValue("privacy_level", privacy)
             .addValue("input_payload",
-                GatewayLoggingLevel.storesPayloads(privacy) ? asJsonb(requestBody) : null);
+                GatewayLoggingLevel.storesPayloads(privacy) ? asJsonb(requestBody) : null)
+            .addValue("workflow_tag", attr.workflowTag())
+            .addValue("workflow_id", attr.workflowId())
+            .addValue("workflow_step_id", attr.workflowStepId())
+            .addValue("request_slo", attr.requestSlo());
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO log_entry (
@@ -132,13 +154,15 @@ public class GatewayCloudAccounting {
                 api_key_id, team_id, user_id, environment,
                 model_id, provider_id, request_id,
                 result_status, cost_finalized, settled_cost_micro_cents,
-                privacy_level, input_payload
+                privacy_level, input_payload,
+                workflow_tag, workflow_id, workflow_step_id, request_slo
             ) VALUES (
                 NOW(), NOW(),
                 :api_key_id, :team_id, :user_id, :environment,
                 :model_id, :provider_id, :request_id,
                 NULL, TRUE, :settled,
-                CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb)
+                CAST(:privacy_level AS logging_enum), CAST(:input_payload AS jsonb),
+                :workflow_tag, :workflow_id, :workflow_step_id, :request_slo
             )
             """, params, keys, new String[] {"id"});
         Number id = keys.getKey();

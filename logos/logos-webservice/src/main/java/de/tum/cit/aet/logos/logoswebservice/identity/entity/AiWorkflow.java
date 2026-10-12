@@ -1,5 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.entity;
 
+import java.time.Instant;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -29,6 +31,14 @@ public class AiWorkflow {
     @Column(nullable = false)
     private Integer sortOrder = 0;
 
+    /** active | deprecated | ignored — ignored/deprecated stay in the DB but leave the default UI. */
+    @Column(nullable = false)
+    private String status = "active";
+
+    private Instant deletedAt;
+
+    /** Stable tag applications send as X-Logos-Workflow-Tag to attribute traffic. */
+    private String tag;
     /** The owner saved {@link #diagramMermaid}; the next analysis keeps it. */
     @Column(nullable = false)
     private boolean diagramSetByOwner;
@@ -45,6 +55,9 @@ public class AiWorkflow {
     public String getTriggerSummary() { return triggerSummary; }
     public String getDiagramMermaid() { return diagramMermaid; }
     public Integer getSortOrder() { return sortOrder; }
+    public String getStatus() { return status; }
+    public Instant getDeletedAt() { return deletedAt; }
+    public String getTag() { return tag; }
     public boolean isDiagramSetByOwner() { return diagramSetByOwner; }
     public String getProposedDiagramMermaid() { return proposedDiagramMermaid; }
     public String getDismissedDiagramMermaid() { return dismissedDiagramMermaid; }
@@ -54,6 +67,9 @@ public class AiWorkflow {
     public void setTriggerSummary(String triggerSummary) { this.triggerSummary = triggerSummary; }
     public void setDiagramMermaid(String diagramMermaid) { this.diagramMermaid = diagramMermaid; }
     public void setSortOrder(Integer sortOrder) { this.sortOrder = sortOrder; }
+    public void setStatus(String status) { this.status = status; }
+    public void setDeletedAt(Instant deletedAt) { this.deletedAt = deletedAt; }
+    public void setTag(String tag) { this.tag = tag; }
     public void setDiagramSetByOwner(boolean diagramSetByOwner) { this.diagramSetByOwner = diagramSetByOwner; }
     public void setProposedDiagramMermaid(String proposedDiagramMermaid) {
         this.proposedDiagramMermaid = proposedDiagramMermaid;

@@ -25,18 +25,23 @@ public class ExportImportService {
         "model_provider", "team_model_permissions", "api_key_model_permissions",
         "team_provider_permissions", "api_key_provider_permissions", "policies",
         "team_provider_budgets",
-        "ai_workflow_analyses", "ai_workflows", "ai_llm_call_recommendations",
+        "ai_workflow_analyses", "ai_workflows", "ai_workflow_steps", "ai_llm_call_recommendations",
+        "ai_workflow_benchmarks", "application_key_queue_ranks",
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );
     private static final Set<String> TABLE_WHITELIST = Set.copyOf(TABLES);
 
     /** Tables added after exports already existed; an export without one restores it empty. */
-    private static final Set<String> OPTIONAL_TABLES = Set.of("team_provider_budgets");
+    private static final Set<String> OPTIONAL_TABLES = Set.of(
+        "team_provider_budgets",
+        "ai_workflow_steps", "ai_workflow_benchmarks", "application_key_queue_ranks"
+    );
 
     private static final List<String> SEQUENCE_TABLES = List.of(
         "users", "teams", "team_repositories", "api_keys", "providers", "models",
         "model_provider", "policies",
-        "ai_workflow_analyses", "ai_workflows", "ai_llm_call_recommendations",
+        "ai_workflow_analyses", "ai_workflows", "ai_workflow_steps", "ai_llm_call_recommendations",
+        "ai_workflow_benchmarks",
         "log_entry", "token_types", "usage_tokens", "token_prices", "jobs"
     );
 
@@ -177,6 +182,9 @@ public class ExportImportService {
             }
             if ("models".equals(table) && copy.get("profile_ratings") == null) {
                 copy.put("profile_ratings", Map.of());
+            }
+            if ("ai_workflows".equals(table) && copy.get("status") == null) {
+                copy.put("status", "active");
             }
             if ("ai_llm_call_recommendations".equals(table)) {
                 // Dumps taken before the sla → slo column rename still carry the

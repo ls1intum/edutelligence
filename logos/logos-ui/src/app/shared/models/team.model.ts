@@ -187,6 +187,29 @@ export interface WorkflowAnalysisSummary {
   finished_at?: string | null;
 }
 
+export type RecommendedSlo = 'ux-critical' | 'ux-high-prio' | 'ux-background';
+
+export type RecommendationReviewStatus = 'pending' | 'accepted' | 'overridden' | 'rejected';
+
+/** Ordered optimization goals for a call site (most important first). */
+export type ObjectiveKey = 'latency' | 'quality' | 'price';
+
+/** Lifecycle of a detected workflow — active is shown by default; deprecated/ignored stay until soft-deleted. */
+export type AiWorkflowStatus = 'active' | 'deprecated' | 'ignored';
+
+/** A named step within a workflow, with its own SLO and optional tag. */
+export interface AiWorkflowStep {
+  id: number;
+  workflow_id: number;
+  name: string;
+  sort_order: number;
+  tag?: string | null;
+  recommended_slo?: RecommendedSlo | null;
+  confirmed_slo?: RecommendedSlo | null;
+  objective_priority?: ObjectiveKey[];
+  confirmed_objective_priority?: ObjectiveKey[] | null;
+}
+
 export interface AiWorkflow {
   id: number;
   analysis_id: number;
@@ -198,19 +221,19 @@ export interface AiWorkflow {
   diagram_set_by_owner?: boolean;
   /** Agent Mermaid that differs from the owner's; Accept / Keep mine. */
   proposed_diagram_mermaid?: string | null;
+  status: AiWorkflowStatus;
+  /** Stable tag applications send as X-Logos-Workflow-Tag to attribute traffic. */
+  tag?: string | null;
+  deleted_at?: string | null;
+  steps?: AiWorkflowStep[];
 }
-
-export type RecommendedSlo = 'ux-critical' | 'ux-high-prio' | 'ux-background';
-
-export type RecommendationReviewStatus = 'pending' | 'accepted' | 'overridden' | 'rejected';
-
-/** Ordered optimization goals for a call site (most important first). */
-export type ObjectiveKey = 'latency' | 'quality' | 'price';
 
 export interface AiLlmCallRecommendation {
   id: number;
   analysis_id: number;
   workflow_id?: number | null;
+  /** Step within the workflow this call site belongs to, when known. */
+  step_id?: number | null;
   team_id: number;
   file_path: string;
   start_line?: number | null;
@@ -274,6 +297,84 @@ export interface ReviewRecommendationPayload {
   api_key_id?: number;
   /** "No key": bind and re-prioritise no key, not even the one linked before. */
   no_api_key?: boolean;
+}
+
+export interface UpdateWorkflowPayload {
+  status?: AiWorkflowStatus;
+  tag?: string | null;
+  /** Soft-delete when true; clear deleted_at (and restore to active when status omitted) when false. */
+  deleted?: boolean;
+}
+
+export interface UpdateWorkflowStepPayload {
+  confirmed_slo?: RecommendedSlo | null;
+  confirmed_objective_priority?: ObjectiveKey[] | null;
+  tag?: string | null;
+  name?: string;
+}
+
+export interface WorkflowBenchmarkRequest {
+  candidate_model: string;
+  sample_size?: number;
+}
+
+export interface WorkflowHistoricMetrics {
+  sample_count: number;
+  avg_queue_wait_ms?: number | null;
+  avg_ttft_ms?: number | null;
+  avg_latency_ms?: number | null;
+  p50_latency_ms?: number | null;
+  p95_latency_ms?: number | null;
+  models_seen?: string[];
+}
+
+export interface WorkflowCandidateMetrics {
+  candidate_model: string;
+  sample_count?: number;
+  avg_queue_wait_ms?: number | null;
+  avg_ttft_ms?: number | null;
+  avg_latency_ms?: number | null;
+  p50_latency_ms?: number | null;
+  p95_latency_ms?: number | null;
+  models_seen?: string[];
+  note?: string;
+}
+
+export interface WorkflowBenchmark {
+  id: number;
+  workflow_id: number;
+  team_id: number;
+  candidate_model: string;
+  status: string;
+  sample_size: number;
+  historic_metrics?: WorkflowHistoricMetrics | null;
+  candidate_metrics?: WorkflowCandidateMetrics | null;
+  error?: string | null;
+  created_by?: number | null;
+  created_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface ProposeTaggingPrResult {
+  agent_session_id: number;
+  workflow_id: number;
+  team_repository_id: number;
+  repo_slug: string;
+  status: string;
+  open_pull_request: boolean;
+  no_push: boolean;
+  message?: string;
+}
+
+/** One entry in the Logos-admin ordered ranking of application keys across teams. */
+export interface ApplicationKeyQueueRankEntry {
+  api_key_id: number;
+  rank: number;
+  key_name: string;
+  team_id: number | null;
+  team_name: string | null;
+  environment?: string | null;
+  default_priority?: number | null;
 }
 
 export interface StoreDeployKeyPayload {

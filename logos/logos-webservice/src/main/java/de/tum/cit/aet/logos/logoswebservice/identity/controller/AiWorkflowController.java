@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -20,6 +21,9 @@ import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewWorkflowDiagramPr
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetRecommendationModelRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetWorkflowDiagramRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.StoreDeployKeyRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateWorkflowRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.UpdateWorkflowStepRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.WorkflowBenchmarkRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.AiWorkflowAnalysisService;
 
@@ -50,6 +54,71 @@ public class AiWorkflowController {
             return ResponseEntity.status(404).body(Map.of("detail", "Team not found"));
         }
         return ResponseEntity.ok(service.listTeamWorkflows(teamId));
+    }
+
+    @PatchMapping("/teams/{teamId}/workflows/{workflowId}")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> updateWorkflow(
+            @PathVariable Integer teamId,
+            @PathVariable Integer workflowId,
+            @RequestBody UpdateWorkflowRequestDTO body,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (forbiddenForNonOwner(auth, teamId)) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        return ResponseEntity.ok(service.updateWorkflow(teamId, workflowId, body));
+    }
+
+    @PatchMapping("/teams/{teamId}/workflow-steps/{stepId}")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> updateWorkflowStep(
+            @PathVariable Integer teamId,
+            @PathVariable Integer stepId,
+            @RequestBody UpdateWorkflowStepRequestDTO body,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (forbiddenForNonOwner(auth, teamId)) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        return ResponseEntity.ok(service.updateWorkflowStep(teamId, stepId, body));
+    }
+
+    @PostMapping("/teams/{teamId}/workflows/{workflowId}/benchmark")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> benchmarkWorkflow(
+            @PathVariable Integer teamId,
+            @PathVariable Integer workflowId,
+            @RequestBody WorkflowBenchmarkRequestDTO body,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (forbiddenForNonOwner(auth, teamId)) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        return ResponseEntity.ok(service.compareWorkflow(teamId, workflowId, body, auth.userId()));
+    }
+
+    @GetMapping("/teams/{teamId}/workflows/{workflowId}/benchmarks")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> listWorkflowBenchmarks(
+            @PathVariable Integer teamId,
+            @PathVariable Integer workflowId,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (forbiddenForNonOwner(auth, teamId)) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        return ResponseEntity.ok(service.listWorkflowBenchmarks(teamId, workflowId));
+    }
+
+    /**
+     * Logos admins only: the tagging session pushes and opens a pull request
+     * as the agent's GitHub account, and linking a repository proves no
+     * ownership of it — a team owner could otherwise aim that account at any
+     * repository it can write to.
+     */
+    @PostMapping("/teams/{teamId}/workflows/{workflowId}/propose-tagging-pr")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> proposeTaggingPr(
+            @PathVariable Integer teamId,
+            @PathVariable Integer workflowId) {
+        return ResponseEntity.ok(service.queueTaggingPullRequest(teamId, workflowId));
     }
 
     @PostMapping("/teams/{teamId}/repositories/{linkId}/analyze/agent")

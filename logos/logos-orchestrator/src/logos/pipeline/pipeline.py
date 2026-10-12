@@ -24,6 +24,7 @@ from logos.timeouts import global_timeout_s
 from .context_resolver import ContextResolver, ExecutionContext
 from .executor import Executor
 from .prefix_affinity import affinity_keys
+from .request_slo import parse_request_slo_header, resolve_request_priority
 from .scheduler_interface import QueueTimeoutError, SchedulerInterface, SchedulingRequest
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,27 @@ def queue_role_rank(key_type: Optional[str], user_role: Optional[str]) -> int:
     if user_role in ("app_admin", "logos_admin"):
         return 1
     return 0
+
+
+def effective_queue_role_rank(
+    key_type: Optional[str],
+    user_role: Optional[str],
+    admin_queue_rank: Optional[int] = None,
+) -> int:
+    """
+    Queue tiebreak rank, optionally folded with an admin application-key rank.
+
+    When ``admin_queue_rank`` is set (lower number = higher priority within
+    equal ``raw_priority``), the effective rank is
+    ``(100000 - rank) * 10 + base_role_rank``. Unranked keys keep the plain
+    base role rank (0/1/2).
+    """
+    base = queue_role_rank(key_type, user_role)
+    # Reject bool (subclass of int) and non-ints so mocks / bad rows do not
+    # silently invent a cross-key rank.
+    if type(admin_queue_rank) is not int:
+        return base
+    return (100000 - admin_queue_rank) * 10 + base
 
 
 @dataclass
@@ -613,12 +635,16 @@ class RequestPipeline:
         )
 
         # The classifier bakes the policy's priority into every candidate, but
-        # the key owner's default_priority — then the team's admin-set
-        # priority — takes precedence: resolve the effective priority here so
-        # all downstream consumers (schedulers, queueing, monitoring, log
-        # stats) agree on it.
-        effective_priority = resolve_queue_priority(
-            request.default_priority, request.team_priority, policy.get("priority")
+        # per-request SLO headers / workflow-tag SLOs — then the key owner's
+        # default_priority, then the team's admin-set priority — take
+        # precedence: resolve the effective priority here so all downstream
+        # consumers (schedulers, queueing, monitoring, log stats) agree on it.
+        effective_priority = resolve_request_priority(
+            parse_request_slo_header(request.headers),
+            None,  # tag SLO is folded into default_priority by the HTTP boundary
+            request.default_priority,
+            request.team_priority,
+            policy.get("priority"),
         )
         if candidates:
             candidates = [(model_id, weight, effective_priority) for model_id, weight, _ in candidates]

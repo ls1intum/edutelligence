@@ -27,6 +27,8 @@ public class AiLlmCallRecommendation {
 
     private Integer workflowId;
 
+    private Integer stepId;
+
     @Column(nullable = false)
     private Integer teamId;
 
@@ -78,6 +80,7 @@ public class AiLlmCallRecommendation {
     public Integer getId() { return id; }
     public Integer getAnalysisId() { return analysisId; }
     public Integer getWorkflowId() { return workflowId; }
+    public Integer getStepId() { return stepId; }
     public Integer getTeamId() { return teamId; }
     public String getFilePath() { return filePath; }
     public Integer getStartLine() { return startLine; }
@@ -101,6 +104,7 @@ public class AiLlmCallRecommendation {
 
     public void setAnalysisId(Integer analysisId) { this.analysisId = analysisId; }
     public void setWorkflowId(Integer workflowId) { this.workflowId = workflowId; }
+    public void setStepId(Integer stepId) { this.stepId = stepId; }
     public void setTeamId(Integer teamId) { this.teamId = teamId; }
     public void setFilePath(String filePath) { this.filePath = filePath; }
     public void setStartLine(Integer startLine) { this.startLine = startLine; }

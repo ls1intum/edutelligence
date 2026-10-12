@@ -52,6 +52,7 @@ public class InferenceGatewayController {
     private final GatewayCloudForwarder cloudForwarder;
     private final GatewayCloudRateLimiter cloudRateLimiter;
     private final GatewayOrchestratorProxy orchestratorProxy;
+    private final GatewayWorkflowAttributionResolver workflowAttributionResolver;
     private final ObjectMapper objectMapper;
 
     public InferenceGatewayController(
@@ -61,6 +62,7 @@ public class InferenceGatewayController {
             GatewayCloudForwarder cloudForwarder,
             GatewayCloudRateLimiter cloudRateLimiter,
             GatewayOrchestratorProxy orchestratorProxy,
+            GatewayWorkflowAttributionResolver workflowAttributionResolver,
             ObjectMapper objectMapper) {
         this.enabled = enabled;
         this.authService = authService;
@@ -68,6 +70,7 @@ public class InferenceGatewayController {
         this.cloudForwarder = cloudForwarder;
         this.cloudRateLimiter = cloudRateLimiter;
         this.orchestratorProxy = orchestratorProxy;
+        this.workflowAttributionResolver = workflowAttributionResolver;
         this.objectMapper = objectMapper;
     }
 
@@ -116,8 +119,10 @@ public class InferenceGatewayController {
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
                 cloudRateLimiter.enforce(ctx.key(), body);
                 String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
+                GatewayRequestAttribution attribution =
+                    workflowAttributionResolver.resolve(request, ctx.key().teamId());
                 Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), body, logLevel);
+                    ctx.key(), decision.deployment(), body, logLevel, attribution);
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());

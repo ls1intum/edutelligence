@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- SLO / workflow improvements:
+         1. Workflow lifecycle (active / deprecated / ignored / soft-delete)
+         2. Explicit steps with their own SLOs and request tags
+         3. Request attribution columns on log_entry
+         4. Per-workflow historic-vs-candidate benchmark rows, following the
+            workflow across re-analyses
+         5. Logos-admin cross–application-key queue ranks -->
+    <changeSet id="057-workflow-lifecycle" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="ai_workflows" columnName="status"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE ai_workflows
+                ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN ('active', 'deprecated', 'ignored')),
+                ADD COLUMN deleted_at TIMESTAMPTZ,
+                ADD COLUMN tag TEXT;
+            CREATE INDEX IF NOT EXISTS idx_ai_workflows_tag
+                ON ai_workflows(tag)
+                WHERE tag IS NOT NULL AND deleted_at IS NULL;
+        ]]></sql>
+        <rollback>
+            <sql>
+                DROP INDEX IF EXISTS idx_ai_workflows_tag;
+                ALTER TABLE ai_workflows
+                    DROP COLUMN IF EXISTS tag,
+                    DROP COLUMN IF EXISTS deleted_at,
+                    DROP COLUMN IF EXISTS status;
+            </sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="057-workflow-steps" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="ai_workflow_steps"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE ai_workflow_steps (
+                id SERIAL PRIMARY KEY,
+                workflow_id INTEGER NOT NULL
+                    REFERENCES ai_workflows(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                tag TEXT,
+                recommended_slo TEXT NOT NULL
+                    CHECK (recommended_slo IN ('ux-critical', 'ux-high-prio', 'ux-background')),
+                confirmed_slo TEXT
+                    CHECK (confirmed_slo IS NULL OR confirmed_slo IN
+                        ('ux-critical', 'ux-high-prio', 'ux-background')),
+                objective_priority JSONB NOT NULL DEFAULT '["latency","quality","price"]'::jsonb,
+                confirmed_objective_priority JSONB
+            );
+            CREATE INDEX idx_ai_workflow_steps_workflow
+                ON ai_workflow_steps(workflow_id, sort_order);
+            CREATE INDEX idx_ai_workflow_steps_tag
+                ON ai_workflow_steps(tag)
+                WHERE tag IS NOT NULL;
+
+            ALTER TABLE ai_llm_call_recommendations
+                ADD COLUMN IF NOT EXISTS step_id INTEGER
+                    REFERENCES ai_workflow_steps(id) ON DELETE SET NULL;
+        ]]></sql>
+        <rollback>
+            <sql>
+                ALTER TABLE ai_llm_call_recommendations DROP COLUMN IF EXISTS step_id;
+                DROP TABLE IF EXISTS ai_workflow_steps;
+            </sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="057-log-entry-workflow-attribution" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="log_entry" columnName="workflow_tag"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE log_entry
+                ADD COLUMN workflow_tag TEXT,
+                ADD COLUMN workflow_id INTEGER,
+                ADD COLUMN workflow_step_id INTEGER,
+                ADD COLUMN request_slo TEXT
+                    CHECK (request_slo IS NULL OR request_slo IN
+                        ('ux-critical', 'ux-high-prio', 'ux-background'));
+            CREATE INDEX IF NOT EXISTS idx_log_entry_workflow_tag
+                ON log_entry(workflow_tag, timestamp_request DESC)
+                WHERE workflow_tag IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_log_entry_workflow_id
+                ON log_entry(workflow_id, timestamp_request DESC)
+                WHERE workflow_id IS NOT NULL;
+        ]]></sql>
+        <rollback>
+            <sql>
+                DROP INDEX IF EXISTS idx_log_entry_workflow_id;
+                DROP INDEX IF EXISTS idx_log_entry_workflow_tag;
+                ALTER TABLE log_entry
+                    DROP COLUMN IF EXISTS request_slo,
+                    DROP COLUMN IF EXISTS workflow_step_id,
+                    DROP COLUMN IF EXISTS workflow_id,
+                    DROP COLUMN IF EXISTS workflow_tag;
+            </sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="057-workflow-benchmarks" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="ai_workflow_benchmarks"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE ai_workflow_benchmarks (
+                id SERIAL PRIMARY KEY,
+                workflow_id INTEGER NOT NULL
+                    REFERENCES ai_workflows(id) ON DELETE CASCADE,
+                team_id INTEGER NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+                candidate_model TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'succeeded'
+                    CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                sample_size INTEGER NOT NULL DEFAULT 50,
+                historic_metrics JSONB,
+                candidate_metrics JSONB,
+                error TEXT,
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMPTZ
+            );
+            CREATE INDEX idx_ai_workflow_benchmarks_workflow
+                ON ai_workflow_benchmarks(workflow_id, created_at DESC);
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS ai_workflow_benchmarks;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="057-workflow-lineage" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="ai_workflows" columnName="previous_workflow_id"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            -- The workflow of the previous analysis this one continues, so
+            -- history (request attribution, benchmarks) follows the logical
+            -- workflow across re-analyses instead of its current tags.
+            ALTER TABLE ai_workflows
+                ADD COLUMN previous_workflow_id INTEGER
+                    REFERENCES ai_workflows(id) ON DELETE SET NULL;
+        ]]></sql>
+        <rollback>
+            <sql>ALTER TABLE ai_workflows DROP COLUMN IF EXISTS previous_workflow_id;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="057-application-key-queue-ranks" author="wasnertobias">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="application_key_queue_ranks"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            -- Logos-admin ordered ranking of application keys across teams.
+            -- Lower rank number = higher dequeue priority within the same SLO
+            -- bucket (raw_priority). Unranked keys keep the historical
+            -- role_rank tiebreak only.
+            CREATE TABLE application_key_queue_ranks (
+                api_key_id INTEGER PRIMARY KEY
+                    REFERENCES api_keys(id) ON DELETE CASCADE,
+                rank INTEGER NOT NULL CHECK (rank >= 1),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+            );
+            CREATE UNIQUE INDEX idx_application_key_queue_ranks_rank
+                ON application_key_queue_ranks(rank);
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS application_key_queue_ranks;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

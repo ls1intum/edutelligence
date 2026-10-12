@@ -129,10 +129,12 @@ def auth_context_for_key(api_key_id: int, log_level: Optional[str] = None) -> Op
         settings=row.get("settings") if row.get("settings") is not None else {},
         default_priority=LOCAL_BATCH_PRIORITY,
         # The batch keeps the key's role tiebreak (an application key's batch
-        # still beats a developer's within the LOW bucket) and team priority
-        # (which stays 0 here — the forced LOW wins the resolution anyway).
+        # still beats a developer's within the LOW bucket), team priority
+        # (which stays 0 here — the forced LOW wins the resolution anyway),
+        # and Logos-admin application-key queue rank (tiebreak inside LOW).
         user_role=row.get("role"),
         team_priority=row.get("team_priority") or 0,
+        admin_queue_rank=row.get("admin_queue_rank"),
     )
 
 

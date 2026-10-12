@@ -2,9 +2,9 @@
 
 A read-only analysis session writes ``/artifacts/analysis.json``. After a
 successful no-push finalize the runner loads that file (when present) and
-upserts ``ai_workflow_analyses`` / ``ai_workflows`` /
-``ai_llm_call_recommendations`` — the same tables Liquibase 043 and the
-webservice heuristic scanner use. Missing file is a no-op with a log line;
+upserts ``ai_workflow_analyses`` / ``ai_workflows`` / ``ai_workflow_steps`` /
+``ai_llm_call_recommendations`` — the same tables Liquibase 046/057 and the
+webservice analysis path use. Missing file is a no-op with a log line;
 the session still succeeds.
 """
 
@@ -36,6 +36,10 @@ MAX_ANALYSIS_BYTES = 2 * 1024 * 1024
 MAX_ANCESTOR_HOPS = 50
 # Bound on the candidate pairs one (file, workflow) group may build when matching.
 MAX_MATCH_PAIRS_PER_GROUP = 10_000
+_TAG_ALLOWED = re.compile(r"[^a-z0-9-]")
+MAX_TAG_CHARS = 80
+# Room kept for a "-N" suffix that makes an allocated tag unique.
+TAG_SUFFIX_RESERVE = 6
 
 
 def objective_priority_for_slo(slo: str) -> list[str]:
@@ -62,6 +66,36 @@ def normalize_objective_priority(raw: object, *, slo: str) -> list[str]:
         if key not in seen:
             ordered.append(key)
     return ordered
+
+
+def normalize_workflow_tag(raw: object) -> str | None:
+    """Stable kebab-case tag for ``X-Logos-Workflow-Tag``; blank → None."""
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    if not value:
+        return None
+    cleaned = _TAG_ALLOWED.sub("", value)[:MAX_TAG_CHARS]
+    return cleaned or None
+
+
+def unique_workflow_tag(tag: str | None, taken: set[str] | None) -> str | None:
+    """``tag``, or ``tag-2``, ``tag-3``, … — never one in ``taken``; reserves it.
+
+    Mirrors the webservice allocator: a long tag is cut to leave room for the
+    suffix, so truncation cannot make two tags equal.
+    """
+    if not tag or taken is None:
+        return tag
+    stem = (
+        tag[: MAX_TAG_CHARS - TAG_SUFFIX_RESERVE].rstrip("-") if len(tag) > MAX_TAG_CHARS - TAG_SUFFIX_RESERVE else tag
+    )
+    candidate, n = stem, 2
+    while candidate in taken:
+        candidate = f"{stem}-{n}"
+        n += 1
+    taken.add(candidate)
+    return candidate
 
 
 def artifact_analysis_path(session_id: int) -> Path:
@@ -334,23 +368,35 @@ async def upsert_analysis(
         previous_recs = await _previous_recommendations(conn, team_repository_id, int(analysis_id))
         previous_workflows = await _previous_workflows(conn, team_repository_id, int(analysis_id))
         previous_for = match_workflows(previous_workflows, previous_recs, workflows, recommendations)
+        # Tags are matched team-wide; reserve every carried-over tag first so a
+        # new one cannot take it, then allocate the rest against that set.
+        taken_tags = await _lock_team_tags(conn, team_id, team_repository_id)
+        for previous_wf in previous_workflows:
+            taken_tags.update(t for t in [previous_wf.get("tag")] if t)
+            taken_tags.update(st["tag"] for st in previous_wf.get("steps", {}).values() if st.get("tag"))
 
         workflow_ids: dict[str, int] = {}
+        # Per workflow name → step name → step id (for recommendation step_id).
+        step_ids: dict[str, dict[str, int]] = {}
         for index, raw in enumerate(workflows):
             if not isinstance(raw, dict):
                 continue
             name = _workflow_name(raw, index)
             agent_diagram = str(raw.get("diagram_mermaid") or "")
+            # Owner edits live on the workflow row, which a re-analysis
+            # replaces: the matched previous workflow carries them over.
             previous_wf = previous_for.get(index)
             diagram, owner_flag, proposed, dismissed = _diagram_for_ingest(agent_diagram, previous_wf)
             wf_id = (
                 await conn.execute(
                     text("""
                         INSERT INTO ai_workflows
-                            (analysis_id, name, trigger_summary, diagram_mermaid, sort_order,
+                            (analysis_id, name, trigger_summary, diagram_mermaid, sort_order, tag,
+                             status, deleted_at, previous_workflow_id,
                              diagram_set_by_owner, proposed_diagram_mermaid, dismissed_diagram_mermaid)
                         VALUES
-                            (:analysis_id, :name, :trigger_summary, :diagram, :sort_order,
+                            (:analysis_id, :name, :trigger_summary, :diagram, :sort_order, :tag,
+                             :status, :deleted_at, :previous_workflow_id,
                              :diagram_set_by_owner, :proposed, :dismissed)
                         RETURNING id
                         """),
@@ -359,7 +405,12 @@ async def upsert_analysis(
                         "name": name,
                         "trigger_summary": _str_or_none(raw.get("trigger_summary")),
                         "diagram": diagram,
-                        "sort_order": int(raw.get("sort_order") if raw.get("sort_order") is not None else index),
+                        "sort_order": _sort_order(raw, index),
+                        "tag": (previous_wf or {}).get("tag")
+                        or unique_workflow_tag(normalize_workflow_tag(raw.get("tag")), taken_tags),
+                        "status": (previous_wf or {}).get("status") or "active",
+                        "deleted_at": (previous_wf or {}).get("deleted_at"),
+                        "previous_workflow_id": (previous_wf or {}).get("id"),
                         "diagram_set_by_owner": owner_flag,
                         "proposed": proposed,
                         "dismissed": dismissed,
@@ -367,6 +418,13 @@ async def upsert_analysis(
                 )
             ).scalar_one()
             workflow_ids[name] = int(wf_id)
+            step_ids[name] = await _insert_workflow_steps(
+                conn,
+                workflow_id=int(wf_id),
+                raw_steps=raw.get("steps"),
+                previous_steps=(previous_wf or {}).get("steps") or {},
+                taken_tags=taken_tags,
+            )
             nested = raw.get("recommendations")
             if isinstance(nested, list):
                 for nested_rec in nested:
@@ -386,20 +444,25 @@ async def upsert_analysis(
             if slo not in VALID_SLOS:
                 slo = "ux-high-prio"
             workflow_name = str(raw.get("workflow") or raw.get("workflow_name") or "").strip()
+            step_name = str(raw.get("step") or raw.get("step_name") or "").strip()
             flags = raw.get("traffic_flags")
             confidence = raw.get("confidence")
             try:
                 confidence_f = float(confidence) if confidence is not None else 0.5
             except (TypeError, ValueError):
                 confidence_f = 0.5
+            # Never trust a numeric workflow_id / step_id from the artifact —
+            # resolve only via names created for this ingest.
+            workflow_id = workflow_ids.get(workflow_name) if workflow_name else None
+            step_id = None
+            if workflow_name and step_name:
+                step_id = step_ids.get(workflow_name, {}).get(step_name)
             parsed.append(
                 {
                     "file_path": file_path,
                     "workflow_name": workflow_name,
-                    # Never trust a numeric workflow_id from the artifact — it could
-                    # point at another analysis/team. Resolve only via names created
-                    # for this ingest.
-                    "workflow_id": workflow_ids.get(workflow_name) if workflow_name else None,
+                    "workflow_id": workflow_id,
+                    "step_id": step_id,
                     "start_line": _int_or_none(raw.get("start_line")),
                     "end_line": _int_or_none(raw.get("end_line")),
                     "code_url": _str_or_none(raw.get("code_url")),
@@ -422,13 +485,13 @@ async def upsert_analysis(
             await conn.execute(
                 text("""
                     INSERT INTO ai_llm_call_recommendations
-                        (analysis_id, workflow_id, team_id, file_path, start_line, end_line,
+                        (analysis_id, workflow_id, step_id, team_id, file_path, start_line, end_line,
                          code_url, detected_model, model_set_by_owner, recommended_slo, objective_priority,
                          confidence, justification, traffic_flags, review_status, review_carried_over,
                          confirmed_slo, confirmed_objective_priority, api_key_id, reviewed_by, reviewed_at,
                          previous_recommendation_id)
                     VALUES
-                        (:analysis_id, :workflow_id, :team_id, :file_path, :start_line, :end_line,
+                        (:analysis_id, :workflow_id, :step_id, :team_id, :file_path, :start_line, :end_line,
                          :code_url, :detected_model, :model_set_by_owner, :slo, CAST(:priority AS jsonb),
                          :confidence, :justification, CAST(:flags AS jsonb), :review_status, :carried_over,
                          :confirmed_slo, CAST(:confirmed_priority AS jsonb), :api_key_id, :reviewed_by, :reviewed_at,
@@ -440,6 +503,7 @@ async def upsert_analysis(
                     "analysis_id": analysis_id,
                     "team_id": team_id,
                     "workflow_id": rec["workflow_id"],
+                    "step_id": rec["step_id"],
                     "file_path": rec["file_path"],
                     "start_line": rec["start_line"],
                     "end_line": rec["end_line"],
@@ -464,6 +528,119 @@ async def upsert_analysis(
         len(workflow_ids),
     )
     return int(analysis_id)
+
+
+async def _insert_workflow_steps(
+    conn: Any,
+    *,
+    workflow_id: int,
+    raw_steps: object,
+    previous_steps: dict[str, dict[str, Any]] | None = None,
+    taken_tags: set[str] | None = None,
+) -> dict[str, int]:
+    """Insert ``ai_workflow_steps`` for one workflow. Returns name → id.
+
+    Missing or empty ``steps`` is fine (backward compatible). Status /
+    soft-delete live on the parent workflow. ``previous_steps`` (step name →
+    row of the previous analysis) carries an owner-confirmed SLO and an
+    established tag over to a same-named step.
+    """
+    names_to_ids: dict[str, int] = {}
+    if not isinstance(raw_steps, list):
+        return names_to_ids
+    for index, raw in enumerate(raw_steps):
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        # Same trimmed name twice would copy one predecessor's tag/SLO onto both.
+        if name in names_to_ids:
+            logger.warning(
+                "skipping duplicate workflow step name %r on workflow %s",
+                name,
+                workflow_id,
+            )
+            continue
+        slo = str(raw.get("recommended_slo") or raw.get("recommended_sla") or "").strip()
+        if slo not in VALID_SLOS:
+            slo = "ux-high-prio"
+        previous = (previous_steps or {}).get(name) or {}
+        confirmed_slo = previous.get("confirmed_slo")
+        confirmed_priority = None
+        if previous.get("confirmed_objective_priority") is not None:
+            confirmed_priority = json.dumps(
+                _priority_list(previous["confirmed_objective_priority"], slo=confirmed_slo or slo)
+            )
+        step_id = (
+            await conn.execute(
+                text("""
+                    INSERT INTO ai_workflow_steps
+                        (workflow_id, name, sort_order, tag, recommended_slo, objective_priority,
+                         confirmed_slo, confirmed_objective_priority)
+                    VALUES
+                        (:workflow_id, :name, :sort_order, :tag, :slo, CAST(:priority AS jsonb),
+                         :confirmed_slo, CAST(:confirmed_priority AS jsonb))
+                    RETURNING id
+                    """),
+                {
+                    "workflow_id": workflow_id,
+                    "name": name,
+                    "sort_order": _sort_order(raw, index),
+                    "tag": previous.get("tag")
+                    or unique_workflow_tag(normalize_workflow_tag(raw.get("tag")), taken_tags),
+                    "slo": slo,
+                    "priority": json.dumps(normalize_objective_priority(raw.get("objective_priority"), slo=slo)),
+                    "confirmed_slo": confirmed_slo,
+                    "confirmed_priority": confirmed_priority,
+                },
+            )
+        ).scalar_one()
+        names_to_ids[name] = int(step_id)
+    return names_to_ids
+
+
+async def _lock_team_tags(conn: Any, team_id: int, team_repository_id: int) -> set[str]:
+    """Take the team's tag lock (shared with the webservice) and return the tags in use.
+
+    The namespace is every other repository's latest succeeded analysis of the
+    team — what the request resolvers match in. This repository's own tags
+    are being replaced and come back through the carry-over.
+    """
+    await conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext('ai-workflow-tags'), :team_id)"),
+        {"team_id": team_id},
+    )
+    rows = (
+        (
+            await conn.execute(
+                text("""
+                    WITH current_analyses AS (
+                        SELECT a.id FROM ai_workflow_analyses a
+                         WHERE a.team_id = :team_id
+                           AND a.team_repository_id <> :repo
+                           AND a.id = (
+                                 SELECT latest.id FROM ai_workflow_analyses latest
+                                  WHERE latest.team_repository_id = a.team_repository_id
+                                    AND latest.status = 'succeeded'
+                                  ORDER BY latest.finished_at DESC NULLS LAST, latest.id DESC
+                                  LIMIT 1
+                               )
+                    )
+                    SELECT w.tag AS tag FROM ai_workflows w
+                     WHERE w.analysis_id IN (SELECT id FROM current_analyses) AND w.tag IS NOT NULL
+                    UNION
+                    SELECT s.tag AS tag FROM ai_workflow_steps s
+                      JOIN ai_workflows w ON w.id = s.workflow_id
+                     WHERE w.analysis_id IN (SELECT id FROM current_analyses) AND s.tag IS NOT NULL
+                    """),
+                {"team_id": team_id, "repo": team_repository_id},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return {str(r["tag"]) for r in rows}
 
 
 def _workflow_name(raw: dict[str, Any], index: int) -> str:
@@ -587,15 +764,18 @@ def _diagram_for_ingest(
 async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
     """Workflows of the latest other succeeded analysis of this repository.
 
-    Matched by :func:`match_workflows` when carrying owner-edited diagrams forward. The caller
-    holds the repository row lock; owner diagram edits take it too.
+    Matched by :func:`match_workflows` when carrying owner edits forward:
+    diagrams, lifecycle, tags, and — under ``steps`` (step name → row) —
+    step tags and confirmed SLOs. The caller holds the repository row lock;
+    owner edits take it too.
     """
     rows = (
         (
             await conn.execute(
                 text("""
-                    SELECT w.name, w.diagram_mermaid, w.diagram_set_by_owner,
-                           w.proposed_diagram_mermaid, w.dismissed_diagram_mermaid
+                    SELECT w.id, w.name, w.diagram_mermaid, w.diagram_set_by_owner,
+                           w.proposed_diagram_mermaid, w.dismissed_diagram_mermaid,
+                           w.status, w.deleted_at, w.tag
                       FROM ai_workflows w
                      WHERE w.analysis_id = (
                              SELECT a.id FROM ai_workflow_analyses a
@@ -613,7 +793,40 @@ async def _previous_workflows(conn: Any, team_repository_id: int, analysis_id: i
         .mappings()
         .all()
     )
-    return [dict(r) for r in rows]
+    previous = [dict(r) for r in rows]
+    for p in previous:
+        p["steps"] = {}
+    ids = [int(p["id"]) for p in previous if p.get("id") is not None]
+    if not ids:
+        return previous
+    step_rows = (
+        (
+            await conn.execute(
+                text("""
+                    SELECT s.workflow_id, s.name, s.tag, s.confirmed_slo, s.confirmed_objective_priority
+                      FROM ai_workflow_steps s
+                     WHERE s.workflow_id = ANY(:ids)
+                     ORDER BY s.id
+                    """),
+                {"ids": ids},
+            )
+        )
+        .mappings()
+        .all()
+    )
+    by_id = {int(p["id"]): p for p in previous if p.get("id") is not None}
+    for row in step_rows:
+        workflow = by_id.get(int(row["workflow_id"]))
+        if workflow is not None:
+            workflow["steps"].setdefault(
+                str(row["name"]),
+                {
+                    "tag": row["tag"],
+                    "confirmed_slo": row["confirmed_slo"],
+                    "confirmed_objective_priority": row["confirmed_objective_priority"],
+                },
+            )
+    return previous
 
 
 async def _previous_recommendations(conn: Any, team_repository_id: int, analysis_id: int) -> list[dict[str, Any]]:
@@ -809,3 +1022,9 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _sort_order(raw: dict[str, Any], index: int) -> int:
+    """Prefer a numeric ``sort_order``; fall back to the list index on missing/invalid."""
+    parsed = _int_or_none(raw.get("sort_order"))
+    return index if parsed is None else parsed
