@@ -47,6 +47,7 @@ async def test_gpu_collector_marks_gpu_that_requires_reset_as_faulted() -> None:
     assert snapshot.devices[0].health_reason == "GPU requires reset"
     assert snapshot.devices[0].memory_used_mb == 82989.0
     assert snapshot.gpu_faults == ["gpu0 (GPU-aaa): GPU requires reset"]
+    assert snapshot.faulted_gpu_indices == [0]
     assert "gpu0: faulted (GPU requires reset)" in snapshot.degraded_reason
 
 
@@ -64,6 +65,7 @@ async def test_gpu_collector_reports_fault_of_gpu_without_memory_reading() -> No
 
     assert [device.device_id for device in snapshot.devices] == ["GPU-bbb"]
     assert snapshot.gpu_faults == ["gpu0 (GPU-aaa): GPU is lost"]
+    assert snapshot.faulted_gpu_indices == [0]
 
 
 @pytest.mark.asyncio

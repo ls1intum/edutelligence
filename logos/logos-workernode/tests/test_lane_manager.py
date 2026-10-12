@@ -991,15 +991,26 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
     assert placed.gpu_devices == "0"
 
 
-def _faulted_gpu0_manager() -> LaneManager:
-    """Three 96 GB GPUs: GPU 0 failed, GPU 1 empty, GPU 2 holding another lane."""
+def _faulted_gpu0_manager(
+    *,
+    lost: bool = False,
+    healthy_free_mb: tuple[float, ...] = (60000.0, 15383.0),
+    gpu_devices: str = "all",
+    with_profile: bool = True,
+) -> LaneManager:
+    """GPU 0 failed; GPUs 1.. are healthy with *healthy_free_mb* free.
+
+    ``lost`` drops GPU 0 from the device list, as the collector does when
+    nvidia-smi cannot read its memory; only faulted_gpu_indices names it then.
+    """
     from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
 
     profiles = ModelProfileRegistry()
-    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
-        loaded_vram_mb=6000.0,
-        engine="vllm",
-    )
+    if with_profile:
+        profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+            loaded_vram_mb=6000.0,
+            engine="vllm",
+        )
 
     async def _snapshot() -> DeviceSummary:
         def gpu(index: int, free_mb: float, health: str = "ok") -> DeviceInfo:
@@ -1013,22 +1024,68 @@ def _faulted_gpu0_manager() -> LaneManager:
                 extra={"index": index},
             )
 
+        # The faulted GPU reports the most free memory, so only its health
+        # keeps placement away from it.
+        devices = [] if lost else [gpu(0, 97883.0, "faulted")]
+        devices += [gpu(i + 1, free) for i, free in enumerate(healthy_free_mb)]
         return DeviceSummary(
             timestamp=datetime.now(timezone.utc),
-            mode="nvidia",
+            mode="nvidia" if devices else "none",
             nvidia_smi_available=True,
-            # The faulted GPU reports the most free memory, so only its health
-            # keeps placement away from it.
-            devices=[gpu(0, 97883.0, "faulted"), gpu(1, 60000.0), gpu(2, 15383.0)],
+            faulted_gpu_indices=[0],
+            devices=devices,
         )
 
     return LaneManager(
-        WorkerConfig(gpu_devices="all"),
+        WorkerConfig(gpu_devices=gpu_devices),
         lane_port_start=15100,
         lane_port_end=15110,
         model_profiles=profiles,
         gpu_snapshot=_snapshot,
     )
+
+
+def _lane(gpu_devices: str = "", tp: int = 1) -> LaneConfig:
+    return LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices=gpu_devices,
+        vllm_config=VllmConfig(tensor_parallel_size=tp),
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_a_pin_on_a_lost_gpu_missing_from_the_device_list() -> None:
+    with pytest.raises(RuntimeError, match=r"faulted GPU\(s\) \[0\]"):
+        await _faulted_gpu0_manager(lost=True)._auto_place_gpu_devices("lane", _lane("0"))  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_an_unpinned_lane_when_every_gpu_is_lost() -> None:
+    manager = _faulted_gpu0_manager(lost=True, healthy_free_mb=())
+    with pytest.raises(RuntimeError, match="every GPU on this node is faulted"):
+        await manager._auto_place_gpu_devices("lane", _lane())  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_pins_a_healthy_gpu_without_a_vram_estimate() -> None:
+    manager = _faulted_gpu0_manager(with_profile=False)
+    placed = await manager._auto_place_gpu_devices("lane", _lane())  # noqa: SLF001
+    assert placed.gpu_devices == "1"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_when_too_few_healthy_gpus_remain() -> None:
+    manager = _faulted_gpu0_manager(healthy_free_mb=(60000.0,))
+    with pytest.raises(RuntimeError, match=r"only 1 healthy GPU"):
+        await manager._auto_place_gpu_devices("lane", _lane(tp=2))  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_a_worker_pool_of_only_faulted_gpus() -> None:
+    manager = _faulted_gpu0_manager(gpu_devices="0")
+    with pytest.raises(RuntimeError, match="no healthy GPU in this worker's GPU pool"):
+        await manager._auto_place_gpu_devices("lane", _lane())  # noqa: SLF001
 
 
 @pytest.mark.asyncio

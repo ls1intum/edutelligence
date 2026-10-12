@@ -297,3 +297,36 @@ async def test_runtime_reports_version_checksum(monkeypatch):
     runtime = await build_runtime_status(_make_app([], _NvidiaCollector()))
 
     assert runtime.version_checksum == _COMMIT
+
+
+class _AllGpusLostCollector:
+    """nvidia-smi answers, but no GPU's memory can be read: every GPU is lost."""
+
+    async def get_snapshot(self):
+        return DeviceSummary(
+            timestamp=datetime(2026, 10, 12, 8, 0, 0, tzinfo=timezone.utc),
+            mode="none",
+            nvidia_smi_available=True,
+            telemetry_available=True,
+            degraded_reason="gpu0: faulted (GPU is lost)",
+            gpu_faults=["gpu0 (GPU-aaa): GPU is lost"],
+            faulted_gpu_indices=[0],
+            devices=[],
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_keeps_the_faults_when_every_gpu_is_lost(monkeypatch):
+    """Swapping in the derived summary would drop the faults and report host
+    RAM as GPU capacity."""
+    monkeypatch.setattr(
+        "logos_worker_node.runtime._read_proc_meminfo_mb",
+        lambda: (16384.0, 4096.0, 12288.0),
+    )
+
+    runtime = await build_runtime_status(_make_app([], _AllGpusLostCollector()))
+
+    assert runtime.devices.gpu_faults == ["gpu0 (GPU-aaa): GPU is lost"]
+    assert runtime.devices.faulted_gpu_indices == [0]
+    assert runtime.devices.total_memory_mb == 0.0
+    assert runtime.devices.devices == []

@@ -2179,7 +2179,9 @@ class LaneManager:
         if not snapshot.nvidia_smi_available:
             return lane_config
 
-        faulted_indices: set[int] = set()
+        # GPUs nvidia-smi reports as failed, including ones left out of
+        # snapshot.devices because their memory could not be read.
+        faulted_indices: set[int] = set(snapshot.faulted_gpu_indices)
         device_rows: list[dict[str, float]] = []
         for fallback_index, device in enumerate(snapshot.devices):
             if device.kind != "nvidia":
@@ -2223,6 +2225,11 @@ class LaneManager:
         available_indices = {int(row["index"]) for row in device_rows}
         allowed_indices = self._parse_gpu_selector(self._global_config.gpu_devices, available_indices)
         if not allowed_indices:
+            if faulted_indices:
+                raise RuntimeError(
+                    f"Auto-placement: no healthy GPU in this worker's GPU pool for lane '{lane_id}' "
+                    f"model={lane_config.model}; faulted GPU(s) {sorted(faulted_indices)}"
+                )
             return lane_config
 
         allowed_rows = [row for row in device_rows if int(row["index"]) in set(allowed_indices)]
@@ -2242,6 +2249,13 @@ class LaneManager:
                     f"holds GPU(s) {sorted(self._calibration_gpu_subset)}. "
                     "The lane is placed once the session ends."
                 )
+            if faulted_indices:
+                # Unpinned, the lane would see every GPU and could start on a
+                # faulted one.
+                raise RuntimeError(
+                    f"Auto-placement: only {len(allowed_rows)} healthy GPU(s) for lane '{lane_id}' "
+                    f"model={lane_config.model} (tp={tp_size}); faulted GPU(s) {sorted(faulted_indices)}"
+                )
             logger.warning(
                 "Auto-placement skipped for lane '%s': only %d allowed GPU(s) for tp=%d",
                 lane_id,
@@ -2252,6 +2266,21 @@ class LaneManager:
 
         required_total_mb = self._estimate_lane_vram_mb(lane_config)
         if required_total_mb <= 0:
+            if faulted_indices:
+                # Without an estimate there is nothing to fit, but leaving the
+                # lane unpinned would let it start on a faulted GPU: take the
+                # healthy GPUs with the most free memory.
+                rows = sorted(allowed_rows, key=lambda r: (-float(r["free_mb"]), int(r["index"])))[:tp_size]
+                selector = ",".join(str(index) for index in sorted(int(r["index"]) for r in rows))
+                logger.info(
+                    "Auto-placement lane '%s' model=%s: gpu_devices=%s (no VRAM estimate; "
+                    "faulted GPU(s) %s excluded)",
+                    lane_id,
+                    lane_config.model,
+                    selector,
+                    sorted(faulted_indices),
+                )
+                return lane_config.model_copy(update={"gpu_devices": selector})
             logger.debug(
                 "Auto-placement skipped for lane '%s' model=%s: no VRAM estimate available",
                 lane_id,

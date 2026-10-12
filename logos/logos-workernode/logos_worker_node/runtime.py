@@ -226,7 +226,9 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     # usage, and its telemetry_available=False already tells the flag-gating
     # consumers (main.py reporting, logosnode_provider) to keep their
     # conservative values until a real mlx probe succeeds.
-    if devices.mode == "none":
+    # A snapshot whose GPUs have all failed is kept as well: replacing it would
+    # drop the fault list and report host memory as GPU capacity.
+    if devices.mode == "none" and not devices.gpu_faults:
         devices = _build_derived_device_summary(lanes)
 
     capacity = CapacitySummary(

@@ -853,6 +853,8 @@ class DeviceSummary(BaseModel):
     # One line per GPU that nvidia-smi reports as failed, including GPUs left
     # out of ``devices`` because their memory could not be read.
     gpu_faults: list[str] = Field(default_factory=list)
+    # nvidia-smi indices of those GPUs; lane placement never uses them.
+    faulted_gpu_indices: list[int] = Field(default_factory=list)
     devices: list[DeviceInfo] = Field(default_factory=list)
     total_memory_mb: float = 0.0
     used_memory_mb: float = 0.0

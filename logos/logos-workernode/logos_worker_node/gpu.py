@@ -49,6 +49,7 @@ class GpuMetricsCollector:
         self._available = False
         self._degraded_reason = ""
         self._gpu_faults: list[str] = []
+        self._faulted_gpu_indices: list[int] = []
 
     @property
     def available(self) -> bool:
@@ -109,6 +110,7 @@ class GpuMetricsCollector:
             available = self._available
             degraded_reason = self._degraded_reason
             gpu_faults = list(self._gpu_faults)
+            faulted_gpu_indices = list(self._faulted_gpu_indices)
 
         total = sum(device.memory_total_mb for device in devices)
         used = sum(device.memory_used_mb for device in devices)
@@ -126,6 +128,7 @@ class GpuMetricsCollector:
             telemetry_available=available,
             degraded_reason=degraded_reason,
             gpu_faults=gpu_faults,
+            faulted_gpu_indices=faulted_gpu_indices,
             devices=devices,
             total_memory_mb=total,
             used_memory_mb=used,
@@ -149,6 +152,7 @@ class GpuMetricsCollector:
         devices: list[DeviceInfo] = []
         degraded_messages: list[str] = []
         fault_messages: list[str] = []
+        faulted_indices: list[int] = []
         for line in raw.strip().splitlines():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) < 8:
@@ -166,6 +170,7 @@ class GpuMetricsCollector:
                 logger.warning("Skipping nvidia-smi line with invalid memory fields: %s", line)
                 if fault:
                     fault_messages.append(f"gpu{device_index} ({parts[1] or parts[0]}): {fault}")
+                    faulted_indices.append(device_index)
                     degraded_messages.append(f"gpu{device_index}: faulted ({fault})")
                 else:
                     degraded_messages.append(f"gpu{device_index}: invalid memory telemetry")
@@ -193,6 +198,7 @@ class GpuMetricsCollector:
                     fault,
                 )
                 fault_messages.append(f"gpu{device_index} ({parts[1] or parts[0]}): {fault}")
+                faulted_indices.append(device_index)
                 degraded_messages.append(f"gpu{device_index}: faulted ({fault})")
             elif partial_fields:
                 health = "degraded"
@@ -226,6 +232,7 @@ class GpuMetricsCollector:
             self._devices = devices
             self._degraded_reason = "; ".join(degraded_messages[:3]) if degraded_messages else ""
             self._gpu_faults = fault_messages
+            self._faulted_gpu_indices = faulted_indices
 
     @staticmethod
     def _run_nvidia_smi() -> str | None:
