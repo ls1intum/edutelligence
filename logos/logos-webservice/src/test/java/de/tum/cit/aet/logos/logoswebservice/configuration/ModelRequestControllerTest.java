@@ -55,9 +55,9 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"gpt-5\"}"))
+                .content("{\"name\": \"openai/gpt-5\"}"))
            .andExpect(status().isOk())
-           .andExpect(jsonPath("$.name").value("gpt-5"))
+           .andExpect(jsonPath("$.name").value("openai/gpt-5"))
            .andExpect(jsonPath("$.request_count").value(1))
            .andExpect(jsonPath("$.has_voted").value(true))
            .andExpect(jsonPath("$.id").isNumber());
@@ -68,7 +68,7 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"gpt-5\"}"))
+                .content("{\"name\": \"openai/gpt-5\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(1));
 
@@ -77,7 +77,7 @@ class ModelRequestControllerTest {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
                 .contentType("application/json")
-                .content("{\"name\": \"gpt-5\"}"))
+                .content("{\"name\": \"openai/gpt-5\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(1));
     }
@@ -86,39 +86,44 @@ class ModelRequestControllerTest {
     void vote_secondUserIncrementsTheCount() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"gpt-5\"}"))
+                .contentType("application/json").content("{\"name\": \"openai/gpt-5\"}"))
            .andExpect(status().isOk());
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.adminUser())
-                .contentType("application/json").content("{\"name\": \"gpt-5\"}"))
+                .contentType("application/json").content("{\"name\": \"openai/gpt-5\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(2));
     }
 
     @Test
     void vote_rejectsAModelThatIsAlreadyServed() throws Exception {
-        // "gpt-4" is seeded into the models table, so it is already available and
-        // must not be requestable.
-        mvc.perform(post("/logosdb/add_model_request")
-                .with(TestJwt.testUser())
-                .contentType("application/json")
-                .content("{\"name\": \"gpt-4\"}"))
-           .andExpect(status().isConflict())
-           .andExpect(jsonPath("$.error").exists());
+        // "openai/gpt-4" is added to the models table (simulated directly), so it
+        // is already available and must not be requestable.
+        jdbc.update("INSERT INTO models (id, name) VALUES (5098, 'openai/gpt-4')");
+        try {
+            mvc.perform(post("/logosdb/add_model_request")
+                    .with(TestJwt.testUser())
+                    .contentType("application/json")
+                    .content("{\"name\": \"openai/gpt-4\"}"))
+               .andExpect(status().isConflict())
+               .andExpect(jsonPath("$.error").exists());
+        } finally {
+            jdbc.update("DELETE FROM models WHERE id = 5098");
+        }
     }
 
     @Test
     void undo_takesTheVoteBackAndAllowsRevoting() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"claude\"}"))
+                .contentType("application/json").content("{\"name\": \"anthropic/claude\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(1));
 
         // Undo: the (only) vote is removed, the model's registry row goes with it.
         mvc.perform(post("/logosdb/remove_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"claude\"}"))
+                .contentType("application/json").content("{\"name\": \"anthropic/claude\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(0))
            .andExpect(jsonPath("$.has_voted").value(false));
@@ -131,7 +136,7 @@ class ModelRequestControllerTest {
         // Re-vote: the model is requestable again and counts one.
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"claude\"}"))
+                .contentType("application/json").content("{\"name\": \"anthropic/claude\"}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.request_count").value(1));
     }
@@ -140,7 +145,7 @@ class ModelRequestControllerTest {
     void list_reportsHasVotedPerVoter() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"llama\"}"))
+                .contentType("application/json").content("{\"name\": \"meta-llama/llama-3\"}"))
            .andExpect(status().isOk());
 
         // The voter sees has_voted=true ...
@@ -149,7 +154,7 @@ class ModelRequestControllerTest {
                 .contentType("application/json").content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(1))
-           .andExpect(jsonPath("$[0].name").value("llama"))
+           .andExpect(jsonPath("$[0].name").value("meta-llama/llama-3"))
            .andExpect(jsonPath("$[0].request_count").value(1))
            .andExpect(jsonPath("$[0].has_voted").value(true));
 
@@ -159,17 +164,17 @@ class ModelRequestControllerTest {
                 .contentType("application/json").content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(1))
-           .andExpect(jsonPath("$[0].name").value("llama"))
+           .andExpect(jsonPath("$[0].name").value("meta-llama/llama-3"))
            .andExpect(jsonPath("$[0].request_count").value(1))
            .andExpect(jsonPath("$[0].has_voted").value(false));
     }
 
     @Test
     void list_excludesModelsThatBecameServed() throws Exception {
-        // First request "gpt-5" (not yet served) ...
+        // First request "openai/gpt-5" (not yet served) ...
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"gpt-5\"}"))
+                .contentType("application/json").content("{\"name\": \"openai/gpt-5\"}"))
            .andExpect(status().isOk());
         mvc.perform(post("/logosdb/get_model_requests")
                 .with(TestJwt.testUser())
@@ -177,7 +182,7 @@ class ModelRequestControllerTest {
            .andExpect(jsonPath("$.length()").value(1));
 
         // ... then an admin adds it to the models table (simulated directly).
-        jdbc.update("INSERT INTO models (id, name) VALUES (5099, 'gpt-5')");
+        jdbc.update("INSERT INTO models (id, name) VALUES (5099, 'openai/gpt-5')");
         try {
             // It is served now, so it drops out of the requests list.
             mvc.perform(post("/logosdb/get_model_requests")
@@ -194,15 +199,15 @@ class ModelRequestControllerTest {
     void list_ordersByVoteCountDescending() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"alpha\"}"))
+                .contentType("application/json").content("{\"name\": \"acme/alpha\"}"))
            .andExpect(status().isOk());
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.adminUser())
-                .contentType("application/json").content("{\"name\": \"alpha\"}"))
+                .contentType("application/json").content("{\"name\": \"acme/alpha\"}"))
            .andExpect(status().isOk());
         mvc.perform(post("/logosdb/add_model_request")
                 .with(TestJwt.testUser())
-                .contentType("application/json").content("{\"name\": \"beta\"}"))
+                .contentType("application/json").content("{\"name\": \"acme/beta\"}"))
            .andExpect(status().isOk());
 
         mvc.perform(post("/logosdb/get_model_requests")
@@ -210,10 +215,10 @@ class ModelRequestControllerTest {
                 .contentType("application/json").content("{}"))
            .andExpect(status().isOk())
            .andExpect(jsonPath("$.length()").value(2))
-           // "alpha" (2 votes) ranks above "beta" (1 vote).
-           .andExpect(jsonPath("$[0].name").value("alpha"))
+           // "acme/alpha" (2 votes) ranks above "acme/beta" (1 vote).
+           .andExpect(jsonPath("$[0].name").value("acme/alpha"))
            .andExpect(jsonPath("$[0].request_count").value(2))
-           .andExpect(jsonPath("$[1].name").value("beta"))
+           .andExpect(jsonPath("$[1].name").value("acme/beta"))
            .andExpect(jsonPath("$[1].request_count").value(1));
     }
 
@@ -236,7 +241,7 @@ class ModelRequestControllerTest {
     void addModelRequest_withoutTokenIsUnauthorized() throws Exception {
         mvc.perform(post("/logosdb/add_model_request")
                 .contentType("application/json")
-                .content("{\"name\": \"gpt-5\"}"))
+                .content("{\"name\": \"openai/gpt-5\"}"))
            .andExpect(status().isUnauthorized());
     }
 }
