@@ -25,6 +25,10 @@ The queue is narrowed the same way: a backlog on another local model, or on
 a cloud provider, is not a person waiting for the lane this runner uses.
 Pausing for those used to hand a GPU back to nobody who was asking for it.
 
+**Measured in real slots.** A deployment holds as many slots as its lanes
+guarantee to serve at once, not the scheduler's ledger ceiling, and a worker
+that is offline holds none — the orchestrator reports its models unloaded.
+
 It falls back to the fleet-wide figure only when none of those deployments
 is resident — there is nothing of ours to measure then, and the older signal
 is the better of the two available answers. A key that reaches *nothing*
@@ -178,6 +182,22 @@ def _queue_parts(model: dict) -> tuple[int, int]:
     reported = signals.get("queue_waiting_current")
     wait = max(0, int(reported)) if isinstance(reported, (int, float)) else 0
     return max(0, int(model.get("queue_depth") or 0)), wait
+
+
+def _slots(model: dict) -> int:
+    """How many requests one deployment can really serve at once.
+
+    The lanes' guaranteed concurrency (``lane_parallel``) — the slot count
+    the lane pages show. ``max_capacity`` is the scheduler's ledger
+    ceiling, deliberately loose so it never binds before the engine does;
+    measured against it, a lane with two slots read as having twenty, and
+    two busy requests with users queueing behind them looked like 10% load.
+    The ceiling stands in only until a lane reports its concurrency.
+    """
+    reported = model.get("lane_parallel")
+    if isinstance(reported, (int, float)) and reported > 0:
+        return int(reported)
+    return int(model.get("max_capacity") or 0)
 
 
 def _live(model: dict, capacity: int) -> tuple[int, int, float]:
@@ -364,7 +384,7 @@ def parse_scheduler_state(
                     qshare = queued_split.get(str(own_api_key_id), 0)
                     if isinstance(qshare, (int, float)):
                         per_model_own_queued[name] = max(per_model_own_queued.get(name, 0), int(qshare))
-            capacity = int(model.get("max_capacity") or 0)
+            capacity = _slots(model)
             if not model.get("loaded") or capacity <= 0:
                 # Only loaded models hold capacity. An unloaded one
                 # contributes nothing to either side of the ratio: its slots

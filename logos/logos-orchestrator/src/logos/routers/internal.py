@@ -29,10 +29,12 @@ from logos.benchmarks.guidellm_runner import (
 )
 from logos.benchmarks.huggingface_datasets import dataset_metadata, search_datasets
 from logos.benchmarks.worker_limits import validate_worker_overrides, worker_limits
+from logos.client_tags import cancel as cancel_client_tag
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import (
     BenchmarkLimitsRequest,
+    CancelClientTagRequest,
     DatasetMetadataRequest,
     DatasetSearchRequest,
     HfReachabilityRequest,
@@ -343,6 +345,22 @@ def _require_internal_secret(request: Request, disabled_detail: str = "Internal 
     )
     if not hmac.compare_digest(token.encode("utf-8"), _INTERNAL_SECRET.encode("utf-8")):
         raise HTTPException(status_code=401, detail="Invalid or missing internal secret")
+
+
+@router.post("/internal/client_tags/cancel", tags=["admin"])
+async def internal_cancel_client_tag(data: CancelClientTagRequest, request: Request):
+    """End every in-flight request a proxy marked with this client tag.
+
+    For a caller that has stopped reading its answers without closing its
+    connection — the agent runner, when it freezes a session. Each request
+    sees an ordinary client disconnect, so its upstream generation is
+    aborted and its slot released at once instead of when the answer ends.
+    """
+    _require_internal_secret(request)
+    cancelled = cancel_client_tag(data.tag)
+    if cancelled:
+        logger.info("Cancelling %d in-flight request(s) for client tag %s", cancelled, data.tag)
+    return JSONResponse(content={"cancelled": cancelled})
 
 
 @router.get("/internal/live_streams", tags=["admin"])

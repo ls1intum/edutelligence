@@ -2239,6 +2239,83 @@ class TestYieldingReallyYields:
         assert order[1] == ("disconnect", sessions.settings.session_network, "cid-7")
         assert ("transition", SessionStatus.PAUSED) in order
 
+    async def test_a_paused_sessions_in_flight_requests_are_ended(self, monkeypatch):
+        """Cutting the network ends nothing the gateway can see: the frozen
+        client sends no close, and its generations would hold their slots
+        until they finish. The orchestrator ends them by the address the
+        gateway tagged them with — read before the detach takes it away."""
+        from app import sessions
+
+        order: list = []
+
+        async def fake_pause(cid, **_kwargs):
+            order.append(("pause", cid))
+            return True
+
+        async def fake_ip(cid, network):
+            order.append(("address", cid, network))
+            return "172.30.0.5"
+
+        async def fake_disconnect(network, cid):
+            order.append(("disconnect", network, cid))
+            return True
+
+        async def fake_cancel(address, **_kwargs):
+            order.append(("cancel", address))
+            return 2
+
+        async def noop(*_args, **_kwargs):
+            return True
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", fake_pause)
+        monkeypatch.setattr(sessions.docker_engine, "container_ip", fake_ip)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", fake_disconnect)
+        monkeypatch.setattr(sessions.upstream, "cancel_client_requests", fake_cancel)
+        monkeypatch.setattr(sessions.db, "transition_session", noop)
+        monkeypatch.setattr(sessions.db, "add_event", noop)
+
+        await sessions.SessionManager()._pause(self.ROW, "users are queueing")
+
+        network = sessions.settings.session_network
+        assert order == [
+            ("pause", "cid-7"),
+            ("address", "cid-7", network),
+            ("disconnect", network, "cid-7"),
+            ("cancel", "172.30.0.5"),
+        ]
+
+    async def test_a_session_whose_address_cannot_be_read_is_still_paused(self, monkeypatch):
+        from app import sessions
+
+        transitions: list = []
+        cancelled: list = []
+
+        async def broken_inspect(_cid, _network):
+            raise RuntimeError("docker said no")
+
+        async def fake_cancel(address, **_kwargs):
+            cancelled.append(address)
+            return 0
+
+        async def fake_transition(_sid, target, **_fields):
+            transitions.append(target)
+            return True
+
+        async def ok(*_args, **_kwargs):
+            return True
+
+        monkeypatch.setattr(sessions.docker_engine, "pause_container", ok)
+        monkeypatch.setattr(sessions.docker_engine, "container_ip", broken_inspect)
+        monkeypatch.setattr(sessions.docker_engine, "disconnect_network", ok)
+        monkeypatch.setattr(sessions.upstream, "cancel_client_requests", fake_cancel)
+        monkeypatch.setattr(sessions.db, "transition_session", fake_transition)
+        monkeypatch.setattr(sessions.db, "add_event", ok)
+
+        await sessions.SessionManager()._pause(self.ROW, "users are queueing")
+
+        assert transitions == [SessionStatus.PAUSED]
+        assert cancelled == []
+
     async def test_a_pause_docker_refused_does_not_move_the_row(self, monkeypatch):
         from app import sessions
 
