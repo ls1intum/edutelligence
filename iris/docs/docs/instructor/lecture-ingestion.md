@@ -50,11 +50,11 @@ Make it a habit to re-ingest after updating lecture materials. A quick click on 
 
 ### Re-Ingesting While a Unit Is Still Processing
 
-You do not have to wait for a running ingestion to finish before sending the same unit again. Iris starts the new run immediately and **supersedes** the one in progress: the older run stops at its next checkpoint and reports nothing, so the status you see belongs to the newest request.
+You do not have to wait for a running ingestion to finish before sending the same unit again. Iris **supersedes** the run in progress: the older run stops at its next checkpoint and sends no final success or failure status. It may already have sent progress updates before it was superseded.
 
 This is what makes correcting a mistake cheap. If you replace the slides again, or fix a video link while the first version is still being transcribed, the obsolete run does not finish and cannot overwrite the result of the one you actually want.
 
-A superseded run stops only at a point where what is stored for the unit is consistent, so students never get answers from a half-written unit while the new run is still working.
+Iris stops a superseded run at a checkpoint and guards the write phases of the current run. Before reporting ingestion as finished, it verifies the stored content. During processing, old and new entries can briefly coexist, so wait for ingestion to finish before relying on answers about the updated material.
 
 ## How Iris Uses Lecture Content
 

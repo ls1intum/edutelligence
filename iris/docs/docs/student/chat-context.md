@@ -86,7 +86,7 @@ This is what lets you ask "what does this mean?" or "explain this part" without 
 Three things are worth knowing:
 
 - **It describes the moment you hit send.** If you move on to another slide afterwards, your next message carries the new position, not the old one.
-- **Only material Iris has indexed counts.** A position in a lecture unit that was never sent to Iris tells it nothing, and it will say so rather than guess at what is on your screen.
+- **Only material Iris has indexed counts.** If Iris has no indexed material at your position, it leaves that position out of the context it uses to answer. It cannot infer what is on your screen from the position alone.
 - **It is not stored with the conversation.** Reopening an old chat shows its messages without the positions they were asked from.
 
 Your position is also what Iris needs in order to [show you a place in the material](./chat#when-iris-shows-you-the-place) rather than describe it.

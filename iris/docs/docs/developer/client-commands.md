@@ -91,9 +91,9 @@ The return string is the agent's last input before it writes its answer, which i
 | Already at that position                                    | The view was not moved; refer to it naturally anyway.                                                                      |
 | Not applied (student left the view, or a transport failure) | The view could not be moved, and not to tell the student otherwise.                                                        |
 | Rejected                                                    | Which value was not in the retrieved results.                                                                              |
-| Second call in one answer                                   | Refused; further positions belong in the answer text.                                                                      |
+| Another call after a successful move                        | Refused; further positions belong in the answer text.                                                                      |
 
-One point-out per answer is enforced with a closure flag: jumping the view around mid-answer is confusing, and the restriction means the tool never has to track where an earlier point-out left the student. A single call naming a page _and_ a timestamp counts as that one point-out.
+One successful point-out per answer is enforced with a closure flag: jumping the view around mid-answer is confusing, and the restriction means the tool never has to track where an earlier point-out left the student. A rejected or unapplied call does not set the flag, so the agent can correct its request and try again. A single successful call naming a page _and_ a timestamp counts as that one point-out.
 
 A successful call also invalidates the current-position snapshot — see [viewing context](./viewing-context.md#going-stale-mid-run).
 

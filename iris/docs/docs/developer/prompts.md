@@ -174,7 +174,7 @@ Feedbacks (from automated tests):
 
 These are loaded and formatted using Python's `str.format()` or passed directly to LangChain prompt templates.
 
-The three citation prompts are the one group where the wording is part of a wire format: `citation_prompt.txt` tells the model to copy the provided ids verbatim, and `citation_keyword_prompt.txt` and `citation_summary_prompt.txt` forbid the characters that delimit a citation's fields. See [citations](./citations.md).
+The four citation prompts are the one group where the wording is part of a wire format: `citation_prompt.txt` and `faq_citation_prompt.txt` tell the model to copy the provided ids verbatim, and `citation_keyword_prompt.txt` and `citation_summary_prompt.txt` forbid the characters that delimit a citation's fields. See [citations](./citations.md).
 
 ## How Prompts Are Assembled
 

@@ -73,7 +73,7 @@ Each task builds its own `IrisLangchainChatModel` over the shared request handle
 
 ### Field sanitization
 
-`_sanitize_citation_field()` removes `:`, `[` and `]` from every generated keyword and summary and collapses whitespace. The fields are colon-delimited and bracket-terminated, so an unescaped colon in a keyword would shift every field behind it. The summary is the last field and is therefore the one place a parser can tolerate extra colons — Artemis reads it as everything up to the closing bracket — but it is sanitized as well rather than relying on being last.
+`_sanitize_citation_field()` replaces `:`, `[` and `]` in every generated keyword and summary and collapses whitespace. The fields are colon-delimited and bracket-terminated, so an unescaped colon in a keyword would shift every field behind it. The summary is the last field and is therefore the one place a parser can tolerate extra colons — Artemis reads it as everything up to the closing bracket — but it is sanitized as well rather than relying on being last.
 
 ## Model roles
 
@@ -103,14 +103,15 @@ The current view is dropped when the agent switched the chat context during the 
 
 ## Failure behavior
 
-The two stages fail differently, on purpose:
+Failures are handled at different points:
 
-| Failure                      | Outcome                                                                                                               |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Enrichment (keyword/summary) | Logged; the answer keeps its citations with empty keyword and summary fields. A chip without a label still navigates. |
-| Citation placement           | Raised out of `CitationPipeline`, caught by `ChatPipeline._add_citations()`, which returns the uncited answer.        |
+| Failure                                                | Outcome                                                                                                                                                                                |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A summary call or the sequential keyword task          | Logged; rewriting continues. A failed summary leaves that summary empty; a failed keyword task can leave all keywords empty.                                                           |
+| An unexpected error in the enrichment or rewrite stage | Logged; `CitationPipeline` returns the placement result without rewriting its intermediate `!sequence` markers. Those markers are not guaranteed to render as source chips.            |
+| Citation placement                                     | Raised out of `CitationPipeline` and caught by `ChatPipeline._add_citations()`. The current answer text is returned; if the FAQ citation pass already succeeded, its citations remain. |
 
-Neither case loses the answer. An answer the student cannot read is a worse outcome than an answer whose sources are unlabelled.
+These paths preserve the answer text, but an unexpected enrichment error can leave citations in a form the client cannot use.
 
 ## Language
 

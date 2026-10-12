@@ -43,7 +43,7 @@ Hover over a chip to see a one- or two-sentence summary of the source, and for l
 
 Clicking a lecture chip opens that unit, with the slides at the cited page or the video at the cited moment. That is what makes a citation worth having: it shows you where Iris found support, so you can check the answer against the material rather than take it on trust.
 
-![Iris chat conversation with citation markers](/img/screenshots/iris-citation.png)
+![A source chip with its summary tooltip open](/img/screenshots/iris-citation.png)
 
 Occasionally a citation opens the unit without jumping to the exact place. That happens when the slides or the video have been replaced since the answer was written, so the page or moment named in it may no longer hold the same content. Artemis tells you which of those applies, and you can ask again for an answer based on the current material once it has been processed.
 
@@ -54,7 +54,7 @@ If you have a lecture unit open in the combined view — the material across the
 A few things follow from how this works:
 
 - **Iris points you at material it actually found.** It retrieves the lecture content first and can only move you to a position that came back in those results, so it cannot send you to a page it guessed at.
-- **It happens at most once per answer**, even when the answer covers several places. Jumping the view around mid-answer would be more confusing than helpful, and one move may bring up a slide and a video moment together.
+- **Iris moves the view at most once per answer**, even when the answer covers several places. If a move fails, it can try again. One successful move may bring up a slide and a video moment together.
 - **It only works while that view is open.** If you close it, Iris answers in words instead and does not claim to have shown you anything.
 - **The move is recorded in the conversation.** A chip naming the page or moment stays in the chat, so you can get back to that place later with one click.
 

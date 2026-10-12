@@ -80,7 +80,7 @@ The latter two exist only when the request carries a viewing context. `read_stud
 
 Both tools read shared mutable state (`state.current_view_storage`) rather than values captured when they were built, because a successful point-out invalidates what the other tool would otherwise keep reporting as the student's current position.
 
-`switch_chat_context` is the only tool that changes something outside the LLM's context window, and it does so indirectly. It takes a mode and an entity ID, validates them against the course data on the DTO, and records the result through a callback:
+`switch_chat_context` changes the chat's active context indirectly, after the run. It takes a mode and an entity ID, validates them against the course data on the DTO, and records the result through a callback:
 
 ```python
 def provide_switch_chat_context(state: State) -> Optional[Callable]:
