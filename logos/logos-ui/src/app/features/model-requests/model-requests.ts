@@ -28,6 +28,7 @@ export class ModelRequests implements OnInit {
   error = signal<string | null>(null);
   notice = signal<string | null>(null);
   name = signal('');
+  showHelpImage = signal(false);
 
   async ngOnInit(): Promise<void> {
     await this.refresh();

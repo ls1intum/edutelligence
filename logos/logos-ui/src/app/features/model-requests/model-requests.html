@@ -20,10 +20,26 @@
         [value]="name()"
         (input)="name.set($any($event.target).value)"
         (keyup.enter)="submit()"
-        placeholder="e.g. gpt-5"
+        placeholder="e.g. openai/gpt-oss-120b"
         autocomplete="off"
       />
-      <small>The exact model identifier you would use in a request's <code>model</code> field.</small>
+      <small>
+        Please enter the <a href="https://huggingface.co" target="_blank" rel="noopener noreferrer" style="color: #0066cc; text-decoration: underline;">HuggingFace</a> model name or Hugging Face URL.
+        <button 
+          type="button" 
+          class="btn btn-link p-0 ms-1 align-baseline" 
+          (click)="showHelpImage.update(v => !v)" 
+          aria-label="Help">
+          (?)
+        </button>
+
+      </small>
+
+      @if (showHelpImage()) {
+        <div class="mt-2">
+          <img src="/huggingface-copy-icon.png" alt="Help instructions" class="img-fluid" style="max-width: 300px;"/>
+        </div>
+}
     </label>
 
     <button class="primary" [disabled]="!name().trim() || submitting()" (click)="submit()">

@@ -22,8 +22,7 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.service.RequestedModel
  * Logos does not serve yet, take the vote back, and see what everyone has voted
  * for.
  *
- * This is a demand signal, not a configuration change — nothing here provisions
- * a model. It is open to every authenticated role (like the model list), since
+ * It is open to every authenticated role (like the model list), since
  * anyone with an account may want a model that is not on the platform yet. The
  * voter is the authenticated user, so "one vote per user per model" and undo
  * are keyed to them.
