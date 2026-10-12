@@ -199,3 +199,7 @@ class BenchmarkLimitsRequest(BaseModel):
 
 class HfReachabilityRequest(BaseModel):
     hf_repo_id: str = Field(min_length=1, max_length=200)
+
+
+class CancelClientTagRequest(BaseModel):
+    tag: str = Field(min_length=1, max_length=200)

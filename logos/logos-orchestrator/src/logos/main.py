@@ -52,6 +52,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
+from logos.client_tags import ClientTagCancellationMiddleware
 from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
@@ -887,6 +888,7 @@ app.add_middleware(
 )
 
 
+app.add_middleware(ClientTagCancellationMiddleware)
 app.add_middleware(APIPrefixStripperMiddleware, prefix="/api")
 
 

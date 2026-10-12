@@ -48,6 +48,11 @@ key **LOW** priority so agent work can never outrank a user at the scheduler.
 The runner reads `/logosdb/scheduler_state` every 15 seconds and computes one
 number: the busy share of the serving slots **its own sessions would use**.
 
+A slot is one request a lane can serve at once — the concurrency its lanes
+guarantee (`lane_parallel`, the slot count the lane pages show), not the
+scheduler's loose ledger ceiling (`max_capacity`), which stands in only until
+a lane reports. A worker that is offline holds no slots.
+
 That filter matters. A fleet holds embedding models, rerankers and chat models
 that share nothing but a building, and summing them answers a question nobody
 asked — "6 of 120 slots busy" reads as an idle platform when all six of those
@@ -102,8 +107,13 @@ precedence over admitting: a pass that pauses does not also start something.
 Freezing alone would not return the slot: the generation the agent already
 started runs upstream, and a frozen client neither cancels it nor closes its
 socket — it just stops reading, and the slot stays occupied for as long as the
-pause lasts. So a paused session is also detached from the session network,
-which ends the connection and lets the orchestrator release the slot. The
+pause lasts. Detaching the container from the session network does not end
+that connection either: the gateway is sent no close and keeps waiting. So
+the model gateway tags every request with the session's address
+(`X-Logos-Client-Tag`), and a pause detaches the session and then asks the
+orchestrator to end every request carrying its tag
+(`POST /internal/client_tags/cancel`). Each one goes the way of a client that
+left — the upstream generation is aborted and the slot released at once. The
 agent meets a network error when it resumes and retries, which is the
 cheapest possible way to lose an in-flight answer. A session that cannot be
 reattached stays paused rather than being thawed without a way to work.

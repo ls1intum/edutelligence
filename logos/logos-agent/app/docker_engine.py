@@ -371,15 +371,14 @@ async def unpause_container(container_id: str) -> bool:
 
 
 async def disconnect_network(network: str, container_id: str) -> bool:
-    """Detach a container from a network, ending its open connections.
+    """Detach a container from a network.
 
-    Freezing a session stops its process tree, but not the generation it
-    already started: the request is running upstream, and a frozen client
-    neither cancels it nor closes its socket — it simply stops reading, and
-    the serving slot stays occupied for as long as the pause lasts. Cutting
-    the container off the network tears that connection down, so the
-    orchestrator sees the client go away and can release the slot, which is
-    the entire point of pausing.
+    Keeps a frozen session from reaching the model gateway, but it does not
+    end the connections the session already has open: removing the
+    interface sends the peer nothing, so the gateway keeps waiting on a
+    client that will never read again. Ending the generation those
+    connections started is the orchestrator's job (see
+    ``upstream.cancel_client_requests``).
 
     Best effort: a container that is already detached, or gone, is the
     desired state.
@@ -424,6 +423,14 @@ async def inspect_container(container_id: str) -> dict[str, Any] | None:
             return None
         raise
     return response.json()
+
+
+async def container_ip(container_id: str, network: str) -> str | None:
+    """The container's address on ``network``, or ``None`` if it has none."""
+    info = await inspect_container(container_id)
+    networks = ((info or {}).get("NetworkSettings") or {}).get("Networks") or {}
+    address = (networks.get(network) or {}).get("IPAddress")
+    return address or None
 
 
 async def container_state(container_id: str) -> tuple[str, int | None]:
