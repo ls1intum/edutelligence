@@ -66,7 +66,14 @@ This is particularly valuable because it means Iris does not rely solely on its 
 
 Iris reads the number **printed on each slide** during ingestion and refers to slides by that number, not by their position in the PDF. For a deck with a title or agenda slide in front, the two differ, and the printed number is the one your students see.
 
-A slide that carries no legible number is described without one ("the slide on quicksort"). Where the printed numbering is regular, Iris infers the number of such a slide from its neighbours, so a single unnumbered or misprinted slide in an otherwise consistent deck still gets named correctly.
+Where the printed numbering is regular, Iris infers the number of an unreadable slide from its neighbours, so a single unnumbered or misprinted slide in an otherwise consistent deck still gets named correctly.
+
+Two cases fall outside that:
+
+- **No number anywhere in the deck.** If Iris cannot read a single page number — unnumbered slides throughout, or a scan it cannot make out — it falls back to counting PDF pages and names slides by that count. For a deck with a title slide in front, those numbers are one ahead of what students would have read off the slides, had there been numbers.
+- **A slide whose number stays unknown.** Where the rest of the deck is numbered but one slide's number cannot be resolved — typically front matter before printed page 1 — Iris describes it without a number ("the slide on quicksort") rather than guessing.
+
+Adding page numbers to your slides is therefore the surest way to get Iris to refer to them the way your students do.
 
 ### What Replacing Slides Does to Older Citations
 

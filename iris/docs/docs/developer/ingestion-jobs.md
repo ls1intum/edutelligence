@@ -51,7 +51,7 @@ That last rule is the one to keep in mind when adding a checkpoint. Stopping is 
 
 ### `current_job_guard()`
 
-A context manager for the write phases. It takes the unit's update lock, re-reads the registry **under** it, and raises unless the caller is still the registered owner:
+A context manager for the write phases. It takes the unit's update lock, re-reads the registry **under** it, and raises `IngestionCancelledException` when the run has lost the unit:
 
 ```python
 with ingestion_job_handler.current_job_guard(
@@ -61,6 +61,22 @@ with ingestion_job_handler.current_job_guard(
 ```
 
 The difference from `raise_if_cancelled()` is the identity check: an event that was never set but whose registration has been replaced also fails here. A run that passed a bare event check microseconds before a supersession would otherwise write anyway. Everything that must not interleave with a newer run — the chunk replacement, the stale-row purges, the terminal callback — goes through the guard.
+
+What it actually decides, and what it does not:
+
+| Situation                                                  | Outcome                                                          |
+| ---------------------------------------------------------- | ---------------------------------------------------------------- |
+| `cancel_event` is set                                      | Raises.                                                          |
+| A **different** event is registered for the unit           | Raises — the run was superseded.                                 |
+| `cancel_event` is the registered one                       | Proceeds, holding the lock for the body.                         |
+| **No** event is registered for the unit, and ours is unset | Proceeds. An absent registration is not treated as a lost claim. |
+| `cancel_event` is `None`                                   | Yields immediately. No lock is taken and nothing is checked.     |
+
+:::warning Not an authorization check
+The last two rows are the ones to know. The guard asks "has this run been superseded?", not "is this run entitled to write?" — so it does **not** reject a write from a run the registry has never heard of. A pipeline constructed without a cancellation event (the `None` default, as in tests and any direct instantiation) bypasses it completely, and a run whose registration was already removed still passes. Do not reach for this guard to keep unregistered writers out; it has no way to tell one from a legitimate untracked run.
+:::
+
+Neither exception matters for the tracked path, where `add_job()` registers the event before the thread starts and `complete_job()` removes it only after the worker is done. Both the webhook route and the pull-based worker go through that path.
 
 ### The per-unit lock
 
