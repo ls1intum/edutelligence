@@ -26,9 +26,29 @@
           role="tab"
           [attr.aria-selected]="activeTab() === tab.id"
           (click)="setActiveTab(tab.id)"
-        >{{ tab.label }}</button>
+        >{{ tab.label }}@if (tab.id === 'local-providers' && gpuFaultCount() > 0) {<span
+            class="stats-tabs__alert"
+            [attr.aria-label]="gpuFaultCount() + ' faulted GPU' + (gpuFaultCount() === 1 ? '' : 's')"
+            >{{ gpuFaultCount() }}</span>}</button>
       }
     </nav>
+
+    <!-- A failed GPU drops out of lane placement without any other visible
+         effect, so it is raised here, on every tab, until it is reset. -->
+    @for (alert of gpuFaultAlerts(); track alert.name) {
+      <div class="stats-gpu-fault" role="alert">
+        <i class="pi pi-exclamation-triangle stats-gpu-fault__icon" aria-hidden="true"></i>
+        <div class="stats-gpu-fault__body">
+          <strong>{{ alert.name }}: {{ alert.faults.length === 1 ? 'a GPU has' : alert.faults.length + ' GPUs have' }} failed</strong>
+          <ul class="stats-gpu-fault__list">
+            @for (fault of alert.faults; track fault) {
+              <li>{{ fault }}</li>
+            }
+          </ul>
+          <span class="stats-gpu-fault__hint">No lane is placed on a failed GPU. Reset it (<code>nvidia-smi -r</code>) or reboot the node to get its capacity back.</span>
+        </div>
+      </div>
+    }
 
     <!-- Scope and time range drive the request-derived panels only, so they show
          up with them rather than hanging over a tab they cannot change. -->
@@ -361,7 +381,7 @@
       } @else {
         <div class="stats-providers-stack">
           @for (row of providerGlassRows(); track row.name) {
-            <div class="stats-glass-row">
+            <div class="stats-glass-row" [class.stats-glass-row--offline]="!row.online">
               <div class="stats-glass-row__header">
                 <span class="stats-glass-row__label">{{ row.name }}</span>
                 @if (row.versionChip; as chip) {
@@ -371,7 +391,16 @@
                   </span>
                 }
                 @if (!row.online) {
-                  <span class="stats-provider-badge stats-provider-badge--offline">offline</span>
+                  <span class="stats-provider-badge stats-provider-badge--offline">
+                    <i class="pi pi-power-off" aria-hidden="true"></i>
+                    Offline{{ row.lastSeen ? ' · last seen ' + formatTimeAgo(row.lastSeen, nowMs()) : '' }}
+                  </span>
+                }
+                @if (row.gpuFaults.length > 0) {
+                  <span class="stats-provider-badge stats-provider-badge--fault" [title]="row.gpuFaults.join(' · ')">
+                    <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
+                    {{ row.gpuFaults.length }} GPU{{ row.gpuFaults.length === 1 ? '' : 's' }} failed
+                  </span>
                 }
                 @if (row.calibrating) {
                   <span class="stats-provider-badge stats-provider-badge--calibrating">
@@ -380,10 +409,34 @@
                 }
               </div>
 
+              @if (!row.online) {
+                <div class="stats-offline-notice" role="status">
+                  <i class="pi pi-power-off stats-offline-notice__icon" aria-hidden="true"></i>
+                  <div class="stats-offline-notice__body">
+                    <strong>{{ row.name }} is offline.</strong>
+                    <span>
+                      @if (row.lastSeen) {
+                        No contact since {{ row.lastSeen | date: 'medium' }} ({{ formatTimeAgo(row.lastSeen, nowMs()) }}).
+                      } @else {
+                        No contact since the server started.
+                      }
+                      Its lanes take no requests. Anything shown for it is its last report, not its current state.
+                    </span>
+                  </div>
+                  <button type="button" class="stats-offline-notice__toggle"
+                          [attr.aria-expanded]="expandedOfflineRows().has(row.name)"
+                          (click)="toggleOfflineRow(row.name)">
+                    {{ expandedOfflineRows().has(row.name) ? 'Hide last report' : 'Show last report' }}
+                  </button>
+                </div>
+              }
+
               <!-- One row per provider: where the lanes sit (a card per GPU, lanes
                    drawn onto it, coloured by state), then the lane list with its
                    actions beside the host-RAM donut. -->
-              <div class="stats-panel-stack">
+              @if (row.online || expandedOfflineRows().has(row.name)) {
+              <div class="stats-panel-stack" [class.stats-panel-stack--stale]="!row.online"
+                   [attr.aria-label]="row.online ? null : 'Last report of ' + row.name + ', not current'">
                 <app-stats-chart-panel
                   title="GPUs &amp; memory"
                   [subtitle]="row.name + (row.modelsLoaded
@@ -450,6 +503,7 @@
                   }
                 </div>
               </div>
+              }
             </div>
           }
         </div>

@@ -22,6 +22,8 @@ import {
   applyTimeSeriesLabels,
   chooseDynamicTargetBuckets,
   describeWorkerVersion,
+  extractProviderGpuFaults,
+  formatTimeAgo,
   extractProviderHostRamMb,
   extractProviderVramMb,
   formatPercent,
@@ -85,6 +87,11 @@ type ProviderGlassRow = {
   online: boolean;
   calibrating: boolean;
   versionChip: WorkerVersionChip | null;
+  /** GPUs this worker reports as failed; empty while the worker is offline,
+   *  whose last sample may predate a reset. */
+  gpuFaults: string[];
+  /** When the worker was last heard from: its last heartbeat, else its last sample. */
+  lastSeen: string | null;
   lanes: Record<string, LaneSignalData>;
   hasLanes: boolean;
   laneCount: number;
@@ -393,6 +400,22 @@ export class Statistics implements OnInit, OnDestroy {
   readonly vramError = signal<string | null>(null);
   readonly isVramLoading = signal(false);
   readonly nowMs = signal(Date.now());
+  /**
+   * Offline workers whose last report the operator chose to look at. Hidden by
+   * default: an offline worker's last sample describes a machine that may
+   * have rebooted, lost a GPU or dropped every lane since, and drawn like live
+   * data it reads as the current state.
+   */
+  readonly expandedOfflineRows = signal<ReadonlySet<string>>(new Set());
+
+  toggleOfflineRow(name: string): void {
+    const next = new Set(this.expandedOfflineRows());
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    this.expandedOfflineRows.set(next);
+  }
+
+  readonly formatTimeAgo = formatTimeAgo;
   readonly refreshing = signal(false);
   readonly resetZoomCounter = signal(0);
   readonly chartTooltip = signal<ChartTooltip | null>(null);
@@ -617,6 +640,8 @@ export class Statistics implements OnInit, OnDestroy {
         online: this._isProviderOnline(name),
         calibrating: metaByName[name]?.calibrating === true,
         versionChip: describeWorkerVersion(metaByName[name]?.worker_version_checksum, this._isProviderOnline(name)),
+        gpuFaults: this._isProviderOnline(name) ? extractProviderGpuFaults(sample) : [],
+        lastSeen: metaByName[name]?.last_heartbeat ?? sample?.timestamp ?? null,
         lanes,
         hasLanes: Object.keys(lanes).length > 0,
         laneCount: Object.keys(lanes).length,
@@ -637,6 +662,21 @@ export class Statistics implements OnInit, OnDestroy {
       };
     });
   });
+
+  /**
+   * Every online worker with a failed GPU. Shown above the tabs, on both of
+   * them: a failed GPU silently takes its capacity out of placement, so it
+   * must be seen without opening the worker's row.
+   */
+  readonly gpuFaultAlerts = computed(() =>
+    this.providerGlassRows()
+      .filter((row) => row.gpuFaults.length > 0)
+      .map((row) => ({ name: row.name, faults: row.gpuFaults })),
+  );
+
+  readonly gpuFaultCount = computed(() =>
+    this.gpuFaultAlerts().reduce((sum, alert) => sum + alert.faults.length, 0),
+  );
 
   // ── Volume line data ──────────────────────────────────────────────────────────
 

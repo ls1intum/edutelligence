@@ -46,6 +46,9 @@ export interface MemoryCard {
   temperatureC: number | null;
   powerW: number | null;
   utilizationPct: number | null;
+  /** "faulted": the GPU has failed and takes no lanes; "degraded": readings missing. */
+  health: 'ok' | 'degraded' | 'faulted';
+  healthReason: string;
 }
 
 
@@ -112,14 +115,23 @@ export class GpuMapComponent {
     });
   }
 
+  /**
+   * The worker's index of each card. Lane placements name GPUs by that index,
+   * and it differs from list position once the worker leaves a GPU out (one
+   * whose memory it could not read). Samples without it fall back to position.
+   */
+  private gpuIndex(device: DeviceInfo, position: number): number {
+    return typeof device.index === 'number' ? device.index : position;
+  }
+
   private placement(lane: LaneSignalData): number[] {
     const raw = (lane.effective_gpu_devices || lane.gpu_devices || '').trim();
     // Workers report "all" for a lane that may use every device (the Mac worker does).
-    if (raw.toLowerCase() === 'all') return this.devices.map((_, i) => i);
+    if (raw.toLowerCase() === 'all') return this.devices.map((d, i) => this.gpuIndex(d, i));
     const parsed = parseGpuIndices(raw);
     if (parsed.length) return parsed;
     // A single-GPU worker can only mean that card.
-    return this.devices.length === 1 ? [0] : [];
+    return this.devices.length === 1 ? [this.gpuIndex(this.devices[0], 0)] : [];
   }
 
   private segment(
@@ -144,7 +156,8 @@ export class GpuMapComponent {
 
   get cards(): MemoryCard[] {
     if (this.unified) return [];
-    return this.devices.map((device, index) => {
+    return this.devices.map((device, position) => {
+      const index = this.gpuIndex(device, position);
       const segments: MemorySegment[] = [];
       for (const [laneId, lane] of this.sortedLanes()) {
         const gpus = this.placement(lane);
@@ -170,6 +183,8 @@ export class GpuMapComponent {
         temperatureC: device.temperature_celsius,
         powerW: device.power_draw_watts,
         utilizationPct: device.utilization_percent,
+        health: device.health ?? 'ok',
+        healthReason: device.health_reason ?? '',
       };
     });
   }

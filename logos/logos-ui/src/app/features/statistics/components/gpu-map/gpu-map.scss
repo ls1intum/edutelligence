@@ -81,6 +81,17 @@
   &--ram {
     border-style: dashed;
   }
+
+  &--faulted {
+    border: 2px solid rgb(var(--color-error));
+    background: rgb(var(--color-error) / 0.08);
+  }
+}
+
+.gpu-map__fault {
+  margin: 0;
+  font-size: 0.75rem;
+  color: rgb(var(--color-error));
 }
 
 .gpu-map__head {
@@ -137,6 +148,18 @@
   &--hot {
     background: rgb(var(--color-error) / 0.18);
     color: rgb(var(--color-error));
+  }
+
+  &--fault {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-weight: 600;
+    text-transform: uppercase;
+
+    .pi {
+      font-size: 0.625rem;
+    }
   }
 }
 

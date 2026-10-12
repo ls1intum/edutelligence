@@ -95,6 +95,18 @@ export type DeviceInfo = {
   utilization_percent: number | null;
   temperature_celsius: number | null;
   power_draw_watts: number | null;
+  /**
+   * The worker's GPU index (nvidia-smi numbering), which lane placements
+   * refer to. Absent on samples that predate it; list position stands in then.
+   */
+  index?: number | null;
+  /**
+   * "faulted": nvidia-smi reports the GPU itself as failed (e.g. "GPU requires
+   * reset"), and the worker places no lane on it. "degraded": some readings
+   * are missing. Absent on samples that predate it.
+   */
+  health?: 'ok' | 'degraded' | 'faulted';
+  health_reason?: string;
 };
 
 // LaneSignalData from logos-ui-old/components/statistics/types.ts
@@ -169,6 +181,8 @@ export interface VramV2Sample {
       cold_lane_count?: number;
       total_effective_vram_mb?: number;
       devices?: DeviceInfo[];
+      /** One line per GPU the worker reports as failed, e.g. "gpu0 (GPU-…): GPU requires reset". */
+      gpu_faults?: string[];
     };
     lanes?: Record<string, LaneSignalData>;
     models?: Record<string, any>;

@@ -736,6 +736,16 @@ export const extractProviderHostRamMb = (
  * on device_mode because it is the flag the worker sets for exactly this
  * hardware; the page then shows one "Unified memory" chart instead.
  */
+/**
+ * GPUs a worker reports as failed, one line each. The worker places no lane on
+ * them, so their capacity stays gone until the GPU is reset or the node
+ * rebooted — which is why the page raises them far above the GPU cards.
+ */
+export const extractProviderGpuFaults = (sample: VramV2Sample | null | undefined): string[] => {
+  const faults = sample?.scheduler_signals?.provider?.gpu_faults;
+  return Array.isArray(faults) ? faults.filter((f): f is string => typeof f === 'string' && f.length > 0) : [];
+};
+
 export const isUnifiedMemoryProvider = (sample: VramV2Sample | null | undefined): boolean =>
   sample?.scheduler_signals?.provider?.device_mode === 'metal';
 

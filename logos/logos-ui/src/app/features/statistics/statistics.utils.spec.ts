@@ -1,5 +1,6 @@
 import {
   describeWorkerVersion,
+  extractProviderGpuFaults,
   extractProviderHostRamMb,
   formatBucketRange,
   formatPercent,
@@ -11,6 +12,7 @@ import {
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
 } from './statistics.utils';
+import type { VramV2Sample } from './statistics.models';
 
 /**
  * The dropdown's raw value becomes the bucket the feed is narrowed by.
@@ -462,5 +464,20 @@ describe('modelSeriesKey', () => {
   it('falls back to a single shared bucket when neither id nor name survived', () => {
     expect(modelSeriesKey(null, null)).toBe('deleted-unknown');
     expect(modelSeriesKey(null, '   ')).toBe('deleted-unknown');
+  });
+});
+
+describe('extractProviderGpuFaults', () => {
+  it('lists the GPUs the worker reports as failed', () => {
+    const sample = {
+      timestamp: '2026-10-12T07:49:00Z',
+      scheduler_signals: { provider: { gpu_faults: ['gpu0 (GPU-aaa): GPU requires reset', ''] } },
+    } as VramV2Sample;
+    expect(extractProviderGpuFaults(sample)).toEqual(['gpu0 (GPU-aaa): GPU requires reset']);
+  });
+
+  it('reports none for samples without the field', () => {
+    expect(extractProviderGpuFaults({ timestamp: '2026-10-12T07:49:00Z' } as VramV2Sample)).toEqual([]);
+    expect(extractProviderGpuFaults(null)).toEqual([]);
   });
 });

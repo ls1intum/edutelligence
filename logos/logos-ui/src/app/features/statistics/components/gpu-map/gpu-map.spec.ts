@@ -114,4 +114,40 @@ describe('GpuMapComponent', () => {
   it('draws no cards for unified memory, whose pool the donut shows', () => {
     expect(create({ devices: [device(1)], unified: true, lanes: { a: lane() } }).cards).toEqual([]);
   });
+
+  it('names cards by the worker GPU index, not list position', () => {
+    // GPU 0 was left out by the worker, so the list starts at GPU 1.
+    const cmp = create({
+      devices: [{ ...device(40_000), index: 1 }, { ...device(0), index: 2 }],
+      lanes: { a: lane({ gpu_devices: '1', effective_gpu_devices: '1' }) },
+    });
+    expect(cmp.cards.map((c) => c.title)).toEqual(['GPU 1', 'GPU 2']);
+    expect(cmp.cards.map((c) => c.segments.length)).toEqual([1, 0]);
+    expect(cmp.unplacedLanes).toEqual([]);
+  });
+
+  it('marks a failed GPU and keeps its held memory as other used', () => {
+    const cmp = create({
+      devices: [
+        { ...device(83_000), index: 0, health: 'faulted', health_reason: 'GPU requires reset' },
+        { ...device(0), index: 1 },
+      ],
+      lanes: {},
+    });
+    expect(cmp.cards.map((c) => c.health)).toEqual(['faulted', 'ok']);
+    expect(cmp.cards[0].healthReason).toBe('GPU requires reset');
+    expect(cmp.cards[0].otherMb).toBe(83_000);
+  });
+
+  it('renders the failure on the card', () => {
+    const fixture = TestBed.createComponent(GpuMapComponent);
+    fixture.componentRef.setInput('devices', [
+      { ...device(83_000), index: 0, health: 'faulted', health_reason: 'GPU requires reset' },
+    ]);
+    fixture.detectChanges();
+    const card: HTMLElement = fixture.nativeElement.querySelector('.gpu-map__card');
+    expect(card.classList).toContain('gpu-map__card--faulted');
+    expect(card.textContent).toContain('GPU requires reset');
+    expect(card.textContent).toContain('No lane is placed on this GPU');
+  });
 });

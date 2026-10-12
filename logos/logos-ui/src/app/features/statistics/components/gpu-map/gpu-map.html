@@ -14,13 +14,21 @@
 
     <div class="gpu-map__grid">
       @for (card of cards; track card.key) {
-        <section class="gpu-map__card" [class.gpu-map__card--ram]="card.key === 'ram' || card.key === 'unified'">
+        <section class="gpu-map__card" [class.gpu-map__card--ram]="card.key === 'ram' || card.key === 'unified'"
+                 [class.gpu-map__card--faulted]="card.health === 'faulted'">
           <header class="gpu-map__head">
             <div class="gpu-map__title">
               <span class="gpu-map__name">{{ card.title }}</span>
               <span class="gpu-map__sub" [title]="card.subtitle">{{ card.subtitle }}</span>
             </div>
             <div class="gpu-map__chips">
+              @if (card.health === 'faulted') {
+                <span class="gpu-map__chip gpu-map__chip--hot gpu-map__chip--fault">
+                  <i class="pi pi-exclamation-triangle" aria-hidden="true"></i> failed
+                </span>
+              } @else if (card.health === 'degraded') {
+                <span class="gpu-map__chip gpu-map__chip--warn" [title]="'nvidia-smi: ' + card.healthReason">partial telemetry</span>
+              }
               @if (card.utilizationPct !== null) {
                 <span class="gpu-map__chip" title="GPU utilization">{{ card.utilizationPct | number: '1.0-0' }}% util</span>
               }
@@ -32,6 +40,13 @@
               }
             </div>
           </header>
+
+          @if (card.health === 'faulted') {
+            <p class="gpu-map__fault" role="alert">
+              nvidia-smi reports <strong>{{ card.healthReason || 'a failure' }}</strong>. No lane is placed on this GPU;
+              the memory below is held by the failed GPU, not by a lane.
+            </p>
+          }
 
           <div class="gpu-map__figures">
             <span class="gpu-map__used">{{ gb(card.usedMb) }}</span>

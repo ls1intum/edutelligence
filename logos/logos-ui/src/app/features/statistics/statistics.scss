@@ -67,6 +67,62 @@
   border-bottom-color: rgb(var(--color-text-accent));
 }
 
+// Count of failed GPUs on the Local Providers tab, so the fault is seen from
+// the Requests tab as well.
+.stats-tabs__alert {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 9999px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: rgb(255 255 255);
+  background: rgb(var(--color-error));
+}
+
+.stats-gpu-fault {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  color: rgb(var(--color-typography-100));
+  background: rgb(var(--color-error) / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-error) / var(--opacity-border));
+  border-left-width: 4px;
+}
+
+.stats-gpu-fault__icon {
+  margin-top: 2px;
+  color: rgb(var(--color-error));
+  font-size: 1.1rem;
+}
+
+.stats-gpu-fault__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+}
+
+.stats-gpu-fault__list {
+  margin: 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.stats-gpu-fault__hint {
+  color: rgb(var(--color-typography-400));
+}
+
 .stats-header__controls {
   display: flex;
   // Center within a single-row toolbar (filters + pills + period nav). When
@@ -263,6 +319,72 @@
   gap: 12px;
 }
 
+// An offline worker is drawn as one: no glass, a dashed outline, and its last
+// report folded away behind the notice.
+.stats-glass-row--offline {
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  border: 2px dashed rgb(var(--color-typography-500) / 0.5);
+  box-shadow: none;
+  backdrop-filter: none;
+
+  .stats-glass-row__label {
+    color: rgb(var(--color-typography-500));
+  }
+}
+
+.stats-offline-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgb(var(--color-typography-500) / 0.12);
+  border-left: 4px solid rgb(var(--color-typography-500));
+  font-size: var(--font-size-sm);
+}
+
+.stats-offline-notice__icon {
+  color: rgb(var(--color-typography-400));
+  font-size: 1.1rem;
+}
+
+.stats-offline-notice__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 16rem;
+  min-width: 0;
+  color: rgb(var(--color-typography-300));
+
+  strong {
+    color: rgb(var(--color-typography-100));
+  }
+}
+
+.stats-offline-notice__toggle {
+  appearance: none;
+  padding: 6px 12px;
+  border-radius: 9999px;
+  border: 1px solid rgb(var(--color-typography-500) / 0.5);
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-200));
+  cursor: pointer;
+
+  &:hover {
+    background: rgb(var(--color-typography-500) / 0.12);
+  }
+}
+
+// The last report of an offline worker, when unfolded: greyed out so no
+// number in it reads as live.
+.stats-panel-stack--stale {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
 .stats-glass-row__header {
   // The version card hangs off this on a phone (see version-hint.scss).
   position: relative;
@@ -338,7 +460,7 @@
 
 // The commit a worker was built from reads like a hash, so it is set in monospace.
 .stats-panel-badge__mono {
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-family-mono);
 }
 
 // ── Provider-row badges (free VRAM / calibrating) ─────────────────────────────
@@ -376,10 +498,16 @@
   border: 1px solid rgb(var(--color-warning) / var(--opacity-border));
 }
 
+.stats-provider-badge--fault {
+  color: rgb(var(--color-error));
+  background: rgb(var(--color-error) / var(--opacity-soft));
+  border: 1px solid rgb(var(--color-error) / var(--opacity-border));
+}
+
 .stats-provider-badge--offline {
-  color: rgb(var(--color-typography-500));
-  background: rgb(var(--color-outline-200) / var(--opacity-soft));
-  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-border));
+  color: rgb(var(--color-typography-100));
+  background: rgb(var(--color-typography-500) / 0.3);
+  border: 1px solid rgb(var(--color-typography-500));
 }
 
 // ── Range badge ───────────────────────────────────────────────────────────────
