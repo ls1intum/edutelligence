@@ -1796,6 +1796,31 @@ class LogosBridgeClient:
                 ordered.append(model_name)
         return ordered
 
+    async def _refresh_calibration_keys(self) -> None:
+        """Re-fingerprint from config.yml as this session will run it.
+
+        config.yml can change without a restart; the startup keys would then
+        stamp snapshots with a plan that was never measured.
+        """
+        gpu_collector = getattr(self._app.state, "gpu_collector", None)
+        if gpu_collector is None:
+            return
+        try:
+            from logos_worker_node.calibration import plans_from_config  # noqa: PLC0415
+            from logos_worker_node.profile_fingerprint import node_calibration_keys  # noqa: PLC0415
+
+            snapshot = await gpu_collector.get_snapshot()
+            config_path = self._resolve_config_path()
+            plans = plans_from_config(config_path) if config_path.exists() else []
+            # Resolving an unknown vLLM version may fork a subprocess.
+            keys = await asyncio.to_thread(node_calibration_keys, self._app.state.config, plans, list(snapshot.devices))
+        except Exception:  # noqa: BLE001
+            logger.warning("[Calibration] Could not refresh calibration keys; keeping the previous ones", exc_info=True)
+            return
+        changed = self._app.state.model_profiles.set_calibration_keys(keys)
+        if changed:
+            logger.info("[Calibration] Calibration key changed for %s — re-measuring", ", ".join(sorted(changed)))
+
     async def _run_calibration_session(self, session: _CalibrationSession) -> None:
         """Async driver that walks uncalibrated models one at a time.
 
@@ -1808,6 +1833,7 @@ class LogosBridgeClient:
         # could fail. The orchestrator relies on the terminal event in the
         # finally block to free its active-provider slot, so we must always
         # produce a session_started/session_finished pair on a normal start.
+        await self._refresh_calibration_keys()
         models = self._list_uncalibrated_models()
         self._record_calibration_event(
             "calibration_session_started",

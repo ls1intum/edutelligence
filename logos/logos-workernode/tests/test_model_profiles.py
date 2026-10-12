@@ -1108,3 +1108,21 @@ def test_sync_reports_a_model_only_when_its_record_changed():
     assert registry.replace_from_sync(
         {"org/m": {"sync_revision": 3, "calibration_id": 7, "calibration_stale": True}}
     ) == ["org/m"]
+
+
+def test_a_changed_calibration_key_marks_the_linked_calibration_stale():
+    registry = ModelProfileRegistry()
+    assert registry.set_calibration_keys({"org/m": {"plan_hash": "a"}, "org/new": {"plan_hash": "x"}}) == []
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 5.0, "sync_revision": 2, "calibration_id": 4}})
+    assert registry.set_calibration_keys({"org/m": {"plan_hash": "b"}, "org/new": {"plan_hash": "x"}}) == ["org/m"]
+    assert registry.get_profile("org/m").calibration_stale is True
+
+
+def test_an_unlinked_calibration_reports_the_key_it_was_measured_under():
+    from logos_worker_node.profile_fingerprint import key_hash
+
+    registry = ModelProfileRegistry()
+    registry.set_calibration_keys({"org/m": {"plan_hash": "a"}})
+    registry.apply_calibration_result("org/m", {"base_residency_mb": 15000.0, "residency_source": "calibrated"})
+    registry.set_calibration_keys({"org/m": {"plan_hash": "b"}})
+    assert registry.get_all_profiles()["org/m"]["calibration_key_hash"] == key_hash({"plan_hash": "a"})

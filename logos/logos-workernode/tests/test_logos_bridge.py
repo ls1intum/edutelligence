@@ -3944,6 +3944,30 @@ async def test_a_push_that_changes_nothing_skips_the_status_rebuild(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_session_re_fingerprints_config_changed_since_startup(tmp_path, monkeypatch):
+    """config.yml edited without a restart: the session must neither stamp
+    snapshots with the startup key nor keep the old calibration fresh."""
+    from logos_worker_node import profile_fingerprint
+
+    client = _central_client(tmp_path)
+    registry = client._app.state.model_profiles  # noqa: SLF001
+    registry.replace_from_sync({"org/ready": {"base_residency_mb": 5.0, "sync_revision": 2, "calibration_id": 4}})
+
+    async def _snapshot():
+        return SimpleNamespace(devices=[])
+
+    client._app.state.gpu_collector = SimpleNamespace(get_snapshot=_snapshot)  # noqa: SLF001
+    edited = {"org/ready": {"schema": 1, "plan_hash": "edited"}, "org/pending": {"schema": 1}}
+    monkeypatch.setattr(profile_fingerprint, "node_calibration_keys", lambda cfg, plans, devices: edited)
+
+    await client._refresh_calibration_keys()  # noqa: SLF001
+
+    assert registry.calibration_key("org/ready") == edited["org/ready"]
+    assert registry.get_profile("org/ready").calibration_stale is True
+    assert "org/ready" in client._list_uncalibrated_models()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_status_echo_carries_the_central_sync_contract(tmp_path):
     """The orchestrator stores an echo only with sync_revision present, keeps
     overridden fields out of the database, and compares key hashes."""

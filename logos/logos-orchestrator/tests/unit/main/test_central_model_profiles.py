@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
+from fastapi import WebSocketDisconnect
 
 import logos as main_mod
 from logos.dbutils.dbrequest import (
@@ -405,3 +407,57 @@ def test_overridden_fields_are_passed_on_so_their_stored_values_survive():
     logosnode_mod._persist_model_profiles(db, 1, {"org/model": echo})
     assert db.persisted[0][2] == {}
     assert db.overridden == ["max_context_length"]
+
+
+def test_a_finished_session_leaves_no_bookkeeping_behind(monkeypatch):
+    for name in ("_last_runtime_ts", "_last_snapshot_at", "_resync_rounds", "_pending_resyncs"):
+        monkeypatch.setattr(logosnode_mod, name, {1: "x", 2: "y"})
+    logosnode_mod._recorded_calibrations.update({(1, "a"): 1.0, (2, "a"): 2.0})
+    logosnode_mod._profile_write_cache.remember(1, "a", "d")
+    logosnode_mod._profile_write_cache.remember(2, "a", "d")
+
+    logosnode_mod._forget_provider_state(1)
+
+    for name in ("_last_runtime_ts", "_last_snapshot_at", "_resync_rounds", "_pending_resyncs"):
+        assert getattr(logosnode_mod, name) == {2: "y"}
+    assert logosnode_mod._recorded_calibrations == {(2, "a"): 2.0}
+    assert not logosnode_mod._profile_write_cache.unchanged(1, "a", "d")
+    assert logosnode_mod._profile_write_cache.unchanged(2, "a", "d")
+
+
+class _EndedSessionRegistry:
+    def __init__(self, newer_session: bool):
+        self.newer_session = newer_session
+
+    async def consume_ticket(self, token):
+        return SimpleNamespace(provider_id=1, worker_id="w")
+
+    async def attach_session(self, ticket, websocket):
+        return SimpleNamespace(session_id="s1")
+
+    async def detach_session(self, provider_id, websocket=None):
+        return None
+
+    def peek_runtime_snapshot(self, provider_id):
+        return {"session_id": "s2"} if self.newer_session else None
+
+
+class _DisconnectingSocket:
+    async def accept(self):
+        return None
+
+    async def receive_json(self):
+        raise WebSocketDisconnect()
+
+
+@pytest.mark.parametrize("newer_session", [False, True])
+def test_only_a_session_without_successor_drops_the_bookkeeping(monkeypatch, newer_session):
+    """A replaced socket ends after its successor attached; it must not
+    wipe the state the new session already builds up."""
+    monkeypatch.setattr(main_mod, "_logosnode_registry", _EndedSessionRegistry(newer_session))
+    monkeypatch.setattr(logosnode_mod, "_is_tls_websocket", lambda websocket: True)
+    monkeypatch.setattr(logosnode_mod, "_last_runtime_ts", {1: "ts"})
+
+    asyncio.run(logosnode_mod.logosnode_session(_DisconnectingSocket(), token="t"))
+
+    assert (1 in logosnode_mod._last_runtime_ts) is newer_session

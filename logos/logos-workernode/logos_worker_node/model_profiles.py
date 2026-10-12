@@ -895,15 +895,21 @@ class ModelProfileRegistry:
     def get_all_profiles(self) -> dict[str, dict[str, Any]]:
         """All profiles as the runtime status reports them to Logos.
 
-        Each carries the calibration key this node computes for the model
-        right now and the fields its config.yml overrides, so Logos can tell
-        configuration from measurement.
+        Each carries its calibration key hash and the fields config.yml
+        overrides, so Logos can tell configuration from measurement.
         """
+        from logos_worker_node.profile_fingerprint import key_hash  # noqa: PLC0415
+
         with self._lock:
             result = {}
             for name, profile in self._profiles.items():
                 entry = profile.to_dict()
-                entry["calibration_key_hash"] = self._calibration_keys.get(name, (None, None))[1]
+                # A calibration not yet snapshotted reports the key it was
+                # measured under, even if config.yml changed since.
+                if profile.calibration_key is not None:
+                    entry["calibration_key_hash"] = key_hash(profile.calibration_key)
+                else:
+                    entry["calibration_key_hash"] = self._calibration_keys.get(name, (None, None))[1]
                 entry["overridden_fields"] = self._overridden_fields(name)
                 result[name] = entry
             return result
@@ -912,11 +918,27 @@ class ModelProfileRegistry:
         overrides = self._manual_overrides.get(model_name) or {}
         return sorted(key for key in overrides if key in _RECORD_FIELDS)
 
-    def set_calibration_keys(self, keys: dict[str, dict[str, Any]]) -> None:
+    def set_calibration_keys(self, keys: dict[str, dict[str, Any]]) -> list[str]:
+        """Adopt the node's current keys; returns the models whose key changed.
+
+        Their stored calibration no longer describes how the node runs them,
+        so it is re-measured like a stale one.
+        """
         from logos_worker_node.profile_fingerprint import key_hash  # noqa: PLC0415
 
         with self._lock:
+            previous = self._calibration_keys
             self._calibration_keys = {name: (key, key_hash(key)) for name, key in keys.items()}
+            changed = [
+                name
+                for name, (_, digest) in self._calibration_keys.items()
+                if name in previous and previous[name][1] != digest
+            ]
+            for name in changed:
+                profile = self._profiles.get(name)
+                if profile is not None and profile.calibration_id is not None:
+                    profile.calibration_stale = True
+        return changed
 
     def calibration_key(self, model_name: str) -> dict[str, Any] | None:
         with self._lock:

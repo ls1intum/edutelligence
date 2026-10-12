@@ -431,6 +431,21 @@ async def _run_model_profile_resync(provider_id: int, delay: float = _RESYNC_DEL
         await _push_model_profiles(provider_id, sorted(model_names))
 
 
+def _forget_provider_state(provider_id: int) -> None:
+    """Drop the bookkeeping of a node whose session ended.
+
+    Not while a newer session of it runs; a writer still draining the last
+    status removes itself.
+    """
+    _last_runtime_ts.pop(provider_id, None)
+    _last_snapshot_at.pop(provider_id, None)
+    _resync_rounds.pop(provider_id, None)
+    _pending_resyncs.pop(provider_id, None)
+    for key in [key for key in _recorded_calibrations if key[0] == provider_id]:
+        del _recorded_calibrations[key]
+    _profile_write_cache.forget(provider_id)
+
+
 def _string_map(value: Any) -> Dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -770,6 +785,8 @@ async def logosnode_session(websocket: WebSocket, token: str):
             ticket.provider_id,
             str(current["session_id"]) if current else None,
         )
+        if current is None:
+            _forget_provider_state(ticket.provider_id)
 
 
 @router.post("/logosdb/providers/logosnode/status", tags=["logosnode"])

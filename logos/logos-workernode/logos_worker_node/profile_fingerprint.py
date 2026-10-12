@@ -131,6 +131,17 @@ def calibration_keys(
     }
 
 
+def node_calibration_keys(
+    cfg: AppConfig, plans: list[dict[str, Any]], devices: list[DeviceInfo]
+) -> dict[str, dict[str, Any]]:
+    """Calibration key of every configured model, as the node runs it now."""
+    from logos_worker_node.vllm_compat import _DEFAULT_VLLM  # noqa: PLC0415
+
+    models = list(cfg.logos.configured_models) if cfg.logos else []
+    version = cached_vllm_version(serving_vllm_binary(cfg, _DEFAULT_VLLM))
+    return calibration_keys(cfg, plans, models, devices, version)
+
+
 _vllm_versions: dict[str, str] = {}
 
 

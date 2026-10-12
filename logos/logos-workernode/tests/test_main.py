@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 import logos_worker_node.main as worker_main
 from logos_worker_node import config as worker_config
+from logos_worker_node import profile_fingerprint
 from logos_worker_node.models import AppConfig, DeviceSummary, LaneConfig, LogosConfig, VllmConfig, WorkerConfig
 
 
@@ -70,7 +71,7 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
 
     app = FastAPI()
     with (
-        patch.object(worker_main, "cached_vllm_version", return_value=""),
+        patch.object(profile_fingerprint, "cached_vllm_version", return_value=""),
         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
         patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}),
     ):
@@ -130,7 +131,7 @@ async def test_lifespan_bootstraps_central_hf_token_before_startup_model_operati
 
     app = FastAPI()
     with (
-        patch.object(worker_main, "cached_vllm_version", return_value=""),
+        patch.object(profile_fingerprint, "cached_vllm_version", return_value=""),
         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
         patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}),
         patch(
@@ -250,7 +251,7 @@ async def test_central_profiles_wait_for_logos_and_hand_over_the_legacy_files(tm
 
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
     monkeypatch.setattr(worker_main, "get_state_dir", lambda: tmp_path)
-    monkeypatch.setattr(worker_main, "cached_vllm_version", lambda binary: "0.30.0")
+    monkeypatch.setattr(profile_fingerprint, "cached_vllm_version", lambda binary: "0.30.0")
     monkeypatch.setattr(worker_main.asyncio, "sleep", _sleep)
     bridge = _FakeBridge(failures=2, profiles={"org/model": {"base_residency_mb": 7.0, "sync_revision": 3}})
     registry = ModelProfileRegistry()
@@ -273,7 +274,7 @@ async def test_central_profiles_skip_logos_when_the_bridge_is_disabled(tmp_path,
 
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
     monkeypatch.setattr(worker_main, "get_state_dir", lambda: tmp_path)
-    monkeypatch.setattr(worker_main, "cached_vllm_version", lambda binary: "")
+    monkeypatch.setattr(profile_fingerprint, "cached_vllm_version", lambda binary: "")
     bridge = _FakeBridge(failures=0, profiles={})
     registry = ModelProfileRegistry()
 
