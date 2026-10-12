@@ -140,7 +140,7 @@ public class TeamMembershipService {
     @Transactional
     public void leave(Integer userId, Integer teamId) {
         TeamMemberId memberId = new TeamMemberId(userId, teamId);
-        Optional<TeamMember> existing = memberRepository.findByIdForUpdate(memberId);
+        Optional<TeamMember> existing = memberRepository.findByIdForUpdate(userId, teamId);
         memberRepository.deleteById(memberId);
         existing.ifPresent(m -> auditLog.record("team.member_removed", "team_member", teamId + "/" + userId, teamId,
             snapshot(m), absent()));

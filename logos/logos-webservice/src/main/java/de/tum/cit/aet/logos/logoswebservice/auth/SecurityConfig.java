@@ -48,10 +48,6 @@ public class SecurityConfig {
                 // /info must be reachable before login — it tells the UI which
                 // Keycloak instance to talk to.
                 .requestMatchers(HttpMethod.GET, "/info").permitAll()
-                // The public statistics page is a showcase for visitors without
-                // a session; the controller answers only opted-in teams'
-                // successful requests, so nothing private needs a JWT here.
-                .requestMatchers(HttpMethod.GET, "/stats").permitAll()
                 // get_model_health is authenticated with a Logos API key in the
                 // controller — a key is not a JWT, so the resource-server chain
                 // must not run for this path.

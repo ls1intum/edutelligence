@@ -1,11 +1,13 @@
 package de.tum.cit.aet.logos.logoswebservice.identity;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -20,9 +22,9 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberId;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
+import de.tum.cit.aet.logos.logoswebservice.identity.service.ApiKeyAdminService;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.KeycloakUserSyncService;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.SessionApiKeyService;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.TeamMembershipService;
@@ -60,6 +62,7 @@ class SessionApiKeyMintConcurrencyTest {
     private static final int ROUNDS = 15;
 
     @Autowired SessionApiKeyService sessionApiKeyService;
+    @Autowired ApiKeyAdminService apiKeyAdminService;
     @Autowired KeycloakUserSyncService syncService;
     @Autowired TeamMembershipService membershipService;
     @Autowired UserRepository userRepository;
@@ -108,10 +111,8 @@ class SessionApiKeyMintConcurrencyTest {
             .isTrue();
         assertThat(mint).isNotCompleted();
         release.countDown();
-        CompletableFuture.allOf(deactivation, mint).get(30, TimeUnit.SECONDS);
-        assertThat(mint.isCompletedExceptionally())
-            .as("the mint must be refused once the owner is deactivated")
-            .isTrue();
+        deactivation.get(30, TimeUnit.SECONDS);
+        assertMintRefused(mint, "the mint must be refused once the owner is deactivated");
 
         assertNoSessionKey(PARENT_KEY_ID);
         assertThat(keyIsActive(PARENT_KEY_ID)).isFalse();
@@ -136,7 +137,7 @@ class SessionApiKeyMintConcurrencyTest {
         CompletableFuture<Void> leave = CompletableFuture.runAsync(() ->
             new TransactionTemplate(txManager).executeWithoutResult(status -> {
                 teamMemberRepository
-                    .findByIdForUpdate(new TeamMemberId(OWNER_ID, TEAM_ID)).orElseThrow();
+                    .findByIdForUpdate(OWNER_ID, TEAM_ID).orElseThrow();
                 holder.set(backendPid());
                 locked.countDown();
                 try {
@@ -158,10 +159,8 @@ class SessionApiKeyMintConcurrencyTest {
             .isTrue();
         assertThat(mint).isNotCompleted();
         release.countDown();
-        CompletableFuture.allOf(leave, mint).get(30, TimeUnit.SECONDS);
-        assertThat(mint.isCompletedExceptionally())
-            .as("the mint must be refused once the owner has left the team")
-            .isTrue();
+        leave.get(30, TimeUnit.SECONDS);
+        assertMintRefused(mint, "the mint must be refused once the owner has left the team");
 
         assertNoSessionKey(PARENT_KEY_ID);
         assertThat(keyIsActive(PARENT_KEY_ID)).isFalse();
@@ -227,6 +226,48 @@ class SessionApiKeyMintConcurrencyTest {
         }
     }
 
+    /**
+     * Deactivating the standing key must take its minted session keys with
+     * it: the gateway honours a key's own is_active alone.
+     */
+    @Test
+    void deactivatingAKeySwitchesOffItsExistingSessionKeys() {
+        sessionApiKeyService.mint(PARENT_KEY_VALUE, "agent-session-a", newSession());
+        sessionApiKeyService.mint(PARENT_KEY_VALUE, "agent-session-b", newSession());
+
+        apiKeyAdminService.deactivateKey(PARENT_KEY_ID);
+
+        assertThat(keyIsActive(PARENT_KEY_ID)).isFalse();
+        assertNoActiveSessionKey(PARENT_KEY_ID, 0);
+    }
+
+    /**
+     * The same against a mint in flight: the mint either commits its child
+     * before the sweep (which then switches it off) or finds the parent
+     * already inactive and is refused.
+     */
+    @Test
+    void keyDeactivationRacingAMintLeavesNoActiveSessionKey() throws Exception {
+        for (int round = 0; round < ROUNDS; round++) {
+            resetRound(false);
+            int sessionId = newSession();
+            CyclicBarrier start = new CyclicBarrier(2);
+
+            CompletableFuture<Void> deactivation = run(start, () ->
+                apiKeyAdminService.deactivateKey(PARENT_KEY_ID));
+            CompletableFuture<Void> mint = run(start, () ->
+                sessionApiKeyService.mint(PARENT_KEY_VALUE, "agent-session-race", sessionId));
+            try {
+                mint.get(30, TimeUnit.SECONDS);
+            } catch (Exception expectedRefusal) {
+            }
+            deactivation.get(30, TimeUnit.SECONDS);
+
+            assertThat(keyIsActive(PARENT_KEY_ID)).isFalse();
+            assertNoActiveSessionKey(PARENT_KEY_ID, round);
+        }
+    }
+
     /** Restores the owner, the parent key and (after a leave) the membership. */
     private void resetRound(boolean membershipGone) {
         jdbc.update("UPDATE users SET is_active = true WHERE id = ?", OWNER_ID);
@@ -236,6 +277,7 @@ class SessionApiKeyMintConcurrencyTest {
             jdbc.update("""
                 INSERT INTO team_members (user_id, team_id, is_owner, source)
                 VALUES (?, ?, true, 'MANUAL')
+                ON CONFLICT DO NOTHING
                 """, OWNER_ID, TEAM_ID);
         }
     }
@@ -283,6 +325,14 @@ class SessionApiKeyMintConcurrencyTest {
             ) VALUES (?, 'mint-key', 'starting', 'test', FALSE, FALSE, '[]'::jsonb, TRUE)
             RETURNING id
             """, Integer.class, workspaceId);
+    }
+
+    /** The mint was refused for authorization, not by an unrelated failure. */
+    private static void assertMintRefused(CompletableFuture<Void> mint, String reason) {
+        assertThatThrownBy(() -> mint.get(30, TimeUnit.SECONDS))
+            .as(reason)
+            .isInstanceOf(ExecutionException.class)
+            .hasCauseInstanceOf(IllegalArgumentException.class);
     }
 
     private void assertNoSessionKey(int parentKeyId) {

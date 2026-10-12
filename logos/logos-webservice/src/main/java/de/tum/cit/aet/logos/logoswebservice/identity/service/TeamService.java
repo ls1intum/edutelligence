@@ -208,7 +208,6 @@ public class TeamService {
             // Same field as the teams list: needed so the application-keys SLO
             // column can show what an unset (inherited) key is actually served as.
             teamMap.put("priority", team.getPriority());
-            teamMap.put("share_public_stats", Boolean.TRUE.equals(team.getSharePublicStats()));
 
             List<Map<String, Object>> members = memberRepository.findActiveById_TeamId(teamId).stream()
                 .flatMap(m -> userRepository.findById(m.getId().getUserId()).stream().map(user -> {
@@ -278,21 +277,6 @@ public class TeamService {
     public Optional<TeamResponseDTO> updateTeamPriority(Integer teamId, Integer priority) {
         return teamRepository.findByIdForUpdate(teamId).map(team -> {
             team.setPriority(priority);
-            teamRepository.save(team);
-            return new TeamResponseDTO(team.getId(), team.getName());
-        });
-    }
-
-    /**
-     * Switches the team's successful requests into (or out of) the
-     * unauthenticated public statistics page. Sharing a team's usage is the
-     * team's own decision, so a team owner may make it; a Logos admin may do
-     * it for any team.
-     */
-    @Transactional
-    public Optional<TeamResponseDTO> updateTeamPublicStats(Integer teamId, boolean sharePublicStats) {
-        return teamRepository.findByIdForUpdate(teamId).map(team -> {
-            team.setSharePublicStats(sharePublicStats);
             teamRepository.save(team);
             return new TeamResponseDTO(team.getId(), team.getName());
         });

@@ -136,11 +136,22 @@ public class ApiKeyAdminService {
         return Map.of("result", "Updated log level to " + level);
     }
 
+    /**
+     * Switches a key off together with the session keys minted from it. The
+     * gateway honours a key's own {@code is_active} alone, so a child left
+     * active would keep working after its parent was revoked. The parent row
+     * is locked first, as a mint holds it, so a mint in flight commits its
+     * child before the sweep enumerates the children.
+     */
     @Transactional
     public void deactivateKey(int keyId) {
-        apiKeyRepository.findById(keyId).ifPresent(k -> {
+        apiKeyRepository.findByIdForUpdate(keyId).ifPresent(k -> {
             k.setIsActive(false);
             apiKeyRepository.save(k);
+            for (ApiKey child : apiKeyRepository.findByParentApiKeyId(k.getId())) {
+                child.setIsActive(false);
+                apiKeyRepository.save(child);
+            }
         });
     }
 

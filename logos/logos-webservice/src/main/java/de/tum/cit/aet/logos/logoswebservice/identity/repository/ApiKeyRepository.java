@@ -5,8 +5,11 @@ import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
+import jakarta.persistence.LockModeType;
 
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
@@ -17,6 +20,18 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.RateLimitUsagePr
 
 public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
     Optional<ApiKey> findByKeyValue(String keyValue);
+
+    /**
+     * Locks the key row until the surrounding transaction ends. Deactivating a
+     * standing key takes the same row lock a session-key mint holds on its
+     * parent, so the two serialize and the sweep sees every committed child.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT k FROM ApiKey k WHERE k.id = :id")
+    Optional<ApiKey> findByIdForUpdate(@Param("id") Integer id);
+
+    /** The session keys minted from a standing key. */
+    List<ApiKey> findByParentApiKeyId(Integer parentApiKeyId);
 
     Optional<ApiKey> findByKeyValueAndIsActiveTrue(String keyValue);
 

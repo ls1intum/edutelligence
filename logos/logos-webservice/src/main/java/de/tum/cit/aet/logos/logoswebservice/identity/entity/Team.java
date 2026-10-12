@@ -33,12 +33,6 @@ public class Team {
     // keeps applying as before. Set by Logos admins only.
     private Integer priority;
 
-    // Whether the team's successful requests are part of the unauthenticated
-    // public statistics page (GET /stats). Opt-in: the column defaults to
-    // false, so a team stays out of the page until a team owner or a Logos
-    // admin flips this.
-    private Boolean sharePublicStats = false;
-
     public Integer getId() { return id; }
     public String getName() { return name; }
     public Integer getDefaultCloudRpmLimit() { return defaultCloudRpmLimit; }
@@ -48,7 +42,6 @@ public class Team {
     public Long getDefaultMonthlyBudgetMicroCents() { return defaultMonthlyBudgetMicroCents; }
     public Long getTeamMonthlyBudgetMicroCents() { return teamMonthlyBudgetMicroCents; }
     public Integer getPriority() { return priority; }
-    public Boolean getSharePublicStats() { return sharePublicStats; }
     public String getKeycloakGroup() { return keycloakGroup; }
     public void setName(String name) { this.name = name; }
     public void setDefaultCloudRpmLimit(Integer v) { this.defaultCloudRpmLimit = v; }
@@ -58,6 +51,5 @@ public class Team {
     public void setDefaultMonthlyBudgetMicroCents(Long v) { this.defaultMonthlyBudgetMicroCents = v; }
     public void setTeamMonthlyBudgetMicroCents(Long v) { this.teamMonthlyBudgetMicroCents = v; }
     public void setPriority(Integer v) { this.priority = v; }
-    public void setSharePublicStats(Boolean v) { this.sharePublicStats = v; }
     public void setKeycloakGroup(String keycloakGroup) { this.keycloakGroup = keycloakGroup; }
 }

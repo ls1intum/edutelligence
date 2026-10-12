@@ -71,16 +71,6 @@ export class TeamManagementService {
     return firstValueFrom(this.http.patch<void>(`/api/teams/${teamId}`, payload));
   }
 
-  /**
-   * Switches the team's successful requests into (or out of) the public
-   * statistics page (GET /stats, readable without a session).
-   */
-  setTeamPublicStats(teamId: number, share: boolean): Promise<void> {
-    return firstValueFrom(
-      this.http.patch<void>(`/api/teams/${teamId}/public-stats`, { share_public_stats: share }),
-    );
-  }
-
   getTeamProviderBudgets(teamId: number): Promise<TeamProviderBudget[]> {
     return firstValueFrom(
       this.http.get<TeamProviderBudget[]>(`/api/admin/teams/${teamId}/provider-budgets`),

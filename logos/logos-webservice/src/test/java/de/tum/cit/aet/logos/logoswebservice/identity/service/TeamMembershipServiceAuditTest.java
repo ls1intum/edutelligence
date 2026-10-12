@@ -67,7 +67,7 @@ class TeamMembershipServiceAuditTest {
         when(team.getName()).thenReturn("T");
         when(users.findById(7)).thenReturn(Optional.of(user));
         when(teams.findById(3)).thenReturn(Optional.of(team));
-        when(members.findById(new TeamMemberId(7, 3))).thenReturn(Optional.empty());
+        when(members.findByIdForUpdate(7, 3)).thenReturn(Optional.empty());
         ApiKey newKey = new ApiKey();
         newKey.setKeyValue("lg-test");
         when(keyFactory.createDeveloperKey(user, team)).thenReturn(newKey);
@@ -86,7 +86,7 @@ class TeamMembershipServiceAuditTest {
     @Test
     @SuppressWarnings("unchecked")
     void leavingATeamRecordsWhatWasLost() {
-        when(members.findById(new TeamMemberId(7, 3)))
+        when(members.findByIdForUpdate(7, 3))
             .thenReturn(Optional.of(member(7, 3, true, TeamMemberSource.MANUAL)));
 
         service.leave(7, 3);

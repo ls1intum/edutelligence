@@ -42,7 +42,6 @@ describe('SettingsTabComponent — Keycloak link', () => {
       priority: null,
       managed: false,
       keycloak_group: null,
-      share_public_stats: false,
       ...overrides,
     };
   }
@@ -237,105 +236,5 @@ describe('SettingsTabComponent provider budgets', () => {
     await component.addProviderBudget();
 
     expect(upsertTeamProviderBudget).toHaveBeenCalledWith(7, 3, null);
-  });
-});
-
-describe('SettingsTabComponent — public statistics opt-in', () => {
-  const setTeamPublicStats = vi.fn();
-  let refreshes = 0;
-
-  function teamDetail(overrides: Partial<TeamDetail> = {}): TeamDetail {
-    return {
-      id: 7,
-      name: 'iOS',
-      is_caller_owner: true,
-      team_monthly_budget_micro_cents: null,
-      budget_used_micro_cents: 0,
-      default_monthly_budget_micro_cents: null,
-      default_cloud_rpm_limit: 5,
-      default_cloud_tpm_limit: 10000,
-      default_local_rpm_limit: 5,
-      default_local_tpm_limit: 10000,
-      priority: null,
-      managed: false,
-      keycloak_group: null,
-      share_public_stats: false,
-      ...overrides,
-    };
-  }
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    setTeamPublicStats.mockResolvedValue(undefined);
-    refreshes = 0;
-    TestBed.configureTestingModule({
-      providers: [
-        {
-          provide: TeamManagementService,
-          useValue: {
-            setTeamPublicStats,
-          },
-        },
-      ],
-    });
-  });
-
-  function setup(share = false): SettingsTabComponent {
-    const component = TestBed.runInInjectionContext(() => new SettingsTabComponent());
-    component.teamId = 7;
-    component.team = teamDetail({ share_public_stats: share });
-    component.canEdit = true;
-    component.refresh.subscribe(() => refreshes++);
-    return component;
-  }
-
-  it('persists the toggle and re-reads the team from the server', async () => {
-    const component = setup();
-
-    await component.togglePublicStats(true);
-
-    expect(setTeamPublicStats).toHaveBeenCalledWith(7, true);
-    // The reload is what makes the checkbox read back the stored value.
-    expect(refreshes).toBe(1);
-    expect(component.publicStatsError()).toBe('');
-    expect(component.publicStatsSuccess()).toBe(true);
-  });
-
-  it('reports the failure and does not re-read the team', async () => {
-    setTeamPublicStats.mockRejectedValue(new Error('down'));
-    const component = setup();
-
-    await component.togglePublicStats(true);
-
-    expect(refreshes).toBe(0);
-    expect(component.publicStatsSuccess()).toBe(false);
-    expect(component.publicStatsError()).toContain('Failed to update');
-  });
-
-  it('ignores a second toggle while the first is still in flight', async () => {
-    setTeamPublicStats.mockReturnValue(new Promise(() => {}));
-    const component = setup();
-
-    const inFlight = component.togglePublicStats(true);
-    await component.togglePublicStats(false);
-
-    expect(setTeamPublicStats).toHaveBeenCalledTimes(1);
-    expect(inFlight).toBeInstanceOf(Promise);
-    expect(component.publicStatsLoading()).toBe(true);
-  });
-
-  it('hides the success note again after a short while', async () => {
-    vi.useFakeTimers();
-    try {
-      const component = setup();
-
-      await component.togglePublicStats(true);
-      expect(component.publicStatsSuccess()).toBe(true);
-
-      vi.advanceTimersByTime(3000);
-      expect(component.publicStatsSuccess()).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

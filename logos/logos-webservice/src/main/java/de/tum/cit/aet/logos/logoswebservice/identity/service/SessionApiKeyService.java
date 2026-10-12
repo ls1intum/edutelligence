@@ -10,7 +10,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMemberId;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.User;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamMemberRepository;
@@ -84,8 +83,7 @@ public class SessionApiKeyService {
             .findByIdForUpdate(parent.getUserId())
             .orElseThrow(() -> new IllegalArgumentException("parent API key's owner no longer exists"));
         boolean stillMember = owner == null || parent.getTeamId() == null
-            || teamMemberRepository.findByIdForUpdate(
-                new TeamMemberId(parent.getUserId(), parent.getTeamId())).isPresent();
+            || teamMemberRepository.findByIdForUpdate(parent.getUserId(), parent.getTeamId()).isPresent();
         // Scalar on purpose: the parent entity above was read before the
         // locks, and an entity read now would hand back that cached copy
         // instead of the value a deactivation committed in the meantime.

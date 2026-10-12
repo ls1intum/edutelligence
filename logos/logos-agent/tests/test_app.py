@@ -243,7 +243,15 @@ class TestTheEndpointsThatCombineModules:
                 detail="one local model",
             )
 
-        async def reading(timeout_s: float = 5.0, lane=None, ours=None, own_api_key_id=None, *, discount_own=True):
+        async def reading(
+            timeout_s: float = 5.0,
+            lane=None,
+            ours=None,
+            own_api_key_id=None,
+            own_api_key_ids=None,
+            *,
+            discount_own=True,
+        ):
             assert lane == frozenset({("15", "97")}), "the reading must be taken on the runner's own lane"
             assert discount_own is False
             return capacity.Reading(load=0.1, busy_slots=2, total_slots=20, queue_total=0, ok=True, own_slots=1)

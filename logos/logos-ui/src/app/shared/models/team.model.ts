@@ -41,8 +41,6 @@ export interface TeamDetail {
   managed: boolean;
   /** The linked Keycloak group (or realm role); null when the team is Logos-owned. */
   keycloak_group: string | null;
-  /** Whether the team's successful requests appear on the public statistics page. */
-  share_public_stats: boolean;
 }
 
 /** A Keycloak claim name a team can be linked to, as offered by the group picker. */
