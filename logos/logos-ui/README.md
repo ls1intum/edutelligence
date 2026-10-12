@@ -68,6 +68,21 @@ Reusable components live in `src/app/shared/components/`: `app-select`,
 `app-icon-tile`, `app-role-badge`, `app-error-message`, `app-time-range-bar`,
 `app-theme-toggle`. Check there before building a new one.
 
+## Model-provider benchmarks
+
+The model **Performance** tab supports configurable single runs and batches.
+**Review & start benchmark** opens the shared `app-modal-confirm` component used
+for team deletion. Closing the dialog cancels the draft start; confirming submits
+the job once. The dialog explains lane reservation and persistent vLLM changes.
+
+The comparison component renders one eligible measurement as a filled point with
+`n = 1`. Multiple measurements use a boxplot. Recorded configuration controls and
+successful completion remain required for comparison.
+
+See [Configurable model benchmarks](../logos-orchestrator/docs/benchmark-configuration.md)
+for reservation behavior, failed-model preparation, batch cancellation and Dev checks.
+See [GuideLLM → Logos](../benchmarks/GUIDELLM.md) for the separate command-line runner.
+
 ## Additional Resources
 
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.

@@ -8,15 +8,30 @@ provider-model pair → GuideLLM → benchmarks.json → Logos import endpoint �
 
 ## Run from Logos
 
-For the normal admin flow, open **Models → Model Management → model → Performance**
-and select **Run benchmark** next to the provider-model pair. Logos runs 5 questions
-from GSM8K `main/test` with at most 512 output tokens, shows the live job status, and
-adds the successful summary to the same page automatically. Logos worker-node runs
-use a signed, job-scoped internal endpoint and therefore need no benchmark endpoint
-or API key under **Providers**. External provider runs still use their configured
-server-side endpoint and credential.
+For the normal admin flow, open **Models → Model Management → model → Performance**.
+Select the provider-model pair and configure the run. The default dataset is GSM8K
+`main/test`, with 50 samples and at most 512 output tokens per request.
+Select **Review & start benchmark**, then confirm **Start benchmark** in the dialog.
+The page shows live job status and adds successful results automatically.
+
+Logos worker runs use a signed, job-scoped internal endpoint. They need no benchmark
+endpoint or API key under **Providers**. The selected model's lanes are reserved
+while the job runs, including all batch repetitions. Existing requests finish first;
+new production requests wait or use another eligible provider. Completion, failure
+and cancellation release the reservation. Other models on the worker remain available.
+External provider runs use their configured server-side endpoint and credential;
+Logos does not reserve their serving capacity.
+
+One eligible measurement appears as a filled point in the comparison charts.
+When retrying a failed lane with serving overrides, Logos applies the selected
+settings before attempting startup. Applied settings remain active after the run.
+
+See [Configurable model benchmarks](../logos-orchestrator/docs/benchmark-configuration.md)
+for batch behavior, comparison requirements, reservation limits and the Dev checklist.
 
 The commands below remain available for local diagnosis and manual imports.
+They do not create an internal benchmark job or acquire its lane reservation.
+Requests sent to Logos through a public endpoint remain normal production requests.
 
 ## Setup
 
