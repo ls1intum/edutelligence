@@ -37,9 +37,13 @@
 !iris/.pre-commit-config.yaml
 !athena/.pre-commit-config.yaml
 !memiris/.pre-commit-config.yaml
-# The model gateway's nginx configuration, shipped in its image rather than
-# bind-mounted: a deployment copies only the compose file to its VM.
+# The model gateway's configuration and entrypoint, shipped in its image
+# rather than bind-mounted: a deployment copies only the compose file to
+# its VM.
 !logos/agent-gateway/nginx.conf
+!logos/agent-gateway/00-agent-auth-map.conf.template
+!logos/agent-gateway/auth_injection_env.sh
+!logos/agent-gateway/entrypoint.sh
 # The per-IP rate-limit gateway's nginx configuration and entrypoint, same
 # reasoning as the agent gateway above.
 !logos/rate-limit-gateway/nginx.conf

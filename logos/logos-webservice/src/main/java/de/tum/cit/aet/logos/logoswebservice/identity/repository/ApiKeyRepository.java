@@ -16,6 +16,8 @@ import de.tum.cit.aet.logos.logoswebservice.identity.repository.ModelAccessProje
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.RateLimitUsageProjection;
 
 public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
+    Optional<ApiKey> findByKeyValue(String keyValue);
+
     Optional<ApiKey> findByKeyValueAndIsActiveTrue(String keyValue);
 
     long countByIsActive(boolean isActive);
@@ -255,6 +257,10 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, Integer> {
             @Param("keyIds") List<Integer> keyIds, @Param("modelId") int modelId);
 
     List<ApiKey> findByUserIdAndTeamIdAndKeyType(Integer userId, Integer teamId, ApiKeyType keyType);
+
+    /** The user's standing keys for a team: minted session keys, which clone the owner, are not. */
+    List<ApiKey> findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(
+            Integer userId, Integer teamId, ApiKeyType keyType);
 
     List<ApiKey> findByUserIdAndTeamIdIsNullAndKeyType(Integer userId, ApiKeyType keyType);
 

@@ -91,6 +91,7 @@ async def read_load(
     lane: frozenset[tuple[str, str]] | None = None,
     ours: Mapping[str, int] | None = None,
     own_api_key_id: int | None = None,
+    own_api_key_ids: frozenset[int] | None = None,
     *,
     discount_own: bool = True,
 ) -> Reading:
@@ -149,6 +150,7 @@ async def read_load(
         lane=lane,
         ours=ours,
         own_api_key_id=own_api_key_id,
+        own_api_key_ids=own_api_key_ids,
         discount_own=discount_own,
     )
 
@@ -227,6 +229,7 @@ def parse_scheduler_state(
     lane: frozenset[tuple[str, str]] | None = None,
     ours: Mapping[str, int] | None = None,
     own_api_key_id: int | None = None,
+    own_api_key_ids: frozenset[int] | None = None,
     *,
     discount_own: bool = True,
 ) -> Reading:
@@ -272,6 +275,14 @@ def parse_scheduler_state(
     on.
     """
     mine = {str(name).strip().lower(): int(count) for name, count in (ours or {}).items()}
+    # Standing agent key plus any minted session keys still attributed on the
+    # orchestrator under their own ids. Summing them keeps per-key load
+    # accounting correct when sessions no longer share the standing key.
+    own_key_ids: set[str] = set()
+    if own_api_key_id is not None:
+        own_key_ids.add(str(own_api_key_id))
+    for kid in own_api_key_ids or ():
+        own_key_ids.add(str(kid))
     if lane is not None and not lane:
         # A key that reaches no local deployment has no lane to measure and
         # nothing it could legitimately run on. Refusing here rather than
@@ -359,11 +370,14 @@ def parse_scheduler_state(
                 # queued-by-key split describe one queue, so keep the larger
                 # reading rather than summing them.
                 queued_split = model.get("queued_by_api_key")
-                if own_api_key_id is not None and isinstance(queued_split, dict):
+                if own_key_ids and isinstance(queued_split, dict):
                     queue_key_reported.add(name)
-                    qshare = queued_split.get(str(own_api_key_id), 0)
-                    if isinstance(qshare, (int, float)):
-                        per_model_own_queued[name] = max(per_model_own_queued.get(name, 0), int(qshare))
+                    qshare = 0
+                    for kid in own_key_ids:
+                        part = queued_split.get(kid, 0)
+                        if isinstance(part, (int, float)):
+                            qshare += int(part)
+                    per_model_own_queued[name] = max(per_model_own_queued.get(name, 0), qshare)
             capacity = int(model.get("max_capacity") or 0)
             if not model.get("loaded") or capacity <= 0:
                 # Only loaded models hold capacity. An unloaded one
@@ -403,11 +417,14 @@ def parse_scheduler_state(
             # from a session count: a session fanned out into subagents holds
             # several of the slots at once, and only the split sees them all.
             split = model.get("active_by_api_key")
-            if own_api_key_id is not None and isinstance(split, dict):
+            if own_key_ids and isinstance(split, dict):
                 key_reported.add(name)
-                share = split.get(str(own_api_key_id), 0)
-                if isinstance(share, (int, float)):
-                    per_model_own_key[name] = per_model_own_key.get(name, 0) + int(share)
+                share = 0
+                for kid in own_key_ids:
+                    part = split.get(kid, 0)
+                    if isinstance(part, (int, float)):
+                        share += int(part)
+                per_model_own_key[name] = per_model_own_key.get(name, 0) + share
 
     # Unloaded lane models contribute their orchestrator backlog here.
     # Off-lane depth never entered `model_depth` when a lane was set.

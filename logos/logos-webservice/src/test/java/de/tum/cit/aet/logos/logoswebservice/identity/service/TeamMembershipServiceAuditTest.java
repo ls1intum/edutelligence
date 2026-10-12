@@ -46,6 +46,7 @@ class TeamMembershipServiceAuditTest {
         audit = mock(AuditLogService.class);
         ApiKeyRepository keys = mock(ApiKeyRepository.class);
         when(keys.findByUserIdAndTeamIdAndKeyType(any(), any(), any())).thenReturn(List.of());
+        when(keys.findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(any(), any(), any())).thenReturn(List.of());
         service = new TeamMembershipService(members, keys, users, teams, keyFactory, audit);
     }
 
@@ -120,7 +121,7 @@ class TeamMembershipServiceAuditTest {
         ApiKey existingKey = new ApiKey();
         existingKey.setKeyValue("lg-test");
         ApiKeyRepository keys = mock(ApiKeyRepository.class);
-        when(keys.findByUserIdAndTeamIdAndKeyType(any(), any(), any())).thenReturn(List.of(existingKey));
+        when(keys.findByUserIdAndTeamIdAndKeyTypeAndParentApiKeyIdIsNull(any(), any(), any())).thenReturn(List.of(existingKey));
         service = new TeamMembershipService(members, keys, users, teams, keyFactory, audit);
 
         service.join(7, 3, false, TeamMemberSource.KEYCLOAK);

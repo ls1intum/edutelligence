@@ -117,6 +117,15 @@ public class ExportImportService {
               FROM agent_sessions s
               JOIN team_repositories tr ON tr.id = s.team_repository_id
             """);
+        // Snapshot session → key VALUE (not id) so a running minted-key
+        // session stays linked after api_keys is truncated and re-imported.
+        // Matching by value prevents an imported row id from attaching a
+        // session to a different credential.
+        List<Map<String, Object>> sessionKeyLinks = jdbc.queryForList("""
+            SELECT s.id AS session_id, k.key_value
+              FROM agent_sessions s
+              JOIN api_keys k ON k.id = s.session_api_key_id
+            """);
         detachAgentSessionsFromRepositories();
         try {
             for (String table : TABLES) {
@@ -141,6 +150,7 @@ public class ExportImportService {
             restoreAgentSessionsRepositoryFk();
         }
         restoreAgentSessionRepositoryLinks(sessionLinks);
+        restoreAgentSessionApiKeyLinks(sessionKeyLinks);
         sanitizeImportedAnalysisSessionLinks();
         resetSequences();
         return Map.of("result", "Import successful");
@@ -243,10 +253,16 @@ public class ExportImportService {
     }
 
     private void detachAgentSessionsFromRepositories() {
+        // Drop FKs that would make TRUNCATE … CASCADE of exported tables
+        // wipe preserved agent_sessions rows (repositories and session keys).
         jdbc.update("UPDATE agent_sessions SET team_repository_id = NULL "
             + "WHERE team_repository_id IS NOT NULL");
+        jdbc.update("UPDATE agent_sessions SET session_api_key_id = NULL "
+            + "WHERE session_api_key_id IS NOT NULL");
         jdbc.execute("ALTER TABLE agent_sessions DROP CONSTRAINT IF EXISTS "
             + "agent_sessions_team_repository_id_fkey");
+        jdbc.execute("ALTER TABLE agent_sessions DROP CONSTRAINT IF EXISTS "
+            + "agent_sessions_session_api_key_id_fkey");
     }
 
     private void restoreAgentSessionsRepositoryFk() {
@@ -260,6 +276,15 @@ public class ExportImportService {
                   ADD CONSTRAINT agent_sessions_team_repository_id_fkey
                   FOREIGN KEY (team_repository_id)
                   REFERENCES team_repositories(id) ON DELETE SET NULL;
+              END IF;
+              IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                 WHERE conname = 'agent_sessions_session_api_key_id_fkey'
+              ) THEN
+                ALTER TABLE agent_sessions
+                  ADD CONSTRAINT agent_sessions_session_api_key_id_fkey
+                  FOREIGN KEY (session_api_key_id)
+                  REFERENCES api_keys(id) ON DELETE SET NULL;
               END IF;
             END $$;
             """);
@@ -281,6 +306,23 @@ public class ExportImportService {
                    AND tr.team_id = ?
                    AND tr.repo_slug = ?
                 """, sessionId.intValue(), teamId.intValue(), repoSlug);
+        }
+    }
+
+    private void restoreAgentSessionApiKeyLinks(List<Map<String, Object>> sessionKeyLinks) {
+        for (Map<String, Object> link : sessionKeyLinks) {
+            Number sessionId = (Number) link.get("session_id");
+            String keyValue = (String) link.get("key_value");
+            if (sessionId == null || keyValue == null || keyValue.isBlank()) {
+                continue;
+            }
+            jdbc.update("""
+                UPDATE agent_sessions s
+                   SET session_api_key_id = k.id
+                  FROM api_keys k
+                 WHERE s.id = ?
+                   AND k.key_value = ?
+                """, sessionId.intValue(), keyValue);
         }
     }
 

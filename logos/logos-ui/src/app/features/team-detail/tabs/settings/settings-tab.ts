@@ -106,6 +106,34 @@ export class SettingsTabComponent implements OnChanges {
   linkError = signal('');
   linkSuccess = signal(false);
 
+  // ── Public statistics opt-in ────────────────────────────────────────────
+  publicStatsLoading = signal(false);
+  publicStatsError = signal('');
+  publicStatsSuccess = signal(false);
+
+  /**
+   * Switches the team's successful requests into (or out of) the public
+   * statistics page. Saved on the toggle itself — there is no draft state to
+   * keep, unlike the limit fields above — and the team is reloaded so the
+   * checkbox reads back what the platform now stores.
+   */
+  async togglePublicStats(share: boolean): Promise<void> {
+    if (this.publicStatsLoading()) return;
+    this.publicStatsLoading.set(true);
+    this.publicStatsError.set('');
+    this.publicStatsSuccess.set(false);
+    try {
+      await this.teamService.setTeamPublicStats(this.teamId, share);
+      this.refresh.emit();
+      this.publicStatsSuccess.set(true);
+      setTimeout(() => this.publicStatsSuccess.set(false), 3000);
+    } catch {
+      this.publicStatsError.set('Failed to update the public statistics setting, please try again.');
+    } finally {
+      this.publicStatsLoading.set(false);
+    }
+  }
+
   /** Suggestions minus the groups another team already holds — the link is unique. */
   availableKeycloakGroups(): KeycloakGroupOption[] {
     return this.keycloakGroupOptions()

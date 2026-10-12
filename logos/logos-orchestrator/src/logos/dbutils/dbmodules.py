@@ -125,6 +125,7 @@ class ApiKey(Base):
     is_active = Column(Boolean, nullable=False, default=True)
 
     use_custom_permissions = Column(Boolean, nullable=False, default=False)
+    parent_api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="CASCADE"), nullable=True)
 
     team = relationship("Team")
     user = relationship("User")

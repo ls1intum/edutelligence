@@ -171,6 +171,39 @@
     }
   </div>
 
+  <p class="section-label">PUBLIC STATISTICS</p>
+  <p class="settings-hint">
+    When enabled, this team's successful requests are counted on the public statistics page,
+    which anyone can open without an account. Failures and in-flight requests are never shown
+    there, and the team disappears from the page again as soon as this is switched off.
+  </p>
+
+  <div class="settings-card">
+    <div class="settings-field">
+      <label class="field-label" for="s-public-stats">
+        <input
+          id="s-public-stats"
+          type="checkbox"
+          [checked]="team.share_public_stats"
+          [disabled]="!canEdit || publicStatsLoading()"
+          (change)="togglePublicStats($any($event.target).checked)"
+        />
+        Share this team's successful requests on the public statistics page
+      </label>
+    </div>
+
+    @if (canEdit) {
+      <div class="settings-actions">
+        @if (publicStatsSuccess()) {
+          <span class="save-success"><i class="pi pi-check"></i> Saved!</span>
+        }
+        @if (publicStatsError()) {
+          <span class="save-error"><i class="pi pi-exclamation-triangle"></i> {{ publicStatsError() }}</span>
+        }
+      </div>
+    }
+  </div>
+
   @if (canLinkKeycloak) {
     <p class="section-label">KEYCLOAK LINK</p>
     <p class="settings-hint">

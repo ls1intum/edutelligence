@@ -177,10 +177,13 @@ def queue_workspace_limit() -> int:
 def mentions_agent(body: str) -> bool:
     """Whether a comment addresses the agent by name.
 
-    Matched on a word boundary so `@LogosOSSAgentBot` is not this account,
-    and case-insensitively because GitHub logins are.
+    Matched so a longer login (`@LogosOSSAgentBot`) is not this account, and
+    case-insensitively because GitHub logins are. A trailing ``(?!\\w)`` is
+    used instead of ``\\b``: bot logins end in ``]``, which is not a word
+    character, so a word boundary after ``]`` would miss mentions followed
+    by whitespace or the end of the comment.
     """
-    return re.search(rf"@{re.escape(settings.github_login)}\b", body or "", re.IGNORECASE) is not None
+    return re.search(rf"@{re.escape(settings.github_login)}(?!\w)", body or "", re.IGNORECASE) is not None
 
 
 def is_bot(login: str) -> bool:
@@ -497,8 +500,8 @@ class TriggerPoller:
         if not settings.triggers_enabled:
             logger.info("repository triggers are off (LOGOS_AGENT_TRIGGERS_ENABLED=false)")
             return
-        if not settings.github_token:
-            logger.warning("repository triggers are on but no GitHub token is configured; not polling")
+        if not settings.github_token and not (settings.github_app_id and settings.github_app_private_key):
+            logger.warning("repository triggers are on but no GitHub credential is configured; not polling")
             return
         self._task = asyncio.create_task(self._loop(), name="agent-triggers")
         logger.info(
