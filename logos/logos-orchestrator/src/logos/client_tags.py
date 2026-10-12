@@ -65,28 +65,39 @@ class ClientTagCancellationMiddleware:
 
         cancelled = asyncio.Event()
         _events[tag].add(cancelled)
+        # The read of the client in progress, kept across calls.
+        # `Request.is_disconnected()` probes inside an already-cancelled
+        # scope and gives up at the first await; the read must outlive that
+        # probe, or a real disconnect it brings back is lost and the next
+        # probe starts a fresh read that never sees it.
+        pending: asyncio.Future | None = None
 
         async def guarded_receive():
-            # Checked before any await: `Request.is_disconnected()` calls this
-            # inside an already-cancelled scope, so the answer must be ready
-            # without yielding.
+            nonlocal pending
+            # Everything before the await answers without yielding, so the
+            # probe sees a cancellation, or a message that already arrived.
             if cancelled.is_set():
                 return _DISCONNECT
-            message = asyncio.ensure_future(receive())
-            stop = asyncio.ensure_future(cancelled.wait())
-            try:
-                done, _ = await asyncio.wait({message, stop}, return_when=asyncio.FIRST_COMPLETED)
-            finally:
-                stop.cancel()
-                if not message.done():
-                    message.cancel()
-            if message in done:
-                return message.result()
-            return _DISCONNECT
+            if pending is None:
+                pending = asyncio.ensure_future(receive())
+            current = pending
+            if not current.done():
+                stop = asyncio.ensure_future(cancelled.wait())
+                try:
+                    await asyncio.wait({current, stop}, return_when=asyncio.FIRST_COMPLETED)
+                finally:
+                    stop.cancel()
+                if not current.done():
+                    return _DISCONNECT
+            if pending is current:
+                pending = None
+            return current.result()
 
         try:
             await self.app(scope, guarded_receive, send)
         finally:
+            if pending is not None and not pending.done():
+                pending.cancel()
             events = _events.get(tag)
             if events is not None:
                 events.discard(cancelled)

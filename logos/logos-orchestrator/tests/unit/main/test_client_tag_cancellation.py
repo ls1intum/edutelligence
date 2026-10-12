@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import StreamingResponse
 from starlette.routing import Route
 
@@ -140,6 +141,39 @@ async def test_a_cancelled_request_reports_the_disconnect_without_waiting():
     await ClientTagCancellationMiddleware(app)(_scope("agent:172.30.0.8"), _client_that_never_leaves(), _discard)
 
     assert answers == [{"type": "http.disconnect"}]
+
+
+async def test_a_client_that_leaves_on_its_own_is_still_noticed():
+    """The disconnect watcher polls `Request.is_disconnected()`, which gives
+    up at its first await. A read cut short by one probe must hand what it
+    brings back to the next, or a tagged request outlives its client."""
+    left = asyncio.Event()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+        await left.wait()
+        return {"type": "http.disconnect"}
+
+    noticed = []
+
+    async def app(scope, receive, send):
+        request = Request(scope, receive)
+        await request.body()
+        while not await request.is_disconnected():
+            left.set()
+            await asyncio.sleep(0.01)
+        noticed.append(True)
+
+    await asyncio.wait_for(
+        ClientTagCancellationMiddleware(app)(_scope("agent:172.30.0.9"), receive, _discard), timeout=2.0
+    )
+
+    assert noticed == [True]
+    assert in_flight("agent:172.30.0.9") == 0
 
 
 def _request(authorization: str = "") -> MagicMock:

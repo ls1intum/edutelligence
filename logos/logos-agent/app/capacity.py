@@ -200,7 +200,7 @@ def _slots(model: dict) -> int:
     return int(model.get("max_capacity") or 0)
 
 
-def _live(model: dict, capacity: int) -> tuple[int, int, float]:
+def _live(model: dict) -> tuple[int, int, float]:
     """What a model is really doing: in flight, waiting, and how full it is.
 
     The engine's own numbers where it reports them, the orchestrator's
@@ -216,6 +216,11 @@ def _live(model: dict, capacity: int) -> tuple[int, int, float]:
     twenty-request allowance and still have no room for a fourth, because
     concurrency there is bounded by cache, not by a number in a
     configuration file.
+
+    The in-flight figure is not clipped to the deployment's slots: a lane
+    may run more than its guaranteed concurrency, and the ownership
+    accounting must see every request it is reconciling. Only the final
+    load figure is clamped.
     """
     signals = model.get("scheduler_signals") or {}
     if not isinstance(signals, dict):
@@ -230,7 +235,7 @@ def _live(model: dict, capacity: int) -> tuple[int, int, float]:
 
     running = number("requests_running_current")
     ledger_active = float(model.get("active") or 0)
-    active = int(min(running if running is not None else ledger_active, capacity))
+    active = int(running if running is not None else ledger_active)
 
     # The engine's wait list for this deployment only. The ledger's
     # model-wide backlog is a different queue stage, not a fallback reading
@@ -399,7 +404,7 @@ def parse_scheduler_state(
                 if on_lane:
                     queue_total += wait
                 continue
-            active, waiting, cache = _live(model, capacity)
+            active, waiting, cache = _live(model)
             ledger_active = max(0, int(model.get("active") or 0))
             fleet_total += capacity
             fleet_busy += active
@@ -555,7 +560,7 @@ def parse_scheduler_state(
             detail += f", {cache:.0%} of a KV cache in use"
         return Reading(
             load=_clamped_load(model_busy, model_total),
-            busy_slots=int(model_busy),
+            busy_slots=int(min(model_busy, model_total)),
             total_slots=int(model_total),
             queue_total=queue_total,
             cache_pressure=cache,
@@ -573,7 +578,7 @@ def parse_scheduler_state(
     own_total = sum(per_model_own_slots.values()) if not fell_back else 0
     return Reading(
         load=_clamped_load(busy, total),
-        busy_slots=int(busy),
+        busy_slots=int(min(busy, total)),
         total_slots=total,
         queue_total=queue_total,
         ok=True,

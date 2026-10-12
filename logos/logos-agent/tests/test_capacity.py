@@ -80,6 +80,31 @@ class TestRealSlots:
         reading = capacity.parse_scheduler_state(self._fleet(self._deployment(2, lane_parallel=None)))
         assert reading.total_slots == 20
 
+    def test_requests_beyond_the_guarantee_still_count_as_ours(self):
+        """A lane may run more than it guarantees. Clipping the running count
+        to the slots before reconciling ownership left the agent's own waiter
+        looking like a user's, and the runner paused itself."""
+        model = self._deployment(4, lane_parallel=2)
+        model["active_by_api_key"] = {"7": 4}
+        model["queued_by_api_key"] = {}
+        model["scheduler_signals"] = {"requests_running_current": 3, "queue_waiting_current": 1}
+
+        reading = capacity.parse_scheduler_state(self._fleet(model), own_api_key_id=7)
+
+        assert reading.queue_total == 0
+        assert reading.busy_slots == 0
+        assert reading.total_slots == 2
+        assert capacity.pause_decision(reading)[0] is False
+
+    def test_busy_slots_never_exceed_the_total(self):
+        model = self._deployment(3, lane_parallel=2)
+        model["scheduler_signals"] = {"requests_running_current": 3}
+
+        reading = capacity.parse_scheduler_state(self._fleet(model))
+
+        assert reading.busy_slots == 2
+        assert reading.load == 1.0
+
 
 class TestParseSchedulerState:
     def test_idle_fleet_reads_as_zero_load(self):
