@@ -991,6 +991,86 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
     assert placed.gpu_devices == "0"
 
 
+def _faulted_gpu0_manager() -> LaneManager:
+    """Three 96 GB GPUs: GPU 0 failed, GPU 1 empty, GPU 2 holding another lane."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+        loaded_vram_mb=6000.0,
+        engine="vllm",
+    )
+
+    async def _snapshot() -> DeviceSummary:
+        def gpu(index: int, free_mb: float, health: str = "ok") -> DeviceInfo:
+            return DeviceInfo(
+                device_id=f"gpu{index}",
+                kind="nvidia",
+                memory_total_mb=97887.0,
+                memory_used_mb=97887.0 - free_mb,
+                memory_free_mb=free_mb,
+                health=health,
+                extra={"index": index},
+            )
+
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            # The faulted GPU reports the most free memory, so only its health
+            # keeps placement away from it.
+            devices=[gpu(0, 97883.0, "faulted"), gpu(1, 60000.0), gpu(2, 15383.0)],
+        )
+
+    return LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_place_never_picks_a_faulted_gpu() -> None:
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+
+    assert placed.gpu_devices == "1"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_an_explicit_pin_on_a_faulted_gpu() -> None:
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices="0",
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    with pytest.raises(RuntimeError, match=r"faulted GPU\(s\) \[0\]"):
+        await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_keeps_an_explicit_pin_on_healthy_gpus() -> None:
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices="2",
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+
+    assert placed.gpu_devices == "2"
+
+
 async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> None:
     """A kv-pinned lane must NOT be gated by the 0.5 GMU floor.
 

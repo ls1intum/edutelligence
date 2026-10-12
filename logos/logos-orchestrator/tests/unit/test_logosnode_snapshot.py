@@ -59,3 +59,34 @@ def test_ignores_unparseable_runtime_timestamp():
 
     assert sample is not None
     assert sample["timestamp"] == heartbeat
+
+
+def test_scheduler_signals_carry_gpu_index_health_and_faults():
+    from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+
+    signals = _build_logosnode_scheduler_signals(
+        {
+            "lanes": [],
+            "devices": {
+                "gpu_faults": ["gpu0 (GPU-aaa): GPU requires reset"],
+                "devices": [
+                    {
+                        "device_id": "GPU-aaa",
+                        "memory_used_mb": 82989,
+                        "memory_total_mb": 97887,
+                        "health": "faulted",
+                        "health_reason": "GPU requires reset",
+                        "extra": {"index": 0},
+                    },
+                    {"device_id": "GPU-ccc", "memory_total_mb": 97887, "extra": {"index": 2}},
+                ],
+            },
+        }
+    )
+
+    provider = signals["provider"]
+    assert provider["gpu_faults"] == ["gpu0 (GPU-aaa): GPU requires reset"]
+    assert [(d["index"], d["health"], d["health_reason"]) for d in provider["devices"]] == [
+        (0, "faulted", "GPU requires reset"),
+        (2, "ok", ""),
+    ]

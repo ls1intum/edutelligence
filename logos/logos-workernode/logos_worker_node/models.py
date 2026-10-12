@@ -832,6 +832,10 @@ class DeviceInfo(BaseModel):
     utilization_percent: float | None = None
     temperature_celsius: float | None = None
     power_draw_watts: float | None = None
+    # "faulted": nvidia-smi reports the GPU itself as failed (e.g. "GPU requires
+    # reset"); lane placement skips it. "degraded": some readings are missing.
+    health: Literal["ok", "degraded", "faulted"] = "ok"
+    health_reason: str = ""
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -846,6 +850,9 @@ class DeviceSummary(BaseModel):
     # nvidia_smi_available, keep working unchanged.
     telemetry_available: bool = False
     degraded_reason: str = ""
+    # One line per GPU that nvidia-smi reports as failed, including GPUs left
+    # out of ``devices`` because their memory could not be read.
+    gpu_faults: list[str] = Field(default_factory=list)
     devices: list[DeviceInfo] = Field(default_factory=list)
     total_memory_mb: float = 0.0
     used_memory_mb: float = 0.0

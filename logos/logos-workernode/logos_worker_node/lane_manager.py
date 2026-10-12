@@ -2148,7 +2148,9 @@ class LaneManager:
         """Pick an explicit GPU set for auto-managed vLLM lanes.
 
         Strategy:
-        - Respect explicit lane gpu_devices.
+        - Never use a GPU that nvidia-smi reports as faulted; an explicit
+          gpu_devices pin that includes one is refused.
+        - Respect explicit lane gpu_devices otherwise.
         - Preserve the current placement when it still fits.
         - Otherwise choose the feasible GPU subset in the worker's allowed
           GPU pool that shares the least with awake lanes, breaking ties
@@ -2156,8 +2158,6 @@ class LaneManager:
           whose only occupants are sleeping lanes is treated as empty).
         """
         if lane_config.vllm_config is None:
-            return lane_config
-        if lane_config.gpu_devices:
             return lane_config
         if self._gpu_snapshot is None:
             return lane_config
@@ -2179,6 +2179,7 @@ class LaneManager:
         if not snapshot.nvidia_smi_available:
             return lane_config
 
+        faulted_indices: set[int] = set()
         device_rows: list[dict[str, float]] = []
         for fallback_index, device in enumerate(snapshot.devices):
             if device.kind != "nvidia":
@@ -2188,6 +2189,9 @@ class LaneManager:
                 index = int(raw_index)
             except (TypeError, ValueError):
                 index = fallback_index
+            if device.health == "faulted":
+                faulted_indices.add(index)
+                continue
             device_rows.append(
                 {
                     "index": float(index),
@@ -2196,7 +2200,24 @@ class LaneManager:
                     "utilization": float(device.utilization_percent or 0.0),
                 }
             )
+        if lane_config.gpu_devices:
+            pinned = self._lane_gpu_set(lane_config.gpu_devices)
+            broken = sorted(faulted_indices if pinned is None else pinned & faulted_indices)
+            if broken:
+                # A failed GPU still reports memory in use, and vLLM would only
+                # fail at startup with an unrelated-looking free-memory error.
+                raise RuntimeError(
+                    f"Lane '{lane_id}' model={lane_config.model} is pinned to "
+                    f"gpu_devices={lane_config.gpu_devices!r}, which includes faulted GPU(s) {broken} "
+                    "(nvidia-smi reports them as failed; reset or reboot the node)"
+                )
+            return lane_config
         if not device_rows:
+            if faulted_indices:
+                raise RuntimeError(
+                    f"Auto-placement: every GPU on this node is faulted ({sorted(faulted_indices)}); "
+                    f"lane '{lane_id}' model={lane_config.model} cannot be placed"
+                )
             return lane_config
 
         available_indices = {int(row["index"]) for row in device_rows}

@@ -486,10 +486,18 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "runtime_modes": ["vllm"],
     }
 
+    raw_gpu_faults = devices.get("gpu_faults")
+    provider_signals["gpu_faults"] = (
+        [str(fault) for fault in raw_gpu_faults if fault] if isinstance(raw_gpu_faults, list) else []
+    )
+
     raw_device_list = devices.get("devices") or []
     provider_signals["devices"] = [
         {
             "device_id": d.get("device_id", ""),
+            # The worker's GPU index (nvidia-smi numbering), which lane
+            # placements refer to; list position differs once a GPU is skipped.
+            "index": _safe_int((d.get("extra") or {}).get("index")) if isinstance(d.get("extra"), dict) else None,
             "kind": d.get("kind", "nvidia"),
             "name": d.get("name", ""),
             "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
@@ -498,6 +506,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "utilization_percent": _safe_float(d.get("utilization_percent")),
             "temperature_celsius": _safe_float(d.get("temperature_celsius")),
             "power_draw_watts": _safe_float(d.get("power_draw_watts")),
+            "health": d.get("health") if d.get("health") in ("ok", "degraded", "faulted") else "ok",
+            "health_reason": str(d.get("health_reason") or ""),
         }
         for d in raw_device_list
         if isinstance(d, dict)
