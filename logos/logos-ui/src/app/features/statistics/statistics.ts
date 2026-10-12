@@ -16,7 +16,7 @@ import type { Subscription } from 'rxjs';
 
 import { StatsWebsocketService } from './services/stats-websocket.service';
 
-import { CHART_ROLE, getLaneStateColor, MEMORY_FREE_COLOR, MEMORY_OTHER_COLOR, seriesColor, STATUS_COLOR } from './statistics.constants';
+import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './statistics.constants';
 
 import {
   applyTimeSeriesLabels,
@@ -75,7 +75,7 @@ import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
 import { VersionHint } from './components/version-hint/version-hint';
-import { VramDonutComponent, type DonutSlice } from './components/vram-donut/vram-donut';
+import { VramDonutComponent } from './components/vram-donut/vram-donut';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
@@ -110,9 +110,6 @@ type ProviderGlassRow = {
    *  worker's device memory reading. 0 on non-unified rows. */
   unifiedTotalMb: number;
   unifiedFreeMb: number;
-  fallbackVramPie: DonutSlice[];
-  vramUsedGb: number;
-  vramTotalGb: number;
 };
 
 @Component({
@@ -656,9 +653,6 @@ export class Statistics implements OnInit, OnDestroy {
         // workers that predate the host_memory summary.
         unifiedTotalMb: unifiedMemory ? (ram.reported ? ram.totalMb : vram.totalMb) : 0,
         unifiedFreeMb: unifiedMemory ? (ram.reported ? ram.freeMb : vram.freeMb) : 0,
-        fallbackVramPie: this._fallbackVramPie(point),
-        vramUsedGb: point?.used_vram_gb ?? 0,
-        vramTotalGb: point?.total_vram_gb ?? (point?.used_vram_gb ?? 0) + (point?.remaining_vram_gb ?? 0),
       };
     });
   });
@@ -1534,58 +1528,6 @@ export class Statistics implements OnInit, OnDestroy {
   private _isProviderOnline(name: string): boolean {
     const m = this.vramProviderMetaByName()[name];
     return m?.connection_state !== 'offline' && m?.connected !== false;
-  }
-
-  /**
-   * Legacy model-list donut used when a provider has no lane signals yet (older
-   * snapshot shape). Same accounting as the old selected-provider pie.
-   */
-  private _fallbackVramPie(
-    pt: {
-      used_vram_gb?: number;
-      remaining_vram_gb?: number;
-      total_vram_gb?: number;
-      loaded_models?: Array<{ name: string; size_gb: number }>;
-    } | null,
-  ): DonutSlice[] {
-    if (!pt) return [];
-    const usedGb = pt.used_vram_gb ?? 0;
-    const remainingGb = pt.remaining_vram_gb ?? 0;
-    const totalGb = pt.total_vram_gb ?? usedGb + remainingGb;
-    if (totalGb <= 0) return [];
-
-    const reportedModels = pt.loaded_models ?? [];
-    const rawModelSlices = reportedModels
-      .map((model, index) => ({
-        value: Number(model.size_gb || 0),
-        color: seriesColor(index),
-        text: model.name,
-      }))
-      .filter((slice) => slice.value > 0);
-
-    const attributedUsedGb = rawModelSlices.reduce((sum, s) => sum + s.value, 0);
-    const modelScale =
-      attributedUsedGb > usedGb && attributedUsedGb > 0 ? usedGb / attributedUsedGb : 1;
-    const modelSlices = rawModelSlices.map((slice) => ({
-      ...slice,
-      value: Number((slice.value * modelScale).toFixed(3)),
-    }));
-    const modeledUsedGb = modelSlices.reduce((sum, s) => sum + s.value, 0);
-    const otherUsedGb = Math.max(usedGb - modeledUsedGb, 0);
-
-    return [
-      ...modelSlices,
-      {
-        value: otherUsedGb,
-        color: MEMORY_OTHER_COLOR,
-        text: modelSlices.length > 0 ? 'Other used' : 'Used',
-      },
-      {
-        value: remainingGb,
-        color: MEMORY_FREE_COLOR,
-        text: 'Free',
-      },
-    ].filter((s) => s.value > 0);
   }
 
   isProviderOnline = (name: string): boolean => this._isProviderOnline(name);

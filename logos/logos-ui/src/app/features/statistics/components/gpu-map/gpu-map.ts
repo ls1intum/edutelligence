@@ -35,6 +35,12 @@ export interface MemorySegment {
 
 export interface MemoryCard {
   key: string;
+  /**
+   * A memory pool rather than one physical GPU: the aggregate card of a worker
+   * that reports only totals, or the worker's own derived summary. Lanes are
+   * drawn onto it by footprint, never by GPU index.
+   */
+  pool: boolean;
   title: string;
   subtitle: string;
   totalMb: number;
@@ -66,6 +72,8 @@ export function parseGpuIndices(raw: string | null | undefined): number[] {
     if (!range) return [];
     const from = Number(range[1]);
     const to = range[2] === undefined ? from : Number(range[2]);
+    // Past 2^53 `i++` stops advancing and the loop below never ends.
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to)) return [];
     if (to < from || to - from > 64) return [];
     for (let i = from; i <= to; i++) out.add(i);
   }
@@ -124,14 +132,36 @@ export class GpuMapComponent {
     return typeof device.index === 'number' ? device.index : position;
   }
 
+  private isPool(device: DeviceInfo): boolean {
+    return device.kind === 'derived';
+  }
+
+  /**
+   * The GPUs a lane occupies. "all" (and a blank selector) only says which GPUs
+   * the lane could see — a single-GPU lane started that way uses one of them,
+   * and the worker does not say which — so on a worker with several GPUs it
+   * stays unplaced rather than drawn across every card.
+   */
   private placement(lane: LaneSignalData): number[] {
     const raw = (lane.effective_gpu_devices || lane.gpu_devices || '').trim();
-    // Workers report "all" for a lane that may use every device (the Mac worker does).
-    if (raw.toLowerCase() === 'all') return this.devices.map((d, i) => this.gpuIndex(d, i));
     const parsed = parseGpuIndices(raw);
     if (parsed.length) return parsed;
     // A single-GPU worker can only mean that card.
-    return this.devices.length === 1 ? [this.gpuIndex(this.devices[0], 0)] : [];
+    const gpus = this.devices.filter((d) => !this.isPool(d));
+    return gpus.length === 1 ? [this.gpuIndex(gpus[0], this.devices.indexOf(gpus[0]))] : [];
+  }
+
+  /**
+   * Whether a lane belongs on a pool card. With one pool every lane does; the
+   * worker's per-selector derived pools are named after the lane selector,
+   * with "derived" standing for a lane that names none.
+   */
+  private inPool(device: DeviceInfo, lane: LaneSignalData): boolean {
+    const pools = this.devices.filter((d) => this.isPool(d));
+    if (pools.length === 1) return true;
+    const raw = (lane.effective_gpu_devices || lane.gpu_devices || '').trim();
+    const key = ['', 'all', 'none'].includes(raw.toLowerCase()) ? 'derived' : raw;
+    return device.device_id === key;
   }
 
   private segment(
@@ -158,12 +188,20 @@ export class GpuMapComponent {
     if (this.unified) return [];
     return this.devices.map((device, position) => {
       const index = this.gpuIndex(device, position);
+      const pool = this.isPool(device);
       const segments: MemorySegment[] = [];
       for (const [laneId, lane] of this.sortedLanes()) {
-        const gpus = this.placement(lane);
-        if (!gpus.includes(index)) continue;
         const total = lane.effective_vram_mb ?? 0;
         if (total <= 0) continue;
+        if (pool) {
+          // A pool holds a lane's whole footprint, whichever GPUs it names.
+          if (this.inPool(device, lane)) {
+            segments.push(this.segment(laneId, lane, total, device.memory_total_mb, []));
+          }
+          continue;
+        }
+        const gpus = this.placement(lane);
+        if (!gpus.includes(index)) continue;
         // A tensor-parallel lane holds an even share of its weights per card.
         segments.push(
           this.segment(laneId, lane, total / gpus.length, device.memory_total_mb, gpus),
@@ -172,8 +210,9 @@ export class GpuMapComponent {
       const laneMb = segments.reduce((sum, s) => sum + s.mb, 0);
       const usedMb = device.memory_used_mb;
       return {
-        key: `gpu-${index}`,
-        title: `GPU ${index}`,
+        key: pool ? `pool-${position}` : `gpu-${index}`,
+        pool,
+        title: pool ? 'Memory pool' : `GPU ${index}`,
         subtitle: device.name,
         totalMb: device.memory_total_mb,
         usedMb,
@@ -191,7 +230,8 @@ export class GpuMapComponent {
 
   /** Lanes that report no readable placement on a multi-GPU worker. */
   get unplacedLanes(): Array<{ laneId: string; model: string; state: string; color: string }> {
-    if (this.unified || this.devices.length < 2) return [];
+    if (this.unified || this.devices.some((d) => this.isPool(d))) return [];
+    if (this.devices.length < 2) return [];
     return this.sortedLanes()
       .filter(([, lane]) => this.placement(lane).length === 0)
       .map(([laneId, lane]) => ({

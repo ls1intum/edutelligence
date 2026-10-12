@@ -445,3 +445,22 @@ describe('WorkerGpuPanel unified-memory memory bars', () => {
     expect(text).toContain('28.0 GB');
   });
 });
+
+describe('WorkerGpuPanel aggregate card', () => {
+  it('reads the totals of a sample that carries them only at the top level', async () => {
+    await TestBed.configureTestingModule({
+      imports: [WorkerGpuPanel],
+      providers: [{ provide: StatisticsService, useValue: {} }],
+    }).compileComponents();
+    const panel = TestBed.createComponent(WorkerGpuPanel).componentInstance;
+    panel.providerLatestSamples = {
+      legacy: { timestamp: '2026-10-12T08:00:00Z', total_vram_mb: 48_000, remaining_vram_mb: 18_000 },
+    };
+    panel.activeProvider = 'legacy';
+
+    const [card] = panel.mapDevices;
+    expect(card.memory_total_mb).toBe(48_000);
+    expect(card.memory_used_mb).toBe(30_000);
+    expect(card.memory_free_mb).toBe(18_000);
+  });
+});

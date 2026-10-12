@@ -16,7 +16,7 @@ import {
   VramProviderMeta,
   VramV2Sample,
 } from '../../statistics.models';
-import { extractProviderHostRamMb, formatUptime } from '../../statistics.utils';
+import { extractProviderHostRamMb, extractProviderVramMb, formatUptime } from '../../statistics.utils';
 import { EmptyState } from '../empty-state/empty-state';
 import { GpuMapComponent } from '../gpu-map/gpu-map';
 
@@ -162,16 +162,18 @@ export class WorkerGpuPanel implements OnChanges {
    */
   get mapDevices(): DeviceInfo[] {
     if (this.devices.length > 0 || this.isUnifiedMemory) return this.devices;
-    const total = this.syntheticTotalMb();
-    if (total <= 0) return [];
+    // Older samples carry their totals only at the top level, not in the
+    // scheduler signals.
+    const vram = extractProviderVramMb(this.latestSample);
+    if (vram.totalMb <= 0) return [];
     return [
       {
         device_id: 'aggregate',
         kind: 'derived',
         name: 'All GPUs (aggregate)',
-        memory_used_mb: this.syntheticUsedMb(),
-        memory_total_mb: total,
-        memory_free_mb: this.syntheticFreeMb(),
+        memory_used_mb: vram.usedMb,
+        memory_total_mb: vram.totalMb,
+        memory_free_mb: vram.freeMb,
         utilization_percent: null,
         temperature_celsius: null,
         power_draw_watts: null,
@@ -246,24 +248,6 @@ export class WorkerGpuPanel implements OnChanges {
   usedPct(device: DeviceInfo): number {
     if (device.memory_total_mb <= 0) return 0;
     return Math.min(100, (device.memory_used_mb / device.memory_total_mb) * 100);
-  }
-
-  syntheticUsedMb(): number {
-    return this.providerSignals?.used_memory_mb ?? 0;
-  }
-
-  syntheticTotalMb(): number {
-    return this.providerSignals?.total_memory_mb ?? 0;
-  }
-
-  syntheticFreeMb(): number {
-    return this.providerSignals?.free_memory_mb ?? 0;
-  }
-
-  syntheticPct(): number {
-    const total = this.syntheticTotalMb();
-    if (total <= 0) return 0;
-    return Math.min(100, (this.syntheticUsedMb() / total) * 100);
   }
 
   // ── Host RAM ────────────────────────────────────────────────────────────────

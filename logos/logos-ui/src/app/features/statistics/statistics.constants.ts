@@ -35,8 +35,8 @@ export function seriesColor(index: number): string {
 }
 
 /**
- * Memory that belongs to no lane. One colour each, used by every memory chart
- * (donuts and GPU cards): they are neutral on purpose, so they can never be
+ * Memory that belongs to no lane. One colour each, used by every memory donut
+ * (the GPU cards draw the same two neutrals in gpu-map.scss): they are neutral on purpose, so they can never be
  * mistaken for a lane state or a model series, and "free" reads the same wherever
  * it appears.
  */

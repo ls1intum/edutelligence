@@ -47,6 +47,8 @@ describe('parseGpuIndices', () => {
     expect(parseGpuIndices('')).toEqual([]);
     expect(parseGpuIndices('GPU-abc')).toEqual([]);
     expect(parseGpuIndices('3-1')).toEqual([]);
+    // Past 2^53 a counting loop cannot advance.
+    expect(parseGpuIndices('9007199254740992')).toEqual([]);
   });
 });
 
@@ -91,12 +93,40 @@ describe('GpuMapComponent', () => {
     expect(multi.unplacedLanes.map((l) => l.laneId)).toEqual(['a']);
   });
 
-  it('reads "all" as every GPU of the worker', () => {
+  it('leaves "all" unplaced on a worker with several GPUs', () => {
+    // "all" is what the lane could see, not what it holds: a single-GPU lane
+    // started that way sits on one card the worker does not name.
     const cmp = create({
       devices: [device(40_000), device(40_000)],
-      lanes: { a: lane({ gpu_devices: 'all', effective_gpu_devices: 'all', effective_vram_mb: 80_000 }) },
+      lanes: { a: lane({ gpu_devices: 'all', effective_gpu_devices: 'all' }) },
     });
-    expect(cmp.cards.map((c) => c.segments.length)).toEqual([1, 1]);
+    expect(cmp.cards.map((c) => c.segments.length)).toEqual([0, 0]);
+    expect(cmp.unplacedLanes.map((l) => l.laneId)).toEqual(['a']);
+  });
+
+  it('places "all" on the only GPU of a single-GPU worker', () => {
+    const cmp = create({
+      devices: [device(40_000)],
+      lanes: { a: lane({ gpu_devices: 'all', effective_gpu_devices: 'all' }) },
+    });
+    expect(cmp.cards[0].segments.map((s) => s.mb)).toEqual([40_000]);
+  });
+
+  it('draws every lane onto an aggregate pool at its full footprint', () => {
+    const pool: DeviceInfo = { ...device(90_000, 200_000), device_id: 'aggregate', kind: 'derived' };
+    const cmp = create({
+      devices: [pool],
+      lanes: {
+        one: lane({ gpu_devices: '1', effective_gpu_devices: '1', effective_vram_mb: 30_000 }),
+        tp: lane({ gpu_devices: '0,1', effective_gpu_devices: '0,1', effective_vram_mb: 60_000 }),
+      },
+    });
+    expect(cmp.cards[0].pool).toBe(true);
+    expect(cmp.cards[0].title).toBe('Memory pool');
+    expect(cmp.cards[0].segments.map((s) => [s.laneId, s.mb])).toEqual([
+      ['one', 30_000],
+      ['tp', 60_000],
+    ]);
     expect(cmp.unplacedLanes).toEqual([]);
   });
 

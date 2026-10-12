@@ -14,7 +14,7 @@
 
     <div class="gpu-map__grid">
       @for (card of cards; track card.key) {
-        <section class="gpu-map__card" [class.gpu-map__card--ram]="card.key === 'ram' || card.key === 'unified'"
+        <section class="gpu-map__card" [class.gpu-map__card--pool]="card.pool"
                  [class.gpu-map__card--faulted]="card.health === 'faulted'">
           <header class="gpu-map__head">
             <div class="gpu-map__title">
@@ -94,7 +94,7 @@
               }
             </ul>
           } @else {
-            <p class="gpu-map__none">No lane on this {{ card.key.startsWith('gpu') ? 'GPU' : 'memory' }}.</p>
+            <p class="gpu-map__none">No lane on this {{ card.pool ? 'memory' : 'GPU' }}.</p>
           }
         </section>
       }
