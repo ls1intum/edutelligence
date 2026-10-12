@@ -13,6 +13,11 @@ restores the worker before it returns to production.
 
 ## Enable, inspect and disable a schedule
 
+See the [illustrated admin walkthrough](../../docs/roles/logos-admin.md#nightly-benchmarks)
+for screenshots of the plan and both confirmation dialogs.
+
+![Example schedule with the model, parameter values and dataset previews](../../docs/static/img/roles/logos-admin-nightly-benchmarks.png)
+
 1. Sign in as a Logos Admin and open **Models**.
 2. Open the model's **Model Details → Performance** tab.
 3. Find the **Nightly benchmarks** card for the intended worker.

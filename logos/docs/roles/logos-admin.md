@@ -39,10 +39,47 @@ capabilities and scheduling weights for each model. It also shows the Likert
 model to open its **Model Details** view. This view shows the request history,
 the error reports and the scheduling statistics of the model.
 
-The **Performance** tab also provides nightly benchmarks for model/worker pairs.
-See [Nightly benchmarks](../deployment.md#nightly-benchmarks) for deployment requirements and the link to the activation guide.
-
 ![Models page](/img/roles/logos-admin-models.png)
+
+### Nightly benchmarks
+
+The **Performance** tab provides nightly benchmarks for each model/worker pair.
+Schedules are off by default. Activation requires an updated, connected worker.
+See [deployment requirements](../deployment.md#nightly-benchmarks) before activation.
+
+1. Open a model from **Models**.
+2. Select **Performance**.
+3. Find the **Nightly benchmarks** card for the intended worker.
+4. Check **Model** and **Parameters to be tested**.
+5. Select **Enable nightly runs…**.
+6. Read the dialog and select **Enable nightly runs**.
+
+Select **Cancel** to keep the current schedule state.
+The confirmation dialog shows the time window and the rules for incomplete runs.
+
+![Confirmation dialog to enable nightly benchmarks](../static/img/roles/logos-admin-nightly-enable.png)
+
+The card then shows **Nightly runs activated**.
+The schedule stays active after a page reload.
+Each night, Logos selects up to 2 eligible pairs, with new or older attempts first.
+The card shows possible parameter values for this pair, not a guaranteed place for tonight.
+
+The example shows the state before the first benchmark, so the results section is empty.
+The dataset editor and question previews below the card remain available for manual benchmarks.
+These controls do not change the nightly workload.
+
+![Active schedule with the model, parameter values and dataset previews](../static/img/roles/logos-admin-nightly-benchmarks.png)
+
+To remove the pair from the nightly rotation:
+
+1. Select **Disable nightly runs…**.
+2. Read the dialog and select **Disable nightly runs**.
+3. Check that the card shows **Nightly runs deactivated**.
+
+Select **Cancel** to keep the schedule active.
+Deactivation stops an active benchmark and restores the worker configuration before production resumes.
+
+![Confirmation dialog to disable nightly benchmarks](../static/img/roles/logos-admin-nightly-disable.png)
 
 ## Providers
 

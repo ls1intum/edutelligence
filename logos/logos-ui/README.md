@@ -4,6 +4,9 @@ This project was generated using [Angular CLI](https://github.com/angular/angula
 
 ## Nightly benchmarks in Model Details
 
+The [illustrated admin walkthrough](../docs/roles/logos-admin.md#nightly-benchmarks)
+shows the plan and both confirmation dialogs.
+
 A Logos Admin opens **Models → Model Details → Performance**. Each Logos worker
 pair has a **Nightly benchmarks** card above the manual benchmark editor.
 
