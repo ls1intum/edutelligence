@@ -96,6 +96,28 @@ def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | N
             _cancel_benchmark_job(job_id, "Provider restarted or disconnected")
 
 
+def _with_cold_marks(provider_id: int, runtime: Dict[str, Any]) -> Dict[str, Any]:
+    """The worker's runtime with the planner's cold mark added to each lane.
+
+    The mark lives only in this orchestrator and decides whether the scheduler
+    routes to a lane at all, so the lane health panel has to show it next to
+    what the worker reports.
+    """
+    registry = _main._logosnode_registry
+    lanes = runtime.get("lanes")
+    if registry is None or not isinstance(lanes, list):
+        return runtime
+    marked = [
+        (
+            {**lane, "cold_marked": registry.is_lane_cold_marked(provider_id, str(lane.get("lane_id") or ""))}
+            if isinstance(lane, dict)
+            else lane
+        )
+        for lane in lanes
+    ]
+    return {**runtime, "lanes": marked}
+
+
 def _capture_logosnode_provider_snapshot(
     provider_id: int,
     runtime: Dict[str, Any],
@@ -104,7 +126,7 @@ def _capture_logosnode_provider_snapshot(
         None,
         {
             "last_heartbeat": runtime.get("timestamp"),
-            "runtime": runtime,
+            "runtime": _with_cold_marks(provider_id, runtime),
         },
     )
     if sample is None:

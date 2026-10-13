@@ -115,3 +115,48 @@ def test_a_successful_snapshot_still_persists_and_is_recorded(monkeypatch):
     assert db.inserted is not None
     assert db.inserted["provider_id"] == 7
     assert len(created) == 1
+
+
+def test_the_snapshot_carries_the_planner_cold_mark_and_the_worker_transition(monkeypatch):
+    """The cold mark lives only in the orchestrator, yet it decides whether a
+    lane gets requests at all, so the lane health panel must see it next to
+    the step the worker reports."""
+    from types import SimpleNamespace
+
+    from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+
+    db = _SnapshotDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda provider_id: "gpu-1")
+    _capture_created_tasks(monkeypatch)
+    seen: list[dict] = []
+
+    def _sample_from(_provider, payload):
+        seen.append(payload["runtime"])
+        return _sample()
+
+    monkeypatch.setattr(logosnode_mod, "_build_live_local_provider_sample", _sample_from)
+
+    async def _record(*_args):
+        return None
+
+    registry = SimpleNamespace(
+        is_lane_cold_marked=lambda pid, lane_id: (pid, lane_id) == (7, "lane-2"),
+        record_runtime_sample=_record,
+    )
+    monkeypatch.setattr(logosnode_mod._main, "_logosnode_registry", registry)
+
+    runtime = {
+        "lanes": [
+            {"lane_id": "lane-1", "model": "m", "runtime_state": "sleeping", "transition": "waking"},
+            {"lane_id": "lane-2", "model": "m", "runtime_state": "loaded"},
+        ]
+    }
+    logosnode_mod._capture_logosnode_provider_snapshot(7, runtime)
+
+    signals = _build_logosnode_scheduler_signals(seen[0])["lanes"]
+    assert signals["lane-1"]["transition"] == "waking"
+    assert signals["lane-1"]["cold_marked"] is False
+    assert signals["lane-2"]["transition"] is None
+    assert signals["lane-2"]["cold_marked"] is True
+    assert "cold_marked" not in runtime["lanes"][1]  # the worker's payload is left as received

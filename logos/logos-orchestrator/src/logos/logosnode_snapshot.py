@@ -560,6 +560,12 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "model": model_name,
             "runtime_state": runtime_state,
             "sleep_state": lane.get("sleep_state"),
+            # The step the worker is in the middle of (waking, falling asleep,
+            # draining, stopping); runtime_state still names the state the
+            # lane is leaving until the step ends.
+            "transition": lane.get("transition"),
+            # Set while the planner keeps new requests away from the lane.
+            "cold_marked": bool(lane.get("cold_marked")),
             "gpu_devices": str(lane.get("gpu_devices") or ""),
             "effective_gpu_devices": str(lane.get("effective_gpu_devices") or ""),
             "num_parallel": _safe_int(lane.get("num_parallel")) or 0,

@@ -573,7 +573,7 @@ class LogosBridgeClient:
             return False
         transient_states = {"starting", "running"}
         for lane in lanes:
-            if isinstance(lane, dict) and lane.get("runtime_state") in transient_states:
+            if isinstance(lane, dict) and (lane.get("runtime_state") in transient_states or lane.get("transition")):
                 return True
         return False
 

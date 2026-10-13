@@ -306,6 +306,81 @@ async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_status_built_mid_transition_names_the_step_in_progress() -> None:
+    """A sleep or wake takes seconds. A status built meanwhile still shows the
+    state the lane is leaving, so it also carries the step in progress, and
+    the step is gone again once the command has finished."""
+    manager = LaneManager(WorkerConfig(), lane_port_start=15031, lane_port_end=15040)
+    lane = LaneConfig(
+        model="Qwen/Qwen3-Reranker-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_id = "planner-Qwen_Qwen3-Reranker-8B-2"
+    seen: dict[str, tuple[str | None, str]] = {}
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15031
+            self.lane_config = lane
+            self.asleep = False
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.RUNNING, pid=1234)
+
+        async def get_loaded_models(self) -> list[dict[str, Any]]:
+            return [{"name": lane.model, "size": 0, "size_vram": 0, "details": {"backend": "vllm"}}]
+
+        async def is_sleeping(self) -> bool | None:
+            return self.asleep
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            status = await manager._build_lane_status(self, pid_vram_map={})  # noqa: SLF001
+            seen["sleep"] = (status.transition, status.runtime_state)
+            self.asleep = True
+            return {"ok": True}
+
+        async def wake_up(self) -> dict[str, Any]:
+            status = await manager._build_lane_status(self, pid_vram_map={})  # noqa: SLF001
+            seen["wake"] = (status.transition, status.runtime_state)
+            self.asleep = False
+            return {"ok": True}
+
+    manager._handles[lane_id] = FakeVllmHandle()  # noqa: SLF001
+
+    slept = await manager.sleep_lane(lane_id, level=1, mode="wait")
+    woken = await manager.wake_lane(lane_id)
+
+    assert seen["sleep"] == ("falling_asleep", "loaded")
+    assert seen["wake"] == ("waking", "sleeping")
+    assert slept.transition is None and slept.runtime_state == "sleeping"
+    assert woken.transition is None and woken.runtime_state == "loaded"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_wake_does_not_leave_the_lane_waking() -> None:
+    manager = LaneManager(WorkerConfig(), lane_port_start=15041, lane_port_end=15050)
+    lane = LaneConfig(model="Qwen/Qwen3-Reranker-8B", vllm=True, vllm_config=VllmConfig(enable_sleep_mode=True))
+    lane_id = "planner-Qwen_Qwen3-Reranker-8B"
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15041
+            self.lane_config = lane
+
+        async def wake_up(self) -> dict[str, Any]:
+            raise RuntimeError("engine refused")
+
+    manager._handles[lane_id] = FakeVllmHandle()  # noqa: SLF001
+
+    with pytest.raises(RuntimeError, match="engine refused"):
+        await manager.wake_lane(lane_id)
+    assert manager._transitions == {}  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_sleep_lane_invokes_the_on_lane_slept_hook(monkeypatch) -> None:
     """The moment a lane's weights land in host RAM, the wired hook (the RAM
     cache re-plan) must run before sleep_lane returns — so several lanes

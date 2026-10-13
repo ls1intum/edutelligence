@@ -8563,8 +8563,20 @@ class CapacityPlanner:
         riding on the lane (see _settle_manual_load_outcome) learns its
         terminal state: a failure of a planner-owned load of the model must
         reach the operator's poll as well.
+
+        A sleep or stop marks its lane cold for as long as it runs and no
+        longer, whatever its outcome. Once it has ended, the worker's own
+        state keeps a sleeping or removed lane out of the rotation. A mark
+        left behind would only be cleared by a confirmed planner wake, so a
+        lane woken any other way (the panel's wake button, a wake confirmed
+        after its poll gave up) would report itself loaded and idle while the
+        scheduler never picks it.
         """
-        confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds, deadline=deadline)
+        try:
+            confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds, deadline=deadline)
+        finally:
+            if action.action in ("sleep_l1", "sleep_l2", "stop"):
+                self._unmark_lane_cold(action.provider_id, action.lane_id)
         if action.action == "load":
             self._settle_manual_load_outcome(action.provider_id, action.model_name, action.lane_id, confirmed)
         return confirmed
@@ -8752,7 +8764,6 @@ class CapacityPlanner:
                             "Cannot sleep lane %s for reclaim: " "active requests did not drain within 60s",
                             action.lane_id,
                         )
-                        self._unmark_lane_cold(action.provider_id, action.lane_id)
                         return False
 
                 # Sleeping frees VRAM: record a negative reservation so concurrent
@@ -8789,8 +8800,6 @@ class CapacityPlanner:
                         action.lane_id,
                         exc,
                     )
-                    if _is_reclaim_sleep:
-                        self._unmark_lane_cold(action.provider_id, action.lane_id)
                     return False
 
             elif action.action == "wake":
@@ -9114,7 +9123,6 @@ class CapacityPlanner:
                         "Cannot stop lane %s: active requests did not drain within timeout",
                         action.lane_id,
                     )
-                    self._unmark_lane_cold(action.provider_id, action.lane_id)
                     return False
 
                 if self._use_additive_loads:
@@ -9139,7 +9147,6 @@ class CapacityPlanner:
                             action.lane_id,
                             exc,
                         )
-                        self._unmark_lane_cold(action.provider_id, action.lane_id)
                         return False
                 else:
                     # Record inflight removal before building desired set
@@ -9166,7 +9173,6 @@ class CapacityPlanner:
                                 self._facade.get_provider_name(action.provider_id) or action.provider_id,
                             )
                             self._clear_inflight_removal(action.provider_id, action.lane_id)
-                            self._unmark_lane_cold(action.provider_id, action.lane_id)
                             return False
                         self._registry.update_desired_lanes(action.provider_id, desired)
                         self._clear_inflight_removal(action.provider_id, action.lane_id)
@@ -9179,7 +9185,6 @@ class CapacityPlanner:
                             exc,
                         )
                         self._clear_inflight_removal(action.provider_id, action.lane_id)
-                        self._unmark_lane_cold(action.provider_id, action.lane_id)
                         return False
             else:
                 logger.warning("Unknown capacity action: %s", action.action)
@@ -9222,33 +9227,17 @@ class CapacityPlanner:
                     f"the worker accepted the load but the lane did not reach the loaded state "
                     f"within {int(timeout_seconds)} s",
                 )
-            # Sleep confirmation timeout: the command was sent, so the lane
-            # is likely sleeping even though we couldn't verify.  Clear the
-            # cold mark so it doesn't stay permanently excluded.  Sleeping
-            # lanes aren't routable anyway, and the cold mark is re-set on
-            # the next reclaim attempt if needed.
-            if action.action in ("sleep_l1", "sleep_l2"):
-                self._unmark_lane_cold(action.provider_id, action.lane_id)
             logger.warning(
                 "Confirmation timeout for %s on lane %s after %.0fs",
                 action.action,
                 action.lane_id,
                 timeout_seconds,
             )
-        else:
-            if action.action == "stop":
-                # Lane is gone — clear the cold mark so that if the same lane_id
-                # is reloaded later (planner lane IDs are deterministic from model name),
-                # it is not permanently excluded from scheduling.
-                self._unmark_lane_cold(action.provider_id, action.lane_id)
-            elif action.action == "load":
-                # A newly loaded lane should never inherit a stale cold mark from a
-                # previous stop of the same lane_id.
-                self._unmark_lane_cold(action.provider_id, action.lane_id)
-            elif action.action == "wake":
-                # Clear any cold mark left by a prior reclaim sleep so the
-                # woken lane is routable again.
-                self._unmark_lane_cold(action.provider_id, action.lane_id)
+        elif action.action in ("load", "wake"):
+            # A lane that has come up is routable: it never inherits a mark
+            # from an earlier action on the same lane_id (planner lane IDs are
+            # deterministic from the model name).
+            self._unmark_lane_cold(action.provider_id, action.lane_id)
 
         if confirmed and action.action in ("load", "wake") and self._on_state_change is not None:
             # Notify scheduler to reevaluate queued requests for this model

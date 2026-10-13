@@ -906,6 +906,9 @@ class LaneStatus(BaseModel):
     effective_gpu_devices: str = ""
     sleep_mode_enabled: bool = False
     sleep_state: Literal["unsupported", "unknown", "awake", "sleeping"] = "unsupported"
+    # The lifecycle step in progress, if any. runtime_state and sleep_state
+    # keep describing the state the lane is leaving until the step ends.
+    transition: Literal["draining", "falling_asleep", "waking", "stopping"] | None = None
     active_requests: int = Field(default=0, ge=0)
     loaded_models: list[LoadedModel] = Field(default_factory=list)
     lane_config: LaneConfig | None = None
