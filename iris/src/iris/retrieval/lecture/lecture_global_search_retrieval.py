@@ -4,6 +4,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
 from weaviate import WeaviateClient
@@ -103,6 +104,10 @@ _AUTOCUT_GROUPS = 2
 
 # Per-search cap on per-drop detail log lines.
 _MAX_DROP_DETAILS = 10
+
+# Distinct lecture units remembered for the null-display-name warning, so a
+# row is reported once rather than on every hit while memory stays bounded.
+_MISSING_NAME_WARNING_CACHE_SIZE = 1024
 
 # Near-duplicate slides (the same deck ingested by several courses) are collapsed
 # by comparing this many leading snippet characters.
@@ -344,6 +349,57 @@ def _fused_score(obj: Any) -> float:
 def _unit_key(props: dict[str, Any]) -> tuple[Any, Any, Any]:
     """Structural identity of the lecture unit a hit belongs to."""
     return (props.get("base_url"), props.get("course_id"), props.get("lecture_unit_id"))
+
+
+@lru_cache(maxsize=_MISSING_NAME_WARNING_CACHE_SIZE)
+def _warn_missing_display_names(
+    base_url: Any, course_id: Any, unit_id: Any, fields: tuple[str, ...]
+) -> None:
+    """Warn once per unit (bounded by the cache) instead of once per hit."""
+    logger.warning(
+        "Lecture unit has null display names, serving fallbacks | base_url=%s "
+        "course_id=%s unit_id=%s fields=%s",
+        base_url,
+        course_id,
+        unit_id,
+        ",".join(fields),
+    )
+
+
+def _display_names(
+    lecture_unit: dict[str, Any], course_id: Any, unit_id: Any
+) -> tuple[str, str, str]:
+    """Read the course, lecture and unit names of a lecture unit row, never None.
+
+    Older production rows can carry null names. One such row must not fail the
+    whole answer, and dropping it would hide that course's lectures, so it is
+    served with fallbacks instead: an empty course or lecture name (the client
+    hides an empty label) and the lecture name as the unit's title.
+    """
+    names = {
+        name: lecture_unit.get(name)
+        for name in (
+            LectureUnitSchema.COURSE_NAME.value,
+            LectureUnitSchema.LECTURE_NAME.value,
+            LectureUnitSchema.LECTURE_UNIT_NAME.value,
+        )
+    }
+    missing = tuple(name for name, value in names.items() if value is None)
+    if missing:
+        _warn_missing_display_names(
+            lecture_unit.get(LectureUnitSchema.BASE_URL.value),
+            course_id,
+            unit_id,
+            missing,
+        )
+    course_name = names[LectureUnitSchema.COURSE_NAME.value] or ""
+    lecture_name = names[LectureUnitSchema.LECTURE_NAME.value] or ""
+    unit_name = names[LectureUnitSchema.LECTURE_UNIT_NAME.value]
+    return (
+        course_name,
+        lecture_name,
+        unit_name if unit_name is not None else lecture_name,
+    )
 
 
 def _course_scope_filter(
@@ -1586,18 +1642,16 @@ class LectureGlobalSearchRetrieval:
             query_params = {"unit": unit_id, "page": page_number}
             display_meta = f"p. {page_number}"
 
+        course_name, lecture_name, unit_name = _display_names(
+            lecture_unit, course_id, unit_id
+        )
         return (
             LectureSearchResultDTO(
-                course=CourseInfo(
-                    id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
-                ),
-                lecture=LectureInfo(
-                    id=lecture_id,
-                    name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
-                ),
+                course=CourseInfo(id=course_id, name=course_name),
+                lecture=LectureInfo(id=lecture_id, name=lecture_name),
                 lectureUnit=LectureUnitInfo(
                     id=unit_id,
-                    name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                    name=unit_name,
                     link=f"/courses/{course_id}/lectures/{lecture_id}",
                     pageNumber=page_number,
                     sourceType=source_type,
@@ -1670,18 +1724,16 @@ class LectureGlobalSearchRetrieval:
         minutes = int(start_time // 60)
         seconds = int(start_time % 60)
 
+        course_name, lecture_name, unit_name = _display_names(
+            lecture_unit, course_id, unit_id
+        )
         return (
             LectureSearchResultDTO(
-                course=CourseInfo(
-                    id=course_id, name=lecture_unit[LectureUnitSchema.COURSE_NAME.value]
-                ),
-                lecture=LectureInfo(
-                    id=lecture_id,
-                    name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
-                ),
+                course=CourseInfo(id=course_id, name=course_name),
+                lecture=LectureInfo(id=lecture_id, name=lecture_name),
                 lectureUnit=LectureUnitInfo(
                     id=unit_id,
-                    name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                    name=unit_name,
                     link=f"/courses/{course_id}/lectures/{lecture_id}",
                     pageNumber=-1,
                     sourceType="lecture_unit_video",
