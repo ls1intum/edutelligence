@@ -33,6 +33,9 @@ public enum NotificationType {
 
     /** @return the type whose value equals {@code value}, if any. */
     public static Optional<NotificationType> fromValue(String value) {
+        if (value == null) {
+            return Optional.empty();
+        }
         try {
             return Optional.of(NotificationType.valueOf(value));
         } catch (IllegalArgumentException e) {

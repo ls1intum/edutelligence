@@ -2,6 +2,8 @@ package de.tum.cit.aet.logos.logoswebservice.notifications.service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.notifications.channel.NotificationChannelRegistry;
 import de.tum.cit.aet.logos.logoswebservice.notifications.dto.NotificationResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.notifications.dto.PublishNotificationRequestDTO;
@@ -81,6 +84,7 @@ public class NotificationService {
             throw new IllegalArgumentException("At least one target is required");
         }
         String source = resolveSource(req.source());
+        List<NotificationRecipient> recipientRows = toRecipientRows(req.targets());
 
         Notification n = new Notification();
         n.setType(type);
@@ -94,17 +98,7 @@ public class NotificationService {
         }
         Notification saved = notifications.save(n);
 
-        List<NotificationRecipient> recipientRows = new ArrayList<>();
-        for (NotificationTargetDTO target : req.targets()) {
-            RecipientKind kind = RecipientKind.fromValue(target.kind())
-                .orElseThrow(() -> new IllegalArgumentException("Unknown recipient kind: " + target.kind()));
-            NotificationRecipient r = new NotificationRecipient();
-            r.setNotificationId(saved.getId());
-            r.setRecipientKind(kind);
-            r.setRecipientId(kind == RecipientKind.role ? null : target.id());
-            r.setRecipientRole(kind == RecipientKind.role ? target.role() : null);
-            recipientRows.add(r);
-        }
+        recipientRows.forEach(r -> r.setNotificationId(saved.getId()));
         recipients.saveAll(recipientRows);
 
         final Notification delivered = saved;
@@ -124,7 +118,11 @@ public class NotificationService {
         Page<Notification> page = notifications.findForUser(
             userId, role, teamIds, unreadOnly,
             RecipientKind.user, RecipientKind.role, RecipientKind.team, pageable);
-        Set<Long> readIds = readIdsFor(userId);
+        List<Long> pageIds = page.getContent().stream().map(Notification::getId).toList();
+        Set<Long> readIds = pageIds.isEmpty() ? Set.of()
+            : reads.findByUserIdAndNotificationIdIn(userId, pageIds).stream()
+                .map(NotificationRead::getNotificationId)
+                .collect(Collectors.toSet());
         return page.map(n -> toDto(n, readIds.contains(n.getId())));
     }
 
@@ -138,18 +136,17 @@ public class NotificationService {
     /**
      * Mark a single notification read for the user.
      *
-     * @return false if the notification does not exist (the caller maps this
-     *         to a 404), true once it is (or already was) read
+     * @return false if the notification does not exist or is not addressed to
+     *         the user (the caller maps both to the same 404, so ids outside
+     *         the inbox stay hidden), true once it is (or already was) read
      */
     @Transactional
-    public boolean markRead(Integer userId, Long notificationId) {
-        if (!notifications.existsById(notificationId)) {
+    public boolean markRead(Integer userId, String role, List<Integer> teamIds, Long notificationId) {
+        if (!notifications.existsForUser(notificationId, userId, role, teamIds,
+                RecipientKind.user, RecipientKind.role, RecipientKind.team)) {
             return false;
         }
-        if (reads.existsByNotificationIdAndUserId(notificationId, userId)) {
-            return true;
-        }
-        reads.save(readRow(notificationId, userId));
+        reads.insertIfAbsent(notificationId, userId);
         return true;
     }
 
@@ -159,31 +156,46 @@ public class NotificationService {
         List<Long> addressed = notifications.findIdsForUser(
             userId, role, teamIds,
             RecipientKind.user, RecipientKind.role, RecipientKind.team);
-        if (addressed.isEmpty()) {
-            return;
-        }
-        Set<Long> alreadyRead = readIdsFor(userId);
-        List<NotificationRead> toInsert = addressed.stream()
-            .filter(id -> !alreadyRead.contains(id))
-            .map(id -> readRow(id, userId))
-            .toList();
-        if (!toInsert.isEmpty()) {
-            reads.saveAll(toInsert);
-        }
+        // Conflict-tolerant per row: an overlapping single-item read cannot
+        // roll this transaction back.
+        addressed.forEach(id -> reads.insertIfAbsent(id, userId));
     }
 
-    private NotificationRead readRow(Long notificationId, Integer userId) {
-        NotificationRead r = new NotificationRead();
-        r.setNotificationId(notificationId);
-        r.setUserId(userId);
-        r.setReadAt(Instant.now());
-        return r;
-    }
-
-    private Set<Long> readIdsFor(Integer userId) {
-        return reads.findByUserId(userId).stream()
-            .map(NotificationRead::getNotificationId)
-            .collect(Collectors.toSet());
+    /**
+     * Validate every target and turn it into a recipient row, before anything
+     * is persisted. A target without a usable address could never match an
+     * inbox, so it is rejected rather than stored; repeated targets collapse
+     * to one row.
+     */
+    private List<NotificationRecipient> toRecipientRows(List<NotificationTargetDTO> targets) {
+        Set<String> seen = new LinkedHashSet<>();
+        List<NotificationRecipient> rows = new ArrayList<>();
+        for (NotificationTargetDTO target : targets) {
+            if (target == null || target.kind() == null) {
+                throw new IllegalArgumentException("Every target needs a kind");
+            }
+            RecipientKind kind = RecipientKind.fromValue(target.kind())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown recipient kind: " + target.kind()));
+            NotificationRecipient r = new NotificationRecipient();
+            r.setRecipientKind(kind);
+            if (kind == RecipientKind.role) {
+                String role = target.role();
+                if (role == null || Arrays.stream(Role.values()).noneMatch(known -> known.matches(role))) {
+                    throw new IllegalArgumentException("A role target needs a known role, got: " + role);
+                }
+                r.setRecipientRole(role);
+            } else {
+                if (target.id() == null) {
+                    throw new IllegalArgumentException("A " + kind.name() + " target needs an id");
+                }
+                r.setRecipientId(target.id());
+            }
+            String key = kind.name() + ":" + r.getRecipientId() + ":" + r.getRecipientRole();
+            if (seen.add(key)) {
+                rows.add(r);
+            }
+        }
+        return rows;
     }
 
     private String resolveSource(String source) {

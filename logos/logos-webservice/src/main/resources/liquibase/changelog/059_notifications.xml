@@ -52,11 +52,7 @@
                 ON notifications (created_at DESC);
         ]]></sql>
         <rollback>
-            <sql><![CDATA[
-                DROP TABLE IF EXISTS notification_reads;
-                DROP TABLE IF EXISTS notification_recipients;
-                DROP TABLE IF EXISTS notifications;
-            ]]></sql>
+            <sql>DROP TABLE IF EXISTS notifications;</sql>
         </rollback>
     </changeSet>
 

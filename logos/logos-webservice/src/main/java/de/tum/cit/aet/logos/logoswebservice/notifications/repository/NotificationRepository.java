@@ -68,6 +68,17 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
         @Param("kindRole") RecipientKind kindRole,
         @Param("kindTeam") RecipientKind kindTeam);
 
+    /** Whether the notification exists and is addressed to this user. */
+    @Query("SELECT COUNT(n) > 0 FROM Notification n WHERE n.id = :notificationId AND " + RECIPIENT_MATCH)
+    boolean existsForUser(
+        @Param("notificationId") Long notificationId,
+        @Param("userId") Integer userId,
+        @Param("role") String role,
+        @Param("teamIds") List<Integer> teamIds,
+        @Param("kindUser") RecipientKind kindUser,
+        @Param("kindRole") RecipientKind kindRole,
+        @Param("kindTeam") RecipientKind kindTeam);
+
     /** Every notification id addressed to this user (read or unread). */
     @Query("SELECT n.id FROM Notification n WHERE " + RECIPIENT_MATCH)
     List<Long> findIdsForUser(

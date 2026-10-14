@@ -27,6 +27,8 @@ import de.tum.cit.aet.logos.logoswebservice.notifications.service.NotificationSe
 @RestController
 public class NotificationController {
 
+    private static final int MAX_PAGE_SIZE = 100;
+
     private final NotificationService service;
     private final TeamMemberRepository teamMembers;
 
@@ -43,6 +45,9 @@ public class NotificationController {
             @RequestParam(defaultValue = "50") int size) {
         if (auth.userId() == null) {
             return ResponseEntity.ok(Page.empty());
+        }
+        if (size > MAX_PAGE_SIZE) {
+            throw new IllegalArgumentException("size must be <= " + MAX_PAGE_SIZE);
         }
         List<Integer> teamIds = teamIdsFor(auth.userId());
         Page<NotificationResponseDTO> result = service.listMine(
@@ -63,7 +68,10 @@ public class NotificationController {
     public ResponseEntity<Void> markRead(
             @RequestAttribute("authContext") AuthContext auth,
             @PathVariable Long id) {
-        boolean ok = service.markRead(auth.userId(), id);
+        if (auth.userId() == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+        boolean ok = service.markRead(auth.userId(), auth.role(), teamIdsFor(auth.userId()), id);
         return ok ? ResponseEntity.ok().build()
                   : ResponseEntity.status(HttpStatus.NOT_FOUND).build();
     }

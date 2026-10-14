@@ -107,6 +107,17 @@ class InternalNotificationControllerTest {
     }
 
     @Test
+    void incompleteTargetIsBadRequestAndStoresNothing() throws Exception {
+        mvc.perform(post("/internal/notifications")
+                .header("Authorization", "Bearer test-internal-secret")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"type\":\"budget_hit\",\"title\":\"x\","
+                    + "\"targets\":[{\"kind\":\"user\"}]}"))
+           .andExpect(status().isBadRequest());
+        assertThat(notifications.count()).isEqualTo(4L);
+    }
+
+    @Test
     void noTargetsIsBadRequest() throws Exception {
         mvc.perform(post("/internal/notifications")
                 .header("Authorization", "Bearer test-internal-secret")

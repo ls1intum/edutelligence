@@ -86,6 +86,19 @@ class NotificationControllerTest {
     }
 
     @Test
+    void markReadUnaddressedNotificationIs404() throws Exception {
+        // 9001 targets the app_admin role; testuser is an app_developer.
+        mvc.perform(post("/me/notifications/9001/read").with(TestJwt.testUser()))
+           .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void oversizedPageIsBadRequest() throws Exception {
+        mvc.perform(get("/me/notifications").param("size", "101").with(TestJwt.testUser()))
+           .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void markAllReadClearsTheUsersInbox() throws Exception {
         mvc.perform(post("/me/notifications/read-all").with(TestJwt.logosAdmin()))
            .andExpect(status().isOk());

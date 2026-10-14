@@ -3,8 +3,13 @@ package de.tum.cit.aet.logos.logoswebservice.notifications.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -12,6 +17,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -45,6 +51,7 @@ import de.tum.cit.aet.logos.logoswebservice.notifications.dto.PublishNotificatio
 class NotificationServiceTest {
 
     @Autowired NotificationService service;
+    @Autowired JdbcTemplate jdbc;
     @MockitoBean JwtDecoder jwtDecoder;
 
     private static final List<Integer> TEAM = List.of(2001);
@@ -90,16 +97,55 @@ class NotificationServiceTest {
 
     @Test
     void markRead_marksItemReadAndIsIdempotent() {
-        assertThat(service.markRead(1002, 9002L)).isTrue();
+        assertThat(service.markRead(1002, "app_admin", TEAM, 9002L)).isTrue();
         assertThat(service.unreadCount(1002, "app_admin", TEAM)).isEqualTo(0);
         // Already read: still a success, count stays 0.
-        assertThat(service.markRead(1002, 9002L)).isTrue();
+        assertThat(service.markRead(1002, "app_admin", TEAM, 9002L)).isTrue();
         assertThat(service.unreadCount(1002, "app_admin", TEAM)).isEqualTo(0);
     }
 
     @Test
     void markRead_missingNotificationReportsFalse() {
-        assertThat(service.markRead(1002, 99999L)).isFalse();
+        assertThat(service.markRead(1002, "app_admin", TEAM, 99999L)).isFalse();
+    }
+
+    @Test
+    void markRead_unaddressedNotificationReportsFalseAndStoresNothing() {
+        // 9001 targets the app_admin role; 1001 is an app_developer.
+        assertThat(service.markRead(1001, "app_developer", TEAM, 9001L)).isFalse();
+        Integer markers = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM notification_reads WHERE user_id = 1001", Integer.class);
+        assertThat(markers).isZero();
+    }
+
+    @Test
+    void overlappingReadRequestsNeverFail() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        try {
+            for (int round = 0; round < 10; round++) {
+                jdbc.update("DELETE FROM notification_reads WHERE user_id = 1003");
+                CountDownLatch start = new CountDownLatch(1);
+                List<Future<?>> runs = new ArrayList<>();
+                for (int i = 0; i < 2; i++) {
+                    runs.add(pool.submit(() -> {
+                        start.await();
+                        service.markAllRead(1003, "logos_admin", TEAM);
+                        return null;
+                    }));
+                    runs.add(pool.submit(() -> {
+                        start.await();
+                        return service.markRead(1003, "logos_admin", TEAM, 9002L);
+                    }));
+                }
+                start.countDown();
+                for (Future<?> run : runs) {
+                    run.get(); // rethrows a failed request
+                }
+                assertThat(service.unreadCount(1003, "logos_admin", TEAM)).isZero();
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test
@@ -123,6 +169,51 @@ class NotificationServiceTest {
         assertThat(service.unreadCount(1002, "app_admin", TEAM)).isEqualTo(2);
         // 1001 (app_developer) is not addressed by the role target: still 1.
         assertThat(service.unreadCount(1001, "app_developer", TEAM)).isEqualTo(1);
+    }
+
+    @Test
+    void publish_storesPayloadAsJsonObject() {
+        long id = service.publish(new PublishNotificationRequestDTO(
+            "budget_hit", "Budget hit", null, Map.of("team_id", 2001), "webservice", null,
+            List.of(new NotificationTargetDTO("role", null, "app_admin"))));
+        String shape = jdbc.queryForObject(
+            "SELECT jsonb_typeof(payload) FROM notifications WHERE id = ?", String.class, id);
+        assertThat(shape).isEqualTo("object");
+    }
+
+    @Test
+    void publish_collapsesRepeatedTargets() {
+        long id = service.publish(new PublishNotificationRequestDTO(
+            "budget_hit", "Budget hit", null, null, "webservice", null,
+            List.of(new NotificationTargetDTO("team", 2001, null),
+                    new NotificationTargetDTO("team", 2001, null))));
+        Integer rows = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM notification_recipients WHERE notification_id = ?", Integer.class, id);
+        assertThat(rows).isEqualTo(1);
+    }
+
+    @Test
+    void publish_rejectsIncompleteTargetsWithoutPersisting() {
+        long before = jdbc.queryForObject("SELECT COUNT(*) FROM notifications", Long.class);
+        List<NotificationTargetDTO> invalid = new ArrayList<>(List.of(
+            new NotificationTargetDTO("user", null, null),
+            new NotificationTargetDTO("team", null, null),
+            new NotificationTargetDTO("role", null, null),
+            new NotificationTargetDTO("role", null, "not_a_role"),
+            new NotificationTargetDTO(null, 1001, null)));
+        invalid.add(null);
+        for (NotificationTargetDTO target : invalid) {
+            List<NotificationTargetDTO> targets = new ArrayList<>();
+            targets.add(target);
+            assertThatThrownBy(() -> service.publish(new PublishNotificationRequestDTO(
+                "budget_hit", "Title", null, null, "webservice", null, targets)))
+                .isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> service.publish(new PublishNotificationRequestDTO(
+            null, "Title", null, null, "webservice", null,
+            List.of(new NotificationTargetDTO("role", null, "app_admin")))))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM notifications", Long.class)).isEqualTo(before);
     }
 
     @Test

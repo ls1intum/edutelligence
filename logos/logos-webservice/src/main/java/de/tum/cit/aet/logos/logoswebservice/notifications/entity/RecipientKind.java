@@ -21,6 +21,9 @@ public enum RecipientKind {
 
     /** @return the kind whose value equals {@code value}, if any. */
     public static Optional<RecipientKind> fromValue(String value) {
+        if (value == null) {
+            return Optional.empty();
+        }
         try {
             return Optional.of(RecipientKind.valueOf(value));
         } catch (IllegalArgumentException e) {
