@@ -69,9 +69,9 @@ def test_every_detectable_language_has_a_name():
 
 
 def test_reply_language_prefers_the_answer_over_the_setting():
-    assert reply_language(GERMAN_ANSWER, [], "en") == "German"
-    assert reply_language("ok", [], "de") == "German"
-    assert reply_language("ok", None, "en") == "English"
+    assert reply_language(GERMAN_ANSWER, None, [], "en") == "German"
+    assert reply_language("ok", None, [], "de") == "German"
+    assert reply_language("ok", None, None, "en") == "English"
 
 
 def test_short_answer_keeps_the_established_language():
@@ -80,7 +80,42 @@ def test_short_answer_keeps_the_established_language():
         _message(IrisMessageRole.ASSISTANT, GERMAN_ANSWER),
         _message(IrisMessageRole.USER, "Ich komme nicht weiter"),
     ]
-    assert reply_language("Was hast du versucht?", history, "en") == "German"
+    assert reply_language("Was hast du versucht?", "Hm", history, "en") == "German"
+
+
+def test_short_answer_follows_a_clear_switch_by_the_student():
+    english_history = [_message(IrisMessageRole.ASSISTANT, ENGLISH_ANSWER)]
+    german_history = [_message(IrisMessageRole.ASSISTANT, GERMAN_ANSWER)]
+    assert (
+        reply_language(
+            "Was hast du versucht?",
+            "Kannst du mir bitte auf Deutsch helfen? Ich komme nicht weiter.",
+            english_history,
+            "en",
+        )
+        == "German"
+    )
+    assert (
+        reply_language(
+            "What have you tried so far?",
+            "Please answer in English from now on, I am stuck.",
+            german_history,
+            "de",
+        )
+        == "English"
+    )
+    assert (
+        reply_language(
+            "Was hast du versucht?", "Ja welche Aufgabe soll ich machen", [], "en"
+        )
+        == "German"
+    )
+
+
+def test_short_english_text_is_not_taken_for_another_language():
+    text = "Can you give me a quiz question about recursion?\nSure, here you go!"
+    assert detect_language_name(text) is None
+    assert reply_language("Sure, here you go!", text, [], "en") == "English"
 
 
 def test_previous_reply_language_uses_last_answer():
@@ -134,6 +169,7 @@ def test_quiz_json_does_not_change_the_language_of_title_and_suggestions():
     pipeline._generate_suggestions = suggestions
     state = SimpleNamespace(
         result="Klar, hier ist eine Frage, mit der du dein Wissen testen kannst.",
+        query_text="Mach mir bitte ein Quiz",
         dto=SimpleNamespace(chat_history=[], user=SimpleNamespace(lang_key="en")),
         start_time=time.perf_counter(),
         callback=MagicMock(),

@@ -410,7 +410,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # Resolve the answer language once, before citations and quiz JSON are
             # added, so that citations, title and suggestions use the same language.
             state.answer_language = reply_language(
-                result, state.dto.chat_history, state.dto.user.lang_key
+                result,
+                state.query_text,
+                state.dto.chat_history,
+                state.dto.user.lang_key,
             )
 
             # Add citations if applicable
@@ -915,6 +918,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         try:
             answer_language = getattr(state, "answer_language", None) or reply_language(
                 result,
+                getattr(state, "query_text", None),
                 getattr(state.dto, "chat_history", None),
                 state.dto.user.lang_key,
             )
@@ -1142,7 +1146,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     suggestion_dto,
                     language=getattr(state, "answer_language", None)
                     or reply_language(
-                        result, state.dto.chat_history, state.dto.user.lang_key
+                        result,
+                        getattr(state, "query_text", None),
+                        state.dto.chat_history,
+                        state.dto.user.lang_key,
                     ),
                 )
 

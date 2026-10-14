@@ -23,11 +23,14 @@ DetectorFactory.seed = 0
 init_factory()
 
 # Below this many letters, or below this confidence, a text does not clearly
-# show its language ("ok", a code snippet). Detection is only used on answers
-# Iris wrote: short student messages are often misdetected, so the LLMs judge
-# those themselves.
+# show its language ("ok", a code snippet). German and English, the two Artemis
+# languages, need fewer letters. Short texts are sometimes misdetected as another
+# language ("Can you give me a quiz question about recursion?" reads as French),
+# so other languages need more text before they count.
 _MIN_LETTERS = 30
+_MIN_LETTERS_OTHER_LANGUAGE = 80
 _MIN_PROBABILITY = 0.9
+_ARTEMIS_LANGUAGES = {"de", "en"}
 
 # Every language langdetect can return.
 _LANGUAGE_NAMES = {
@@ -109,7 +112,8 @@ def detect_language_name(text: Optional[str]) -> Optional[str]:
     prose = text
     for pattern in _NON_PROSE:
         prose = pattern.sub(" ", prose)
-    if sum(char.isalpha() for char in prose) < _MIN_LETTERS:
+    letters = sum(char.isalpha() for char in prose)
+    if letters < _MIN_LETTERS:
         return None
     try:
         candidates = detect_langs(prose)
@@ -117,7 +121,10 @@ def detect_language_name(text: Optional[str]) -> Optional[str]:
         return None
     if not candidates or candidates[0].prob < _MIN_PROBABILITY:
         return None
-    return _LANGUAGE_NAMES.get(candidates[0].lang)
+    language = candidates[0].lang
+    if language not in _ARTEMIS_LANGUAGES and letters < _MIN_LETTERS_OTHER_LANGUAGE:
+        return None
+    return _LANGUAGE_NAMES.get(language)
 
 
 def previous_reply_language(
@@ -140,17 +147,21 @@ def previous_reply_language(
 
 def reply_language(
     answer: Optional[str],
+    latest_user_text: Optional[str],
     history: Optional[Iterable[PyrisMessage]],
     user_language: Optional[str],
 ) -> str:
     """Return the language of a new answer Iris wrote.
 
-    When the answer is too short to tell, the conversation keeps its language
-    (see `previous_reply_language`).
+    When the answer alone is too short to tell, the student's latest message and
+    the answer together show the language the chat model chose for this turn,
+    including a clear switch. If that is still unclear, the conversation keeps
+    its language (see `previous_reply_language`).
     """
-    return detect_language_name(answer) or previous_reply_language(
-        history, user_language
-    )
+    detected = detect_language_name(answer)
+    if detected is None and latest_user_text and answer:
+        detected = detect_language_name(f"{latest_user_text}\n{answer}")
+    return detected or previous_reply_language(history, user_language)
 
 
 def _message_text(message: PyrisMessage) -> str:

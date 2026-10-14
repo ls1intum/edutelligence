@@ -840,6 +840,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             user = getattr(state.dto, "user", None)
             language = reply_language(
                 output,
+                getattr(state, "query_text", None),
                 getattr(state.dto, "chat_history", None),
                 getattr(user, "lang_key", None),
             )
