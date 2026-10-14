@@ -28,6 +28,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import de.tum.cit.aet.logos.logoswebservice.common.RequestTiming;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -155,7 +156,14 @@ public class SecurityConfig {
             validators.add(new AudienceValidator(props.audience()));
         }
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(validators));
-        return decoder;
+        return token -> {
+            long start = System.nanoTime();
+            try {
+                return decoder.decode(token);
+            } finally {
+                RequestTiming.recordJwtDecode(System.nanoTime() - start);
+            }
+        };
     }
 
     static class AudienceValidator implements OAuth2TokenValidator<Jwt> {
