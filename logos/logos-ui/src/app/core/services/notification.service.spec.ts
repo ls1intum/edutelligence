@@ -63,13 +63,41 @@ describe('NotificationService', () => {
     expect(service.unreadCount()).toBe(4);
   });
 
-  it('marks one item read and lowers the count', async () => {
+  const COUNT_URL = '/api/me/notifications/unread-count';
+
+  it('marks one item read, lowers the count, then confirms it from the server', async () => {
     service.unreadCount.set(2);
     const unread = item();
     const pending = service.markRead(unread);
     http.expectOne({ method: 'POST', url: '/api/me/notifications/7/read' }).flush(null);
     await pending;
     expect(unread.read).toBe(true);
+    expect(service.unreadCount()).toBe(1);
+    http.expectOne(COUNT_URL).flush(1);
+  });
+
+  it('sends one request for two clicks on the same unread item', async () => {
+    service.unreadCount.set(2);
+    const unread = item();
+    const first = service.markRead(unread);
+    const second = service.markRead(unread);
+    http.expectOne({ method: 'POST', url: '/api/me/notifications/7/read' }).flush(null);
+    await Promise.all([first, second]);
+    expect(service.unreadCount()).toBe(1);
+    http.expectOne(COUNT_URL).flush(1);
+  });
+
+  it('ignores a count response that a later change already superseded', async () => {
+    // The reconnect read starts, computed before the push arrives.
+    const reconnect = service.refreshUnreadCount();
+    const stale = http.expectOne(COUNT_URL);
+    // A push arrives: badge +1 and a newer confirmation read.
+    (service as unknown as { adjustUnreadCount(f: (n: number) => number): void }).adjustUnreadCount((n) => n + 1);
+    const fresh = http.match(COUNT_URL).find((r) => r !== stale)!;
+    fresh.flush(1);
+    stale.flush(0);
+    await reconnect;
+    await Promise.resolve();
     expect(service.unreadCount()).toBe(1);
   });
 
@@ -78,12 +106,15 @@ describe('NotificationService', () => {
     http.expectNone('/api/me/notifications/7/read');
   });
 
-  it('marks everything read and clears the count', async () => {
+  it('marks everything read, then takes the server count (an item published meanwhile)', async () => {
     service.unreadCount.set(5);
     const pending = service.markAllRead();
     http.expectOne({ method: 'POST', url: '/api/me/notifications/read-all' }).flush(null);
     await pending;
     expect(service.unreadCount()).toBe(0);
+    http.expectOne(COUNT_URL).flush(1);
+    await Promise.resolve();
+    expect(service.unreadCount()).toBe(1);
   });
 
   it('builds the socket URL on the page origin and encodes the token', () => {

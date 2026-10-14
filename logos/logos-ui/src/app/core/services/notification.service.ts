@@ -103,6 +103,13 @@ export class NotificationService {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Bumped by every count read. Only the newest read may set the badge, so a
+   * slow response cannot overwrite a later push or read.
+   */
+  private countGeneration = 0;
+  /** Reads in flight, by id: a second click joins the first request. */
+  private pendingReads = new Map<number, Promise<void>>();
 
   list(opts: { unreadOnly?: boolean; page?: number; size?: number } = {}): Promise<NotificationPage> {
     const params = new HttpParams()
@@ -112,24 +119,46 @@ export class NotificationService {
     return firstValueFrom(this.http.get<NotificationPage>('/api/me/notifications', { params }));
   }
 
+  /** Read the unread count from the server; the newest read wins. */
   async refreshUnreadCount(): Promise<void> {
+    const generation = ++this.countGeneration;
     try {
-      this.unreadCount.set(await firstValueFrom(this.http.get<number>('/api/me/notifications/unread-count')));
+      const count = await firstValueFrom(this.http.get<number>('/api/me/notifications/unread-count'));
+      if (generation === this.countGeneration) this.unreadCount.set(count);
     } catch {
-      // Keep the last known count; the next poll or reconnect retries.
+      // Keep the last known count; the next poll, change, or reconnect retries.
     }
   }
 
-  async markRead(notification: AppNotification): Promise<void> {
-    if (notification.read) return;
-    await firstValueFrom(this.http.post<void>(`/api/me/notifications/${notification.id}/read`, {}));
-    notification.read = true;
-    this.unreadCount.update((n) => Math.max(0, n - 1));
+  /**
+   * Show a change at once, then confirm it from the server. The refresh also
+   * invalidates any count read already in flight, which was computed before
+   * this change and would otherwise overwrite it.
+   */
+  private adjustUnreadCount(update: (n: number) => number): void {
+    this.unreadCount.update((n) => Math.max(0, update(n)));
+    void this.refreshUnreadCount();
+  }
+
+  markRead(notification: AppNotification): Promise<void> {
+    if (notification.read) return Promise.resolve();
+    const pending = this.pendingReads.get(notification.id);
+    if (pending) return pending;
+    const request = firstValueFrom(this.http.post<void>(`/api/me/notifications/${notification.id}/read`, {}))
+      .then(() => {
+        notification.read = true;
+        this.adjustUnreadCount((n) => n - 1);
+      })
+      .finally(() => this.pendingReads.delete(notification.id));
+    this.pendingReads.set(notification.id, request);
+    return request;
   }
 
   async markAllRead(): Promise<void> {
     await firstValueFrom(this.http.post<void>('/api/me/notifications/read-all', {}));
-    this.unreadCount.set(0);
+    // Something published after the server's statement is still unread, so
+    // the server count, not a hard zero, is the truth.
+    this.adjustUnreadCount(() => 0);
   }
 
   /** Start live updates. Idempotent; the shell calls it once per session. */
@@ -180,7 +209,7 @@ export class NotificationService {
         const msg = JSON.parse(event.data);
         if (msg?.event === 'notification' && msg.notification) {
           this.latest.set(msg.notification as AppNotification);
-          this.unreadCount.update((n) => n + 1);
+          this.adjustUnreadCount((n) => n + 1);
         }
       } catch {
         // Ignore frames this client does not understand.

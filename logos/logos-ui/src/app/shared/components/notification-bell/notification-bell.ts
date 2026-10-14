@@ -163,17 +163,13 @@ export class NotificationBell implements OnInit, OnDestroy {
   async markAllRead(): Promise<void> {
     try {
       await this.notifications.markAllRead();
-      if (this.unreadOnly()) {
-        this.generation++;
-        this.items.set([]);
-        this.hasMore.set(false);
-        this.page = 0;
-      } else {
-        this.items.update((list) => list.map((n) => ({ ...n, read: true })));
-      }
     } catch {
       this.error.set('Could not mark notifications as read.');
+      return;
     }
+    // A fresh read of the current filter discards any page still in flight
+    // and resets loading and paging together.
+    await this.reload();
   }
 
   @HostListener('document:click', ['$event'])

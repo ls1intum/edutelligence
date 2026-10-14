@@ -154,8 +154,33 @@ describe('NotificationBell', () => {
   it('marks all read and empties the unread view', async () => {
     await bell.toggle();
     await bell.setFilter(true);
+    service.list.mockResolvedValueOnce({ content: [], total_elements: 0, total_pages: 0, number: 0, last: true });
     await bell.markAllRead();
     expect(service.unreadCount()).toBe(0);
     expect(bell.items()).toEqual([]);
+    expect(bell.loading()).toBe(false);
   });
+
+  for (const unreadOnly of [false, true]) {
+    it(`discards a page still loading when all are marked read (${unreadOnly ? 'Unread' : 'All'})`, async () => {
+      service.list.mockResolvedValueOnce({ content: [item(3)], total_elements: 2, total_pages: 2, number: 0, last: false });
+      await bell.toggle();
+      if (unreadOnly) {
+        service.list.mockResolvedValueOnce({ content: [item(3)], total_elements: 2, total_pages: 2, number: 0, last: false });
+        await bell.setFilter(true);
+      }
+      let resolveOld!: (page: unknown) => void;
+      service.list.mockReturnValueOnce(new Promise((r) => (resolveOld = r)));
+      const olderPage = bell.loadMore();
+
+      const afterMarkAll = unreadOnly ? [] : [item(3, true), item(4, true)];
+      service.list.mockResolvedValueOnce({ content: afterMarkAll, total_elements: afterMarkAll.length, total_pages: 1, number: 0, last: true });
+      await bell.markAllRead();
+      resolveOld({ content: [item(4)], total_elements: 2, total_pages: 2, number: 1, last: true });
+      await olderPage;
+
+      expect(bell.items().filter((n) => !n.read)).toEqual([]);
+      expect(bell.loading()).toBe(false);
+    });
+  }
 });
