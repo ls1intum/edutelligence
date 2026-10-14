@@ -2,15 +2,17 @@ package de.tum.cit.aet.logos.logoswebservice.notifications.realtime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -20,23 +22,23 @@ import org.springframework.web.socket.WebSocketSession;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import de.tum.cit.aet.logos.logoswebservice.notifications.dto.NotificationTargetDTO;
+import de.tum.cit.aet.logos.logoswebservice.notifications.repository.NotificationRepository;
 
 /**
- * Which open sockets a push reaches: the same user/role/team rule as the
- * inbox query, evaluated against the identity captured at the handshake.
+ * Which open sockets a push reaches: exactly the connected users the
+ * database says are addressed right now (the recipient check is the
+ * repository's; it is pinned against a real database in NotificationServiceTest).
  */
 class NotificationSocketHandlerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private final NotificationSocketHandler handler = new NotificationSocketHandler(objectMapper);
+    private final NotificationRepository notifications = mock(NotificationRepository.class);
+    private final NotificationSocketHandler handler = new NotificationSocketHandler(objectMapper, notifications);
 
-    private WebSocketSession connect(String id, int userId, String role, Set<Integer> teamIds) {
+    private WebSocketSession connect(String id, int userId) {
         WebSocketSession session = mock(WebSocketSession.class);
         Map<String, Object> attributes = new HashMap<>();
         attributes.put(NotificationHandshakeInterceptor.USER_ID, userId);
-        attributes.put(NotificationHandshakeInterceptor.ROLE, role);
-        attributes.put(NotificationHandshakeInterceptor.TEAM_IDS, teamIds);
         when(session.getId()).thenReturn(id);
         when(session.getAttributes()).thenReturn(attributes);
         when(session.isOpen()).thenReturn(true);
@@ -44,39 +46,29 @@ class NotificationSocketHandlerTest {
         return session;
     }
 
-    private static NotificationEvent event(NotificationTargetDTO... targets) {
-        return new NotificationEvent(Map.of("id", 1, "title", "Hello"), List.of(targets));
+    private static NotificationEvent event(long id) {
+        return new NotificationEvent(id, Map.of("id", id, "title", "Hello"));
     }
 
     @Test
-    void pushesOnlyToAddressedSockets() throws Exception {
-        WebSocketSession developer = connect("a", 1001, "app_developer", Set.of(2001));
-        WebSocketSession appAdmin = connect("b", 1002, "app_admin", Set.of());
-        WebSocketSession other = connect("c", 1006, "app_developer", Set.of(2002));
+    void pushesOnlyToUsersTheDatabaseAddresses() throws Exception {
+        WebSocketSession addressed = connect("a", 1001);
+        WebSocketSession secondTab = connect("b", 1001);
+        WebSocketSession other = connect("c", 1006);
+        when(notifications.findAddressedActiveUsers(eq(7L), anyCollection())).thenReturn(List.of(1001));
 
-        handler.deliverLocally(event(new NotificationTargetDTO("team", 2001, null),
-                                     new NotificationTargetDTO("role", null, "app_admin")));
+        handler.deliverLocally(event(7));
 
-        verify(developer).sendMessage(any());
-        verify(appAdmin).sendMessage(any());
+        verify(addressed).sendMessage(any());
+        verify(secondTab).sendMessage(any());
         verify(other, never()).sendMessage(any());
     }
 
     @Test
-    void userTargetReachesOnlyThatUser() throws Exception {
-        WebSocketSession target = connect("a", 1003, "logos_admin", Set.of());
-        WebSocketSession bystander = connect("b", 1001, "logos_admin", Set.of());
-
-        handler.deliverLocally(event(new NotificationTargetDTO("user", 1003, null)));
-
-        verify(target).sendMessage(any());
-        verify(bystander, never()).sendMessage(any());
-    }
-
-    @Test
     void framesTheNotificationAsAnEvent() throws Exception {
-        WebSocketSession session = connect("a", 1001, "app_developer", Set.of());
-        handler.deliverLocally(event(new NotificationTargetDTO("user", 1001, null)));
+        WebSocketSession session = connect("a", 1001);
+        when(notifications.findAddressedActiveUsers(eq(7L), anyCollection())).thenReturn(List.of(1001));
+        handler.deliverLocally(event(7));
 
         ArgumentCaptor<TextMessage> frame = ArgumentCaptor.forClass(TextMessage.class);
         verify(session).sendMessage(frame.capture());
@@ -86,20 +78,34 @@ class NotificationSocketHandlerTest {
     }
 
     @Test
+    void noOpenSocketsMeansNoRecipientQuery() {
+        handler.deliverLocally(event(7));
+        verifyNoInteractions(notifications);
+    }
+
+    @Test
     void closedSocketsAreForgotten() throws Exception {
-        WebSocketSession session = connect("a", 1001, "app_developer", Set.of());
+        WebSocketSession session = connect("a", 1001);
         handler.afterConnectionClosed(session, CloseStatus.NORMAL);
         assertThat(handler.connectedCount()).isZero();
 
-        handler.deliverLocally(event(new NotificationTargetDTO("user", 1001, null)));
+        handler.deliverLocally(event(7));
+        verify(session, never()).sendMessage(any());
+    }
+
+    @Test
+    void aFailedRecipientCheckSendsNothing() throws Exception {
+        WebSocketSession session = connect("a", 1001);
+        when(notifications.findAddressedActiveUsers(eq(7L), anyCollection())).thenThrow(new IllegalStateException("db down"));
+        handler.deliverLocally(event(7));
         verify(session, never()).sendMessage(any());
     }
 
     @Test
     void fanoutEventSurvivesTheRedisJsonRoundTrip() throws Exception {
-        NotificationEvent sent = event(new NotificationTargetDTO("role", null, "app_admin"));
+        NotificationEvent sent = event(7);
         NotificationEvent received = objectMapper.readValue(objectMapper.writeValueAsString(sent), NotificationEvent.class);
-        assertThat(received.targets()).isEqualTo(sent.targets());
+        assertThat(received.notificationId()).isEqualTo(7L);
         assertThat(received.notification()).containsEntry("title", "Hello");
     }
 }

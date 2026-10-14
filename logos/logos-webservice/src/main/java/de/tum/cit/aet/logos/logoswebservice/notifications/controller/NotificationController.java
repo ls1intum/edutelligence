@@ -79,7 +79,7 @@ public class NotificationController {
     @PostMapping("/me/notifications/read-all")
     public ResponseEntity<Void> markAllRead(@RequestAttribute("authContext") AuthContext auth) {
         if (auth.userId() != null) {
-            service.markAllRead(auth.userId(), auth.role(), teamIdsFor(auth.userId()));
+            service.markAllRead(auth.userId(), auth.role());
         }
         return ResponseEntity.ok().build();
     }

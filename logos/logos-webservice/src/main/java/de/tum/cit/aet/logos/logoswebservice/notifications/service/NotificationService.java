@@ -168,15 +168,13 @@ public class NotificationService {
         return true;
     }
 
-    /** Mark every notification addressed to the user read. */
+    /**
+     * Mark every notification addressed to the user read, in one statement
+     * that reads the user's team memberships itself.
+     */
     @Transactional
-    public void markAllRead(Integer userId, String role, List<Integer> teamIds) {
-        List<Long> addressed = notifications.findIdsForUser(
-            userId, role, teamIds,
-            RecipientKind.user, RecipientKind.role, RecipientKind.team);
-        // Conflict-tolerant per row: an overlapping single-item read cannot
-        // roll this transaction back.
-        addressed.forEach(id -> reads.insertIfAbsent(id, userId));
+    public void markAllRead(Integer userId, String role) {
+        reads.insertAllAddressed(userId, role);
     }
 
     /**

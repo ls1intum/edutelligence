@@ -99,6 +99,49 @@ describe('NotificationBell', () => {
     expect(service.list).toHaveBeenLastCalledWith({ unreadOnly: false, page: 1, size: 15 });
   });
 
+  it('drops a response from a filter the user already left', async () => {
+    let resolveAll!: (page: unknown) => void;
+    service.list.mockReturnValueOnce(new Promise((r) => (resolveAll = r)));
+    const opening = bell.toggle();
+    service.list.mockResolvedValueOnce({ content: [item(2)], total_elements: 1, total_pages: 1, number: 0, last: true });
+    await bell.setFilter(true);
+    resolveAll({ content: [item(1, true), item(5, true)], total_elements: 2, total_pages: 2, number: 0, last: false });
+    await opening;
+
+    expect(bell.items().map((n) => n.id)).toEqual([2]);
+    expect(bell.hasMore()).toBe(false);
+  });
+
+  it('retries the same page after a failed load', async () => {
+    service.list.mockResolvedValueOnce({ content: [item(3)], total_elements: 2, total_pages: 2, number: 0, last: false });
+    await bell.toggle();
+    service.list.mockRejectedValueOnce(new Error('offline'));
+    await bell.loadMore();
+    expect(bell.error()).not.toBeNull();
+
+    service.list.mockResolvedValueOnce({ content: [item(4)], total_elements: 2, total_pages: 2, number: 1, last: true });
+    await bell.loadMore();
+    expect(service.list).toHaveBeenNthCalledWith(2, { unreadOnly: false, page: 1, size: 15 });
+    expect(service.list).toHaveBeenNthCalledWith(3, { unreadOnly: false, page: 1, size: 15 });
+    expect(bell.items().map((n) => n.id)).toEqual([3, 4]);
+  });
+
+  it('re-reads the unread view from the top after an item is read', async () => {
+    const firstPage = Array.from({ length: 15 }, (_, i) => item(100 - i));
+    service.list.mockResolvedValueOnce({ content: firstPage, total_elements: 30, total_pages: 2, number: 0, last: false });
+    await bell.toggle();
+    service.list.mockResolvedValueOnce({ content: firstPage, total_elements: 30, total_pages: 2, number: 0, last: false });
+    await bell.setFilter(true);
+
+    // Reading one item shrinks the server's unread set: page 1 would now skip
+    // the old 16th item, so the view reloads from page 0 without the read one.
+    service.list.mockResolvedValueOnce({ content: firstPage.slice(1), total_elements: 29, total_pages: 2, number: 0, last: false });
+    await bell.markRead(bell.items()[0]);
+
+    expect(service.list).toHaveBeenLastCalledWith({ unreadOnly: true, page: 0, size: 15 });
+    expect(bell.items().map((n) => n.id)).not.toContain(100);
+  });
+
   it('prepends a pushed item once', async () => {
     await bell.toggle();
     service.latest.set(item(9));

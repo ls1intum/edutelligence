@@ -48,7 +48,13 @@ export class NotificationBell implements OnInit, OnDestroy {
   loading = signal(false);
   hasMore = signal(false);
   error = signal<string | null>(null);
+  /** Pages already shown; the next fetch asks for this one. */
   private page = 0;
+  /**
+   * Bumped by every reload. A response from an older generation (a filter
+   * switched while it was in flight) is dropped instead of mixed in.
+   */
+  private generation = 0;
 
   readonly meta = notificationMeta;
   readonly age = formatRelativeTime;
@@ -93,9 +99,11 @@ export class NotificationBell implements OnInit, OnDestroy {
   }
 
   async reload(): Promise<void> {
+    this.generation++;
     this.page = 0;
     this.items.set([]);
     this.hasMore.set(false);
+    this.loading.set(false);
     await this.fetch();
   }
 
@@ -108,26 +116,30 @@ export class NotificationBell implements OnInit, OnDestroy {
 
   async loadMore(): Promise<void> {
     if (this.loading() || !this.hasMore()) return;
-    this.page++;
     await this.fetch();
   }
 
   private async fetch(): Promise<void> {
+    const generation = this.generation;
+    const page = this.page;
     this.loading.set(true);
     this.error.set(null);
     try {
       const result = await this.notifications.list({
         unreadOnly: this.unreadOnly(),
-        page: this.page,
+        page,
         size: PAGE_SIZE,
       });
+      if (generation !== this.generation) return;
       const known = new Set(this.items().map((n) => n.id));
       this.items.update((list) => [...list, ...result.content.filter((n) => !known.has(n.id))]);
       this.hasMore.set(!result.last);
+      // Only a page that arrived moves the cursor; a failed one is retried.
+      this.page = page + 1;
     } catch {
-      this.error.set('Could not load notifications.');
+      if (generation === this.generation) this.error.set('Could not load notifications.');
     } finally {
-      this.loading.set(false);
+      if (generation === this.generation) this.loading.set(false);
     }
   }
 
@@ -135,17 +147,30 @@ export class NotificationBell implements OnInit, OnDestroy {
     if (item.read) return;
     try {
       await this.notifications.markRead(item);
-      this.items.update((list) => list.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
     } catch {
       this.error.set('Could not mark the notification as read.');
+      return;
+    }
+    if (this.unreadOnly()) {
+      // The server's unread set just shrank, so page offsets moved: re-read
+      // from the top rather than skip an item on the next page.
+      await this.reload();
+    } else {
+      this.items.update((list) => list.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
     }
   }
 
   async markAllRead(): Promise<void> {
     try {
       await this.notifications.markAllRead();
-      this.items.update((list) => (this.unreadOnly() ? [] : list.map((n) => ({ ...n, read: true }))));
-      if (this.unreadOnly()) this.hasMore.set(false);
+      if (this.unreadOnly()) {
+        this.generation++;
+        this.items.set([]);
+        this.hasMore.set(false);
+        this.page = 0;
+      } else {
+        this.items.update((list) => list.map((n) => ({ ...n, read: true })));
+      }
     } catch {
       this.error.set('Could not mark notifications as read.');
     }

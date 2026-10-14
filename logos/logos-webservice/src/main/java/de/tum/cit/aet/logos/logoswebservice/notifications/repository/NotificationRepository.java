@@ -1,5 +1,6 @@
 package de.tum.cit.aet.logos.logoswebservice.notifications.repository;
 
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.data.domain.Page;
@@ -79,13 +80,25 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
         @Param("kindRole") RecipientKind kindRole,
         @Param("kindTeam") RecipientKind kindTeam);
 
-    /** Every notification id addressed to this user (read or unread). */
-    @Query("SELECT n.id FROM Notification n WHERE " + RECIPIENT_MATCH)
-    List<Long> findIdsForUser(
-        @Param("userId") Integer userId,
-        @Param("role") String role,
-        @Param("teamIds") List<Integer> teamIds,
-        @Param("kindUser") RecipientKind kindUser,
-        @Param("kindRole") RecipientKind kindRole,
-        @Param("kindTeam") RecipientKind kindTeam);
+    /**
+     * Of the given users, those who are active and addressed by the
+     * notification right now: directly, through their current role, or
+     * through a team they are currently a member of. Live delivery checks this
+     * on every push, so revoked access stops the push as it stops the inbox.
+     */
+    @Query(value = """
+        SELECT u.id FROM users u
+        WHERE u.id IN (:userIds)
+          AND u.is_active
+          AND EXISTS (
+              SELECT 1 FROM notification_recipients r
+              WHERE r.notification_id = :notificationId
+                AND ( (r.recipient_kind = 'user' AND r.recipient_id = u.id)
+                   OR (r.recipient_kind = 'role' AND r.recipient_role = u.role)
+                   OR (r.recipient_kind = 'team' AND r.recipient_id IN (
+                          SELECT tm.team_id FROM team_members tm WHERE tm.user_id = u.id)) ))
+        """, nativeQuery = true)
+    List<Integer> findAddressedActiveUsers(
+        @Param("notificationId") Long notificationId,
+        @Param("userIds") Collection<Integer> userIds);
 }

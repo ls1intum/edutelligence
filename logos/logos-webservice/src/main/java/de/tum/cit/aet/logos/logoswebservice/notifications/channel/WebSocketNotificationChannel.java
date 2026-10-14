@@ -4,7 +4,6 @@ import java.util.List;
 
 import org.springframework.stereotype.Component;
 
-import de.tum.cit.aet.logos.logoswebservice.notifications.dto.NotificationTargetDTO;
 import de.tum.cit.aet.logos.logoswebservice.notifications.entity.Notification;
 import de.tum.cit.aet.logos.logoswebservice.notifications.entity.NotificationRecipient;
 import de.tum.cit.aet.logos.logoswebservice.notifications.entity.NotificationType;
@@ -40,9 +39,7 @@ public class WebSocketNotificationChannel implements NotificationChannel {
 
     @Override
     public void deliver(Notification notification, List<NotificationRecipient> recipients) {
-        List<NotificationTargetDTO> targets = recipients.stream()
-            .map(r -> new NotificationTargetDTO(r.getRecipientKind().name(), r.getRecipientId(), r.getRecipientRole()))
-            .toList();
-        fanout.publish(new NotificationEvent(mapper.toWire(mapper.toDto(notification, false)), targets));
+        fanout.publish(new NotificationEvent(
+            notification.getId(), mapper.toWire(mapper.toDto(notification, false))));
     }
 }

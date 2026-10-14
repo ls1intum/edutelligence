@@ -28,4 +28,30 @@ public interface NotificationReadRepository extends JpaRepository<NotificationRe
         ON CONFLICT (notification_id, user_id) DO NOTHING
         """, nativeQuery = true)
     int insertIfAbsent(@Param("notificationId") Long notificationId, @Param("userId") Integer userId);
+
+    /**
+     * Mark every notification addressed to the user read in one statement:
+     * directly, through the role, or through a team the user is a member of.
+     * Only unread rows are inserted; ON CONFLICT covers a concurrent read.
+     *
+     * @return the number of read markers added
+     */
+    @Modifying
+    @Query(value = """
+        INSERT INTO notification_reads (notification_id, user_id, read_at)
+        SELECT n.id, :userId, now()
+        FROM notifications n
+        WHERE NOT EXISTS (
+                SELECT 1 FROM notification_reads rd
+                WHERE rd.notification_id = n.id AND rd.user_id = :userId)
+          AND EXISTS (
+                SELECT 1 FROM notification_recipients r
+                WHERE r.notification_id = n.id
+                  AND ( (r.recipient_kind = 'user' AND r.recipient_id = :userId)
+                     OR (r.recipient_kind = 'role' AND r.recipient_role = :role)
+                     OR (r.recipient_kind = 'team' AND r.recipient_id IN (
+                            SELECT tm.team_id FROM team_members tm WHERE tm.user_id = :userId)) ))
+        ON CONFLICT (notification_id, user_id) DO NOTHING
+        """, nativeQuery = true)
+    int insertAllAddressed(@Param("userId") Integer userId, @Param("role") String role);
 }

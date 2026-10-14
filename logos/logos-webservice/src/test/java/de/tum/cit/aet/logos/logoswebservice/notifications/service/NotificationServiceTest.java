@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
@@ -13,7 +14,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -99,7 +99,7 @@ class NotificationServiceTest {
         assertThat(none.getTotalElements()).isZero();
         assertThat(service.unreadCount(1005, "app_developer", List.of())).isZero();
         assertThat(service.markRead(1005, "app_developer", List.of(), 9002L)).isFalse();
-        service.markAllRead(1005, "app_developer", List.of());
+        service.markAllRead(1005, "app_developer");
     }
 
     @Test
@@ -155,7 +155,7 @@ class NotificationServiceTest {
                 for (int i = 0; i < 2; i++) {
                     runs.add(pool.submit(() -> {
                         start.await();
-                        service.markAllRead(1003, "logos_admin", TEAM);
+                        service.markAllRead(1003, "logos_admin");
                         return null;
                     }));
                     runs.add(pool.submit(() -> {
@@ -176,7 +176,7 @@ class NotificationServiceTest {
 
     @Test
     void markAllRead_marksEveryAddressedItemForThatUserOnly() {
-        service.markAllRead(1003, "logos_admin", TEAM);
+        service.markAllRead(1003, "logos_admin");
         assertThat(service.unreadCount(1003, "logos_admin", TEAM)).isEqualTo(0);
         // 1002 is untouched by 1003's mark-all-read.
         assertThat(service.unreadCount(1002, "app_admin", TEAM)).isEqualTo(1);
@@ -197,36 +197,75 @@ class NotificationServiceTest {
         assertThat(service.unreadCount(1001, "app_developer", TEAM)).isEqualTo(1);
     }
 
+    private WebSocketSession openSocket(String id, int userId) {
+        WebSocketSession session = mock(WebSocketSession.class);
+        Map<String, Object> attributes = new HashMap<>();
+        attributes.put("notificationUserId", userId);
+        when(session.getId()).thenReturn(id);
+        when(session.getAttributes()).thenReturn(attributes);
+        when(session.isOpen()).thenReturn(true);
+        sockets.afterConnectionEstablished(session);
+        return session;
+    }
+
+    private void publishToTeam2001() {
+        service.publish(new PublishNotificationRequestDTO(
+            "new_models_available", "New models", null, null, "webservice", null,
+            List.of(new NotificationTargetDTO("team", 2001, null))));
+    }
+
     @Test
     void publish_pushesToTheOpenSocketsOfItsRecipients() throws Exception {
-        WebSocketSession appAdmin = mock(WebSocketSession.class);
-        Map<String, Object> attributes = new HashMap<>();
-        attributes.put("notificationUserId", 1002);
-        attributes.put("notificationRole", "app_admin");
-        attributes.put("notificationTeamIds", Set.of(2001));
-        when(appAdmin.getId()).thenReturn("push-test");
-        when(appAdmin.getAttributes()).thenReturn(attributes);
-        when(appAdmin.isOpen()).thenReturn(true);
-        sockets.afterConnectionEstablished(appAdmin);
+        WebSocketSession appAdmin = openSocket("push-role", 1002);
+        WebSocketSession outsider = openSocket("push-outsider", 1006);
         try {
             service.publish(new PublishNotificationRequestDTO(
                 "budget_hit", "Budget hit", null, null, "webservice", null,
                 List.of(new NotificationTargetDTO("role", null, "app_admin"))));
             // Delivered after the publishing transaction commits.
             verify(appAdmin, timeout(2_000)).sendMessage(any(TextMessage.class));
+            verify(outsider, after(300).never()).sendMessage(any(TextMessage.class));
         } finally {
             sockets.afterConnectionClosed(appAdmin, CloseStatus.NORMAL);
+            sockets.afterConnectionClosed(outsider, CloseStatus.NORMAL);
         }
     }
 
     @Test
-    void publish_typedOverloadForInProcessProducers() {
-        long id = service.publish(NotificationType.new_models_available, "New models", null, null,
-            List.of(NotificationTargetDTO.team(2001), NotificationTargetDTO.role(Role.LOGOS_ADMIN)));
+    void openSocketStopsReceivingTeamItemsAfterLeavingTheTeam() throws Exception {
+        WebSocketSession developer = openSocket("revoke-team", 1001);
+        try {
+            publishToTeam2001();
+            verify(developer, timeout(2_000).times(1)).sendMessage(any(TextMessage.class));
+
+            jdbc.update("DELETE FROM team_members WHERE user_id = 1001 AND team_id = 2001");
+            publishToTeam2001();
+            verify(developer, after(500).times(1)).sendMessage(any(TextMessage.class));
+        } finally {
+            sockets.afterConnectionClosed(developer, CloseStatus.NORMAL);
+        }
+    }
+
+    @Test
+    void openSocketStopsReceivingAfterTheUserIsDeactivated() throws Exception {
+        WebSocketSession developer = openSocket("revoke-active", 1001);
+        try {
+            jdbc.update("UPDATE users SET is_active = false WHERE id = 1001");
+            publishToTeam2001();
+            verify(developer, after(500).never()).sendMessage(any(TextMessage.class));
+        } finally {
+            jdbc.update("UPDATE users SET is_active = true WHERE id = 1001");
+            sockets.afterConnectionClosed(developer, CloseStatus.NORMAL);
+        }
+    }
+
+    @Test
+    void markAllRead_skipsHistoryAlreadyRead() {
+        // 1002 already read 9001; only 9002 is added.
+        service.markAllRead(1002, "app_admin");
         assertThat(jdbc.queryForObject(
-            "SELECT source FROM notifications WHERE id = ?", String.class, id)).isEqualTo("webservice");
-        // Team 2001 member 1001 sees it.
-        assertThat(service.unreadCount(1001, "app_developer", TEAM)).isEqualTo(2);
+            "SELECT COUNT(*) FROM notification_reads WHERE user_id = 1002", Integer.class)).isEqualTo(2);
+        assertThat(service.unreadCount(1002, "app_admin", TEAM)).isZero();
     }
 
     @Test

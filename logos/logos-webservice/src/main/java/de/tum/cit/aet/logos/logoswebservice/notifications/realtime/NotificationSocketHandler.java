@@ -1,6 +1,8 @@
 package de.tum.cit.aet.logos.logoswebservice.notifications.realtime;
 
 import java.io.IOException;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,6 +18,8 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import de.tum.cit.aet.logos.logoswebservice.notifications.repository.NotificationRepository;
 
 /**
  * {@code /ws/notifications}: the push half of the inbox.
@@ -34,13 +38,14 @@ public class NotificationSocketHandler extends TextWebSocketHandler {
 
     private final Map<String, ConnectedInbox> inboxes = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper;
+    private final NotificationRepository notifications;
 
-    public NotificationSocketHandler(ObjectMapper objectMapper) {
+    public NotificationSocketHandler(ObjectMapper objectMapper, NotificationRepository notifications) {
         this.objectMapper = objectMapper;
+        this.notifications = notifications;
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public void afterConnectionEstablished(WebSocketSession session) {
         Map<String, Object> attributes = session.getAttributes();
         // Pushes come from channel and Redis threads; the decorator serializes
@@ -48,10 +53,7 @@ public class NotificationSocketHandler extends TextWebSocketHandler {
         WebSocketSession safe = new ConcurrentWebSocketSessionDecorator(
             session, SEND_TIME_LIMIT_MS, BUFFER_SIZE_LIMIT_BYTES);
         inboxes.put(session.getId(), new ConnectedInbox(
-            safe,
-            (Integer) attributes.get(NotificationHandshakeInterceptor.USER_ID),
-            (String) attributes.get(NotificationHandshakeInterceptor.ROLE),
-            (Set<Integer>) attributes.get(NotificationHandshakeInterceptor.TEAM_IDS)));
+            safe, (Integer) attributes.get(NotificationHandshakeInterceptor.USER_ID)));
     }
 
     @Override
@@ -64,8 +66,27 @@ public class NotificationSocketHandler extends TextWebSocketHandler {
         inboxes.remove(session.getId());
     }
 
-    /** Push to every socket on this replica the event is addressed to. */
+    /**
+     * Push to every socket on this replica whose user may receive the event
+     * now. One query per push decides that for all users connected here.
+     */
     public void deliverLocally(NotificationEvent event) {
+        if (inboxes.isEmpty()) {
+            return;
+        }
+        Set<Integer> connected = new HashSet<>();
+        inboxes.values().forEach(inbox -> connected.add(inbox.userId()));
+        Set<Integer> addressed;
+        try {
+            List<Integer> allowed = notifications.findAddressedActiveUsers(event.notificationId(), connected);
+            addressed = new HashSet<>(allowed);
+        } catch (RuntimeException e) {
+            log.warn("notification push skipped: recipient check failed", e);
+            return;
+        }
+        if (addressed.isEmpty()) {
+            return;
+        }
         String frame;
         try {
             frame = objectMapper.writeValueAsString(Map.of(
@@ -77,7 +98,7 @@ public class NotificationSocketHandler extends TextWebSocketHandler {
         }
         TextMessage message = new TextMessage(frame);
         for (ConnectedInbox inbox : inboxes.values()) {
-            if (!inbox.isAddressedBy(event.targets())) {
+            if (!addressed.contains(inbox.userId())) {
                 continue;
             }
             try {
