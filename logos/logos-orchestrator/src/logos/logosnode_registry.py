@@ -1162,7 +1162,16 @@ class LogosNodeRuntimeRegistry:
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
         on_sent: Callable[[], None] | None = None,
+        on_dispatched: Callable[[asyncio.Future], None] | None = None,
     ) -> dict[str, Any]:
+        """Send a command to the worker and wait for its answer.
+
+        ``on_dispatched`` receives the future of the worker's answer once the
+        command is on the wire. That future outlives this call: if the caller
+        is cancelled or the wait times out, it still resolves when the worker
+        answers, and fails when the session ends. A caller uses it to learn
+        when a command it stopped waiting for has actually finished.
+        """
         session = await self._get_active_session(provider_id, stale_after_seconds)
         loop = asyncio.get_running_loop()
         cmd_id = str(uuid.uuid4())
@@ -1214,21 +1223,29 @@ class LogosNodeRuntimeRegistry:
         # longer belong to the provider's own window.
         if on_sent is not None:
             on_sent()
+        if on_dispatched is not None:
+            on_dispatched(fut)
 
         try:
-            result = await asyncio.wait_for(fut, timeout=max(1, timeout_seconds))
+            # Shielded so that giving up on the answer leaves the future to
+            # whoever on_dispatched handed it to.
+            result = await asyncio.wait_for(
+                fut if on_dispatched is None else asyncio.shield(fut), timeout=max(1, timeout_seconds)
+            )
         except asyncio.CancelledError:
             # The caller went away — typically a client that disconnected
             # mid-request. Dropping the future only stops us from reading the
             # answer; the worker is still producing it, so tell it to stop.
             # Guarded against recursion: a cancel command cancelling itself
             # would loop.
-            session.pending_commands.pop(cmd_id, None)
+            if on_dispatched is None:
+                session.pending_commands.pop(cmd_id, None)
             if action != CANCEL_COMMAND_ACTION:
                 self._request_command_cancellation(session, cmd_id)
             raise
         except asyncio.TimeoutError as exc:
-            session.pending_commands.pop(cmd_id, None)
+            if on_dispatched is None:
+                session.pending_commands.pop(cmd_id, None)
             self._emit_session_diagnostic(
                 kind="command-timeout",
                 session=session,
