@@ -92,10 +92,14 @@ async def test_prefetch_selection_fails_closed_when_disk_space_is_unavailable(tm
 
 @pytest.mark.asyncio
 async def test_prefetch_selection_skips_when_the_cache_path_cannot_be_resolved(tmp_path, monkeypatch) -> None:
-    def broken_exists(self):
-        raise OSError(5, "Input/output error")
+    real_exists = Path.exists
 
-    monkeypatch.setattr("logos_worker_node.runtime.Path.exists", broken_exists)
+    def broken_exists(self, *args, **kwargs):
+        if self.is_relative_to(tmp_path):
+            raise OSError(5, "Input/output error")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", broken_exists)
     estimate_size = MagicMock(return_value=1)
     monkeypatch.setattr(worker_main, "_estimate_model_download_bytes", estimate_size)
 
@@ -103,6 +107,20 @@ async def test_prefetch_selection_skips_when_the_cache_path_cannot_be_resolved(t
 
     assert selected == []
     estimate_size.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_rechecks_the_disk_before_each_later_download(tmp_path, monkeypatch) -> None:
+    # All fit at selection; by the time "second" is due the disk has filled up.
+    fit = AsyncMock(side_effect=[["first", "second", "third"], [], ["third"]])
+    monkeypatch.setattr(worker_main, "_models_that_fit_disk", fit)
+    download = MagicMock()
+    monkeypatch.setattr(worker_main, "_download_one_model", download)
+
+    await worker_main._prefetch_missing_models(["first", "second", "third"], str(tmp_path))
+
+    assert [call.args[0] for call in download.call_args_list] == ["first", "third"]
+    assert [call.args[0] for call in fit.call_args_list] == [["first", "second", "third"], ["second"], ["third"]]
 
 
 @pytest.mark.asyncio

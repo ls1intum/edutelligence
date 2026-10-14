@@ -181,7 +181,12 @@ async def _prefetch_missing_models(missing: list[str], hf_home: str) -> None:
         logger.info("Prefetching %d of %d missing capability model(s): %s", len(models), len(missing), models)
     else:
         logger.info("Prefetching %d missing capability model(s): %s", len(models), models)
-    for model_name in models:
+    for position, model_name in enumerate(models):
+        # The volume is shared: earlier downloads take minutes, and anything
+        # else writing to it meanwhile shrinks the budget, so check again.
+        if position > 0 and not await _models_that_fit_disk([model_name], hf_home):
+            logger.info("Prefetch: %s no longer fits on disk; skipping", model_name)
+            continue
         try:
             logger.info("Prefetch: downloading %s …", model_name)
             await asyncio.to_thread(_download_one_model, model_name, hf_home)
