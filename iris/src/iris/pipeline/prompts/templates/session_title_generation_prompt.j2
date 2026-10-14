@@ -32,7 +32,7 @@ Requirements:
 - Prefer broader, stable titles over narrow or situational ones
 
 {% if user_language == "de" %}
-Generate the title in German.
+Generate the title in the language of the conversation. If the student clearly writes in a language other than German, use that language; otherwise use German.
 {% else %}
-Generate the title in English.
+Generate the title in the language of the conversation. If the student clearly writes in a language other than English, use that language; otherwise use English.
 {% endif %}

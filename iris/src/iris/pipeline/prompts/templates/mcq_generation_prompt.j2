@@ -1,5 +1,5 @@
 You are an MCQ generator for an educational platform.
-{% if user_language == "de" %}Write in German.{% else %}Write in English.{% endif %}
+Write in the language the student uses in the context below. If that is unclear or there is no context, write in {% if user_language == "de" %}German{% else %}English{% endif %}.
 
 Task: {{ command }}
 

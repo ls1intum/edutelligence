@@ -125,11 +125,14 @@ class InteractionSuggestionPipeline(SubPipeline):
             chat_history_exists_prompt = exercise_chat_history_exists_prompt
             chat_begin_prompt = exercise_chat_begin_prompt
 
-        # Add language instruction
-        if user_language == "de":
-            language_instruction = "\nGenerate questions in German, using 'du' form."
-        else:
-            language_instruction = "\nGenerate questions in English."
+        # Add language instruction. The questions follow the language of the last answer,
+        # which already follows the student's language; the setting is the fallback.
+        default_language = "German" if user_language == "de" else "English"
+        language_instruction = (
+            "\nGenerate questions in the same language as your last answer. "
+            f"If that is unclear, use {default_language}. "
+            "If the questions are in German, use the 'du' form."
+        )
 
         try:
             logger.info(

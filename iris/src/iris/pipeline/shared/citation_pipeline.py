@@ -466,10 +466,11 @@ class CitationPipeline(SubPipeline):
             self.prompt_str = self.lecture_prompt_str
 
         # Add language instruction to prompt
-        if user_language == "de":
-            language_instruction = "Format all citations and references in German.\n\n"
-        else:
-            language_instruction = "Format all citations and references in English.\n\n"
+        default_language = "German" if user_language == "de" else "English"
+        language_instruction = (
+            "Format all citations and references in the language of the answer. "
+            f"If that is unclear, use {default_language}.\n\n"
+        )
 
         try:
             self.default_prompt = PromptTemplate(
