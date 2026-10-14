@@ -4128,3 +4128,32 @@ async def test_auto_place_keeps_a_launch_override_onto_healthy_gpus() -> None:
     placed = await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
     assert placed.vllm_config is not None
     assert placed.vllm_config.env_overrides == {"CUDA_VISIBLE_DEVICES": "2"}
+
+
+@pytest.mark.parametrize(
+    ("tp", "extra_args", "global_extra_args", "count"),
+    [
+        (2, [], [], 2),
+        (2, ["--tensor-parallel-size", "1"], [], 1),  # appended last: argparse keeps it
+        (1, ["--tensor-parallel-size=2", "--pipeline-parallel-size", "2"], [], 4),
+        (1, ["-tp", "2", "-dp", "2"], [], 4),
+        (1, [], ["--tensor-parallel-size", "2"], 2),  # worker-wide flag
+        (1, ["--tensor-parallel-size", "1"], ["--tensor-parallel-size", "2"], 1),  # the lane's wins
+        (1, ["--tensor-parallel-size", "x"], [], 0),
+    ],
+)
+def test_launch_gpu_count_reads_the_effective_parallelism(
+    tp: int, extra_args: list[str], global_extra_args: list[str], count: int
+) -> None:
+    vc = VllmConfig(tensor_parallel_size=tp, extra_args=extra_args)
+    assert LaneManager._launch_gpu_count(vc, global_extra_args) == count  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_lane_occupancy_follows_a_tensor_parallel_override_in_extra_args() -> None:
+    # Configured TP=2 on "1,0", but the appended override runs vLLM on GPU 1 alone.
+    vc = VllmConfig(tensor_parallel_size=2, extra_args=["--tensor-parallel-size", "1"])
+    lane = LaneConfig(model="Qwen/Qwen2.5-0.5B-Instruct", vllm=True, gpu_devices="1,0", vllm_config=vc)
+    manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
+    count = LaneManager._launch_gpu_count(vc, [])  # noqa: SLF001
+    assert await manager._lane_occupied_gpu_devices(lane, "1,0", count) == "1"  # noqa: SLF001

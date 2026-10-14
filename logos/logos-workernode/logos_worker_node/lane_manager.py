@@ -1998,6 +1998,40 @@ class LaneManager:
             result.append(index)
         return result
 
+    # vLLM's parallelism flags and their short forms. The engine uses
+    # tensor x pipeline x data parallel GPUs.
+    _PARALLEL_FLAGS = {
+        "--tensor-parallel-size": "tp",
+        "-tp": "tp",
+        "--pipeline-parallel-size": "pp",
+        "-pp": "pp",
+        "--data-parallel-size": "dp",
+        "-dp": "dp",
+    }
+
+    @classmethod
+    def _launch_gpu_count(cls, vllm_config: VllmConfig, global_extra_args: list[str]) -> int:
+        """The GPUs a vLLM engine uses, read from its command line as launched.
+
+        The command passes the configured tensor_parallel_size first, then the
+        worker-wide and the lane's extra_args; argparse keeps the last value,
+        so an extra --tensor-parallel-size wins. 0 when a value is unreadable.
+        """
+        args = ["--tensor-parallel-size", str(vllm_config.tensor_parallel_size), *global_extra_args]
+        args += vllm_config.extra_args
+        sizes = {"tp": 1, "pp": 1, "dp": 1}
+        for index, arg in enumerate(args):
+            flag, has_value, raw = arg.partition("=")
+            key = cls._PARALLEL_FLAGS.get(flag)
+            if key is None:
+                continue
+            if not has_value:
+                raw = args[index + 1] if index + 1 < len(args) else ""
+            if not raw.isdigit() or int(raw) < 1:
+                return 0
+            sizes[key] = int(raw)
+        return sizes["tp"] * sizes["pp"] * sizes["dp"]
+
     async def _lane_occupied_gpu_devices(self, lc: LaneConfig, selector: str, gpu_count: int) -> str:
         """The GPUs a lane's engine runs on, read from its final launch environment.
 
@@ -3581,10 +3615,11 @@ class LaneManager:
             flash_attention = lc.flash_attention
             gpu_devices = lc.gpu_devices
             effective_gpu_devices = lc.gpu_devices or self._global_config.gpu_devices
-            try:
-                gpu_count = lc.vllm_config.parallel_gpu_count if lc.vllm_config else 1
-            except ValueError:
-                gpu_count = 0
+            gpu_count = (
+                self._launch_gpu_count(lc.vllm_config, self._vllm_engine_config.global_extra_args)
+                if lc.vllm_config
+                else 1
+            )
             occupied_gpu_devices = await self._lane_occupied_gpu_devices(lc, effective_gpu_devices, gpu_count)
             if lc.vllm_config:
                 sleep_mode_enabled = bool(lc.vllm_config.enable_sleep_mode)
