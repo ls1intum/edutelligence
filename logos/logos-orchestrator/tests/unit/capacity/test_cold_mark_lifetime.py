@@ -82,6 +82,9 @@ def _planner(registry: LogosNodeRuntimeRegistry, worker_lanes: dict[str, dict]) 
     planner._drain_lane = AsyncMock(return_value=True)
     planner._on_state_change = None
     planner._pending_capacity = {}
+    planner._lifecycle_commands_sent = set()
+    planner._cold_marks_settling = set()
+    planner._cold_mark_settlers = set()
 
     async def send_command(provider_id, action, params, timeout_seconds=30):  # noqa: ARG001
         lane = worker_lanes[params["lane_id"]]
@@ -177,3 +180,149 @@ async def test_the_lane_stays_cold_while_the_sleep_is_in_flight():
 
     assert await planner._execute_action_with_confirmation(_sleep_action(), timeout_seconds=10.0)
     assert seen_during_drain == [BUSY_LANE]
+
+
+# ── a cancelled action whose command already went out ──────────────────────
+
+
+async def _publish(registry, worker_lanes: dict[str, dict]) -> None:
+    await registry.update_runtime(provider_id=PROVIDER_ID, runtime={"lanes": list(worker_lanes.values())})
+
+
+async def _until(predicate, attempts: int = 200) -> None:
+    for _ in range(attempts):
+        if predicate():
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("condition never held")
+
+
+async def _cancel_while_the_worker_runs_the_command(planner, registry, worker_lanes, *, reaches_worker: bool):
+    """Start a sleep, cancel it once its command is in flight, return the release for the worker."""
+    worker_done = asyncio.Event()
+
+    async def send_command(provider_id, action, params, timeout_seconds=30):  # noqa: ARG001
+        if reaches_worker:
+            worker_lanes[IDLE_LANE]["transition"] = "falling_asleep"
+            await _publish(registry, worker_lanes)
+        await worker_done.wait()
+        return {}
+
+    registry.send_command = send_command
+    task = asyncio.create_task(planner._execute_action_with_confirmation(_sleep_action(), timeout_seconds=10.0))
+    await _until(lambda: (PROVIDER_ID, IDLE_LANE) in planner._lifecycle_commands_sent)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    return worker_done
+
+
+async def test_a_lane_stays_cold_while_the_worker_finishes_a_cancelled_sleep():
+    worker_lanes = {
+        BUSY_LANE: _lane(BUSY_LANE, "running", "awake", queue_waiting=453.0),
+        IDLE_LANE: _lane(IDLE_LANE, "loaded", "awake", queue_waiting=0.0),
+    }
+    registry = await _registry_with(list(worker_lanes.values()))
+    planner = _planner(registry, worker_lanes)
+
+    worker_done = await _cancel_while_the_worker_runs_the_command(planner, registry, worker_lanes, reaches_worker=True)
+
+    assert registry.is_lane_cold_marked(PROVIDER_ID, IDLE_LANE)
+    assert (await registry.select_lane_for_model(PROVIDER_ID, MODEL))["lane_id"] == BUSY_LANE
+
+    # The worker finishes: the lane is asleep, and the mark has done its job.
+    worker_lanes[IDLE_LANE].update(runtime_state="sleeping", sleep_state="sleeping", transition=None)
+    await _publish(registry, worker_lanes)
+    worker_done.set()
+    await _until(lambda: not registry.is_lane_cold_marked(PROVIDER_ID, IDLE_LANE))
+
+    await _wake_outside_the_planner(registry, worker_lanes)
+    assert (await registry.select_lane_for_model(PROVIDER_ID, MODEL))["lane_id"] == IDLE_LANE
+
+
+async def test_a_cancelled_sleep_the_worker_skipped_restores_routing():
+    worker_lanes = {
+        BUSY_LANE: _lane(BUSY_LANE, "running", "awake", queue_waiting=453.0),
+        IDLE_LANE: _lane(IDLE_LANE, "loaded", "awake", queue_waiting=0.0),
+    }
+    registry = await _registry_with(list(worker_lanes.values()))
+    planner = _planner(registry, worker_lanes)
+
+    await _cancel_while_the_worker_runs_the_command(planner, registry, worker_lanes, reaches_worker=True)
+    # A request arrived during the worker's drain, so it kept the lane awake.
+    worker_lanes[IDLE_LANE]["transition"] = None
+    await _publish(registry, worker_lanes)
+
+    await _until(lambda: not registry.is_lane_cold_marked(PROVIDER_ID, IDLE_LANE))
+    assert (await registry.select_lane_for_model(PROVIDER_ID, MODEL))["lane_id"] == IDLE_LANE
+
+
+async def test_a_cancelled_command_that_never_reached_the_worker_restores_routing():
+    worker_lanes = {
+        BUSY_LANE: _lane(BUSY_LANE, "running", "awake", queue_waiting=453.0),
+        IDLE_LANE: _lane(IDLE_LANE, "loaded", "awake", queue_waiting=0.0),
+    }
+    registry = await _registry_with(list(worker_lanes.values()))
+    planner = _planner(registry, worker_lanes)
+    planner.COLD_MARK_UNSEEN_COMMAND_S = 0.0
+
+    await _cancel_while_the_worker_runs_the_command(planner, registry, worker_lanes, reaches_worker=False)
+
+    await _until(lambda: not registry.is_lane_cold_marked(PROVIDER_ID, IDLE_LANE))
+    assert (await registry.select_lane_for_model(PROVIDER_ID, MODEL))["lane_id"] == IDLE_LANE
+
+
+async def test_a_new_action_on_the_lane_takes_over_from_a_pending_settle():
+    worker_lanes = {
+        BUSY_LANE: _lane(BUSY_LANE, "running", "awake", queue_waiting=453.0),
+        IDLE_LANE: _lane(IDLE_LANE, "loaded", "awake", queue_waiting=0.0),
+    }
+    registry = await _registry_with(list(worker_lanes.values()))
+    planner = _planner(registry, worker_lanes)
+    worker_done = await _cancel_while_the_worker_runs_the_command(planner, registry, worker_lanes, reaches_worker=True)
+    worker_done.set()
+
+    # The next sleep marks the lane again; the earlier settle must not clear that mark mid-drain.
+    seen_during_drain: list[bool] = []
+
+    async def drain(provider_id, lane_id, timeout_seconds=30.0):  # noqa: ARG001
+        for _ in range(20):
+            await asyncio.sleep(0)
+        seen_during_drain.append(registry.is_lane_cold_marked(PROVIDER_ID, IDLE_LANE))
+        return True
+
+    planner._drain_lane = drain
+    worker_lanes[IDLE_LANE]["transition"] = None
+    registry.send_command = _planner(registry, worker_lanes)._registry.send_command
+    assert await planner._execute_action_with_confirmation(_sleep_action(), timeout_seconds=10.0)
+    assert seen_during_drain == [True]
+
+
+# ── routing and publishing ──────────────────────────────────────────────────
+
+
+async def test_a_lane_the_worker_is_taking_down_gets_no_requests():
+    worker_lanes = {
+        BUSY_LANE: _lane(BUSY_LANE, "running", "awake", queue_waiting=453.0),
+        IDLE_LANE: {**_lane(IDLE_LANE, "loaded", "awake", queue_waiting=0.0), "transition": "falling_asleep"},
+    }
+    registry = await _registry_with(list(worker_lanes.values()))
+
+    assert (await registry.select_lane_for_model(PROVIDER_ID, MODEL))["lane_id"] == BUSY_LANE
+
+    worker_lanes[IDLE_LANE]["transition"] = "waking"
+    await _publish(registry, worker_lanes)
+    assert (await registry.select_lane_for_model(PROVIDER_ID, MODEL))["lane_id"] == IDLE_LANE
+
+
+def test_the_registry_publishes_a_cold_mark_change_once():
+    registry = LogosNodeRuntimeRegistry()
+    published: list[int] = []
+    registry.on_cold_mark_changed = published.append
+
+    registry.mark_lane_cold(PROVIDER_ID, IDLE_LANE)
+    registry.mark_lane_cold(PROVIDER_ID, IDLE_LANE)
+    registry.unmark_lane_cold(PROVIDER_ID, IDLE_LANE)
+    registry.unmark_lane_cold(PROVIDER_ID, IDLE_LANE)
+
+    assert published == [PROVIDER_ID, PROVIDER_ID]

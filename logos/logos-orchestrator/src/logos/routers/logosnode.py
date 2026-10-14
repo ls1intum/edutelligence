@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import secrets
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -116,6 +117,21 @@ def _with_cold_marks(provider_id: int, runtime: Dict[str, Any]) -> Dict[str, Any
         for lane in lanes
     ]
     return {**runtime, "lanes": marked}
+
+
+def republish_lane_snapshot(provider_id: int) -> None:
+    """Capture a snapshot now because a lane's cold mark changed.
+
+    The worker pushes its status only when it changes, so a mark set or
+    cleared between two pushes would otherwise not reach the lane health
+    panel until the worker's state moves on, and a lane already asleep
+    could keep showing as draining.
+    """
+    snapshot = _main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}
+    runtime = snapshot.get("runtime")
+    if not isinstance(runtime, dict) or not runtime:
+        return
+    _capture_logosnode_provider_snapshot(provider_id, {**runtime, "timestamp": datetime.now(timezone.utc).isoformat()})
 
 
 def _capture_logosnode_provider_snapshot(

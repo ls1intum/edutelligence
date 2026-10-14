@@ -435,6 +435,13 @@ class CapacityPlanner:
         # Phase 3a: Lanes pre-marked as cold — excluded from scheduling before
         # physical removal so new requests don't route to dying lanes.
         self._marked_cold_lanes: set[tuple[int, str]] = set()
+        # Lanes whose sleep or stop command has been sent to the worker by the
+        # action still running; see _execute_action_with_confirmation.
+        self._lifecycle_commands_sent: set[tuple[int, str]] = set()
+        # Lanes whose cold mark waits for the worker to finish a command the
+        # planner stopped waiting for; see _settle_cold_mark.
+        self._cold_marks_settling: set[tuple[int, str]] = set()
+        self._cold_mark_settlers: set[asyncio.Task] = set()
 
         # Track how a lane was loaded: True = cold load, False = wake from sleep
         self._lane_was_cold_loaded: dict[tuple[int, str], bool] = {}
@@ -8057,7 +8064,13 @@ class CapacityPlanner:
         )
 
     def _unmark_lane_cold(self, provider_id: int, lane_id: str) -> None:
-        """Restore lane to normal scheduling after aborted stop."""
+        """Restore lane to normal scheduling after aborted stop.
+
+        A no-op while the worker is still carrying out a command whose action
+        was cancelled: _settle_cold_mark clears that mark once it has ended.
+        """
+        if (provider_id, lane_id) in self._cold_marks_settling:
+            return
         self._marked_cold_lanes.discard((provider_id, lane_id))
         self._registry.unmark_lane_cold(provider_id, lane_id)
         logger.info(
@@ -8065,6 +8078,64 @@ class CapacityPlanner:
             lane_id,
             self._facade.get_provider_name(provider_id) or provider_id,
         )
+
+    COLD_MARK_SETTLE_POLL_S = 1.0
+    # The worker reports a step it has started (draining, falling asleep,
+    # stopping) in the status it pushes right away. A command not seen at work
+    # within this long never reached it.
+    COLD_MARK_UNSEEN_COMMAND_S = 15.0
+    # Longer than any sleep or stop command budget.
+    COLD_MARK_SETTLE_TIMEOUT_S = 150.0
+
+    def _settle_cold_mark_in_background(self, action: CapacityPlanAction) -> None:
+        key = (action.provider_id, action.lane_id)
+        self._cold_marks_settling.add(key)
+        task = asyncio.get_running_loop().create_task(self._settle_cold_mark(action.provider_id, action.lane_id))
+        self._cold_mark_settlers.add(task)
+        task.add_done_callback(self._cold_mark_settlers.discard)
+
+    async def _settle_cold_mark(self, provider_id: int, lane_id: str) -> None:
+        """Clear the cold mark of a cancelled sleep or stop once the worker is done with it.
+
+        The worker runs a lifecycle command to the end even when the planner
+        stops waiting for it. Routing to the lane before then would land
+        requests on a lane that is about to sleep or go away, so the mark
+        stays until the worker reports the outcome: the lane is asleep or
+        gone, or the step it reported has ended without that (the sleep was
+        skipped because a request arrived during its drain). A command the
+        worker never shows at work did not reach it, and the lane is routable
+        again after COLD_MARK_UNSEEN_COMMAND_S.
+        """
+        key = (provider_id, lane_id)
+        started = time.monotonic()
+        seen_at_work = False
+        try:
+            while key in self._cold_marks_settling:
+                elapsed = time.monotonic() - started
+                snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
+                lanes = (snapshot.get("runtime") or {}).get("lanes") or []
+                lane = next((item for item in lanes if isinstance(item, dict) and item.get("lane_id") == lane_id), None)
+                if lane is None or lane.get("runtime_state") == "sleeping":
+                    break
+                if lane.get("transition"):
+                    seen_at_work = True
+                elif seen_at_work or elapsed >= self.COLD_MARK_UNSEEN_COMMAND_S:
+                    break
+                if elapsed >= self.COLD_MARK_SETTLE_TIMEOUT_S:
+                    logger.warning(
+                        "Lane %s on worker=%s still reports a step in progress %.0fs after its cancelled "
+                        "action; restoring routing",
+                        lane_id,
+                        self._facade.get_provider_name(provider_id) or provider_id,
+                        elapsed,
+                    )
+                    break
+                await asyncio.sleep(self.COLD_MARK_SETTLE_POLL_S)
+        finally:
+            # A newer action on the lane took over its routing state; leave it be.
+            if key in self._cold_marks_settling:
+                self._cold_marks_settling.discard(key)
+                self._unmark_lane_cold(provider_id, lane_id)
 
     def is_lane_marked_cold(self, provider_id: int, lane_id: str) -> bool:
         """Check if a lane is pre-marked as cold (for scheduler exclusion)."""
@@ -8571,11 +8642,25 @@ class CapacityPlanner:
         lane woken any other way (the panel's wake button, a wake confirmed
         after its poll gave up) would report itself loaded and idle while the
         scheduler never picks it.
+
+        A cancelled action is the one exception. Once its command has gone
+        out, the worker carries it through regardless, so the mark stays
+        until the worker reports the outcome (see _settle_cold_mark).
         """
+        key = (action.provider_id, action.lane_id)
+        marks_cold = action.action in ("sleep_l1", "sleep_l2", "stop")
+        # A new action on the lane owns its routing state from here on, so a
+        # settle left by an earlier, cancelled action no longer clears it.
+        self._cold_marks_settling.discard(key)
         try:
             confirmed = await self._execute_action_core(action, timeout_seconds=timeout_seconds, deadline=deadline)
+        except asyncio.CancelledError:
+            if marks_cold and key in self._lifecycle_commands_sent:
+                self._settle_cold_mark_in_background(action)
+            raise
         finally:
-            if action.action in ("sleep_l1", "sleep_l2", "stop"):
+            if marks_cold:
+                self._lifecycle_commands_sent.discard(key)
                 self._unmark_lane_cold(action.provider_id, action.lane_id)
         if action.action == "load":
             self._settle_manual_load_outcome(action.provider_id, action.model_name, action.lane_id, confirmed)
@@ -8786,6 +8871,7 @@ class CapacityPlanner:
                     "sleep_l2": ("sleep_lane", {"lane_id": action.lane_id, "level": 2}),
                 }
                 command_action, command_params = command_map[action.action]
+                self._lifecycle_commands_sent.add((action.provider_id, action.lane_id))
                 try:
                     await self._registry.send_command(
                         action.provider_id,
@@ -9126,6 +9212,7 @@ class CapacityPlanner:
                     return False
 
                 if self._use_additive_loads:
+                    self._lifecycle_commands_sent.add((action.provider_id, action.lane_id))
                     try:
                         await self._registry.send_command(
                             action.provider_id,
@@ -9156,6 +9243,7 @@ class CapacityPlanner:
                         action.provider_id,
                         remove_lane_id=action.lane_id,
                     )
+                    self._lifecycle_commands_sent.add((action.provider_id, action.lane_id))
                     try:
                         result = await self._registry.send_command(
                             action.provider_id,

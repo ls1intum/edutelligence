@@ -106,6 +106,9 @@ def _lane_e2e_latency_p50_seconds(metrics: dict[str, Any]) -> float:
     return _histogram_quantile(metrics.get("e2e_latency_histogram"), 0.50)
 
 
+_LANE_LEAVING_TRANSITIONS = frozenset({"draining", "falling_asleep", "stopping"})
+
+
 def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:
     backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
     queue_waiting = _lane_metric_float(backend_metrics.get("queue_waiting"))
@@ -386,6 +389,10 @@ class LogosNodeRuntimeRegistry:
         # Lanes pre-marked as cold by the capacity planner — excluded from
         # scheduling so new requests don't route to lanes about to be stopped.
         self._cold_marked_lanes: set[tuple[int, str]] = set()
+        # Called with the provider id whenever a lane's cold mark changes, so
+        # the lane health snapshot can show it without waiting for the worker
+        # to push a status that differs from its last one.
+        self.on_cold_mark_changed: Callable[[int], None] | None = None
         # provider_id -> monotonic timestamp of the last live-session drop.
         # A worker that went down a moment ago is mid-reboot, not dead: the
         # request path uses this to extend the startup grace period past the
@@ -1611,6 +1618,11 @@ class LogosNodeRuntimeRegistry:
             lid = str(lane.get("lane_id") or "")
             if lid and self.is_lane_cold_marked(provider_id, lid):
                 continue
+            # The worker is taking the lane down (draining for a sleep, falling
+            # asleep, stopping): a request sent now would queue behind that
+            # command and reach a sleeping or removed lane.
+            if lane.get("transition") in _LANE_LEAVING_TRANSITIONS:
+                continue
             candidates.append(lane)
         if not candidates:
             return None
@@ -1623,11 +1635,25 @@ class LogosNodeRuntimeRegistry:
 
     def mark_lane_cold(self, provider_id: int, lane_id: str) -> None:
         """Pre-mark a lane as cold so it's excluded from scheduling."""
-        self._cold_marked_lanes.add((int(provider_id), lane_id))
+        key = (int(provider_id), lane_id)
+        if key not in self._cold_marked_lanes:
+            self._cold_marked_lanes.add(key)
+            self._notify_cold_mark_changed(key[0])
 
     def unmark_lane_cold(self, provider_id: int, lane_id: str) -> None:
         """Restore a lane to normal scheduling after aborted stop."""
-        self._cold_marked_lanes.discard((int(provider_id), lane_id))
+        key = (int(provider_id), lane_id)
+        if key in self._cold_marked_lanes:
+            self._cold_marked_lanes.discard(key)
+            self._notify_cold_mark_changed(key[0])
+
+    def _notify_cold_mark_changed(self, provider_id: int) -> None:
+        if self.on_cold_mark_changed is None:
+            return
+        try:
+            self.on_cold_mark_changed(provider_id)
+        except Exception:  # noqa: BLE001 — the snapshot is telemetry; routing must not depend on it
+            logger.warning("Could not publish the cold mark change of worker %s", provider_id, exc_info=True)
 
     def is_lane_cold_marked(self, provider_id: int, lane_id: str) -> bool:
         """Check if a lane is pre-marked as cold."""

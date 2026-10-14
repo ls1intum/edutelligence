@@ -56,6 +56,9 @@ def _planner(lanes: list) -> CapacityPlanner:
     planner._facade.get_provider_name.return_value = "worker-a"
     planner._facade.get_model_profiles.return_value = {}
     planner._marked_cold_lanes = set()
+    planner._lifecycle_commands_sent = set()
+    planner._cold_marks_settling = set()
+    planner._cold_mark_settlers = set()
     planner._lane_action_locks = {}
     return planner
 

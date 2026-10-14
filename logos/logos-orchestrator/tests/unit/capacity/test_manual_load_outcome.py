@@ -31,6 +31,9 @@ _CALIBRATED_PROFILE = SimpleNamespace(residency_source="calibrated")
 
 def _planner(*, calibrating=False, has_status=True, capacity=object(), profiles=None) -> CapacityPlanner:
     planner = CapacityPlanner.__new__(CapacityPlanner)
+    planner._lifecycle_commands_sent = set()
+    planner._cold_marks_settling = set()
+    planner._cold_mark_settlers = set()
     registry = MagicMock()
     registry.is_calibrating.return_value = calibrating
     registry.has_received_first_status.return_value = has_status
