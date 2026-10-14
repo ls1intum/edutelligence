@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import de.tum.cit.aet.logos.logoswebservice.common.ConflictException;
+import de.tum.cit.aet.logos.logoswebservice.common.RequestTiming;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakClaims;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakProperties;
 import de.tum.cit.aet.logos.logoswebservice.auth.KeycloakRoleMapper;
@@ -121,12 +122,18 @@ public class KeycloakUserSyncService {
         // row this one already holds; and every write below depends on a read of
         // a team or its memberships, so all of those reads have to happen with
         // the rows already held.
+        long resolveStart = System.nanoTime();
         Map<Integer, Team> resolved = resolveTeams(claims.roleNames());
-        Map<Integer, String> linkedGroups = lockTeams(teamsToHold(user, resolved, wasInactive));
+        Set<Integer> held = teamsToHold(user, resolved, wasInactive);
+        long lockStart = System.nanoTime();
+        Map<Integer, String> linkedGroups = lockTeams(held);
+        long writeStart = System.nanoTime();
 
         if (wasInactive) reactivateUserKeys(user);
         deactivatePersonalKeys(user);
         syncTeamMemberships(user, resolved, linkedGroups, claims.roleNames());
+        RequestTiming.recordSync(lockStart - resolveStart, writeStart - lockStart,
+            System.nanoTime() - writeStart, held.size());
         return user;
     }
 
