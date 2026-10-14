@@ -486,10 +486,28 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "runtime_modes": ["vllm"],
     }
 
+    # Space on the volume holding the worker's Hugging Face cache. Missing on
+    # workers that predate the report, zero-filled when it could not be read:
+    # both leave the fields out so the page shows no disk rather than 0 GB.
+    disk = runtime.get("disk") if isinstance(runtime.get("disk"), dict) else {}
+    if disk.get("source") == "statvfs" and (_safe_float(disk.get("total_mb")) or 0.0) > 0:
+        provider_signals["disk_total_mb"] = _safe_float(disk.get("total_mb"))
+        provider_signals["disk_used_mb"] = _safe_float(disk.get("used_mb"))
+        provider_signals["disk_free_mb"] = _safe_float(disk.get("free_mb"))
+        provider_signals["disk_path"] = str(disk.get("path") or "")
+
+    raw_gpu_faults = devices.get("gpu_faults")
+    provider_signals["gpu_faults"] = (
+        [str(fault) for fault in raw_gpu_faults if fault] if isinstance(raw_gpu_faults, list) else []
+    )
+
     raw_device_list = devices.get("devices") or []
     provider_signals["devices"] = [
         {
             "device_id": d.get("device_id", ""),
+            # The worker's GPU index (nvidia-smi numbering), which lane
+            # placements refer to; list position differs once a GPU is skipped.
+            "index": _safe_int((d.get("extra") or {}).get("index")) if isinstance(d.get("extra"), dict) else None,
             "kind": d.get("kind", "nvidia"),
             "name": d.get("name", ""),
             "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
@@ -498,6 +516,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "utilization_percent": _safe_float(d.get("utilization_percent")),
             "temperature_celsius": _safe_float(d.get("temperature_celsius")),
             "power_draw_watts": _safe_float(d.get("power_draw_watts")),
+            "health": d.get("health") if d.get("health") in ("ok", "degraded", "faulted") else "ok",
+            "health_reason": str(d.get("health_reason") or ""),
         }
         for d in raw_device_list
         if isinstance(d, dict)
@@ -568,6 +588,9 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "cold_marked": bool(lane.get("cold_marked")),
             "gpu_devices": str(lane.get("gpu_devices") or ""),
             "effective_gpu_devices": str(lane.get("effective_gpu_devices") or ""),
+            # The GPUs the engine runs on; the selectors above only say which
+            # it can see. Empty when the worker does not know.
+            "occupied_gpu_devices": str(lane.get("occupied_gpu_devices") or ""),
             "num_parallel": _safe_int(lane.get("num_parallel")) or 0,
             "active_requests": active_requests,
             "effective_vram_mb": _safe_float(lane.get("effective_vram_mb")) or 0.0,
