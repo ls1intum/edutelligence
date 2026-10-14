@@ -407,6 +407,12 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
 
+            # Resolve the answer language once, before citations and quiz JSON are
+            # added, so that citations, title and suggestions use the same language.
+            state.answer_language = reply_language(
+                result, state.dto.chat_history, state.dto.user.lang_key
+            )
+
             # Add citations if applicable
             with timed_span("ChatPipeline", "citations", state.start_time):
                 result = self._add_citations(state, result)
@@ -907,7 +913,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
 
         try:
-            answer_language = reply_language(result, state.dto.user.lang_key)
+            answer_language = getattr(state, "answer_language", None) or reply_language(
+                result,
+                getattr(state.dto, "chat_history", None),
+                state.dto.user.lang_key,
+            )
 
             # Add FAQ citations
             if state.faq_storage.get("faqs"):
@@ -1130,7 +1140,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 suggestion_dto.last_message = result
                 suggestions = self.suggestion_pipeline(
                     suggestion_dto,
-                    language=reply_language(result, state.dto.user.lang_key),
+                    language=getattr(state, "answer_language", None)
+                    or reply_language(
+                        result, state.dto.chat_history, state.dto.user.lang_key
+                    ),
                 )
 
                 if self.suggestion_pipeline.tokens is not None:

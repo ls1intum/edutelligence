@@ -93,6 +93,9 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # it is sent to the client with the next outgoing status callback.
     deferred_session_title: Optional[str]
     deferred_session_title_delivered: bool
+    # Language of the final answer, resolved once so that title, suggestions and
+    # citations agree. None until a pipeline resolves it.
+    answer_language: Optional[str]
     # Context switch requested by the agent via the switch_chat_context tool;
     # delivered to Artemis with the final result status update.
     pending_context_switch: Optional[SuggestedContextDTO]
@@ -830,10 +833,16 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
             return None
 
-        # The title uses the language of the answer; the Artemis setting is the
-        # fallback (using getattr for DTOs that may not have user attr)
-        user = getattr(state.dto, "user", None)
-        language = reply_language(output, getattr(user, "lang_key", None))
+        # The title uses the language of the answer (using getattr for DTOs that
+        # may not have the user or chat history attributes)
+        language = getattr(state, "answer_language", None)
+        if language is None:
+            user = getattr(state.dto, "user", None)
+            language = reply_language(
+                output,
+                getattr(state.dto, "chat_history", None),
+                getattr(user, "lang_key", None),
+            )
 
         try:
             if output:
@@ -905,6 +914,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.allow_memiris_tool = False
         state.start_time = start_time
         state.deferred_session_title = None
+        state.answer_language = None
         state.deferred_session_title_delivered = False
         state.pending_context_switch = None
         state.partial_result_sender = None

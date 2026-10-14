@@ -29,33 +29,60 @@ init_factory()
 _MIN_LETTERS = 30
 _MIN_PROBABILITY = 0.9
 
+# Every language langdetect can return.
 _LANGUAGE_NAMES = {
+    "af": "Afrikaans",
     "ar": "Arabic",
     "bg": "Bulgarian",
+    "bn": "Bengali",
+    "ca": "Catalan",
     "cs": "Czech",
+    "cy": "Welsh",
     "da": "Danish",
     "de": "German",
     "el": "Greek",
     "en": "English",
     "es": "Spanish",
+    "et": "Estonian",
+    "fa": "Persian",
     "fi": "Finnish",
     "fr": "French",
+    "gu": "Gujarati",
+    "he": "Hebrew",
+    "hi": "Hindi",
     "hr": "Croatian",
     "hu": "Hungarian",
+    "id": "Indonesian",
     "it": "Italian",
     "ja": "Japanese",
+    "kn": "Kannada",
     "ko": "Korean",
+    "lt": "Lithuanian",
+    "lv": "Latvian",
+    "mk": "Macedonian",
+    "ml": "Malayalam",
+    "mr": "Marathi",
+    "ne": "Nepali",
     "nl": "Dutch",
     "no": "Norwegian",
+    "pa": "Punjabi",
     "pl": "Polish",
     "pt": "Portuguese",
     "ro": "Romanian",
     "ru": "Russian",
     "sk": "Slovak",
     "sl": "Slovenian",
+    "so": "Somali",
+    "sq": "Albanian",
     "sv": "Swedish",
+    "sw": "Swahili",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "th": "Thai",
+    "tl": "Tagalog",
     "tr": "Turkish",
     "uk": "Ukrainian",
+    "ur": "Urdu",
     "vi": "Vietnamese",
     "zh-cn": "Chinese",
     "zh-tw": "Chinese",
@@ -93,9 +120,37 @@ def detect_language_name(text: Optional[str]) -> Optional[str]:
     return _LANGUAGE_NAMES.get(candidates[0].lang)
 
 
-def reply_language(answer: Optional[str], user_language: Optional[str]) -> str:
-    """Return the language of an answer Iris wrote, or the Artemis setting if unclear."""
-    return detect_language_name(answer) or language_name(user_language)
+def previous_reply_language(
+    history: Optional[Iterable[PyrisMessage]], user_language: Optional[str]
+) -> str:
+    """Return the language of the conversation before the new answer.
+
+    This is the language of the newest earlier answer of Iris whose language is
+    clear. Short answers ("Was hast du versucht?") do not reset it. Without such
+    an answer, the Artemis setting applies. Use this for text Iris writes before
+    its new answer exists, such as quiz questions.
+    """
+    for message in reversed(list(history or [])):
+        if message.sender == IrisMessageRole.ASSISTANT:
+            detected = detect_language_name(_message_text(message))
+            if detected:
+                return detected
+    return language_name(user_language)
+
+
+def reply_language(
+    answer: Optional[str],
+    history: Optional[Iterable[PyrisMessage]],
+    user_language: Optional[str],
+) -> str:
+    """Return the language of a new answer Iris wrote.
+
+    When the answer is too short to tell, the conversation keeps its language
+    (see `previous_reply_language`).
+    """
+    return detect_language_name(answer) or previous_reply_language(
+        history, user_language
+    )
 
 
 def _message_text(message: PyrisMessage) -> str:
@@ -104,16 +159,3 @@ def _message_text(message: PyrisMessage) -> str:
         for content in message.contents
         if isinstance(content, TextMessageContentDTO)
     )
-
-
-def previous_reply_language(
-    history: Optional[Iterable[PyrisMessage]], user_language: Optional[str]
-) -> str:
-    """Return the language of Iris's last answer in `history`, or the Artemis setting.
-
-    Use this for text Iris writes before its new answer exists, such as quiz questions.
-    """
-    for message in reversed(list(history or [])):
-        if message.sender == IrisMessageRole.ASSISTANT:
-            return reply_language(_message_text(message), user_language)
-    return language_name(user_language)
