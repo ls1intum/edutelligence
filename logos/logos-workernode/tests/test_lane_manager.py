@@ -4100,3 +4100,31 @@ async def test_lane_occupancy_follows_the_final_launch_environment(
     manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
     lane = _override_lane(gpu_devices, env_overrides)
     assert await manager._lane_occupied_gpu_devices(lane, gpu_devices, 1) == occupied  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gpu_devices", "env_overrides", "error"),
+    [
+        # A healthy pin that the override redirects onto the failed GPU.
+        ("1", {"CUDA_VISIBLE_DEVICES": "0"}, r"CUDA_VISIBLE_DEVICES='0', which includes faulted GPU\(s\) \[0\]"),
+        # The override also undoes an automatic placement.
+        ("", {"CUDA_VISIBLE_DEVICES": "2,0"}, r"includes faulted GPU\(s\) \[0\]"),
+        ("1", {"CUDA_VISIBLE_DEVICES": "GPU-1234"}, "cannot be checked"),
+        ("1", {"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}, "CUDA_DEVICE_ORDER='FASTEST_FIRST'"),
+    ],
+)
+async def test_auto_place_refuses_a_launch_override_onto_a_faulted_gpu(
+    gpu_devices: str, env_overrides: dict[str, str], error: str
+) -> None:
+    lane = _override_lane(gpu_devices, env_overrides)
+    with pytest.raises(RuntimeError, match=error):
+        await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_keeps_a_launch_override_onto_healthy_gpus() -> None:
+    lane = _override_lane("", {"CUDA_VISIBLE_DEVICES": "2"})
+    placed = await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+    assert placed.vllm_config is not None
+    assert placed.vllm_config.env_overrides == {"CUDA_VISIBLE_DEVICES": "2"}

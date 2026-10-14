@@ -2205,12 +2205,46 @@ class LaneManager:
                 best_indices = list(indices)
         return best_indices
 
+    @staticmethod
+    def _refuse_faulted_launch_override(lane_id: str, lane_config: LaneConfig, faulted_indices: set[int]) -> None:
+        """Refuse a lane whose CUDA env_overrides could open a faulted GPU.
+
+        Only a numeric CUDA_VISIBLE_DEVICES under PCI bus order maps to
+        nvidia-smi indices; any other override cannot be checked while a GPU is
+        faulted, so it is refused rather than risked.
+        """
+        assert lane_config.vllm_config is not None
+        overrides = lane_config.vllm_config.env_overrides
+        prefix = f"Lane '{lane_id}' model={lane_config.model}"
+        faults = f"faulted GPU(s) {sorted(faulted_indices)}"
+        order = overrides.get("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+        if order != "PCI_BUS_ID":
+            raise RuntimeError(
+                f"{prefix} overrides CUDA_DEVICE_ORDER={order!r}, so its GPU numbers cannot be checked "
+                f"against {faults}; drop the override or reset the GPU"
+            )
+        visible = overrides["CUDA_VISIBLE_DEVICES"]
+        parts = [part.strip() for part in visible.split(",")]
+        if not all(part.isdigit() for part in parts):
+            raise RuntimeError(
+                f"{prefix} overrides CUDA_VISIBLE_DEVICES={visible!r}, which cannot be checked "
+                f"against {faults}; use numeric GPU indices or reset the GPU"
+            )
+        broken = sorted({int(part) for part in parts} & faulted_indices)
+        if broken:
+            raise RuntimeError(
+                f"{prefix} overrides CUDA_VISIBLE_DEVICES={visible!r}, which includes faulted GPU(s) {broken} "
+                "(nvidia-smi reports them as failed; reset or reboot the node)"
+            )
+
     async def _auto_place_gpu_devices(self, lane_id: str, lane_config: LaneConfig) -> LaneConfig:
         """Pick an explicit GPU set for auto-managed vLLM lanes.
 
         Strategy:
         - Never use a GPU that nvidia-smi reports as faulted; an explicit
-          gpu_devices pin that includes one is refused.
+          gpu_devices pin that includes one is refused, and so is a
+          CUDA_VISIBLE_DEVICES / CUDA_DEVICE_ORDER override in the model's
+          env_overrides that opens one or cannot be checked.
         - Respect explicit lane gpu_devices otherwise.
         - Preserve the current placement when it still fits.
         - Otherwise choose the feasible GPU subset in the worker's allowed
@@ -2263,6 +2297,14 @@ class LaneManager:
                     "utilization": float(device.utilization_percent or 0.0),
                 }
             )
+        overrides = lane_config.vllm_config.env_overrides
+        if faulted_indices and (
+            "CUDA_VISIBLE_DEVICES" in overrides or overrides.get("CUDA_DEVICE_ORDER", "PCI_BUS_ID") != "PCI_BUS_ID"
+        ):
+            # The model's env_overrides are applied after the selector at
+            # launch, so they decide which GPUs the engine opens: check those.
+            self._refuse_faulted_launch_override(lane_id, lane_config, faulted_indices)
+            return lane_config
         if lane_config.gpu_devices:
             pinned = self._lane_gpu_set(lane_config.gpu_devices)
             broken = sorted(faulted_indices if pinned is None else pinned & faulted_indices)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -373,10 +374,14 @@ async def test_build_runtime_status_marks_disk_unavailable_when_it_cannot_be_rea
 @pytest.mark.asyncio
 async def test_build_runtime_status_survives_an_io_error_while_resolving_the_cache_path(monkeypatch, tmp_path):
     # A broken cache mount fails the path lookup itself, before any usage read.
-    def broken_exists(self):
-        raise OSError(5, "Input/output error")
+    real_exists = Path.exists
 
-    monkeypatch.setattr("logos_worker_node.runtime.Path.exists", broken_exists)
+    def broken_exists(self, *args, **kwargs):
+        if self.is_relative_to(tmp_path):
+            raise OSError(5, "Input/output error")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", broken_exists)
     app = _make_app([], _NvidiaCollector())
     app.state.hf_home = str(tmp_path / ".hf_cache")
 
