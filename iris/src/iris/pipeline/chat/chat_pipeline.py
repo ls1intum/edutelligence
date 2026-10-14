@@ -479,6 +479,23 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             return state.result
 
+    @staticmethod
+    def _has_memories(
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> bool:
+        """Whether the memory tool is offered; not when the memories cannot be read, so the chat still answers."""
+        dto = state.dto
+        if not (dto.user and dto.user.memiris_enabled and state.memiris_wrapper):
+            return False
+        try:
+            return state.memiris_wrapper.has_memories()
+        except Exception:
+            logger.warning(
+                "Memories are unavailable; answering without the memory tool",
+                exc_info=True,
+            )
+            return False
+
     def prepare_state(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -501,12 +518,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             state.allow_lecture_tool = lecture_tool_future.result()
             state.allow_faq_tool = faq_tool_future.result()
-        state.allow_memiris_tool = bool(
-            dto.user
-            and dto.user.memiris_enabled
-            and state.memiris_wrapper
-            and state.memiris_wrapper.has_memories()
-        )
+        state.allow_memiris_tool = self._has_memories(state)
 
         # Extract lecture contexts from DTO and store in state
         lecture_contexts = self._parse_lecture_context(dto)
