@@ -35,7 +35,7 @@ jobs:
           - environment: "Logos Worker - hochbruegge-vm-2"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
-            node-manager: false
+            node-manager: true
     environment:
       name: ${{ matrix.environment }}
     steps:

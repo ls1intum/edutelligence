@@ -626,3 +626,4 @@ jobs:
         - registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+# Commennt, so worker image is rebuilt, because it was not built earlier, mainly due to the github problems
