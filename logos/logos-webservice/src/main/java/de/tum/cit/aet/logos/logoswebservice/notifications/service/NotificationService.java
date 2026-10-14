@@ -1,0 +1,229 @@
+package de.tum.cit.aet.logos.logoswebservice.notifications.service;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+
+import de.tum.cit.aet.logos.logoswebservice.notifications.channel.NotificationChannelRegistry;
+import de.tum.cit.aet.logos.logoswebservice.notifications.dto.NotificationResponseDTO;
+import de.tum.cit.aet.logos.logoswebservice.notifications.dto.PublishNotificationRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.notifications.dto.NotificationTargetDTO;
+import de.tum.cit.aet.logos.logoswebservice.notifications.entity.Notification;
+import de.tum.cit.aet.logos.logoswebservice.notifications.entity.NotificationRead;
+import de.tum.cit.aet.logos.logoswebservice.notifications.entity.NotificationRecipient;
+import de.tum.cit.aet.logos.logoswebservice.notifications.entity.NotificationType;
+import de.tum.cit.aet.logos.logoswebservice.notifications.entity.RecipientKind;
+import de.tum.cit.aet.logos.logoswebservice.notifications.repository.NotificationReadRepository;
+import de.tum.cit.aet.logos.logoswebservice.notifications.repository.NotificationRecipientRepository;
+import de.tum.cit.aet.logos.logoswebservice.notifications.repository.NotificationRepository;
+
+/**
+ * The publish and read halves of the notification system.
+ *
+ * <p>Persisting the notification and its recipients is one transaction; the
+ * channel fan-out is deferred to {@code afterCommit} so a delivery that reads
+ * the database back never sees an uncommitted row, and a rolled-back publish
+ * delivers nothing (mirrors {@code OrchestratorNotificationService}).
+ */
+@Service
+public class NotificationService {
+
+    private static final String SOURCE_WEB = "webservice";
+    private static final String SOURCE_ORCH = "orchestrator";
+
+    private final NotificationRepository notifications;
+    private final NotificationReadRepository reads;
+    private final NotificationRecipientRepository recipients;
+    private final NotificationChannelRegistry channelRegistry;
+    private final ObjectMapper objectMapper;
+
+    public NotificationService(
+        NotificationRepository notifications,
+        NotificationReadRepository reads,
+        NotificationRecipientRepository recipients,
+        NotificationChannelRegistry channelRegistry,
+        ObjectMapper objectMapper) {
+        this.notifications = notifications;
+        this.reads = reads;
+        this.recipients = recipients;
+        this.channelRegistry = channelRegistry;
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * Persist a notification and its fan-out targets, then dispatch to the
+     * registered channels after commit.
+     *
+     * @return the new notification id
+     * @throws IllegalArgumentException on an unknown type, missing title, no
+     *         targets, an invalid source, or a non-serializable payload
+     */
+    @Transactional
+    public Long publish(PublishNotificationRequestDTO req) {
+        NotificationType type = NotificationType.fromValue(req.type())
+            .orElseThrow(() -> new IllegalArgumentException("Unknown notification type: " + req.type()));
+        if (req.title() == null || req.title().isBlank()) {
+            throw new IllegalArgumentException("title is required");
+        }
+        if (req.targets() == null || req.targets().isEmpty()) {
+            throw new IllegalArgumentException("At least one target is required");
+        }
+        String source = resolveSource(req.source());
+
+        Notification n = new Notification();
+        n.setType(type);
+        n.setTitle(req.title());
+        n.setBody(req.body());
+        n.setSource(source);
+        n.setActorUserId(req.actorUserId());
+        n.setCreatedAt(Instant.now());
+        if (req.payload() != null && !req.payload().isEmpty()) {
+            n.setPayload(writeJson(req.payload()));
+        }
+        Notification saved = notifications.save(n);
+
+        List<NotificationRecipient> recipientRows = new ArrayList<>();
+        for (NotificationTargetDTO target : req.targets()) {
+            RecipientKind kind = RecipientKind.fromValue(target.kind())
+                .orElseThrow(() -> new IllegalArgumentException("Unknown recipient kind: " + target.kind()));
+            NotificationRecipient r = new NotificationRecipient();
+            r.setNotificationId(saved.getId());
+            r.setRecipientKind(kind);
+            r.setRecipientId(kind == RecipientKind.role ? null : target.id());
+            r.setRecipientRole(kind == RecipientKind.role ? target.role() : null);
+            recipientRows.add(r);
+        }
+        recipients.saveAll(recipientRows);
+
+        final Notification delivered = saved;
+        final List<NotificationRecipient> deliveredRecipients = recipientRows;
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                channelRegistry.dispatch(delivered, deliveredRecipients);
+            }
+        });
+        return saved.getId();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<NotificationResponseDTO> listMine(Integer userId, String role, List<Integer> teamIds,
+        boolean unreadOnly, Pageable pageable) {
+        Page<Notification> page = notifications.findForUser(
+            userId, role, teamIds, unreadOnly,
+            RecipientKind.user, RecipientKind.role, RecipientKind.team, pageable);
+        Set<Long> readIds = readIdsFor(userId);
+        return page.map(n -> toDto(n, readIds.contains(n.getId())));
+    }
+
+    @Transactional(readOnly = true)
+    public long unreadCount(Integer userId, String role, List<Integer> teamIds) {
+        return notifications.countForUser(
+            userId, role, teamIds, true,
+            RecipientKind.user, RecipientKind.role, RecipientKind.team);
+    }
+
+    /**
+     * Mark a single notification read for the user.
+     *
+     * @return false if the notification does not exist (the caller maps this
+     *         to a 404), true once it is (or already was) read
+     */
+    @Transactional
+    public boolean markRead(Integer userId, Long notificationId) {
+        if (!notifications.existsById(notificationId)) {
+            return false;
+        }
+        if (reads.existsByNotificationIdAndUserId(notificationId, userId)) {
+            return true;
+        }
+        reads.save(readRow(notificationId, userId));
+        return true;
+    }
+
+    /** Mark every notification addressed to the user read. */
+    @Transactional
+    public void markAllRead(Integer userId, String role, List<Integer> teamIds) {
+        List<Long> addressed = notifications.findIdsForUser(
+            userId, role, teamIds,
+            RecipientKind.user, RecipientKind.role, RecipientKind.team);
+        if (addressed.isEmpty()) {
+            return;
+        }
+        Set<Long> alreadyRead = readIdsFor(userId);
+        List<NotificationRead> toInsert = addressed.stream()
+            .filter(id -> !alreadyRead.contains(id))
+            .map(id -> readRow(id, userId))
+            .toList();
+        if (!toInsert.isEmpty()) {
+            reads.saveAll(toInsert);
+        }
+    }
+
+    private NotificationRead readRow(Long notificationId, Integer userId) {
+        NotificationRead r = new NotificationRead();
+        r.setNotificationId(notificationId);
+        r.setUserId(userId);
+        r.setReadAt(Instant.now());
+        return r;
+    }
+
+    private Set<Long> readIdsFor(Integer userId) {
+        return reads.findByUserId(userId).stream()
+            .map(NotificationRead::getNotificationId)
+            .collect(Collectors.toSet());
+    }
+
+    private String resolveSource(String source) {
+        if (source == null || source.isBlank()) {
+            return SOURCE_WEB;
+        }
+        if (SOURCE_WEB.equals(source) || SOURCE_ORCH.equals(source)) {
+            return source;
+        }
+        throw new IllegalArgumentException("source must be 'webservice' or 'orchestrator'");
+    }
+
+    private String writeJson(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            throw new IllegalArgumentException("payload must be JSON-serializable", e);
+        }
+    }
+
+    private NotificationResponseDTO toDto(Notification n, boolean read) {
+        Object payload = null;
+        if (n.getPayload() != null && !n.getPayload().isBlank()) {
+            try {
+                payload = objectMapper.readValue(n.getPayload(), Object.class);
+            } catch (Exception e) {
+                // The payload is written by us as valid JSON, so this is
+                // defensive; fall back to the raw text rather than dropping it.
+                payload = n.getPayload();
+            }
+        }
+        return new NotificationResponseDTO(
+            n.getId(),
+            n.getType().name(),
+            n.getTitle(),
+            n.getBody(),
+            payload,
+            n.getSource(),
+            n.getActorUserId(),
+            n.getCreatedAt(),
+            read);
+    }
+}

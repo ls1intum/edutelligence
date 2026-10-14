@@ -40,6 +40,7 @@ public class WebConfig implements WebMvcConfigurer {
             .excludePathPatterns(
                 "/error", "/info", "/ws/**",
                 "/logosdb/get_model_health", "/internal/models_discovered",
+                "/internal/notifications",
                 "/internal/gateway_relay_stats", "/internal/gateway_relay_stats/**",
                 "/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**");
         // Registered after the auth interceptor, so it marks where authentication
