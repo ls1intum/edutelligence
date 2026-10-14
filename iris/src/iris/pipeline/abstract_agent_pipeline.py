@@ -181,6 +181,23 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     ) -> bool:
         """Return True if background memory creation should be enabled for this run."""
 
+    def _create_memiris_wrapper(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> Optional[MemirisWrapper]:
+        """The memory wrapper of this run, or None while Weaviate is unavailable.
+
+        The memory repositories make sure their collections exist when they are created, which needs Weaviate.
+        Without it the run answers without memories instead of failing.
+        """
+        try:
+            return MemirisWrapper(state.db.client, self.get_memiris_tenant(state.dto))
+        except Exception:
+            logger.warning(
+                "Memories are unavailable, Weaviate could not be reached; answering without them",
+                exc_info=True,
+            )
+            return None
+
     @abstractmethod
     def get_tools(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
@@ -901,9 +918,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
         )
         state.tracing_context = self.create_tracing_context(dto, variant)
-        state.memiris_wrapper = MemirisWrapper(
-            state.db.client, self.get_memiris_tenant(state.dto)
-        )
+        state.memiris_wrapper = self._create_memiris_wrapper(state)
 
         # Set up LangFuse tracing context for this thread
         set_current_context(state.tracing_context)
@@ -961,7 +976,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 logger.info("Using cloud model with tool calling support")
 
             # 4. Start memory creation if enabled
-            if self.is_memiris_memory_creation_enabled(state):
+            if (
+                state.memiris_wrapper is not None
+                and self.is_memiris_memory_creation_enabled(state)
+            ):
                 reference = self.get_memiris_reference(dto=state.dto)
                 state.memiris_memory_creation_thread = (
                     state.memiris_wrapper.create_memories_in_separate_thread(

@@ -107,40 +107,64 @@ class VectorDatabase:
         Running the schema setup on every call is racy: several threads can pass the ``exists()`` check and all
         call ``create()``, the losers getting a 422 "class already exists". So one thread does it. Every caller
         waits for the first attempt, so nothing writes to a collection before it exists. Once an attempt has
-        failed, the plain handles stay in place and a single caller retries at most every
-        ``_SCHEMA_RETRY_SECONDS``; the others go on without waiting.
+        failed, the plain handles stay in place and a background thread retries at most every
+        ``_SCHEMA_RETRY_SECONDS``; no caller waits for it, so a Weaviate that hangs cannot slow down a request.
         """
         if cls._schemas_ready or time.monotonic() < cls._next_schema_attempt:
             return
-        if not cls._schema_lock.acquire(blocking=not cls._schema_attempted):
+        if not cls._schema_attempted:
+            with cls._schema_lock:
+                if not cls._schema_attempted:
+                    cls._attempt_schema_setup()
             return
+        if not cls._schema_lock.acquire(blocking=False):
+            return
+        if cls._schemas_ready or time.monotonic() < cls._next_schema_attempt:
+            cls._schema_lock.release()
+            return
+        # The retry waits up to the start-up timeout, so it runs off the request; it owns the lock until it ends.
+        cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
+        threading.Thread(
+            target=cls._retry_schema_setup, name="weaviate-setup-retry", daemon=True
+        ).start()
+
+    @classmethod
+    def _retry_schema_setup(cls) -> None:
         try:
-            if cls._schemas_ready or time.monotonic() < cls._next_schema_attempt:
-                return
-            client = cls.static_client_instance
-            try:
-                if not client.is_connected():
-                    client.connect()
-                    logger.info("Weaviate client initialized")
-                cls._static_collections = {
-                    "lectures": init_lecture_unit_page_chunk_schema(client),
-                    "transcriptions": init_lecture_transcription_schema(client),
-                    "lecture_segments": init_lecture_unit_segment_schema(client),
-                    "lecture_units": init_lecture_unit_schema(client),
-                    "faqs": init_faq_schema(client),
-                }
-                cls._schemas_ready = True
-            except Exception:
-                cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
-                logger.warning(
-                    "Weaviate is unavailable; could not set up its collections, retrying in %ss",
-                    _SCHEMA_RETRY_SECONDS,
-                    exc_info=True,
-                )
-            finally:
-                cls._schema_attempted = True
+            cls._attempt_schema_setup()
         finally:
             cls._schema_lock.release()
+
+    @classmethod
+    def _attempt_schema_setup(cls) -> None:
+        """One attempt to connect and create the collections; the caller holds ``_schema_lock``."""
+        client = cls.static_client_instance
+        try:
+            if not client.is_connected():
+                client.connect()
+                logger.info("Weaviate client initialized")
+                # Handles taken before connecting are bound to an unknown server version; take them again.
+                cls._static_collections = _collection_handles(client)
+            cls._static_collections = {
+                "lectures": init_lecture_unit_page_chunk_schema(client),
+                "transcriptions": init_lecture_transcription_schema(client),
+                "lecture_segments": init_lecture_unit_segment_schema(client),
+                "lecture_units": init_lecture_unit_schema(client),
+                "faqs": init_faq_schema(client),
+            }
+            cls._schemas_ready = True
+        except Exception:
+            if not client.is_connected():
+                # A failed connect leaves its connections open; close them before the next attempt opens new ones.
+                client.close()
+            cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
+            logger.warning(
+                "Weaviate is unavailable; could not set up its collections, retrying in %ss",
+                _SCHEMA_RETRY_SECONDS,
+                exc_info=True,
+            )
+        finally:
+            cls._schema_attempted = True
 
     def delete_collection(self, collection_name):
         """

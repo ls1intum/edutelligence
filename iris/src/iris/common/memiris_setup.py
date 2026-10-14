@@ -326,20 +326,8 @@ class MemirisWrapper:
             self.enabled = False
             return
 
-        self.tenant = tenant
-        try:
-            self._set_up(weaviate_client)
-            self.enabled = True
-        except Exception:
-            # The memory repositories make sure their collections exist when they are created, which needs
-            # Weaviate. Without it the wrapper is disabled for this run, as if memories were turned off.
-            logging.warning(
-                "Memories are unavailable, Weaviate could not be reached; continuing without them",
-                exc_info=True,
-            )
-            self.enabled = False
+        self.enabled = True
 
-    def _set_up(self, weaviate_client: WeaviateClient) -> None:
         # Create embedding models from configuration
         config = settings.memiris.llm_configuration
         self._memiris_embedding_models = [
@@ -367,6 +355,7 @@ class MemirisWrapper:
         self.learning_service = LearningService(weaviate_client)
         self.memory_service = MemoryService(weaviate_client)
         self.memory_connection_service = MemoryConnectionService(weaviate_client)
+        self.tenant = tenant
 
     @observe(name="Memiris: Create Memories")
     def create_memories(

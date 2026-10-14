@@ -102,7 +102,19 @@ def fresh_database(monkeypatch):
     monkeypatch.setattr(database.time, "monotonic", lambda: clock.now)
     for name in SCHEMA_INITS[1:]:
         monkeypatch.setattr(database, name, MagicMock(return_value=MagicMock()))
-    return SimpleNamespace(client=client, build=build, clock=clock)
+    retries = []
+
+    class _HeldThread:
+        """Records the retry instead of starting it, so the test decides when it runs."""
+
+        def __init__(self, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            retries.append(self.target)
+
+    monkeypatch.setattr(database.threading, "Thread", _HeldThread)
+    return SimpleNamespace(client=client, build=build, clock=clock, retries=retries)
 
 
 def test_a_pipeline_gets_a_database_while_weaviate_is_unreachable(fresh_database):
@@ -130,7 +142,7 @@ def test_a_pipeline_gets_a_database_while_the_collections_cannot_be_set_up(
     assert db.faqs is fresh_database.client.collections.get.return_value
 
 
-def test_the_collection_setup_is_retried_once_the_wait_is_over(
+def test_the_collection_setup_is_retried_in_the_background_once_the_wait_is_over(
     monkeypatch, fresh_database
 ):
     lectures = MagicMock()
@@ -140,39 +152,66 @@ def test_the_collection_setup_is_retried_once_the_wait_is_over(
     VectorDatabase()
     VectorDatabase()
     assert init_lectures.call_count == 1
-    fresh_database.build.assert_called_once()
+    assert not fresh_database.retries
 
     fresh_database.clock.now += database._SCHEMA_RETRY_SECONDS + 1
-    db = VectorDatabase()
-
-    assert init_lectures.call_count == 2
-    assert db.lectures is lectures
     VectorDatabase()
+    VectorDatabase()
+
+    # The caller did not wait: the retry is handed to one background thread, and only once.
+    assert init_lectures.call_count == 1
+    assert len(fresh_database.retries) == 1
+    assert VectorDatabase._schema_lock.locked()
+
+    fresh_database.retries[0]()
+
     assert init_lectures.call_count == 2
+    assert not VectorDatabase._schema_lock.locked()
+    assert VectorDatabase().lectures is lectures
+    fresh_database.clock.now += database._SCHEMA_RETRY_SECONDS + 1
+    VectorDatabase()
+    assert len(fresh_database.retries) == 1
 
 
-def test_memories_are_off_for_the_run_while_weaviate_is_unavailable(monkeypatch):
-    from iris.common import memiris_setup  # pylint: disable=import-outside-toplevel
+def test_a_failed_connect_is_closed_and_handles_are_taken_again_after_connecting(
+    monkeypatch, fresh_database
+):
+    monkeypatch.setattr(database, SCHEMA_INITS[0], MagicMock(return_value=MagicMock()))
+    client = fresh_database.client
+    client.connect.side_effect = [RuntimeError("Weaviate down"), None]
 
-    monkeypatch.setattr(
-        memiris_setup,
-        "settings",
-        SimpleNamespace(
-            memiris=SimpleNamespace(
-                enabled=True,
-                llm_configuration=SimpleNamespace(embeddings=[]),
-            )
-        ),
+    VectorDatabase()
+    client.close.assert_called_once()
+    handles_before = client.collections.get.call_count
+
+    fresh_database.clock.now += database._SCHEMA_RETRY_SECONDS + 1
+    VectorDatabase()
+    fresh_database.retries[0]()
+
+    assert client.connect.call_count == 2
+    assert client.collections.get.call_count == handles_before + 5
+    assert VectorDatabase._schemas_ready is True
+
+
+def test_a_run_goes_on_without_memories_while_weaviate_is_unavailable(monkeypatch):
+    from iris.pipeline import (  # pylint: disable=import-outside-toplevel
+        abstract_agent_pipeline,
     )
-    monkeypatch.setattr(memiris_setup, "Vectorizer", MagicMock())
+
     monkeypatch.setattr(
-        memiris_setup,
-        "_create_memory_creation_pipeline",
+        abstract_agent_pipeline,
+        "MemirisWrapper",
         MagicMock(side_effect=RuntimeError("Weaviate down")),
     )
+    pipeline = MagicMock()
+    state = SimpleNamespace(db=SimpleNamespace(client=MagicMock()), dto=MagicMock())
 
-    wrapper = memiris_setup.MemirisWrapper(MagicMock(), "artemis-user-1")
+    wrapper = abstract_agent_pipeline.AbstractAgentPipeline._create_memiris_wrapper(
+        pipeline, state
+    )
 
-    assert wrapper.enabled is False
-    assert wrapper.has_memories() is False
-    assert not wrapper.create_memories("text", "reference")
+    assert wrapper is None
+    assert (
+        ChatPipeline._has_memories(SimpleNamespace(dto=state.dto, memiris_wrapper=None))
+        is False
+    )
