@@ -820,7 +820,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         stored as -1.
         """
         doc = None
-        cancel_event = self.cancel_event
         try:
             doc = fitz.open(lecture_pdf)
             self.course_language = self._resolve_course_language(doc)
@@ -832,8 +831,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
 
             # Phase 1: vision per page — collect the merged text and the raw slide number.
             page_texts = [
-                doc.load_page(page_num).get_text()
-                for page_num in range(doc.page_count)
+                doc.load_page(page_num).get_text() for page_num in range(doc.page_count)
             ]
             vision_results = self._interpret_pages(
                 doc, page_texts, lecture_unit_slide_dto

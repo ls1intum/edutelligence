@@ -1,4 +1,4 @@
-"""The slides and slide segments of a lecture unit are sent to the LLM several at a time, without changing the result."""
+"""Slides and slide segments of a lecture unit go to the LLM several at a time, with the same result."""
 
 import base64
 import threading
@@ -66,7 +66,7 @@ def test_pages_are_interpreted_side_by_side_and_returned_in_page_order():
     concurrency = _Concurrency()
     contexts = {}
 
-    def interpret(img_base64, last_page_content, _lecture, _language):
+    def interpret(img_base64, last_page_content, *_args):
         with concurrency:
             time.sleep(0.05)
         page = int(base64.b64decode(img_base64).decode().split()[-1])
@@ -85,7 +85,9 @@ def test_pages_are_interpreted_side_by_side_and_returned_in_page_order():
     assert concurrency.peak == 3
     assert contexts[0] == ""
     assert contexts[4] == "text of page 3"
-    progress = [c.kwargs["stage_progress"] for c in pipeline.callback.update.call_args_list]
+    progress = [
+        c.kwargs["stage_progress"] for c in pipeline.callback.update.call_args_list
+    ]
     assert progress == list(range(1, 8))
 
 
@@ -130,7 +132,8 @@ def test_segment_summaries_run_side_by_side_and_keep_segment_order():
     pipeline.lecture_unit_dto = SimpleNamespace(lecture_unit_id=7)
     concurrency = _Concurrency()
 
-    def create_summary(_transcriptions, slides, _cancel_event):
+    def create_summary(*args):
+        slides = args[1]
         with concurrency:
             time.sleep(0.05)
         return f"summary of {slides[0]}"
@@ -142,7 +145,9 @@ def test_segment_summaries_run_side_by_side_and_keep_segment_order():
 
     assert summaries == [f"summary of slide {n}" for n in range(6)]
     assert concurrency.peak == 3
-    progress = [c.kwargs["stage_progress"] for c in pipeline.callback.update.call_args_list]
+    progress = [
+        c.kwargs["stage_progress"] for c in pipeline.callback.update.call_args_list
+    ]
     assert progress == list(range(1, 7))
 
 
@@ -168,7 +173,9 @@ def test_each_segment_summary_counts_the_tokens_of_its_own_call():
     ), patch(
         "iris.pipeline.lecture_unit_segment_summary_pipeline.ChatPromptTemplate"
     ) as template:
-        template.from_messages.return_value.__or__.return_value.__or__.return_value = chain
+        template.from_messages.return_value.__or__.return_value.__or__.return_value = (
+            chain
+        )
         first = pipeline._create_summary([], [], None)
         second = pipeline._create_summary([], [], None)
 
