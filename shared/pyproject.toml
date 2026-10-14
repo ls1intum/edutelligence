@@ -13,7 +13,7 @@ readme = "README.md"
 requires-python = ">=3.11,<4.0.0"
 
 dependencies = [
-    "fastapi[standard] >= 0.141.1",
+    "fastapi[standard] >= 0.143.1",
     # Security floor. python-multipart arrives through fastapi's "standard"
     # extra, which only asks for >= 0.0.18. Consumers install shared from this
     # manifest rather than from poetry.lock, so this constraint is what keeps
@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [tool.poetry.group.dev.dependencies]
-black = "26.10.0"
+black = "26.10.1"
 flake8 = "7.4.1"
 
 [virtualenvs]
