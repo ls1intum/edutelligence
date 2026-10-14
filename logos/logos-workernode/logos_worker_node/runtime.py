@@ -212,6 +212,11 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     gpu_collector = app.state.gpu_collector
     bridge = app.state.logos_bridge
 
+    # Taken before the lanes are collected: every lifecycle change this
+    # revision covers is reflected in them, and a later one may not be.
+    lifecycle_revision = getattr(lane_manager, "status_revision", None)
+    if not isinstance(lifecycle_revision, int):
+        lifecycle_revision = None
     lanes = await lane_manager.get_all_statuses()
     devices = await gpu_collector.get_snapshot()
     # The derived summary is the last resort: it is built only when the
@@ -280,6 +285,7 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         timestamp=datetime.now(timezone.utc),
         process_started_at=_PROCESS_STARTED_AT,
         version_checksum=_VERSION_CHECKSUM,
+        lifecycle_revision=lifecycle_revision,
         transport=bridge.transport_status(),
         devices=devices,
         gpu_devices=cfg.worker.gpu_devices,

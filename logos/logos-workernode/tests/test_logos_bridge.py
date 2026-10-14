@@ -4042,3 +4042,29 @@ async def test_startup_fetch_rejects_an_orchestrator_without_central_profiles(tm
     monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=15.0: _Http())
     with pytest.raises(RuntimeError, match="HTTP 404"):
         await client.fetch_model_profiles({}, None)
+
+
+@pytest.mark.asyncio
+async def test_a_command_answer_carries_the_lifecycle_revision_after_the_command():
+    """The orchestrator holds a lane out of routing until a status sampled at
+    this revision or later arrives, so it must be read once the command is done."""
+    app = _DummyApp()
+    app.state.lane_manager = SimpleNamespace(status_revision=4)
+    app.state.gpu_collector = object()
+    client = LogosBridgeClient(app, LogosConfig(enabled=True, logos_url="https://logos.example", shared_key="secret"))
+    sent: list[dict] = []
+
+    async def _sleep_lane(action, params):  # noqa: ARG001
+        app.state.lane_manager.status_revision = 7  # the sleep changed the lane
+        return {"ok": True}
+
+    async def _send_json(_ws, payload):
+        sent.append(payload)
+
+    client._execute_command = _sleep_lane  # type: ignore[method-assign]  # noqa: SLF001
+    client._send_json = _send_json  # type: ignore[method-assign]  # noqa: SLF001
+
+    await client._execute_command_and_respond(object(), "cmd-1", "sleep_lane", {"lane_id": "lane-a"})  # noqa: SLF001
+
+    assert sent[-1]["cmd_id"] == "cmd-1"
+    assert sent[-1]["lifecycle_revision"] == 7

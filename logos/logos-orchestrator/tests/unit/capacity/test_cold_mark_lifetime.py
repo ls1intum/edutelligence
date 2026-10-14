@@ -60,6 +60,10 @@ class _Worker:
         }
         self.answering = True
         self.queued: list[dict] = []
+        # The lane manager's lifecycle revision, bumped by every lane change.
+        self.revision = 0
+        # When set, a frame handed to send_json is not written until it is.
+        self.send_gate: asyncio.Event | None = None
 
     async def connect(self) -> None:
         ticket = await self.registry.consume_ticket(await self.registry.issue_ticket(PROVIDER_ID, "worker-a", [MODEL]))
@@ -67,14 +71,23 @@ class _Worker:
         await self.registry.attach_session(ticket, self)
         await self.publish()
 
-    async def publish(self) -> None:
-        lanes = [dict(lane) for lane in self.lanes.values()]  # what went over the wire, not live state
-        await self.registry.update_runtime(provider_id=PROVIDER_ID, runtime={"lanes": lanes})
+    async def publish(self, lanes: list[dict] | None = None, revision: int | None = None) -> None:
+        """Send a status: the current lanes, or a sample taken earlier at ``revision``."""
+        if lanes is None:
+            lanes, revision = self.sample()
+        runtime = {"lanes": lanes, "lifecycle_revision": revision}
+        await self.registry.update_runtime(provider_id=PROVIDER_ID, runtime=runtime)
+
+    def sample(self) -> tuple[list[dict], int]:
+        """The lanes as a status collects them, with the revision taken first."""
+        return [dict(lane) for lane in self.lanes.values()], self.revision
 
     async def send_json(self, message: dict) -> None:
         if message.get("type") != "command" or message.get("action") == "cancel_command":
             return
         self.queued.append(message)
+        if self.send_gate is not None:
+            await self.send_gate.wait()
         if self.answering:
             asyncio.get_running_loop().call_soon(lambda: asyncio.ensure_future(self.finish()))
 
@@ -93,10 +106,12 @@ class _Worker:
             lane.update(runtime_state="sleeping", sleep_state="sleeping")
         elif message["action"] == "wake_lane":
             lane.update(runtime_state="loaded", sleep_state="awake")
+        self.revision += 1
         if status and not answer_first:
             await self.publish()
         await self.registry.on_command_result(
-            PROVIDER_ID, {"cmd_id": message["cmd_id"], "success": True, "result": {"ok": True}}
+            PROVIDER_ID,
+            {"cmd_id": message["cmd_id"], "success": True, "result": {"ok": True}, "lifecycle_revision": self.revision},
         )
         if status and answer_first:
             await self.publish()
@@ -104,6 +119,7 @@ class _Worker:
     async def wake_from_the_panel(self) -> None:
         """What the panel's wake button does: the worker wakes the lane, the planner is not involved."""
         self.lanes[IDLE_LANE].update(runtime_state="loaded", sleep_state="awake")
+        self.revision += 1
         await self.publish()
 
     async def selected(self) -> str:
@@ -400,3 +416,64 @@ def test_the_registry_publishes_a_cold_mark_change_once():
     registry.unmark_lane_cold(PROVIDER_ID, IDLE_LANE)
 
     assert published == [PROVIDER_ID, PROVIDER_ID]
+
+
+async def test_a_status_sampled_before_the_command_does_not_release_the_lane(worker):
+    planner = _planner(worker)
+    await _sleep_the_worker_has_not_answered(planner, worker, cancel=True)
+    # A status collection starts before the worker gets to the sleep ...
+    early_lanes, early_revision = worker.sample()
+
+    await worker.finish(skip_sleep=True, status=False)
+    # ... and is delivered only after the answer.
+    await worker.publish(early_lanes, early_revision)
+    await _settled()
+    assert worker.cold()
+    assert await worker.selected() == BUSY_LANE
+
+    await worker.publish()
+    await _settled()
+    assert not worker.cold()
+    assert await worker.selected() == IDLE_LANE
+
+
+async def test_a_sleep_cancelled_while_its_command_is_being_sent_keeps_the_lane_cold(worker):
+    planner = _planner(worker)
+    worker.answering = False
+    worker.send_gate = asyncio.Event()
+    task = asyncio.create_task(planner._execute_action_with_confirmation(_action("sleep_l1"), timeout_seconds=1.0))
+    for _ in range(50):
+        if worker.queued:
+            break
+        await asyncio.sleep(0)
+    assert worker.queued, "the frame never reached the websocket"
+
+    task.cancel()  # the frame is handed off, the send has not returned
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    worker.send_gate.set()
+    await _settled()
+    assert worker.cold()
+
+    await worker.finish()
+    await _settled()
+    assert not worker.cold()
+
+
+async def test_a_manual_drain_keeps_its_mark_when_an_older_sleep_settles(worker):
+    planner = _planner(worker)
+    await _sleep_the_worker_has_not_answered(planner, worker, cancel=True)
+    seen_during_drain: list[bool] = []
+
+    async def drain(provider_id, lane_id, timeout_seconds=30.0):  # noqa: ARG001
+        await worker.finish(skip_sleep=True, answer_first=True)  # the older sleep settles mid-drain
+        await _settled()
+        seen_during_drain.append(worker.cold())
+        return False  # the lane does not drain in time
+
+    planner._drain_lane = drain
+    result = await planner.drain_lane_manually(PROVIDER_ID, IDLE_LANE)
+
+    assert result["status"] == "drain_timeout"
+    assert seen_during_drain == [True]
+    assert not worker.cold()

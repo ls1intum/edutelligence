@@ -1259,7 +1259,7 @@ class CapacityPlanner:
             updated = apply_serving_overrides(current, overrides)
             if updated == current:
                 return True
-            self._mark_lane_cold(provider_id, target.lane_id)
+            self._hold_lane_cold(provider_id, target.lane_id)
             try:
                 if progress_callback is not None:
                     progress_callback("reconfiguring_worker")
@@ -1299,7 +1299,7 @@ class CapacityPlanner:
                         f"within {confirmation_timeout:g} seconds. Check its connection."
                     )
             finally:
-                self._unmark_lane_cold(provider_id, target.lane_id)
+                self._release_lane_cold(provider_id, target.lane_id)
         return await self.prepare_benchmark_lane(provider_id, model_name, timeout_seconds)
 
     @staticmethod
@@ -1564,12 +1564,15 @@ class CapacityPlanner:
                 lane.effective_vram_mb or 0,
                 loading_model,
             )
-            self._mark_lane_cold(provider_id, lane.lane_id)
-            async with self._lane_lock(provider_id, lane.lane_id):
-                await self._execute_action_with_confirmation(
-                    stop_action,
-                    timeout_seconds=min(timeout_seconds, 30.0),
-                )
+            self._hold_lane_cold(provider_id, lane.lane_id)
+            try:
+                async with self._lane_lock(provider_id, lane.lane_id):
+                    await self._execute_action_with_confirmation(
+                        stop_action,
+                        timeout_seconds=min(timeout_seconds, 30.0),
+                    )
+            finally:
+                self._release_lane_cold(provider_id, lane.lane_id)
 
     async def _cold_load_for_request(
         self,
@@ -7079,7 +7082,7 @@ class CapacityPlanner:
         started = time.monotonic()
         deadline = started + self.DRAIN_ENDPOINT_BUDGET_SECONDS
         async with self._lane_lock(provider_id, lane_id):
-            self._mark_lane_cold(provider_id, lane_id)
+            self._hold_lane_cold(provider_id, lane_id)
             try:
                 drained = await self._drain_lane(
                     provider_id, lane_id, timeout_seconds=self._step_budget(deadline, self.DRAIN_TIMEOUT_SECONDS)
@@ -7218,7 +7221,7 @@ class CapacityPlanner:
                     ),
                 }
             finally:
-                self._unmark_lane_cold(provider_id, lane_id)
+                self._release_lane_cold(provider_id, lane_id)
 
     def _build_load_params(
         self,
@@ -8087,6 +8090,19 @@ class CapacityPlanner:
     COLD_MARK_STATUS_WAIT_S = 30.0
     COLD_MARK_STATUS_POLL_S = 0.5
 
+    def _hold_lane_cold(self, provider_id: int, lane_id: str) -> None:
+        """Mark a lane cold for a scope that clears it with _release_lane_cold.
+
+        Every scope that takes a lane out of the rotation on its own (a manual
+        drain, a benchmark reconfiguration, a KV cache reconfiguration) holds
+        the mark, so a sleep or stop that ends meanwhile cannot clear it.
+        """
+        self._hold_cold_mark((provider_id, lane_id))
+        self._mark_lane_cold(provider_id, lane_id)
+
+    def _release_lane_cold(self, provider_id: int, lane_id: str) -> None:
+        self._drop_cold_mark_hold((provider_id, lane_id))
+
     def _hold_cold_mark(self, key: tuple[int, str]) -> None:
         self._cold_mark_holds[key] = self._cold_mark_holds.get(key, 0) + 1
 
@@ -8120,10 +8136,11 @@ class CapacityPlanner:
         with it, the lane may be about to sleep or go away.
 
         The answer alone is not enough either: the worker sends it separately
-        from its status, so the cached state can still show the lane awake
-        when the answer arrives. The hold lasts until a status received after
-        the answer, or one that already shows the lane asleep or gone. From
-        then on the worker's own state decides whether the lane is routable.
+        from its status, and even a status that arrives after the answer can
+        hold lanes sampled before the command. The hold lasts until a status
+        that reflects the command (see LogosNodeRuntimeRegistry.reflects_command)
+        or one that already shows the lane asleep or gone. From then on the
+        worker's own state decides whether the lane is routable.
         """
         provider_id, lane_id = key
         try:
@@ -8139,11 +8156,9 @@ class CapacityPlanner:
                 return
             except Exception:  # noqa: BLE001 — the session ended, and the command with it
                 return
-            statuses_before = reply.get("runtime_statuses_before") if isinstance(reply, dict) else None
             answered_at = time.monotonic()
             while time.monotonic() - answered_at < self.COLD_MARK_STATUS_WAIT_S:
-                statuses = self._registry.runtime_status_count(provider_id)
-                if statuses is None or statuses_before is None or statuses > statuses_before:
+                if self._registry.reflects_command(provider_id, reply):
                     return
                 snapshot = self._registry.peek_runtime_snapshot(provider_id) or {}
                 lanes = (snapshot.get("runtime") or {}).get("lanes") or []
@@ -8712,7 +8727,7 @@ class CapacityPlanner:
             # Mark lane cold BEFORE sleeping so the scheduler immediately stops
             # routing new requests (prevents TOCTOU where requests land on a
             # lane that's about to sleep for KV reconfiguration).
-            self._mark_lane_cold(action.provider_id, action.lane_id)
+            self._hold_lane_cold(action.provider_id, action.lane_id)
             try:
                 logger.info(
                     "Sleeping lane %s before KV cache reconfigure (warm restart)",
@@ -8745,12 +8760,12 @@ class CapacityPlanner:
                     action.lane_id,
                     exc,
                 )
-                self._unmark_lane_cold(action.provider_id, action.lane_id)
+                self._release_lane_cold(action.provider_id, action.lane_id)
                 return False
 
             confirmed = await self._poll_confirmation(action, timeout_seconds)
             # Unmark cold after reconfigure completes (lane will be loaded/running again)
-            self._unmark_lane_cold(action.provider_id, action.lane_id)
+            self._release_lane_cold(action.provider_id, action.lane_id)
             if not confirmed:
                 logger.warning(
                     "Confirmation timeout for reconfigure_kv_cache on lane %s after %.0fs",

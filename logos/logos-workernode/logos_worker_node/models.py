@@ -945,6 +945,11 @@ class WorkerRuntimeStatus(BaseModel):
     # build without one (local build, source checkout); None only from workers
     # that predate the field.
     version_checksum: str | None = None
+    # The lane manager's lifecycle revision when the lanes below were
+    # collected. Command answers carry the revision after the command, so the
+    # orchestrator can tell a status that reflects a command from one sampled
+    # before it. None from workers that predate the field.
+    lifecycle_revision: int | None = None
     transport: WorkerTransportStatus
     devices: DeviceSummary
     gpu_devices: str = "all"
