@@ -37,6 +37,26 @@ memiris:
   # Keep it below the parallel capacity of the local model's serving lanes.
   sleep_max_threads: 4
 
+course_memory:
+  enabled: true # Set to false to disable the Course Memory feature
+  alpha: 0.5 # Hybrid fusion weight (Weaviate convention: 0=BM25/keyword, 1=dense/vector)
+  similarity_threshold: 0.85 # Minimum cosine certainty (0-1) for a retrieved entry; certainty = (1 + cosine) / 2
+  result_limit: 5 # Max verified Q/A pairs returned per query
+  query_rewrite_enabled: true # Rewrite context-poor questions before retrieval
+  context_message_limit: 20 # Preceding thread messages used for context
+
+autonomous_tutor:
+  organizational_evidence_guard:
+    # Every reply Artemis would publish unreviewed (confidence >= 0.85) is checked by an LLM: it
+    # lists the organizational facts (dates, rooms, scope, deadlines, grading, registration) and
+    # whether tutor-verified Course Memory answers state each of them. FAQs and community-resolved
+    # entries do not count. A reply with an unsupported fact, or a failed check, is capped to
+    # confidence_cap, so Artemis routes it to tutor review. Artemis publishes at >= 0.85, reviews in
+    # [0.70, 0.85), discards below 0.70.
+    enabled: true
+    llm_check_enabled: true # false: cap every such reply ("review everything"), no LLM check
+    confidence_cap: 0.75
+
 local_llm_enabled: true # Set to false to disable local LLM support entirely
 
 langfuse:
@@ -222,6 +242,20 @@ llm_configuration:
       chat:
         local: qwen3.8-27b
         cloud: oai-gpt-5-mini-minimal
+      embedding: oai-embedding-small
+
+  course_memory_ingestion_pipeline:
+    default:
+      chat:
+        local: gpt-oss
+        cloud: oai-gpt-5-mini
+      embedding: oai-embedding-small
+
+  course_memory_retrieval_pipeline:
+    default:
+      chat:
+        local: qwen3.8-27b # must be an on-premise model: LOCAL_AI runs rewrite the student's question with it
+        cloud: oai-gpt-5-mini
       embedding: oai-embedding-small
 
   citation_pipeline:

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import Field
 
@@ -10,7 +10,12 @@ class AutonomousTutorPipelineStatusUpdateDTO(StatusUpdateDTO):
     This DTO is sent back to Artemis with the generated response and a confidence score.
     - result: The generated response to the student's post.
     - confidence: Confidence score (0.0 to 1.0) indicating how confident the model is in the response.
+    - used_course_memory_conversation_ids: The channels of every Course Memory entry the run
+      retrieved. Artemis checks them again before publishing the response unreviewed.
     """
 
     result: Optional[str] = None
     confidence: Optional[float] = Field(default=None)
+    used_course_memory_conversation_ids: Optional[List[int]] = Field(
+        default=None, alias="usedCourseMemoryConversationIds"
+    )
