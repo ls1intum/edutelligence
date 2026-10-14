@@ -10,27 +10,33 @@ LLM to guess, so all parts of one reply use the same language.
 import re
 from typing import Iterable, Optional
 
-from langdetect import DetectorFactory, detect_langs
-from langdetect.detector_factory import init_factory
+from langdetect import DetectorFactory
+from langdetect.detector_factory import PROFILES_DIRECTORY
 from langdetect.lang_detect_exception import LangDetectException
 
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 
-# A fixed seed keeps detection reproducible. Load the profiles at import time,
-# because langdetect loads them lazily and that first load is not thread-safe.
-DetectorFactory.seed = 0
-init_factory()
+# An own factory with a fixed seed keeps detection reproducible. It loads the
+# profiles at import time, because the first load is not thread-safe.
+_FACTORY = DetectorFactory()
+_FACTORY.load_profile(PROFILES_DIRECTORY)
+_FACTORY.set_seed(0)
 
-# Below this many letters, or below this confidence, a text does not clearly
-# show its language ("ok", a code snippet). German and English, the two Artemis
-# languages, need fewer letters. Short texts are sometimes misdetected as another
-# language ("Can you give me a quiz question about recursion?" reads as French),
-# so other languages need more text before they count.
-_MIN_LETTERS = 30
+# German and English are the two Artemis languages. Short texts are often
+# misdetected as another language ("Can you give me a quiz question about
+# recursion?" reads as French), so another language only counts for a longer
+# text. Otherwise detection only decides between German and English, which
+# works well even for short texts. Below the minimum, or below the confidence,
+# a text does not clearly show its language ("ok", a code snippet).
+_MIN_LETTERS = 15
 _MIN_LETTERS_OTHER_LANGUAGE = 80
 _MIN_PROBABILITY = 0.9
 _ARTEMIS_LANGUAGES = {"de", "en"}
+_ARTEMIS_ONLY_PRIOR = {
+    language: (0.5 if language in _ARTEMIS_LANGUAGES else 0.0)
+    for language in _FACTORY.get_lang_list()
+}
 
 # Every language langdetect can return.
 _LANGUAGE_NAMES = {
@@ -115,16 +121,27 @@ def detect_language_name(text: Optional[str]) -> Optional[str]:
     letters = sum(char.isalpha() for char in prose)
     if letters < _MIN_LETTERS:
         return None
+    if letters >= _MIN_LETTERS_OTHER_LANGUAGE:
+        detected = _detect(prose, None)
+        if detected and detected not in _ARTEMIS_LANGUAGES:
+            return _LANGUAGE_NAMES.get(detected)
+    detected = _detect(prose, _ARTEMIS_ONLY_PRIOR)
+    return _LANGUAGE_NAMES.get(detected) if detected else None
+
+
+def _detect(text: str, prior_map: Optional[dict[str, float]]) -> Optional[str]:
+    """Return the detected language code if its probability is high enough."""
+    detector = _FACTORY.create()
+    if prior_map:
+        detector.set_prior_map(prior_map)
+    detector.append(text)
     try:
-        candidates = detect_langs(prose)
+        candidates = detector.get_probabilities()
     except LangDetectException:
         return None
     if not candidates or candidates[0].prob < _MIN_PROBABILITY:
         return None
-    language = candidates[0].lang
-    if language not in _ARTEMIS_LANGUAGES and letters < _MIN_LETTERS_OTHER_LANGUAGE:
-        return None
-    return _LANGUAGE_NAMES.get(language)
+    return candidates[0].lang
 
 
 def previous_reply_language(

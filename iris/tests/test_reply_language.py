@@ -113,9 +113,21 @@ def test_short_answer_follows_a_clear_switch_by_the_student():
 
 
 def test_short_english_text_is_not_taken_for_another_language():
-    text = "Can you give me a quiz question about recursion?\nSure, here you go!"
-    assert detect_language_name(text) is None
-    assert reply_language("Sure, here you go!", text, [], "en") == "English"
+    request = "Can you give me a quiz question about recursion?"
+    german_history = [_message(IrisMessageRole.ASSISTANT, GERMAN_ANSWER)]
+    assert detect_language_name(f"{request}\nSure, here you go!") == "English"
+    assert (
+        reply_language("Sure, here you go!", request, german_history, "de") == "English"
+    )
+
+
+def test_other_languages_need_a_longer_text():
+    french = (
+        "Peux-tu m'expliquer la récursivité, s'il te plaît ? Je ne comprends pas "
+        "comment une méthode peut s'appeler elle-même sans jamais s'arrêter."
+    )
+    assert detect_language_name(french) == "French"
+    assert detect_language_name("Peux-tu m'expliquer la récursivité ?") != "French"
 
 
 def test_previous_reply_language_uses_last_answer():
@@ -132,7 +144,7 @@ def test_previous_reply_language_skips_short_answers():
     history = [
         _message(IrisMessageRole.ASSISTANT, GERMAN_ANSWER),
         _message(IrisMessageRole.USER, "Hm"),
-        _message(IrisMessageRole.ASSISTANT, "Was hast du versucht?"),
+        _message(IrisMessageRole.ASSISTANT, "Ok!"),
     ]
     assert previous_reply_language(history, "en") == "German"
 
