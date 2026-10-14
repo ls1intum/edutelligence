@@ -77,6 +77,17 @@ class NotificationServiceTest {
     }
 
     @Test
+    void userWithoutTeamsSeesOnlyDirectAndRoleItems() {
+        // 1005 (app_developer) has no team memberships: the team match runs
+        // against an empty id list and must simply match nothing.
+        Page<NotificationResponseDTO> none = service.listMine(1005, "app_developer", List.of(), false, PageRequest.of(0, 50));
+        assertThat(none.getTotalElements()).isZero();
+        assertThat(service.unreadCount(1005, "app_developer", List.of())).isZero();
+        assertThat(service.markRead(1005, "app_developer", List.of(), 9002L)).isFalse();
+        service.markAllRead(1005, "app_developer", List.of());
+    }
+
+    @Test
     void unreadCount_countsOnlyUnreadForTheUser() {
         // 1002 sees 9001 (read) and 9002 (unread) -> 1.
         assertThat(service.unreadCount(1002, "app_admin", TEAM)).isEqualTo(1);
