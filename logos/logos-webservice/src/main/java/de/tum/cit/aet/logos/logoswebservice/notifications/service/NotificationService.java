@@ -51,18 +51,21 @@ public class NotificationService {
     private final NotificationRecipientRepository recipients;
     private final NotificationChannelRegistry channelRegistry;
     private final ObjectMapper objectMapper;
+    private final NotificationMapper mapper;
 
     public NotificationService(
         NotificationRepository notifications,
         NotificationReadRepository reads,
         NotificationRecipientRepository recipients,
         NotificationChannelRegistry channelRegistry,
-        ObjectMapper objectMapper) {
+        ObjectMapper objectMapper,
+        NotificationMapper mapper) {
         this.notifications = notifications;
         this.reads = reads;
         this.recipients = recipients;
         this.channelRegistry = channelRegistry;
         this.objectMapper = objectMapper;
+        this.mapper = mapper;
     }
 
     /**
@@ -112,6 +115,21 @@ public class NotificationService {
         return saved.getId();
     }
 
+    /**
+     * Publish from a component inside the application server, e.g.
+     * {@code publish(NotificationType.budget_hit, "Budget hit", body, Map.of("team_id", id),
+     * List.of(NotificationTargetDTO.role(Role.APP_ADMIN)))}. Joins the caller's
+     * transaction, so a rolled-back producer publishes nothing.
+     *
+     * @return the new notification id
+     */
+    @Transactional
+    public Long publish(NotificationType type, String title, String body, Map<String, Object> payload,
+                        List<NotificationTargetDTO> targets) {
+        return publish(new PublishNotificationRequestDTO(
+            type.name(), title, body, payload, SOURCE_WEB, null, targets));
+    }
+
     @Transactional(readOnly = true)
     public Page<NotificationResponseDTO> listMine(Integer userId, String role, List<Integer> teamIds,
         boolean unreadOnly, Pageable pageable) {
@@ -123,7 +141,7 @@ public class NotificationService {
             : reads.findByUserIdAndNotificationIdIn(userId, pageIds).stream()
                 .map(NotificationRead::getNotificationId)
                 .collect(Collectors.toSet());
-        return page.map(n -> toDto(n, readIds.contains(n.getId())));
+        return page.map(n -> mapper.toDto(n, readIds.contains(n.getId())));
     }
 
     @Transactional(readOnly = true)
@@ -214,28 +232,5 @@ public class NotificationService {
         } catch (JsonProcessingException e) {
             throw new IllegalArgumentException("payload must be JSON-serializable", e);
         }
-    }
-
-    private NotificationResponseDTO toDto(Notification n, boolean read) {
-        Object payload = null;
-        if (n.getPayload() != null && !n.getPayload().isBlank()) {
-            try {
-                payload = objectMapper.readValue(n.getPayload(), Object.class);
-            } catch (Exception e) {
-                // The payload is written by us as valid JSON, so this is
-                // defensive; fall back to the raw text rather than dropping it.
-                payload = n.getPayload();
-            }
-        }
-        return new NotificationResponseDTO(
-            n.getId(),
-            n.getType().name(),
-            n.getTitle(),
-            n.getBody(),
-            payload,
-            n.getSource(),
-            n.getActorUserId(),
-            n.getCreatedAt(),
-            read);
     }
 }

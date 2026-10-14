@@ -3,9 +3,17 @@ package de.tum.cit.aet.logos.logoswebservice.notifications.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -18,6 +26,9 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -26,7 +37,10 @@ import org.springframework.test.context.jdbc.Sql;
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.notifications.dto.NotificationResponseDTO;
 import de.tum.cit.aet.logos.logoswebservice.notifications.dto.NotificationTargetDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.notifications.dto.PublishNotificationRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.notifications.entity.NotificationType;
+import de.tum.cit.aet.logos.logoswebservice.notifications.realtime.NotificationSocketHandler;
 
 /**
  * The publish and read halves against a real (Testcontainers) database:
@@ -52,6 +66,7 @@ class NotificationServiceTest {
 
     @Autowired NotificationService service;
     @Autowired JdbcTemplate jdbc;
+    @Autowired NotificationSocketHandler sockets;
     @MockitoBean JwtDecoder jwtDecoder;
 
     private static final List<Integer> TEAM = List.of(2001);
@@ -180,6 +195,38 @@ class NotificationServiceTest {
         assertThat(service.unreadCount(1002, "app_admin", TEAM)).isEqualTo(2);
         // 1001 (app_developer) is not addressed by the role target: still 1.
         assertThat(service.unreadCount(1001, "app_developer", TEAM)).isEqualTo(1);
+    }
+
+    @Test
+    void publish_pushesToTheOpenSocketsOfItsRecipients() throws Exception {
+        WebSocketSession appAdmin = mock(WebSocketSession.class);
+        Map<String, Object> attributes = new HashMap<>();
+        attributes.put("notificationUserId", 1002);
+        attributes.put("notificationRole", "app_admin");
+        attributes.put("notificationTeamIds", Set.of(2001));
+        when(appAdmin.getId()).thenReturn("push-test");
+        when(appAdmin.getAttributes()).thenReturn(attributes);
+        when(appAdmin.isOpen()).thenReturn(true);
+        sockets.afterConnectionEstablished(appAdmin);
+        try {
+            service.publish(new PublishNotificationRequestDTO(
+                "budget_hit", "Budget hit", null, null, "webservice", null,
+                List.of(new NotificationTargetDTO("role", null, "app_admin"))));
+            // Delivered after the publishing transaction commits.
+            verify(appAdmin, timeout(2_000)).sendMessage(any(TextMessage.class));
+        } finally {
+            sockets.afterConnectionClosed(appAdmin, CloseStatus.NORMAL);
+        }
+    }
+
+    @Test
+    void publish_typedOverloadForInProcessProducers() {
+        long id = service.publish(NotificationType.new_models_available, "New models", null, null,
+            List.of(NotificationTargetDTO.team(2001), NotificationTargetDTO.role(Role.LOGOS_ADMIN)));
+        assertThat(jdbc.queryForObject(
+            "SELECT source FROM notifications WHERE id = ?", String.class, id)).isEqualTo("webservice");
+        // Team 2001 member 1001 sees it.
+        assertThat(service.unreadCount(1001, "app_developer", TEAM)).isEqualTo(2);
     }
 
     @Test
