@@ -169,17 +169,23 @@ def republish_lane_snapshot(provider_id: int) -> None:
     panel until the worker's state moves on, and a lane already asleep
     could keep showing as draining.
     """
-    snapshot = _main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}
-    runtime = snapshot.get("runtime")
-    if not isinstance(runtime, dict) or not runtime:
-        return
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    task = loop.create_task(_capture_logosnode_provider_snapshot(provider_id, runtime, cold_mark_changed=True))
+    task = loop.create_task(_republish_latest_runtime(provider_id))
     _main._background_tasks.add(task)
     task.add_done_callback(_main._background_tasks.discard)
+
+
+async def _republish_latest_runtime(provider_id: int) -> None:
+    # Read only now: a status captured since the mark changed must not be
+    # overwritten by the older runtime under a newer timestamp.
+    snapshot = _main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}
+    runtime = snapshot.get("runtime")
+    if not isinstance(runtime, dict) or not runtime:
+        return
+    await _capture_logosnode_provider_snapshot(provider_id, runtime, cold_mark_changed=True)
 
 
 async def _capture_logosnode_provider_snapshot(

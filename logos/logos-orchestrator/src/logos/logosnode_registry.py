@@ -331,6 +331,8 @@ class ProviderSession:
     latest_events: list[dict[str, Any]] = field(default_factory=list)
     recent_samples: deque[dict[str, Any]] = field(default_factory=deque)
     pending_commands: dict[str, asyncio.Future] = field(default_factory=dict)
+    # Counts the runtime statuses received; see runtime_status_count.
+    runtime_status_count: int = 0
     pending_streams: dict[str, asyncio.Queue] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -670,6 +672,9 @@ class LogosNodeRuntimeRegistry:
                     accent=YELLOW,
                 )
             )
+            # The old handler's own detach no longer matches a session, so the
+            # commands it was waiting on are failed here instead.
+            self._fail_pending_commands(old, "Worker session replaced")
             await self._close_session(old)
         else:
             body_lines = [
@@ -732,9 +737,7 @@ class LogosNodeRuntimeRegistry:
                 accent=RED,
             )
         )
-        for fut in list(session.pending_commands.values()):
-            if not fut.done():
-                fut.set_exception(LogosNodeOfflineError("Worker disconnected"))
+        self._fail_pending_commands(session, "Worker disconnected")
         for queue in list(session.pending_streams.values()):
             try:
                 queue.put_nowait(
@@ -809,6 +812,7 @@ class LogosNodeRuntimeRegistry:
             return
         old_runtime = session.latest_runtime
         session.latest_runtime = runtime if isinstance(runtime, dict) else {}
+        session.runtime_status_count += 1
         session.runtime_revision += 1
         was_first = not session.first_status_received
         session.first_status_received = True
@@ -1099,7 +1103,7 @@ class LogosNodeRuntimeRegistry:
             return
         fut = session.pending_commands.pop(cmd_id, None)
         if fut is not None and not fut.done():
-            fut.set_result(payload)
+            fut.set_result({**payload, "runtime_statuses_before": session.runtime_status_count})
 
     async def on_stream_start(self, provider_id: int, payload: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)
@@ -1654,6 +1658,22 @@ class LogosNodeRuntimeRegistry:
     # ------------------------------------------------------------------
     # Cold lane marking (for capacity planner pre-removal exclusion)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fail_pending_commands(session: ProviderSession, reason: str) -> None:
+        for fut in list(session.pending_commands.values()):
+            if not fut.done():
+                fut.set_exception(LogosNodeOfflineError(reason))
+
+    def runtime_status_count(self, provider_id: int) -> int | None:
+        """How many runtime statuses the worker's session has delivered.
+
+        A command's answer carries the count at its arrival as
+        ``runtime_statuses_before``, so a caller can tell whether a status
+        sent after the command finished has arrived yet.
+        """
+        session = self._sessions.get(int(provider_id))
+        return session.runtime_status_count if session is not None else None
 
     def mark_lane_cold(self, provider_id: int, lane_id: str) -> None:
         """Pre-mark a lane as cold so it's excluded from scheduling."""

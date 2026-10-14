@@ -68,7 +68,8 @@ class _Worker:
         await self.publish()
 
     async def publish(self) -> None:
-        await self.registry.update_runtime(provider_id=PROVIDER_ID, runtime={"lanes": list(self.lanes.values())})
+        lanes = [dict(lane) for lane in self.lanes.values()]  # what went over the wire, not live state
+        await self.registry.update_runtime(provider_id=PROVIDER_ID, runtime={"lanes": lanes})
 
     async def send_json(self, message: dict) -> None:
         if message.get("type") != "command" or message.get("action") == "cancel_command":
@@ -80,17 +81,25 @@ class _Worker:
     async def close(self) -> None:
         return None
 
-    async def finish(self, *, skip_sleep: bool = False) -> None:
+    async def finish(self, *, skip_sleep: bool = False, status: bool = True, answer_first: bool = False) -> None:
+        """Carry out and answer the oldest command.
+
+        The worker sends its answer and its status separately, so either can
+        arrive first; ``status=False`` leaves the status for a later publish.
+        """
         message = self.queued.pop(0)
         lane = self.lanes[message["params"]["lane_id"]]
         if message["action"] == "sleep_lane" and not skip_sleep:
             lane.update(runtime_state="sleeping", sleep_state="sleeping")
         elif message["action"] == "wake_lane":
             lane.update(runtime_state="loaded", sleep_state="awake")
-        await self.publish()
+        if status and not answer_first:
+            await self.publish()
         await self.registry.on_command_result(
             PROVIDER_ID, {"cmd_id": message["cmd_id"], "success": True, "result": {"ok": True}}
         )
+        if status and answer_first:
+            await self.publish()
 
     async def wake_from_the_panel(self) -> None:
         """What the panel's wake button does: the worker wakes the lane, the planner is not involved."""
@@ -127,7 +136,7 @@ def _planner(worker: _Worker) -> CapacityPlanner:
     planner._on_state_change = None
     planner._pending_capacity = {}
     planner._lifecycle_commands_sent = {}
-    planner._cold_mark_owner = {}
+    planner._cold_mark_holds = {}
     planner._cold_mark_settlers = set()
     planner._mark_wake_failure = MagicMock()
     planner._lane_wake_failure_until = {}
@@ -254,7 +263,54 @@ async def test_a_sleep_the_worker_skipped_restores_routing_once_it_answers(worke
     await _sleep_the_worker_has_not_answered(planner, worker, cancel=True)
 
     # A request arrived during the worker's drain, so it kept the lane awake.
-    await worker.finish(skip_sleep=True)
+    await worker.finish(skip_sleep=True, answer_first=True)
+    await _settled()
+
+    assert not worker.cold()
+    assert await worker.selected() == IDLE_LANE
+
+
+async def test_an_answer_that_arrives_before_the_status_keeps_the_lane_cold(worker):
+    planner = _planner(worker)
+    await _sleep_the_worker_has_not_answered(planner, worker, cancel=True)
+
+    # The lane is asleep on the worker, but the status saying so is still on its way.
+    await worker.finish(status=False)
+    await _settled()
+    assert worker.cold()
+    assert await worker.selected() == BUSY_LANE
+
+    await worker.publish()
+    await _settled()
+    assert not worker.cold()
+    assert await worker.selected() == BUSY_LANE  # asleep
+
+
+async def test_a_newer_sleep_aborted_before_dispatch_keeps_the_older_sleep_holding(worker):
+    planner = _planner(worker)
+    await _sleep_the_worker_has_not_answered(planner, worker, cancel=True)
+
+    planner._drain_lane = AsyncMock(return_value=False)  # the newer sleep gives up during its drain
+    assert not await planner._execute_action_with_confirmation(_action("sleep_l1"), timeout_seconds=10.0)
+
+    assert worker.cold()
+    assert await worker.selected() == BUSY_LANE
+
+    await worker.finish(skip_sleep=True, answer_first=True)
+    await _settled()
+    assert not worker.cold()
+    assert await worker.selected() == IDLE_LANE
+
+
+async def test_a_replaced_session_ends_the_wait_for_the_answer(worker):
+    planner = _planner(worker)
+    await _sleep_the_worker_has_not_answered(planner, worker, cancel=True)
+
+    # The worker reconnects before the old handler has detached; its new
+    # session reports the lane awake, and the old command is gone with the old session.
+    ticket = await worker.registry.consume_ticket(await worker.registry.issue_ticket(PROVIDER_ID, "worker-a", [MODEL]))
+    await worker.registry.attach_session(ticket, _Worker())
+    await worker.publish()
     await _settled()
 
     assert not worker.cold()

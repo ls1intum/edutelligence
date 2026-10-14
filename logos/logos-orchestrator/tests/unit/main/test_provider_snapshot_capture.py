@@ -277,3 +277,22 @@ def test_a_cold_mark_change_is_written_although_the_worker_status_repeats(monkey
     assert persisted == [False, True]
     assert db.inserts[-1]["runtime_payload"]["lanes"][0]["cold_marked"] is False
     assert db.inserts[-1]["snapshot_ts"] > db.inserts[0]["snapshot_ts"]
+
+
+def test_a_cold_mark_republish_writes_the_status_current_when_it_runs(monkeypatch, registry):
+    """A worker status captured between the mark change and the republish
+    must not be overwritten by the runtime from before it."""
+    db = _SnapshotDB()
+    _patched_capture(monkeypatch, db)
+    registry.runtime = {"timestamp": _TS, "lanes": [{"lane_id": "lane-2", "runtime_state": "loaded"}]}
+
+    async def _run():
+        logosnode_mod.republish_lane_snapshot(7)
+        registry.runtime = {"timestamp": _TS, "lanes": [{"lane_id": "lane-2", "runtime_state": "sleeping"}]}
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.gather(*list(logosnode_mod._sample_writers.values()))
+
+    asyncio.run(_run())
+
+    assert db.inserts[-1]["runtime_payload"]["lanes"][0]["runtime_state"] == "sleeping"

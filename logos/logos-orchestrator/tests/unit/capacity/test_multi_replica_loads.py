@@ -248,7 +248,7 @@ def _manual_load_planner(lanes: List[LaneSchedulerSignals]) -> CapacityPlanner:
     """Planner with a mock facade reporting exactly `lanes`."""
     planner = CapacityPlanner.__new__(CapacityPlanner)
     planner._lifecycle_commands_sent = {}
-    planner._cold_mark_owner = {}
+    planner._cold_mark_holds = {}
     planner._cold_mark_settlers = set()
     registry = MagicMock()
     registry.is_calibrating.return_value = False
@@ -1628,7 +1628,7 @@ class TestRequestTimeColdLoadBackoff:
         planner = CapacityPlanner.__new__(CapacityPlanner)
         planner._lane_load_failure_until = {}
         planner._lifecycle_commands_sent = {}
-        planner._cold_mark_owner = {}
+        planner._cold_mark_holds = {}
         planner._cold_mark_settlers = set()
         planner._pending_capacity = {}
         planner._registry = None

@@ -32,7 +32,7 @@ _CALIBRATED_PROFILE = SimpleNamespace(residency_source="calibrated")
 def _planner(*, calibrating=False, has_status=True, capacity=object(), profiles=None) -> CapacityPlanner:
     planner = CapacityPlanner.__new__(CapacityPlanner)
     planner._lifecycle_commands_sent = {}
-    planner._cold_mark_owner = {}
+    planner._cold_mark_holds = {}
     planner._cold_mark_settlers = set()
     registry = MagicMock()
     registry.is_calibrating.return_value = calibrating
