@@ -1,9 +1,9 @@
+from concurrent.futures import as_completed
 from threading import Event
 from typing import Optional, Tuple
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import Runnable
 from weaviate.classes.query import Filter
 from weaviate.client import WeaviateClient
 from weaviate.exceptions import UnexpectedStatusCodeError
@@ -30,7 +30,7 @@ from iris.pipeline.prompts.lecture_unit_segment_summary_prompt import (
     lecture_unit_segment_summary_prompt,
 )
 from iris.pipeline.sub_pipeline import SubPipeline
-from iris.tracing import observe
+from iris.tracing import TracedThreadPoolExecutor, observe
 from iris.vector_database.batch_verify import (
     confirmed_rows,
     delete_many_with_retry,
@@ -64,7 +64,6 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
     """
 
     llm: IrisLangchainChatModel
-    pipeline: Runnable
     prompt: ChatPromptTemplate
 
     def __init__(
@@ -102,7 +101,6 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
 
     @observe(name="Lecture Unit Segment Summary Pipeline")
@@ -112,47 +110,24 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         cancel_event = self.cancel_event
         slide_number_start, slide_number_end = self._get_slide_range()
 
-        summaries = []
-        written_uuids = []
-        total_slides = slide_number_end - slide_number_start + 1
+        # Read every slide's inputs first, here: the reads are quick, and Weaviate access stays in this thread.
+        segments = []
         for slide_index in range(slide_number_start, slide_number_end + 1):
             raise_if_cancelled(
                 cancel_event,
                 self.lecture_unit_dto.lecture_unit_id,
                 "lecture unit segment summary",
             )
-            if self.callback is not None:
-                self.callback.update(
-                    stage_name="segment-summaries",
-                    stage_progress=slide_index - slide_number_start + 1,
-                    stage_total=total_slides,
-                )
-            transcriptions = self._get_transcriptions(slide_index)
-            # PAGE_NUMBER is unique at the PDF page level, but the ingestion pipeline
-            # stores one object per page chunk after splitting the page text. That is
-            # why this returns a list even though the logical slide/page is unique.
-            slides = self._get_slides(slide_index)
-            display_page_number = slide_index
+            segments.append(self._read_segment_inputs(slide_index))
 
-            if len(slides) != 0:
-                # A stored display number can be null on legacy chunks (written
-                # before the field existed), and .get(key, default) returns that
-                # null rather than the default; int(None) would then crash the
-                # whole segment stage. Fall back to the slide index when it is
-                # absent or null.
-                stored_display = slides[0].properties.get(
-                    LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value
-                )
-                display_page_number = (
-                    int(stored_display) if stored_display is not None else slide_index
-                )
-                if display_page_number == -1:
-                    transcriptions = []
-                else:
-                    transcriptions = self._get_transcriptions(display_page_number)
+        # The summaries wait almost entirely for the LLM and do not depend on each other, so several run at once.
+        summaries = self._summarize_segments(segments)
 
-            summary = self._create_summary(transcriptions, slides)
-            summaries.append(summary)
+        # Write in slide order, here, so the shared write-retry budget is only used from one thread.
+        written_uuids = []
+        for (slide_index, display_page_number, _, slides), summary in zip(
+            segments, summaries
+        ):
             hidden_until = (
                 slides[0].properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value)
                 if slides
@@ -164,6 +139,69 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             written_uuids.append(self._segment_uuid(slide_index))
         self._prune_stale_segments(slide_number_start, slide_number_end, written_uuids)
         return summaries, self.tokens
+
+    def _read_segment_inputs(self, slide_index: int):
+        """The slide's display number, transcript segments and page chunks, as the summary of the slide needs them."""
+        transcriptions = self._get_transcriptions(slide_index)
+        # PAGE_NUMBER is unique at the PDF page level, but the ingestion pipeline
+        # stores one object per page chunk after splitting the page text. That is
+        # why this returns a list even though the logical slide/page is unique.
+        slides = self._get_slides(slide_index)
+        display_page_number = slide_index
+
+        if len(slides) != 0:
+            # A stored display number can be null on legacy chunks (written
+            # before the field existed), and .get(key, default) returns that
+            # null rather than the default; int(None) would then crash the
+            # whole segment stage. Fall back to the slide index when it is
+            # absent or null.
+            stored_display = slides[0].properties.get(
+                LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value
+            )
+            display_page_number = (
+                int(stored_display) if stored_display is not None else slide_index
+            )
+            if display_page_number == -1:
+                transcriptions = []
+            else:
+                transcriptions = self._get_transcriptions(display_page_number)
+        return slide_index, display_page_number, transcriptions, slides
+
+    def _summarize_segments(self, segments) -> list[str]:
+        """Summarize the segments, ``segment_summary_concurrency`` at a time, returned in segment order."""
+        cancel_event = self.cancel_event
+        unit_id = self.lecture_unit_dto.lecture_unit_id
+        total = len(segments)
+        summaries: list[Optional[str]] = [None] * total
+        finished = 0
+        with TracedThreadPoolExecutor(
+            max_workers=settings.lecture_ingestion.segment_summary_concurrency
+        ) as executor:
+            futures = {
+                executor.submit(
+                    self._create_summary, transcriptions, slides, cancel_event
+                ): position
+                for position, (_, _, transcriptions, slides) in enumerate(segments)
+            }
+            try:
+                for future in as_completed(futures):
+                    summaries[futures[future]] = future.result()
+                    finished += 1
+                    if self.callback is not None:
+                        self.callback.update(
+                            stage_name="segment-summaries",
+                            stage_progress=finished,
+                            stage_total=total,
+                        )
+                    raise_if_cancelled(
+                        cancel_event, unit_id, "lecture unit segment summary"
+                    )
+            finally:
+                # On a failure or cancellation, segments not yet started are dropped; the ones in progress finish
+                # their current call before the executor shuts down.
+                for future in futures:
+                    future.cancel()
+        return summaries
 
     def _prune_stale_segments(
         self, slide_number_start: int, slide_number_end: int, keep_uuids=()
@@ -384,7 +422,12 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             ).equal(self.lecture_unit_dto.base_url)
         return transcription_filter
 
-    def _create_summary(self, transcriptions, slides) -> str:
+    def _create_summary(self, transcriptions, slides, cancel_event=None) -> str:
+        raise_if_cancelled(
+            cancel_event,
+            self.lecture_unit_dto.lecture_unit_id,
+            "lecture unit segment summary",
+        )
         transcriptions_slide_text = ""
         for transcription in transcriptions:
             transcriptions_slide_text += f"{transcription.properties[LectureTranscriptionSchema.SEGMENT_TEXT.value]}\n"
@@ -392,29 +435,30 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         slide_text = ""
         for slide in slides:
             slide_text += f"{slide.properties[LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value]}\n"
-        self.prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    lecture_unit_segment_summary_prompt(
-                        self.lecture_unit_dto.lecture_name,
-                        self.lecture_unit_dto.course_name,
-                        transcription_content=transcriptions_slide_text,
-                        slide_content=slide_text,
+        prompt = ChatPromptTemplate.from_messages(
+            ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        lecture_unit_segment_summary_prompt(
+                            self.lecture_unit_dto.lecture_name,
+                            self.lecture_unit_dto.course_name,
+                            transcription_content=transcriptions_slide_text,
+                            slide_content=slide_text,
+                        ),
                     ),
-                ),
-            ]
+                ]
+            ).format_messages()
         )
-        formatted_prompt = self.prompt.format_messages()
-        self.prompt = ChatPromptTemplate.from_messages(formatted_prompt)
-        try:
-            response = (self.prompt | self.pipeline).invoke({})
-            self._append_tokens(
-                self.llm.tokens, PipelineEnum.IRIS_LECTURE_SUMMARY_PIPELINE
-            )
-            return response
-        except Exception as e:
-            raise e
+        # Summaries run in several threads, and the chat model keeps the token usage of its last call, so each call
+        # gets its own model around the shared request handler.
+        llm = IrisLangchainChatModel(
+            request_handler=self.llm.request_handler,
+            completion_args=self.llm.completion_args,
+        )
+        response = (prompt | llm | StrOutputParser()).invoke({})
+        self._append_tokens(llm.tokens, PipelineEnum.IRIS_LECTURE_SUMMARY_PIPELINE)
+        return response
 
     def _segment_uuid(self, slide_number: int) -> str:
         """Deterministic id for a unit's slide segment.

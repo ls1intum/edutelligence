@@ -6,6 +6,7 @@ import re
 import tempfile
 import time
 from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, wait
 from datetime import datetime
 from threading import Event
 from typing import Optional
@@ -48,7 +49,7 @@ from ..llm import (
     LlmRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
-from ..tracing import observe
+from ..tracing import TracedThreadPoolExecutor, observe
 from ..vector_database.batch_verify import (
     confirmed_generations,
     confirmed_rows,
@@ -830,51 +831,23 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
 
             # Phase 1: vision per page — collect the merged text and the raw slide number.
+            page_texts = [
+                doc.load_page(page_num).get_text()
+                for page_num in range(doc.page_count)
+            ]
+            vision_results = self._interpret_pages(
+                doc, page_texts, lecture_unit_slide_dto
+            )
             pages: list[tuple[int, str]] = []
             raw_display_numbers: list[int] = []
-            old_page_text = ""
-            for page_num in range(doc.page_count):
-                raise_if_cancelled(
-                    cancel_event,
-                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                    "lecture page chunking",
-                )
-                self.callback.update(
-                    stage_name="vision",
-                    stage_progress=page_num + 1,
-                    stage_total=doc.page_count,
-                )
-                page = doc.load_page(page_num)
-                page_text = page.get_text()
-
-                matrix = fitz.Matrix(5, 5)
-                pix = page.get_pixmap(matrix=matrix)
-                img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
-
-                raise_if_cancelled(
-                    cancel_event,
-                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                    "before lecture page vision",
-                )
-                vision_result = self.interpret_image(
-                    img_base64,
-                    old_page_text,
-                    lecture_unit_slide_dto.lecture_name,
-                    self.course_language,
-                )
-                raise_if_cancelled(
-                    cancel_event,
-                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                    "after lecture page vision",
-                )
+            for page_num, vision_result in enumerate(vision_results):
                 raw_display_numbers.append(vision_result.display_page_number)
-
+                page_text = page_texts[page_num]
                 if vision_result.academic_description:
                     page_text = self.merge_page_content_and_image_interpretation(
                         page_text, vision_result.academic_description
                     )
                 pages.append((page_num, page_text))
-                old_page_text = page_text
 
             # Phase 2: reconcile the independently-read numbers into a consistent sequence.
             display_page_numbers = self._reconcile_display_page_numbers(
@@ -982,6 +955,69 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             number if isinstance(number, int) and number > 0 else index + 1
             for index, number in enumerate(reconciled)
         ]
+
+    def _interpret_pages(
+        self,
+        doc,
+        page_texts: list[str],
+        lecture_unit_slide_dto: LectureUnitPageDTO,
+    ) -> list[SlideVisionDTO]:
+        """Interpret every page via vision, ``vision_concurrency`` pages at a time, in page order.
+
+        Each call waits almost entirely for the LLM, so the pages of a unit run side by side instead of one after
+        another. A page gets the extracted text of the page before it as context. That text is known before any
+        vision call, so no call waits for another; the previous page's vision description is no longer part of the
+        context. Pages are rendered here, in the calling thread, because a PyMuPDF document must not be used from
+        several threads, and only as many as are being interpreted, so the rendered images in memory stay bounded.
+        """
+        unit_id = getattr(lecture_unit_slide_dto, "lecture_unit_id", None)
+        cancel_event = self.cancel_event
+        page_count = doc.page_count
+        concurrency = settings.lecture_ingestion.vision_concurrency
+        results: list[Optional[SlideVisionDTO]] = [None] * page_count
+        in_flight: dict = {}
+        next_page = 0
+        finished = 0
+        with TracedThreadPoolExecutor(max_workers=concurrency) as executor:
+            try:
+                while next_page < page_count or in_flight:
+                    while next_page < page_count and len(in_flight) < concurrency:
+                        raise_if_cancelled(
+                            cancel_event, unit_id, "before lecture page vision"
+                        )
+                        pix = doc.load_page(next_page).get_pixmap(
+                            matrix=fitz.Matrix(5, 5)
+                        )
+                        img_base64 = base64.b64encode(pix.tobytes("jpg")).decode(
+                            "utf-8"
+                        )
+                        future = executor.submit(
+                            self.interpret_image,
+                            img_base64,
+                            page_texts[next_page - 1] if next_page > 0 else "",
+                            lecture_unit_slide_dto.lecture_name,
+                            self.course_language,
+                        )
+                        in_flight[future] = next_page
+                        next_page += 1
+                    done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        results[in_flight.pop(future)] = future.result()
+                        finished += 1
+                        self.callback.update(
+                            stage_name="vision",
+                            stage_progress=finished,
+                            stage_total=page_count,
+                        )
+                    raise_if_cancelled(
+                        cancel_event, unit_id, "after lecture page vision"
+                    )
+            finally:
+                # On a failure or cancellation, pages not yet started are dropped; the ones in progress finish their
+                # current call before the executor shuts down.
+                for future in in_flight:
+                    future.cancel()
+        return results
 
     def interpret_image(
         self,
