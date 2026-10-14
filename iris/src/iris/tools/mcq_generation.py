@@ -12,7 +12,7 @@ def create_tool_generate_mcq_questions(
     chat_history: Optional[List[PyrisMessage]],
     callback: StatusCallback,
     mcq_result_storage: Dict[str, str],
-    user_language: str = "en",
+    language: str = "English",
     lecture_content_supplier: Optional[Callable[[], Optional[str]]] = None,
 ) -> Callable[[str], str]:
     """
@@ -23,7 +23,7 @@ def create_tool_generate_mcq_questions(
         chat_history: Recent chat history for context.
         callback: Callback for status updates.
         mcq_result_storage: Shared dict to store the generated MCQ JSON.
-        user_language: The user's preferred language ("en" or "de").
+        language: Name of the language the conversation uses, such as "German".
         lecture_content_supplier: Lazily fetches lecture content to ground MCQ
             generation. Only invoked when the tool is actually called, so the
             (potentially large) content fetch is not paid on every chat turn.
@@ -53,7 +53,7 @@ def create_tool_generate_mcq_questions(
         result_json = mcq_pipeline(
             command=command,
             chat_history=chat_history,
-            user_language=user_language,
+            language=language,
             callback=callback,
             lecture_content=lecture_content,
         )

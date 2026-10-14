@@ -1,0 +1,307 @@
+:host {
+  display: block;
+}
+
+.gpu-map {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+
+  &--offline {
+    opacity: 0.55;
+  }
+}
+
+.gpu-map__empty,
+.gpu-map__none {
+  color: rgb(var(--color-typography-500));
+  font-size: 0.8125rem;
+  margin: 0;
+}
+
+.gpu-map__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-400));
+  text-transform: lowercase;
+
+  li {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+}
+
+// One neutral definition for "not a lane", used by legend, bar and list alike.
+%other-fill {
+  background: repeating-linear-gradient(
+    135deg,
+    rgb(var(--color-typography-500) / 0.45) 0 3px,
+    rgb(var(--color-typography-500) / 0.2) 3px 6px
+  );
+}
+
+.gpu-map__swatch {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+
+  &--other {
+    @extend %other-fill;
+  }
+
+  &--free {
+    background: rgb(var(--color-typography-500) / 0.12);
+    box-shadow: inset 0 0 0 1px rgb(var(--color-typography-500) / 0.35);
+  }
+}
+
+.gpu-map__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 20rem), 1fr));
+  gap: 0.75rem;
+}
+
+.gpu-map__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-width: 0;
+  padding: 0.875rem;
+  border: 1px solid rgb(var(--color-typography-500) / 0.22);
+  border-radius: 0.75rem;
+  background: rgb(var(--color-typography-500) / 0.04);
+
+  &--pool {
+    border-style: dashed;
+  }
+
+  &--faulted {
+    border: 2px solid rgb(var(--color-error));
+    background: rgb(var(--color-error) / 0.08);
+  }
+}
+
+.gpu-map__fault {
+  margin: 0;
+  font-size: 0.75rem;
+  color: rgb(var(--color-error));
+}
+
+.gpu-map__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.gpu-map__title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.gpu-map__name {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.gpu-map__sub {
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-400));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpu-map__chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+
+.gpu-map__chip {
+  padding: 0.0625rem 0.4375rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  background: rgb(var(--color-typography-500) / 0.14);
+  color: rgb(var(--color-typography-300));
+
+  &--ok {
+    background: rgb(var(--color-success) / 0.16);
+    color: rgb(var(--color-success));
+  }
+
+  &--warn {
+    background: rgb(var(--color-warning) / 0.2);
+    color: rgb(var(--color-warning));
+  }
+
+  &--hot {
+    background: rgb(var(--color-error) / 0.18);
+    color: rgb(var(--color-error));
+  }
+
+  &--fault {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-weight: 600;
+    text-transform: uppercase;
+
+    .pi {
+      font-size: 0.625rem;
+    }
+  }
+}
+
+.gpu-map__figures {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+}
+
+.gpu-map__used {
+  font-size: 1.25rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.gpu-map__of {
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-400));
+}
+
+// The empty track is the "free" colour: whatever the segments leave is free.
+.gpu-map__bar {
+  display: flex;
+  height: 1.125rem;
+  overflow: hidden;
+  border-radius: 0.375rem;
+  background: rgb(var(--color-typography-500) / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(var(--color-typography-500) / 0.35);
+}
+
+.gpu-map__seg {
+  height: 100%;
+  min-width: 2px;
+  box-shadow: inset -1px 0 0 rgb(var(--color-background, 255 255 255) / 0.8);
+
+  &--shared {
+    // A lane that spans cards is drawn at half weight per card, not at full colour.
+    background-image: linear-gradient(rgb(255 255 255 / 0.18), rgb(255 255 255 / 0.18));
+  }
+
+  &--other {
+    @extend %other-fill;
+  }
+}
+
+.gpu-map__lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.gpu-map__lane {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.5rem;
+  row-gap: 0.125rem;
+  min-width: 0;
+  font-size: 0.8125rem;
+
+  &--other {
+    color: rgb(var(--color-typography-400));
+  }
+}
+
+.gpu-map__dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &--other {
+    @extend %other-fill;
+    border-radius: 3px;
+  }
+}
+
+.gpu-map__model {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpu-map__meta {
+  grid-column: 2 / 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.gpu-map__laneid {
+  font-size: 0.6875rem;
+  color: rgb(var(--color-typography-400));
+}
+
+.gpu-map__state {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.gpu-map__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  padding: 0 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.6875rem;
+  background: rgb(var(--color-typography-500) / 0.14);
+  color: rgb(var(--color-typography-300));
+
+  &--busy {
+    background: rgb(var(--color-success) / 0.16);
+    color: rgb(var(--color-success));
+  }
+}
+
+.gpu-map__size {
+  flex-shrink: 0;
+  min-width: 3.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--color-typography-300));
+}
+
+.gpu-map__unplaced {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  font-size: 0.75rem;
+  color: rgb(var(--color-typography-400));
+}
+

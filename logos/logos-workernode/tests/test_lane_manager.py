@@ -306,6 +306,81 @@ async def test_sleep_and_wake_lane_delegate_to_vllm_handle(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_status_built_mid_transition_names_the_step_in_progress() -> None:
+    """A sleep or wake takes seconds. A status built meanwhile still shows the
+    state the lane is leaving, so it also carries the step in progress, and
+    the step is gone again once the command has finished."""
+    manager = LaneManager(WorkerConfig(), lane_port_start=15031, lane_port_end=15040)
+    lane = LaneConfig(
+        model="Qwen/Qwen3-Reranker-8B",
+        vllm=True,
+        vllm_config=VllmConfig(enable_sleep_mode=True),
+    )
+    lane_id = "planner-Qwen_Qwen3-Reranker-8B-2"
+    seen: dict[str, tuple[str | None, str]] = {}
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15031
+            self.lane_config = lane
+            self.asleep = False
+
+        def status(self) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.RUNNING, pid=1234)
+
+        async def get_loaded_models(self) -> list[dict[str, Any]]:
+            return [{"name": lane.model, "size": 0, "size_vram": 0, "details": {"backend": "vllm"}}]
+
+        async def is_sleeping(self) -> bool | None:
+            return self.asleep
+
+        async def sleep(self, level: int = 1, mode: str = "wait") -> dict[str, Any]:
+            status = await manager._build_lane_status(self, pid_vram_map={})  # noqa: SLF001
+            seen["sleep"] = (status.transition, status.runtime_state)
+            self.asleep = True
+            return {"ok": True}
+
+        async def wake_up(self) -> dict[str, Any]:
+            status = await manager._build_lane_status(self, pid_vram_map={})  # noqa: SLF001
+            seen["wake"] = (status.transition, status.runtime_state)
+            self.asleep = False
+            return {"ok": True}
+
+    manager._handles[lane_id] = FakeVllmHandle()  # noqa: SLF001
+
+    slept = await manager.sleep_lane(lane_id, level=1, mode="wait")
+    woken = await manager.wake_lane(lane_id)
+
+    assert seen["sleep"] == ("falling_asleep", "loaded")
+    assert seen["wake"] == ("waking", "sleeping")
+    assert slept.transition is None and slept.runtime_state == "sleeping"
+    assert woken.transition is None and woken.runtime_state == "loaded"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_wake_does_not_leave_the_lane_waking() -> None:
+    manager = LaneManager(WorkerConfig(), lane_port_start=15041, lane_port_end=15050)
+    lane = LaneConfig(model="Qwen/Qwen3-Reranker-8B", vllm=True, vllm_config=VllmConfig(enable_sleep_mode=True))
+    lane_id = "planner-Qwen_Qwen3-Reranker-8B"
+
+    class FakeVllmHandle:
+        def __init__(self) -> None:
+            self.lane_id = lane_id
+            self.port = 15041
+            self.lane_config = lane
+
+        async def wake_up(self) -> dict[str, Any]:
+            raise RuntimeError("engine refused")
+
+    manager._handles[lane_id] = FakeVllmHandle()  # noqa: SLF001
+
+    with pytest.raises(RuntimeError, match="engine refused"):
+        await manager.wake_lane(lane_id)
+    assert manager._transitions == {}  # noqa: SLF001
+
+
+@pytest.mark.asyncio
 async def test_sleep_lane_invokes_the_on_lane_slept_hook(monkeypatch) -> None:
     """The moment a lane's weights land in host RAM, the wired hook (the RAM
     cache re-plan) must run before sleep_lane returns — so several lanes
@@ -989,6 +1064,143 @@ async def test_auto_place_gpu_devices_picks_best_fit_single_gpu() -> None:
     # GMU floor (0.5 × 24576 = 12288 MB) eliminates GPU 1 (12000) and GPU 2
     # (7600); only GPU 0 (16000) is feasible.
     assert placed.gpu_devices == "0"
+
+
+def _faulted_gpu0_manager(
+    *,
+    lost: bool = False,
+    healthy_free_mb: tuple[float, ...] = (60000.0, 15383.0),
+    gpu_devices: str = "all",
+    with_profile: bool = True,
+) -> LaneManager:
+    """GPU 0 failed; GPUs 1.. are healthy with *healthy_free_mb* free.
+
+    ``lost`` drops GPU 0 from the device list, as the collector does when
+    nvidia-smi cannot read its memory; only faulted_gpu_indices names it then.
+    """
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    if with_profile:
+        profiles._profiles["Qwen/Qwen2.5-0.5B-Instruct"] = ModelProfileRecord(  # noqa: SLF001
+            loaded_vram_mb=6000.0,
+            engine="vllm",
+        )
+
+    async def _snapshot() -> DeviceSummary:
+        def gpu(index: int, free_mb: float, health: str = "ok") -> DeviceInfo:
+            return DeviceInfo(
+                device_id=f"gpu{index}",
+                kind="nvidia",
+                memory_total_mb=97887.0,
+                memory_used_mb=97887.0 - free_mb,
+                memory_free_mb=free_mb,
+                health=health,
+                extra={"index": index},
+            )
+
+        # The faulted GPU reports the most free memory, so only its health
+        # keeps placement away from it.
+        devices = [] if lost else [gpu(0, 97883.0, "faulted")]
+        devices += [gpu(i + 1, free) for i, free in enumerate(healthy_free_mb)]
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia" if devices else "none",
+            nvidia_smi_available=True,
+            faulted_gpu_indices=[0],
+            devices=devices,
+        )
+
+    return LaneManager(
+        WorkerConfig(gpu_devices=gpu_devices),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+
+
+def _lane(gpu_devices: str = "", tp: int = 1) -> LaneConfig:
+    return LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices=gpu_devices,
+        vllm_config=VllmConfig(tensor_parallel_size=tp),
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_a_pin_on_a_lost_gpu_missing_from_the_device_list() -> None:
+    with pytest.raises(RuntimeError, match=r"faulted GPU\(s\) \[0\]"):
+        await _faulted_gpu0_manager(lost=True)._auto_place_gpu_devices("lane", _lane("0"))  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_an_unpinned_lane_when_every_gpu_is_lost() -> None:
+    manager = _faulted_gpu0_manager(lost=True, healthy_free_mb=())
+    with pytest.raises(RuntimeError, match="every GPU on this node is faulted"):
+        await manager._auto_place_gpu_devices("lane", _lane())  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_pins_a_healthy_gpu_without_a_vram_estimate() -> None:
+    manager = _faulted_gpu0_manager(with_profile=False)
+    placed = await manager._auto_place_gpu_devices("lane", _lane())  # noqa: SLF001
+    assert placed.gpu_devices == "1"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_when_too_few_healthy_gpus_remain() -> None:
+    manager = _faulted_gpu0_manager(healthy_free_mb=(60000.0,))
+    with pytest.raises(RuntimeError, match=r"only 1 healthy GPU"):
+        await manager._auto_place_gpu_devices("lane", _lane(tp=2))  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_a_worker_pool_of_only_faulted_gpus() -> None:
+    manager = _faulted_gpu0_manager(gpu_devices="0")
+    with pytest.raises(RuntimeError, match="no healthy GPU in this worker's GPU pool"):
+        await manager._auto_place_gpu_devices("lane", _lane())  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_never_picks_a_faulted_gpu() -> None:
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+
+    assert placed.gpu_devices == "1"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_refuses_an_explicit_pin_on_a_faulted_gpu() -> None:
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices="0",
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    with pytest.raises(RuntimeError, match=r"faulted GPU\(s\) \[0\]"):
+        await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_keeps_an_explicit_pin_on_healthy_gpus() -> None:
+    lane = LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices="2",
+        vllm_config=VllmConfig(tensor_parallel_size=1),
+    )
+
+    placed = await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+
+    assert placed.gpu_devices == "2"
 
 
 async def test_auto_place_skips_gmu_floor_when_kv_cache_memory_bytes_set() -> None:
@@ -3855,3 +4067,168 @@ async def test_apply_lanes_replans_after_rollback_restores_the_original_floor(mo
     # The restart re-planned for the replacement model, and the post-rollback
     # re-plan saw the RESTORED model — its footprint is the final floor.
     assert replan_models == ["org/small", "org/big"]
+
+
+@pytest.mark.parametrize(
+    ("selector", "gpu_count", "occupied"),
+    [
+        ("1,0", 1, "1"),  # visibility list: a TP=1 engine runs on the first entry
+        ("2,3", 2, "2,3"),
+        ("0", 1, "0"),
+        ("all", 1, ""),
+        ("", 1, ""),
+        ("1", 2, ""),  # fewer GPUs than the engine needs: unknown
+    ],
+)
+def test_occupied_gpu_devices_takes_the_first_visible_gpus(selector: str, gpu_count: int, occupied: str) -> None:
+    assert LaneManager._occupied_gpu_devices(selector, gpu_count) == occupied  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("selector", "gpu_count", "all_gpus", "occupied"),
+    [
+        ("all", 1, [0, 1, 2], "0"),
+        ("all", 2, [2, 0, 1], "0,1"),
+        ("all", 1, None, ""),  # incomplete inventory: unknown
+        ("all", 3, [0, 1], ""),
+        ("", 1, [0], ""),  # blank may inherit the parent's CUDA_VISIBLE_DEVICES
+        ("1,0", 1, [0, 1], "1"),
+    ],
+)
+def test_occupied_gpu_devices_resolves_all_only_from_a_complete_inventory(
+    selector: str, gpu_count: int, all_gpus: list[int] | None, occupied: str
+) -> None:
+    assert LaneManager._occupied_gpu_devices(selector, gpu_count, all_gpus) == occupied  # noqa: SLF001
+
+
+def _inventory_manager(devices: list[DeviceInfo], **summary: object) -> LaneManager:
+    async def snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc), mode="nvidia", nvidia_smi_available=True, devices=devices, **summary
+        )
+
+    manager = LaneManager.__new__(LaneManager)
+    manager._gpu_snapshot = snapshot  # noqa: SLF001
+    return manager
+
+
+def _inventory_gpu(index: int, health: str = "ok") -> DeviceInfo:
+    return DeviceInfo(
+        device_id=f"GPU-{index}",
+        kind="nvidia",
+        name="GPU",
+        memory_used_mb=0,
+        memory_total_mb=1000,
+        memory_free_mb=1000,
+        health=health,
+        extra={"index": index},
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_gpu_inventory_lists_every_index_of_a_whole_report() -> None:
+    manager = _inventory_manager([_inventory_gpu(1), _inventory_gpu(0)])
+    assert await manager._complete_gpu_inventory() == [1, 0]  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("devices", "summary"),
+    [
+        ([_inventory_gpu(1)], {}),  # GPU 0 left out of the report
+        ([_inventory_gpu(0)], {"degraded_reason": "gpu1: missing memory"}),  # GPU 1 left out
+        ([_inventory_gpu(0)], {"gpu_faults": ["gpu1 (GPU-1): GPU is lost"]}),
+        ([_inventory_gpu(0, "faulted"), _inventory_gpu(1)], {}),
+    ],
+)
+async def test_complete_gpu_inventory_is_unknown_when_a_gpu_may_be_missing(
+    devices: list[DeviceInfo], summary: dict[str, object]
+) -> None:
+    assert await _inventory_manager(devices, **summary)._complete_gpu_inventory() is None  # noqa: SLF001
+
+
+def _override_lane(gpu_devices: str, env_overrides: dict[str, str], tp: int = 1) -> LaneConfig:
+    return LaneConfig(
+        model="Qwen/Qwen2.5-0.5B-Instruct",
+        vllm=True,
+        gpu_devices=gpu_devices,
+        vllm_config=VllmConfig(tensor_parallel_size=tp, env_overrides=env_overrides),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gpu_devices", "env_overrides", "occupied"),
+    [
+        ("0", {}, "0"),
+        ("0", {"CUDA_VISIBLE_DEVICES": "1"}, "1"),  # the override decides what the engine sees
+        ("0", {"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}, ""),  # numbering no longer matches nvidia-smi
+        ("0", {"CUDA_DEVICE_ORDER": "PCI_BUS_ID"}, "0"),
+        ("0", {"CUDA_VISIBLE_DEVICES": "GPU-1234"}, ""),
+        ("0", {"CUDA_VISIBLE_DEVICES": "all"}, ""),
+        ("all", {}, "0"),  # complete inventory below
+    ],
+)
+async def test_lane_occupancy_follows_the_final_launch_environment(
+    gpu_devices: str, env_overrides: dict[str, str], occupied: str
+) -> None:
+    manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
+    lane = _override_lane(gpu_devices, env_overrides)
+    assert await manager._lane_occupied_gpu_devices(lane, gpu_devices, 1) == occupied  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("gpu_devices", "env_overrides", "error"),
+    [
+        # A healthy pin that the override redirects onto the failed GPU.
+        ("1", {"CUDA_VISIBLE_DEVICES": "0"}, r"CUDA_VISIBLE_DEVICES='0', which includes faulted GPU\(s\) \[0\]"),
+        # The override also undoes an automatic placement.
+        ("", {"CUDA_VISIBLE_DEVICES": "2,0"}, r"includes faulted GPU\(s\) \[0\]"),
+        ("1", {"CUDA_VISIBLE_DEVICES": "GPU-1234"}, "cannot be checked"),
+        ("1", {"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}, "CUDA_DEVICE_ORDER='FASTEST_FIRST'"),
+    ],
+)
+async def test_auto_place_refuses_a_launch_override_onto_a_faulted_gpu(
+    gpu_devices: str, env_overrides: dict[str, str], error: str
+) -> None:
+    lane = _override_lane(gpu_devices, env_overrides)
+    with pytest.raises(RuntimeError, match=error):
+        await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_auto_place_keeps_a_launch_override_onto_healthy_gpus() -> None:
+    lane = _override_lane("", {"CUDA_VISIBLE_DEVICES": "2"})
+    placed = await _faulted_gpu0_manager()._auto_place_gpu_devices("lane", lane)  # noqa: SLF001
+    assert placed.vllm_config is not None
+    assert placed.vllm_config.env_overrides == {"CUDA_VISIBLE_DEVICES": "2"}
+
+
+@pytest.mark.parametrize(
+    ("tp", "extra_args", "global_extra_args", "count"),
+    [
+        (2, [], [], 2),
+        (2, ["--tensor-parallel-size", "1"], [], 1),  # appended last: argparse keeps it
+        (1, ["--tensor-parallel-size=2", "--pipeline-parallel-size", "2"], [], 4),
+        (1, ["-tp", "2", "-dp", "2"], [], 4),
+        (1, [], ["--tensor-parallel-size", "2"], 2),  # worker-wide flag
+        (1, ["--tensor-parallel-size", "1"], ["--tensor-parallel-size", "2"], 1),  # the lane's wins
+        (1, ["--tensor-parallel-size", "x"], [], 0),
+    ],
+)
+def test_launch_gpu_count_reads_the_effective_parallelism(
+    tp: int, extra_args: list[str], global_extra_args: list[str], count: int
+) -> None:
+    vc = VllmConfig(tensor_parallel_size=tp, extra_args=extra_args)
+    assert LaneManager._launch_gpu_count(vc, global_extra_args) == count  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_lane_occupancy_follows_a_tensor_parallel_override_in_extra_args() -> None:
+    # Configured TP=2 on "1,0", but the appended override runs vLLM on GPU 1 alone.
+    vc = VllmConfig(tensor_parallel_size=2, extra_args=["--tensor-parallel-size", "1"])
+    lane = LaneConfig(model="Qwen/Qwen2.5-0.5B-Instruct", vllm=True, gpu_devices="1,0", vllm_config=vc)
+    manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
+    count = LaneManager._launch_gpu_count(vc, [])  # noqa: SLF001
+    assert await manager._lane_occupied_gpu_devices(lane, "1,0", count) == "1"  # noqa: SLF001

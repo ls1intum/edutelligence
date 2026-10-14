@@ -11,7 +11,7 @@ from iris.common.boot_id import BOOT_ID
 class ServiceStatus(str, Enum):
     UP = "UP"  # module up (ui: 🟢)
     WARN = "WARN"  # non-default variants missing (ui: 🟡)
-    DEGRADED = "DEGRADED"  # some default variants invalid, none critical (ui: 🟠)
+    DEGRADED = "DEGRADED"  # some default variants invalid, none critical, or Weaviate unavailable (ui: 🟠)
     DOWN = "DOWN"  # module down OR any critical pipeline invalid (ui: 🔴)
 
 

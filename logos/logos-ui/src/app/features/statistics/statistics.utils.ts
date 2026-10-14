@@ -727,6 +727,58 @@ export const extractProviderHostRamMb = (
   };
 };
 
+export type DiskLevel = 'ok' | 'low' | 'critical';
+
+export interface ProviderDisk {
+  reported: boolean;
+  totalMb: number;
+  usedMb: number;
+  freeMb: number;
+  usedPct: number;
+  path: string;
+  level: DiskLevel;
+}
+
+/** Free space below which a node is flagged: one large model no longer fits. */
+const DISK_LOW = { fraction: 0.15, mb: 100 * 1024 };
+/** Below this the startup prefetch stops and lane starts may fail. */
+const DISK_CRITICAL = { fraction: 0.05, mb: 20 * 1024 };
+
+/**
+ * Disk space of one provider's latest sample, in MiB: the volume that holds
+ * the worker's Hugging Face cache, where model weights are downloaded to.
+ * `reported` is false for workers that do not send it, so a missing reading
+ * is never shown as an empty disk.
+ */
+export const extractProviderDiskMb = (sample: VramV2Sample | null | undefined): ProviderDisk => {
+  const prov = sample?.scheduler_signals?.provider;
+  const totalMb = prov?.disk_total_mb ?? 0;
+  if (totalMb <= 0) {
+    return { reported: false, totalMb: 0, usedMb: 0, freeMb: 0, usedPct: 0, path: '', level: 'ok' };
+  }
+  const freeMb = Math.max(prov?.disk_free_mb ?? 0, 0);
+  const usedMb = prov?.disk_used_mb ?? Math.max(totalMb - freeMb, 0);
+  const below = (limit: { fraction: number; mb: number }) =>
+    freeMb < limit.mb || freeMb < totalMb * limit.fraction;
+  return {
+    reported: true,
+    totalMb,
+    usedMb,
+    freeMb,
+    usedPct: Math.min(Math.max(((totalMb - freeMb) / totalMb) * 100, 0), 100),
+    path: prov?.disk_path ?? '',
+    level: below(DISK_CRITICAL) ? 'critical' : below(DISK_LOW) ? 'low' : 'ok',
+  };
+};
+
+/** A disk size in MiB as GB or TB (1024-based, like the rest of the page). */
+export const formatStorageMb = (mb: number): string => {
+  const gb = mb / 1024;
+  if (gb >= 1024) return `${(gb / 1024).toFixed(1)} TB`;
+  if (gb >= 100) return `${Math.round(gb)} GB`;
+  return `${gb.toFixed(1)} GB`;
+};
+
 /**
  * Whether a provider's device reports a single unified memory pool — Apple
  * Silicon (Metal) has no separate VRAM at all, GPU and CPU draw from the same
@@ -736,6 +788,16 @@ export const extractProviderHostRamMb = (
  * on device_mode because it is the flag the worker sets for exactly this
  * hardware; the page then shows one "Unified memory" chart instead.
  */
+/**
+ * GPUs a worker reports as failed, one line each. The worker places no lane on
+ * them, so their capacity stays gone until the GPU is reset or the node
+ * rebooted — which is why the page raises them far above the GPU cards.
+ */
+export const extractProviderGpuFaults = (sample: VramV2Sample | null | undefined): string[] => {
+  const faults = sample?.scheduler_signals?.provider?.gpu_faults;
+  return Array.isArray(faults) ? faults.filter((f): f is string => typeof f === 'string' && f.length > 0) : [];
+};
+
 export const isUnifiedMemoryProvider = (sample: VramV2Sample | null | undefined): boolean =>
   sample?.scheduler_signals?.provider?.device_mode === 'metal';
 

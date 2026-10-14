@@ -1350,6 +1350,16 @@ def test_build_process_env_scrubs_inherited_distributed_vars_for_all_gpus(
     assert process_env["PATH"] == f"{expected_prefix}{os.pathsep}/usr/bin"
 
 
+def test_build_env_numbers_gpus_like_nvidia_smi() -> None:
+    handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(gpu_devices="all"))
+    lane = LaneConfig(model="Qwen/Qwen2.5-0.5B-Instruct", vllm=True, gpu_devices="1")
+
+    env = handle._build_env(lane)
+
+    assert env["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+    assert env["CUDA_VISIBLE_DEVICES"] == "1"
+
+
 def test_build_process_env_keeps_explicit_gpu_pin(monkeypatch) -> None:
     handle = VllmProcessHandle("lane-test", 19000, WorkerConfig(gpu_devices="all"))
     lane = LaneConfig(

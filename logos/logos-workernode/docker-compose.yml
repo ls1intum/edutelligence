@@ -33,9 +33,6 @@ services:
       # block eviction-driven lane creation.
       # ── tmpfs RAM cache ────────────────────────────────────────────────
       LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
-      # ── Auto-calibration ───────────────────────────────────────────────
-      # Set to "1" to skip auto-calibration on startup (use manual calibrate.sh instead)
-      LOGOS_SKIP_AUTO_CALIBRATION: ${LOGOS_SKIP_AUTO_CALIBRATION:-}
       # ── Fixed container paths ──────────────────────────────────────────
       LOGOS_WORKER_NODE_CONFIG: /app/config.yml
       LOGOS_STATE_DIR: /app/data
@@ -108,67 +105,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
-
-  # ── One-shot VRAM calibration ──────────────────────────────────────────────
-  # Loads each capabilities model, measures real awake + sleeping VRAM, and
-  # writes model_profiles.yml to the shared worker-state volume.
-  # The worker reads these values on next startup — no estimation needed.
-  #
-  # Usage (worker must be stopped first):
-  #   docker compose stop logos-workernode
-  #   docker compose run --rm logos-workernode-calibrate
-  #   docker compose up -d logos-workernode
-  #
-  # Or with a custom KV cache size (match what your lanes use in production):
-  #   CALIBRATION_KV_CACHE=6G docker compose run --rm logos-workernode-calibrate
-  logos-workernode-calibrate:
-    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-workernode-vllm:${IMAGE_TAG:-latest}
-    profiles: ["calibrate"]
-    container_name: logos-workernode-calibrate
-    init: true
-    restart: "no"
-    command: >
-      python3 /app/tools/calibrate_vram_profiles.py
-      --config /app/config.yml
-      --state-dir /app/data
-      --kv-cache-memory-bytes ${CALIBRATION_KV_CACHE:-4G}
-    environment:
-      LOGOS_WORKER_NODE_CONFIG: /app/config.yml
-      LOGOS_STATE_DIR: /app/data
-      # Global request-lifecycle timeout (empty = per-stage defaults; benchmark sets 86400).
-      LOGOS_TIMEOUT_S: ${LOGOS_TIMEOUT_S:-}
-      # Stuck-detection dwell (seconds) before a no-progress lane may be killed
-      # (empty = code default 180s). Raise to reduce false positives on slow lanes.
-      LOGOS_STUCK_DURATION_SECONDS: ${LOGOS_STUCK_DURATION_SECONDS:-}
-      HF_TOKEN: ${HF_TOKEN:-}
-      HF_HOME: /usr/share/logos/models/.hf_cache
-      LOGOS_TMPFS_CACHE_PATH: ${LOGOS_TMPFS_CACHE_PATH:-}
-      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
-      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-utility,compute}
-    gpus: all
-    pid: host
-    ipc: host
-    shm_size: "16g"
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    volumes:
-      - ./config.yml:/app/config.yml:ro
-      - ./data:/app/data
-      # Model volume — backward-compatible source resolution (kept for one
-      # release): LOGOS_MODELS_MOUNT → legacy OLLAMA_MODELS_MOUNT → the
-      # the pre-existing model named volume. In-place upgrades keep
-      # their cached model weights (the legacy env var / volume still
-      # resolves); fresh deployments set LOGOS_MODELS_MOUNT (.env.example).
-      - ${LOGOS_MODELS_MOUNT:-${OLLAMA_MODELS_MOUNT:-ollama-models}}:/usr/share/logos/models
-      - ./tools:/app/tools:ro
-      - ./calibration_logs:/app/calibration_logs
-      # tmpfs RAM cache for calibration — models load faster from RAM
-      - type: tmpfs
-        target: /mnt/ramcache
-        tmpfs:
-          size: ${TMPFS_SIZE:-0}
 
 # The pre-upgrade model volume name is kept for one release so
 # in-place upgrades resolve to the volume that already holds the cached
