@@ -96,13 +96,13 @@ class InteractionSuggestionPipeline(SubPipeline):
     def __call__(
         self,
         dto: InteractionSuggestionPipelineExecutionDTO,
-        user_language: str = "en",
+        language: str = "English",
         **kwargs,
     ) -> list[str]:
         """
         Runs the pipeline
             :param dto: The pipeline execution data transfer object
-            :param user_language: The user's preferred language ("en" or "de")
+            :param language: Name of the language of the answer, such as "German"
             :param kwargs: The keyword arguments
 
         """
@@ -125,14 +125,10 @@ class InteractionSuggestionPipeline(SubPipeline):
             chat_history_exists_prompt = exercise_chat_history_exists_prompt
             chat_begin_prompt = exercise_chat_begin_prompt
 
-        # Add language instruction. The questions follow the language of the last answer,
-        # which already follows the student's language; the setting is the fallback.
-        default_language = "German" if user_language == "de" else "English"
-        language_instruction = (
-            "\nGenerate questions in the same language as your last answer. "
-            f"If that is unclear, use {default_language}. "
-            "If the questions are in German, use the 'du' form."
-        )
+        # Add language instruction
+        language_instruction = f"\nGenerate questions in {language}."
+        if language == "German":
+            language_instruction += " Use the 'du' form."
 
         try:
             logger.info(

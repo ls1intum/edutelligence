@@ -12,6 +12,7 @@ from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.compaction_dto import CompactionDTO
@@ -829,16 +830,15 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
             return None
 
-        # Extract user language (using getattr for DTOs that may not have user attr)
-        user_language = "en"
+        # The title uses the language of the answer; the Artemis setting is the
+        # fallback (using getattr for DTOs that may not have user attr)
         user = getattr(state.dto, "user", None)
-        if user and getattr(user, "lang_key", None):
-            user_language = user.lang_key
+        language = reply_language(output, getattr(user, "lang_key", None))
 
         try:
             if output:
                 session_title = self.session_title_pipeline(
-                    current_session_title, recent_messages, user_language=user_language
+                    current_session_title, recent_messages, language=language
                 )
                 if self.session_title_pipeline.tokens is not None:
                     self._track_tokens(state, self.session_title_pipeline.tokens)

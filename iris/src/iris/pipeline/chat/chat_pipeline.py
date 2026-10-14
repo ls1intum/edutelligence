@@ -11,6 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
@@ -906,6 +907,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
 
         try:
+            answer_language = reply_language(result, state.dto.user.lang_key)
+
             # Add FAQ citations
             if state.faq_storage.get("faqs"):
                 base_url = (
@@ -916,7 +919,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
-                    user_language=state.dto.user.lang_key,
+                    language=answer_language,
                     base_url=base_url,
                 )
 
@@ -944,7 +947,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
-                    user_language=state.dto.user.lang_key,
+                    language=answer_language,
                     base_url=base_url,
                 )
 
@@ -1126,7 +1129,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 suggestion_dto.chat_history = state.dto.chat_history
                 suggestion_dto.last_message = result
                 suggestions = self.suggestion_pipeline(
-                    suggestion_dto, user_language=state.dto.user.lang_key
+                    suggestion_dto,
+                    language=reply_language(result, state.dto.user.lang_key),
                 )
 
                 if self.suggestion_pipeline.tokens is not None:

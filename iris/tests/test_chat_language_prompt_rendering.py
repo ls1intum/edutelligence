@@ -80,34 +80,29 @@ def test_system_prompt_omits_missing_exercises_note_when_exercises_exist():
     assert "The course includes exercises you can reference." in rendered
 
 
-@pytest.mark.parametrize(
-    "user_language,default_language", [("de", "German"), ("en", "English")]
-)
-def test_session_title_prompt_follows_conversation_language(
-    user_language, default_language
-):
+@pytest.mark.parametrize("language", ["German", "French"])
+def test_session_title_prompt_uses_answer_language(language):
     rendered = _render_template(
-        "session_title_generation_prompt.j2", {"user_language": user_language}
+        "session_title_generation_prompt.j2", {"language": language}
     )
-    assert "Generate the title in the language of the conversation." in rendered
-    assert f"otherwise use {default_language}" in rendered
+    assert f"The current title is not written in {language}." in rendered
+    assert f"Generate the title in {language}" in rendered
 
 
-@pytest.mark.parametrize(
-    "user_language,default_language", [("de", "German"), ("en", "English")]
-)
-def test_mcq_prompt_follows_conversation_language(user_language, default_language):
+@pytest.mark.parametrize("language", ["German", "English"])
+def test_mcq_prompt_follows_conversation_language(language):
     rendered = _render_template(
         "mcq_generation_prompt.j2",
         {
-            "user_language": user_language,
+            "language": language,
             "command": "Generate 1 question",
             "chat_history_text": "",
             "lecture_content": None,
         },
     )
-    assert "Write in the language the student uses in the context below." in rendered
-    assert f"write in {default_language}." in rendered
+    assert f"Write in {language}, the language of the conversation so far." in rendered
+    assert "clearly written in a different language" in rendered
+    assert 'the informal "du"' in rendered
 
 
 CHECK_HEADING = "## Check Before You Ask"
@@ -126,8 +121,22 @@ def test_course_chat_checks_situation_before_asking(support_level):
 @pytest.mark.parametrize(
     "chat_mode", ["PROGRAMMING_EXERCISE_CHAT", "LECTURE_CHAT", "TEXT_EXERCISE_CHAT"]
 )
-def test_other_chat_modes_omit_course_check_rule(chat_mode):
+def test_other_chat_modes_keep_check_rule_for_switch_to_course(chat_mode):
     context = _system_prompt_context("en", True)
     context["chat_mode"] = chat_mode
     rendered = _render_template("chat_system_prompt.j2", context)
-    assert CHECK_HEADING not in rendered
+    assert CHECK_HEADING in rendered
+    assert "also right after you switched to it" in rendered
+
+
+@pytest.mark.parametrize("support_level", ["low", "moderate", "high"])
+def test_missing_exercises_note_respects_support_level(support_level):
+    context = _system_prompt_context("en", False)
+    context["support_level"] = support_level
+    rendered = _render_template("chat_system_prompt.j2", context)
+    asks_question = (
+        "ask one guiding question about how they want to prepare" in rendered
+    )
+    suggests = "suggest how they can prepare instead" in rendered
+    assert asks_question == (support_level == "low")
+    assert suggests == (support_level != "low")

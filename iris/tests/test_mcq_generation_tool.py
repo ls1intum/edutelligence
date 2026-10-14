@@ -28,16 +28,14 @@ VALID_MCQ_JSON = json.dumps(
 )
 
 
-def _create_tool(
-    mcq_pipeline, chat_history, callback, mcq_result_storage, user_language
-):
+def _create_tool(mcq_pipeline, chat_history, callback, mcq_result_storage, language):
     """Replicate the tool factory exactly as in iris/tools/mcq_generation.py."""
 
     def generate_mcq_questions(command: str) -> str:
         result_json = mcq_pipeline(
             command=command,
             chat_history=chat_history,
-            user_language=user_language,
+            language=language,
             callback=callback,
         )
         mcq_result_storage["mcq_json"] = result_json
@@ -58,7 +56,7 @@ def _setup_tool(pipeline_return=VALID_MCQ_JSON):
         chat_history=chat_history,
         callback=mock_callback,
         mcq_result_storage=storage,
-        user_language="de",
+        language="German",
     )
     return tool, mock_pipeline, mock_callback, chat_history, storage
 
@@ -91,6 +89,6 @@ def test_tool_calls_pipeline_with_correct_args():
     mock_pipeline.assert_called_once_with(
         command=command,
         chat_history=chat_history,
-        user_language="de",
+        language="German",
         callback=mock_callback,
     )
