@@ -477,3 +477,25 @@ async def test_a_manual_drain_keeps_its_mark_when_an_older_sleep_settles(worker)
     assert result["status"] == "drain_timeout"
     assert seen_during_drain == [True]
     assert not worker.cold()
+
+
+async def test_a_sleep_cancelled_before_its_command_is_sent_releases_the_lane(worker):
+    """Another command holds the session's send lock; the sleep is cancelled
+    while waiting for it, so the worker never gets the sleep."""
+    planner = _planner(worker)
+    send_lock = worker.registry._sessions[PROVIDER_ID].send_lock  # noqa: SLF001
+    await send_lock.acquire()
+    try:
+        task = asyncio.create_task(planner._execute_action_with_confirmation(_action("sleep_l1"), timeout_seconds=10.0))
+        await _settled()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        send_lock.release()
+    await _settled()
+
+    assert worker.queued == []
+    assert worker.registry._sessions[PROVIDER_ID].pending_commands == {}  # noqa: SLF001
+    assert not worker.cold()
+    assert await worker.selected() == IDLE_LANE

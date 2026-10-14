@@ -1170,8 +1170,8 @@ class LogosNodeRuntimeRegistry:
     ) -> dict[str, Any]:
         """Send a command to the worker and wait for its answer.
 
-        ``on_dispatched`` receives the future of the worker's answer just
-        before the command is sent. That future outlives this call: if the
+        ``on_dispatched`` receives the future of the worker's answer right
+        before the command is written, once the send lock is held. That future outlives this call: if the
         caller is cancelled or the wait times out, it still resolves when the
         worker answers, and fails when the session ends or the send fails. A caller uses it to learn
         when a command it stopped waiting for has actually finished.
@@ -1215,14 +1215,23 @@ class LogosNodeRuntimeRegistry:
                 session.optimistic_calibration_until = prior_optimistic_until
                 self._set_calibrating(session, was_calibrating, "start_calibration_session refused")
 
-        # Handed over before sending: a caller cancelled while the frame is
-        # being written cannot tell whether the worker got it, so the answer
-        # must already be in its hands.
-        if on_dispatched is not None:
-            on_dispatched(fut)
+        writing = False
         try:
             async with session.send_lock:
+                # Handed over right before the frame is written: a caller
+                # cancelled while it is being written cannot tell whether the
+                # worker got it, so the answer must already be in its hands.
+                if on_dispatched is not None:
+                    on_dispatched(fut)
+                writing = True
                 await session.websocket.send_json(message)
+        except asyncio.CancelledError:
+            # Cancelled while still waiting for the send lock: nothing was
+            # sent, so no answer will come.
+            if not writing:
+                session.pending_commands.pop(cmd_id, None)
+                _undo_optimistic_calibration_mark()
+            raise
         except Exception as exc:  # noqa: BLE001
             session.pending_commands.pop(cmd_id, None)
             _undo_optimistic_calibration_mark()
