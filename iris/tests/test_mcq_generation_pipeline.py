@@ -263,7 +263,7 @@ def test_run_in_thread_single_question():
     thread = pipeline.run_in_thread(
         command="Generate a question about math",
         chat_history=None,
-        user_language="en",
+        language="English",
         result_storage=storage,
         count=1,
     )
@@ -290,7 +290,7 @@ def test_run_in_thread_error_on_failure():
     thread = pipeline.run_in_thread(
         command="Generate a question",
         chat_history=None,
-        user_language="en",
+        language="English",
         result_storage=storage,
         count=1,
     )
@@ -312,7 +312,7 @@ def test_run_in_thread_multiple_questions():
     thread = pipeline.run_in_thread(
         command="Generate 3 questions about math",
         chat_history=None,
-        user_language="en",
+        language="English",
         result_storage=storage,
         count=3,
     )

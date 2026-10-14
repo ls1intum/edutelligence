@@ -1,7 +1,10 @@
 from weaviate.collections.classes.filters import Filter
 
+from iris.common.logging_config import get_logger
 from iris.vector_database.database import VectorDatabase
 from iris.vector_database.faq_schema import FaqSchema
+
+logger = get_logger(__name__)
 
 
 def should_allow_faq_tool(db: VectorDatabase, course_id: int) -> bool:
@@ -13,17 +16,26 @@ def should_allow_faq_tool(db: VectorDatabase, course_id: int) -> bool:
         course_id (int): The course ID.
 
     Returns:
-        bool: True if there are indexed FAQs for the course, False otherwise.
+        bool: True if there are indexed FAQs for the course, False otherwise, also when Weaviate is
+        unavailable, so the chat still answers without the FAQ tool.
     """
-    if course_id:
+    if not course_id:
+        return False
+    try:
         # Fetch the first object that matches the course ID with the language property
         result = db.faqs.query.fetch_objects(
             filters=Filter.by_property(FaqSchema.COURSE_ID.value).equal(course_id),
             limit=1,
             return_properties=[FaqSchema.COURSE_NAME.value],
         )
-        return len(result.objects) > 0
-    return False
+    except Exception:
+        logger.warning(
+            "Weaviate is unavailable; answering without the FAQ tool | course_id=%s",
+            course_id,
+            exc_info=True,
+        )
+        return False
+    return len(result.objects) > 0
 
 
 def format_faqs(retrieved_faqs):

@@ -78,10 +78,10 @@ class SessionTitleGenerationPipeline(SubPipeline):
         self,
         current_session_title: str,
         recent_messages: list[str],
-        user_language: str = "en",
+        language: str = "English",
         **kwargs,
     ) -> Optional[str]:
-        prompt_text = self.prompt_template.render(user_language=user_language)
+        prompt_text = self.prompt_template.render(language=language)
         formatted_recent_messages = self.format_recent_messages(recent_messages)
         try:
             logger.info("Running Session Title Generation Pipeline")

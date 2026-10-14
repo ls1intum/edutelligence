@@ -231,6 +231,91 @@ class TestSegmentToDto:
         assert dto.lecture_unit.name == "Instance A's unit"
 
 
+def _transcription_props(unit_id: int = 1) -> dict:
+    return {
+        LectureTranscriptionSchema.SEGMENT_TEXT.value: (
+            "A real transcript excerpt long enough to clear the low-information filter."
+        ),
+        LectureTranscriptionSchema.LECTURE_UNIT_ID.value: unit_id,
+        LectureTranscriptionSchema.BASE_URL.value: "http://a",
+        LectureTranscriptionSchema.COURSE_ID.value: 10,
+        LectureTranscriptionSchema.LECTURE_ID.value: 20,
+        LectureTranscriptionSchema.SEGMENT_START_TIME.value: 12.0,
+        LectureTranscriptionSchema.PAGE_NUMBER.value: -1,
+    }
+
+
+def _unit_props_with_null_names(unit_id: int, **names) -> dict:
+    return {
+        **_unit_props(unit_id),
+        LectureUnitSchema.COURSE_NAME.value: None,
+        LectureUnitSchema.LECTURE_NAME.value: None,
+        LectureUnitSchema.LECTURE_UNIT_NAME.value: None,
+        **names,
+    }
+
+
+class TestNullDisplayNames:
+    """Regression: an older production unit row with a null course name crashed
+    the whole Iris answer with a pydantic ValidationError. Such a hit must be
+    served with fallback names, not fail the search and not be dropped."""
+
+    # pylint: disable=protected-access
+
+    def test_segment_with_null_names_is_served_with_fallbacks(self):
+        dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
+            _segment_props(),
+            {("http://a", 1): _unit_props_with_null_names(1)},
+            {},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
+        )
+        assert reason is None
+        assert dto is not None
+        assert dto.course.id == 10
+        assert dto.course.name == ""
+        assert dto.lecture.name == ""
+        assert dto.lecture_unit.name == ""
+
+    def test_transcription_with_null_names_is_served_with_fallbacks(self):
+        dto, reason = LectureGlobalSearchRetrieval._transcription_to_dto(
+            _transcription_props(),
+            {("http://a", 1): _unit_props_with_null_names(1)},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
+        )
+        assert reason is None
+        assert dto is not None
+        assert dto.course.name == ""
+        assert dto.lecture.name == ""
+        assert dto.lecture_unit.name == ""
+
+    def test_null_unit_name_falls_back_to_the_lecture_name(self):
+        unit = _unit_props_with_null_names(
+            1, **{LectureUnitSchema.LECTURE_NAME.value: "Lecture 3"}
+        )
+        dto, reason = LectureGlobalSearchRetrieval._segment_to_dto(
+            _segment_props(),
+            {("http://a", 1): unit},
+            {},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
+        )
+        assert reason is None
+        assert dto is not None
+        assert dto.lecture_unit.name == "Lecture 3"
+
+    def test_missing_name_keys_behave_like_null(self):
+        unit = _unit_props(1)
+        del unit[LectureUnitSchema.COURSE_NAME.value]
+        dto, reason = LectureGlobalSearchRetrieval._transcription_to_dto(
+            _transcription_props(),
+            {("http://a", 1): unit},
+            policy=_VisibilityPolicy.from_context(None, base_url="http://a"),
+        )
+        assert reason is None
+        assert dto is not None
+        assert dto.course.name == ""
+        assert dto.lecture_unit.name == "Unit"
+
+
 class TestFetchLimitRegression:
     """Regressions in the metadata fetch: the over-fetch limit and the
     (base_url, id) keying that keeps colliding instances' rows distinct."""

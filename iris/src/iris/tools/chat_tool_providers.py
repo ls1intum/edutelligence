@@ -11,6 +11,7 @@ from functools import wraps
 from typing import Callable, Optional
 
 from iris.common.logging_config import get_logger
+from iris.common.reply_language import previous_reply_language
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.variant.variant import Variant
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
@@ -367,7 +368,7 @@ def provide_mcq_generation(state: State) -> Optional[Callable]:
         state.dto.chat_history,
         state.callback,
         state.mcq_result_storage,
-        state.dto.user.lang_key,
+        previous_reply_language(state.dto.chat_history, state.dto.user.lang_key),
         lecture_content_supplier=lecture_content_supplier,
     )
 

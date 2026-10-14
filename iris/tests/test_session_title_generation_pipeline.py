@@ -14,7 +14,7 @@ def test_session_title_generation_handles_braces_in_recent_messages():
     pipeline.prompt_template = Environment(autoescape=False).from_string(
         "Current: {{ current_session_title }}\n"
         "Messages: {{ recent_messages | safe }}\n"
-        "Language: {{ user_language }}"
+        "Language: {{ language }}"
     )
     pipeline.pipeline = RunnableLambda(lambda _: "KEEP")
     pipeline.llm = SimpleNamespace(tokens=SimpleNamespace(pipeline=None))
