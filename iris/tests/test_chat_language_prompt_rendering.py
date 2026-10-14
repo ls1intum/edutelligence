@@ -108,3 +108,26 @@ def test_mcq_prompt_follows_conversation_language(user_language, default_languag
     )
     assert "Write in the language the student uses in the context below." in rendered
     assert f"write in {default_language}." in rendered
+
+
+CHECK_HEADING = "## Check Before You Ask"
+
+
+@pytest.mark.parametrize("support_level", ["low", "moderate", "high"])
+def test_course_chat_checks_situation_before_asking(support_level):
+    context = _system_prompt_context("en", True)
+    context["support_level"] = support_level
+    rendered = _render_template("chat_system_prompt.j2", context)
+    assert CHECK_HEADING in rendered
+    guiding_question = "ask one specific guiding question" in rendered
+    assert guiding_question == (support_level == "low")
+
+
+@pytest.mark.parametrize(
+    "chat_mode", ["PROGRAMMING_EXERCISE_CHAT", "LECTURE_CHAT", "TEXT_EXERCISE_CHAT"]
+)
+def test_other_chat_modes_omit_course_check_rule(chat_mode):
+    context = _system_prompt_context("en", True)
+    context["chat_mode"] = chat_mode
+    rendered = _render_template("chat_system_prompt.j2", context)
+    assert CHECK_HEADING not in rendered
