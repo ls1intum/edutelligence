@@ -22,7 +22,12 @@ import {
   applyTimeSeriesLabels,
   chooseDynamicTargetBuckets,
   describeWorkerVersion,
+  extractProviderGpuFaults,
+  formatTimeAgo,
+  extractProviderDiskMb,
   extractProviderHostRamMb,
+  formatStorageMb,
+  type ProviderDisk,
   extractProviderVramMb,
   formatPercent,
   formatRangeLabel,
@@ -73,7 +78,7 @@ import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
 import { VersionHint } from './components/version-hint/version-hint';
-import { VramDonutComponent, type DonutSlice } from './components/vram-donut/vram-donut';
+import { VramDonutComponent } from './components/vram-donut/vram-donut';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
@@ -85,6 +90,11 @@ type ProviderGlassRow = {
   online: boolean;
   calibrating: boolean;
   versionChip: WorkerVersionChip | null;
+  /** GPUs this worker reports as failed; empty while the worker is offline,
+   *  whose last sample may predate a reset. */
+  gpuFaults: string[];
+  /** When the worker was last heard from: its last heartbeat, else its last sample. */
+  lastSeen: string | null;
   lanes: Record<string, LaneSignalData>;
   hasLanes: boolean;
   laneCount: number;
@@ -92,6 +102,8 @@ type ProviderGlassRow = {
   freeVramMb: number;
   modelsLoaded: number;
   ram: { reported: boolean; totalMb: number; freeMb: number; usedMb: number };
+  /** Space on the model volume; not reported while the worker is offline. */
+  disk: ProviderDisk;
   hasLaneRam: boolean;
   /**
    * True when the worker runs on unified memory (Apple Silicon / Metal): the
@@ -103,9 +115,6 @@ type ProviderGlassRow = {
    *  worker's device memory reading. 0 on non-unified rows. */
   unifiedTotalMb: number;
   unifiedFreeMb: number;
-  fallbackVramPie: DonutSlice[];
-  vramUsedGb: number;
-  vramTotalGb: number;
 };
 
 @Component({
@@ -393,6 +402,23 @@ export class Statistics implements OnInit, OnDestroy {
   readonly vramError = signal<string | null>(null);
   readonly isVramLoading = signal(false);
   readonly nowMs = signal(Date.now());
+  /**
+   * Offline workers whose last report the operator chose to look at. Hidden by
+   * default: an offline worker's last sample describes a machine that may
+   * have rebooted, lost a GPU or dropped every lane since, and drawn like live
+   * data it reads as the current state.
+   */
+  readonly expandedOfflineRows = signal<ReadonlySet<string>>(new Set());
+
+  toggleOfflineRow(name: string): void {
+    const next = new Set(this.expandedOfflineRows());
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    this.expandedOfflineRows.set(next);
+  }
+
+  readonly formatTimeAgo = formatTimeAgo;
+  readonly formatStorageMb = formatStorageMb;
   readonly refreshing = signal(false);
   readonly resetZoomCounter = signal(0);
   readonly chartTooltip = signal<ChartTooltip | null>(null);
@@ -617,6 +643,8 @@ export class Statistics implements OnInit, OnDestroy {
         online: this._isProviderOnline(name),
         calibrating: metaByName[name]?.calibrating === true,
         versionChip: describeWorkerVersion(metaByName[name]?.worker_version_checksum, this._isProviderOnline(name)),
+        gpuFaults: this._isProviderOnline(name) ? extractProviderGpuFaults(sample) : [],
+        lastSeen: metaByName[name]?.last_heartbeat ?? sample?.timestamp ?? null,
         lanes,
         hasLanes: Object.keys(lanes).length > 0,
         laneCount: Object.keys(lanes).length,
@@ -624,6 +652,9 @@ export class Statistics implements OnInit, OnDestroy {
         freeVramMb: vram.freeMb,
         modelsLoaded,
         ram,
+        disk: this._isProviderOnline(name)
+          ? extractProviderDiskMb(sample)
+          : extractProviderDiskMb(null),
         hasLaneRam: Object.values(lanes).some((l) => typeof l.host_ram_mb === 'number'),
         unifiedMemory,
         // The single pool is the host's physical RAM; the device reading is
@@ -631,12 +662,24 @@ export class Statistics implements OnInit, OnDestroy {
         // workers that predate the host_memory summary.
         unifiedTotalMb: unifiedMemory ? (ram.reported ? ram.totalMb : vram.totalMb) : 0,
         unifiedFreeMb: unifiedMemory ? (ram.reported ? ram.freeMb : vram.freeMb) : 0,
-        fallbackVramPie: this._fallbackVramPie(point),
-        vramUsedGb: point?.used_vram_gb ?? 0,
-        vramTotalGb: point?.total_vram_gb ?? (point?.used_vram_gb ?? 0) + (point?.remaining_vram_gb ?? 0),
       };
     });
   });
+
+  /**
+   * Every online worker with a failed GPU. Shown above the tabs, on both of
+   * them: a failed GPU silently takes its capacity out of placement, so it
+   * must be seen without opening the worker's row.
+   */
+  readonly gpuFaultAlerts = computed(() =>
+    this.providerGlassRows()
+      .filter((row) => row.gpuFaults.length > 0)
+      .map((row) => ({ name: row.name, faults: row.gpuFaults })),
+  );
+
+  readonly gpuFaultCount = computed(() =>
+    this.gpuFaultAlerts().reduce((sum, alert) => sum + alert.faults.length, 0),
+  );
 
   // ── Volume line data ──────────────────────────────────────────────────────────
 
@@ -1494,58 +1537,6 @@ export class Statistics implements OnInit, OnDestroy {
   private _isProviderOnline(name: string): boolean {
     const m = this.vramProviderMetaByName()[name];
     return m?.connection_state !== 'offline' && m?.connected !== false;
-  }
-
-  /**
-   * Legacy model-list donut used when a provider has no lane signals yet (older
-   * snapshot shape). Same accounting as the old selected-provider pie.
-   */
-  private _fallbackVramPie(
-    pt: {
-      used_vram_gb?: number;
-      remaining_vram_gb?: number;
-      total_vram_gb?: number;
-      loaded_models?: Array<{ name: string; size_gb: number }>;
-    } | null,
-  ): DonutSlice[] {
-    if (!pt) return [];
-    const usedGb = pt.used_vram_gb ?? 0;
-    const remainingGb = pt.remaining_vram_gb ?? 0;
-    const totalGb = pt.total_vram_gb ?? usedGb + remainingGb;
-    if (totalGb <= 0) return [];
-
-    const reportedModels = pt.loaded_models ?? [];
-    const rawModelSlices = reportedModels
-      .map((model, index) => ({
-        value: Number(model.size_gb || 0),
-        color: seriesColor(index),
-        text: model.name,
-      }))
-      .filter((slice) => slice.value > 0);
-
-    const attributedUsedGb = rawModelSlices.reduce((sum, s) => sum + s.value, 0);
-    const modelScale =
-      attributedUsedGb > usedGb && attributedUsedGb > 0 ? usedGb / attributedUsedGb : 1;
-    const modelSlices = rawModelSlices.map((slice) => ({
-      ...slice,
-      value: Number((slice.value * modelScale).toFixed(3)),
-    }));
-    const modeledUsedGb = modelSlices.reduce((sum, s) => sum + s.value, 0);
-    const otherUsedGb = Math.max(usedGb - modeledUsedGb, 0);
-
-    return [
-      ...modelSlices,
-      {
-        value: otherUsedGb,
-        color: CHART_ROLE.total,
-        text: modelSlices.length > 0 ? 'Other used' : 'Used',
-      },
-      {
-        value: remainingGb,
-        color: seriesColor(3),
-        text: 'Free',
-      },
-    ].filter((s) => s.value > 0);
   }
 
   isProviderOnline = (name: string): boolean => this._isProviderOnline(name);

@@ -2258,7 +2258,10 @@ class VllmProcessHandle:
         gc = self._global_config
         env: dict[str, str] = {}
 
-        # GPU device pinning
+        # GPU device pinning. The indices come from nvidia-smi, which numbers
+        # GPUs by PCI bus; CUDA's default FASTEST_FIRST order can differ (for
+        # example once one GPU has failed), so pin CUDA to the same order.
+        env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         gpu_devices = lane_config.gpu_devices if lane_config.gpu_devices else gc.gpu_devices
         if gpu_devices.lower() not in ("all", "none", ""):
             env["CUDA_VISIBLE_DEVICES"] = gpu_devices

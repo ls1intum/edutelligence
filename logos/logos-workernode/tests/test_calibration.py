@@ -3636,3 +3636,5 @@ def test_spawn_vllm_expands_model_path_with_plan_cache_token_and_revision(monkey
     assert "{model_path}" not in " ".join(cmd)
     assert seen["popen_env"]["HF_TOKEN"] == "plan-token"
     assert seen["popen_env"]["HF_HOME"] == str(tmp_path / "hf")
+    # The probe's slice is chosen by nvidia-smi index, so CUDA must count the same way.
+    assert seen["popen_env"]["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"

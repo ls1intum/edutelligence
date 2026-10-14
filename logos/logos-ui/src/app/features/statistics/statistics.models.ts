@@ -95,6 +95,18 @@ export type DeviceInfo = {
   utilization_percent: number | null;
   temperature_celsius: number | null;
   power_draw_watts: number | null;
+  /**
+   * The worker's GPU index (nvidia-smi numbering), which lane placements
+   * refer to. Absent on samples that predate it; list position stands in then.
+   */
+  index?: number | null;
+  /**
+   * "faulted": nvidia-smi reports the GPU itself as failed (e.g. "GPU requires
+   * reset"), and the worker places no lane on it. "degraded": some readings
+   * are missing. Absent on samples that predate it.
+   */
+  health?: 'ok' | 'degraded' | 'faulted';
+  health_reason?: string;
 };
 
 // LaneSignalData from logos-ui-old/components/statistics/types.ts
@@ -104,6 +116,12 @@ export type LaneSignalData = {
   sleep_state: string | null;
   gpu_devices: string | null;
   effective_gpu_devices: string | null;
+  /**
+   * The GPUs the lane's engine runs on. The two selectors above only list the
+   * GPUs it can see: "1,0" with one GPU runs on GPU 1 alone. Empty when the
+   * worker does not know; absent on samples that predate it.
+   */
+  occupied_gpu_devices?: string;
   /**
    * Worker-reported concurrency: the lane's full-context KV budget parsed
    * from the vLLM startup log (guaranteed minimum; 0 until the log is parsed).
@@ -162,6 +180,14 @@ export interface VramV2Sample {
       host_ram_total_mb?: number;
       host_ram_used_mb?: number;
       host_ram_available_mb?: number;
+      /**
+       * Space on the volume holding the worker's Hugging Face cache (MiB).
+       * Left out when the worker predates the report or could not read it.
+       */
+      disk_total_mb?: number;
+      disk_used_mb?: number;
+      disk_free_mb?: number;
+      disk_path?: string;
       lane_count?: number;
       active_requests?: number;
       loaded_lane_count?: number;
@@ -169,6 +195,8 @@ export interface VramV2Sample {
       cold_lane_count?: number;
       total_effective_vram_mb?: number;
       devices?: DeviceInfo[];
+      /** One line per GPU the worker reports as failed, e.g. "gpu0 (GPU-…): GPU requires reset". */
+      gpu_faults?: string[];
     };
     lanes?: Record<string, LaneSignalData>;
     models?: Record<string, any>;

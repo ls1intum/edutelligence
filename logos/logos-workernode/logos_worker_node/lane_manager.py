@@ -1998,6 +1998,101 @@ class LaneManager:
             result.append(index)
         return result
 
+    # vLLM's parallelism flags and their short forms. The engine uses
+    # tensor x pipeline x data parallel GPUs.
+    _PARALLEL_FLAGS = {
+        "--tensor-parallel-size": "tp",
+        "-tp": "tp",
+        "--pipeline-parallel-size": "pp",
+        "-pp": "pp",
+        "--data-parallel-size": "dp",
+        "-dp": "dp",
+    }
+
+    @classmethod
+    def _launch_gpu_count(cls, vllm_config: VllmConfig, global_extra_args: list[str]) -> int:
+        """The GPUs a vLLM engine uses, read from its command line as launched.
+
+        The command passes the configured tensor_parallel_size first, then the
+        worker-wide and the lane's extra_args; argparse keeps the last value,
+        so an extra --tensor-parallel-size wins. 0 when a value is unreadable.
+        """
+        args = ["--tensor-parallel-size", str(vllm_config.tensor_parallel_size), *global_extra_args]
+        args += vllm_config.extra_args
+        sizes = {"tp": 1, "pp": 1, "dp": 1}
+        for index, arg in enumerate(args):
+            flag, has_value, raw = arg.partition("=")
+            key = cls._PARALLEL_FLAGS.get(flag)
+            if key is None:
+                continue
+            if not has_value:
+                raw = args[index + 1] if index + 1 < len(args) else ""
+            if not raw.isdigit() or int(raw) < 1:
+                return 0
+            sizes[key] = int(raw)
+        return sizes["tp"] * sizes["pp"] * sizes["dp"]
+
+    async def _lane_occupied_gpu_devices(self, lc: LaneConfig, selector: str, gpu_count: int) -> str:
+        """The GPUs a lane's engine runs on, read from its final launch environment.
+
+        A model's env_overrides are applied after the selector at launch, so an
+        override of CUDA_VISIBLE_DEVICES decides which GPUs the engine sees, and
+        one of CUDA_DEVICE_ORDER breaks the nvidia-smi numbering the selector
+        relies on (that leaves the GPUs unknown).
+        """
+        overrides = lc.vllm_config.env_overrides if lc.vllm_config else {}
+        if overrides.get("CUDA_DEVICE_ORDER", "PCI_BUS_ID") != "PCI_BUS_ID":
+            return ""
+        if "CUDA_VISIBLE_DEVICES" in overrides:
+            # Taken literally by CUDA: only a numeric list resolves; "all" is
+            # not a CUDA value, and UUIDs or "" stay unknown.
+            visible = overrides["CUDA_VISIBLE_DEVICES"]
+            return "" if visible.strip().lower() == "all" else self._occupied_gpu_devices(visible, gpu_count)
+        return self._occupied_gpu_devices(selector, gpu_count, await self._complete_gpu_inventory())
+
+    async def _complete_gpu_inventory(self) -> list[int] | None:
+        """Every GPU index on this node, or None when the report may be missing one.
+
+        nvidia-smi leaves out GPUs whose memory it cannot read, so only a
+        report without faults, gaps or degraded readings is known to be whole.
+        """
+        if self._gpu_snapshot is None:
+            return None
+        try:
+            snapshot = await self._gpu_snapshot()
+        except Exception:
+            return None
+        if snapshot.mode != "nvidia" or snapshot.degraded_reason or snapshot.gpu_faults:
+            return None
+        indices: list[int] = []
+        for device in snapshot.devices:
+            index = device.extra.get("index") if isinstance(device.extra, dict) else None
+            if device.health != "ok" or not isinstance(index, int):
+                return None
+            indices.append(index)
+        if sorted(indices) != list(range(len(indices))):
+            return None
+        return indices
+
+    @staticmethod
+    def _occupied_gpu_devices(selector: str | None, gpu_count: int, all_gpus: list[int] | None = None) -> str:
+        """The GPUs an engine started with *selector* as CUDA_VISIBLE_DEVICES runs on.
+
+        The engine takes the first *gpu_count* visible devices in the order the
+        selector lists them, so "1,0" with one GPU means GPU 1. "all" sees every
+        GPU in PCI order, which is only known when *all_gpus* lists the node's
+        complete inventory. Anything else gives "" (unknown); a blank selector
+        may still inherit the parent's CUDA_VISIBLE_DEVICES.
+        """
+        if (selector or "").strip().lower() == "all":
+            if all_gpus is None or gpu_count < 1 or len(all_gpus) < gpu_count:
+                return ""
+            return ",".join(str(index) for index in sorted(all_gpus)[:gpu_count])
+        parts = [part.strip() for part in (selector or "").split(",")]
+        if gpu_count < 1 or not parts or not all(part.isdigit() for part in parts) or len(parts) < gpu_count:
+            return ""
+        return ",".join(str(int(part)) for part in parts[:gpu_count])
+
     @staticmethod
     def _lane_gpu_set(gpu_devices: str | None) -> frozenset[int] | None:
         """Return the GPU indices a lane occupies, or ``None`` for "all".
@@ -2144,11 +2239,47 @@ class LaneManager:
                 best_indices = list(indices)
         return best_indices
 
+    @staticmethod
+    def _refuse_faulted_launch_override(lane_id: str, lane_config: LaneConfig, faulted_indices: set[int]) -> None:
+        """Refuse a lane whose CUDA env_overrides could open a faulted GPU.
+
+        Only a numeric CUDA_VISIBLE_DEVICES under PCI bus order maps to
+        nvidia-smi indices; any other override cannot be checked while a GPU is
+        faulted, so it is refused rather than risked.
+        """
+        assert lane_config.vllm_config is not None
+        overrides = lane_config.vllm_config.env_overrides
+        prefix = f"Lane '{lane_id}' model={lane_config.model}"
+        faults = f"faulted GPU(s) {sorted(faulted_indices)}"
+        order = overrides.get("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+        if order != "PCI_BUS_ID":
+            raise RuntimeError(
+                f"{prefix} overrides CUDA_DEVICE_ORDER={order!r}, so its GPU numbers cannot be checked "
+                f"against {faults}; drop the override or reset the GPU"
+            )
+        visible = overrides["CUDA_VISIBLE_DEVICES"]
+        parts = [part.strip() for part in visible.split(",")]
+        if not all(part.isdigit() for part in parts):
+            raise RuntimeError(
+                f"{prefix} overrides CUDA_VISIBLE_DEVICES={visible!r}, which cannot be checked "
+                f"against {faults}; use numeric GPU indices or reset the GPU"
+            )
+        broken = sorted({int(part) for part in parts} & faulted_indices)
+        if broken:
+            raise RuntimeError(
+                f"{prefix} overrides CUDA_VISIBLE_DEVICES={visible!r}, which includes faulted GPU(s) {broken} "
+                "(nvidia-smi reports them as failed; reset or reboot the node)"
+            )
+
     async def _auto_place_gpu_devices(self, lane_id: str, lane_config: LaneConfig) -> LaneConfig:
         """Pick an explicit GPU set for auto-managed vLLM lanes.
 
         Strategy:
-        - Respect explicit lane gpu_devices.
+        - Never use a GPU that nvidia-smi reports as faulted; an explicit
+          gpu_devices pin that includes one is refused, and so is a
+          CUDA_VISIBLE_DEVICES / CUDA_DEVICE_ORDER override in the model's
+          env_overrides that opens one or cannot be checked.
+        - Respect explicit lane gpu_devices otherwise.
         - Preserve the current placement when it still fits.
         - Otherwise choose the feasible GPU subset in the worker's allowed
           GPU pool that shares the least with awake lanes, breaking ties
@@ -2156,8 +2287,6 @@ class LaneManager:
           whose only occupants are sleeping lanes is treated as empty).
         """
         if lane_config.vllm_config is None:
-            return lane_config
-        if lane_config.gpu_devices:
             return lane_config
         if self._gpu_snapshot is None:
             return lane_config
@@ -2179,6 +2308,9 @@ class LaneManager:
         if not snapshot.nvidia_smi_available:
             return lane_config
 
+        # GPUs nvidia-smi reports as failed, including ones left out of
+        # snapshot.devices because their memory could not be read.
+        faulted_indices: set[int] = set(snapshot.faulted_gpu_indices)
         device_rows: list[dict[str, float]] = []
         for fallback_index, device in enumerate(snapshot.devices):
             if device.kind != "nvidia":
@@ -2188,6 +2320,9 @@ class LaneManager:
                 index = int(raw_index)
             except (TypeError, ValueError):
                 index = fallback_index
+            if device.health == "faulted":
+                faulted_indices.add(index)
+                continue
             device_rows.append(
                 {
                     "index": float(index),
@@ -2196,12 +2331,42 @@ class LaneManager:
                     "utilization": float(device.utilization_percent or 0.0),
                 }
             )
+        overrides = lane_config.vllm_config.env_overrides
+        if faulted_indices and (
+            "CUDA_VISIBLE_DEVICES" in overrides or overrides.get("CUDA_DEVICE_ORDER", "PCI_BUS_ID") != "PCI_BUS_ID"
+        ):
+            # The model's env_overrides are applied after the selector at
+            # launch, so they decide which GPUs the engine opens: check those.
+            self._refuse_faulted_launch_override(lane_id, lane_config, faulted_indices)
+            return lane_config
+        if lane_config.gpu_devices:
+            pinned = self._lane_gpu_set(lane_config.gpu_devices)
+            broken = sorted(faulted_indices if pinned is None else pinned & faulted_indices)
+            if broken:
+                # A failed GPU still reports memory in use, and vLLM would only
+                # fail at startup with an unrelated-looking free-memory error.
+                raise RuntimeError(
+                    f"Lane '{lane_id}' model={lane_config.model} is pinned to "
+                    f"gpu_devices={lane_config.gpu_devices!r}, which includes faulted GPU(s) {broken} "
+                    "(nvidia-smi reports them as failed; reset or reboot the node)"
+                )
+            return lane_config
         if not device_rows:
+            if faulted_indices:
+                raise RuntimeError(
+                    f"Auto-placement: every GPU on this node is faulted ({sorted(faulted_indices)}); "
+                    f"lane '{lane_id}' model={lane_config.model} cannot be placed"
+                )
             return lane_config
 
         available_indices = {int(row["index"]) for row in device_rows}
         allowed_indices = self._parse_gpu_selector(self._global_config.gpu_devices, available_indices)
         if not allowed_indices:
+            if faulted_indices:
+                raise RuntimeError(
+                    f"Auto-placement: no healthy GPU in this worker's GPU pool for lane '{lane_id}' "
+                    f"model={lane_config.model}; faulted GPU(s) {sorted(faulted_indices)}"
+                )
             return lane_config
 
         allowed_rows = [row for row in device_rows if int(row["index"]) in set(allowed_indices)]
@@ -2221,6 +2386,13 @@ class LaneManager:
                     f"holds GPU(s) {sorted(self._calibration_gpu_subset)}. "
                     "The lane is placed once the session ends."
                 )
+            if faulted_indices:
+                # Unpinned, the lane would see every GPU and could start on a
+                # faulted one.
+                raise RuntimeError(
+                    f"Auto-placement: only {len(allowed_rows)} healthy GPU(s) for lane '{lane_id}' "
+                    f"model={lane_config.model} (tp={tp_size}); faulted GPU(s) {sorted(faulted_indices)}"
+                )
             logger.warning(
                 "Auto-placement skipped for lane '%s': only %d allowed GPU(s) for tp=%d",
                 lane_id,
@@ -2231,6 +2403,21 @@ class LaneManager:
 
         required_total_mb = self._estimate_lane_vram_mb(lane_config)
         if required_total_mb <= 0:
+            if faulted_indices:
+                # Without an estimate there is nothing to fit, but leaving the
+                # lane unpinned would let it start on a faulted GPU: take the
+                # healthy GPUs with the most free memory.
+                rows = sorted(allowed_rows, key=lambda r: (-float(r["free_mb"]), int(r["index"])))[:tp_size]
+                selector = ",".join(str(index) for index in sorted(int(r["index"]) for r in rows))
+                logger.info(
+                    "Auto-placement lane '%s' model=%s: gpu_devices=%s (no VRAM estimate; "
+                    "faulted GPU(s) %s excluded)",
+                    lane_id,
+                    lane_config.model,
+                    selector,
+                    sorted(faulted_indices),
+                )
+                return lane_config.model_copy(update={"gpu_devices": selector})
             logger.debug(
                 "Auto-placement skipped for lane '%s' model=%s: no VRAM estimate available",
                 lane_id,
@@ -3406,6 +3593,7 @@ class LaneManager:
             host_ram_source = source
 
         effective_gpu_devices = ""
+        occupied_gpu_devices = ""
         routing_url = f"http://127.0.0.1:{handle.port}"
         inference_endpoint = "/v1/chat/completions"
         sleep_mode_enabled = False
@@ -3427,6 +3615,12 @@ class LaneManager:
             flash_attention = lc.flash_attention
             gpu_devices = lc.gpu_devices
             effective_gpu_devices = lc.gpu_devices or self._global_config.gpu_devices
+            gpu_count = (
+                self._launch_gpu_count(lc.vllm_config, self._vllm_engine_config.global_extra_args)
+                if lc.vllm_config
+                else 1
+            )
+            occupied_gpu_devices = await self._lane_occupied_gpu_devices(lc, effective_gpu_devices, gpu_count)
             if lc.vllm_config:
                 sleep_mode_enabled = bool(lc.vllm_config.enable_sleep_mode)
                 backend_metrics = lc.vllm_config.model_dump(mode="json")
@@ -3508,6 +3702,7 @@ class LaneManager:
             flash_attention=flash_attention,
             gpu_devices=gpu_devices,
             effective_gpu_devices=effective_gpu_devices,
+            occupied_gpu_devices=occupied_gpu_devices,
             sleep_mode_enabled=sleep_mode_enabled,
             sleep_state=sleep_state,
             active_requests=active_requests,

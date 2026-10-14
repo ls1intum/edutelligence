@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import shutil
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -11,7 +13,14 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, HostMemorySummary, WorkerRuntimeStatus
+from logos_worker_node.models import (
+    CapacitySummary,
+    DeviceInfo,
+    DeviceSummary,
+    DiskSummary,
+    HostMemorySummary,
+    WorkerRuntimeStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +155,37 @@ def _build_host_memory_summary() -> HostMemorySummary:
     )
 
 
+def existing_volume_path(path: str) -> Path:
+    """*path*, or its nearest existing parent: the cache may not exist yet."""
+    volume = Path(path)
+    while not volume.exists() and volume != volume.parent:
+        volume = volume.parent
+    return volume
+
+
+def _build_disk_summary(hf_home: str | None) -> DiskSummary:
+    """Space on the volume holding the Hugging Face cache, or zeros when unknown."""
+    now = datetime.now(timezone.utc)
+    if not hf_home:
+        return DiskSummary(timestamp=now)
+    try:
+        # Inside the try: resolving the path stats it, which fails with EIO on a
+        # broken cache mount just like the usage read does.
+        usage = shutil.disk_usage(existing_volume_path(hf_home))
+    except OSError:
+        logger.debug("Could not read disk usage for %s", hf_home, exc_info=True)
+        return DiskSummary(timestamp=now, path=hf_home)
+    mb = 1024 * 1024
+    return DiskSummary(
+        timestamp=now,
+        source="statvfs",
+        path=hf_home,
+        total_mb=usage.total / mb,
+        used_mb=usage.used / mb,
+        free_mb=usage.free / mb,
+    )
+
+
 def _build_derived_device_summary(lanes) -> DeviceSummary:
     usage_by_device: dict[str, float] = defaultdict(float)
     for lane in lanes:
@@ -226,7 +266,9 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     # usage, and its telemetry_available=False already tells the flag-gating
     # consumers (main.py reporting, logosnode_provider) to keep their
     # conservative values until a real mlx probe succeeds.
-    if devices.mode == "none":
+    # A snapshot whose GPUs have all failed is kept as well: replacing it would
+    # drop the fault list and report host memory as GPU capacity.
+    if devices.mode == "none" and not devices.gpu_faults:
         devices = _build_derived_device_summary(lanes)
 
     capacity = CapacitySummary(
@@ -240,6 +282,8 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     )
 
     host_memory = _build_host_memory_summary()
+    # Off the event loop: statvfs on a network mount can stall.
+    disk = await asyncio.to_thread(_build_disk_summary, getattr(app.state, "hf_home", None))
 
     # Sample node-level health (GPU ERR/N/A, HF cache EIO/EROFS, …).
     # Stateless — re-evaluated each heartbeat so recovery is automatic
@@ -284,6 +328,7 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         devices=devices,
         gpu_devices=cfg.worker.gpu_devices,
         host_memory=host_memory,
+        disk=disk,
         capacity=capacity,
         lanes=lanes,
         model_profiles=model_profiles if model_profiles else None,

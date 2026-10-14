@@ -445,3 +445,94 @@ describe('selector placement on the requests tab', () => {
     ).toHaveLength(0);
   });
 });
+
+describe('local providers: failed GPUs and offline workers', () => {
+  let fixture: ComponentFixture<Statistics>;
+  afterEach(() => fixture?.destroy());
+
+  const sample = (gpuFaults: string[] = []) => ({
+    timestamp: '2026-10-12T07:49:00Z',
+    scheduler_signals: { provider: { gpu_faults: gpuFaults, devices: [] } },
+  });
+
+  async function pageWith(providers: unknown[]) {
+    const page = await pageAt();
+    fixture = page.fx;
+    (page.component as any).replaceRawVramSeries(providers);
+    page.fx.detectChanges();
+    return { component: page.component, el: page.fx.nativeElement as HTMLElement };
+  }
+
+  it('raises a failed GPU above the tabs, on the tab and on the worker row', async () => {
+    const { component, el } = await pageWith([
+      {
+        provider_id: 1,
+        name: 'deioma',
+        connected: true,
+        connection_state: 'online',
+        data: [sample(['gpu0 (GPU-aaa): GPU requires reset'])],
+      },
+    ]);
+    expect(component.gpuFaultCount()).toBe(1);
+    expect(el.querySelector('.stats-gpu-fault')?.textContent).toContain('gpu0 (GPU-aaa): GPU requires reset');
+    expect(el.querySelector('.stats-tabs__alert')?.textContent?.trim()).toBe('1');
+    expect(el.querySelector('.stats-provider-badge--fault')?.textContent).toContain('1 GPU failed');
+
+    // The banner stays on the Requests tab too.
+    component.activeTab.set('requests');
+    fixture.detectChanges();
+    expect(el.querySelector('.stats-gpu-fault')).not.toBeNull();
+  });
+
+  it('folds an offline worker away behind a notice until asked for its last report', async () => {
+    const { component, el } = await pageWith([
+      {
+        provider_id: 2,
+        name: 'hochbrueck',
+        connected: false,
+        connection_state: 'offline',
+        last_heartbeat: '2026-10-12T07:00:00Z',
+        // A fault in a stale report is not raised: the GPU may have been reset since.
+        data: [sample(['gpu0 (GPU-bbb): GPU requires reset'])],
+      },
+    ]);
+    const row = el.querySelector('.stats-glass-row') as HTMLElement;
+    expect(row.classList).toContain('stats-glass-row--offline');
+    expect(row.querySelector('.stats-offline-notice')?.textContent).toContain('hochbrueck is offline.');
+    expect(row.querySelector('.stats-panel-stack')).toBeNull();
+    expect(component.gpuFaultCount()).toBe(0);
+
+    (row.querySelector('.stats-offline-notice__toggle') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(row.querySelector('.stats-panel-stack--stale')).not.toBeNull();
+  });
+
+  it('shows the free disk space of each online worker in its row header', async () => {
+    const disk = (freeMb: number) => ({
+      timestamp: '2026-10-12T07:49:00Z',
+      scheduler_signals: {
+        provider: {
+          devices: [],
+          disk_total_mb: 2048 * 1024,
+          disk_used_mb: 2048 * 1024 - freeMb,
+          disk_free_mb: freeMb,
+          disk_path: '/cache/.hf_cache',
+        },
+      },
+    });
+    const { el } = await pageWith([
+      { provider_id: 1, name: 'deioma', connected: true, connection_state: 'online', data: [disk(412 * 1024)] },
+      { provider_id: 2, name: 'gpu-full', connected: true, connection_state: 'online', data: [disk(10 * 1024)] },
+      { provider_id: 3, name: 'hochbrueck', connected: false, connection_state: 'offline', data: [disk(900 * 1024)] },
+    ]);
+    const [deioma, full, offline] = Array.from(el.querySelectorAll('.stats-glass-row')) as HTMLElement[];
+    const meter = deioma.querySelector('.stats-disk-meter') as HTMLElement;
+    expect(meter.textContent).toContain('412 GB');
+    expect(meter.textContent).toContain('free of 2.0 TB');
+    expect(meter.title).toContain('/cache/.hf_cache');
+    expect(meter.classList).not.toContain('stats-disk-meter--low');
+    expect(full.querySelector('.stats-disk-meter')?.classList).toContain('stats-disk-meter--critical');
+    // An offline worker's last reading may be long out of date.
+    expect(offline.querySelector('.stats-disk-meter')).toBeNull();
+  });
+});
