@@ -936,6 +936,9 @@ class LaneStatus(BaseModel):
     occupied_gpu_devices: str = ""
     sleep_mode_enabled: bool = False
     sleep_state: Literal["unsupported", "unknown", "awake", "sleeping"] = "unsupported"
+    # The lifecycle step in progress, if any. runtime_state and sleep_state
+    # keep describing the state the lane is leaving until the step ends.
+    transition: Literal["draining", "falling_asleep", "waking", "stopping"] | None = None
     active_requests: int = Field(default=0, ge=0)
     loaded_models: list[LoadedModel] = Field(default_factory=list)
     lane_config: LaneConfig | None = None
@@ -972,6 +975,11 @@ class WorkerRuntimeStatus(BaseModel):
     # build without one (local build, source checkout); None only from workers
     # that predate the field.
     version_checksum: str | None = None
+    # The lane manager's lifecycle revision when the lanes below were
+    # collected. Command answers carry the revision after the command, so the
+    # orchestrator can tell a status that reflects a command from one sampled
+    # before it. None from workers that predate the field.
+    lifecycle_revision: int | None = None
     transport: WorkerTransportStatus
     devices: DeviceSummary
     gpu_devices: str = "all"

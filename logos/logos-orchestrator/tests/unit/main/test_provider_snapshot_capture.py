@@ -56,6 +56,14 @@ class _SnapshotDB:
 class _Registry:
     def __init__(self):
         self.samples: list[dict] = []
+        self.cold_marked: set[tuple[int, str]] = set()
+        self.runtime: dict = {}
+
+    def is_lane_cold_marked(self, provider_id, lane_id):
+        return (provider_id, lane_id) in self.cold_marked
+
+    def peek_runtime_snapshot(self, provider_id):
+        return {"runtime": self.runtime}
 
     async def record_runtime_sample(self, provider_id, sample):
         self.samples.append(sample)
@@ -206,3 +214,85 @@ def test_a_malformed_status_does_not_stop_the_writer(monkeypatch, registry):
 
     asyncio.run(_run())
     assert len(db.inserts) == 1
+
+
+def test_the_snapshot_carries_the_planner_cold_mark_and_the_worker_transition(monkeypatch, registry):
+    """The cold mark lives only in the orchestrator, yet it decides whether a
+    lane gets requests at all, so the lane health panel must see it next to
+    the step the worker reports."""
+    from logos.logosnode_snapshot import _build_logosnode_scheduler_signals
+
+    db = _SnapshotDB()
+    _patched_capture(monkeypatch, db)
+    registry.cold_marked.add((7, "lane-2"))
+    runtime = {
+        "timestamp": _TS,
+        "lanes": [
+            {"lane_id": "lane-1", "model": "m", "runtime_state": "sleeping", "transition": "waking"},
+            {"lane_id": "lane-2", "model": "m", "runtime_state": "loaded"},
+        ],
+    }
+
+    _capture(runtime)
+
+    signals = _build_logosnode_scheduler_signals(db.inserted["runtime_payload"])["lanes"]
+    assert signals["lane-1"]["transition"] == "waking"
+    assert signals["lane-1"]["cold_marked"] is False
+    assert signals["lane-2"]["transition"] is None
+    assert signals["lane-2"]["cold_marked"] is True
+    assert "cold_marked" not in runtime["lanes"][1]  # the worker's payload is left as received
+
+
+def test_a_cold_mark_change_is_written_although_the_worker_status_repeats(monkeypatch, registry):
+    """The worker pushes nothing new when the planner clears a mark, so the
+    change is written on its own, right away and without storing profiles again."""
+    db = _SnapshotDB()
+    _patched_capture(monkeypatch, db)
+    monkeypatch.setattr(
+        logosnode_mod,
+        "_build_live_local_provider_sample",
+        lambda _p, snap: {**_sample(snap["runtime"]), "timestamp": snap["last_heartbeat"]},
+    )
+    persisted: list = []
+    original = logosnode_mod._persist_logosnode_status
+
+    def _spy(provider_id, sample, count_only=False):
+        persisted.append(count_only)
+        return original(provider_id, sample, count_only)
+
+    monkeypatch.setattr(logosnode_mod, "_persist_logosnode_status", _spy)
+    registry.runtime = {"timestamp": _TS, "lanes": [{"lane_id": "lane-2", "model": "m", "runtime_state": "sleeping"}]}
+    registry.cold_marked.add((7, "lane-2"))
+    _capture(registry.runtime)
+
+    registry.cold_marked.clear()
+
+    async def _republish():
+        logosnode_mod.republish_lane_snapshot(7)
+        await asyncio.sleep(0)
+        await asyncio.gather(*list(logosnode_mod._sample_writers.values()))
+
+    asyncio.run(_republish())
+
+    assert persisted == [False, True]
+    assert db.inserts[-1]["runtime_payload"]["lanes"][0]["cold_marked"] is False
+    assert db.inserts[-1]["snapshot_ts"] > db.inserts[0]["snapshot_ts"]
+
+
+def test_a_cold_mark_republish_writes_the_status_current_when_it_runs(monkeypatch, registry):
+    """A worker status captured between the mark change and the republish
+    must not be overwritten by the runtime from before it."""
+    db = _SnapshotDB()
+    _patched_capture(monkeypatch, db)
+    registry.runtime = {"timestamp": _TS, "lanes": [{"lane_id": "lane-2", "runtime_state": "loaded"}]}
+
+    async def _run():
+        logosnode_mod.republish_lane_snapshot(7)
+        registry.runtime = {"timestamp": _TS, "lanes": [{"lane_id": "lane-2", "runtime_state": "sleeping"}]}
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await asyncio.gather(*list(logosnode_mod._sample_writers.values()))
+
+    asyncio.run(_run())
+
+    assert db.inserts[-1]["runtime_payload"]["lanes"][0]["runtime_state"] == "sleeping"

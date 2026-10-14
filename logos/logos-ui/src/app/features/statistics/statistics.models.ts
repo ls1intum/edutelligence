@@ -114,6 +114,17 @@ export type LaneSignalData = {
   model: string;
   runtime_state: string; // "running"|"loaded"|"sleeping"|"starting"|"cold"|"stopped"|"error"
   sleep_state: string | null;
+  /**
+   * Lifecycle step the worker is in the middle of. runtime_state and
+   * sleep_state keep naming the state the lane is leaving until it ends.
+   * Optional: workers that predate the field report nothing.
+   */
+  transition?: 'draining' | 'falling_asleep' | 'waking' | 'stopping' | null;
+  /**
+   * The capacity planner keeps new requests away from the lane (it is about to
+   * sleep or unload it), whatever state the worker reports.
+   */
+  cold_marked?: boolean;
   gpu_devices: string | null;
   effective_gpu_devices: string | null;
   /**

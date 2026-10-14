@@ -603,7 +603,7 @@ class LogosBridgeClient:
             return False
         transient_states = {"starting", "running"}
         for lane in lanes:
-            if isinstance(lane, dict) and lane.get("runtime_state") in transient_states:
+            if isinstance(lane, dict) and (lane.get("runtime_state") in transient_states or lane.get("transition")):
                 return True
         return False
 
@@ -838,6 +838,11 @@ class LogosBridgeClient:
                 "success": False,
                 "error": str(exc),
             }
+        # The lifecycle revision after the command: a status sampled at this
+        # revision or later reflects whatever the command changed.
+        revision = getattr(self._app.state.lane_manager, "status_revision", None)
+        if isinstance(revision, int):
+            response["lifecycle_revision"] = revision
         await self._send_json(ws, response)
 
     async def _handle_message(self, ws, raw: str) -> None:

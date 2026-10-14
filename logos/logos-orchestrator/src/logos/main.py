@@ -5108,6 +5108,8 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
 
 from logos.routers import admin, internal, logosnode, monitoring, user_facing  # noqa: E402
 
+_logosnode_registry.on_cold_mark_changed = logosnode.republish_lane_snapshot
+
 app.include_router(monitoring.router)
 app.include_router(internal.router)
 app.include_router(logosnode.router)

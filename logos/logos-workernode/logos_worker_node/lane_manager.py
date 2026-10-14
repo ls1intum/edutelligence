@@ -348,6 +348,10 @@ class LaneManager:
         self._lock = asyncio.Lock()
         self._event_log: list[LaneEvent] = []
         self._active_requests: dict[str, int] = {}
+        # The lifecycle step a lane is in the middle of ("draining",
+        # "falling_asleep", "waking", "stopping"). A status built during a
+        # sleep or wake would otherwise still show the state from before it.
+        self._transitions: dict[str, str] = {}
         self._event_seq = 0
         self._starting_deadlines: dict[str, float] = {}
         self._status_revision = 0
@@ -928,6 +932,13 @@ class LaneManager:
         """
         if lane_id in self._static_lane_ids:
             raise ValueError(f"Cannot remove static lane '{lane_id}'")
+        self._set_transition(lane_id, "stopping")
+        try:
+            await self._remove_lane_drained(lane_id)
+        finally:
+            self._clear_transition(lane_id)
+
+    async def _remove_lane_drained(self, lane_id: str) -> None:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _LANE_SLEEP_DRAIN_TIMEOUT_S
         while True:
@@ -1131,8 +1142,16 @@ class LaneManager:
         requests so an active generation is not torn down mid-stream. ``mode ==
         "force"`` skips the drain (immediate sleep, e.g. emergency reclaim).
         """
+        try:
+            return await self._sleep_lane(lane_id, level, mode)
+        finally:
+            self._clear_transition(lane_id)
+
+    async def _sleep_lane(self, lane_id: str, level: int, mode: str) -> LaneStatus:
         if mode != "force":
+            self._set_transition(lane_id, "draining")
             await self._drain_lane_inflight(lane_id)
+        self._set_transition(lane_id, "falling_asleep")
         async with self._lock:
             if len(self._handles) == 1:
                 logger.warning(
@@ -1161,8 +1180,10 @@ class LaneManager:
                         lane_id,
                         active,
                     )
+                    self._clear_transition(lane_id)
                     return await self._get_status_unlocked(lane_id)
             await handle.sleep(level=level, mode=mode)
+            self._clear_transition(lane_id)
             # Refresh GPU snapshot BEFORE _record_event so that the status-push
             # triggered by _mark_status_dirty carries post-sleep GPU numbers.
             # Without this, _status_refresh_loop would race ahead with stale data,
@@ -1191,6 +1212,13 @@ class LaneManager:
 
     async def wake_lane(self, lane_id: str) -> LaneStatus:
         """Wake a sleeping vLLM lane."""
+        self._set_transition(lane_id, "waking")
+        try:
+            return await self._wake_lane(lane_id)
+        finally:
+            self._clear_transition(lane_id)
+
+    async def _wake_lane(self, lane_id: str) -> LaneStatus:
         cleanup: tuple[ProcessHandle, int | None, str] | None = None
         status: LaneStatus | None = None
         async with self._lock:
@@ -1202,6 +1230,7 @@ class LaneManager:
                 raise ValueError(f"Lane '{lane_id}' has no lane config")
             try:
                 await handle.wake_up()
+                self._clear_transition(lane_id)
             except Exception as exc:
                 if not self._is_probable_cuda_oom(exc):
                     raise
@@ -3165,6 +3194,14 @@ class LaneManager:
             except asyncio.TimeoutError:
                 return self._status_revision
 
+    def _set_transition(self, lane_id: str, transition: str) -> None:
+        self._transitions[lane_id] = transition
+        self._mark_status_dirty()
+
+    def _clear_transition(self, lane_id: str) -> None:
+        if self._transitions.pop(lane_id, None) is not None:
+            self._mark_status_dirty()
+
     def _mark_status_dirty(self) -> None:
         self._status_revision += 1
         self._status_event.set()
@@ -3705,6 +3742,7 @@ class LaneManager:
             occupied_gpu_devices=occupied_gpu_devices,
             sleep_mode_enabled=sleep_mode_enabled,
             sleep_state=sleep_state,
+            transition=self._transitions.get(handle.lane_id),
             active_requests=active_requests,
             loaded_models=loaded_models,
             lane_config=lc,

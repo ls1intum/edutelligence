@@ -139,15 +139,74 @@ def _cancel_benchmarks_for_changed_session(provider_id: int, session_id: str | N
             _cancel_benchmark_job(job_id, "Provider restarted or disconnected")
 
 
+def _with_cold_marks(provider_id: int, runtime: Dict[str, Any]) -> Dict[str, Any]:
+    """The worker's runtime with the planner's cold mark added to each lane.
+
+    The mark lives only in this orchestrator and decides whether the scheduler
+    routes to a lane at all, so the lane health panel has to show it next to
+    what the worker reports.
+    """
+    registry = _main._logosnode_registry
+    lanes = runtime.get("lanes")
+    if registry is None or not isinstance(lanes, list):
+        return runtime
+    marked = [
+        (
+            {**lane, "cold_marked": registry.is_lane_cold_marked(provider_id, str(lane.get("lane_id") or ""))}
+            if isinstance(lane, dict)
+            else lane
+        )
+        for lane in lanes
+    ]
+    return {**runtime, "lanes": marked}
+
+
+def republish_lane_snapshot(provider_id: int) -> None:
+    """Capture a snapshot now because a lane's cold mark changed.
+
+    The worker pushes its status only when it changes, so a mark set or
+    cleared between two pushes would otherwise not reach the lane health
+    panel until the worker's state moves on, and a lane already asleep
+    could keep showing as draining.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    task = loop.create_task(_republish_latest_runtime(provider_id))
+    _main._background_tasks.add(task)
+    task.add_done_callback(_main._background_tasks.discard)
+
+
+async def _republish_latest_runtime(provider_id: int) -> None:
+    # Read only now: a status captured since the mark changed must not be
+    # overwritten by the older runtime under a newer timestamp.
+    snapshot = _main._logosnode_registry.peek_runtime_snapshot(provider_id) or {}
+    runtime = snapshot.get("runtime")
+    if not isinstance(runtime, dict) or not runtime:
+        return
+    await _capture_logosnode_provider_snapshot(provider_id, runtime, cold_mark_changed=True)
+
+
 async def _capture_logosnode_provider_snapshot(
     provider_id: int,
     runtime: Dict[str, Any],
+    *,
+    cold_mark_changed: bool = False,
 ) -> None:
+    """Record a worker status and queue its database write.
+
+    ``cold_mark_changed`` re-captures the worker's last status because the
+    planner's cold mark on one of its lanes changed. It is always written,
+    under a fresh timestamp so it sorts after the status it repeats, and it
+    counts as a repeat of that status, so profiles are not stored again.
+    """
+    heartbeat = datetime.datetime.now(datetime.timezone.utc).isoformat() if cold_mark_changed else None
     sample = _build_live_local_provider_sample(
         None,
         {
-            "last_heartbeat": runtime.get("timestamp"),
-            "runtime": runtime,
+            "last_heartbeat": heartbeat or runtime.get("timestamp"),
+            "runtime": _with_cold_marks(provider_id, runtime),
         },
     )
     if sample is None:
@@ -156,10 +215,15 @@ async def _capture_logosnode_provider_snapshot(
     # write below is coalesced and runs off the receive loop.
     await _main._logosnode_registry.record_runtime_sample(provider_id, sample)
     runtime_ts = runtime.get("timestamp")
-    count_only = runtime_ts is not None and _last_runtime_ts.get(provider_id) == runtime_ts
+    count_only = cold_mark_changed or (runtime_ts is not None and _last_runtime_ts.get(provider_id) == runtime_ts)
     _last_runtime_ts[provider_id] = runtime_ts
     last_write = _last_snapshot_at.get(provider_id)
-    if count_only and last_write is not None and time.monotonic() - last_write < _COUNT_ONLY_SNAPSHOT_SECONDS:
+    if (
+        count_only
+        and not cold_mark_changed
+        and last_write is not None
+        and time.monotonic() - last_write < _COUNT_ONLY_SNAPSHOT_SECONDS
+    ):
         return
     pending = _unsaved_samples.get(provider_id)
     # A status replaced before its write still owes its profiles.
