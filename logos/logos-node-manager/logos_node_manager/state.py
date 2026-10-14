@@ -33,6 +33,10 @@ _TAG = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,127}")
 MAX_EVENTS = 60
 KEEP_FINISHED = 30
 
+# The local name ``<image>:previous`` keeps the image of the version that ran before. A deployment cannot ask for this
+# tag: the manager moves the name to the running image before it swaps, so the requested release would be lost.
+PREVIOUS_TAG = "previous"
+
 
 class Phase(str, Enum):
     QUEUED = "queued"
@@ -74,6 +78,8 @@ def validate_id(value: str) -> str:
 def validate_tag(value: str) -> str:
     if not _TAG.fullmatch(value):
         raise ValueError(f"invalid image tag {value!r}")
+    if value == PREVIOUS_TAG:
+        raise ValueError(f"the image tag {value!r} is reserved for the previous version")
     return value
 
 
@@ -91,7 +97,7 @@ class Deployment:
     message: str = ""
     started_at: str | None = None
     finished_at: str | None = None
-    # Unexpected errors of the manager itself. After a few the deployment is marked as failed.
+    # Unexpected errors of the manager itself since the phase began. After a few, the deployer gives up on the phase.
     attempts: int = 0
 
     # The container and image that ran before the deployment. None on a host without a worker container.
@@ -185,6 +191,8 @@ class StateStore:
         self.state_dir = state_dir
         self.deployments_dir = state_dir / "deployments"
         self.heartbeat_file = state_dir / "heartbeat"
+        # Names of files that were skipped, so that the daemon reports each one once and not on every pass.
+        self._ignored: set[str] = set()
 
     def ensure(self) -> None:
         self.deployments_dir.mkdir(parents=True, exist_ok=True)
@@ -229,11 +237,16 @@ class StateStore:
         _write_atomically(self._path(deployment.id), self._dump(deployment))
 
     def all(self) -> list[Deployment]:
-        """Every readable record, oldest request first."""
+        """Every readable record, oldest request first. A file whose name is not a deployment id is not a record."""
         if not self.deployments_dir.is_dir():
             return []
         records = []
         for path in self.deployments_dir.glob("*.json"):
+            if not _ID.fullmatch(path.stem):
+                if path.name not in self._ignored:
+                    self._ignored.add(path.name)
+                    logger.warning("Ignoring %s: its name is not a deployment id", path)
+                continue
             record = self.load(path.stem)
             if record is not None:
                 records.append(record)

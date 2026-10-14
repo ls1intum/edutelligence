@@ -162,7 +162,9 @@ jobs:
               docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env "$@"
             }
             compose pull logos-node-manager
-            compose up -d logos-node-manager
+            # Recreated on every run: `docker login` replaces config.json with a new file, and the node manager
+            # mounts that one file, so a container that is kept would go on with the old login.
+            compose up -d --force-recreate logos-node-manager
             for attempt in $(seq 1 30); do
               if docker exec logos-node-manager node-manager ping; then
                 exit 0

@@ -19,13 +19,20 @@ from logos_node_manager.config import Settings
 from logos_node_manager.docker_ops import Docker, split_image_ref
 from logos_node_manager.errors import DockerError, Interrupted
 from logos_node_manager.rollback import restore_previous
-from logos_node_manager.state import MAX_EVENTS, Deployment, FailureKind, Outcome, Phase, StateStore, utc_now
+from logos_node_manager.state import (
+    MAX_EVENTS,
+    PREVIOUS_TAG,
+    Deployment,
+    FailureKind,
+    Outcome,
+    Phase,
+    StateStore,
+    utc_now,
+)
 from logos_node_manager.verify import verify_container
 
 logger = logging.getLogger(__name__)
 
-# The local name under which the image of the previous deployment is kept.
-PREVIOUS_TAG = "previous"
 # The saved log of a failed container is limited, so the record stays small.
 MAX_LOG_CHARS = 6000
 
@@ -77,6 +84,28 @@ class Deployer:
         self._clean_up(deployment)
         return deployment
 
+    def give_up(self, deployment: Deployment, error: Exception) -> None:
+        """End the attempts after the manager itself failed again and again in the phase of the record.
+
+        Before the swap nothing was replaced, so the deployment just fails. From the swap on, the worker may run an
+        image that nobody checked, so the previous version is restored first. The rollback gets attempts of its own.
+        If it fails as well, the deployment ends as a failed rollback and every image stays.
+        """
+        reason = f"the node manager failed {deployment.attempts} times: {error}"
+        logger.warning("Deployment %s: giving up in phase %s: %s", deployment.id, deployment.phase.value, reason)
+        if deployment.phase is Phase.ROLLING_BACK:
+            self._finish(
+                deployment,
+                Outcome.FAILED,
+                FailureKind.ROLLBACK_FAILED,
+                f"{deployment.message}. The rollback failed too: {reason}.",
+            )
+        elif deployment.phase in (Phase.SWAPPING, Phase.VERIFYING):
+            deployment.failure_logs = self._capture_logs()
+            self._fail_over(deployment, FailureKind.INTERNAL_ERROR, reason)
+        else:
+            self._finish(deployment, Outcome.FAILED, FailureKind.INTERNAL_ERROR, reason)
+
     # ------------------------------------------------------------------ Record helpers
 
     def _event(self, deployment: Deployment, note: str) -> None:
@@ -87,6 +116,9 @@ class Deployer:
 
     def _advance(self, deployment: Deployment, phase: Phase, note: str = "") -> None:
         deployment.phase = phase
+        # A new phase is progress, so errors of the phase before do not count against this one. This also gives a
+        # rollback that starts after repeated errors attempts of its own.
+        deployment.attempts = 0
         self._event(deployment, note)
         self.store.save(deployment)
 

@@ -116,6 +116,14 @@ def test_invalid_input_is_refused_before_anything_is_written(settings, store, cl
     assert store.all() == []
 
 
+def test_the_reserved_tag_is_refused_with_a_reason(settings, store, clock, capsys):
+    args = parse("deploy", "--id", "run-1", "--tag", "previous")
+
+    assert cli.cmd_deploy(args, settings, clock=clock, sleep=clock.sleep) == cli.EXIT_USAGE
+    assert "reserved" in capsys.readouterr().err
+    assert store.all() == []
+
+
 def test_a_missing_daemon_is_pointed_out_but_the_request_is_kept(settings, store, clock, capsys):
     deploy(settings, store, clock)
 

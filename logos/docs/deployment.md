@@ -130,13 +130,22 @@ To use the node manager on a host without the deploy workflow, do these steps:
 
 1. If the registry needs a login, run `docker login` on the host.
 2. Add `COMPOSE_PROFILES=node-manager` to the `.env` file of the worker.
-3. In the worker directory, run `docker compose up -d logos-node-manager`.
+3. Set `REGISTRY` in the `.env` file of the worker to the deployment registry
+   (`<registry>/logos`). The node manager image is not in the public mirror.
+4. In the worker directory, run `docker compose up -d logos-node-manager`.
+
+The node manager keeps the login that existed when it started. If you run
+`docker login` again, run
+`docker compose up -d --force-recreate logos-node-manager`. The deploy
+workflows do this on each run.
 
 To send a deploy request, run this command:
 
 ```bash
 docker exec logos-node-manager node-manager deploy --id manual-1 --tag latest --wait
 ```
+
+The node manager reserves the tag `previous`. Do not deploy that tag.
 
 To see the latest deployment, run `docker exec logos-node-manager node-manager status`.
 

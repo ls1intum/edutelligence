@@ -17,6 +17,11 @@ def phases(record) -> list[str]:
     return [event["phase"] for event in record.events]
 
 
+def rollback_attempts(docker) -> int:
+    """How often the old container was started again: ``up`` with ``recreate``."""
+    return len([call for call in docker.calls if call[0] == "up" and call[2]])
+
+
 def test_a_healthy_release_replaces_the_container(deployer, docker, store):
     record = deployer.process(queued(store, "v2"))
 
@@ -145,13 +150,73 @@ def test_a_container_that_restarts_fails_the_check_even_if_it_looks_healthy_now(
 
 def test_a_failed_rollback_is_reported_as_failed(deployer, docker, store):
     docker.new_container_timeline = CRASHED
-    docker.up_errors = [None, "no space left on device"]
+    docker.up_errors = [None] + ["no space left on device"] * 3
 
     record = deployer.process(queued(store, "v2"))
 
     assert record.outcome is Outcome.FAILED
     assert record.failure is FailureKind.ROLLBACK_FAILED
     assert "no space left" in record.message
+    assert "after 3 attempts" in record.message
+    assert rollback_attempts(docker) == 3
+
+
+def test_a_rollback_that_fails_once_is_tried_again(deployer, docker, store):
+    docker.new_container_timeline = CRASHED
+    # The swap works. The first attempt to restore the old container finds leftovers of the interrupted replacement.
+    docker.up_errors = [None, "Error when allocating new name: Conflict. The container name is already in use"]
+
+    record = deployer.process(queued(store, "v2"))
+
+    assert record.outcome is Outcome.ROLLED_BACK
+    assert docker.container_info.image_id == OLD
+    assert rollback_attempts(docker) == 2
+
+
+def test_the_rollback_waits_longer_before_each_new_attempt(make_deployer, docker, store, clock):
+    docker.new_container_timeline = CRASHED
+    docker.up_errors = [None] + ["still busy"] * 3
+    events = []
+    up = docker.up
+
+    def spy_up(*args, **kwargs):
+        events.append("rollback up" if kwargs.get("recreate") else "up")
+        return up(*args, **kwargs)
+
+    def spy_sleep(seconds):
+        events.append(seconds)
+        clock.sleep(seconds)
+
+    docker.up = spy_up
+    deployer = make_deployer(sleep=spy_sleep)
+
+    deployer.process(queued(store, "v2"))
+
+    # Nothing else waits during a rollback whose attempts all fail, so the pauses show up between the attempts.
+    assert events[events.index("rollback up") :] == ["rollback up", 5.0, "rollback up", 10.0, "rollback up"]
+
+
+def test_a_stop_request_ends_the_rollback_between_two_attempts(make_deployer, docker, store):
+    docker.new_container_timeline = CRASHED
+    docker.up_errors = [None, "still busy"]
+    stop = {"asked": False}
+    up = docker.up
+
+    def spy_up(*args, **kwargs):
+        result = up(*args, **kwargs)
+        if kwargs.get("recreate") and not result.ok:
+            stop["asked"] = True  # the daemon is asked to stop while the first attempt fails
+        return result
+
+    docker.up = spy_up
+    deployer = make_deployer(should_stop=lambda: stop["asked"])
+    record = queued(store, "v2")
+
+    with pytest.raises(Interrupted):
+        deployer.process(record)
+
+    assert store.load(record.id).phase is Phase.ROLLING_BACK
+    assert rollback_attempts(docker) == 1
 
 
 def test_a_first_deployment_has_nothing_to_roll_back_to(deployer, docker, store):
@@ -224,7 +289,7 @@ def the_container_already_runs_the_image(docker):
 
 def the_rollback_fails(docker):
     docker.new_container_timeline = CRASHED
-    docker.up_errors = [None, "no space left on device"]
+    docker.up_errors = [None] + ["no space left on device"] * 3
 
 
 def there_is_no_container_yet_and_the_release_crashes(docker):

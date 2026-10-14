@@ -15,13 +15,14 @@ from logos_node_manager.config import Settings
 from logos_node_manager.deployer import Deployer
 from logos_node_manager.docker_ops import Docker, describe_registry_login
 from logos_node_manager.errors import Interrupted
-from logos_node_manager.state import Deployment, FailureKind, Outcome, Phase, StateStore, utc_now
+from logos_node_manager.state import Deployment, StateStore
 
 logger = logging.getLogger(__name__)
 
 # The heartbeat comes from its own thread, so ``ping`` still answers during a deployment that takes many minutes.
 HEARTBEAT_INTERVAL_S = 5.0
-# An unexpected error is tried again this many times before the deployment is marked as failed.
+# A phase is tried this many times in a row when the manager itself fails in it. After the last attempt the deployer
+# decides how to end.
 MAX_ATTEMPTS = 3
 RETRY_DELAY_S = 10.0
 
@@ -87,17 +88,14 @@ class Daemon:
         self._store.prune()
 
     def _record_error(self, deployment: Deployment, exc: Exception) -> None:
-        """Count an unexpected error. The deployment is tried again, and marked as failed after the last attempt."""
+        """Count an unexpected error. The deployment is tried again, and after the last attempt the deployer ends it."""
         logger.exception("Deployment %s hit an unexpected error", deployment.id)
         record = self._store.load(deployment.id) or deployment
         record.attempts += 1
         if record.attempts >= MAX_ATTEMPTS:
-            record.phase = Phase.DONE
-            record.outcome = Outcome.FAILED
-            record.failure = FailureKind.INTERNAL_ERROR
-            record.message = f"the node manager failed {record.attempts} times: {exc}"
-            record.finished_at = utc_now()
-        self._store.save(record)
+            self._deployer.give_up(record, exc)
+        else:
+            self._store.save(record)
         if not record.finished:
             self._stop.wait(self._retry_delay_s * record.attempts)
 

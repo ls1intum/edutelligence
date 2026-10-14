@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 
@@ -60,10 +61,22 @@ def test_invalid_tags_are_rejected(value):
         validate_tag(value)
 
 
-@pytest.mark.parametrize("value", ["latest", "pr-1187", "v1.2.3", "1234567890-1", "A_b.c-d"])
+@pytest.mark.parametrize("value", ["latest", "pr-1187", "v1.2.3", "1234567890-1", "A_b.c-d", "previous-1", "Previous"])
 def test_ordinary_ids_and_tags_are_accepted(value):
     assert validate_id(value) == value
     assert validate_tag(value) == value
+
+
+def test_the_tag_previous_is_reserved_for_the_rollback_image():
+    with pytest.raises(ValueError, match="reserved"):
+        validate_tag("previous")
+
+
+def test_a_deployment_for_the_reserved_tag_is_not_queued(store):
+    with pytest.raises(ValueError, match="reserved"):
+        store.submit(deployment(tag="previous"))
+
+    assert store.all() == []
 
 
 def test_deployments_run_oldest_request_first(store):
@@ -81,6 +94,41 @@ def test_a_finished_deployment_is_not_picked_up_again(store):
 
     assert store.next_unfinished() is None
     assert store.latest().id == "run-1"
+
+
+@pytest.mark.parametrize("name", ["run 1.json", "run-1 (copy).json", "x" * 65 + ".json", ".hidden.json"])
+def test_a_file_whose_name_is_not_a_deployment_id_is_ignored(store, name):
+    store.submit(deployment("good"))
+    (store.deployments_dir / name).write_text("{}", encoding="utf-8")
+
+    assert [record.id for record in store.all()] == ["good"]
+    assert store.next_unfinished().id == "good"
+    assert store.latest().id == "good"
+
+
+def test_an_ignored_file_is_reported_once_and_not_on_every_pass(store, caplog):
+    store.ensure()
+    (store.deployments_dir / "run 1.json").write_text("{}", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            store.all()
+
+    assert caplog.text.count("run 1.json") == 1
+
+
+def test_pruning_deletes_finished_records_and_leaves_ignored_files_alone(store):
+    old = deployment("old")
+    store.submit(old)
+    old.phase = Phase.DONE
+    old.outcome = Outcome.SUCCEEDED
+    store.save(old)
+    (store.deployments_dir / "run 1.json").write_text("{}", encoding="utf-8")
+
+    store.prune(keep=0)
+
+    assert not (store.deployments_dir / "old.json").exists()
+    assert (store.deployments_dir / "run 1.json").exists()
 
 
 def test_a_record_that_cannot_be_read_is_skipped(store):

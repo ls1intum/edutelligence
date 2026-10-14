@@ -13,7 +13,7 @@ A deployment is one request to run a given image tag. The daemon takes requests 
 | `draining` | Reserved. This version passes through it without waiting. |
 | `swapping` | If the new image differs from the running one, keeps the running image under the name `<image>:previous`. Then runs `docker compose up -d --no-deps` for the worker service. Compose recreates the container when its image or its configuration changed. If nothing changed, the deployment ends as `unchanged`. |
 | `verifying` | Waits until the container is healthy and stays healthy for the stability window (60 s). It fails if the container exits, restarts, reports `unhealthy`, runs another image, or is not healthy after 10 minutes. |
-| `rolling_back` | Runs the previous image again. It points the compose image name back at it and recreates the container without a pull, then runs the same check. |
+| `rolling_back` | Runs the previous image again. It points the compose image name back at it and recreates the container without a pull, then runs the same check. If the recreation fails, it tries again after 5 s and once more after 10 s, three attempts in all: a replacement that was cut off can leave containers behind that make the first attempt fail. |
 
 The result of a deployment is one of these:
 
@@ -21,11 +21,17 @@ The result of a deployment is one of these:
 |---|---|---|
 | `succeeded` | The new container runs and is healthy. | 0 |
 | `unchanged` | The container already ran the requested image. | 0 |
-| `rolled_back` | The new container failed. The previous version runs again. | 10 |
+| `rolled_back` | The new container failed, or the manager itself failed three times in a row after the swap. The previous version runs again. | 10 |
 | `failed` | The deployment failed. See `failure` in the record: `pull_failed`, `swap_failed`, `verify_failed` (no previous version to restore), `rollback_failed`, `internal_error`. | 11 |
 
 `deploy --wait` ends with exit code 12 if the wait runs out before the deployment ends. The deployment itself keeps
 running. Attach to it again with `node-manager wait <id>`.
+
+If the manager itself fails three times in a row in one phase, for example because Docker does not answer, it gives up
+on that phase. Before the swap nothing was replaced, so the deployment ends as `failed` (`internal_error`). From the
+swap on, the worker may run an image that nobody checked, so the manager restores the previous version first and the
+deployment ends as `rolled_back` (`internal_error`). The rollback has three attempts of its own. If they fail as well,
+the deployment ends as `failed` (`rollback_failed`) and every image stays on the host.
 
 The log of a failed container is saved in the record before the rollback removes the container. `deploy --wait`
 prints it unless it is called with `--no-logs`.
@@ -65,6 +71,10 @@ COMPOSE_PROFILES=node-manager
 
 The deploy workflows write this line for every worker whose matrix entry has `node-manager: true`.
 
+The image of the service is `${REGISTRY}/logos-node-manager`. The default registry is the public GHCR mirror, which does
+not have this image, so set `REGISTRY` in the `.env` of the worker to the deployment registry (`<registry>/logos`). The
+deploy workflows write it.
+
 The service needs three things from the host:
 
 * the Docker socket, so it can run `docker`;
@@ -72,7 +82,9 @@ The service needs three things from the host:
   paths before it sends them to the Docker engine);
 * the Docker login of the host user, mounted read-only, so it can pull from a registry that needs a login. Run
   `docker login` on the host first. The mount is declared so that Docker does not create the file when it is missing:
-  the service then fails to start with a clear message.
+  the service then fails to start with a clear message. A new `docker login` replaces the file, and a mounted file keeps
+  showing the old one. After each login, recreate the service with
+  `docker compose up -d --force-recreate logos-node-manager`. The deploy workflows do this on every run.
 
 Commands (run them with `docker exec logos-node-manager node-manager …`):
 
@@ -87,12 +99,16 @@ Commands (run them with `docker exec logos-node-manager node-manager …`):
 The requested tag reaches Compose as the `IMAGE_TAG` process variable. A process variable beats the `.env` file, so a
 later rewrite of that file cannot change what an earlier request deploys.
 
+The tag `previous` cannot be deployed. The manager uses the local name `<image>:previous` for the version that ran
+before, and it moves that name to the running image before the swap. `deploy` refuses the tag with exit code 2.
+
 ## State
 
 The state directory is `<worker directory>/node-manager`. It holds one JSON file per deployment in `deployments/` and a
 `heartbeat` file. Every write replaces the file atomically. The record is the memory of the manager: if the manager
 stops in the middle of a deployment, for example because its own container is recreated, the next start continues from
-the recorded phase. Every step can be repeated. The manager keeps the 30 newest finished records.
+the recorded phase. Every step can be repeated. The manager keeps the 30 newest finished records. A file in
+`deployments/` whose name is not a valid deployment id is ignored and logged once.
 
 ## Configuration
 
@@ -122,6 +138,9 @@ A missing, malformed or non-positive timeout falls back to its default.
   limits.
 * `docker compose config` is only called with `--images`. Its normal output contains the resolved environment, which
   holds secrets. No output of it is logged, and neither is the environment of a command.
+* A command that runs out of time is stopped together with every process it started: the group gets SIGTERM, and
+  SIGKILL after 10 s. No old command goes on while the manager moves to the next step. What the Docker engine has
+  already begun, for example stopping a container, goes on and is not undone. The rollback tries again for this reason.
 * The manager never runs a global image prune. When a deployment has ended it removes only the images listed under
   "Images on the host", by ID.
 
