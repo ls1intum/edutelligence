@@ -13,6 +13,7 @@ import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.custom_exceptions import IngestionCancelledException
 from iris.config import settings
 from iris.domain.data.slide_vision_dto import SlideVisionDTO
+from iris.pipeline import lecture_unit_segment_summary_pipeline as segment_module
 from iris.pipeline.lecture_ingestion_pipeline import LectureUnitPageIngestionPipeline
 from iris.pipeline.lecture_unit_segment_summary_pipeline import (
     LectureUnitSegmentSummaryPipeline,
@@ -221,3 +222,56 @@ def test_a_page_without_a_vision_description_keeps_its_text_without_a_merge():
 
     assert results == [(3, "only text")]
     pipeline.merge_page_content_and_image_interpretation.assert_not_called()
+
+
+def test_a_failing_segment_summary_starts_no_further_summaries():
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.cancel_event = Event()
+    pipeline.callback = MagicMock()
+    pipeline.lecture_unit_dto = SimpleNamespace(lecture_unit_id=7)
+    started = []
+
+    def create_summary(*args):
+        slides = args[1]
+        started.append(slides[0])
+        if slides[0] == "slide 0":
+            raise RuntimeError("summary failed")
+        time.sleep(0.1)
+        return "summary"
+
+    pipeline._create_summary = create_summary
+    segments = [(n, n, [], [f"slide {n}"]) for n in range(8)]
+    with patch.object(settings.lecture_ingestion, "segment_summary_concurrency", 2):
+        with pytest.raises(RuntimeError, match="summary failed"):
+            pipeline._summarize_segments(segments)
+
+    # Only the summaries already started may run; never more than the configured two.
+    assert started[0] == "slide 0"
+    assert len(started) <= 2
+
+
+def test_a_segment_is_written_with_the_visibility_its_slide_has_when_it_is_written():
+    pipeline = object.__new__(LectureUnitSegmentSummaryPipeline)
+    pipeline.cancel_event = Event()
+    pipeline.lecture_unit_dto = SimpleNamespace(
+        course_id=1,
+        lecture_id=2,
+        lecture_unit_id=7,
+        base_url="https://artemis.example",
+        content_fingerprint="v1:abc",
+    )
+    pipeline.llm_embedding = MagicMock()
+    pipeline.lecture_unit_segment_collection = MagicMock()
+    pipeline.job_handler = MagicMock()
+    lock_held_while_reading = []
+
+    def current_slides(*_args):
+        lock_held_while_reading.append(segment_module.batch_update_lock.locked())
+        return [SimpleNamespace(properties={"hidden_until": "2030-01-01T00:00:00Z"})]
+
+    pipeline._get_slides = current_slides
+    pipeline._upsert_lecture_object(3, "summary", 3)
+
+    written = pipeline.lecture_unit_segment_collection.data.insert.call_args.kwargs
+    assert written["properties"]["hidden_until"] == "2030-01-01T00:00:00Z"
+    assert lock_held_while_reading == [True]

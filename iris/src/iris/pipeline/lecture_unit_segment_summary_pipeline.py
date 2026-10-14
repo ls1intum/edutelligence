@@ -1,4 +1,4 @@
-from concurrent.futures import as_completed
+from concurrent.futures import FIRST_COMPLETED, wait
 from threading import Event
 from typing import Optional, Tuple
 
@@ -125,17 +125,10 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
 
         # Write in slide order, here, so the shared write-retry budget is only used from one thread.
         written_uuids = []
-        for (slide_index, display_page_number, _, slides), summary in zip(
+        for (slide_index, display_page_number, _, _), summary in zip(
             segments, summaries
         ):
-            hidden_until = (
-                slides[0].properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value)
-                if slides
-                else None
-            )
-            self._upsert_lecture_object(
-                slide_index, summary, display_page_number, hidden_until
-            )
+            self._upsert_lecture_object(slide_index, summary, display_page_number)
             written_uuids.append(self._segment_uuid(slide_index))
         self._prune_stale_segments(slide_number_start, slide_number_end, written_uuids)
         return summaries, self.tokens
@@ -168,38 +161,46 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
         return slide_index, display_page_number, transcriptions, slides
 
     def _summarize_segments(self, segments) -> list[str]:
-        """Summarize the segments, ``segment_summary_concurrency`` at a time, returned in segment order."""
+        """Summarize the segments, ``segment_summary_concurrency`` at a time, returned in segment order.
+
+        Only that many summaries are started at once, and a finished one is checked before the next is started, so a
+        failure or cancellation starts no further LLM calls.
+        """
         cancel_event = self.cancel_event
         unit_id = self.lecture_unit_dto.lecture_unit_id
+        concurrency = settings.lecture_ingestion.segment_summary_concurrency
         total = len(segments)
         summaries: list[Optional[str]] = [None] * total
+        in_flight: dict = {}
+        next_segment = 0
         finished = 0
-        with TracedThreadPoolExecutor(
-            max_workers=settings.lecture_ingestion.segment_summary_concurrency
-        ) as executor:
-            futures = {
-                executor.submit(
-                    self._create_summary, transcriptions, slides, cancel_event
-                ): position
-                for position, (_, _, transcriptions, slides) in enumerate(segments)
-            }
+        with TracedThreadPoolExecutor(max_workers=concurrency) as executor:
             try:
-                for future in as_completed(futures):
-                    summaries[futures[future]] = future.result()
-                    finished += 1
-                    if self.callback is not None:
-                        self.callback.update(
-                            stage_name="segment-summaries",
-                            stage_progress=finished,
-                            stage_total=total,
+                while next_segment < total or in_flight:
+                    while next_segment < total and len(in_flight) < concurrency:
+                        _, _, transcriptions, slides = segments[next_segment]
+                        future = executor.submit(
+                            self._create_summary, transcriptions, slides, cancel_event
                         )
+                        in_flight[future] = next_segment
+                        next_segment += 1
+                    done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        summaries[in_flight.pop(future)] = future.result()
+                        finished += 1
+                        if self.callback is not None:
+                            self.callback.update(
+                                stage_name="segment-summaries",
+                                stage_progress=finished,
+                                stage_total=total,
+                            )
                     raise_if_cancelled(
                         cancel_event, unit_id, "lecture unit segment summary"
                     )
             finally:
-                # On a failure or cancellation, segments not yet started are dropped; the ones in progress finish
-                # their current call before the executor shuts down.
-                for future in futures:
+                # On a failure or cancellation, the summaries in progress finish their current call before the
+                # executor shuts down; none is started after it.
+                for future in in_flight:
                     future.cancel()
         return summaries
 
@@ -478,12 +479,18 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             }
         )
 
+    def _current_hidden_until(self, slide_number: int):
+        """The slide's current visibility as its page chunks carry it, or None for a slide without page chunks."""
+        slides = self._get_slides(slide_number)
+        if not slides:
+            return None
+        return slides[0].properties.get(LectureUnitPageChunkSchema.HIDDEN_UNTIL.value)
+
     def _upsert_lecture_object(
         self,
         slide_number: int,
         summary: str,
         display_page_number: int,
-        hidden_until=None,
     ):
         job_handler = getattr(self, "job_handler", ingestion_job_handler)
         retry = getattr(self, "_retry", None) or WeaviateWriteRetry.for_request()
@@ -496,7 +503,6 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
             LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
             LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
-            LectureUnitSegmentSchema.HIDDEN_UNTIL.value: hidden_until,
             LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value: self.lecture_unit_dto.content_fingerprint,
         }
         embedding = self.llm_embedding.embed(summary)
@@ -518,6 +524,11 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
                     raise
 
         with batch_update_lock:
+            # The slide's visibility is read here, under the lock the visibility update holds as well: the summaries
+            # take minutes, and a slide hidden meanwhile must not get its old visibility back from this write.
+            properties[LectureUnitSegmentSchema.HIDDEN_UNTIL.value] = (
+                self._current_hidden_until(slide_number)
+            )
             with job_handler.current_job_guard(
                 self.lecture_unit_dto.base_url,
                 self.lecture_unit_dto.course_id,
