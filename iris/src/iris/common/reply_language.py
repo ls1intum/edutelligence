@@ -149,16 +149,27 @@ def previous_reply_language(
 ) -> str:
     """Return the language of the conversation before the new answer.
 
-    This is the language of the newest earlier answer of Iris whose language is
-    clear. Short answers ("Was hast du versucht?") do not reset it. Without such
-    an answer, the Artemis setting applies. Use this for text Iris writes before
-    its new answer exists, such as quiz questions.
+    This is the language of the newest earlier turn whose language is clear, read
+    the same way as a new answer (see `reply_language`). Unclear turns ("Ok!"
+    after "Danke") do not reset it. Without such a turn, the Artemis setting
+    applies. Use this for text Iris writes before its new answer exists, such as
+    quiz questions.
     """
-    for message in reversed(list(history or [])):
-        if message.sender == IrisMessageRole.ASSISTANT:
-            detected = detect_language_name(_message_text(message))
-            if detected:
-                return detected
+    messages = list(history or [])
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].sender != IrisMessageRole.ASSISTANT:
+            continue
+        student_text = next(
+            (
+                _message_text(message)
+                for message in reversed(messages[:index])
+                if message.sender == IrisMessageRole.USER
+            ),
+            None,
+        )
+        detected = _turn_language(_message_text(messages[index]), student_text)
+        if detected:
+            return detected
     return language_name(user_language)
 
 
@@ -170,15 +181,25 @@ def reply_language(
 ) -> str:
     """Return the language of a new answer Iris wrote.
 
-    When the answer alone is too short to tell, the student's latest message and
-    the answer together show the language the chat model chose for this turn,
-    including a clear switch. If that is still unclear, the conversation keeps
-    its language (see `previous_reply_language`).
+    If the language of this turn is unclear, the conversation keeps its language
+    (see `previous_reply_language`).
+    """
+    return _turn_language(answer, latest_user_text) or previous_reply_language(
+        history, user_language
+    )
+
+
+def _turn_language(answer: Optional[str], student_text: Optional[str]) -> Optional[str]:
+    """Return the language of one answer, or None if it is unclear.
+
+    When the answer alone is too short to tell, the student's message and the
+    answer together show the language the chat model chose for this turn,
+    including a clear switch.
     """
     detected = detect_language_name(answer)
-    if detected is None and latest_user_text and answer:
-        detected = detect_language_name(f"{latest_user_text}\n{answer}")
-    return detected or previous_reply_language(history, user_language)
+    if detected is None and student_text and answer:
+        detected = detect_language_name(f"{student_text}\n{answer}")
+    return detected
 
 
 def _message_text(message: PyrisMessage) -> str:

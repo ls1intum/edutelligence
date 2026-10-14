@@ -149,6 +149,19 @@ def test_previous_reply_language_skips_short_answers():
     assert previous_reply_language(history, "en") == "German"
 
 
+def test_previous_reply_language_keeps_a_switch_with_a_short_answer():
+    history = [
+        _message(IrisMessageRole.ASSISTANT, ENGLISH_ANSWER),
+        _message(
+            IrisMessageRole.USER,
+            "Kannst du ab jetzt bitte auf Deutsch antworten? Das wäre super.",
+        ),
+        _message(IrisMessageRole.ASSISTANT, "Gerne!"),
+        _message(IrisMessageRole.USER, "Mach mir ein Quiz"),
+    ]
+    assert previous_reply_language(history, "en") == "German"
+
+
 def test_previous_reply_language_falls_back_to_setting():
     assert previous_reply_language([], "de") == "German"
     assert previous_reply_language(None, "en") == "English"
