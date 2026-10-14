@@ -286,7 +286,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
         self._hidden_until_by_page: dict[int, object] = {}
@@ -833,19 +832,14 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             page_texts = [
                 doc.load_page(page_num).get_text() for page_num in range(doc.page_count)
             ]
-            vision_results = self._interpret_pages(
+            page_results = self._interpret_pages(
                 doc, page_texts, lecture_unit_slide_dto
             )
-            pages: list[tuple[int, str]] = []
-            raw_display_numbers: list[int] = []
-            for page_num, vision_result in enumerate(vision_results):
-                raw_display_numbers.append(vision_result.display_page_number)
-                page_text = page_texts[page_num]
-                if vision_result.academic_description:
-                    page_text = self.merge_page_content_and_image_interpretation(
-                        page_text, vision_result.academic_description
-                    )
-                pages.append((page_num, page_text))
+            pages = [
+                (page_num, page_text)
+                for page_num, (_, page_text) in enumerate(page_results)
+            ]
+            raw_display_numbers = [number for number, _ in page_results]
 
             # Phase 2: reconcile the independently-read numbers into a consistent sequence.
             display_page_numbers = self._reconcile_display_page_numbers(
@@ -959,11 +953,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         doc,
         page_texts: list[str],
         lecture_unit_slide_dto: LectureUnitPageDTO,
-    ) -> list[SlideVisionDTO]:
-        """Interpret every page via vision, ``vision_concurrency`` pages at a time, in page order.
+    ) -> list[tuple[int, str]]:
+        """Interpret and merge every page, ``vision_concurrency`` pages at a time, in page order.
 
-        Each call waits almost entirely for the LLM, so the pages of a unit run side by side instead of one after
-        another. A page gets the extracted text of the page before it as context. That text is known before any
+        Returns each page's raw slide number and its text merged with the vision description. Each page waits almost
+        entirely for its two LLM calls (vision, then merge), so the pages of a unit run side by side instead of one
+        after another. A page gets the extracted text of the page before it as context. That text is known before any
         vision call, so no call waits for another; the previous page's vision description is no longer part of the
         context. Pages are rendered here, in the calling thread, because a PyMuPDF document must not be used from
         several threads, and only as many as are being interpreted, so the rendered images in memory stay bounded.
@@ -972,7 +967,7 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         cancel_event = self.cancel_event
         page_count = doc.page_count
         concurrency = settings.lecture_ingestion.vision_concurrency
-        results: list[Optional[SlideVisionDTO]] = [None] * page_count
+        results: list[Optional[tuple[int, str]]] = [None] * page_count
         in_flight: dict = {}
         next_page = 0
         finished = 0
@@ -990,11 +985,12 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                             "utf-8"
                         )
                         future = executor.submit(
-                            self.interpret_image,
+                            self._interpret_and_merge_page,
                             img_base64,
+                            page_texts[next_page],
                             page_texts[next_page - 1] if next_page > 0 else "",
                             lecture_unit_slide_dto.lecture_name,
-                            self.course_language,
+                            unit_id,
                         )
                         in_flight[future] = next_page
                         next_page += 1
@@ -1016,6 +1012,27 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
                 for future in in_flight:
                     future.cancel()
         return results
+
+    def _interpret_and_merge_page(
+        self,
+        img_base64: str,
+        page_text: str,
+        previous_page_text: str,
+        lecture_name: str,
+        unit_id,
+    ) -> tuple[int, str]:
+        """One page: the vision call, then the merge of the page text with the vision description."""
+        raise_if_cancelled(self.cancel_event, unit_id, "before lecture page vision")
+        vision_result = self.interpret_image(
+            img_base64, previous_page_text, lecture_name, self.course_language
+        )
+        if not vision_result.academic_description:
+            return vision_result.display_page_number, page_text
+        raise_if_cancelled(self.cancel_event, unit_id, "before lecture page merge")
+        merged = self.merge_page_content_and_image_interpretation(
+            page_text, vision_result.academic_description
+        )
+        return vision_result.display_page_number, merged
 
     def interpret_image(
         self,
@@ -1136,12 +1153,18 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             image_interpretation=image_interpretation,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
+        # Pages are merged in several threads, and the chat model keeps the token usage of its last call, so each
+        # call gets its own model around the shared request handler.
+        llm = IrisLangchainChatModel(
+            request_handler=self.llm.request_handler,
+            completion_args=self.llm.completion_args,
+        )
         clean_output = clean_text(
-            (prompt | self.pipeline).invoke({}),
+            (prompt | llm | StrOutputParser()).invoke({}),
             bullets=True,
             extra_whitespace=True,
         )
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
+        self._append_tokens(llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
         return clean_output
 
     def _resolve_course_language(self, doc) -> str:

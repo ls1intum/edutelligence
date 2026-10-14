@@ -76,12 +76,15 @@ def test_pages_are_interpreted_side_by_side_and_returned_in_page_order():
         )
 
     pipeline.interpret_image = interpret
+    pipeline.merge_page_content_and_image_interpretation = (
+        lambda text, description: f"{text} + {description}"
+    )
     with patch.object(settings.lecture_ingestion, "vision_concurrency", 3):
         results = pipeline._interpret_pages(
             _doc(7), [f"text of page {n}" for n in range(7)], _slide_dto()
         )
 
-    assert [r.academic_description for r in results] == [f"slide {n}" for n in range(7)]
+    assert results == [(n + 1, f"text of page {n} + slide {n}") for n in range(7)]
     assert concurrency.peak == 3
     assert contexts[0] == ""
     assert contexts[4] == "text of page 3"
@@ -104,6 +107,7 @@ def test_a_failing_page_fails_the_run_and_starts_no_further_pages():
         return SlideVisionDTO(display_page_number=-1, academic_description="x")
 
     pipeline.interpret_image = interpret
+    pipeline.merge_page_content_and_image_interpretation = lambda text, _d: text
     with patch.object(settings.lecture_ingestion, "vision_concurrency", 2):
         with pytest.raises(RuntimeError, match="vision failed"):
             pipeline._interpret_pages(_doc(10), ["t"] * 10, _slide_dto())
@@ -120,6 +124,7 @@ def test_a_cancelled_run_stops_before_the_next_page():
         return SlideVisionDTO(display_page_number=-1, academic_description="x")
 
     pipeline.interpret_image = interpret
+    pipeline.merge_page_content_and_image_interpretation = lambda text, _d: text
     with patch.object(settings.lecture_ingestion, "vision_concurrency", 1):
         with pytest.raises(IngestionCancelledException):
             pipeline._interpret_pages(_doc(5), ["t"] * 5, _slide_dto())
@@ -182,3 +187,37 @@ def test_each_segment_summary_counts_the_tokens_of_its_own_call():
     assert first == second == "summary"
     assert models == [("handler", "args"), ("handler", "args")]
     assert [t.call for t in pipeline.tokens] == [0, 1]
+
+
+def test_a_run_cancelled_during_a_merge_starts_no_further_page():
+    cancel = Event()
+    pipeline = _page_pipeline(cancel)
+    merges = []
+
+    def merge(text, *_args):
+        merges.append(text)
+        cancel.set()
+        return text
+
+    pipeline.interpret_image = lambda *_args: SlideVisionDTO(
+        display_page_number=-1, academic_description="x"
+    )
+    pipeline.merge_page_content_and_image_interpretation = merge
+    with patch.object(settings.lecture_ingestion, "vision_concurrency", 1):
+        with pytest.raises(IngestionCancelledException):
+            pipeline._interpret_pages(_doc(6), ["t"] * 6, _slide_dto())
+
+    assert len(merges) == 1
+
+
+def test_a_page_without_a_vision_description_keeps_its_text_without_a_merge():
+    pipeline = _page_pipeline()
+    pipeline.interpret_image = lambda *_args: SlideVisionDTO(
+        display_page_number=3, academic_description=""
+    )
+    pipeline.merge_page_content_and_image_interpretation = MagicMock()
+
+    results = pipeline._interpret_pages(_doc(1), ["only text"], _slide_dto())
+
+    assert results == [(3, "only text")]
+    pipeline.merge_page_content_and_image_interpretation.assert_not_called()
