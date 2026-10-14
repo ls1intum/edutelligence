@@ -22,10 +22,26 @@ from typing import Dict, List, Optional, Tuple, Union
 from logos.queue.models import Priority, QueueEntry, QueueStatePerPriority
 
 
+def _entry_dispatchable_by(entry: QueueEntry, provider_id: int | None) -> bool:
+    """Whether ``provider_id`` may dispatch ``entry`` from the model-wide queue.
+
+    ``None`` (no provider named — introspection) always passes. Otherwise the
+    entry's single-provider affinity, when set, must match, and its
+    eligible-provider set — the filtered deployment list a pinned internal
+    retry/resume carries — must contain the provider.
+    """
+    if provider_id is None:
+        return True
+    if entry.provider_affinity not in (None, provider_id):
+        return False
+    return entry.eligible_provider_ids is None or provider_id in entry.eligible_provider_ids
+
+
 class PriorityQueueManager:
     """Thread-safe priority queue manager keyed by ``model_id``.
 
     Maintains separate priority heaps per model:
+        queues[model_id][Priority.RESUME] = [(-raw_priority, -role_rank, ts, entry_id, QueueEntry), ...]
         queues[model_id][Priority.HIGH] = [(-raw_priority, -role_rank, ts, entry_id, QueueEntry), ...]
         queues[model_id][Priority.NORMAL] = [...]
         queues[model_id][Priority.LOW] = [...]
@@ -50,6 +66,9 @@ class PriorityQueueManager:
       lane_comparator).
     - Optional per-entry affinity: benchmark requests can be restricted to one
       provider without splitting the model-wide queue.
+    - Optional per-entry eligibility set: pinned internal retries/resumes
+      carry their filtered deployment providers, so the failed node cannot
+      dequeue its own retry.
     - Backward-compatible: every method that previously accepted
       ``provider_id`` still accepts it; unpinned behavior stays model-wide.
     """
@@ -62,6 +81,7 @@ class PriorityQueueManager:
                 Priority.LOW: [],
                 Priority.NORMAL: [],
                 Priority.HIGH: [],
+                Priority.RESUME: [],
             }
         )
 
@@ -81,6 +101,7 @@ class PriorityQueueManager:
         priority: Priority = Priority.NORMAL,
         is_cold_at_queue: bool = False,
         provider_affinity: int | None = None,
+        eligible_provider_ids: frozenset[int] | None = None,
         raw_priority: int | None = None,
         role_rank: int = 0,
         api_key_id: int | None = None,
@@ -89,7 +110,8 @@ class PriorityQueueManager:
 
         ``provider_id`` is accepted but ignored (back-compat). Unless
         ``provider_affinity`` is set, any provider with capability for
-        ``model_id`` can later dispatch this task.
+        ``model_id`` can later dispatch this task; ``eligible_provider_ids``,
+        when set, restricts dispatch further to exactly those providers.
 
         ``raw_priority`` is the full-precision priority the request resolved
         to (1..10 scale); it refines the ordering inside the bucket that
@@ -116,6 +138,7 @@ class PriorityQueueManager:
                 enqueue_time=datetime.now(),
                 is_cold_at_queue=is_cold_at_queue,
                 provider_affinity=provider_affinity,
+                eligible_provider_ids=eligible_provider_ids,
                 api_key_id=api_key_id,
             )
 
@@ -150,7 +173,7 @@ class PriorityQueueManager:
             if priority is not None:
                 task, _ = self._dequeue_from_priority(model_id, priority, provider_id)
                 return task
-            for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
+            for p in [Priority.RESUME, Priority.HIGH, Priority.NORMAL, Priority.LOW]:
                 task, _ = self._dequeue_from_priority(model_id, p, provider_id)
                 if task is not None:
                     return task
@@ -166,7 +189,7 @@ class PriorityQueueManager:
         with self._lock:
             if priority is not None:
                 return self._dequeue_from_priority(model_id, priority, provider_id)
-            for p in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
+            for p in [Priority.RESUME, Priority.HIGH, Priority.NORMAL, Priority.LOW]:
                 task, entry = self._dequeue_from_priority(model_id, p, provider_id)
                 if task is not None:
                     return task, entry
@@ -192,7 +215,7 @@ class PriorityQueueManager:
                     enumerate(queue),
                     key=lambda item: item[1][:4],
                 )
-                if provider_id is None or candidate.provider_affinity in (None, provider_id)
+                if _entry_dispatchable_by(candidate, provider_id)
             ),
             None,
         )
@@ -223,7 +246,7 @@ class PriorityQueueManager:
         ``provider_id`` is accepted but ignored.
         """
         with self._lock:
-            for priority in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
+            for priority in [Priority.RESUME, Priority.HIGH, Priority.NORMAL, Priority.LOW]:
                 queue = self._queues[model_id][priority]
                 if queue:
                     _, _, _, _, entry = queue[0]
@@ -291,6 +314,7 @@ class PriorityQueueManager:
                 low=len(self._queues[model_id][Priority.LOW]),
                 normal=len(self._queues[model_id][Priority.NORMAL]),
                 high=len(self._queues[model_id][Priority.HIGH]),
+                resume=len(self._queues[model_id][Priority.RESUME]),
             )
 
     def get_queued_by_api_key(self, model_id: int) -> Dict[int, int]:
@@ -301,7 +325,7 @@ class PriorityQueueManager:
         """
         with self._lock:
             counts: Dict[int, int] = {}
-            for priority in (Priority.LOW, Priority.NORMAL, Priority.HIGH):
+            for priority in (Priority.LOW, Priority.NORMAL, Priority.HIGH, Priority.RESUME):
                 for *_ordering, entry in self._queues[model_id][priority]:
                     if entry.api_key_id is None:
                         continue
@@ -396,8 +420,7 @@ class PriorityQueueManager:
                 return False
             for queue in model_queues.values():
                 for (*_, entry) in queue:
-                    eligible = provider_id is None or entry.provider_affinity in (None, provider_id)
-                    if eligible and entry.is_cold_at_queue:
+                    if _entry_dispatchable_by(entry, provider_id) and entry.is_cold_at_queue:
                         return True
             return False
 

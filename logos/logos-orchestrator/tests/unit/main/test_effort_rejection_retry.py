@@ -8,7 +8,6 @@ so the client gets the answer instead of the error. Any other upstream error
 behaves exactly as before.
 """
 
-import json
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +16,6 @@ from tests.unit.main.test_request_logging import _make_dummy_db, _make_pipeline,
 import logos as main
 from logos import ExecutionResult
 from logos.errors import UpstreamStreamError
-from logos.logosnode_registry import LogosNodeCommandError
 from logos.pipeline.effort_normalization import effort_scale_for_model, forget_learned_effort_scales
 
 MODEL = "openai/gpt-oss-120b"
@@ -60,6 +58,7 @@ def _context(provider_type):
     return SimpleNamespace(
         provider_type=provider_type,
         lane_id="lane-1" if provider_type == "logosnode" else None,
+        provider_id=12,
         model_name=MODEL,
         anthropic_dialect=None,
         messages_upstream=False,
@@ -80,10 +79,10 @@ def _install_logosnode_stream(monkeypatch, first_error_body):
     async def fake_send_stream_command(**kwargs):
         sent.append(kwargs["params"]["payload"])
         if len(sent) == 1:
-            # What the worker forwards for an upstream error status: the body
-            # as the first chunk, then a failed stream_end.
-            yield json.dumps(first_error_body).encode()
-            raise LogosNodeCommandError("Lane 'lane-1' returned HTTP 400")
+            # An upstream error status: the registry buffers the body and
+            # surfaces it as an UpstreamStreamError before any chunk.
+            raise UpstreamStreamError(400, first_error_body)
+            yield b""  # pragma: no cover - marks this an async generator
         for chunk in ANSWER_CHUNKS:
             yield chunk
 
@@ -121,9 +120,10 @@ async def test_logosnode_stream_forwards_any_other_error_body_as_before(monkeypa
     response = await main._streaming_response(
         _context("logosnode"), dict(PAYLOAD), 42, 12, 27, -1, {}, _scheduling("logosnode")
     )
-    with pytest.raises(LogosNodeCommandError):
-        await _read_stream_response(response)
 
+    # Answered before the stream is committed, so the internal retry can still
+    # decide from the real status.
+    assert response.status_code == 400
     assert len(sent) == 1
     assert effort_scale_for_model(MODEL) is None
     assert [call["result_status"] for call in completion_calls] == ["error"]
@@ -138,9 +138,13 @@ class _FailingOnceExecutor:
     def __init__(self, first_error_body):
         self.first_error_body = first_error_body
         self.payloads = []
+        self.bounds = []
 
-    async def execute_streaming(self, url, headers, payload, on_headers=None, status=None):  # noqa: ARG002
+    async def execute_streaming(
+        self, url, headers, payload, on_headers=None, status=None, timeout=None, deadline_at=None, **_kwargs
+    ):  # noqa: ARG002
         self.payloads.append(payload)
+        self.bounds.append((timeout, deadline_at))
         if status is not None:
             status.dispatch_at = main.datetime.datetime.now(main.datetime.timezone.utc)
         if on_headers:
@@ -150,8 +154,9 @@ class _FailingOnceExecutor:
         for chunk in ANSWER_CHUNKS:
             yield chunk
 
-    async def execute_sync(self, url, headers, payload):  # noqa: ARG002
+    async def execute_sync(self, url, headers, payload, timeout=None, deadline_at=None):  # noqa: ARG002
         self.payloads.append(payload)
+        self.bounds.append((timeout, deadline_at))
         if len(self.payloads) == 1:
             return ExecutionResult(
                 success=False,
@@ -306,3 +311,42 @@ async def test_cloud_stream_resends_a_responses_request_with_the_effort_adapted(
 
     assert [payload["reasoning"]["effort"] for payload in executor.payloads] == ["xhigh", "high"]
     assert [call["result_status"] for call in completion_calls] == ["success"]
+
+
+# ── the resend keeps the retry deadline ──────────────────────────────────────
+
+
+def _spent_attempt_budget():
+    from logos.pipeline.retry import RetryBudget
+
+    budget = RetryBudget(max_attempts=3, deadline_s=30.0)
+    budget.attempts = 1  # a retry: bounded by the deadline instead of unbounded
+    return budget
+
+
+@pytest.mark.asyncio
+async def test_cloud_stream_resend_keeps_the_retry_deadline(monkeypatch):
+    executor, _c, _r = _install_cloud(monkeypatch, REJECTION_BODY)
+    budget = _spent_attempt_budget()
+
+    response = await main._streaming_response(
+        _context("cloud"), dict(PAYLOAD), 42, 12, 27, -1, {}, _scheduling("cloud"), retry_budget=budget
+    )
+    await _read_stream_response(response)
+
+    assert len(executor.bounds) == 2
+    assert all(deadline == budget.deadline_at and timeout is not None for timeout, deadline in executor.bounds)
+
+
+@pytest.mark.asyncio
+async def test_cloud_sync_resend_keeps_the_retry_deadline(monkeypatch):
+    executor, _c, _r = _install_cloud(monkeypatch, REJECTION_BODY)
+    monkeypatch.setattr(main, "write_queue", _FakeWriteQueueFactory(), raising=False)
+    budget = _spent_attempt_budget()
+
+    await main._sync_response(
+        _context("cloud"), dict(PAYLOAD), 42, 12, 27, -1, {}, _scheduling("cloud"), retry_budget=budget
+    )
+
+    assert len(executor.bounds) == 2
+    assert all(deadline == budget.deadline_at and timeout is not None for timeout, deadline in executor.bounds)

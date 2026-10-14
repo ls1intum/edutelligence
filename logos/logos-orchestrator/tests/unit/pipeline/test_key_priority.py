@@ -16,8 +16,25 @@ def test_resolve_queue_priority_key_wins_when_set():
     assert resolve_queue_priority(10, 5, 1) == 10
     # Even a lower key priority is honoured — it is the key owner's choice.
     assert resolve_queue_priority(1, 5, 10) == 1
-    # Arbitrary values pass through (Priority.from_int normalises them later).
-    assert resolve_queue_priority(7, None, 5) == 7
+    # Arbitrary values normalise through from_int at the resolution boundary.
+    assert resolve_queue_priority(7, None, 5) == int(Priority.NORMAL)
+
+
+def test_resolve_queue_priority_caller_value_20_never_reaches_resume():
+    """Caller-supplied 20 must not enter the RESUME bucket from any source.
+
+    RESUME is reserved for internal stream recovery via priority_override;
+    a crafted key, team, or policy priority of 20 must normalise to NORMAL.
+    """
+    assert resolve_queue_priority(20, None, None) == int(Priority.NORMAL)
+    assert resolve_queue_priority(0, 20, None) == int(Priority.NORMAL)
+    assert resolve_queue_priority(0, 0, 20) == int(Priority.NORMAL)
+    for resolved in (
+        resolve_queue_priority(20, None, None),
+        resolve_queue_priority(0, 20, None),
+        resolve_queue_priority(0, 0, 20),
+    ):
+        assert Priority.from_resolved(resolved) is Priority.NORMAL
 
 
 def test_resolve_queue_priority_unset_key_falls_back_to_team():
