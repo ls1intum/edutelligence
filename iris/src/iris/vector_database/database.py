@@ -124,9 +124,15 @@ class VectorDatabase:
             return
         # The retry waits up to the start-up timeout, so it runs off the request; it owns the lock until it ends.
         cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
-        threading.Thread(
-            target=cls._retry_schema_setup, name="weaviate-setup-retry", daemon=True
-        ).start()
+        try:
+            threading.Thread(
+                target=cls._retry_schema_setup,
+                name="weaviate-setup-retry",
+                daemon=True,
+            ).start()
+        except Exception:
+            cls._schema_lock.release()
+            logger.warning("Could not start the Weaviate setup retry", exc_info=True)
 
     @classmethod
     def _retry_schema_setup(cls) -> None:
@@ -154,10 +160,15 @@ class VectorDatabase:
             }
             cls._schemas_ready = True
         except Exception:
+            cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
             if not client.is_connected():
                 # A failed connect leaves its connections open; close them before the next attempt opens new ones.
-                client.close()
-            cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
+                try:
+                    client.close()
+                except Exception:
+                    logger.warning(
+                        "Could not close the failed Weaviate connection", exc_info=True
+                    )
             logger.warning(
                 "Weaviate is unavailable; could not set up its collections, retrying in %ss",
                 _SCHEMA_RETRY_SECONDS,
