@@ -54,7 +54,7 @@ class McqGenerationPipeline(SubPipeline):
         self,
         command: str,
         chat_history: Optional[List[PyrisMessage]] = None,
-        user_language: str = "en",
+        language: str = "English",
         callback: Optional[StatusCallback] = None,
         lecture_content: Optional[str] = None,
     ) -> str:
@@ -63,7 +63,7 @@ class McqGenerationPipeline(SubPipeline):
 
         :param command: Free-text instruction describing what to generate
         :param chat_history: Recent chat history for context
-        :param user_language: "en" or "de"
+        :param language: Name of the language to write in, such as "German"
         :param callback: Status callback for dynamic chat messages
         :param lecture_content: Pre-retrieved lecture content to base questions on
         :return: JSON string with MCQ data
@@ -78,7 +78,7 @@ class McqGenerationPipeline(SubPipeline):
         rendered_prompt = self.prompt_template.render(
             command=command,
             chat_history_text=chat_history_text,
-            user_language=user_language,
+            language=language,
             lecture_content=lecture_content,
         )
 
@@ -96,7 +96,7 @@ class McqGenerationPipeline(SubPipeline):
         self,
         command: str,
         chat_history: Optional[List[PyrisMessage]],
-        user_language: str,
+        language: str,
         result_storage: dict,
         count: int = 1,
         lecture_content: Optional[str] = None,
@@ -114,7 +114,7 @@ class McqGenerationPipeline(SubPipeline):
 
         :param command: Free-text instruction describing what to generate
         :param chat_history: Recent chat history for context
-        :param user_language: "en" or "de"
+        :param language: Name of the language to write in, such as "German"
         :param result_storage: Mutable dict for inter-thread communication
         :param count: Number of questions to generate (1 = single, >1 = one-by-one)
         :param lecture_content: Pre-retrieved lecture content to base questions on
@@ -131,7 +131,7 @@ class McqGenerationPipeline(SubPipeline):
                     self._generate_multiple(
                         command,
                         chat_history,
-                        user_language,
+                        language,
                         count,
                         q,
                         lecture_content=lecture_content,
@@ -140,7 +140,7 @@ class McqGenerationPipeline(SubPipeline):
                     result = self(
                         command=command,
                         chat_history=chat_history,
-                        user_language=user_language,
+                        language=language,
                         callback=None,  # pre_agent_hook already sent status
                         lecture_content=lecture_content,
                     )
@@ -164,7 +164,7 @@ class McqGenerationPipeline(SubPipeline):
         self,
         command: str,
         chat_history: Optional[List[PyrisMessage]],
-        user_language: str,
+        language: str,
         count: int,
         q: Queue,
         lecture_content: Optional[str] = None,
@@ -190,7 +190,7 @@ class McqGenerationPipeline(SubPipeline):
             self._generate_multiple_sequential(
                 command,
                 chat_history,
-                user_language,
+                language,
                 count,
                 q,
                 lecture_content=lecture_content,
@@ -220,7 +220,7 @@ class McqGenerationPipeline(SubPipeline):
                 return worker(
                     command=single_command,
                     chat_history=chat_history,
-                    user_language=user_language,
+                    language=language,
                     callback=None,
                     lecture_content=lecture_content,
                 )
@@ -261,7 +261,7 @@ class McqGenerationPipeline(SubPipeline):
                     result = self(
                         command=f"{command}\n\nGenerate exactly 1 question.",
                         chat_history=chat_history,
-                        user_language=user_language,
+                        language=language,
                         callback=None,
                         lecture_content=lecture_content,
                     )
@@ -331,7 +331,7 @@ class McqGenerationPipeline(SubPipeline):
         self,
         command: str,
         chat_history: Optional[List[PyrisMessage]],
-        user_language: str,
+        language: str,
         count: int,
         q: Queue,
         lecture_content: Optional[str] = None,
@@ -356,7 +356,7 @@ class McqGenerationPipeline(SubPipeline):
                 result = self(
                     command=single_command,
                     chat_history=chat_history,
-                    user_language=user_language,
+                    language=language,
                     callback=None,
                     lecture_content=lecture_content,
                 )

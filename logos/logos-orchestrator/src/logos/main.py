@@ -52,6 +52,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
+from logos.client_tags import ClientTagCancellationMiddleware
 from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
@@ -887,6 +888,7 @@ app.add_middleware(
 )
 
 
+app.add_middleware(ClientTagCancellationMiddleware)
 app.add_middleware(APIPrefixStripperMiddleware, prefix="/api")
 
 
@@ -3520,9 +3522,10 @@ async def route_and_execute(
     This is the main entry point for all request handling. It decides between two execution modes:
 
     **PROXY MODE** (when body["model"] is specified):
-    - Bypasses classification/scheduling pipeline
-    - Forwards directly to the specified provider
-    - User has full control over model/provider selection
+    - Pins the request to the named model (access-checked against the key)
+    - Skips only the classification ranking (Laura)
+    - Still runs the scheduler across that model's deployments: privacy
+      filtering, policy thresholds, ETTFT scoring, queueing, capacity planner
 
     **RESOURCE MODE** (when body["model"] is NOT specified):
     - Full pipeline: Classification → Scheduling → Execution
@@ -3531,7 +3534,7 @@ async def route_and_execute(
 
     Routing logic:
     - Case 1: No deployments available → 404 error
-    - Case 2: body["model"] specified → PROXY mode (direct forwarding)
+    - Case 2: body["model"] specified → PROXY mode (model pinned, no classification)
     - Case 3: no body["model"] → RESOURCE mode (classification + scheduling)
 
     Args:
@@ -4802,6 +4805,7 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
             or profile.get("sleep_l1_transient_host_ram_mb") is None
             or (profile.get("residency_source") == "calibrated" and not profile.get("kv_cache_to_max_model_len_pairs"))
             or collapsed_envelope
+            or bool(profile is not None and profile.get("calibration_stale"))
         ):
             uncalibrated.append(model_name)
     return uncalibrated

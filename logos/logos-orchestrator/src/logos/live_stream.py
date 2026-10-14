@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from logos.billing.finalize import finalize_billing_inputs
+from logos.context_budget import estimate_prompt_tokens
 
 # Anthropic Messages SSE event types the accumulator acts on. The stream also
 # emits content_block_start/stop and ping, which carry neither text nor usage.
@@ -451,8 +452,21 @@ def _usage_tokens_from_payload(
 ) -> Dict[str, int]:
     """Canonical token usage for a response, merged with the derived non-token
     billable quantities (``billed_requests``, characters, images, ...) so the
-    stored ``usage_tokens`` rows carry everything ``logos_price_usage`` prices."""
+    stored ``usage_tokens`` rows carry everything ``logos_price_usage`` prices.
+
+    When the upstream never stated a prompt size — typical of a failed request
+    that returned no usage — the estimate the live feed already showed is stored
+    under ``estimated_prompt_tokens`` so the settled row keeps an input count.
+    That name is never priced (``logos_price_usage`` reads ``prompt_tokens``), so
+    an estimate cannot bill an error.
+    """
     usage, _ = finalize_billing_inputs(request_payload, response_payload, path)
     if not billable_request:
         usage.pop("billed_requests", None)
+        # Failed/timed-out requests often have no upstream usage. Keep the same
+        # prompt estimate the live feed showed so the settled row is not blank.
+        if not usage.get("prompt_tokens"):
+            estimated = estimate_prompt_tokens(request_payload)
+            if estimated > 0:
+                usage["estimated_prompt_tokens"] = estimated
     return usage

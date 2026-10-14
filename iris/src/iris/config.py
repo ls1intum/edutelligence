@@ -355,11 +355,14 @@ class Settings(BaseModel):
         "another instance's unit out of the results.",
     )
     global_search_rerank_results_list: bool = Field(
-        default=True,
+        default=False,
         description="Also rerank the instant results list (SKIP_AI / REST "
-        "search). The AI answer path is always reranked. The list adds the "
-        "reranker's latency to an otherwise ~400ms response — disable if list "
-        "latency matters more than mid-list ranking quality.",
+        "search). The AI answer path is always reranked. Off by default: the "
+        "list is requested on every pause in typing, and a load test of "
+        "Qwen3-Reranker-8B on Logos sustained only 0.5-0.75 requests per "
+        "second with 25 candidates (about 1.2 s p50, 2 s p95 per request), "
+        "while reranking the real top 25 did not improve the list order. "
+        "Enable only with reranker capacity well above the expected search rate.",
     )
     global_search_rerank_list_timeout_s: float = Field(
         default=2.0,

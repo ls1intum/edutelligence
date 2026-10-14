@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers
+from . import attachments, capacity, controls, conventions, db, docker_engine, github, model_policy, triggers, upstream
 from .config import INTERRUPTION_FILE, REPLY_DIR, REPLY_FILE, REVIEW_COMMENTS_FILE, REVIEWED_SHA_FILE, settings
 from .schemas import TERMINAL_STATUSES, EventKind, SessionStatus
 
@@ -918,11 +918,12 @@ class SessionManager:
             return
         # Freezing stops the agent, not the generation it already started:
         # that request runs on upstream capacity, and a frozen client neither
-        # cancels it nor closes its socket. Cutting the container off the
-        # session network ends the connection, so the slot this pause is
-        # meant to return is actually returned. The agent sees a network
-        # error on resume and retries, which is the cheapest possible way to
-        # lose an in-flight answer.
+        # cancels it nor closes its socket. The session is cut off from the
+        # gateway and its in-flight requests are ended on the orchestrator,
+        # so the slots this pause is meant to return are returned now rather
+        # than when each answer is done. The agent sees a network error on
+        # resume and retries, which is the cheapest possible way to lose an
+        # in-flight answer.
         await self._detach_from_model_gateway(sid, container_id)
         self._say_it_was_interrupted(sid)
         if await db.transition_session(sid, SessionStatus.PAUSED):
@@ -973,12 +974,25 @@ class SessionManager:
             logger.info("could not mark session %s as interrupted: %s", session_id, exc)
 
     async def _detach_from_model_gateway(self, session_id: int, container_id: str) -> None:
+        # The address is read before the detach takes it away: it is what
+        # the gateway tagged this session's requests with.
+        try:
+            address = await docker_engine.container_ip(container_id, settings.session_network)
+        except Exception as exc:
+            address = None
+            logger.warning("could not read the address of paused session %s: %s", session_id, exc)
         try:
             await docker_engine.disconnect_network(settings.session_network, container_id)
         except Exception as exc:
-            # Not fatal: the session is frozen either way, and the slot is
-            # released when the upstream request finishes on its own.
+            # Not fatal: the session is frozen either way.
             logger.warning("could not detach paused session %s from the session network: %s", session_id, exc)
+        if address is None:
+            # Not fatal either: its requests then end on their own, later.
+            return
+        # After the detach, so nothing new can arrive behind the cancel.
+        cancelled = await upstream.cancel_client_requests(address)
+        if cancelled:
+            logger.info("ended %s in-flight model request(s) of paused session %s", cancelled, session_id)
 
     async def _resume(self, session: dict[str, Any], reason: str) -> bool:
         """Thaw a paused session. Returns whether it is running again."""
