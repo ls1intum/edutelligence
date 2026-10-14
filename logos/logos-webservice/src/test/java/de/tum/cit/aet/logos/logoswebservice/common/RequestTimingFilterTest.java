@@ -55,7 +55,7 @@ class RequestTimingFilterTest {
         var lines = output.getOut().lines().filter(l -> l.contains("request GET /me ")).toList();
         assertThat(lines).hasSize(2);
         assertThat(lines.get(0))
-            .contains("route=/me", "status=200", "sync=yes", "syncLockMs=", "syncTeams=", "handlerMs=")
+            .contains("route=/me", "status=200", "sync=yes", "syncUserMs=", "syncLockMs=", "syncTeams=", "handlerMs=")
             .containsPattern("user=\\d+");
         assertThat(lines.get(1)).contains("sync=no").doesNotContain("syncLockMs=");
     }

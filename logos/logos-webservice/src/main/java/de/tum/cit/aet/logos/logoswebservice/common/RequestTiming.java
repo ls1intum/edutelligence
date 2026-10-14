@@ -14,6 +14,7 @@ public final class RequestTiming {
     long jwtDecodeNanos = -1;
     long authNanos = -1;
     boolean synced;
+    long syncUserNanos = -1;
     long syncResolveNanos = -1;
     long syncLockNanos = -1;
     long syncWriteNanos = -1;
@@ -47,10 +48,14 @@ public final class RequestTiming {
         timing.synced = synced;
     }
 
-    /** The phases of a Keycloak sync: resolving the claimed teams, waiting for their row locks, writing. */
-    public static void recordSync(long resolveNanos, long lockNanos, long writeNanos, int teams) {
+    /**
+     * The phases of a Keycloak sync: looking up and saving the user row, resolving the claimed
+     * teams, waiting for their row locks, writing keys and memberships.
+     */
+    public static void recordSync(long userNanos, long resolveNanos, long lockNanos, long writeNanos, int teams) {
         RequestTiming timing = CURRENT.get();
         if (timing == null) return;
+        timing.syncUserNanos = userNanos;
         timing.syncResolveNanos = resolveNanos;
         timing.syncLockNanos = lockNanos;
         timing.syncWriteNanos = writeNanos;

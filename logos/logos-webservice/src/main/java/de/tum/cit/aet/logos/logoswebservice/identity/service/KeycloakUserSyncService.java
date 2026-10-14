@@ -83,6 +83,7 @@ public class KeycloakUserSyncService {
 
     @Transactional
     public User syncFromClaims(KeycloakClaims claims) {
+        long userStart = System.nanoTime();
         UUID keycloakId = UUID.fromString(claims.keycloakId());
         User user = findOrCreate(keycloakId, claims);
 
@@ -132,7 +133,7 @@ public class KeycloakUserSyncService {
         if (wasInactive) reactivateUserKeys(user);
         deactivatePersonalKeys(user);
         syncTeamMemberships(user, resolved, linkedGroups, claims.roleNames());
-        RequestTiming.recordSync(lockStart - resolveStart, writeStart - lockStart,
+        RequestTiming.recordSync(resolveStart - userStart, lockStart - resolveStart, writeStart - lockStart,
             System.nanoTime() - writeStart, held.size());
         return user;
     }

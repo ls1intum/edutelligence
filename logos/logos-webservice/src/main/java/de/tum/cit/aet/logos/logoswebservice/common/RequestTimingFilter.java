@@ -69,17 +69,17 @@ public class RequestTimingFilter extends OncePerRequestFilter {
         long start = System.nanoTime();
         String poolAtStart = poolState();
         RequestTiming timing = RequestTiming.open();
-        boolean failed = false;
+        Throwable failure = null;
         try {
             chain.doFilter(request, response);
         } catch (IOException | ServletException | RuntimeException e) {
-            failed = true;
+            failure = e;
             throw e;
         } finally {
             RequestTiming.close();
             long end = System.nanoTime();
             try {
-                logRequest(request, response, timing, start, end, poolAtStart, failed);
+                logRequest(request, response, timing, start, end, poolAtStart, failure);
             } catch (RuntimeException e) {
                 log.debug("Could not log request timing", e);
             }
@@ -87,22 +87,27 @@ public class RequestTimingFilter extends OncePerRequestFilter {
     }
 
     private void logRequest(HttpServletRequest request, HttpServletResponse response, RequestTiming timing,
-                            long start, long end, String poolAtStart, boolean failed) {
+                            long start, long end, String poolAtStart, Throwable failure) {
         long totalMs = toMs(end - start);
         Object route = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
         Object auth = request.getAttribute("authContext");
         Integer userId = auth instanceof AuthContext ctx ? ctx.userId() : null;
+        // An exception escaping the chain still shows the status set before it was
+        // thrown; the container answers it with a 500, and its error dispatch is
+        // not filtered again, so record that here.
+        int status = failure != null && response.getStatus() < 400 ? 500 : response.getStatus();
 
         StringBuilder line = new StringBuilder(256)
             .append("request ").append(request.getMethod()).append(' ').append(request.getRequestURI())
             .append(" route=").append(route != null ? route : "-")
-            .append(" status=").append(failed ? "exception" : String.valueOf(response.getStatus()))
+            .append(" status=").append(status)
             .append(" totalMs=").append(totalMs)
             .append(" jwtMs=").append(msOrDash(timing.jwtDecodeNanos))
             .append(" authMs=").append(msOrDash(timing.authNanos))
             .append(" sync=").append(timing.synced ? "yes" : "no");
         if (timing.synced && timing.syncTeams >= 0) {
-            line.append(" syncResolveMs=").append(toMs(timing.syncResolveNanos))
+            line.append(" syncUserMs=").append(toMs(timing.syncUserNanos))
+                .append(" syncResolveMs=").append(toMs(timing.syncResolveNanos))
                 .append(" syncLockMs=").append(toMs(timing.syncLockNanos))
                 .append(" syncWriteMs=").append(toMs(timing.syncWriteNanos))
                 .append(" syncTeams=").append(timing.syncTeams);
@@ -113,6 +118,9 @@ public class RequestTimingFilter extends OncePerRequestFilter {
             .append(" user=").append(userId != null ? userId : "-")
             .append(" poolStart=").append(poolAtStart)
             .append(" poolEnd=").append(poolState());
+        if (failure != null) {
+            line.append(" exception=").append(failure.getClass().getSimpleName());
+        }
 
         if (totalMs >= slowThresholdMs) {
             log.warn("{}", line);
