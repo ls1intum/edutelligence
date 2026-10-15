@@ -104,8 +104,10 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
-
+      # The worker opens its port only after its startup finishes.
+      # The startup includes the FlashInfer kernel warmup, which takes minutes when the kernel cache is empty.
+      # Failed checks do not count during the start period.
+      start_period: 10m
   # ── Node manager (optional) ────────────────────────────────────────────────
   # Replaces the worker container on a deploy: it pulls the new image, starts
   # the new container, checks that it comes up, and starts the previous version
