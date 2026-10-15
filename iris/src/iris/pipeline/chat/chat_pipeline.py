@@ -11,6 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
@@ -406,6 +407,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
 
+            # Resolve the answer language once, before citations and quiz JSON are
+            # added, so that citations, title and suggestions use the same language.
+            state.answer_language = reply_language(
+                result,
+                state.query_text,
+                state.dto.chat_history,
+                state.dto.user.lang_key,
+            )
+
             # Add citations if applicable
             with timed_span("ChatPipeline", "citations", state.start_time):
                 result = self._add_citations(state, result)
@@ -479,6 +489,23 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             return state.result
 
+    @staticmethod
+    def _has_memories(
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> bool:
+        """Whether the memory tool is offered; not when the memories cannot be read, so the chat still answers."""
+        dto = state.dto
+        if not (dto.user and dto.user.memiris_enabled and state.memiris_wrapper):
+            return False
+        try:
+            return state.memiris_wrapper.has_memories()
+        except Exception:
+            logger.warning(
+                "Memories are unavailable; answering without the memory tool",
+                exc_info=True,
+            )
+            return False
+
     def prepare_state(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -501,12 +528,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             state.allow_lecture_tool = lecture_tool_future.result()
             state.allow_faq_tool = faq_tool_future.result()
-        state.allow_memiris_tool = bool(
-            dto.user
-            and dto.user.memiris_enabled
-            and state.memiris_wrapper
-            and state.memiris_wrapper.has_memories()
-        )
+        state.allow_memiris_tool = self._has_memories(state)
 
         # Extract lecture contexts from DTO and store in state
         lecture_contexts = self._parse_lecture_context(dto)
@@ -894,6 +916,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
 
         try:
+            answer_language = getattr(state, "answer_language", None) or reply_language(
+                result,
+                getattr(state, "query_text", None),
+                getattr(state.dto, "chat_history", None),
+                state.dto.user.lang_key,
+            )
+
             # Add FAQ citations
             if state.faq_storage.get("faqs"):
                 base_url = (
@@ -904,7 +933,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
-                    user_language=state.dto.user.lang_key,
+                    language=answer_language,
                     base_url=base_url,
                 )
 
@@ -932,7 +961,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
-                    user_language=state.dto.user.lang_key,
+                    language=answer_language,
                     base_url=base_url,
                 )
 
@@ -1114,7 +1143,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 suggestion_dto.chat_history = state.dto.chat_history
                 suggestion_dto.last_message = result
                 suggestions = self.suggestion_pipeline(
-                    suggestion_dto, user_language=state.dto.user.lang_key
+                    suggestion_dto,
+                    language=getattr(state, "answer_language", None)
+                    or reply_language(
+                        result,
+                        getattr(state, "query_text", None),
+                        state.dto.chat_history,
+                        state.dto.user.lang_key,
+                    ),
                 )
 
                 if self.suggestion_pipeline.tokens is not None:

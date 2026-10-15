@@ -278,7 +278,7 @@ services:
       - "traefik.http.routers.ws-config.service=ws-svc"
       - "traefik.http.routers.ws-config.middlewares=strip-api"
       - "traefik.http.routers.ws-config.priority=200"
-      - "traefik.http.routers.ws-stats.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
+      - "traefik.http.routers.ws-stats.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`) || Path(`/api/ws/notifications`)"
       - "traefik.http.routers.ws-stats.entrypoints=web8080"
       - "traefik.http.routers.ws-stats.service=ws-svc"
       - "traefik.http.routers.ws-stats.middlewares=strip-api"

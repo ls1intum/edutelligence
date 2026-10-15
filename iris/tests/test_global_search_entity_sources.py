@@ -113,6 +113,24 @@ class TestEntityCardRenderer:
         assert "Implement sorting." in card
         assert "cover the topic named in its title" not in card
 
+    def test_matched_passage_replaces_the_beginning_of_the_description(self):
+        card = render_entity_card(
+            _candidate_dto(
+                description="Part 1: set up the project. " * 100,
+                passage="The storm panel turns red below 980 hectopascal.",
+            )
+        )
+        assert "The storm panel turns red below 980 hectopascal." in card
+        assert "set up the project" not in card
+
+    def test_description_is_used_without_a_matched_passage(self):
+        card = render_entity_card(_candidate_dto(description="Implement sorting."))
+        assert "Implement sorting." in card
+
+    def test_passage_is_read_from_the_artemis_payload(self):
+        assert _candidate_dto(passage="matched").passage == "matched"
+        assert _candidate_dto().passage is None
+
     def test_channel_card_names_visibility_and_purpose(self):
         card = render_entity_card(
             _candidate_dto(

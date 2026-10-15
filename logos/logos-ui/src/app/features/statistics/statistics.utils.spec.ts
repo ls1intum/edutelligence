@@ -1,8 +1,11 @@
 import {
   describeWorkerVersion,
+  extractProviderDiskMb,
+  extractProviderGpuFaults,
   extractProviderHostRamMb,
   formatBucketRange,
   formatPercent,
+  formatStorageMb,
   formatTokenCount,
   formatUptime,
   isUnifiedMemoryProvider,
@@ -11,6 +14,7 @@ import {
   resolveFeedTotal,
   REQUEST_STATUS_FILTERS,
 } from './statistics.utils';
+import type { VramV2Sample } from './statistics.models';
 
 /**
  * The dropdown's raw value becomes the bucket the feed is narrowed by.
@@ -462,5 +466,50 @@ describe('modelSeriesKey', () => {
   it('falls back to a single shared bucket when neither id nor name survived', () => {
     expect(modelSeriesKey(null, null)).toBe('deleted-unknown');
     expect(modelSeriesKey(null, '   ')).toBe('deleted-unknown');
+  });
+});
+
+describe('extractProviderGpuFaults', () => {
+  it('lists the GPUs the worker reports as failed', () => {
+    const sample = {
+      timestamp: '2026-10-12T07:49:00Z',
+      scheduler_signals: { provider: { gpu_faults: ['gpu0 (GPU-aaa): GPU requires reset', ''] } },
+    } as VramV2Sample;
+    expect(extractProviderGpuFaults(sample)).toEqual(['gpu0 (GPU-aaa): GPU requires reset']);
+  });
+
+  it('reports none for samples without the field', () => {
+    expect(extractProviderGpuFaults({ timestamp: '2026-10-12T07:49:00Z' } as VramV2Sample)).toEqual([]);
+    expect(extractProviderGpuFaults(null)).toEqual([]);
+  });
+});
+
+describe('extractProviderDiskMb', () => {
+  const sample = (provider: Record<string, unknown>) =>
+    ({ timestamp: '2026-10-12T07:49:00Z', scheduler_signals: { provider } }) as VramV2Sample;
+  const gb = 1024;
+
+  it('reads the model volume and grades how much is left', () => {
+    const ok = extractProviderDiskMb(sample({ disk_total_mb: 1000 * gb, disk_used_mb: 600 * gb, disk_free_mb: 400 * gb }));
+    expect(ok).toMatchObject({ reported: true, freeMb: 400 * gb, usedPct: 60, level: 'ok' });
+
+    // 120 GB free, but under 15% of a 1 TB volume.
+    expect(extractProviderDiskMb(sample({ disk_total_mb: 1000 * gb, disk_free_mb: 120 * gb })).level).toBe('low');
+    // Under 100 GB is low even on a small volume where it is a large share.
+    expect(extractProviderDiskMb(sample({ disk_total_mb: 200 * gb, disk_free_mb: 90 * gb })).level).toBe('low');
+    expect(extractProviderDiskMb(sample({ disk_total_mb: 1000 * gb, disk_free_mb: 15 * gb })).level).toBe('critical');
+  });
+
+  it('reports nothing for a worker that does not send its disk', () => {
+    expect(extractProviderDiskMb(sample({})).reported).toBe(false);
+    expect(extractProviderDiskMb(null).reported).toBe(false);
+  });
+});
+
+describe('formatStorageMb', () => {
+  it('uses GB below a terabyte and TB above', () => {
+    expect(formatStorageMb(15.5 * 1024)).toBe('15.5 GB');
+    expect(formatStorageMb(412 * 1024)).toBe('412 GB');
+    expect(formatStorageMb(1843 * 1024)).toBe('1.8 TB');
   });
 });

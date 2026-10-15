@@ -166,6 +166,29 @@ class StatsV2WebSocketHandlerInterestTest {
     }
 
     @Test
+    void requestsInterestStillReceivesVramAtALowCadence() throws Exception {
+        handler.afterConnectionEstablished(session);
+        handler.handleMessage(session, new TextMessage(
+            "{\"action\":\"init\",\"interest\":\"requests\"}"));
+        sent.clear();
+
+        // The first tick is on the slow cadence: the baseline goes out once,
+        // so the failed-GPU banner has data on the Requests tab.
+        invokeTick();
+        assertThat(pushedTypes()).containsOnlyOnce("vram_init");
+
+        clearInvocations(vramService);
+        for (int i = 1; i < 10; i++) {
+            invokeTick();
+        }
+        verify(vramService, never()).getVramStats(anyString(), anyInt());
+
+        invokeTick();
+        assertThat(pushedTypes()).containsOnlyOnce("vram_init");
+        verify(vramService, atLeastOnce()).getVramStats(anyString(), anyInt());
+    }
+
+    @Test
     void setInterestToRequestsReInitsRequestChannelsOnly() throws Exception {
         handler.afterConnectionEstablished(session);
         handler.handleMessage(session, new TextMessage(

@@ -16,6 +16,7 @@ import { SearchInputComponent } from '../../shared/components/search-input/searc
 import { DataTableComponent } from '../../shared/components/data-table/data-table';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { ModelProfileRadarComponent } from '../../shared/components/model-profile-radar/model-profile-radar';
+import { ModelRequests } from '../model-requests/model-requests';
 import { AuthService } from '../../core/auth/services/auth.service';
 import { Router } from '@angular/router';
 import {
@@ -38,6 +39,7 @@ const PROFILE_AXES = ['latency', 'quality', 'price'] as const;
     DataTableComponent,
     ErrorMessageComponent,
     ModelProfileRadarComponent,
+    ModelRequests,
   ],
   templateUrl: './models.html',
   changeDetection: ChangeDetectionStrategy.Eager,
