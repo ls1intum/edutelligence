@@ -114,7 +114,7 @@ class TestCensusEndpoint:
         with patch.object(faq_census, "VectorDatabase") as database:
             database.return_value.faqs = collection
             database.return_value.client.collections.exists.return_value = True
-            census = faq_census.get_faq_census(base_url="https%3A%2F%2Fartemis.example")
+            census = faq_census.get_faq_census(base_url=OWN)
 
         assert [
             (e.faq_id, e.owned_row_count, e.legacy_row_count) for e in census.faqs
@@ -126,6 +126,22 @@ class TestCensusEndpoint:
             call.args[0] for call in collection.query.fetch_object_by_id.call_args_list
         ]
         assert "other" not in checked
+
+    def test_compares_the_base_url_as_fastapi_decoded_it(self):
+        # A base URL that itself contains a percent sequence must not be decoded a second time
+        encoded_path = "https://artemis.example/tenant%2Fblue"
+        collection = MagicMock()
+        collection.iterator.return_value = iter(
+            [_row(1, 10, encoded_path, "v1:a", uuid="own")]
+        )
+        collection.query.fetch_object_by_id.return_value = object()
+
+        with patch.object(faq_census, "VectorDatabase") as database:
+            database.return_value.faqs = collection
+            database.return_value.client.collections.exists.return_value = True
+            census = faq_census.get_faq_census(base_url=encoded_path)
+
+        assert census.faqs[0].owned_row_count == 1
 
     def test_a_missing_collection_reports_an_empty_census(self):
         with patch.object(faq_census, "VectorDatabase") as database:
@@ -167,44 +183,63 @@ LEGACY_UUID = "00000000-0000-0000-0000-000000000003"
 class TestDeleteFaq:
     """Deletion of one FAQ's rows for this instance."""
 
-    def test_keeps_rows_of_other_instances_and_matches_by_identity(self):
+    @staticmethod
+    def _deletes(collection):
+        return [
+            _filter_parts(call.kwargs["where"])
+            for call in collection.data.delete_many.call_args_list
+        ]
+
+    @staticmethod
+    def _collection(rows):
         collection = MagicMock()
-        collection.query.fetch_objects.return_value = SimpleNamespace(
-            objects=[
-                _row(1, 10, OWN, uuid=OWN_UUID),
+        collection.query.fetch_objects.return_value = SimpleNamespace(objects=rows)
+        collection.data.delete_many.return_value = SimpleNamespace(
+            failed=0, successful=1, objects=None
+        )
+        return collection
+
+    def test_deletes_owned_rows_by_base_url_and_legacy_rows_by_id(self):
+        collection = self._collection(
+            [
                 _row(1, 10, OTHER, uuid=OTHER_UUID),
                 _row(1, 10, None, uuid=LEGACY_UUID),
             ]
         )
-        collection.data.delete_many.return_value = SimpleNamespace(
-            failed=0, successful=2, objects=None
-        )
 
         assert _pipeline(collection).delete_faq(10, 1, OWN)
 
-        parts = _filter_parts(collection.data.delete_many.call_args.kwargs["where"])
-        assert ("is", "faq_id", "10") in parts
-        assert ("is", "course_id", "1") in parts
-        assert ("not", "_id", OTHER_UUID) in parts
-        assert not any(part[2] in (OWN_UUID, LEGACY_UUID) for part in parts)
+        owned, legacy = self._deletes(collection)
+        assert sorted(owned) == [
+            ("is", "base_url", OWN),
+            ("is", "course_id", "1"),
+            ("is", "faq_id", "10"),
+        ]
+        assert ("is", "_id", LEGACY_UUID) in legacy
+        assert not any(
+            OTHER_UUID in part for parts in self._deletes(collection) for part in parts
+        )
 
-    def test_matches_by_identity_only_when_no_other_instance_has_rows(self):
-        collection = MagicMock()
-        collection.query.fetch_objects.return_value = SimpleNamespace(
-            objects=[_row(1, 10, None, uuid=LEGACY_UUID)]
-        )
-        collection.data.delete_many.return_value = SimpleNamespace(
-            failed=0, successful=1, objects=None
-        )
+    def test_a_row_another_instance_writes_meanwhile_cannot_match(self):
+        # Neither delete matches on identity alone: one needs this instance's base URL, the other the scanned legacy ids
+        collection = self._collection([])
 
         _pipeline(collection).delete_faq(10, 1, OWN)
 
-        parts = _filter_parts(collection.data.delete_many.call_args.kwargs["where"])
-        assert sorted(parts) == [("is", "course_id", "1"), ("is", "faq_id", "10")]
+        (owned,) = self._deletes(collection)
+        assert ("is", "base_url", OWN) in owned
+
+    def test_without_a_base_url_matches_by_identity(self):
+        collection = self._collection([])
+
+        _pipeline(collection).delete_faq(10, 1, None)
+
+        assert self._deletes(collection) == [
+            [("is", "faq_id", "10"), ("is", "course_id", "1")]
+        ]
 
     def test_raises_when_rows_cannot_be_deleted(self):
-        collection = MagicMock()
-        collection.query.fetch_objects.return_value = SimpleNamespace(objects=[])
+        collection = self._collection([])
         collection.data.delete_many.return_value = SimpleNamespace(
             failed=1, successful=0, objects=[SimpleNamespace(error="boom")]
         )

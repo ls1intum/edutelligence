@@ -26,8 +26,7 @@ from . import Pipeline
 
 logger = get_logger(__name__)
 
-# Far above the rows one FAQ can have; the delete itself matches by identity, so this only bounds
-# the scan for other instances' rows
+# Far above the rows one FAQ can have; bounds the scan for legacy rows
 _FAQ_ROW_LIMIT = 1000
 
 
@@ -121,20 +120,33 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
             self.collection.data.insert(properties=properties, vector=embedding)
 
     def delete_faq(self, faq_id: int, course_id: int, base_url: Optional[str]) -> bool:
-        """Delete the FAQ's rows of this Artemis instance, including legacy rows without a base URL.
+        """Delete the FAQ's rows of this Artemis instance and its legacy rows without a base URL.
 
-        Rows of other instances (a base URL that is set and differs) are kept. The delete matches
-        the FAQ's identity minus those rows' ids
-        instead of deleting row by row, so it also removes ghost rows that a scan still returns but
-        the object store no longer holds; a
-        delete by id would silently skip them. Raises when the delete fails, so a caller never
-        inserts next to rows it could not remove.
+        Rows of other instances are never matched: the owned rows are deleted by a filter on this
+        instance's base URL, so a row another
+        instance writes at the same moment cannot fall under it, and that filter also reaches ghost
+        rows that a scan still returns but the
+        object store no longer holds. Legacy rows are deleted by the ids a scan found; every row
+        written now carries a base URL, so no new
+        legacy row can appear in between. A legacy ghost row may survive that delete by id, but the
+        census never reports ghost rows. Without
+        a base URL (a request without settings) the FAQ's rows are matched by identity, as before.
+        Raises when the delete fails, so a
+        caller never inserts next to rows it could not remove.
 
         :return: True once the rows are gone (also when there were none)
         """
         identity = Filter.by_property(FaqSchema.FAQ_ID.value).equal(
             faq_id
         ) & Filter.by_property(FaqSchema.COURSE_ID.value).equal(course_id)
+        if not base_url:
+            delete_many_with_retry(self.collection, identity, f"faq {faq_id}")
+            return True
+        delete_many_with_retry(
+            self.collection,
+            identity & Filter.by_property(FaqSchema.BASE_URL.value).equal(base_url),
+            f"faq {faq_id}",
+        )
         rows = fetch_with_retry(
             lambda: self.collection.query.fetch_objects(
                 filters=identity,
@@ -142,19 +154,17 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
                 return_properties=[FaqSchema.BASE_URL.value],
             )
         ).objects
-        foreign_uuids = [
+        legacy_uuids = [
             str(row.uuid)
             for row in rows
-            if row.properties.get(FaqSchema.BASE_URL.value)
-            and base_url
-            and row.properties.get(FaqSchema.BASE_URL.value) != base_url
+            if not row.properties.get(FaqSchema.BASE_URL.value)
         ]
-        where = (
-            identity & ~Filter.by_id().contains_any(foreign_uuids)
-            if foreign_uuids
-            else identity
-        )
-        delete_many_with_retry(self.collection, where, f"faq {faq_id}")
+        if legacy_uuids:
+            delete_many_with_retry(
+                self.collection,
+                identity & Filter.by_id().contains_any(legacy_uuids),
+                f"legacy rows of faq {faq_id}",
+            )
         logger.info("successfully deleted faq with id %s", faq_id)
         return True
 

@@ -9,8 +9,6 @@ store) are not reported. A read error
 fails the request instead of returning a partial list.
 """
 
-from urllib.parse import unquote
-
 from fastapi import APIRouter, Depends
 from fastapi.params import Query
 
@@ -41,8 +39,12 @@ _PROPERTIES = [
     dependencies=[Depends(TokenValidator())],
 )
 def get_faq_census(base_url: str = Query(...)) -> FaqCensusDTO:
-    """Report every FAQ row of the asking instance, grouped by course and FAQ."""
-    decoded_base_url = unquote(base_url)
+    """Report every FAQ row of the asking instance, grouped by course and FAQ.
+
+    FastAPI has already decoded the query value, so ``base_url`` is compared as it is: decoding it
+    again would change a base URL that
+    contains a percent sequence and no longer match the rows written for it.
+    """
     database = VectorDatabase()
     if not database.client.collections.exists(FaqSchema.COLLECTION_NAME.value):
         # Lost while Pyris kept running: nothing is stored, and the pushes Artemis sends next
@@ -52,14 +54,14 @@ def get_faq_census(base_url: str = Query(...)) -> FaqCensusDTO:
     rows = [
         row
         for row in collection.iterator(return_properties=_PROPERTIES)
-        if _belongs_to(row, decoded_base_url)
+        if _belongs_to(row, base_url)
     ]
     rows = confirmed_rows(
         collection,
         rows,
         concurrency=settings.lecture_ingestion.census_confirm_concurrency,
     )
-    return FaqCensusDTO(faqs=group_rows(rows, decoded_base_url))
+    return FaqCensusDTO(faqs=group_rows(rows, base_url))
 
 
 def _belongs_to(row, base_url: str) -> bool:
