@@ -157,12 +157,14 @@ def test_legacy_collection_gets_the_new_properties(client):
 
     collection = init_faq_schema(client)
 
-    names = {prop.name for prop in collection.config.get().properties}
+    properties = {prop.name: prop for prop in collection.config.get().properties}
     assert {
         FaqSchema.BASE_URL.value,
         FaqSchema.CONTENT_FINGERPRINT.value,
         FaqSchema.COURSE_LANGUAGE.value,
-    } <= names
+    } <= set(properties)
+    # Added to an existing collection, the base URL must still be one token for exact equality filters
+    assert properties[FaqSchema.BASE_URL.value].tokenization.value == "field"
 
 
 def test_delete_does_not_reach_an_instance_whose_url_contains_all_words_of_ours(
