@@ -28,6 +28,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import de.tum.cit.aet.logos.logoswebservice.common.RequestTiming;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -55,6 +56,9 @@ public class SecurityConfig {
                 // models_discovered is authenticated with the internal secret in
                 // the controller — same reason: it is not a JWT.
                 .requestMatchers(HttpMethod.POST, "/internal/models_discovered").permitAll()
+                // /internal/notifications is the orchestrator's emission door,
+                // also authenticated with the internal secret in the controller.
+                .requestMatchers(HttpMethod.POST, "/internal/notifications").permitAll()
                 // Per-replica StreamingResponseBody occupancy for the gateway
                 // concurrency benchmark. Counters only; not routed via Traefik.
                 .requestMatchers("/internal/gateway_relay_stats", "/internal/gateway_relay_stats/**")
@@ -155,7 +159,14 @@ public class SecurityConfig {
             validators.add(new AudienceValidator(props.audience()));
         }
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(validators));
-        return decoder;
+        return token -> {
+            long start = System.nanoTime();
+            try {
+                return decoder.decode(token);
+            } finally {
+                RequestTiming.recordJwtDecode(System.nanoTime() - start);
+            }
+        };
     }
 
     static class AudienceValidator implements OAuth2TokenValidator<Jwt> {
@@ -204,6 +215,7 @@ public class SecurityConfig {
             }
             if ("/logosdb/get_model_health".equals(path)
                     || "/internal/models_discovered".equals(path)
+                    || "/internal/notifications".equals(path)
                     || path.equals("/internal/gateway_relay_stats")
                     || path.startsWith("/internal/gateway_relay_stats/")) {
                 return null;

@@ -17,10 +17,14 @@ log = get_logger(__name__)
 
 
 def check_weaviate_status() -> tuple[str, ModuleStatus]:
-    """Check the connection and readiness status of the Weaviate instance."""
+    """Check the connection and readiness status of the Weaviate instance.
+
+    An unavailable Weaviate is reported as DEGRADED rather than DOWN: chat and the other pipelines still answer
+    without lecture and FAQ lookups, and a DOWN module would make Artemis show Iris as unavailable to everyone.
+    """
     module_name = "Weaviate Vector Database"
     url = f"http://{settings.weaviate.host}:{settings.weaviate.port}/v1"
-    status_obj = ModuleStatus(status=ServiceStatus.DOWN, metaData=url)
+    status_obj = ModuleStatus(status=ServiceStatus.DEGRADED, metaData=url)
 
     try:
         client = VectorDatabase().client
@@ -42,5 +46,8 @@ def check_weaviate_status() -> tuple[str, ModuleStatus]:
             exc_info=True,
         )
         status_obj.error = f"Network error: {exc}"
+    except Exception as exc:
+        log.error("Unexpected error during Weaviate health check", exc_info=True)
+        status_obj.error = f"Weaviate error: {exc}"
 
     return module_name, status_obj

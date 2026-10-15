@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- General notification store: one row per event, plus who it is
+         addressed to, and who has read it.
+
+         The system is deliberately generic. `notifications` holds the event
+         (a type from a fixed vocabulary, a human title/body, and a JSONB
+         payload for anything event-specific); `notification_recipients`
+         records the fan-out target — a user, a team, or a whole role — so a
+         single event can reach many people without storing one row per
+         person; `notification_reads` tracks per-user read state so "unread"
+         is computed, not stored, on the notification itself.
+
+         Both child tables carry a surrogate id (rather than a composite
+         primary key over nullable columns) so the read/inbox queries stay
+         plain and a role target's NULL id/role columns cannot defeat
+         uniqueness. The unique index on notification_recipients is what
+         keeps a (notification, kind, id-or-role) pair from being inserted
+         twice; the service layer emits each target once, so this is
+         defence in depth rather than a hot constraint.
+
+         actor_user_id is a real foreign key with SET NULL (unlike
+         audit_log, which must outlive its actor): a notification is a
+         transient signal, and deleting a user should drop the reference
+         without taking the rows — they may still be addressed to a team or
+         role and be relevant to other people. -->
+    <changeSet id="059-notifications" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="notifications"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE notifications (
+                id BIGSERIAL PRIMARY KEY,
+                type VARCHAR(64) NOT NULL,
+                title VARCHAR(255) NOT NULL,
+                body TEXT NULL,
+                payload JSONB NULL,
+                source VARCHAR(32) NOT NULL
+                    CHECK (source IN ('webservice', 'orchestrator')),
+                actor_user_id INTEGER NULL
+                    REFERENCES users(id) ON DELETE SET NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+
+            -- The inbox lists newest-first.
+            CREATE INDEX idx_notifications_created
+                ON notifications (created_at DESC);
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS notifications;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="059-notification-recipients" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="notification_recipients"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE notification_recipients (
+                id BIGSERIAL PRIMARY KEY,
+                notification_id BIGINT NOT NULL
+                    REFERENCES notifications(id) ON DELETE CASCADE,
+                recipient_kind VARCHAR(16) NOT NULL
+                    CHECK (recipient_kind IN ('user', 'team', 'role')),
+                -- user id (kind=user) or team id (kind=team); NULL for role.
+                recipient_id INTEGER NULL,
+                -- role value (kind=role); NULL for user/team.
+                recipient_role VARCHAR(32) NULL
+            );
+
+            -- A user sees a notification when a recipient row matches their
+            -- own id, one of their roles, or one of their teams. These two
+            -- indexes serve that OR directly.
+            CREATE INDEX idx_notification_recipients_id
+                ON notification_recipients (recipient_kind, recipient_id);
+            CREATE INDEX idx_notification_recipients_role
+                ON notification_recipients (recipient_kind, recipient_role);
+
+            -- Keep each target unique within a notification. COALESCE folds
+            -- the nullable id/role columns so (user,5) and (role,'app_admin')
+            -- each hash to one slot instead of colliding on NULLs.
+            CREATE UNIQUE INDEX uq_notification_recipients_target
+                ON notification_recipients
+                    (notification_id, recipient_kind,
+                     COALESCE(recipient_id, 0), COALESCE(recipient_role, ''));
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS notification_recipients;</sql>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="059-notification-reads" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><tableExists tableName="notification_reads"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            CREATE TABLE notification_reads (
+                id BIGSERIAL PRIMARY KEY,
+                notification_id BIGINT NOT NULL
+                    REFERENCES notifications(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL
+                    REFERENCES users(id) ON DELETE CASCADE,
+                read_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+
+            -- One read row per (notification, user).
+            CREATE UNIQUE INDEX uq_notification_reads
+                ON notification_reads (notification_id, user_id);
+            -- "Has user X read anything I haven't told them about yet" and
+            -- the mark-all-read sweep both key off the user.
+            CREATE INDEX idx_notification_reads_user
+                ON notification_reads (user_id);
+        ]]></sql>
+        <rollback>
+            <sql>DROP TABLE IF EXISTS notification_reads;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

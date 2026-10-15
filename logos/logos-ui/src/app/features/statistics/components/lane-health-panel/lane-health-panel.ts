@@ -138,9 +138,23 @@ export function acceptedModelIsResolved(
   );
 }
 
+/**
+ * The state a lane is in right now. A step in progress wins over the state the
+ * worker reports, because that one still names the state the lane is leaving.
+ * Without a step, a planner cold mark reads as draining: the lane still looks
+ * loaded, but no new requests are routed to it.
+ */
+export function laneDisplayState(lane: LaneSignalData): string {
+  if (lane.transition) return lane.transition;
+  if (lane.cold_marked) return 'draining';
+  return lane.runtime_state;
+}
+
 export interface LaneRow {
   laneId: string;
   lane: LaneSignalData;
+  /** laneDisplayState as the badge shows it — "FALLING ASLEEP". */
+  stateLabel: string;
   stateColor: string;
   kvColor: string | null;
   ttftColor: string | null;
@@ -173,6 +187,10 @@ export type LaneSleepAction = 'sleep' | 'drain' | 'wake' | null;
 /**
  * Which manual sleep/drain/wake action a lane row offers.
  *
+ * None while the lane is in the middle of a step (the worker is waking it,
+ * putting it to sleep or stopping it) or the planner has marked it cold: each
+ * button would race a command that is already running on that lane.
+ *
  * Wake only on a lane that is actually asleep: vLLM's /wake_up on an awake
  * engine is a no-op at best, so the button would promise a transition that is
  * not coming. Sleep only on a lane that is awake and idle: the server first
@@ -199,6 +217,7 @@ export type LaneSleepAction = 'sleep' | 'drain' | 'wake' | null;
  * "unknown") offer neither — there is nothing to sleep and nothing to drain.
  */
 export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
+  if (lane.transition || lane.cold_marked) return null;
   if (lane.sleep_state === 'sleeping') return 'wake';
   if (lane.active_requests > 0 || (lane.requests_running ?? 0) > 0 || (lane.queue_waiting ?? 0) > 0) {
     return 'drain';
@@ -311,10 +330,12 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
         const kvPct = lane.gpu_cache_usage_percent;
         const ttft = lane.ttft_p95_seconds;
         const running = runningLabel(lane, kvPct);
+        const state = laneDisplayState(lane);
         return {
           laneId,
           lane,
-          stateColor: getLaneStateColor(lane.runtime_state),
+          stateLabel: state.replace('_', ' ').toUpperCase(),
+          stateColor: getLaneStateColor(state),
           kvColor: kvPct != null ? kvBarColor(kvPct) : null,
           ttftColor: ttft != null ? ttftColor(ttft) : null,
           ttftLabel:

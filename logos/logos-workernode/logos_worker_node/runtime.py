@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+import shutil
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -11,7 +13,14 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from logos_worker_node.models import CapacitySummary, DeviceInfo, DeviceSummary, HostMemorySummary, WorkerRuntimeStatus
+from logos_worker_node.models import (
+    CapacitySummary,
+    DeviceInfo,
+    DeviceSummary,
+    DiskSummary,
+    HostMemorySummary,
+    WorkerRuntimeStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +155,37 @@ def _build_host_memory_summary() -> HostMemorySummary:
     )
 
 
+def existing_volume_path(path: str) -> Path:
+    """*path*, or its nearest existing parent: the cache may not exist yet."""
+    volume = Path(path)
+    while not volume.exists() and volume != volume.parent:
+        volume = volume.parent
+    return volume
+
+
+def _build_disk_summary(hf_home: str | None) -> DiskSummary:
+    """Space on the volume holding the Hugging Face cache, or zeros when unknown."""
+    now = datetime.now(timezone.utc)
+    if not hf_home:
+        return DiskSummary(timestamp=now)
+    try:
+        # Inside the try: resolving the path stats it, which fails with EIO on a
+        # broken cache mount just like the usage read does.
+        usage = shutil.disk_usage(existing_volume_path(hf_home))
+    except OSError:
+        logger.debug("Could not read disk usage for %s", hf_home, exc_info=True)
+        return DiskSummary(timestamp=now, path=hf_home)
+    mb = 1024 * 1024
+    return DiskSummary(
+        timestamp=now,
+        source="statvfs",
+        path=hf_home,
+        total_mb=usage.total / mb,
+        used_mb=usage.used / mb,
+        free_mb=usage.free / mb,
+    )
+
+
 def _build_derived_device_summary(lanes) -> DeviceSummary:
     usage_by_device: dict[str, float] = defaultdict(float)
     for lane in lanes:
@@ -212,6 +252,11 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     gpu_collector = app.state.gpu_collector
     bridge = app.state.logos_bridge
 
+    # Taken before the lanes are collected: every lifecycle change this
+    # revision covers is reflected in them, and a later one may not be.
+    lifecycle_revision = getattr(lane_manager, "status_revision", None)
+    if not isinstance(lifecycle_revision, int):
+        lifecycle_revision = None
     lanes = await lane_manager.get_all_statuses()
     devices = await gpu_collector.get_snapshot()
     # The derived summary is the last resort: it is built only when the
@@ -226,7 +271,9 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     # usage, and its telemetry_available=False already tells the flag-gating
     # consumers (main.py reporting, logosnode_provider) to keep their
     # conservative values until a real mlx probe succeeds.
-    if devices.mode == "none":
+    # A snapshot whose GPUs have all failed is kept as well: replacing it would
+    # drop the fault list and report host memory as GPU capacity.
+    if devices.mode == "none" and not devices.gpu_faults:
         devices = _build_derived_device_summary(lanes)
 
     capacity = CapacitySummary(
@@ -240,6 +287,8 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     )
 
     host_memory = _build_host_memory_summary()
+    # Off the event loop: statvfs on a network mount can stall.
+    disk = await asyncio.to_thread(_build_disk_summary, getattr(app.state, "hf_home", None))
 
     # Sample node-level health (GPU ERR/N/A, HF cache EIO/EROFS, …).
     # Stateless — re-evaluated each heartbeat so recovery is automatic
@@ -272,32 +321,6 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
     model_profiles = None
     if hasattr(app.state, "model_profiles") and app.state.model_profiles is not None:
         model_profiles = app.state.model_profiles.get_all_profiles()
-        # Reconcile each profile's calibration_unsupported flag against the
-        # current state of calibration_unsupported_models.txt — that file is
-        # operator-editable, so deleting a line should immediately let the
-        # master's orchestrator re-schedule the model without requiring a
-        # worker restart or a separate clear-flag RPC. Best-effort: ignore
-        # any I/O error and leave the persisted flag in place.
-        try:
-            from logos_worker_node.calibration import _load_unsupported_models  # noqa: PLC0415
-            from logos_worker_node.config import get_state_dir  # noqa: PLC0415
-
-            _file_state = _load_unsupported_models(
-                get_state_dir() / "calibration_logs" / "calibration_unsupported_models.txt"
-            )
-            for _name, _prof in model_profiles.items():
-                if _name in _file_state:
-                    _prof["calibration_unsupported"] = True
-                    _prof["calibration_unsupported_reason"] = _file_state[_name].reason_code
-                elif _prof.get("calibration_unsupported"):
-                    # File no longer mentions this model — clear the flag
-                    # both on the wire and in the in-memory registry so the
-                    # next persist drops the stale value.
-                    _prof["calibration_unsupported"] = None
-                    _prof["calibration_unsupported_reason"] = None
-                    app.state.model_profiles.mark_calibration_unsupported(_name, False)
-        except Exception:  # noqa: BLE001
-            pass
 
     return WorkerRuntimeStatus(
         worker_name=cfg.worker.name,
@@ -306,10 +329,12 @@ async def build_runtime_status(app: FastAPI) -> WorkerRuntimeStatus:
         timestamp=datetime.now(timezone.utc),
         process_started_at=_PROCESS_STARTED_AT,
         version_checksum=_VERSION_CHECKSUM,
+        lifecycle_revision=lifecycle_revision,
         transport=bridge.transport_status(),
         devices=devices,
         gpu_devices=cfg.worker.gpu_devices,
         host_memory=host_memory,
+        disk=disk,
         capacity=capacity,
         lanes=lanes,
         model_profiles=model_profiles if model_profiles else None,

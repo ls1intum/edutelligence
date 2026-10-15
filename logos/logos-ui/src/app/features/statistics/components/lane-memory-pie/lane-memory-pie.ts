@@ -2,7 +2,7 @@ import { Component, Input, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 import { VramDonutComponent, type DonutSlice } from '../vram-donut/vram-donut';
-import { getLaneStateColor, seriesColor } from '../../statistics.constants';
+import { getLaneStateColor, MEMORY_FREE_COLOR, MEMORY_OTHER_COLOR } from '../../statistics.constants';
 import type { LaneSignalData } from '../../statistics.models';
 
 // Sort order mirrors the original lane-vram-pie.web.tsx
@@ -109,7 +109,7 @@ export class LaneMemoryPieComponent {
     if (otherUsedMb > 0) {
       result.push({
         value: Number((otherUsedMb / 1024).toFixed(3)),
-        color: seriesColor(3), // ochre, unused by lane state colors
+        color: MEMORY_OTHER_COLOR,
         text: 'Other used',
       });
     }
@@ -118,7 +118,7 @@ export class LaneMemoryPieComponent {
     if (this.freeMb > 0) {
       result.push({
         value: Number((this.freeMb / 1024).toFixed(3)),
-        color: seriesColor(4), // pink, unused by lane state colors
+        color: MEMORY_FREE_COLOR,
         text: 'Free',
       });
     }
