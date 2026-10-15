@@ -113,6 +113,7 @@ class TestCensusEndpoint:
 
         with patch.object(faq_census, "VectorDatabase") as database:
             database.return_value.faqs = collection
+            database.return_value.client.collections.exists.return_value = True
             census = faq_census.get_faq_census(base_url="https%3A%2F%2Fartemis.example")
 
         assert [
@@ -126,6 +127,14 @@ class TestCensusEndpoint:
         ]
         assert "other" not in checked
 
+    def test_a_missing_collection_reports_an_empty_census(self):
+        with patch.object(faq_census, "VectorDatabase") as database:
+            database.return_value.client.collections.exists.return_value = False
+            census = faq_census.get_faq_census(base_url=OWN)
+
+        assert not census.faqs
+        database.return_value.faqs.iterator.assert_not_called()
+
     def test_a_read_error_fails_the_request_instead_of_a_partial_list(self):
         def failing_iterator(**_kwargs):
             yield _row(1, 10, OWN, "v1:a")
@@ -136,6 +145,7 @@ class TestCensusEndpoint:
 
         with patch.object(faq_census, "VectorDatabase") as database:
             database.return_value.faqs = collection
+            database.return_value.client.collections.exists.return_value = True
             with pytest.raises(RuntimeError):
                 faq_census.get_faq_census(base_url=OWN)
 

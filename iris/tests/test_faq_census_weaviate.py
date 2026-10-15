@@ -57,6 +57,7 @@ def _pipeline(collection):
 def _census(collection, base_url=OWN):
     with patch.object(faq_census, "VectorDatabase") as database:
         database.return_value.faqs = collection
+        database.return_value.client.collections.exists.return_value = True
         return {
             (entry.course_id, entry.faq_id): entry
             for entry in faq_census.get_faq_census(base_url=base_url).faqs
@@ -65,6 +66,9 @@ def _census(collection, base_url=OWN):
 
 def test_empty_weaviate_refill_and_census(client):
     # The collection does not exist, as after replacing Weaviate with an empty one
+    with patch.object(faq_census, "VectorDatabase") as database:
+        database.return_value.client = client
+        assert not faq_census.get_faq_census(base_url=OWN).faqs
     collection = init_faq_schema(client)
     pipeline = _pipeline(collection)
     assert _census(collection) == {}
