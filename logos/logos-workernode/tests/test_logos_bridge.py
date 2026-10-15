@@ -4068,3 +4068,12 @@ async def test_a_command_answer_carries_the_lifecycle_revision_after_the_command
 
     assert sent[-1]["cmd_id"] == "cmd-1"
     assert sent[-1]["lifecycle_revision"] == 7
+
+
+@pytest.mark.asyncio
+async def test_reconfigure_passes_explicit_restart_to_lane_manager():
+    client = _client_with_calibration_session(session_done=True)
+    manager = SimpleNamespace(reconfigure_lane=AsyncMock(return_value=_make_lane_status()))
+    client._app.state.lane_manager = manager
+    await client._execute_command("reconfigure_lane", {"lane_id": "lane-a", "updates": {}, "force_restart": True})
+    manager.reconfigure_lane.assert_awaited_once_with("lane-a", {}, require_idle=True, force_restart=True)

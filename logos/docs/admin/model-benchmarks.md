@@ -180,3 +180,28 @@ The CI forwarding-overhead benchmark uses a mock lane. It does not replace these
 8. Repeat the release check after a successful job and a failed job.
 9. Correct settings for a failed lane and check that reconfiguration occurs before another startup attempt.
 10. Restore the intended serving settings after the checks.
+
+## Reload worker GPU limits
+
+Open **vLLM settings for the next run** and select **Reload GPU limits**.
+The button stays available after a failed request or an unknown GPU count.
+
+![Desktop view of the GPU limits reload button](/img/benchmarks/gpu-limits-desktop.png)
+
+The desktop view shows **Reload GPU limits** above the vLLM fields.
+
+![Mobile view of the GPU limits reload button](/img/benchmarks/gpu-limits-mobile.png)
+
+The mobile view keeps the reload button above the configuration fields.
+These screenshots use example data in the local Performance component.
+
+Wait for the worker status update if the GPU count stays unknown.
+Then select **Reload GPU limits** again.
+Use **Clear vLLM changes** to keep the current worker configuration.
+
+Requests admitted before a benchmark reservation finish before the benchmark starts.
+New production requests cannot use the reserved model lanes.
+Reserved lanes do not contribute memory to capacity reclaim plans.
+After cancellation, wait for cleanup before another benchmark starts on that worker.
+A conflicting start returns HTTP 409 without a new pending job.
+A failed lane can restart with its current settings when you explicitly apply those settings again.

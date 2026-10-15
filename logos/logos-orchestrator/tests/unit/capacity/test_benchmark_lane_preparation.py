@@ -303,3 +303,20 @@ async def test_reserved_benchmark_fails_if_existing_requests_do_not_drain():
             await planner.prepare_benchmark_lane(7, "org/model", 0)
     finally:
         benchmark_reservations.release(7001)
+
+
+@pytest.mark.parametrize("state", ["error", "stopped"])
+async def test_unchanged_configuration_explicitly_restarts_recovering_lane(state):
+    from logos.benchmarks.configuration import ServingOverrides
+
+    planner, _, _ = _configured_planner()
+    planner._pick_request_target_lane.return_value = None
+    planner._safe_get_lanes.return_value = [_lane(state, "unsupported")]
+    current = {"dtype": "auto", "enable_sleep_mode": True, "tensor_parallel_size": 1}
+    snapshot = planner._registry.peek_runtime_snapshot(7)
+    planner._registry.peek_runtime_snapshot.side_effect = None
+    planner._registry.peek_runtime_snapshot.return_value = snapshot
+    planner._registry.send_command.return_value = {"lane_config": {"vllm_config": current}}
+    assert await planner.prepare_configured_benchmark_lane(7, "org/model", ServingOverrides(tensor_parallel_size=1))
+    assert planner._registry.send_command.await_args.args[2]["force_restart"] is True
+    planner.prepare_benchmark_lane.assert_awaited_once()

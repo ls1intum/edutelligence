@@ -1301,7 +1301,12 @@ class CapacityPlanner:
                 result = await self._registry.send_command(
                     provider_id,
                     "reconfigure_lane",
-                    {"lane_id": target.lane_id, "updates": {"vllm_config": updated}, "require_idle": True},
+                    {
+                        "lane_id": target.lane_id,
+                        "updates": {"vllm_config": updated},
+                        "require_idle": True,
+                        **({"force_restart": True} if recovering else {}),
+                    },
                     timeout_seconds=int(timeout_seconds),
                 )
                 reported = (result.get("lane_config") or {}).get("vllm_config")
@@ -2224,6 +2229,8 @@ class CapacityPlanner:
         min_wait: Optional[float] = None
 
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
@@ -2302,6 +2309,8 @@ class CapacityPlanner:
         min_wait: Optional[float] = None
 
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
@@ -2370,6 +2379,8 @@ class CapacityPlanner:
         target_gpu_ids = self._parse_gpu_device_ids(target.gpu_devices)
 
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests <= 0 and lane.queue_waiting <= 0:
@@ -2444,6 +2455,8 @@ class CapacityPlanner:
         target_eff = self._effective_demand(target.model_name, provider_id, lanes)
 
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests <= 0 and lane.queue_waiting <= 0:
@@ -2744,6 +2757,8 @@ class CapacityPlanner:
         # empty. Each entry is (lane_id, model_name, reason).
         skipped: list[tuple[str, str, str]] = []
         for lane in lanes:
+            if benchmark_reservations.owner(provider_id, lane.model_name) is not None:
+                continue
             # The lane being woken can never be its own eviction victim:
             # `stop` destroys the wakee (the follow-up wake then fails with
             # "Lane '<id>' not found" and the model goes permanently absent),
@@ -5546,6 +5561,7 @@ class CapacityPlanner:
         profiles: dict[str, ModelProfile],
         required_free_mb: float = 0.0,
     ) -> Optional[CapacityPlanAction]:
+        lanes = [lane for lane in lanes if benchmark_reservations.owner(provider_id, lane.model_name) is None]
         sleep_candidates: list[tuple[float, CapacityPlanAction]] = []
         stop_candidates: list[tuple[float, CapacityPlanAction]] = []
         now = time.time()
@@ -6472,6 +6488,13 @@ class CapacityPlanner:
         including VRAM freed by sleep/stop actions in the same batch and
         VRAM reserved by in-flight operations.
         """
+        # Reserved lanes cannot contribute memory to a load plan.
+        actions = [
+            action
+            for action in actions
+            if action.action not in {"sleep_l1", "sleep_l2", "stop", "reconfigure_kv_cache"}
+            or benchmark_reservations.owner(action.provider_id, action.model_name) is None
+        ]
         # Pre-pass: drop load actions in load-failure cooldown AND any reclaim
         # actions paired with them. Without this the planner sleeps/stops a
         # victim to make room for a load that the cooldown will refuse —

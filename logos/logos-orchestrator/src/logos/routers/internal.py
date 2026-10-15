@@ -605,6 +605,10 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
                 detail="Provider credentials require HTTPS (plain HTTP is allowed only on loopback)",
             )
 
+        if provider_type == "logosnode" and benchmark_reservations.provider_owner(provider_id) is not None:
+            raise HTTPException(
+                status_code=409, detail="A benchmark still owns this worker. Wait for cleanup to finish."
+            )
         active = db.find_active_model_benchmark_job(provider_id)
         if active is not None:
             return JSONResponse(

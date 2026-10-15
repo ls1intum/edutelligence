@@ -132,3 +132,87 @@ def test_benchmark_permission_survives_processing_until_completion(lease, action
     facade.on_request_complete("benchmark", was_cold_start=False, duration_ms=10, provider_id=9001)
     assert not lease.allows(9001, "model", "benchmark")
     assert lease.owner(9001, "model") == 9002
+
+
+@pytest.mark.parametrize("action", ["infer", "infer_stream"])
+async def test_admitted_production_survives_reservation_until_completion(action):
+    registry = LogosNodeRuntimeRegistry()
+    lane = {"lane_id": "lane", "model": "drain-model", "runtime_state": "running"}
+    session = SimpleNamespace(provider_id=9010, capabilities_models=["drain-model"], latest_runtime={"lanes": [lane]})
+    registry._get_active_session = AsyncMock(return_value=session)
+    facade = LogosNodeSchedulingDataFacade(MagicMock())
+    provider = MagicMock(provider_id=9010)
+    provider.try_reserve_capacity.return_value = True
+    facade._get_provider_for_model = MagicMock(return_value=provider)
+    facade.get_model_name = MagicMock(return_value="drain-model")
+    assert facade.try_reserve_capacity(1, 9010, "admitted")
+    benchmark_reservations.reserve(9010, "drain-model", 9011)
+    try:
+        assert facade.model_inflight_requests(9010, "drain-model") == 1
+        assert await registry.select_lane_for_model(9010, "drain-model", request_id="admitted") == lane
+        registry._check_benchmark_reservation(session, action, {"lane_id": "lane"}, "admitted")
+        assert not facade.try_reserve_capacity(1, 9010, "new-request")
+        assert await registry.select_lane_for_model(9010, "drain-model", request_id="new-request") is None
+        benchmark_reservations.finish_request("admitted")
+        assert facade.model_inflight_requests(9010, "drain-model") == 0
+        assert not benchmark_reservations.allows(9010, "drain-model", "admitted")
+    finally:
+        benchmark_reservations.finish_request("admitted")
+        benchmark_reservations.release(9011)
+
+
+def test_failed_capacity_admission_does_not_keep_access():
+    lease = BenchmarkReservations()
+    assert not lease.try_admit(1, "m", "rejected", lambda: False)
+    lease.reserve(1, "m", 7)
+    assert not lease.allows(1, "m", "rejected")
+
+
+def test_reclaim_plan_does_not_count_reserved_memory(lease):
+    from logos.capacity.capacity_planner import CapacityPlanner
+
+    planner = object.__new__(CapacityPlanner)
+    target = SimpleNamespace(lane_id="target", model_name="target", gpu_devices=None)
+    reserved = SimpleNamespace(lane_id="reserved", model_name="model")
+    # A reserved lane must be excluded before its state or reclaim capacity is inspected.
+    assert (
+        planner._next_request_reclaim_action(
+            provider_id=9001, target=target, lanes=[reserved], profiles={}, required_free_mb=100
+        )
+        is None
+    )
+    assert not planner._has_blocking_busy_lanes(
+        provider_id=9001, target=target, lanes=[reserved], profiles={}, required_free_mb=100
+    )
+
+
+def test_reclaim_selects_unreserved_alternative(lease):
+    from logos.capacity.capacity_planner import CapacityPlanner
+
+    planner = object.__new__(CapacityPlanner)
+    planner._facade = MagicMock()
+    planner._facade.get_scheduler_queue_depth_by_model_name.return_value = 0
+    planner._lane_is_in_load_cooldown = MagicMock(return_value=False)
+    target = SimpleNamespace(lane_id="target", model_name="target", gpu_devices=None)
+    reserved = SimpleNamespace(lane_id="reserved", model_name="model")
+    alternative = SimpleNamespace(
+        lane_id="alternative",
+        model_name="other",
+        runtime_state="running",
+        sleep_state="unsupported",
+        active_requests=0,
+        queue_waiting=0,
+        effective_vram_mb=200,
+    )
+    action = planner._next_request_reclaim_action(
+        provider_id=9001, target=target, lanes=[reserved, alternative], profiles={}, required_free_mb=100
+    )
+    assert action.lane_id == "alternative"
+
+
+def test_reserved_reclaim_is_not_credited_to_vram_budget(lease):
+    from logos.capacity.capacity_planner import CapacityPlanner
+
+    planner = object.__new__(CapacityPlanner)
+    action = SimpleNamespace(action="stop", provider_id=9001, model_name="model")
+    assert planner._validate_vram_budget([action]) == []
