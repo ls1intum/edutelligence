@@ -16,7 +16,7 @@ from iris.vector_database.lecture_transcription_schema import (
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
-from iris.vector_database.lecture_unit_schema import _add_property_if_missing
+from iris.vector_database.schema_properties import add_property_if_missing
 
 
 class LectureUnitSegmentSchema(Enum):
@@ -59,7 +59,7 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 )
             )
 
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
@@ -69,7 +69,7 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
             ),
         )
 
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value,

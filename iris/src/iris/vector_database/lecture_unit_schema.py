@@ -8,7 +8,8 @@ from weaviate.collections.classes.config import (
     DataType,
     VectorDistances,
 )
-from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateInvalidInputError
+
+from .schema_properties import add_property_if_missing
 
 
 class LectureUnitSchema(Enum):
@@ -87,27 +88,10 @@ def _ledger_properties() -> list[Property]:
     ]
 
 
-def _add_property_if_missing(collection: Collection, new_property: Property) -> None:
-    def property_exists() -> bool:
-        return any(
-            schema_property.name == new_property.name
-            for schema_property in collection.config.get(simple=True).properties
-        )
-
-    if property_exists():
-        return
-    try:
-        collection.config.add_property(new_property)
-    except (UnexpectedStatusCodeError, WeaviateInvalidInputError):
-        # Another concurrent initializer may have added the property after our check.
-        if not property_exists():
-            raise
-
-
 def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureUnitSchema.COLLECTION_NAME.value):
         collection = client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitSchema.RELEASE_DATE.value,
@@ -116,7 +100,7 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
         )
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitSchema.SLIDE_VISIBILITY.value,
@@ -125,7 +109,7 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
         )
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitSchema.COURSE_LANGUAGE.value,
@@ -135,7 +119,7 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
             ),
         )
         for ledger_property in _ledger_properties():
-            _add_property_if_missing(collection, ledger_property)
+            add_property_if_missing(collection, ledger_property)
         return collection
     return client.collections.create(
         name=LectureUnitSchema.COLLECTION_NAME.value,
