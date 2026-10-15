@@ -1,7 +1,7 @@
 from enum import Enum
 
 from weaviate import WeaviateClient
-from weaviate.classes.config import Property
+from weaviate.classes.config import Property, Tokenization
 from weaviate.collections import Collection
 from weaviate.collections.classes.config import (
     Configure,
@@ -30,10 +30,14 @@ class FaqSchema(Enum):
 
 
 def _base_url_property() -> Property:
+    # Field tokenization keeps the URL whole: with the default word tokenization, an equality filter on
+    # "https://artemis.example" would also match "https://artemis-test.artemis.example", which contains all
+    # its words. Tokenization cannot change once the property exists.
     return Property(
         name=FaqSchema.BASE_URL.value,
         description="The base URL of the Artemis instance the FAQ belongs to",
         data_type=DataType.TEXT,
+        tokenization=Tokenization.FIELD,
         index_searchable=False,
     )
 

@@ -163,3 +163,19 @@ def test_legacy_collection_gets_the_new_properties(client):
         FaqSchema.CONTENT_FINGERPRINT.value,
         FaqSchema.COURSE_LANGUAGE.value,
     } <= names
+
+
+def test_delete_does_not_reach_an_instance_whose_url_contains_all_words_of_ours(
+    client,
+):
+    # "https://artemis.example" splits into words that "https://artemis-test.artemis.example" also contains
+    collection = init_faq_schema(client)
+    pipeline = _pipeline(collection)
+    longer = "https://artemis-test.artemis.example"
+    pipeline.insert_faq(FaqDTO(faqId=1, courseId=7, questionTitle="mine"), OWN)
+    pipeline.insert_faq(FaqDTO(faqId=1, courseId=7, questionTitle="theirs"), longer)
+
+    pipeline.delete_faq(1, 7, OWN)
+
+    assert (7, 1) not in _census(collection)
+    assert _census(collection, longer)[(7, 1)].owned_row_count == 1
