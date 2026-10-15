@@ -12,6 +12,7 @@ from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.compaction_dto import CompactionDTO
@@ -92,6 +93,9 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # it is sent to the client with the next outgoing status callback.
     deferred_session_title: Optional[str]
     deferred_session_title_delivered: bool
+    # Language of the final answer, resolved once so that title, suggestions and
+    # citations agree. None until a pipeline resolves it.
+    answer_language: Optional[str]
     # Context switch requested by the agent via the switch_chat_context tool;
     # delivered to Artemis with the final result status update.
     pending_context_switch: Optional[SuggestedContextDTO]
@@ -180,6 +184,23 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> bool:
         """Return True if background memory creation should be enabled for this run."""
+
+    def _create_memiris_wrapper(
+        self, state: AgentPipelineExecutionState[DTO, VARIANT]
+    ) -> Optional[MemirisWrapper]:
+        """The memory wrapper of this run, or None while Weaviate is unavailable.
+
+        The memory repositories make sure their collections exist when they are created, which needs Weaviate.
+        Without it the run answers without memories instead of failing.
+        """
+        try:
+            return MemirisWrapper(state.db.client, self.get_memiris_tenant(state.dto))
+        except Exception:
+            logger.warning(
+                "Memories are unavailable, Weaviate could not be reached; answering without them",
+                exc_info=True,
+            )
+            return None
 
     @abstractmethod
     def get_tools(
@@ -812,16 +833,22 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             )
             return None
 
-        # Extract user language (using getattr for DTOs that may not have user attr)
-        user_language = "en"
-        user = getattr(state.dto, "user", None)
-        if user and getattr(user, "lang_key", None):
-            user_language = user.lang_key
+        # The title uses the language of the answer (using getattr for DTOs that
+        # may not have the user or chat history attributes)
+        language = getattr(state, "answer_language", None)
+        if language is None:
+            user = getattr(state.dto, "user", None)
+            language = reply_language(
+                output,
+                getattr(state, "query_text", None),
+                getattr(state.dto, "chat_history", None),
+                getattr(user, "lang_key", None),
+            )
 
         try:
             if output:
                 session_title = self.session_title_pipeline(
-                    current_session_title, recent_messages, user_language=user_language
+                    current_session_title, recent_messages, language=language
                 )
                 if self.session_title_pipeline.tokens is not None:
                     self._track_tokens(state, self.session_title_pipeline.tokens)
@@ -888,6 +915,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.allow_memiris_tool = False
         state.start_time = start_time
         state.deferred_session_title = None
+        state.answer_language = None
         state.deferred_session_title_delivered = False
         state.pending_context_switch = None
         state.partial_result_sender = None
@@ -901,9 +929,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
         )
         state.tracing_context = self.create_tracing_context(dto, variant)
-        state.memiris_wrapper = MemirisWrapper(
-            state.db.client, self.get_memiris_tenant(state.dto)
-        )
+        state.memiris_wrapper = self._create_memiris_wrapper(state)
 
         # Set up LangFuse tracing context for this thread
         set_current_context(state.tracing_context)
@@ -961,7 +987,10 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 logger.info("Using cloud model with tool calling support")
 
             # 4. Start memory creation if enabled
-            if self.is_memiris_memory_creation_enabled(state):
+            if (
+                state.memiris_wrapper is not None
+                and self.is_memiris_memory_creation_enabled(state)
+            ):
                 reference = self.get_memiris_reference(dto=state.dto)
                 state.memiris_memory_creation_thread = (
                     state.memiris_wrapper.create_memories_in_separate_thread(

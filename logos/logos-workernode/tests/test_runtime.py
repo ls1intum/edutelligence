@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -297,3 +298,94 @@ async def test_runtime_reports_version_checksum(monkeypatch):
     runtime = await build_runtime_status(_make_app([], _NvidiaCollector()))
 
     assert runtime.version_checksum == _COMMIT
+
+
+class _AllGpusLostCollector:
+    """nvidia-smi answers, but no GPU's memory can be read: every GPU is lost."""
+
+    async def get_snapshot(self):
+        return DeviceSummary(
+            timestamp=datetime(2026, 10, 12, 8, 0, 0, tzinfo=timezone.utc),
+            mode="none",
+            nvidia_smi_available=True,
+            telemetry_available=True,
+            degraded_reason="gpu0: faulted (GPU is lost)",
+            gpu_faults=["gpu0 (GPU-aaa): GPU is lost"],
+            faulted_gpu_indices=[0],
+            devices=[],
+        )
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_keeps_the_faults_when_every_gpu_is_lost(monkeypatch):
+    """Swapping in the derived summary would drop the faults and report host
+    RAM as GPU capacity."""
+    monkeypatch.setattr(
+        "logos_worker_node.runtime._read_proc_meminfo_mb",
+        lambda: (16384.0, 4096.0, 12288.0),
+    )
+
+    runtime = await build_runtime_status(_make_app([], _AllGpusLostCollector()))
+
+    assert runtime.devices.gpu_faults == ["gpu0 (GPU-aaa): GPU is lost"]
+    assert runtime.devices.faulted_gpu_indices == [0]
+    assert runtime.devices.total_memory_mb == 0.0
+    assert runtime.devices.devices == []
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_reports_disk_space_of_the_hf_cache_volume(monkeypatch, tmp_path):
+    mb = 1024 * 1024
+    seen = []
+
+    def disk_usage(path):
+        seen.append(path)
+        return SimpleNamespace(total=1000 * mb, used=600 * mb, free=400 * mb)
+
+    monkeypatch.setattr("logos_worker_node.runtime.shutil.disk_usage", disk_usage)
+    app = _make_app([], _NvidiaCollector())
+    # The cache directory does not exist yet: measure the volume it will live on.
+    app.state.hf_home = str(tmp_path / "missing" / ".hf_cache")
+
+    runtime = await build_runtime_status(app)
+
+    assert seen == [tmp_path]
+    assert runtime.disk is not None
+    assert runtime.disk.source == "statvfs"
+    assert runtime.disk.path == app.state.hf_home
+    assert (runtime.disk.total_mb, runtime.disk.used_mb, runtime.disk.free_mb) == (1000.0, 600.0, 400.0)
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_marks_disk_unavailable_when_it_cannot_be_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "logos_worker_node.runtime.shutil.disk_usage", lambda path: (_ for _ in ()).throw(OSError("stale mount"))
+    )
+    app = _make_app([], _NvidiaCollector())
+    app.state.hf_home = str(tmp_path)
+
+    runtime = await build_runtime_status(app)
+
+    assert runtime.disk is not None
+    assert runtime.disk.source == "unavailable"
+    assert runtime.disk.free_mb == 0.0
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_status_survives_an_io_error_while_resolving_the_cache_path(monkeypatch, tmp_path):
+    # A broken cache mount fails the path lookup itself, before any usage read.
+    real_exists = Path.exists
+
+    def broken_exists(self, *args, **kwargs):
+        if self.is_relative_to(tmp_path):
+            raise OSError(5, "Input/output error")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", broken_exists)
+    app = _make_app([], _NvidiaCollector())
+    app.state.hf_home = str(tmp_path / ".hf_cache")
+
+    runtime = await build_runtime_status(app)
+
+    assert runtime.disk is not None
+    assert runtime.disk.source == "unavailable"

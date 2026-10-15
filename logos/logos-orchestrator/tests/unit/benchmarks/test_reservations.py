@@ -163,3 +163,40 @@ def test_nightly_owner_allows_recovery_but_blocks_unrelated_lane_changes():
             NIGHTLY_CONTEXT.reset(token)
     finally:
         benchmark_reservations.release(-31)
+
+
+@pytest.mark.parametrize("action", ["infer", "sync_model_profiles"])
+async def test_reserved_worker_commands_preserve_dispatch_confirmation(action, lease):
+    import asyncio
+
+    registry = LogosNodeRuntimeRegistry()
+    session = SimpleNamespace(
+        provider_id=9001,
+        latest_runtime={"lanes": [{"lane_id": "lane", "model": "model"}]},
+        pending_commands={},
+        send_lock=asyncio.Lock(),
+        calibrating=False,
+        optimistic_calibration_until=None,
+    )
+    dispatched = []
+
+    async def reply(message):
+        future = session.pending_commands.pop(message["cmd_id"])
+        assert dispatched == [future]
+        future.set_result({"success": True, "result": {"ok": True}})
+
+    session.websocket = SimpleNamespace(send_json=AsyncMock(side_effect=reply))
+    registry._get_active_session = AsyncMock(return_value=session)
+    lease.register_request(9001, "model", 9002, "benchmark")
+    lease.reserve(9001, "*", 9002)
+    result = await registry.send_command(
+        9001,
+        action,
+        {"lane_id": "lane"},
+        request_id="benchmark",
+        on_dispatched=dispatched.append,
+    )
+    assert result == {"ok": True}
+    session.websocket.send_json.assert_awaited_once()
+    assert dispatched[0].done()
+    assert not session.pending_commands

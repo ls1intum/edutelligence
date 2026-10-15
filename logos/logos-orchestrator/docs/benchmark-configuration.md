@@ -65,7 +65,7 @@ All Spring endpoints below require `logos_admin` and forward to the internal orc
 - `POST /logosdb/model_benchmarks/datasets/metadata`: `{ "dataset": "openai/gsm8k", "subset": "main", "split": "test" }` (subset and split are optional)
 - `POST /logosdb/model_benchmarks/run`: existing target and sample fields plus `dataset`, `subset`, `split`, `text_column`, `profile`, `concurrency`, `seed` and optional `serving_overrides`.
 
-The selected settings are persisted with the job; successful results store the actual GuideLLM scenario and the worker's serving snapshot. The manual configuration API requires no additional migration. Nightly schedules require `057_nightly_benchmarks.xml`.
+The selected settings are persisted with the job; successful results store the actual GuideLLM scenario and the worker's serving snapshot. The manual configuration API requires no additional migration. Nightly schedules require `060_nightly_benchmarks.xml`.
 
 
 ## Benchmark batches and comparison

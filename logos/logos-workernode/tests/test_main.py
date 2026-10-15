@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 import logos_worker_node.main as worker_main
 from logos_worker_node import config as worker_config
+from logos_worker_node import profile_fingerprint
 from logos_worker_node.models import AppConfig, DeviceSummary, LaneConfig, LogosConfig, VllmConfig, WorkerConfig
 
 
@@ -36,6 +37,102 @@ class _FakeGpuCollector:
             mode="none",
             nvidia_smi_available=False,
         )
+
+
+def test_estimate_model_download_bytes_sums_the_full_hf_snapshot(monkeypatch) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    fake_api = MagicMock()
+    fake_api.model_info.return_value = SimpleNamespace(siblings=[SimpleNamespace(size=7), SimpleNamespace(size=5)])
+    with patch("huggingface_hub.HfApi", return_value=fake_api):
+        size_bytes = worker_main._estimate_model_download_bytes("org/model")
+
+    assert size_bytes == 12
+    fake_api.model_info.assert_called_once_with(
+        "org/model",
+        token=None,
+        files_metadata=True,
+        timeout=15.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_prefetch_selection_only_includes_models_that_fit_with_disk_reserve(tmp_path, monkeypatch) -> None:
+    gib = 1024**3
+    monkeypatch.setattr(
+        worker_main.shutil,
+        "disk_usage",
+        lambda path: SimpleNamespace(total=100 * gib, used=50 * gib, free=50 * gib),
+    )
+    sizes = {
+        "fits-first": 30 * gib,
+        "too-large": 20 * gib,
+        "fits-later": 15 * gib,
+        "unknown": None,
+    }
+    monkeypatch.setattr(worker_main, "_estimate_model_download_bytes", lambda model: sizes[model])
+
+    selected = await worker_main._models_that_fit_disk(
+        ["fits-first", "too-large", "fits-later", "unknown"],
+        str(tmp_path),
+    )
+
+    assert selected == ["fits-first", "fits-later"]
+
+
+@pytest.mark.asyncio
+async def test_prefetch_selection_fails_closed_when_disk_space_is_unavailable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(worker_main.shutil, "disk_usage", MagicMock(side_effect=OSError("disk unavailable")))
+    estimate_size = MagicMock(return_value=1)
+    monkeypatch.setattr(worker_main, "_estimate_model_download_bytes", estimate_size)
+
+    selected = await worker_main._models_that_fit_disk(["org/model"], str(tmp_path))
+
+    assert selected == []
+    estimate_size.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_selection_skips_when_the_cache_path_cannot_be_resolved(tmp_path, monkeypatch) -> None:
+    real_exists = Path.exists
+
+    def broken_exists(self, *args, **kwargs):
+        if self.is_relative_to(tmp_path):
+            raise OSError(5, "Input/output error")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", broken_exists)
+    estimate_size = MagicMock(return_value=1)
+    monkeypatch.setattr(worker_main, "_estimate_model_download_bytes", estimate_size)
+
+    selected = await worker_main._models_that_fit_disk(["org/model"], str(tmp_path / ".hf_cache"))
+
+    assert selected == []
+    estimate_size.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prefetch_rechecks_the_disk_before_each_later_download(tmp_path, monkeypatch) -> None:
+    # All fit at selection; by the time "second" is due the disk has filled up.
+    fit = AsyncMock(side_effect=[["first", "second", "third"], [], ["third"]])
+    monkeypatch.setattr(worker_main, "_models_that_fit_disk", fit)
+    download = MagicMock()
+    monkeypatch.setattr(worker_main, "_download_one_model", download)
+
+    await worker_main._prefetch_missing_models(["first", "second", "third"], str(tmp_path))
+
+    assert [call.args[0] for call in download.call_args_list] == ["first", "third"]
+    assert [call.args[0] for call in fit.call_args_list] == [["first", "second", "third"], ["second"], ["third"]]
+
+
+@pytest.mark.asyncio
+async def test_prefetch_downloads_only_models_selected_by_disk_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(worker_main, "_models_that_fit_disk", AsyncMock(return_value=["fits"]))
+    download = MagicMock()
+    monkeypatch.setattr(worker_main, "_download_one_model", download)
+
+    await worker_main._prefetch_missing_models(["fits", "does-not-fit"], str(tmp_path))
+
+    download.assert_called_once_with("fits", str(tmp_path))
 
 
 @pytest.mark.asyncio
@@ -70,7 +167,7 @@ async def test_lifespan_fails_startup_when_vllm_configured_without_nvidia_smi(
 
     app = FastAPI()
     with (
-        patch.object(worker_main, "_auto_calibrate_if_needed", new_callable=AsyncMock),
+        patch.object(profile_fingerprint, "cached_vllm_version", return_value=""),
         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
         patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}),
     ):
@@ -116,7 +213,7 @@ async def test_lifespan_bootstraps_central_hf_token_before_startup_model_operati
 
         @staticmethod
         def json():
-            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token"}
+            return {"ws_url": "wss://logos.example/ws", "hf_token": "central-token", "profiles": {}}
 
     class _HttpClient:
         async def __aenter__(self):
@@ -130,7 +227,7 @@ async def test_lifespan_bootstraps_central_hf_token_before_startup_model_operati
 
     app = FastAPI()
     with (
-        patch.object(worker_main, "_auto_calibrate_if_needed", new_callable=AsyncMock),
+        patch.object(profile_fingerprint, "cached_vllm_version", return_value=""),
         patch("logos_worker_node.main.create_model_cache", return_value=mock_cache),
         patch.dict("sys.modules", {"logos_worker_node.flashinfer_warmup": MagicMock()}),
         patch(
@@ -212,39 +309,74 @@ class TestPropagateCachePathToEnv:
         assert environ["LOGOS_WORKER_CACHE_ROOT"] == str(tmp_path / "custom")
 
 
-@pytest.mark.asyncio
-async def test_auto_calibrate_if_needed_skips_on_metal_backend(tmp_path, monkeypatch) -> None:
-    """Calibration measures against nvidia-smi and samples /proc/meminfo,
-    neither of which exists on macOS. On the Metal backend the function must
-    return before touching the calibration machinery — no operator flag
-    required."""
-    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "metal")
-    monkeypatch.delenv("LOGOS_SKIP_AUTO_CALIBRATION", raising=False)
-    cfg = MagicMock()
-    with patch.object(worker_main, "auto_calibrate_models") as mock_calibrate:
-        await worker_main._auto_calibrate_if_needed(  # noqa: SLF001
-            cfg,
-            MagicMock(),
-            tmp_path,
+class _FakeBridge:
+    def __init__(self, failures: int, profiles: dict) -> None:
+        self.failures = failures
+        self.profiles = profiles
+        self.calls: list = []
+
+    async def fetch_model_profiles(self, key_hashes, legacy_import):
+        self.calls.append((key_hashes, legacy_import))
+        if len(self.calls) <= self.failures:
+            raise RuntimeError("Logos unreachable")
+        return self.profiles
+
+
+def _central_cfg(enabled: bool) -> AppConfig:
+    return AppConfig(
+        logos=LogosConfig(
+            enabled=enabled,
+            logos_url="https://logos.example:8080",
+            shared_key="secret",
+            capabilities_models=["org/model"],
         )
-    mock_calibrate.assert_not_called()
+    )
 
 
 @pytest.mark.asyncio
-async def test_auto_calibrate_if_needed_runs_on_cuda_backend(tmp_path, monkeypatch) -> None:
-    """On the CUDA backend the platform must not skip calibration: an
-    uncalibrated capability model still reaches the (mocked) measurement."""
+async def test_central_profiles_wait_for_logos_and_hand_over_the_legacy_files(tmp_path, monkeypatch) -> None:
+    """No lane may start without profiles: the worker retries until Logos
+    answers, then hands its old profile file over exactly once."""
+    from logos_worker_node.model_profiles import ModelProfileRegistry
+
+    (tmp_path / "model_profiles.yml").write_text("model_profiles:\n  org/model:\n    base_residency_mb: 5.0\n")
+    sleeps: list = []
+
+    async def _sleep(seconds):
+        sleeps.append(seconds)
+
     monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
-    monkeypatch.delenv("LOGOS_SKIP_AUTO_CALIBRATION", raising=False)
-    cfg = MagicMock()
-    cfg.logos.capabilities_models = ["Org/Model"]
-    cfg.engines = None
-    profiles = MagicMock()
-    profiles.get_profile.return_value = None  # no profile → uncalibrated
-    with patch.object(worker_main, "auto_calibrate_models", return_value={}) as mock_calibrate:
-        await worker_main._auto_calibrate_if_needed(  # noqa: SLF001
-            cfg,
-            profiles,
-            tmp_path,
-        )
-    mock_calibrate.assert_called_once()
+    monkeypatch.setattr(worker_main, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(profile_fingerprint, "cached_vllm_version", lambda binary: "0.30.0")
+    monkeypatch.setattr(worker_main.asyncio, "sleep", _sleep)
+    bridge = _FakeBridge(failures=2, profiles={"org/model": {"base_residency_mb": 7.0, "sync_revision": 3}})
+    registry = ModelProfileRegistry()
+
+    await worker_main._load_central_profiles(_central_cfg(True), bridge, registry, _FakeGpuCollector(1))  # noqa: SLF001
+
+    assert sleeps == [5.0, 10.0]
+    key_hashes, legacy = bridge.calls[0]
+    assert set(key_hashes) == {"org/model"}
+    assert legacy == {"model_profiles": {"org/model": {"base_residency_mb": 5.0}}, "unsupported_models": {}}
+    profile = registry.get_profile("org/model")
+    assert (profile.base_residency_mb, profile.sync_revision) == (7.0, 3)
+    assert not (tmp_path / "model_profiles.yml").exists()
+    assert (tmp_path / "model_profiles.yml.migrated").exists()
+
+
+@pytest.mark.asyncio
+async def test_central_profiles_skip_logos_when_the_bridge_is_disabled(tmp_path, monkeypatch) -> None:
+    from logos_worker_node.model_profiles import ModelProfileRegistry
+
+    monkeypatch.setenv("LOGOS_WORKER_BACKEND", "cuda")
+    monkeypatch.setattr(worker_main, "get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr(profile_fingerprint, "cached_vllm_version", lambda binary: "")
+    bridge = _FakeBridge(failures=0, profiles={})
+    registry = ModelProfileRegistry()
+
+    await worker_main._load_central_profiles(
+        _central_cfg(False), bridge, registry, _FakeGpuCollector(1)
+    )  # noqa: SLF001
+
+    assert bridge.calls == []
+    assert set(registry.calibration_key_hashes()) == {"org/model"}

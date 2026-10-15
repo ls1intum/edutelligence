@@ -44,8 +44,8 @@
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "22.20.5",
     "jsdom": "28.1.0",
-    "postcss": "8.5.29",
-    "prettier": "3.9.9",
+    "postcss": "8.5.30",
+    "prettier": "3.9.10",
     "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
     "vitest": "4.1.11"

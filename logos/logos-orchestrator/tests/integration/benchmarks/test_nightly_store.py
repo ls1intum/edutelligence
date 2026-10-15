@@ -29,7 +29,7 @@ def database(monkeypatch):
         os.getenv("NIGHTLY_SCHEMA_FILE")
         or (
             Path(__file__).resolve().parents[4]
-            / "logos-webservice/src/main/resources/liquibase/changelog/057_nightly_benchmarks.xml"
+            / "logos-webservice/src/main/resources/liquibase/changelog/060_nightly_benchmarks.xml"
         )
     )
     tree = ElementTree.parse(migration)

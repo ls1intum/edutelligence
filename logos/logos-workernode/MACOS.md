@@ -460,7 +460,7 @@ override (letting vllm-metal size itself, same as a production lane),
 warms it up, and reads the memory delta via `vm_stat`. No KV sweep (there
 is no per-request KV-size flag to search over on this backend, only the
 whole-process `VLLM_METAL_MEMORY_FRACTION`), no TP (single GPU), no sleep
-(see above). The result still lands in `model_profiles.yml` with
+(see above). The result is stored in Logos like every other profile, with
 `residency_source="calibrated"`. The "Calibrate uncalibrated" admin action
 remains available on Metal nodes. The application no longer starts the automatic
 calibration timer; scheduled maintenance uses the opt-in

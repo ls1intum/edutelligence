@@ -144,7 +144,16 @@ this feature does not introduce multi-process worker-session sharing.
 
 ## Deployment
 
-Deploy the webservice migration `057_nightly_benchmarks.xml`, the orchestrator,
+Model profiles and calibration snapshots use the central Logos database.
+Workers fetch their profiles before lanes start and receive central changes through `sync_model_profiles`.
+The nightly schedule and recovery journal use the same PostgreSQL database.
+Benchmark runs do not restore local profile files.
+
+Apply `058_central_model_profiles.xml` and the nightly migration before workers connect.
+Imported profiles are stale until calibration succeeds. Use the explicit calibration action when needed.
+Nightly benchmarks do not automatically recalibrate these profiles.
+
+Deploy the webservice migration `060_nightly_benchmarks.xml`, the orchestrator,
 the web application and the updated worker code. Workers advertise
 `supports_benchmark_restart`; activation rejects workers without this feature.
 Enable only the desired model/worker pairs after deployment. No schedules are

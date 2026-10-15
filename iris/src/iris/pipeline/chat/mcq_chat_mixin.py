@@ -12,6 +12,7 @@ from typing import Any, Optional
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
+from iris.common.reply_language import previous_reply_language
 from iris.domain.status.activity_dto import ActivityKind
 from iris.pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
@@ -315,7 +316,7 @@ def mcq_pre_agent_hook(
         mcq_pipeline.run_in_thread(
             command=user_message,
             chat_history=chat_history,
-            user_language=state.dto.user.lang_key,
+            language=previous_reply_language(chat_history, state.dto.user.lang_key),
             result_storage=getattr(state, "mcq_result_storage", {}),
             count=count,
             lecture_content=lecture_content,

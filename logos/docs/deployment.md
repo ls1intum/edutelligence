@@ -69,8 +69,10 @@ jump is a normal event. First, back up the persistent volumes (see the
 
 Worker nodes update in the same way from their worker directory. Change
 `IMAGE_TAG` in the `.env` of the worker. Then run `docker compose pull` and
-`docker compose up -d`. The lane configuration and the calibrated model profiles
-stay in the `data/` volume of the worker. An update does not reset them.
+`docker compose up -d`. The lane configuration stays in the `data/` volume of
+the worker, and the calibrated model profiles stay in the Logos database. An
+update does not reset them. Update the core node first: a worker does not start
+any lane until Logos hands it its profiles.
 
 Each worker image has the commit that it was built from. The Statistics page
 shows the commit beside the name of the worker as `version: <commit>`. To see the
@@ -85,7 +87,7 @@ into `main` as of the build.
 ## Nightly benchmarks
 
 Nightly benchmarks require updates to the webservice, orchestrator, web application and selected workers.
-The webservice applies `057_nightly_benchmarks.xml` before the new scheduler starts.
+The webservice applies `060_nightly_benchmarks.xml` before the new scheduler starts.
 Workers report `supports_benchmark_restart` in their runtime status.
 The activation API rejects workers without this capability.
 All schedules default to disabled.

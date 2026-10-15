@@ -436,6 +436,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     }
 
     private int globalTick = 0;
+    /** VRAM cadence, in ticks, while the session looks at the Requests tab. */
+    private static final int VRAM_IDLE_TICKS = 10;
 
     private void tick() {
         int t = globalTick++;
@@ -456,6 +458,15 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // stays small; the push itself is still skipped when nothing
                 // moved (no new samples, cursor, or provider metadata).
                 if (state.wantsLocalProviders()) {
+                    pushVramDelta(session, state);
+                } else if (t % VRAM_IDLE_TICKS == 0) {
+                    // The failed-GPU banner shows on the Requests tab too and is
+                    // read from the VRAM samples, so they keep coming there, at a
+                    // tenth of the cadence. A session that opened on Requests
+                    // has no baseline yet; the init goes out once, then deltas.
+                    synchronized (state.vramLock) {
+                        pushVramInit(session, state);
+                    }
                     pushVramDelta(session, state);
                 }
                 // Aggregates are the expensive push (findTotals alone scans the

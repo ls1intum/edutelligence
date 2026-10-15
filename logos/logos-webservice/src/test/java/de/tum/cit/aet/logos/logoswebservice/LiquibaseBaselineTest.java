@@ -49,6 +49,18 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void nightlySchedulesCoexistWithCentralProfilesAndKeepMigrationIdentity() {
+        assertThat(tableExists("model_profiles")).isTrue();
+        assertThat(tableExists("model_calibrations")).isTrue();
+        assertThat(tableExists("nightly_benchmarks")).isTrue();
+        assertThat(columnExists("nightly_benchmarks", "recovery")).isTrue();
+        assertThat(jdbc.queryForList(
+            "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
+            String.class, "057-nightly-benchmarks", "logos"))
+            .containsExactly("liquibase/changelog/057_nightly_benchmarks.xml");
+    }
+
+    @Test
     void migration045_teamRepositoriesExist() {
         assertThat(tableExists("team_repositories")).isTrue();
         assertThat(columnExists("team_repositories", "repo_url")).isTrue();
@@ -188,6 +200,30 @@ class LiquibaseBaselineTest {
         // enum makes legacy local-provider rows impossible) — reaching this test already
         // proves the changelog ran to the end.
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM providers", Integer.class)).isZero();
+    }
+
+    @Test
+    void migration057_requestedModelsAndVotesTablesExist() {
+        // The model-request voting feature: a registry of requested models
+        // (one row per model, unique on the lower-cased name) plus the votes
+        // (one row per voter, unique on the (model, user) pair so each user gets
+        // exactly one vote per model).
+        assertThat(tableExists("requested_models")).isTrue();
+        assertThat(columnExists("requested_models", "id")).isTrue();
+        assertThat(columnExists("requested_models", "name")).isTrue();
+        assertThat(tableExists("requested_model_votes")).isTrue();
+        assertThat(columnExists("requested_model_votes", "id")).isTrue();
+        assertThat(columnExists("requested_model_votes", "requested_model_id")).isTrue();
+        assertThat(columnExists("requested_model_votes", "user_id")).isTrue();
+        for (String indexName : new String[] {
+            "uq_requested_models_name_lower",
+            "uq_requested_model_votes_model_user",
+        }) {
+            Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pg_indexes WHERE schemaname='public' AND indexname=?",
+                Integer.class, indexName);
+            assertThat(count).as("index %s", indexName).isEqualTo(1);
+        }
     }
 
     @Test

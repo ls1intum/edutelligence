@@ -456,8 +456,8 @@ services:
       - "traefik.http.routers.webservice-admin.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-admin.priority=200"
 
-      # === Routing: /api/ws/stats, /api/ws/stats/v2 (WebSocket) ===
-      - "traefik.http.routers.webservice-ws.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
+      # === Routing: /api/ws/stats, /api/ws/stats/v2, /api/ws/notifications (WebSocket) ===
+      - "traefik.http.routers.webservice-ws.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`) || Path(`/api/ws/notifications`)"
       - "traefik.http.routers.webservice-ws.entrypoints=internal8090"
       - "traefik.http.routers.webservice-ws.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-ws.middlewares=strip-api,rl-admin"

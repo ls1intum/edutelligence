@@ -105,7 +105,9 @@ def render_entity_card(candidate: EntityCandidateDTO) -> str:
     if facts:
         parts.append("Details: " + "; ".join(facts) + ".")
 
-    description = (candidate.description or "").strip()
+    # The matched passage shows the part of a long text that the search found,
+    # which the beginning of the description often does not contain.
+    description = (candidate.passage or candidate.description or "").strip()
     if description:
         parts.append(description[:_DESCRIPTION_MAX_CHARS])
     elif etype in _POINTER_TYPES:

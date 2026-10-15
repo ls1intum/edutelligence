@@ -451,6 +451,8 @@ def _build_convert_env(
     if hf_token:
         env["HF_TOKEN"] = hf_token
 
+    # Same GPU numbering as nvidia-smi, like the serving lane.
+    env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     gpu = (gpu_devices or "").strip().lower()
     if gpu_devices and gpu not in ("all", "none", ""):
         env["CUDA_VISIBLE_DEVICES"] = gpu_devices

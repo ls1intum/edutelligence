@@ -4814,6 +4814,7 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
             or profile.get("sleep_l1_transient_host_ram_mb") is None
             or (profile.get("residency_source") == "calibrated" and not profile.get("kv_cache_to_max_model_len_pairs"))
             or collapsed_envelope
+            or bool(profile is not None and profile.get("calibration_stale"))
         ):
             uncalibrated.append(model_name)
     return uncalibrated
@@ -5115,6 +5116,8 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
 # Add new routers above that line.
 
 from logos.routers import admin, internal, logosnode, monitoring, nightly_benchmarks, user_facing  # noqa: E402
+
+_logosnode_registry.on_cold_mark_changed = logosnode.republish_lane_snapshot
 
 app.include_router(monitoring.router)
 app.include_router(internal.router)
