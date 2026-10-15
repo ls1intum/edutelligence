@@ -73,11 +73,6 @@ services:
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
-      # Traefik defaults to ERROR, which hides every ACME diagnostic: a
-      # resolver that never fires logs a WARN and nothing else, so an empty
-      # acme.json and a self-signed default cert were the only symptoms.
-      # INFO keeps certificate acquisition and renewal auditable.
-      - "--log.level=INFO"
       - "--api.dashboard=true"
     ports:
       - "${LOGOS_TRAEFIK_HTTP_PORT:-80}:80"
@@ -181,9 +176,10 @@ services:
       # every path through the per-IP budget. Without a domain Traefik has
       # nothing to ask Let's Encrypt for: it never registers an account,
       # acme.json stays empty, and every request is served the built-in
-      # TRAEFIK DEFAULT CERT. Worse, that is a WARN, and the default log
-      # level is ERROR (see --log.level=INFO on traefik), so it fails in
-      # total silence. Name the domain explicitly instead.
+      # TRAEFIK DEFAULT CERT. Worse, that is a WARN and Traefik's default
+      # log level is ERROR, so it fails in total silence — add
+      # --log.level=INFO above when diagnosing a resolver that will not
+      # fire. Name the domain explicitly instead.
       - "traefik.http.routers.public-rate-gateway.tls.domains[0].main=${LOGOS_DOMAIN:-localhost}"
       - "traefik.http.routers.public-rate-gateway.service=logos-rate-gateway-svc"
       - "traefik.http.routers.public-rate-gateway.priority=100"
