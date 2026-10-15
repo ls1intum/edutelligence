@@ -136,6 +136,11 @@ vLLM requirement:
 
 ## Nightly benchmark support
 
+Calibration has priority over benchmarks. The orchestrator admits at most one
+calibration or benchmark across the cluster, including manual starts.
+The worker exposes `get_calibration_status`; a live session remains active until
+its task and cleanup finish. Upgrade workers together with the orchestrator.
+
 The orchestrator selects and schedules nightly benchmarks. The worker does not
 need a cron job or a local time window. Its runtime status advertises
 `supports_benchmark_restart`; the activation API rejects workers without this

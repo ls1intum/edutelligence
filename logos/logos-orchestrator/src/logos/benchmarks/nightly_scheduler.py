@@ -9,6 +9,7 @@ from starlette.requests import Request
 
 from logos.benchmarks import nightly_store as store
 from logos.benchmarks.guidellm_runner import extract_serving_configuration
+from logos.benchmarks.maintenance import AUTOMATIC_CALIBRATION
 from logos.benchmarks.nightly import (
     LEASE_CHECK,
     MAX_PAIRS_PER_NIGHT,
@@ -27,10 +28,12 @@ logger = logging.getLogger(__name__)
 
 
 class NightlyScheduler:
-    def __init__(self, registry, planner):
+    def __init__(self, registry, planner, calibration=None, maintenance=None):
         self.registry = registry
         self.planner = planner
         self.task = None
+        self.calibration = calibration
+        self.maintenance = maintenance
 
     async def start(self):
         # Reinstall persisted reservations before accepting production traffic.
@@ -47,12 +50,36 @@ class NightlyScheduler:
     async def _loop(self):
         while True:
             try:
-                await self.tick()
+                await self._cycle()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Nightly benchmark tick failed")
             await asyncio.sleep(15)
+
+    async def _cycle(self):
+        claim = None
+        if self.maintenance:
+            completed = await self.maintenance.reconcile()
+            if completed is not None and self.calibration:
+                self.calibration._completed_this_window.add(completed)
+                if self.calibration._active_provider_id == completed:
+                    self.calibration._active_provider_id = None
+            claim = store.calibration_claim()
+            if claim and claim["automatic"] and self.calibration:
+                self.calibration._active_provider_id = claim["provider_id"]
+        if (
+            self.calibration
+            and not store.has_recovery()
+            and not store.has_active_benchmarks()
+            and (claim is None or self.calibration._active_provider_id is not None)
+        ):
+            token = AUTOMATIC_CALIBRATION.set(True)
+            try:
+                await self.calibration._tick()
+            finally:
+                AUTOMATIC_CALIBRATION.reset(token)
+        await self.tick()
 
     async def tick(self):
         token = NIGHTLY_CONTEXT.set(True)
@@ -68,6 +95,8 @@ class NightlyScheduler:
         with store.cluster_lock() as connection:
             if connection is None:
                 return
+            if self.maintenance and (store.calibration_claim() or self.maintenance.live_calibration()):
+                return
             for row in schedules:
                 pair_id = row["model_provider_id"]
                 if row["recovery"]:
@@ -81,6 +110,8 @@ class NightlyScheduler:
                         # Keep the node excluded and do not take a second node.
                         logger.exception("Nightly worker recovery requires attention")
                         return
+            if self.calibration and self.calibration.benchmarks_must_wait():
+                return
             # Recover every reserved worker before considering the oldest untested pair.
             for row in schedules:
                 pair_id = row["model_provider_id"]
@@ -88,6 +119,7 @@ class NightlyScheduler:
                 if (
                     not can_start(local_now())
                     or store.has_active_benchmarks()
+                    or (self.calibration and self.calibration.benchmarks_must_wait())
                     or store.claimed_today(day) >= MAX_PAIRS_PER_NIGHT
                 ):
                     return
@@ -205,7 +237,13 @@ class NightlyScheduler:
                     if not await self.planner._drain_lane(pid, item["lane_id"], 900):
                         raise RuntimeError("Could not drain the worker's existing traffic")
             for index, settings in enumerate(plan):
+                if self.calibration and self.calibration.benchmarks_must_wait():
+                    state = "calibration_pending"
+                    break
                 for attempt in range(2):
+                    if self.calibration and self.calibration.benchmarks_must_wait():
+                        state = "calibration_pending"
+                        break
                     if not can_start(local_now()) or not store.status(pair_id)["enabled"]:
                         state = "window_closed" if store.status(pair_id)["enabled"] else "disabled"
                         raise NightlyStopped(state)

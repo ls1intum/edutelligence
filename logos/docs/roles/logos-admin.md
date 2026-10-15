@@ -44,6 +44,8 @@ the error reports and the scheduling statistics of the model.
 ### Nightly benchmarks
 
 The **Performance** tab provides nightly benchmarks for each model/worker pair.
+Calibration runs first. Benchmarks use the remaining time.
+Only 1 calibration or benchmark runs across the cluster, including manual starts.
 Schedules are off by default. Activation requires an updated, connected worker.
 See [deployment requirements](../deployment.md#nightly-benchmarks) before activation.
 See the [nightly benchmark guide](../admin/nightly-benchmarks.md) for rotation, parameter values and recovery rules.

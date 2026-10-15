@@ -209,6 +209,12 @@ services:
       # 86400 to isolate scheduling from timeout-induced failures). Empty =
       # each stage keeps its own default (prod behaviour unchanged).
       LOGOS_TIMEOUT_S: "${LOGOS_TIMEOUT_S:-}"
+      # Calibration runs first; opt-in benchmarks use the remaining window.
+      LOGOS_CALIB_ENABLED: "${LOGOS_CALIB_ENABLED:-true}"
+      LOGOS_CALIB_WINDOW_START: "${LOGOS_CALIB_WINDOW_START:-03:00}"
+      LOGOS_CALIB_WINDOW_END: "${LOGOS_CALIB_WINDOW_END:-05:00}"
+      LOGOS_CALIB_TIMEZONE: "${LOGOS_CALIB_TIMEZONE:-Europe/Berlin}"
+      LOGOS_CALIB_SLEEP_LEVEL: "${LOGOS_CALIB_SLEEP_LEVEL:-1}"
       # Nightly benchmarks are opt-in per model/worker in the administration UI.
       # The schedule is persisted in PostgreSQL (Europe/Berlin, starts 03:00–04:50).
       # How long the orchestrator waits for a worker to produce the next stream

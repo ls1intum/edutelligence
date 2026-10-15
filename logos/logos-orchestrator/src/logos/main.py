@@ -45,6 +45,7 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_token,
 )
+from logos.benchmarks.maintenance import MaintenanceCoordinator
 from logos.benchmarks.nightly_scheduler import NightlyScheduler
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.billing.budget import check_monthly_budget
@@ -224,6 +225,7 @@ _demand_tracker: Optional[DemandTracker] = None
 _capacity_planner: Optional[CapacityPlanner] = None
 _calibration_orchestrator: Optional[CalibrationOrchestrator] = None
 _nightly_scheduler: Optional[NightlyScheduler] = None
+_maintenance_coordinator: Optional[MaintenanceCoordinator] = None
 _pipeline: Optional[RequestPipeline] = None
 _azure_deployment_sync: Optional[AzureDeploymentSyncService] = None
 _cloud_model_sync: Optional[CloudModelSyncService] = None
@@ -1296,8 +1298,13 @@ async def start_pipeline():
         facade=_logosnode_facade,
         config=CalibrationConfig.from_env(),
     )
-    global _nightly_scheduler
-    _nightly_scheduler = NightlyScheduler(_logosnode_registry, _capacity_planner)
+    global _nightly_scheduler, _maintenance_coordinator
+    _maintenance_coordinator = MaintenanceCoordinator(_logosnode_registry)
+    _logosnode_registry.maintenance = _maintenance_coordinator
+    _logosnode_registry.subscribe_to_events(_calibration_orchestrator._on_provider_event)
+    _nightly_scheduler = NightlyScheduler(
+        _logosnode_registry, _capacity_planner, _calibration_orchestrator, _logosnode_registry.maintenance
+    )
     await _nightly_scheduler.start()
     logger.info("Nightly benchmark scheduler started; schedules require explicit admin opt-in")
 

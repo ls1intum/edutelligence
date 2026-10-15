@@ -94,3 +94,15 @@ Manual batches stop at the first failed run and do not retry automatically. Nigh
 **Load comparison preset** fills the comparison template; **Clear vLLM changes** removes draft
 serving overrides, and **Stop varying** removes a parameter from the sweep. These actions do not
 restore settings already applied to a worker.
+
+## Shared maintenance admission
+
+Calibration runs first during its configured window (03:00–05:00 Europe/Berlin
+by default). Benchmarks use the remaining time; new nightly configurations stop
+at 04:50. Manual starts share the same PostgreSQL admission lock and durable
+claims. At most one calibration or benchmark runs across all providers.
+Conflicting manual starts return HTTP 409 rather than queueing.
+Migration `061_maintenance_calibration.xml` and workers with
+`get_calibration_status` support are required. Calibration completion and
+benchmark cleanup must finish before their claims are released.
+See the [operator guide](../../docs/admin/nightly-benchmarks.md#calibration-priority-and-shared-execution).

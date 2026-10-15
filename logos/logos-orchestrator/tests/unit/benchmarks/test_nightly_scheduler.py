@@ -208,3 +208,50 @@ async def test_daily_quota_never_blocks_pending_recovery(scheduler, rotation):
     await scheduler.tick()
     scheduler.restore.assert_awaited_once()
     scheduler.run_schedule.assert_not_awaited()
+
+
+async def test_calibration_runs_before_benchmarks_even_without_enabled_schedules(scheduler, monkeypatch):
+    events = []
+    scheduler.calibration = MagicMock()
+    scheduler.calibration._active_provider_id = None
+    scheduler.calibration._tick = AsyncMock(side_effect=lambda: events.append("calibration"))
+    scheduler.tick = AsyncMock(side_effect=lambda: events.append("benchmarks"))
+    monkeypatch.setattr(module.store, "has_recovery", lambda: False)
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda: False)
+    await scheduler._cycle()
+    assert events == ["calibration", "benchmarks"]
+
+
+async def test_manual_benchmark_does_not_consume_pending_calibration_attempt(scheduler, monkeypatch):
+    scheduler.calibration = MagicMock()
+    scheduler.calibration._tick = AsyncMock()
+    scheduler.tick = AsyncMock()
+    monkeypatch.setattr(module.store, "has_recovery", lambda: False)
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda: True)
+    await scheduler._cycle()
+    scheduler.calibration._tick.assert_not_awaited()
+
+
+async def test_pending_calibration_prevents_next_configuration(scheduler):
+    scheduler.calibration = MagicMock()
+    scheduler.calibration.benchmarks_must_wait.return_value = True
+    scheduler.submit = AsyncMock()
+    assert await scheduler.run_schedule(31, MagicMock())
+    scheduler.submit.assert_not_awaited()
+    scheduler.restore.assert_awaited_once()
+    assert scheduler.saved[-1][1] == "calibration_pending"
+
+
+async def test_automatic_calibration_claim_is_reattached_after_restart(scheduler, monkeypatch):
+    scheduler.calibration = MagicMock()
+    scheduler.calibration._active_provider_id = None
+    scheduler.calibration._tick = AsyncMock()
+    scheduler.maintenance = MagicMock()
+    scheduler.maintenance.reconcile = AsyncMock(return_value=None)
+    scheduler.tick = AsyncMock()
+    monkeypatch.setattr(module.store, "calibration_claim", lambda: {"provider_id": 20, "automatic": True})
+    monkeypatch.setattr(module.store, "has_recovery", lambda: False)
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda: False)
+    await scheduler._cycle()
+    assert scheduler.calibration._active_provider_id == 20
+    scheduler.calibration._tick.assert_awaited_once()

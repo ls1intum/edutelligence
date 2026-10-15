@@ -592,6 +592,7 @@ class LogosBridgeClient:
                     "reconfigure_lane",
                     "start_calibration_session",
                     "stop_calibration_session",
+                    "get_calibration_status",
                     "sync_model_profiles",
                 ],
             },
@@ -920,6 +921,8 @@ class LogosBridgeClient:
 
         if action == "infer":
             return await self._execute_infer_command(params)
+        if action == "get_calibration_status":
+            return {"calibrating": self._calibration_session_is_live()}
         if action == "get_runtime":
             runtime = await build_runtime_status(self._app)
             return runtime.model_dump(mode="json")

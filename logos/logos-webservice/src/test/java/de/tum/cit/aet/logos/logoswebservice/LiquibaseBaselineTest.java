@@ -53,6 +53,8 @@ class LiquibaseBaselineTest {
         assertThat(tableExists("model_profiles")).isTrue();
         assertThat(tableExists("model_calibrations")).isTrue();
         assertThat(tableExists("nightly_benchmarks")).isTrue();
+        assertThat(tableExists("maintenance_calibration")).isTrue();
+        assertThat(tableExists("maintenance_benchmark")).isTrue();
         assertThat(columnExists("nightly_benchmarks", "recovery")).isTrue();
         assertThat(jdbc.queryForList(
             "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",

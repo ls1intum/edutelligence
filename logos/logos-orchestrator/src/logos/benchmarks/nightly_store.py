@@ -137,7 +137,7 @@ def has_active_benchmarks() -> bool:
             db.session.execute(
                 text(
                     "SELECT EXISTS(SELECT 1 FROM jobs WHERE environment = 'model-provider-benchmark' "
-                    "AND status IN ('pending', 'running') AND updated_at > CURRENT_TIMESTAMP - INTERVAL '60 seconds')"
+                    "AND status IN ('pending', 'running')) OR EXISTS(SELECT 1 FROM maintenance_benchmark)"
                 )
             ).scalar()
         )
@@ -149,7 +149,12 @@ def manual_admission(db) -> bool:
     return (
         bool(acquired)
         and not db.session.execute(
-            text("SELECT EXISTS(SELECT 1 FROM nightly_benchmarks WHERE recovery IS NOT NULL)")
+            text(
+                "SELECT EXISTS(SELECT 1 FROM nightly_benchmarks WHERE recovery IS NOT NULL) "
+                "OR EXISTS(SELECT 1 FROM maintenance_calibration) "
+                "OR EXISTS(SELECT 1 FROM jobs WHERE environment = 'model-provider-benchmark' "
+                "AND status IN ('pending', 'running')) OR EXISTS(SELECT 1 FROM maintenance_benchmark)"
+            )
         ).scalar()
     )
 
@@ -190,4 +195,55 @@ def disable_missing_target(pair_id: int) -> None:
         db.session.execute(
             text("UPDATE nightly_benchmarks SET enabled = false WHERE model_provider_id = :id"), {"id": pair_id}
         )
+        db.session.commit()
+
+
+def has_recovery():
+    with DBManager() as db:
+        return bool(
+            db.session.execute(
+                text("SELECT EXISTS(SELECT 1 FROM nightly_benchmarks WHERE recovery IS NOT NULL)")
+            ).scalar()
+        )
+
+
+def calibration_claim():
+    with DBManager() as db:
+        row = db.session.execute(text("SELECT * FROM maintenance_calibration WHERE singleton")).mappings().first()
+        return dict(row) if row else None
+
+
+def claim_calibration(provider_id, token, automatic=False):
+    with DBManager() as db:
+        db.session.execute(
+            text(
+                "INSERT INTO maintenance_calibration (provider_id, token, automatic) VALUES (:pid, :token, :automatic)"
+            ),
+            {"pid": provider_id, "token": token, "automatic": automatic},
+        )
+        db.session.commit()
+
+
+def confirm_calibration(token):
+    with DBManager() as db:
+        db.session.execute(
+            text("UPDATE maintenance_calibration SET confirmed = true WHERE token = :token"), {"token": token}
+        )
+        db.session.commit()
+
+
+def release_calibration(token):
+    with DBManager() as db:
+        db.session.execute(text("DELETE FROM maintenance_calibration WHERE token = :token"), {"token": token})
+        db.session.commit()
+
+
+def claim_benchmark(db, job_id):
+    db.session.execute(text("INSERT INTO maintenance_benchmark (job_id) VALUES (:job)"), {"job": job_id})
+    db.session.commit()
+
+
+def release_benchmark(job_id):
+    with DBManager() as db:
+        db.session.execute(text("DELETE FROM maintenance_benchmark WHERE job_id = :job"), {"job": job_id})
         db.session.commit()

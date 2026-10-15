@@ -15,6 +15,10 @@ See the [agent runner](logos-agent/README.md) for how Logos runs coding agents i
 
 ## Nightly model benchmarks
 
+Automatic calibration runs first (03:00–05:00 Europe/Berlin by default).
+Benchmarks use the remaining time. Only one calibration or benchmark runs
+across the cluster, including manual starts.
+
 Logos admins can add model/worker pairs to a persistent nightly rotation from
 **Model Details → Performance**. Both activation and deactivation require
 confirmation. Schedules start disabled.

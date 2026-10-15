@@ -592,12 +592,17 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
     # One orchestrator process owns benchmark execution. Serialize the short
     # check-and-create section in memory so simultaneous starts cannot both
     # admit a benchmark for the same provider.
+    if not NIGHTLY_CONTEXT.get() and (
+        (_main._calibration_orchestrator and _main._calibration_orchestrator.benchmarks_must_wait())
+        or any(_main._logosnode_registry.is_calibrating(pid) for pid in _main._logosnode_registry.active_provider_ids())
+    ):
+        raise HTTPException(status_code=409, detail="Calibration has priority over benchmarks")
     with _benchmark_admission_lock, DBManager() as db:
         if NIGHTLY_CONTEXT.get() and not can_start(local_now()):
             raise NightlyStopped("window_closed")
         if not NIGHTLY_CONTEXT.get() and not nightly_store.manual_admission(db):
             raise HTTPException(
-                status_code=409, detail="Nightly benchmarks own the maintenance slot or require recovery"
+                status_code=409, detail="Calibration, benchmarks or recovery already own the maintenance slot"
             )
         target = db.get_model_provider_benchmark_target(data.model_provider_id)
         if target is None:
@@ -667,6 +672,9 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
             user_id=None,
             environment="model-provider-benchmark",
         )
+
+        if not NIGHTLY_CONTEXT.get() and _main._maintenance_coordinator:
+            nightly_store.claim_benchmark(db, job_id)
 
     is_internal_worker_benchmark = provider_type == "logosnode"
     benchmark_target = (
@@ -760,17 +768,24 @@ async def internal_run_model_benchmark(data: InternalBenchmarkRequest, request: 
         finally:
             PROGRESS.pop(job_id, None)
 
-    task = asyncio.create_task(
-        nightly_run()
-        if NIGHTLY_CONTEXT.get()
-        else run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data)
-    )
+    async def manual_run():
+        async def execute():
+            return await (run_benchmark_batch(data.batch, execute_run) if data.batch else execute_run(data))
+
+        if _main._maintenance_coordinator:
+            return await _main._maintenance_coordinator.run_benchmark(job_id, execute)
+        return await execute()
+
+    task = asyncio.create_task(nightly_run() if NIGHTLY_CONTEXT.get() else manual_run())
     _background_tasks.add(task)
     _benchmark_tasks.add(task)
     _benchmark_tasks_by_job[job_id] = task
     if is_internal_worker_benchmark:
         _benchmark_sessions_by_job[job_id] = (provider_id, str(job_payload["provider_session_id"]))
     task.add_done_callback(lambda done, jid=job_id: _forget_benchmark_task(jid, done))
+    if not NIGHTLY_CONTEXT.get() and _main._maintenance_coordinator:
+        # Also release when cancellation happens before the coroutine starts.
+        task.add_done_callback(lambda done, jid=job_id: nightly_store.release_benchmark(jid))
     return JSONResponse(
         status_code=202,
         content={

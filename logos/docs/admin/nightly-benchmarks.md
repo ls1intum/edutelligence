@@ -150,19 +150,52 @@ The nightly schedule and recovery journal use the same PostgreSQL database.
 Benchmark runs do not restore local profile files.
 
 Apply `058_central_model_profiles.xml` and the nightly migration before workers connect.
-Imported profiles are stale until calibration succeeds. Use the explicit calibration action when needed.
-Nightly benchmarks do not automatically recalibrate these profiles.
+Imported profiles are stale until calibration succeeds.
+Automatic calibration runs first during the maintenance window.
+Benchmarks use the remaining time.
 
-Deploy the webservice migration `060_nightly_benchmarks.xml`, the orchestrator,
+Deploy webservice migrations `060_nightly_benchmarks.xml` and `061_maintenance_calibration.xml`, the orchestrator,
 the web application and the updated worker code. Workers advertise
 `supports_benchmark_restart`; activation rejects workers without this feature.
 Enable only the desired model/worker pairs after deployment. No schedules are
 enabled by the migration or by application startup.
 
-The automatic calibration maintenance timer is replaced by this scheduler.
-Explicit calibration actions and worker calibration remain available. The old
-`LOGOS_CALIB_WINDOW_*` environment variables no longer control an application
-startup timer.
+## Calibration priority and shared execution
+
+Automatic calibration remains enabled by default, from 03:00 to 05:00 in `Europe/Berlin`.
+The `LOGOS_CALIB_WINDOW_START`, `LOGOS_CALIB_WINDOW_END` and `LOGOS_CALIB_TIMEZONE` variables control calibration.
+`LOGOS_CALIB_ENABLED=false` disables automatic calibration. It does not disable manual calibration.
+These variables do not change the benchmark time limits.
+
+Calibration has priority. A healthy worker with pending calibration blocks new benchmarks during the calibration window.
+Each worker gets at most 1 automatic calibration attempt per window.
+Benchmarks start only after these attempts finish and before 04:50.
+If new calibration work appears during a benchmark, the current run finishes first.
+The scheduler restores the worker and stops the remaining benchmark plan with `calibration_pending`.
+
+At most 1 calibration or benchmark runs across the cluster.
+This limit also applies to manual calibration and manual benchmarks, including cloud benchmarks.
+Conflicting manual starts return HTTP 409. They do not enter a queue.
+Automatic calibration stops at the end of its window. The 50% completion rule applies only to benchmarks.
+
+PostgreSQL stores the active calibration and manual benchmark claims.
+A worker must confirm that calibration ended before the orchestrator releases its claim.
+A timeout or a terminal event alone does not release it.
+Update workers before use: the coordinator requires the `get_calibration_status` command.
+Manual benchmarks retain their claim until process cleanup completes.
+
+If a calibration start has no reply, the claim stays active.
+Use the calibration stop action after the worker reconnects.
+The stop action confirms worker completion before it releases the claim.
+Automatic calibration also sends this stop command after its window closes.
+
+An orchestrator crash can leave a manual benchmark claim or an active job record.
+Age alone does not release these records.
+An operator must stop the original benchmark process and verify worker cleanup before database recovery.
+Then mark the affected job as failed and remove its matching `maintenance_benchmark` record.
+Keep every nightly recovery journal until the scheduler restores the original worker configuration.
+
+## Deployment recovery
 
 A schedule retains its recovery journal independently of the model/provider
 deployment. Deleting a deployment must not delete the original settings needed

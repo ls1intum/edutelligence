@@ -47,6 +47,10 @@ class LogosNodeCommandError(RuntimeError):
     """Raised when a worker command RPC returns an error."""
 
 
+class MaintenanceBusyError(LogosNodeCommandError):
+    """Another maintenance operation owns the cluster slot."""
+
+
 class LogosNodeSessionConflictError(RuntimeError):
     """Raised when a different worker tries to claim an active provider session."""
 
@@ -1187,6 +1191,43 @@ class LogosNodeRuntimeRegistry:
             raise LogosNodeCommandError("The lane is reserved for an active benchmark")
 
     async def send_command(
+        self,
+        provider_id: int,
+        action: str,
+        params: dict[str, Any] | None = None,
+        timeout_seconds: int = 20,
+        stale_after_seconds: int = 30,
+        on_sent: Callable[[], None] | None = None,
+        request_id: str | None = None,
+        on_dispatched: Callable[[asyncio.Future], None] | None = None,
+    ) -> dict[str, Any]:
+        coordinator = getattr(self, "maintenance", None)
+
+        async def send(dispatched=on_dispatched):
+            def notify(future):
+                if dispatched:
+                    dispatched(future)
+                if on_dispatched and on_dispatched is not dispatched:
+                    on_dispatched(future)
+
+            return await self._send_command(
+                provider_id,
+                action,
+                params,
+                timeout_seconds,
+                stale_after_seconds,
+                on_sent,
+                request_id,
+                notify if dispatched or on_dispatched else None,
+            )
+
+        if coordinator is not None and action == "start_calibration_session":
+            return await coordinator.start_calibration(provider_id, send)
+        if coordinator is not None and action == "stop_calibration_session":
+            return await coordinator.stop_calibration(provider_id, send)
+        return await send()
+
+    async def _send_command(
         self,
         provider_id: int,
         action: str,

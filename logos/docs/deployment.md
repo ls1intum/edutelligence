@@ -121,9 +121,12 @@ Before activation:
 4. Test the time limits and rotation with a controlled test clock.
 5. Check that another worker still accepts production requests.
 
-The automatic calibration timer no longer starts with the application.
-Explicit calibration remains available.
-The old `LOGOS_CALIB_WINDOW_*` variables do not control nightly benchmarks.
+Automatic calibration runs first, from 03:00 to 05:00 in `Europe/Berlin` by default.
+Benchmarks use the remaining time and start no new configuration after 04:50.
+At most 1 calibration or benchmark runs across the cluster, including manual starts.
+Apply `061_maintenance_calibration.xml` and update workers for the `get_calibration_status` command.
+The coordinator releases calibration claims only after worker confirmation.
+The `LOGOS_CALIB_WINDOW_*` variables control calibration. They do not change benchmark time limits.
 
 See the [nightly benchmark guide](admin/nightly-benchmarks.md)
 for activation, the fixed workload, parameter values, API requests and diagnostic states.

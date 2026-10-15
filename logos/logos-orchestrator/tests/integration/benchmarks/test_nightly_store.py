@@ -38,6 +38,8 @@ def database(monkeypatch):
         connection.execute(text("CREATE TABLE model_provider (id integer PRIMARY KEY)"))
         connection.execute(text("INSERT INTO model_provider VALUES (31), (32)"))
         connection.execute(text(sql))
+        maintenance = ElementTree.parse(migration.with_name("061_maintenance_calibration.xml"))
+        connection.execute(text(maintenance.find("{*}changeSet/{*}sql").text))
         connection.execute(
             text(
                 "CREATE TABLE jobs(id integer PRIMARY KEY, environment text, status text, "
@@ -156,3 +158,51 @@ def test_two_pair_rotation_persists_across_restart_failure_and_disable(database)
         assert not store.claim(waiting[2], second)
     store.set_enabled(31, True, False)
     assert [row["model_provider_id"] for row in store.rows()] == [31, 32, 33, 34]
+
+
+def test_calibration_claim_blocks_manual_admission_and_survives_connections(database):
+    engine, Database = database
+    with store.cluster_lock():
+        store.claim_calibration(20, "owner", automatic=True)
+        store.confirm_calibration("owner")
+    engine.dispose()
+    assert store.calibration_claim()["confirmed"]
+    assert store.calibration_claim()["automatic"]
+    with Database() as db:
+        assert not store.manual_admission(db)
+    store.release_calibration("old-owner")
+    assert store.calibration_claim() is not None
+    store.release_calibration("owner")
+    with Database() as db:
+        assert store.manual_admission(db)
+
+
+def test_finished_job_keeps_slot_until_benchmark_cleanup_completes(database):
+    engine, Database = database
+    with Database() as db:
+        assert store.manual_admission(db)
+        store.claim_benchmark(db, 7)
+    # A second connection must not admit another job, even without a live jobs row.
+    with Database() as db:
+        assert not store.manual_admission(db)
+    assert store.has_active_benchmarks()
+    store.release_benchmark(6)
+    assert store.has_active_benchmarks()
+    store.release_benchmark(7)
+    assert not store.has_active_benchmarks()
+    with Database() as db:
+        assert store.manual_admission(db)
+
+
+def test_old_running_job_is_not_assumed_finished(database):
+    engine, Database = database
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO jobs(id, environment, status, updated_at) VALUES "
+                "(7, 'model-provider-benchmark', 'running', CURRENT_TIMESTAMP - INTERVAL '1 day')"
+            )
+        )
+    assert store.has_active_benchmarks()
+    with Database() as db:
+        assert not store.manual_admission(db)
