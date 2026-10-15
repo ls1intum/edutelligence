@@ -1,0 +1,138 @@
+@use 'styles/glass' as *;
+
+.model-requests {
+  margin-top: 40px;
+}
+
+.section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.section-title {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+}
+
+.section-subtitle {
+  margin: 0;
+  max-width: 68ch;
+  opacity: 0.75;
+}
+
+.card {
+  @include glass-card;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+
+  h3 {
+    margin: 0 0 16px;
+    font-size: 1rem;
+  }
+}
+
+.field {
+  display: block;
+  margin-bottom: 16px;
+
+  > span {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 500;
+  }
+
+  input[type='text'] {
+    width: 100%;
+    max-width: 520px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+    background: transparent;
+    color: inherit;
+  }
+
+  small {
+    display: block;
+    margin-top: 6px;
+    opacity: 0.75;
+
+    code {
+      overflow-wrap: anywhere;
+    }
+  }
+}
+
+button.primary {
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  background: rgb(var(--color-primary-500));
+  color: #fff;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+button.ghost {
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+  border: 1px solid rgb(var(--color-outline-200) / var(--opacity-strong));
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}
+
+button.ghost--vote {
+  border-color: rgb(var(--color-primary-500));
+  color: rgb(var(--color-primary-500));
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+
+  th,
+  td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgb(var(--color-outline-200) / var(--opacity-subtle));
+  }
+
+  th {
+    font-weight: 500;
+    opacity: 0.75;
+  }
+}
+
+.row-action {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+}
+
+.empty {
+  opacity: 0.7;
+}
+
+.error {
+  color: rgb(var(--color-danger-500));
+}
+
+.notice {
+  opacity: 0.85;
+}

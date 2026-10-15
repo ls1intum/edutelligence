@@ -214,10 +214,12 @@
         </p>
       } @else {
         <p class="section-note">
-          Claude Code runs one model at a time, so the wrapper points every alias —
-          <code class="inline-code">opus</code>, <code class="inline-code">sonnet</code>,
-          <code class="inline-code">haiku</code> — at the model you pick here. Switching alias
-          with <code class="inline-code">/model</code> then never leaves Logos.
+          Optional default. Leave it blank and Claude Code discovers Logos models via
+          <code class="inline-code">GET /v1/models</code>, then switch with
+          <code class="inline-code">/model</code>. Pick one here only if you want every
+          alias (<code class="inline-code">opus</code>,
+          <code class="inline-code">sonnet</code>,
+          <code class="inline-code">haiku</code>) pinned to that model.
         </p>
       }
 
@@ -245,14 +247,14 @@
 
       <div class="step-nav">
         <button type="button" class="btn-secondary" (click)="back()">Back</button>
-        <button type="button" class="btn-primary" [disabled]="!modelUsable()" (click)="next()">
+        <button type="button" class="btn-primary" [disabled]="!ready()" (click)="next()">
           Continue <i class="pi pi-arrow-right" aria-hidden="true"></i>
         </button>
       </div>
     } @else if (showSummary(3)) {
       <button type="button" class="step-summary" (click)="goTo(3)">
         <span class="step-summary-label">{{ stepNumber(3) }} · Model</span>
-        <span class="step-summary-value">{{ selected()?.model_name ?? '—' }}</span>
+        <span class="step-summary-value">{{ selected()?.model_name ?? (activeTool() === 'claudecode' ? 'Claude Code picks' : '—') }}</span>
         <i class="pi pi-pencil" aria-hidden="true"></i>
       </button>
     }
@@ -379,7 +381,8 @@
 
       @if (!ready()) {
         <p class="model-empty">
-          Pick a team and a model first — the commands here are generated from them.
+          Pick a team first — and a model if you want a pinned default. The commands here
+          are generated from them.
         </p>
       } @else {
         <!-- With one team and/or one model those steps hold no decision and are
@@ -463,11 +466,17 @@
         <p class="tab-note">
           Anything after it goes to Claude Code:
           <code class="inline-code">claude-logos -p "explain this repo"</code>,
-          <code class="inline-code">claude-logos --resume</code>. To use another Logos model
-          once, prefix it:
+          <code class="inline-code">claude-logos --resume</code>.
+          Switch models inside the session with
+          <code class="inline-code">/model</code>.
+          To pin a default for one run, prefix it:
           <code class="inline-code">{{ modelOverrideExample() }}</code>.
         </p>
-      } @else if (ready()) {
+        <p class="tab-note">
+          Web search works too, without an Anthropic account: Logos runs the searches on
+          DuckDuckGo, so they leave from Logos rather than your machine. Keep credentials and
+          private code out of what you ask it to search for.
+        </p>      } @else if (ready()) {
         <!-- ── OpenCode: add the provider ───────────────────────────────────── -->
         <div class="privacy-callout" role="note">
           <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
@@ -570,7 +579,7 @@
         <p class="substep-label">Check the connection</p>
         <p class="apply-hint">
           Prints the gateway, the key it found, the context window this deployment currently
-          serves and the result of one real request:
+          serves and how web search is answered:
         </p>
         <div class="terminal-block">
           <span class="terminal-prefix" aria-hidden="true">{{ shellPrompt() }}</span>

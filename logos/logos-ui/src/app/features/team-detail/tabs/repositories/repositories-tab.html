@@ -12,9 +12,8 @@
   </div>
 
   <p class="section-hint">
-    GitHub repositories this team's applications live in. Run a heuristic scan
-    or queue LogosOSSAgent analysis; store a deploy key only for private repos
-    (read-only access).
+    GitHub repositories this team's applications live in. Queue a LogosOSSAgent
+    analysis; store a deploy key only for private repos (read-only access).
   </p>
 
   @if (loadError()) {
@@ -68,22 +67,12 @@
               <button
                 type="button"
                 class="btn-icon"
-                title="Analyze (heuristic)"
-                aria-label="Analyze heuristically"
-                [disabled]="busyLinkId() === repo.id"
-                (click)="analyzeHeuristic(repo)"
-              >
-                <i class="pi pi-search" aria-hidden="true"></i>
-              </button>
-              <button
-                type="button"
-                class="btn-icon"
                 title="Queue agent analysis"
                 aria-label="Queue agent analysis"
                 [disabled]="busyLinkId() === repo.id"
                 (click)="analyzeAgent(repo)"
               >
-                <i class="pi pi-bolt" aria-hidden="true"></i>
+                <i class="pi pi-sparkles" aria-hidden="true"></i>
               </button>
               <button
                 type="button"

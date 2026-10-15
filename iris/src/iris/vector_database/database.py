@@ -1,21 +1,54 @@
 import atexit
 import threading
+import time
 
-import weaviate
+from weaviate import WeaviateClient
 from weaviate.classes.init import Auth
 from weaviate.classes.query import Filter
+from weaviate.connect import ConnectionParams
 
 from iris.common.logging_config import get_logger
 from iris.config import settings
 
-from .faq_schema import init_faq_schema
-from .lecture_transcription_schema import init_lecture_transcription_schema
-from .lecture_unit_page_chunk_schema import init_lecture_unit_page_chunk_schema
-from .lecture_unit_schema import init_lecture_unit_schema
-from .lecture_unit_segment_schema import init_lecture_unit_segment_schema
+from .faq_schema import FaqSchema, init_faq_schema
+from .lecture_transcription_schema import (
+    LectureTranscriptionSchema,
+    init_lecture_transcription_schema,
+)
+from .lecture_unit_page_chunk_schema import (
+    LectureUnitPageChunkSchema,
+    init_lecture_unit_page_chunk_schema,
+)
+from .lecture_unit_schema import LectureUnitSchema, init_lecture_unit_schema
+from .lecture_unit_segment_schema import (
+    LectureUnitSegmentSchema,
+    init_lecture_unit_segment_schema,
+)
 
 logger = get_logger(__name__)
 batch_update_lock = threading.Lock()
+
+# How long to wait before trying the collection setup again after Weaviate was unavailable.
+_SCHEMA_RETRY_SECONDS = 60.0
+
+
+def _collection_handles(client: WeaviateClient) -> dict:
+    """Handles of the collections by name; creating them makes no request, so they also exist while Weaviate is down."""
+    return {
+        "lectures": client.collections.get(
+            LectureUnitPageChunkSchema.COLLECTION_NAME.value
+        ),
+        "transcriptions": client.collections.get(
+            LectureTranscriptionSchema.COLLECTION_NAME.value
+        ),
+        "lecture_segments": client.collections.get(
+            LectureUnitSegmentSchema.COLLECTION_NAME.value
+        ),
+        "lecture_units": client.collections.get(
+            LectureUnitSchema.COLLECTION_NAME.value
+        ),
+        "faqs": client.collections.get(FaqSchema.COLLECTION_NAME.value),
+    }
 
 
 class VectorDatabase:
@@ -24,8 +57,12 @@ class VectorDatabase:
     """
 
     _lock = threading.Lock()
+    _schema_lock = threading.Lock()
     static_client_instance = None
     _static_collections: dict = {}
+    _schemas_ready = False
+    _schema_attempted = False
+    _next_schema_attempt = 0.0
 
     def __init__(self):
         with VectorDatabase._lock:
@@ -35,30 +72,25 @@ class VectorDatabase:
                     if settings.weaviate.api_key
                     else None
                 )
-                VectorDatabase.static_client_instance = weaviate.connect_to_custom(
-                    http_host=settings.weaviate.host,
-                    http_port=settings.weaviate.port,
-                    http_secure=settings.weaviate.http_secure,
-                    grpc_host=settings.weaviate.host,
-                    grpc_port=settings.weaviate.grpc_port,
-                    grpc_secure=settings.weaviate.grpc_secure,
-                    auth_credentials=auth,
+                # Built without connecting: _ensure_schemas connects, so an unreachable Weaviate cannot break
+                # every pipeline that creates a VectorDatabase; only the calls that need Weaviate fail.
+                VectorDatabase.static_client_instance = WeaviateClient(
+                    connection_params=ConnectionParams.from_params(
+                        http_host=settings.weaviate.host,
+                        http_port=settings.weaviate.port,
+                        http_secure=settings.weaviate.http_secure,
+                        grpc_host=settings.weaviate.host,
+                        grpc_port=settings.weaviate.grpc_port,
+                        grpc_secure=settings.weaviate.grpc_secure,
+                    ),
+                    auth_client_secret=auth,
+                    skip_init_checks=True,
                 )
                 atexit.register(VectorDatabase.static_client_instance.close)
-                logger.info("Weaviate client initialized")
-
-                # Initialize schemas exactly once per process. Running them on
-                # every ``VectorDatabase()`` call is racy: multiple threads can
-                # pass the ``exists()`` check and then all call ``create()``,
-                # with the losers getting a 422 "class already exists".
-                client = VectorDatabase.static_client_instance
-                VectorDatabase._static_collections = {
-                    "lectures": init_lecture_unit_page_chunk_schema(client),
-                    "transcriptions": init_lecture_transcription_schema(client),
-                    "lecture_segments": init_lecture_unit_segment_schema(client),
-                    "lecture_units": init_lecture_unit_schema(client),
-                    "faqs": init_faq_schema(client),
-                }
+                VectorDatabase._static_collections = _collection_handles(
+                    VectorDatabase.static_client_instance
+                )
+        VectorDatabase._ensure_schemas()
 
         self.client = VectorDatabase.static_client_instance
         collections = VectorDatabase._static_collections
@@ -67,6 +99,83 @@ class VectorDatabase:
         self.lecture_segments = collections["lecture_segments"]
         self.lecture_units = collections["lecture_units"]
         self.faqs = collections["faqs"]
+
+    @classmethod
+    def _ensure_schemas(cls) -> None:
+        """Connect and create the collections once per process, retrying while Weaviate is unavailable.
+
+        Running the schema setup on every call is racy: several threads can pass the ``exists()`` check and all
+        call ``create()``, the losers getting a 422 "class already exists". So one thread does it. Every caller
+        waits for the first attempt, so nothing writes to a collection before it exists. Once an attempt has
+        failed, the plain handles stay in place and a background thread retries at most every
+        ``_SCHEMA_RETRY_SECONDS``; no caller waits for it, so a Weaviate that hangs cannot slow down a request.
+        """
+        if cls._schemas_ready or time.monotonic() < cls._next_schema_attempt:
+            return
+        if not cls._schema_attempted:
+            with cls._schema_lock:
+                if not cls._schema_attempted:
+                    cls._attempt_schema_setup()
+            return
+        if not cls._schema_lock.acquire(blocking=False):
+            return
+        if cls._schemas_ready or time.monotonic() < cls._next_schema_attempt:
+            cls._schema_lock.release()
+            return
+        # The retry waits up to the start-up timeout, so it runs off the request; it owns the lock until it ends.
+        cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
+        try:
+            threading.Thread(
+                target=cls._retry_schema_setup,
+                name="weaviate-setup-retry",
+                daemon=True,
+            ).start()
+        except Exception:
+            cls._schema_lock.release()
+            logger.warning("Could not start the Weaviate setup retry", exc_info=True)
+
+    @classmethod
+    def _retry_schema_setup(cls) -> None:
+        try:
+            cls._attempt_schema_setup()
+        finally:
+            cls._schema_lock.release()
+
+    @classmethod
+    def _attempt_schema_setup(cls) -> None:
+        """One attempt to connect and create the collections; the caller holds ``_schema_lock``."""
+        client = cls.static_client_instance
+        try:
+            if not client.is_connected():
+                client.connect()
+                logger.info("Weaviate client initialized")
+                # Handles taken before connecting are bound to an unknown server version; take them again.
+                cls._static_collections = _collection_handles(client)
+            cls._static_collections = {
+                "lectures": init_lecture_unit_page_chunk_schema(client),
+                "transcriptions": init_lecture_transcription_schema(client),
+                "lecture_segments": init_lecture_unit_segment_schema(client),
+                "lecture_units": init_lecture_unit_schema(client),
+                "faqs": init_faq_schema(client),
+            }
+            cls._schemas_ready = True
+        except Exception:
+            cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
+            if not client.is_connected():
+                # A failed connect leaves its connections open; close them before the next attempt opens new ones.
+                try:
+                    client.close()
+                except Exception:
+                    logger.warning(
+                        "Could not close the failed Weaviate connection", exc_info=True
+                    )
+            logger.warning(
+                "Weaviate is unavailable; could not set up its collections, retrying in %ss",
+                _SCHEMA_RETRY_SECONDS,
+                exc_info=True,
+            )
+        finally:
+            cls._schema_attempted = True
 
     def delete_collection(self, collection_name):
         """

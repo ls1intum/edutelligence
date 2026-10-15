@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from app import controls, conventions, db, docker_engine, model_policy, sessions
+from app import controls, conventions, db, docker_engine, model_policy, sessions, upstream
 
 
 @pytest.fixture(autouse=True)
@@ -182,3 +182,37 @@ def unpaused_runner(monkeypatch):
     controls.forget()
     yield
     controls.forget()
+
+
+@pytest.fixture(autouse=True)
+def own_key_by_default(monkeypatch):
+    """The discounted readings ask which platform key this runner is.
+
+    Unstubbed the question goes to a database that is not there. A resolved
+    key keeps the passes on the per-key path; tests about a key that does
+    not resolve set their own answer.
+    """
+
+    async def the_key(_key_value: str):
+        return 7
+
+    monkeypatch.setattr(db, "agent_key_id", the_key)
+
+
+@pytest.fixture(autouse=True)
+def no_session_address_by_default(monkeypatch):
+    """A pause reads the session's address to end its model requests.
+
+    Unstubbed that asks a Docker daemon and then an orchestrator that are not
+    there. Without an address the pause skips the cancel, which is what every
+    test not about it wants; the tests about it answer for themselves.
+    """
+
+    async def no_address(_container_id: str, _network: str):
+        return None
+
+    async def nothing_cancelled(_address: str, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(docker_engine, "container_ip", no_address)
+    monkeypatch.setattr(upstream, "cancel_client_requests", nothing_cancelled)

@@ -3,10 +3,10 @@ package de.tum.cit.aet.logos.logoswebservice.operations.repository;
 import java.time.Instant;
 
 /**
- * The tail of the export's capped slice: the row a continued export starts
- * from. Timestamp and id are the keyset the export walks newest first, so
- * they are all the continuation needs — the row's content stays in the
- * database, where the next slice will read it.
+ * One keyset key of the export's capped slice: timestamp and id, newest first.
+ * Preparation captures the ordered keys so the download can stream exactly
+ * those rows after the short snapshot ends; the last key is also the
+ * continuation cursor when the window outruns the cap.
  */
 public interface ExportSliceCursorProjection {
     Instant getTimestampRequest();

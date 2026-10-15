@@ -20,7 +20,7 @@
           <div class="lane-info">
             <div class="lane-top">
               <span class="lane-id">{{ row.laneId }}</span>
-              <span class="state-label" [style.color]="row.stateColor">{{ row.lane.runtime_state.toUpperCase() }}</span>
+              <span class="state-label" [style.color]="row.stateColor">{{ row.stateLabel }}</span>
               <div class="lane-badges">
                 @if (canUnload) {
                   <button

@@ -60,3 +60,22 @@ export function formatLastUsed(iso: string | null | undefined, now: Date = new D
   const { primary, age } = formatLastUsedParts(iso, now);
   return age ? `${primary} ${age}` : primary;
 }
+
+/**
+ * Short age of an ISO timestamp for feeds: "just now", "5 min ago",
+ * "3 h ago", "yesterday", "4 days ago", then the date ("02.06.2026").
+ */
+export function formatRelativeTime(iso: string | null | undefined, now: Date = new Date()): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const minutes = Math.floor((now.getTime() - d.getTime()) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = daysSince(iso, now);
+  if (days <= 1) return 'yesterday';
+  if (days < 7) return `${days} days ago`;
+  return formatGermanDate(d);
+}

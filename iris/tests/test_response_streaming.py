@@ -5,12 +5,14 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import openai
+import pytest
 import requests
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
     PipelineExecutionSettingsDTO,
 )
+from iris.domain.status.suggested_context_dto import SuggestedContextDTO  # noqa: E402
 from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.external.openai_chat import DirectOpenAIChatModel  # noqa: E402
 from iris.pipeline.chat.chat_pipeline import ChatPipeline  # noqa: E402
@@ -110,6 +112,8 @@ def _mock_responses_response(
     output_text="ok",
     input_tokens=1,
     output_tokens=1,
+    cached_tokens=0,
+    cache_write_tokens=0,
     status="completed",
 ):
     return SimpleNamespace(
@@ -132,6 +136,9 @@ def _mock_responses_response(
         output_text=output_text,
         usage=SimpleNamespace(
             input_tokens=input_tokens,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=cached_tokens, cache_write_tokens=cache_write_tokens
+            ),
             output_tokens=output_tokens,
             output_tokens_details=SimpleNamespace(reasoning_tokens=0),
         ),
@@ -235,7 +242,15 @@ def test_openai_streaming_resets_on_tool_call_and_returns_tool_call_message():
             ),
             _chunk(tool_calls=[_tool_delta(0, arguments=':"iris"}')]),
             _chunk(content="This must not be forwarded."),
-            _chunk(usage=SimpleNamespace(prompt_tokens=7, completion_tokens=4)),
+            _chunk(
+                usage=SimpleNamespace(
+                    prompt_tokens=7,
+                    completion_tokens=4,
+                    prompt_tokens_details=SimpleNamespace(
+                        cached_tokens=5, cache_write_tokens=1
+                    ),
+                )
+            ),
         ]
     )
 
@@ -253,6 +268,8 @@ def test_openai_streaming_resets_on_tool_call_and_returns_tool_call_message():
     assert result.tool_calls[0].function.arguments == {"query": "iris"}
     assert result.token_usage.num_input_tokens == 7
     assert result.token_usage.num_output_tokens == 4
+    assert result.token_usage.num_cached_input_tokens == 5
+    assert result.token_usage.num_cache_write_input_tokens == 1
 
 
 def test_openai_non_streaming_tool_call_retains_assistant_content():
@@ -415,6 +432,8 @@ def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message()
                     output_text="",
                     input_tokens=7,
                     output_tokens=4,
+                    cached_tokens=6,
+                    cache_write_tokens=1,
                 ),
             ),
         ]
@@ -434,6 +453,8 @@ def test_responses_streaming_resets_on_tool_call_and_returns_tool_call_message()
     assert result.tool_calls[0].function.arguments == {"query": "iris"}
     assert result.token_usage.num_input_tokens == 7
     assert result.token_usage.num_output_tokens == 4
+    assert result.token_usage.num_cached_input_tokens == 6
+    assert result.token_usage.num_cache_write_input_tokens == 1
 
 
 def test_responses_streaming_resets_and_retries_after_retryable_mid_stream_error():
@@ -782,6 +803,7 @@ def _make_pipeline(chat_mode: IrisChatMode) -> ChatPipeline:
     pipeline.mcq_pipeline = MagicMock()
     pipeline.prepare_state = lambda state: None
     pipeline.build_system_message = lambda state: "system prompt"
+    pipeline.build_turn_context_message = lambda state: "turn context"
     pipeline.get_tools = lambda state: []
     pipeline.execute_agent = lambda state: "agent answer"
     pipeline.create_tracing_context = lambda dto, variant: None
@@ -862,6 +884,10 @@ def _run_stubbed_pipeline_details(
         patch("iris.pipeline.abstract_agent_pipeline.VectorDatabase"),
         patch("iris.pipeline.abstract_agent_pipeline.MemirisWrapper"),
         patch("iris.pipeline.abstract_agent_pipeline.LlmRequestHandler"),
+        patch(
+            "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
+            return_value=None,
+        ),
         patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel", FakeLlm),
         patch("iris.pipeline.abstract_agent_pipeline.PartialResultSender", FakeSender),
     ):
@@ -887,7 +913,8 @@ def test_pipeline_wires_partial_sender_when_stream_response_is_enabled():
     sender = sender_instances[0]
     assert sender.url.endswith("/chat/runs/run-1/status")
     assert sender.run_id == "run-1"
-    assert created_args[0].stream_handler == sender.on_delta
+    created_args[0].stream_handler("Hello")
+    assert sender.deltas == ["Hello"]
     assert events.index("sender.start") < events.index("sender.stop")
     assert events.index("sender.stop") < events.index("callback.finish")
 
@@ -923,6 +950,68 @@ def test_exercise_streaming_does_not_forward_raw_agent_deltas():
         delta for sender in details.sender_instances for delta in sender.deltas
     ]
     assert details.callback.send_result.call_args_list[0].args[0] == "agent answer"
+
+
+def _switching_agent(switch):
+    """An agent that narrates, calls the switch tool, then streams a draft answer."""
+
+    def execute_agent(state):
+        handler = state.llm.completion_args.stream_handler
+        handler("Let me look that up. ")
+        handler(None)  # the tool-call turn resets the visible draft
+        state.pending_context_switch = switch
+        handler("class SortStrategy ")
+        handler("{ solution }")
+        return "class SortStrategy { solution }"
+
+    return execute_agent
+
+
+@pytest.mark.parametrize(
+    "chat_mode",
+    [IrisChatMode.COURSE, IrisChatMode.LECTURE, IrisChatMode.TEXT_EXERCISE],
+)
+def test_switch_into_programming_exercise_never_streams_the_draft(chat_mode):
+    """The guide rewrites the draft, so the draft must never reach a partial payload."""
+
+    def guide_refinement(state_arg, response, stream_handler=None):
+        del state_arg
+        assert response == "class SortStrategy { solution }"
+        assert stream_handler is None
+        return "Think about a common interface.", "Think about a common interface."
+
+    details = _run_stubbed_pipeline_details(
+        True,
+        chat_mode=chat_mode,
+        execute_agent=_switching_agent(
+            SuggestedContextDTO(mode=IrisChatMode.EXERCISE, entity_id=4)
+        ),
+        guide_refinement=guide_refinement,
+    )
+
+    deltas = [d for sender in details.sender_instances for d in sender.deltas]
+    assert deltas == ["Let me look that up. ", None]
+    assert details.callback.send_result.call_args_list[0].args[0] == (
+        "Think about a common interface."
+    )
+
+
+def test_switch_into_a_lecture_keeps_streaming_the_answer():
+    details = _run_stubbed_pipeline_details(
+        True,
+        chat_mode=IrisChatMode.COURSE,
+        execute_agent=_switching_agent(
+            SuggestedContextDTO(mode=IrisChatMode.LECTURE, entity_id=3)
+        ),
+    )
+
+    deltas = [d for sender in details.sender_instances for d in sender.deltas]
+    assert deltas == [
+        "Let me look that up. ",
+        None,
+        "class SortStrategy ",
+        "{ solution }",
+    ]
 
 
 def test_exercise_streaming_forwards_guide_rewrite_deltas():

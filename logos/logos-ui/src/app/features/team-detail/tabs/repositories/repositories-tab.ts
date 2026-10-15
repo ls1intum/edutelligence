@@ -18,8 +18,7 @@ import { TeamRepository } from '../../../../shared/models/team.model';
  * Team → Repositories.
  *
  * Links GitHub repositories for AI-workflow analysis. Owners can store a
- * deploy key for private repos, run a heuristic scan, or queue an agent
- * analysis session.
+ * deploy key for private repos or queue an agent analysis session.
  */
 @Component({
   selector: 'app-repositories-tab',
@@ -211,20 +210,6 @@ export class RepositoriesTabComponent implements OnChanges {
       await this.load();
     } catch (err: unknown) {
       this.actionError.set(extractDetail(err) || 'Failed to revoke credentials.');
-    } finally {
-      this.busyLinkId.set(null);
-    }
-  }
-
-  async analyzeHeuristic(repo: TeamRepository): Promise<void> {
-    if (this.busyLinkId() != null) return;
-    this.busyLinkId.set(repo.id);
-    this.actionError.set('');
-    try {
-      await this.teamService.analyzeRepositoryHeuristic(this.teamId, repo.id);
-      await this.load();
-    } catch (err: unknown) {
-      this.actionError.set(extractDetail(err) || 'Heuristic analysis failed.');
     } finally {
       this.busyLinkId.set(null);
     }

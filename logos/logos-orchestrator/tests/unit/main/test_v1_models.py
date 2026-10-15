@@ -28,8 +28,10 @@ def _make_request(headers: dict | None = None):
 class DummyDB:
     """Minimal DBManager stub used via monkeypatch."""
 
-    def __init__(self, models=None, historic=None, cloud=None, catalog=None):
+    def __init__(self, models=None, historic=None, cloud=None, catalog=None, hidden=None):
         self._models = models if models is not None else []
+        # Models this key cannot see (but an administrator key's resolver can).
+        self._hidden = hidden if hidden is not None else []
         # Model name -> widest context ever reported (model_profiles high-water mark).
         self._historic = historic if historic is not None else {}
         # Model name -> the windows cloud upstreams report (cloud_model_context).
@@ -45,6 +47,9 @@ class DummyDB:
 
     def get_models_for_api_key(self, _api_key_id: int):
         return self._models
+
+    def get_all_model_names_with_aliases(self):
+        return self._models + self._hidden
 
     def get_model_for_api_key(self, _api_key_id: int, model_name: str):
         return next((m for m in self._models if m["name"] == model_name), None)
@@ -626,3 +631,257 @@ async def test_list_models_catalog_window_never_added_for_an_unlisted_model(monk
 
     assert set(entries) == {"qwen-14b"}
     assert "max_model_len" not in entries["qwen-14b"]
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/models — Anthropic shape (the ``anthropic-version`` header gate)
+# ---------------------------------------------------------------------------
+
+
+def _anthropic_request(query_params: dict | None = None):
+    """A mock request the way an Anthropic SDK / Claude Code call arrives:
+    with the mandatory ``anthropic-version`` header and a real query string."""
+    req = _make_request(headers={"authorization": "Bearer test-key", "anthropic-version": "2023-06-01"})
+    # The OpenAI path never reads query params, but the Anthropic one does —
+    # a bare MagicMock would hand back a truthy .get() result for after_id.
+    req.query_params = query_params if query_params is not None else {}
+    return req
+
+
+async def _list_anthropic_body(
+    monkeypatch,
+    models,
+    registry,
+    historic=None,
+    cloud=None,
+    catalog=None,
+    query_params=None,
+    hidden=None,
+    role=None,
+):
+    """Call list_models the way an Anthropic client does and return the body."""
+    import json
+
+    monkeypatch.setattr(
+        main,
+        "DBManager",
+        lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog, hidden=hidden),
+    )
+    monkeypatch.setattr(
+        user_facing_mod,
+        "DBManager",
+        lambda: DummyDB(models=models, historic=historic, cloud=cloud, catalog=catalog, hidden=hidden),
+    )
+    monkeypatch.setattr(main, "_logosnode_registry", registry)
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key", role=role)
+        response = await user_facing_mod.list_models(_anthropic_request(query_params))
+    return json.loads(response.body)
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_shape(monkeypatch):
+    """With the header, the same endpoint returns the Anthropic models shape."""
+    models = [
+        {"id": 1, "name": "qwen-27b", "description": "Qwen 27B"},
+        {"id": 2, "name": "gpt-4o", "description": None},
+    ]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)])})
+    body = await _list_anthropic_body(monkeypatch, models, registry)
+
+    assert body["first_id"] == "claude-qwen-27b"
+    assert body["last_id"] == "claude-gpt-4o"
+    assert body["has_more"] is False
+    assert [entry["id"] for entry in body["data"]] == ["claude-qwen-27b", "claude-gpt-4o"]
+
+    first = body["data"][0]
+    assert first["type"] == "model"
+    assert first["display_name"] == "Qwen 27B"
+    # RFC 3339 timestamp, rendered from the same server start the OpenAI shape uses.
+    assert first["created_at"].endswith("Z") and "T" in first["created_at"]
+    assert first["max_input_tokens"] == 33000
+    assert first["max_tokens"] is None
+    assert first["capabilities"] is None
+    assert first["allowed_fallback_models"] is None
+
+    second = body["data"][1]
+    # No description: the plain name is the display name. No known window: null.
+    assert second["display_name"] == "gpt-4o"
+    assert second["max_input_tokens"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_lists_only_claude_prefixed_ids(monkeypatch):
+    """Claude Code drops gateway models whose id lacks "claude"/"anthropic",
+    so every other id is listed as claude-<id> and only so. An id that already
+    contains either word is listed unchanged."""
+    models = [
+        {"id": 1, "name": "Qwen/Qwen3.8-27B", "description": None},
+        {"id": 2, "name": "claude-native", "description": None},
+        {"id": 3, "name": "my-Anthropic-proxy", "description": None},
+    ]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
+    assert [entry["id"] for entry in body["data"]] == [
+        "claude-Qwen/Qwen3.8-27B",
+        "claude-native",
+        "my-Anthropic-proxy",
+    ]
+    assert body["data"][0]["display_name"] == "Qwen/Qwen3.8-27B"
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_never_advertises_a_colliding_id(monkeypatch):
+    """foo next to claude-foo, or a model whose alias is claude-foo: the
+    prefixed id belongs to the other model, so foo is listed under its own
+    name rather than under an id that would select the wrong model."""
+    models = [
+        {"id": 1, "name": "foo", "description": None},
+        {"id": 2, "name": "claude-foo", "description": None},
+        {"id": 3, "name": "bar", "description": None},
+        {"id": 4, "name": "baz", "description": None, "aliases": ["claude-bar"]},
+    ]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
+    assert [entry["id"] for entry in body["data"]] == ["foo", "claude-foo", "bar", "claude-baz"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["logos_admin", "app_admin"])
+async def test_list_models_anthropic_admin_checks_collisions_against_hidden_models(monkeypatch, role):
+    """The proxy resolver searches every model for administrator keys, so a
+    claude-foo the key's permissions do not cover would still capture foo's
+    prefixed id."""
+    models = [{"id": 1, "name": "foo", "description": None}]
+    hidden = [{"name": "claude-foo", "aliases": []}]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), hidden=hidden, role=role)
+    assert [entry["id"] for entry in body["data"]] == ["foo"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [None, "app_developer"])
+async def test_list_models_anthropic_non_admin_ignores_hidden_models(monkeypatch, role):
+    """A non-admin key resolves only among its permitted models, so a hidden
+    claude-foo cannot capture foo and foo keeps its prefixed, visible id."""
+    models = [{"id": 1, "name": "foo", "description": None}]
+    hidden = [{"name": "claude-foo", "aliases": []}]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), hidden=hidden, role=role)
+    assert [entry["id"] for entry in body["data"]] == ["claude-foo"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_max_input_prefers_the_guaranteed_window(monkeypatch):
+    """max_input_tokens is the window a request is sure to get (smallest
+    served), not the widest one."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    registry = DummyRegistry(
+        {
+            7: _snapshot([_vllm_lane("qwen-27b", max_model_len=262144)]),
+            8: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)]),
+        }
+    )
+    body = await _list_anthropic_body(monkeypatch, models, registry)
+    assert body["data"][0]["max_input_tokens"] == 33000
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_max_input_falls_back_to_overall(monkeypatch):
+    """A model that nothing serves right now but that has a known ceiling
+    reports it — a config file can still be written from the listing."""
+    models = [{"id": 1, "name": "cold-model", "description": None}]
+    registry = DummyRegistry({7: _snapshot([], model_profiles={"cold-model": {"max_context_length": 131072}})})
+    body = await _list_anthropic_body(monkeypatch, models, registry)
+    assert body["data"][0]["max_input_tokens"] == 131072
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_max_input_unknown_is_null(monkeypatch):
+    """No source knows the window: null rather than a made-up number."""
+    models = [{"id": 1, "name": "mystery", "description": None}]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}))
+    assert body["data"][0]["max_input_tokens"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_without_header_stays_openai_shape(monkeypatch):
+    """The gate is the header alone: a request without it sees the OpenAI
+    shape exactly as before (this is what the claude-logos wrapper probes)."""
+    models = [{"id": 1, "name": "qwen-27b", "description": None}]
+    monkeypatch.setattr(user_facing_mod, "DBManager", lambda: DummyDB(models=models))
+    monkeypatch.setattr(main, "_logosnode_registry", DummyRegistry({}))
+    with patch("logos.routers.user_facing.authenticate_api_key") as mock_auth:
+        mock_auth.return_value = MagicMock(api_key_id=1, key_value="test-key")
+        response = await user_facing_mod.list_models(_make_request())
+
+    import json
+
+    body = json.loads(response.body)
+    assert body["object"] == "list"
+    assert set(body) == {"object", "data"}
+    assert set(body["data"][0]) == {"id", "object", "created", "owned_by"}
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_limit_caps_the_page(monkeypatch):
+    """limit=2 yields two models and tells the client more remain."""
+    models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(5)]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"limit": "2"})
+
+    assert [entry["id"] for entry in body["data"]] == ["claude-model-0", "claude-model-1"]
+    assert body["first_id"] == "claude-model-0"
+    assert body["last_id"] == "claude-model-1"
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_limit_without_a_remainder(monkeypatch):
+    """A limit that covers the whole list still says has_more: false."""
+    models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(3)]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"limit": "10"})
+    assert len(body["data"]) == 3
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_after_id_cursors_past_a_model(monkeypatch):
+    """after_id starts the page after the named model, so pagination walks
+    the listing without repeating entries."""
+    models = [{"id": i, "name": f"model-{i}", "description": None} for i in range(3)]
+    body = await _list_anthropic_body(
+        monkeypatch, models, DummyRegistry({}), query_params={"after_id": "claude-model-1"}
+    )
+
+    assert [entry["id"] for entry in body["data"]] == ["claude-model-2"]
+    assert body["first_id"] == "claude-model-2"
+    assert body["last_id"] == "claude-model-2"
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_stale_after_id_starts_over(monkeypatch):
+    """A cursor that matches nothing (renamed model, other key) degrades to
+    the full listing rather than an error."""
+    models = [{"id": 1, "name": "model-a", "description": None}]
+    body = await _list_anthropic_body(monkeypatch, models, DummyRegistry({}), query_params={"after_id": "gone"})
+    assert [entry["id"] for entry in body["data"]] == ["claude-model-a"]
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_leaves_aliases_out(monkeypatch):
+    """Aliases are not listed (they only confuse the picker) but still carry
+    the model's window through the model they belong to."""
+    models = [
+        {"id": 1, "name": "qwen-27b", "description": "Qwen 27B", "aliases": ["local-most-powerful"]},
+        {"id": 2, "name": "other-model", "description": None, "aliases": []},
+    ]
+    registry = DummyRegistry({7: _snapshot([_vllm_lane("qwen-27b", max_model_len=33000)])})
+    body = await _list_anthropic_body(monkeypatch, models, registry)
+
+    assert [entry["id"] for entry in body["data"]] == ["claude-qwen-27b", "claude-other-model"]
+    assert body["data"][0]["max_input_tokens"] == 33000
+    assert body["data"][0]["display_name"] == "Qwen 27B"
+
+
+@pytest.mark.asyncio
+async def test_list_models_anthropic_empty_listing(monkeypatch):
+    """A key without models gets an empty Anthropic envelope, not an error."""
+    body = await _list_anthropic_body(monkeypatch, [], DummyRegistry({}))
+    assert body == {"data": [], "first_id": None, "last_id": None, "has_more": False}

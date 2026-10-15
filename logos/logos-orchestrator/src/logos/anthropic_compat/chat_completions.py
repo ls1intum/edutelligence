@@ -29,6 +29,7 @@ from logos.anthropic_compat.common import (
     tool_result_text,
     usage_block,
     usage_extras,
+    wants_max_completion_tokens,
 )
 
 # Sampling parameters that carry over to a non-reasoning model. ``top_k`` is
@@ -37,7 +38,12 @@ from logos.anthropic_compat.common import (
 _PASSTHROUGH_PARAMS = ("temperature", "top_p")
 
 
-def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = None) -> Dict[str, Any]:
+def to_chat_completions(
+    payload: Dict[str, Any],
+    *,
+    model_name: Optional[str] = None,
+    endpoint_url: Optional[str] = None,
+) -> Dict[str, Any]:
     """Translate an Anthropic Messages request into a chat/completions one.
 
     Only fields with a chat/completions counterpart are carried over — an
@@ -47,12 +53,13 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
     """
     # The two OpenAI families take mutually exclusive parameter sets, and the
     # wrong one is a 400 before the model sees anything: a reasoning model
-    # rejects max_tokens, temperature, top_p, stop and the system role, while
+    # rejects temperature, top_p, stop and the system role, while
     # everything older rejects reasoning_effort and knows no developer role.
     # Anthropic clients supply max_tokens always, a system prompt on every
     # Claude Code turn, and a temperature and an effort routinely — so this
     # cannot be left to the client to get right.
-    reasoning = is_reasoning_model(model_name or payload.get("model"))
+    served_model = model_name or payload.get("model")
+    reasoning = is_reasoning_model(served_model)
 
     messages: List[Dict[str, Any]] = []
 
@@ -72,9 +79,13 @@ def to_chat_completions(payload: Dict[str, Any], *, model_name: Optional[str] = 
         "messages": messages,
     }
 
+    # The output-cap name follows the upstream operation in ``endpoint_url``:
+    # chat/completions wants max_completion_tokens; the legacy text completions
+    # endpoint still wants max_tokens. See wants_max_completion_tokens.
     max_tokens = payload.get("max_tokens")
     if max_tokens is not None:
-        result["max_completion_tokens" if reasoning else "max_tokens"] = max_tokens
+        cap = "max_completion_tokens" if wants_max_completion_tokens(endpoint_url) else "max_tokens"
+        result[cap] = max_tokens
 
     if not reasoning:
         for name in _PASSTHROUGH_PARAMS:

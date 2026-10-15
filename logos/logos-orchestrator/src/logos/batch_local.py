@@ -97,13 +97,16 @@ def new_object_id(prefix: str) -> str:
     return f"{prefix}{separator}{secrets.token_hex(12)}"
 
 
-def auth_context_for_key(api_key_id: int) -> Optional[AuthContext]:
+def auth_context_for_key(api_key_id: int, log_level: Optional[str] = None) -> Optional[AuthContext]:
     """Rebuild the submitting key's auth context, at batch priority.
 
     The runner acts for the key that submitted the batch, long after its
     request is gone. ``default_priority`` is forced to LOW rather than taken
     from the key: a batch is background work even when its owner's interactive
     traffic is not.
+
+    ``log_level``, when set, is the creating request's recorded consent and
+    overrides the key's living level for every line log row of this batch.
     """
     with DBManager() as db:
         row = db.get_api_key_by_id(api_key_id)
@@ -112,6 +115,8 @@ def auth_context_for_key(api_key_id: int) -> Optional[AuthContext]:
     key_type = row["key_type"]
     if hasattr(key_type, "value"):
         key_type = key_type.value
+    if hasattr(log_level, "value"):
+        log_level = log_level.value
     return AuthContext(
         key_value=row["key_value"],
         api_key_id=row["id"],
@@ -120,7 +125,7 @@ def auth_context_for_key(api_key_id: int) -> Optional[AuthContext]:
         team_id=row["team_id"],
         user_id=row["user_id"],
         environment=row["environment"],
-        log_level=row.get("log") or "BILLING",
+        log_level=log_level or row.get("log") or "BILLING",
         settings=row.get("settings") if row.get("settings") is not None else {},
         default_priority=LOCAL_BATCH_PRIORITY,
         # The batch keeps the key's role tiebreak (an application key's batch
@@ -266,7 +271,11 @@ async def _start(batch: Dict[str, Any], batch_object_id: int) -> Optional[str]:
             db.finish_local_batch(batch_object_id, RUNNER_ID, status="failed")
         return None
 
-    auth = auth_context_for_key(int(batch["api_key_id"])) if batch.get("api_key_id") else None
+    auth = (
+        auth_context_for_key(int(batch["api_key_id"]), log_level=batch.get("log_level"))
+        if batch.get("api_key_id")
+        else None
+    )
     if auth is None:
         logger.error("Batch %s was submitted by a key that no longer exists", batch.get("upstream_id"))
         with DBManager() as db:

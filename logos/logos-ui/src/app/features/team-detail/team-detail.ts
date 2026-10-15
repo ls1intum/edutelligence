@@ -164,6 +164,19 @@ export class TeamDetail implements OnInit {
     this.loadAll(this.teamId());
   }
 
+  /**
+   * Reload only the application keys, without the page-wide loading state:
+   * that state unmounts the active tab, and the Workflows tab would lose the
+   * key the owner picked for their reviews.
+   */
+  async refreshApiKeys(): Promise<void> {
+    try {
+      this.apiKeys.set(await this.teamService.getTeamApiKeys(this.teamId()));
+    } catch {
+      // The keys on screen stay as they were; the next full load corrects them.
+    }
+  }
+
   openEditName(): void {
     this.editNameValue.set(this.team()?.name ?? '');
     this.editNameError.set('');

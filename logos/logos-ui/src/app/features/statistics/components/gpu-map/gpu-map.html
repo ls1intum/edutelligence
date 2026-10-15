@@ -1,0 +1,112 @@
+@if (cards.length === 0) {
+  @if (!unified) {
+    <div class="gpu-map__empty">No GPU data yet.</div>
+  }
+} @else {
+  <div class="gpu-map" [class.gpu-map--offline]="offline">
+    <ul class="gpu-map__legend" aria-label="Colour key">
+      @for (item of legend; track item.state) {
+        <li><span class="gpu-map__swatch" [style.background]="item.color"></span>{{ item.state }}</li>
+      }
+      <li><span class="gpu-map__swatch gpu-map__swatch--other"></span>other used</li>
+      <li><span class="gpu-map__swatch gpu-map__swatch--free"></span>free</li>
+    </ul>
+
+    <div class="gpu-map__grid">
+      @for (card of cards; track card.key) {
+        <section class="gpu-map__card" [class.gpu-map__card--pool]="card.pool"
+                 [class.gpu-map__card--faulted]="card.health === 'faulted'">
+          <header class="gpu-map__head">
+            <div class="gpu-map__title">
+              <span class="gpu-map__name">{{ card.title }}</span>
+              <span class="gpu-map__sub" [title]="card.subtitle">{{ card.subtitle }}</span>
+            </div>
+            <div class="gpu-map__chips">
+              @if (card.health === 'faulted') {
+                <span class="gpu-map__chip gpu-map__chip--hot gpu-map__chip--fault">
+                  <i class="pi pi-exclamation-triangle" aria-hidden="true"></i> failed
+                </span>
+              } @else if (card.health === 'degraded') {
+                <span class="gpu-map__chip gpu-map__chip--warn" [title]="'nvidia-smi: ' + card.healthReason">partial telemetry</span>
+              }
+              @if (card.utilizationPct !== null) {
+                <span class="gpu-map__chip" title="GPU utilization">{{ card.utilizationPct | number: '1.0-0' }}% util</span>
+              }
+              @if (card.temperatureC !== null) {
+                <span class="gpu-map__chip" [ngClass]="tempClass(card.temperatureC)">{{ card.temperatureC | number: '1.0-0' }}°C</span>
+              }
+              @if (card.powerW !== null) {
+                <span class="gpu-map__chip">{{ card.powerW | number: '1.0-0' }} W</span>
+              }
+            </div>
+          </header>
+
+          @if (card.health === 'faulted') {
+            <p class="gpu-map__fault" role="alert">
+              nvidia-smi reports <strong>{{ card.healthReason || 'a failure' }}</strong>. No lane is placed on this GPU;
+              the memory below is held by the failed GPU, not by a lane.
+            </p>
+          }
+
+          <div class="gpu-map__figures">
+            <span class="gpu-map__used">{{ gb(card.usedMb) }}</span>
+            <span class="gpu-map__of">of {{ gb(card.totalMb) }} · {{ card.freeMb > 0 ? gb(card.freeMb) + ' free' : 'full' }}</span>
+          </div>
+
+          <div class="gpu-map__bar" role="img"
+               [attr.aria-label]="card.title + ': ' + gb(card.usedMb) + ' of ' + gb(card.totalMb) + ' used'">
+            @for (seg of card.segments; track seg.laneId) {
+              <span class="gpu-map__seg" [class.gpu-map__seg--shared]="seg.shared"
+                    [style.width.%]="seg.pct" [style.background]="seg.color"
+                    [title]="segmentTitle(seg)"></span>
+            }
+            @if (card.otherMb > 0) {
+              <span class="gpu-map__seg gpu-map__seg--other" [style.width.%]="pct(card.otherMb, card.totalMb)"
+                    [title]="'Other used · ' + gb(card.otherMb)"></span>
+            }
+          </div>
+
+          @if (card.segments.length > 0) {
+            <ul class="gpu-map__lanes">
+              @for (seg of card.segments; track seg.laneId) {
+                <li class="gpu-map__lane" [title]="segmentTitle(seg)">
+                  <span class="gpu-map__dot" [style.background]="seg.color"></span>
+                  <span class="gpu-map__model">{{ seg.model }}</span>
+                  <span class="gpu-map__size">{{ gb(seg.mb) }}</span>
+                  <span class="gpu-map__meta">
+                    <span class="gpu-map__state" [style.color]="seg.color">{{ seg.state }}</span>
+                    <span class="gpu-map__laneid">{{ seg.laneId }}</span>
+                    @if (seg.shared && seg.gpuLabel) {
+                      <span class="gpu-map__tag" [title]="'Also on the other cards of ' + seg.gpuLabel">{{ seg.gpuLabel }}</span>
+                    }
+                    @if (seg.activeRequests > 0) {
+                      <span class="gpu-map__tag gpu-map__tag--busy">{{ seg.activeRequests }} active</span>
+                    }
+                  </span>
+                </li>
+              }
+              @if (card.otherMb > 0) {
+                <li class="gpu-map__lane gpu-map__lane--other">
+                  <span class="gpu-map__dot gpu-map__dot--other"></span>
+                  <span class="gpu-map__model">Other used</span>
+                  <span class="gpu-map__size">{{ gb(card.otherMb) }}</span>
+                </li>
+              }
+            </ul>
+          } @else {
+            <p class="gpu-map__none">No lane on this {{ card.pool ? 'memory' : 'GPU' }}.</p>
+          }
+        </section>
+      }
+    </div>
+
+    @if (unplacedLanes.length > 0) {
+      <p class="gpu-map__unplaced">
+        No GPU reported for:
+        @for (lane of unplacedLanes; track lane.laneId) {
+          <span class="gpu-map__tag"><span class="gpu-map__dot" [style.background]="lane.color"></span>{{ lane.model }} · {{ lane.state }}</span>
+        }
+      </p>
+    }
+  </div>
+}

@@ -7,7 +7,7 @@
 # .env, and a self-built stack points it at wherever those images were pushed.
 services:
   traefik:
-    image: traefik:v3.7.10
+    image: traefik:v3.7.14
     container_name: traefik
     restart: unless-stopped
     command:
@@ -447,7 +447,7 @@ services:
       # and to both services but not to this line is still routed straight to the
       # orchestrator — which does not serve Spring's paths and answers 404. That
       # is what happened to lanes/add: present end to end, unreachable in prod.
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/drain`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
       - "traefik.http.routers.webservice-logosnode-admin.entrypoints=internal8090"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api,rl-admin"
@@ -460,8 +460,8 @@ services:
       - "traefik.http.routers.webservice-admin.middlewares=strip-api,rl-admin"
       - "traefik.http.routers.webservice-admin.priority=200"
 
-      # === Routing: /api/ws/stats, /api/ws/stats/v2 (WebSocket) ===
-      - "traefik.http.routers.webservice-ws.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
+      # === Routing: /api/ws/stats, /api/ws/stats/v2, /api/ws/notifications (WebSocket) ===
+      - "traefik.http.routers.webservice-ws.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`) || Path(`/api/ws/notifications`)"
       - "traefik.http.routers.webservice-ws.entrypoints=internal8090"
       - "traefik.http.routers.webservice-ws.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-ws.middlewares=strip-api,rl-admin"
@@ -589,6 +589,13 @@ services:
       # repository's organisation. Empty falls back to "may write to this
       # repository", which is what the runner used before.
       LOGOS_AGENT_TRUSTED_TEAMS: "${LOGOS_AGENT_TRUSTED_TEAMS:-logos-developers,logos-maintainers}"
+      # Review apps that may direct the agent on its own pull requests, and
+      # who is asked to review a pull request it just opened. Single-dash
+      # defaults: an explicitly empty value in .env disables the behaviour
+      # instead of falling back to the built-in list (`:-` would not).
+      LOGOS_AGENT_REVIEW_BOTS: "${LOGOS_AGENT_REVIEW_BOTS-coderabbitai[bot],Claudia-Anthropica}"
+      LOGOS_AGENT_PR_REVIEWERS: "${LOGOS_AGENT_PR_REVIEWERS-Claudia-Anthropica}"
+      LOGOS_AGENT_REVIEW_TEAMS: "${LOGOS_AGENT_REVIEW_TEAMS-logos-maintainers,logos-developers}"
       LOGOS_AGENT_SESSION_TIMEOUT_S: "${LOGOS_AGENT_SESSION_TIMEOUT_S:-0}"
 
       # Capacity gates: start only below the first threshold, hand capacity

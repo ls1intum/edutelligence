@@ -26,6 +26,7 @@ const wsSpy = () => ({
   setTimelineRange: vi.fn(),
   setScope: vi.fn(),
   setFeedStatus: vi.fn(),
+  setFeedFilters: vi.fn(),
   setInterest: vi.fn(),
 });
 
@@ -293,5 +294,245 @@ describe('Statistics scope options', () => {
     expect(page.component.feedTeams()).toEqual(fresh.teams);
     expect(page.component.filterUserId()).toBe(7);
     expect(page.ws.setScope.mock.calls.length).toBe(scopesBefore);
+  });
+});
+
+describe('recent request model and state filters', () => {
+  let fixture: ComponentFixture<Statistics>;
+  afterEach(() => {
+    fixture?.destroy();
+    vi.useRealTimers();
+  });
+
+  it('combines the model selection and status while keeping the page scope intact', async () => {
+    const page = await pageAt();
+    fixture = page.fx;
+    page.component.statsPending.set(false);
+    page.component.liveFeedTotal.set(12);
+    page.component.setFeedModelFilter(['5001', '5002']);
+    expect(page.component.requestFeedTotal()).toBeNull();
+    // A model selection narrows the whole page: the cards and charts are
+    // blanked until the server answers for it.
+    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith(null, [5001, 5002], []);
+    expect(page.component.statsPending()).toBe(true);
+    page.component.statsPending.set(false);
+    // The state bucket narrows the request list alone.
+    page.component.setFeedStatusFilter('running');
+    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith('running', [5001, 5002], []);
+    expect(page.ws.setScope).not.toHaveBeenCalled();
+    expect(page.component.statsPending()).toBe(false);
+    expect(page.component.requestsPending()).toBe(true);
+    const opts = page.ws.connect.mock.calls[0][0];
+    opts.handlers.onRequestsData({ requests: [], total: 4 });
+    expect(page.component.requestFeedTotal()).toBe(4);
+    opts.handlers.onRequestsData({ requests: [] });
+    expect(page.component.requestFeedTotal()).toBe(4);
+    page.component.setPreset('day');
+    expect(page.component.requestFeedTotal()).toBeNull();
+    page.component.clearFilters();
+    expect(page.ws.setFeedFilters).toHaveBeenLastCalledWith(null, [], []);
+    expect(page.component.feedFilterActive()).toBe(false);
+  });
+
+  it('offers models from scope options', async () => {
+    const page = await pageAt(vi.fn().mockResolvedValue({
+      teams: [], requesters: [],
+      models: [{ id: 5001, label: 'org/long-model', requestCount: 8 }],
+      providers: [{ id: 6001, label: 'worker-with-a-long-name', requestCount: 8 }],
+    }));
+    fixture = page.fx;
+    await Promise.resolve();
+    expect(page.component.feedModelOptions()).toEqual([{ value: '5001', label: 'org/long-model (8)' }]);
+  });
+
+  it('prunes feed model selections that vanish from scope options', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 8, 6, 23, 50, 0, 0));
+
+    let resolveOptions: (value: {
+      teams: FeedFilterOption[];
+      requesters: FeedFilterOption[];
+      providers: FeedFilterOption[];
+      models: FeedFilterOption[];
+    }) => void = () => {};
+    const pending = new Promise<{
+      teams: FeedFilterOption[];
+      requesters: FeedFilterOption[];
+      providers: FeedFilterOption[];
+      models: FeedFilterOption[];
+    }>((resolve) => {
+      resolveOptions = resolve;
+    });
+    let first = true;
+    const getScopeOptions = vi.fn(() =>
+      first
+        ? ((first = false),
+          Promise.resolve({
+            teams: [],
+            requesters: [],
+            models: [
+              { id: 5001, label: 'keep', requestCount: 1 },
+              { id: 5002, label: 'drop', requestCount: 1 },
+            ],
+            providers: [
+              { id: 6001, label: 'keep-p', requestCount: 1 },
+              { id: 6002, label: 'drop-p', requestCount: 1 },
+            ],
+          }))
+        : pending,
+    );
+    const page = await pageAt(getScopeOptions);
+    fixture = page.fx;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    page.component.setFeedModelFilter(['5001', '5002']);
+    page.ws.setFeedFilters.mockClear();
+
+    // Narrower range: only one model remains.
+    page.component.setPreset('day');
+    await Promise.resolve();
+    resolveOptions({
+      teams: [],
+      requesters: [],
+      models: [{ id: 5001, label: 'keep', requestCount: 1 }],
+      providers: [{ id: 6001, label: 'keep-p', requestCount: 1 }],
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.component.feedModelIds()).toEqual(['5001']);
+    expect(page.ws.setFeedFilters).toHaveBeenCalledWith(null, [5001], []);
+  });
+});
+
+describe('selector placement on the requests tab', () => {
+  let fixture: ComponentFixture<Statistics>;
+  afterEach(() => {
+    fixture?.destroy();
+    vi.useRealTimers();
+  });
+
+  it('keeps every selector in the page-top row and none in the recent-requests panel', async () => {
+    const page = await pageAt();
+    fixture = page.fx;
+    // The filter row only renders on the requests tab; the route parameter is
+    // what drives the tab in the browser, the signal is what drives the
+    // template, so the test sets the signal directly.
+    page.component.activeTab.set('requests');
+    page.fx.detectChanges();
+    const el = page.fx.nativeElement as HTMLElement;
+    const scope = el.querySelector('.stats-scope') as HTMLElement;
+    // The feed's model and state selectors sit in the page-top row with the
+    // page scope ...
+    expect(scope.querySelector('app-multi-select')).not.toBeNull();
+    expect(scope.querySelector('select[aria-label="Filter requests by state"]')).not.toBeNull();
+    // ... team / requester / provider are searchable single-selects (not a
+    // second multi-select beside the feed), and outcomes are gone — only the
+    // feed state selector remains for lifecycle buckets ...
+    expect(scope.querySelectorAll('app-searchable-select')).toHaveLength(3);
+    expect(scope.querySelector('[aria-label="Filter by outcome"]')).toBeNull();
+    expect(
+      el.querySelectorAll('[aria-label^="Filter by provider"]'),
+    ).toHaveLength(1);
+    // ... and the recent-requests panel carries no selectors of its own.
+    const feedPanel = Array.from(el.querySelectorAll('app-stats-chart-panel')).find(
+      (p) => p.textContent?.includes('Recent requests'),
+    );
+    expect(feedPanel).toBeDefined();
+    expect(
+      feedPanel?.querySelectorAll('app-select, app-multi-select, app-searchable-select'),
+    ).toHaveLength(0);
+  });
+});
+
+describe('local providers: failed GPUs and offline workers', () => {
+  let fixture: ComponentFixture<Statistics>;
+  afterEach(() => fixture?.destroy());
+
+  const sample = (gpuFaults: string[] = []) => ({
+    timestamp: '2026-10-12T07:49:00Z',
+    scheduler_signals: { provider: { gpu_faults: gpuFaults, devices: [] } },
+  });
+
+  async function pageWith(providers: unknown[]) {
+    const page = await pageAt();
+    fixture = page.fx;
+    (page.component as any).replaceRawVramSeries(providers);
+    page.fx.detectChanges();
+    return { component: page.component, el: page.fx.nativeElement as HTMLElement };
+  }
+
+  it('raises a failed GPU above the tabs, on the tab and on the worker row', async () => {
+    const { component, el } = await pageWith([
+      {
+        provider_id: 1,
+        name: 'deioma',
+        connected: true,
+        connection_state: 'online',
+        data: [sample(['gpu0 (GPU-aaa): GPU requires reset'])],
+      },
+    ]);
+    expect(component.gpuFaultCount()).toBe(1);
+    expect(el.querySelector('.stats-gpu-fault')?.textContent).toContain('gpu0 (GPU-aaa): GPU requires reset');
+    expect(el.querySelector('.stats-tabs__alert')?.textContent?.trim()).toBe('1');
+    expect(el.querySelector('.stats-provider-badge--fault')?.textContent).toContain('1 GPU failed');
+
+    // The banner stays on the Requests tab too.
+    component.activeTab.set('requests');
+    fixture.detectChanges();
+    expect(el.querySelector('.stats-gpu-fault')).not.toBeNull();
+  });
+
+  it('folds an offline worker away behind a notice until asked for its last report', async () => {
+    const { component, el } = await pageWith([
+      {
+        provider_id: 2,
+        name: 'hochbrueck',
+        connected: false,
+        connection_state: 'offline',
+        last_heartbeat: '2026-10-12T07:00:00Z',
+        // A fault in a stale report is not raised: the GPU may have been reset since.
+        data: [sample(['gpu0 (GPU-bbb): GPU requires reset'])],
+      },
+    ]);
+    const row = el.querySelector('.stats-glass-row') as HTMLElement;
+    expect(row.classList).toContain('stats-glass-row--offline');
+    expect(row.querySelector('.stats-offline-notice')?.textContent).toContain('hochbrueck is offline.');
+    expect(row.querySelector('.stats-panel-stack')).toBeNull();
+    expect(component.gpuFaultCount()).toBe(0);
+
+    (row.querySelector('.stats-offline-notice__toggle') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(row.querySelector('.stats-panel-stack--stale')).not.toBeNull();
+  });
+
+  it('shows the free disk space of each online worker in its row header', async () => {
+    const disk = (freeMb: number) => ({
+      timestamp: '2026-10-12T07:49:00Z',
+      scheduler_signals: {
+        provider: {
+          devices: [],
+          disk_total_mb: 2048 * 1024,
+          disk_used_mb: 2048 * 1024 - freeMb,
+          disk_free_mb: freeMb,
+          disk_path: '/cache/.hf_cache',
+        },
+      },
+    });
+    const { el } = await pageWith([
+      { provider_id: 1, name: 'deioma', connected: true, connection_state: 'online', data: [disk(412 * 1024)] },
+      { provider_id: 2, name: 'gpu-full', connected: true, connection_state: 'online', data: [disk(10 * 1024)] },
+      { provider_id: 3, name: 'hochbrueck', connected: false, connection_state: 'offline', data: [disk(900 * 1024)] },
+    ]);
+    const [deioma, full, offline] = Array.from(el.querySelectorAll('.stats-glass-row')) as HTMLElement[];
+    const meter = deioma.querySelector('.stats-disk-meter') as HTMLElement;
+    expect(meter.textContent).toContain('412 GB');
+    expect(meter.textContent).toContain('free of 2.0 TB');
+    expect(meter.title).toContain('/cache/.hf_cache');
+    expect(meter.classList).not.toContain('stats-disk-meter--low');
+    expect(full.querySelector('.stats-disk-meter')?.classList).toContain('stats-disk-meter--critical');
+    // An offline worker's last reading may be long out of date.
+    expect(offline.querySelector('.stats-disk-meter')).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 # Gateway Concurrency & Failover Benchmark
 
-Measures what the design doc for the SLA-restructure work (architecture
+Measures what the design doc for the SLO-restructure work (architecture
 meeting 2026-09-18) asks for before the inference gateway (`logos-webservice`
 `gateway/`) carries PROD traffic: how many streaming requests it can hold
 open concurrently and where that limit comes from, the added latency of the

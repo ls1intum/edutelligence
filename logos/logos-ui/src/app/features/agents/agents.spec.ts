@@ -1,5 +1,7 @@
+import { vi } from 'vitest';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 
+import { TeamManagementService } from '../../core/services/team-management.service';
 import { AgentService } from '../../core/services/agent.service';
 import {
   ACTIVE_SESSION_STATUSES,
@@ -12,7 +14,7 @@ import {
   AgentWorkspace,
   isActive,
 } from '../../shared/models/agent.model';
-import { Agents } from './agents';
+import { Agents, scaleSlotCounts } from './agents';
 
 /**
  * The agents page groups the list into "active" and "finished", and it only
@@ -53,6 +55,8 @@ const CAPACITY: AgentCapacity = {
   load: 0.25,
   total_slots: 4,
   busy_slots: 1,
+  own_slots: 1,
+  other_slots: 0,
   sessions_running: 1,
   sessions_queued: 0,
   sessions_paused: 0,
@@ -145,12 +149,16 @@ describe('Agents', () => {
   let fixture: ComponentFixture<Agents>;
   let component: Agents;
   let agentService: FakeAgentService;
+  const teamService = { analyzeAllRepositories: vi.fn() };
 
   beforeEach(async () => {
     agentService = new FakeAgentService();
     await TestBed.configureTestingModule({
       imports: [Agents],
-      providers: [{ provide: AgentService, useValue: agentService }],
+      providers: [
+        { provide: AgentService, useValue: agentService },
+        { provide: TeamManagementService, useValue: teamService },
+      ],
     }).compileComponents();
     fixture = TestBed.createComponent(Agents);
     component = fixture.componentInstance;
@@ -163,6 +171,142 @@ describe('Agents', () => {
     // ngOnInit opened a polling interval; dropping it here keeps the event
     // loop empty for the next test.
     fixture.destroy();
+    vi.useRealTimers();
+  });
+
+  describe('session timings', () => {
+    beforeEach(async () => {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+      vi.setSystemTime(new Date('2026-09-02T10:02:09Z'));
+      fixture.detectChanges();
+      await component.refresh();
+    });
+
+    const timings = (): string[] =>
+      Array.from(
+        fixture.nativeElement.querySelectorAll('.session__timing') as NodeListOf<HTMLElement>,
+      ).map((element) => element.textContent!.trim());
+
+    it('updates queue waits and running durations every second between server polls', async () => {
+      agentService.sessions = [
+        makeSession({
+          id: 1,
+          status: 'queued',
+          created_at: '2026-09-02T10:02:00Z',
+          started_at: null,
+        }),
+        makeSession({ id: 2, status: 'running', started_at: '2026-09-02T10:02:00Z' }),
+      ];
+      await component.refresh();
+      fixture.detectChanges();
+      expect(timings()).toEqual(['Queued 9s', 'Queued 2m 0s', 'Run 9s']);
+      agentService.sessionCalls = 0;
+
+      await vi.advanceTimersByTimeAsync(1000);
+      fixture.detectChanges();
+
+      expect(timings()).toEqual(['Queued 10s', 'Queued 2m 0s', 'Run 10s']);
+      expect(agentService.sessionCalls).toBe(0);
+      expect(fixture.nativeElement.querySelector('.status--running')).toBeTruthy();
+    });
+
+    it.each(['succeeded', 'failed', 'cancelled'] as const)(
+      'updates the finish age of a %s session while queue and runtime stay fixed',
+      async (status) => {
+        agentService.sessions = [makeSession({ status, finished_at: '2026-09-02T10:02:00Z' })];
+        await component.refresh();
+        fixture.detectChanges();
+        expect(timings()).toEqual(['Queued 1m 0s', 'Run 1m 0s', 'Finished 9s ago']);
+        expect(
+          fixture.nativeElement.querySelector('.session__timing[title^="Finished "]'),
+        ).toBeTruthy();
+        agentService.sessionCalls = 0;
+
+        await vi.advanceTimersByTimeAsync(1000);
+        fixture.detectChanges();
+
+        expect(timings()).toEqual(['Queued 1m 0s', 'Run 1m 0s', 'Finished 10s ago']);
+        expect(agentService.sessionCalls).toBe(0);
+      },
+    );
+
+    it('freezes the queue wait when a session is cancelled before it starts', async () => {
+      const session = makeSession({
+        status: 'cancelled',
+        started_at: null,
+        finished_at: '2026-09-02T10:01:00Z',
+      });
+      agentService.sessions = [session];
+      await component.refresh();
+      fixture.detectChanges();
+      expect(timings()).toEqual(['Queued 1m 0s', 'Finished 1m 9s ago']);
+      expect(component.duration(session)).toBe('—');
+
+      await vi.advanceTimersByTimeAsync(1000);
+      fixture.detectChanges();
+
+      expect(timings()).toEqual(['Queued 1m 0s', 'Finished 1m 10s ago']);
+    });
+
+    it.each([
+      ['2026-09-02T10:01:09.001Z', '59s'],
+      ['2026-09-02T10:01:09Z', '1m 0s'],
+      ['2026-09-02T09:02:09.001Z', '59m 59s'],
+      ['2026-09-02T09:02:09Z', '1h 0m'],
+      ['2026-09-02T10:02:10Z', '0s'],
+      ['invalid', '—'],
+    ])('formats a start at %s as %s without overflowing seconds', (started_at, expected) => {
+      expect(component.duration(makeSession({ started_at }))).toBe(expected);
+    });
+
+    it('stops both local timing updates and polling when the page is destroyed', async () => {
+      const session = makeSession({ status: 'running', started_at: '2026-09-02T10:02:00Z' });
+      const elapsed = component.duration(session);
+      fixture.destroy();
+      agentService.sessionCalls = 0;
+      agentService.capacityCalls = 0;
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(component.duration(session)).toBe(elapsed);
+      expect(agentService.sessionCalls).toBe(0);
+      expect(agentService.capacityCalls).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
+  describe('slot strip', () => {
+    it('scales categories proportionally when total exceeds the cell limit', () => {
+      // Truncating in category order would render 60 agent / 4 other / 0 free
+      // and contradict the legend. Proportional scaling keeps every non-zero
+      // category visible.
+      expect(scaleSlotCounts([60, 20, 20], 64)).toEqual([38, 13, 13]);
+      expect(scaleSlotCounts([60, 20, 20], 64).reduce((a, b) => a + b, 0)).toBe(64);
+    });
+
+    it('keeps every non-zero category at least one cell', () => {
+      expect(scaleSlotCounts([100, 1, 1], 64)).toEqual([62, 1, 1]);
+    });
+
+    it('passes counts through when they already fit', () => {
+      expect(scaleSlotCounts([2, 1, 1], 64)).toEqual([2, 1, 1]);
+    });
+
+    it('renders a proportional strip for a capacity above the cell limit', async () => {
+      agentService.getCapacity = async () => ({
+        ...CAPACITY,
+        total_slots: 100,
+        busy_slots: 80,
+        own_slots: 60,
+        other_slots: 20,
+      });
+      await component.refresh();
+      const cells = component.slotCells();
+      expect(cells.length).toBe(64);
+      expect(cells.filter((c) => c === 'agent').length).toBe(38);
+      expect(cells.filter((c) => c === 'other').length).toBe(13);
+      expect(cells.filter((c) => c === 'free').length).toBe(13);
+    });
   });
 
   describe('grouping', () => {
@@ -184,6 +328,52 @@ describe('Agents', () => {
     });
   });
 
+  describe('analyze all repositories', () => {
+    it('queues every repository and says how many', async () => {
+      teamService.analyzeAllRepositories.mockResolvedValue({
+        queued: 14,
+        already_in_flight: 1,
+        message: '14 analyses queued, 1 already in flight',
+      });
+      await component.analyzeAllRepositories();
+      expect(teamService.analyzeAllRepositories).toHaveBeenCalledTimes(1);
+      expect(component.analyzeAllMessage()).toBe('14 analyses queued, 1 already in flight');
+      expect(component.analyzingAll()).toBe(false);
+    });
+
+    it('reports a failure instead of a count', async () => {
+      teamService.analyzeAllRepositories.mockRejectedValue(new Error('boom'));
+      await component.analyzeAllRepositories();
+      expect(component.analyzeAllMessage()).toBeNull();
+      expect(component.error()).toBeTruthy();
+    });
+  });
+
+  describe('repository analysis sessions', () => {
+    it('names the team and repository being analysed', () => {
+      const analysis = makeSession({
+        trigger_kind: 'analysis',
+        repo_slug: 'ls1intum/hestia',
+        team_name: 'hestia',
+      });
+      expect(component.analysisTarget(analysis)).toBe('hestia · ls1intum/hestia');
+      expect(component.originOf(analysis)).toBe('repository analysis');
+    });
+
+    it('falls back to the slug once the link is gone, and stays out of other sessions', () => {
+      expect(
+        component.analysisTarget(
+          makeSession({ trigger_kind: 'analysis', repo_slug: 'ls1intum/artemis', team_name: null }),
+        ),
+      ).toBe('ls1intum/artemis');
+      expect(
+        component.analysisTarget(
+          makeSession({ trigger_kind: 'issue', repo_slug: 'ls1intum/edutelligence' }),
+        ),
+      ).toBeNull();
+    });
+  });
+
   describe('the standing instructions', () => {
     /**
      * Reset is a statement about one box. The other one may hold an edit
@@ -191,7 +381,7 @@ describe('Agents', () => {
      * operator's back — and refilling it from the answer would throw it
      * away on screen as well.
      */
-    it('resets one half without submitting the other half\'s draft', async () => {
+    it("resets one half without submitting the other half's draft", async () => {
       component.houseRulesDraft.set('rules nobody saved');
       component.environmentNotesDraft.set('notes nobody saved');
 

@@ -125,6 +125,23 @@ async def agent_key_exists(key_value: str) -> bool:
     return row is not None
 
 
+async def agent_key_id(key_value: str) -> int | None:
+    """The platform id of the runner's key, or ``None`` if it does not resolve.
+
+    The orchestrator splits a model's in-flight requests by this id, so the
+    runner discounts the requests its own sessions — and the subagents those
+    sessions start — are actually making, rather than guessing one per session.
+    """
+    async with sessionmaker()() as db:
+        row = (
+            await db.execute(
+                text("SELECT id FROM api_keys WHERE key_value = :key_value AND is_active = true"),
+                {"key_value": key_value},
+            )
+        ).first()
+    return int(row[0]) if row is not None else None
+
+
 async def reachable_deployments(key_value: str) -> list[dict[str, Any]]:
     """Every model deployment the given Logos key is permitted to use."""
     async with sessionmaker()() as db:
@@ -837,6 +854,7 @@ _SESSION_SELECT = """
            s.reply_target, s.reaction_target,
            s.priority, s.priority_reason, s.environment_notes,
            s.repo_url, s.repo_slug, s.team_repository_id,
+           t.name AS team_name,
            COALESCE(s.tokens_in, 0) AS tokens_in,
            COALESCE(s.tokens_out, 0) AS tokens_out,
            COALESCE(s.cost_usd, 0) AS cost_usd,
@@ -844,6 +862,8 @@ _SESSION_SELECT = """
              WHERE e.session_id = s.id AND e.kind = 'screenshot') AS screenshot_count
       FROM agent_sessions s
       JOIN agent_workspaces w ON w.id = s.workspace_id
+      LEFT JOIN team_repositories tr ON tr.id = s.team_repository_id
+      LEFT JOIN teams t ON t.id = tr.team_id
 """
 
 

@@ -205,32 +205,32 @@
 
         <div class="form-row-2">
           <div class="form-field">
-            <label class="field-label" for="km-sla">SLA</label>
+            <label class="field-label" for="km-slo">SLO</label>
             <select
-              id="km-sla"
+              id="km-slo"
               class="field-input"
-              [title]="slaFieldHint()"
-              [value]="fSla()"
-              (change)="fSla.set($any($event.target).value)"
+              [title]="sloFieldHint()"
+              [value]="fSlo()"
+              (change)="fSlo.set($any($event.target).value)"
               [disabled]="saveLoading()"
             >
-              @if (fSla() === '') {
+              @if (fSlo() === '') {
                 <option value="" disabled selected>
-                  inherited ({{ slaLabel(inheritedEffectiveSla()) }})
+                  inherited ({{ sloLabel(inheritedEffectiveSlo()) }})
                 </option>
               }
-              @for (option of slaOptions; track option.value) {
-                <option [value]="option.value" [selected]="option.value === fSla()">
+              @for (option of sloOptions; track option.value) {
+                <option [value]="option.value" [selected]="option.value === fSlo()">
                   {{ option.label }}
                 </option>
               }
             </select>
-            <span class="field-hint">{{ slaFieldHint() }}</span>
-            @if (canResetDeveloperSla()) {
+            <span class="field-hint">{{ sloFieldHint() }}</span>
+            @if (canResetDeveloperSlo()) {
               <button
                 type="button"
-                class="sla-reset"
-                (click)="resetDeveloperSlaToInherited()"
+                class="slo-reset"
+                (click)="resetDeveloperSloToInherited()"
                 [disabled]="saveLoading()"
               >
                 Reset to inherited

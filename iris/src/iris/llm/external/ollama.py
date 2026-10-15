@@ -33,6 +33,7 @@ from ...domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel, CompletionModel, EmbeddingModel
+from ...llm.external.openai_chat import LATE_SYSTEM_MESSAGE_PREFIX
 
 logger = get_logger(__name__)
 
@@ -165,6 +166,48 @@ def convert_to_iris_message(
     )
 
 
+def keep_ollama_system_messages_leading(messages: list[Message]) -> list[Message]:
+    """
+    Rewrite messages for chat templates that accept a system message only at the start.
+
+    Same rules as ``keep_system_messages_leading`` for OpenAI-compatible servers:
+    leading system messages are merged, later ones become marked user messages at the
+    same position, and a lone system prompt is sent as the user message.
+    """
+    result: list[Message] = []
+    in_leading_block = True
+    for message in messages:
+        if message.role != "system":
+            in_leading_block = False
+            result.append(message)
+        elif not in_leading_block:
+            result.append(
+                Message(
+                    role="user",
+                    content="\n".join(
+                        (LATE_SYSTEM_MESSAGE_PREFIX, message.content or "")
+                    ),
+                    images=message.images,
+                )
+            )
+        elif result:
+            result[0] = Message(
+                role="system",
+                content="\n".join(
+                    part for part in (result[0].content, message.content) if part
+                ),
+                images=(result[0].images or []) + (message.images or []) or None,
+            )
+        else:
+            result.append(message)
+    if result and result[0].role == "system":
+        if not any(message.role == "user" for message in result):
+            result[0] = Message(
+                role="user", content=result[0].content, images=result[0].images
+            )
+    return result
+
+
 class OllamaModel(
     CompletionModel,
     ChatModel,
@@ -182,6 +225,8 @@ class OllamaModel(
     password: Optional[str] = None
     api_key: Optional[str] = None
     think: Optional[Union[bool, Literal["low", "medium", "high"]]] = None
+    # The model's chat template accepts a system message only at the start (Qwen3.x).
+    leading_system_message_only: bool = False
     _client: Client
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
@@ -270,6 +315,8 @@ class OllamaModel(
     ):
         tools_for_client = self._convert_tools(tools)
         ollama_messages = convert_to_ollama_messages(messages)
+        if self.leading_system_message_only:
+            ollama_messages = keep_ollama_system_messages_leading(ollama_messages)
 
         response = self._client.chat(
             model=self.model,

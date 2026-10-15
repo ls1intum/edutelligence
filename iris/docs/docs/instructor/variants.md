@@ -33,7 +33,7 @@ In practice, instructors see two options:
 
 ## Configuring Variants
 
-Variants are configured in the Iris settings on your **course overview page**. You can set the variant for each Iris feature independently. For example, you might use the Advanced variant for Exercise Chat (where response quality matters most) and the Default variant for Course Chat (where speed is more important).
+Variants are configured in the Iris settings on your **course overview page**. The variant applies to the chat as a whole, in every context, so a student gets the same model quality whether they are asking about a lecture or debugging an exercise.
 
 :::tip
 If you are unsure which variant to use, start with **Default**. It works well for the majority of use cases. Switch to Advanced if students report that Iris's responses are not detailed or accurate enough for your course content.

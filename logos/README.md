@@ -164,12 +164,18 @@ To deploy Logos locally:
    | pech.vogel            | app_developer (no roles at all — useful for testing the no-team / no-access screens) |
 
    A fresh dev stack starts with no teams, so `app_developer` accounts won't
-   have access to anything yet. Two ways to fix that:
+   have access to anything yet. Three ways to fix that:
 
    - **Manually** (default): log in as `tobias.wasner` (or another
      `app_admin`/`logos_admin`), create a team under **Teams**, and add the
      developer account(s) you want to test as members — they'll pick up
      access the next time they log in.
+   - **From a Keycloak group**: as `tobias.wasner` (a `logos_admin`), create a
+     team under **Teams** and set its **Keycloak group** — in the create dialog
+     or later on the team's **Settings** tab. Everyone carrying that group or
+     realm role joins the team on their next login and leaves it again once
+     they no longer carry it. The seeded realm offers `logos-dev` and
+     `maiss-dev` for this.
    - **Automatically**: set `KEYCLOAK_AUTO_PROVISION_TEAMS=true` for the
      `logos-webservice` service in `docker-compose.dev.yaml`. On their next
      login, any account whose Keycloak roles include a team role (one ending
@@ -200,7 +206,7 @@ environment:
   LOGOS_CAPACITY_PLANNER_ENABLED: "true"
 ```
 
-Worker nodes auto-calibrate model VRAM profiles (how much GPU memory each model needs when loaded vs sleeping). Profiles persist in the worker's state directory and are sent to Logos over the existing websocket heartbeat. No extra configuration needed on the worker side.
+Worker nodes auto-calibrate model VRAM profiles (how much GPU memory each model needs when loaded vs sleeping). Logos stores the profiles in its database — the workers keep none on disk — and sends them to each worker at startup. No extra configuration needed on the worker side.
 
 ## Scheduler Benchmarking
 
@@ -372,6 +378,14 @@ that independently with `LOGOS_MAX_AUDIO_REQUEST_BYTES`.
 When the provider reports duration-based usage, Logos stores millisecond
 precision and applies the provider's per-second catalogue price. This avoids
 discarding fractional audio duration while retaining the integer usage schema.
+
+### Decision models
+
+`POST /v1/systemone` answers typed questions about a text (yes/no, choice,
+score) with calibrated probabilities. The endpoint uses the schema of TypeSafe's
+Jev API. Logos serves it with decision models such as `autotrust/JEV-27B-VL` on
+a plain vLLM lane. See [Decision models](docs/decision-models.md) for the API and
+for the worker-node configuration.
 
 ### Batch processing
 

@@ -1,0 +1,44 @@
+<span class="hint">
+  <button
+    #icon
+    type="button"
+    class="hint__icon"
+    [class.hint__icon--active]="open()"
+    aria-label="About this worker's version"
+    [attr.aria-expanded]="open()"
+    [attr.aria-controls]="bubbleId"
+    (click)="toggle()"
+  >
+    <i class="pi pi-info-circle" aria-hidden="true"></i>
+  </button>
+
+  <div
+    class="hint__bubble"
+    [class.hint__bubble--open]="open()"
+    [class.hint__bubble--pinned]="pinned()"
+    [id]="bubbleId"
+    role="group"
+    aria-label="Worker version"
+  >
+    @if (pinned()) {
+      <button type="button" class="btn-icon hint__close" aria-label="Close" (click)="dismiss()">
+        <i class="pi pi-times" aria-hidden="true"></i>
+      </button>
+    }
+    <p class="hint__text">{{ hint() }}</p>
+    @if (commit(); as fullCommit) {
+      <div class="hint__commit-row">
+        <code #commitText class="hint__commit">{{ fullCommit }}</code>
+        <button type="button" class="btn-copy" (click)="copy()">
+          @if (copied()) {
+            <i class="pi pi-check" aria-hidden="true"></i> Copied
+          } @else {
+            <i class="pi pi-copy" aria-hidden="true"></i> Copy
+          }
+        </button>
+      </div>
+    }
+  </div>
+
+  <span class="hint__sr-only" aria-live="polite">{{ copied() ? 'Commit copied to clipboard' : '' }}</span>
+</span>

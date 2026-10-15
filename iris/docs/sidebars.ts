@@ -9,14 +9,8 @@ const sidebars: SidebarsConfig = {
   ],
   studentSidebar: [
     { type: "doc", id: "student/getting-started", label: "Getting Started" },
-    { type: "doc", id: "student/course-chat", label: "Course Chat" },
-    { type: "doc", id: "student/exercise-chat", label: "Exercise Chat" },
-    {
-      type: "doc",
-      id: "student/text-exercise-chat",
-      label: "Text Exercise Chat",
-    },
-    { type: "doc", id: "student/lecture-chat", label: "Lecture Chat" },
+    { type: "doc", id: "student/chat", label: "The Iris Chat" },
+    { type: "doc", id: "student/chat-context", label: "Chat Context" },
     {
       type: "doc",
       id: "student/how-iris-helps",
@@ -28,6 +22,11 @@ const sidebars: SidebarsConfig = {
   ],
   instructorSidebar: [
     { type: "doc", id: "instructor/enabling-iris", label: "Enabling Iris" },
+    {
+      type: "doc",
+      id: "instructor/support-level",
+      label: "Instructional Support Level",
+    },
     {
       type: "doc",
       id: "instructor/custom-instructions",

@@ -45,6 +45,10 @@ export interface AgentSession {
   trigger_kind: string | null;
   /** Which event it reacted to, e.g. 'issue'.*/
   trigger_ref: string | null;
+  /** For a repository analysis: the linked repository (owner/name). */
+  repo_slug?: string | null;
+  /** For a repository analysis: the team that linked the repository. */
+  team_name?: string | null;
   /** How urgent the work is (higher runs first), and why. */
   priority: number;
   priority_reason: string | null;
@@ -78,6 +82,10 @@ export interface AgentCapacity {
   load: number;
   total_slots: number;
   busy_slots: number;
+  /** Slots held by this runner (sessions and their subagents). */
+  own_slots: number;
+  /** Slots held by other production traffic on the same local model. */
+  other_slots: number;
   sessions_running: number;
   sessions_queued: number;
   sessions_paused: number;

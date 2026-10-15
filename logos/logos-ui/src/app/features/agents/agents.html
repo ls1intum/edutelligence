@@ -11,15 +11,29 @@
       <div
         class="capacity__meter"
         role="img"
-        [attr.aria-label]="'Platform load ' + loadPercent() + ' percent'"
+        [attr.aria-label]="slotAriaLabel()"
       >
-        <div class="capacity__fill" [style.width.%]="loadPercent()"></div>
+        @for (slot of slotCells(); track $index) {
+          <span
+            class="capacity__slot"
+            [class.capacity__slot--agent]="slot === 'agent'"
+            [class.capacity__slot--other]="slot === 'other'"
+            [class.capacity__slot--free]="slot === 'free'"
+          ></span>
+        }
       </div>
       <div class="capacity__facts">
         <span class="capacity__load">{{ loadPercent() }}% platform load</span>
-        <span class="capacity__slots"
-          >{{ cap.busy_slots }}/{{ cap.total_slots }} serving slots busy</span
-        >
+        <span class="capacity__slots">
+          {{ cap.busy_slots }}/{{ cap.total_slots }} slots on the local model
+          @if (cap.total_slots > 0) {
+            ·
+            <span class="capacity__legend capacity__legend--agent">{{ cap.own_slots }} agent</span>
+            ·
+            <span class="capacity__legend capacity__legend--other">{{ cap.other_slots }} other</span>
+            · {{ freeSlots() }} free
+          }
+        </span>
         <span class="capacity__sessions">
           <!-- The ceiling belongs to what runs. The queue is not capped:
                waiting work is what the ceiling exists to produce. -->
@@ -37,6 +51,32 @@
       </p>
     </div>
   }
+
+  <!-- Team repository analysis: runs nightly on its own; this is the manual
+       "everything, now" for when the analysis task itself changed. -->
+  <div class="repo-analysis">
+    <p class="page-subtitle">
+      <i class="pi pi-sparkles" aria-hidden="true"></i>
+      Linked team repositories are re-analysed every night when their branch has new commits;
+      unchanged repositories are skipped. Results arrive as proposals on each team's Workflows tab.
+    </p>
+    <button
+      type="button"
+      class="btn"
+      (click)="analyzeAllRepositories()"
+      [disabled]="analyzingAll()"
+    >
+      @if (analyzingAll()) {
+        <i class="pi pi-spin pi-spinner" aria-hidden="true"></i>
+      } @else {
+        <i class="pi pi-sparkles" aria-hidden="true"></i>
+      }
+      Analyze all repositories
+    </button>
+    @if (analyzeAllMessage(); as msg) {
+      <span class="field__hint" role="status">{{ msg }}</span>
+    }
+  </div>
 
   @if (capacity(); as cap) {
     @if (!cap.models_local_only) {
@@ -427,10 +467,33 @@
         <span [class]="statusClass(session.status)">{{ statusLabel(session) }}</span>
         <span class="session__task">{{ taskPreview(session.task) }}</span>
         <span class="session__meta">
-          <span class="session__workspace" title="The working copy this session runs in">
-            <i class="pi pi-folder" aria-hidden="true"></i> {{ session.workspace_name }}
+          @if (analysisTarget(session); as target) {
+            <span class="session__workspace" title="The team repository this session analyses">
+              <i class="pi pi-github" aria-hidden="true"></i> {{ target }}
+            </span>
+          } @else {
+            <span class="session__workspace" title="The working copy this session runs in">
+              <i class="pi pi-folder" aria-hidden="true"></i> {{ session.workspace_name }}
+            </span>
+          }
+          <span class="session__timings">
+            <span class="session__timing" title="Time waiting before the session started">
+              Queued {{ queueDuration(session) }}
+            </span>
+            @if (session.started_at) {
+              <span class="session__timing" title="Time from start to finish"
+                >Run {{ duration(session) }}</span
+              >
+            }
+            @if (session.finished_at) {
+              <span
+                class="session__timing"
+                [title]="'Finished ' + (session.finished_at | date: 'medium')"
+              >
+                Finished {{ finishedAgo(session) }} ago
+              </span>
+            }
           </span>
-          <span class="session__duration">{{ duration(session) }}</span>
         </span>
       </button>
 
@@ -484,6 +547,23 @@
                 }
               </dd>
             </div>
+            @if (session.trigger_kind === 'analysis' && session.repo_slug) {
+              <div>
+                <dt>Analyses</dt>
+                <dd>
+                  <a
+                    [href]="'https://github.com/' + session.repo_slug"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {{ session.repo_slug }}
+                  </a>
+                  <span class="field__hint">{{
+                    session.team_name ? 'team ' + session.team_name : 'link removed'
+                  }}</span>
+                </dd>
+              </div>
+            }
             <div>
               <dt>Model</dt>
               <dd>{{ session.model ?? 'runner default' }}</dd>

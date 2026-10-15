@@ -450,11 +450,12 @@ class WorkerConfig(BaseModel):
     prefetch_missing_models: bool = Field(
         default=True,
         description=(
-            "Download capability models that are missing from local storage at "
-            "startup. Runs in the background (non-blocking) via the HuggingFace "
-            "hub using HF_TOKEN, so the worker stays in zero-lane mode while "
-            "weights stream in. Set false to keep the old warn-only behavior "
-            "(e.g. air-gapped hosts that pre-stage weights out of band)."
+            "Download missing capability models at startup only when their full "
+            "Hugging Face snapshot fits available disk space, keeping at least "
+            "1 GiB or 5% of the volume free. Runs in the background (non-blocking) "
+            "via the HuggingFace hub using HF_TOKEN, so the worker stays in "
+            "zero-lane mode while weights stream in. Set false to keep the old "
+            "warn-only behavior (e.g. air-gapped hosts that pre-stage weights out of band)."
         ),
     )
     models_path: str = Field(
@@ -832,6 +833,10 @@ class DeviceInfo(BaseModel):
     utilization_percent: float | None = None
     temperature_celsius: float | None = None
     power_draw_watts: float | None = None
+    # "faulted": nvidia-smi reports the GPU itself as failed (e.g. "GPU requires
+    # reset"); lane placement skips it. "degraded": some readings are missing.
+    health: Literal["ok", "degraded", "faulted"] = "ok"
+    health_reason: str = ""
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -846,10 +851,30 @@ class DeviceSummary(BaseModel):
     # nvidia_smi_available, keep working unchanged.
     telemetry_available: bool = False
     degraded_reason: str = ""
+    # One line per GPU that nvidia-smi reports as failed, including GPUs left
+    # out of ``devices`` because their memory could not be read.
+    gpu_faults: list[str] = Field(default_factory=list)
+    # nvidia-smi indices of those GPUs; lane placement never uses them.
+    faulted_gpu_indices: list[int] = Field(default_factory=list)
     devices: list[DeviceInfo] = Field(default_factory=list)
     total_memory_mb: float = 0.0
     used_memory_mb: float = 0.0
     free_memory_mb: float = 0.0
+
+
+class DiskSummary(BaseModel):
+    """Space on the volume that holds the Hugging Face cache (model weights).
+
+    Shown per node on the statistics page and the reason the startup prefetch
+    skips models: a full disk stops downloads and lane starts alike.
+    """
+
+    timestamp: datetime
+    source: Literal["statvfs", "unavailable"] = "unavailable"
+    path: str = ""
+    total_mb: float = 0.0
+    used_mb: float = 0.0
+    free_mb: float = 0.0
 
 
 class HostMemorySummary(BaseModel):
@@ -904,8 +929,16 @@ class LaneStatus(BaseModel):
     flash_attention: bool = False
     gpu_devices: str = ""
     effective_gpu_devices: str = ""
+    # The GPUs the lane's engine actually runs on (nvidia-smi indices): the
+    # first tensor × pipeline parallel entries of a numeric selector, which
+    # only lists the GPUs the lane can see. Empty when that is not known, e.g.
+    # for "all".
+    occupied_gpu_devices: str = ""
     sleep_mode_enabled: bool = False
     sleep_state: Literal["unsupported", "unknown", "awake", "sleeping"] = "unsupported"
+    # The lifecycle step in progress, if any. runtime_state and sleep_state
+    # keep describing the state the lane is leaving until the step ends.
+    transition: Literal["draining", "falling_asleep", "waking", "stopping"] | None = None
     active_requests: int = Field(default=0, ge=0)
     loaded_models: list[LoadedModel] = Field(default_factory=list)
     lane_config: LaneConfig | None = None
@@ -938,10 +971,20 @@ class WorkerRuntimeStatus(BaseModel):
     # Fixed for the process lifetime — distinct from transport.last_connected_at,
     # which moves on every bridge reconnect.
     process_started_at: datetime
+    # Commit this worker's image was built from, stamped by CI. "unknown" for a
+    # build without one (local build, source checkout); None only from workers
+    # that predate the field.
+    version_checksum: str | None = None
+    # The lane manager's lifecycle revision when the lanes below were
+    # collected. Command answers carry the revision after the command, so the
+    # orchestrator can tell a status that reflects a command from one sampled
+    # before it. None from workers that predate the field.
+    lifecycle_revision: int | None = None
     transport: WorkerTransportStatus
     devices: DeviceSummary
     gpu_devices: str = "all"
     host_memory: HostMemorySummary | None = None
+    disk: DiskSummary | None = None
     capacity: CapacitySummary
     lanes: list[LaneStatus] = Field(default_factory=list)
     model_profiles: dict[str, dict[str, Any]] | None = None

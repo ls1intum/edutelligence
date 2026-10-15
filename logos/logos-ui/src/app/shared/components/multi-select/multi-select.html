@@ -1,0 +1,65 @@
+<button
+  type="button"
+  class="multi-select-trigger"
+  cdkOverlayOrigin
+  #origin="cdkOverlayOrigin"
+  [attr.aria-label]="'Filter requests by ' + label().toLowerCase()"
+  [attr.aria-expanded]="opened()"
+  aria-haspopup="dialog"
+  [title]="summary()"
+  (click)="toggle()"
+>
+  <span>{{ summary() }}</span>
+  <i class="pi pi-chevron-down" aria-hidden="true"></i>
+</button>
+<ng-template
+  cdkConnectedOverlay
+  [cdkConnectedOverlayOrigin]="origin"
+  [cdkConnectedOverlayOpen]="opened()"
+  [cdkConnectedOverlayHasBackdrop]="true"
+  [cdkConnectedOverlayPush]="true"
+  [cdkConnectedOverlayViewportMargin]="8"
+  cdkConnectedOverlayBackdropClass="cdk-overlay-transparent-backdrop"
+  (backdropClick)="opened.set(false)"
+  (overlayKeydown)="$event.key === 'Escape' && opened.set(false)"
+>
+  <div
+    class="multi-select-menu"
+    role="dialog"
+    cdkTrapFocus
+    [cdkTrapFocusAutoCapture]="true"
+    [attr.aria-label]="label() + ' filter'"
+  >
+    <input
+      type="search"
+      cdkFocusInitial
+      [attr.aria-label]="'Search ' + label().toLowerCase()"
+      [placeholder]="'Search ' + label().toLowerCase() + '…'"
+      [value]="query()"
+      (input)="query.set($any($event.target).value)"
+    />
+    <button
+      type="button"
+      class="multi-select-clear"
+      [disabled]="!values().length"
+      (click)="valuesChange.emit([])"
+    >
+      Clear selection
+    </button>
+    <div class="multi-select-options">
+      @for (option of matches(); track option.value) {
+        <label class="multi-select-option" [title]="option.label">
+          <input
+            type="checkbox"
+            [checked]="values().includes(option.value)"
+            [disabled]="option.disabled ?? false"
+            (change)="select(option.value)"
+          />
+          <span>{{ option.label }}</span>
+        </label>
+      } @empty {
+        <p>No matching {{ label().toLowerCase() }}.</p>
+      }
+    </div>
+  </div>
+</ng-template>

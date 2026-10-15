@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -8,6 +8,60 @@ from logos.dbutils.dbmodules import ThresholdLevel
 
 class LogosKeyModel(BaseModel):
     logos_key: str
+
+
+class WebSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    max_results: int = Field(default=5, ge=1, le=10, strict=True)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def _strip_query(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+
+# A free-form text field of the decision API: a string, or JSON rendered as text.
+DecisionText = Union[str, dict, list, None]
+
+
+class NoulCriteria(BaseModel):
+    true: DecisionText = None
+    false: DecisionText = None
+
+
+class NoulQuestion(BaseModel):
+    type: Literal["noul"]
+    instructions: DecisionText = None
+    criteria: Optional[NoulCriteria] = None
+
+
+class ChoiceQuestion(BaseModel):
+    type: Literal["choice"]
+    instructions: DecisionText = None
+    criteria: dict[str, DecisionText]
+
+
+class ScoreQuestion(BaseModel):
+    type: Literal["score"]
+    instructions: DecisionText = None
+    criteria: list[Union[str, dict, list]] = Field(min_length=1)
+
+
+DecisionQuestion = Annotated[Union[NoulQuestion, ChoiceQuestion, ScoreQuestion], Field(discriminator="type")]
+
+
+# Upper bound on questions per /v1/systemone call. Each entry becomes one
+# pipeline completion; without a cap a single request can spawn unbounded
+# concurrent auth/schedule/DB work before per-turn rate limits apply.
+SYSTEM_ONE_MAX_QUESTIONS = 32
+
+
+class SystemOneRequest(BaseModel):
+    """Body of ``POST /v1/systemone``: a state and the typed questions to answer about it."""
+
+    model: str = Field(min_length=1)
+    state: Any
+    questions: dict[str, DecisionQuestion] = Field(min_length=1, max_length=SYSTEM_ONE_MAX_QUESTIONS)
 
 
 class LogosNodeAuthRequest(BaseModel):
@@ -40,6 +94,38 @@ class LogosNodeRegisterRequest(LogosKeyModel):
 
 class LogosNodeStatusRequest(LogosKeyModel):
     provider_id: int
+
+
+# Far above any node's model count; bounds what one request can write.
+_MAX_PROFILE_MODELS = 1000
+
+
+class LogosNodeLegacyProfileImport(BaseModel):
+    model_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
+    unsupported_models: dict[str, str] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
+
+
+class LogosNodeModelProfilesRequest(BaseModel):
+    shared_key: str
+    # model name -> calibration key hash the worker computes for it right now
+    calibration_key_hashes: dict[str, str] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
+    legacy_import: LogosNodeLegacyProfileImport | None = None
+
+
+class LogosNodeClearUnsupportedRequest(LogosKeyModel):
+    provider_id: int
+    model_name: str
+
+
+class LogosNodeResetProfilesRequest(LogosKeyModel):
+    provider_id: int
+    # None resets every profile of the node
+    model_names: list[str] | None = None
+
+
+class LogosNodeInvalidateCalibrationRequest(LogosKeyModel):
+    calibration_id: int
+    reason: str = "invalidated by admin"
 
 
 class LogosNodeApplyLanesRequest(LogosKeyModel):
@@ -145,3 +231,7 @@ class BenchmarkLimitsRequest(BaseModel):
 
 class HfReachabilityRequest(BaseModel):
     hf_repo_id: str = Field(min_length=1, max_length=200)
+
+
+class CancelClientTagRequest(BaseModel):
+    tag: str = Field(min_length=1, max_length=200)

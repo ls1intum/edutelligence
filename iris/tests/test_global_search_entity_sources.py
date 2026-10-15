@@ -113,6 +113,24 @@ class TestEntityCardRenderer:
         assert "Implement sorting." in card
         assert "cover the topic named in its title" not in card
 
+    def test_matched_passage_replaces_the_beginning_of_the_description(self):
+        card = render_entity_card(
+            _candidate_dto(
+                description="Part 1: set up the project. " * 100,
+                passage="The storm panel turns red below 980 hectopascal.",
+            )
+        )
+        assert "The storm panel turns red below 980 hectopascal." in card
+        assert "set up the project" not in card
+
+    def test_description_is_used_without_a_matched_passage(self):
+        card = render_entity_card(_candidate_dto(description="Implement sorting."))
+        assert "Implement sorting." in card
+
+    def test_passage_is_read_from_the_artemis_payload(self):
+        assert _candidate_dto(passage="matched").passage == "matched"
+        assert _candidate_dto().passage is None
+
     def test_channel_card_names_visibility_and_purpose(self):
         card = render_entity_card(
             _candidate_dto(
@@ -187,10 +205,12 @@ class TestWireShapes:
         assert dto.exclude_course_ids == [5]
 
     def test_lecture_search_request_parses_exclude_course_ids(self):
-        dto = LectureSearchRequestDTO(query="q", excludeCourseIds=[5])
+        dto = LectureSearchRequestDTO(
+            query="q", excludeCourseIds=[5], artemisBaseUrl="http://a"
+        )
         assert dto.exclude_course_ids == [5]
 
-        dto = LectureSearchRequestDTO(query="q")
+        dto = LectureSearchRequestDTO(query="q", artemisBaseUrl="http://a")
         assert dto.exclude_course_ids == []
 
     def test_request_parses_camel_case_entity_candidates(self):
@@ -555,7 +575,9 @@ class TestSemesterTwinDedup:
         )
 
         response = pipeline(
-            query="tell me about patterns", intent=SearchIntent.TRIGGER_AI
+            query="tell me about patterns",
+            intent=SearchIntent.TRIGGER_AI,
+            base_url="http://a",
         )
 
         assert response.sources == [lecture_a, lecture_b]
@@ -605,7 +627,9 @@ class TestSemesterTwinDedup:
         )
 
         response = pipeline(
-            query="what is deep learning", intent=SearchIntent.TRIGGER_AI
+            query="what is deep learning",
+            intent=SearchIntent.TRIGGER_AI,
+            base_url="http://a",
         )
 
         # rank_2 was cited FIRST in the text, so it becomes source 1 — the returned list
@@ -649,7 +673,9 @@ class TestSemesterTwinDedup:
         )
 
         response = pipeline(
-            query="tell me about patterns", intent=SearchIntent.TRIGGER_AI
+            query="tell me about patterns",
+            intent=SearchIntent.TRIGGER_AI,
+            base_url="http://a",
         )
 
         assert response.sources == [lecture_a]
@@ -703,7 +729,9 @@ class TestSemesterTwinDedup:
         )
 
         response = pipeline(
-            query="explain array indexing", intent=SearchIntent.TRIGGER_AI
+            query="explain array indexing",
+            intent=SearchIntent.TRIGGER_AI,
+            base_url="http://a",
         )
 
         assert response.sources == [source_1, source_2]
@@ -771,7 +799,9 @@ class TestLectureSearchRoute:
     for the access context to narrow itself."""
 
     def test_forwards_exclude_course_ids_to_the_retriever(self):
-        dto = LectureSearchRequestDTO(query="q", courseIds=[9], excludeCourseIds=[5])
+        dto = LectureSearchRequestDTO(
+            query="q", courseIds=[9], excludeCourseIds=[5], artemisBaseUrl="http://a"
+        )
         with (
             patch.object(search_router, "VectorDatabase"),
             patch.object(search_router, "LectureGlobalSearchRetrieval") as mock_cls,

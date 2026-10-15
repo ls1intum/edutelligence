@@ -173,6 +173,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
    * by the page — the live push and every fetched page must agree on it.
    */
   @Input() filterStatus: string | null = null;
+  @Input() filterModelIds: string[] = [];
 
   /** Shared ticker: ms since epoch, updated by setInterval. */
   now = signal(Date.now());
@@ -204,6 +205,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
   private readonly _filterTeamId = signal<number | null>(null);
   private readonly _filterProviderId = signal<number | null>(null);
   private readonly _filterErrorsOnly = signal(false);
+  private readonly _filterModelIds = signal<string[]>([]);
   private readonly _filterStatus = signal<string | null>(null);
 
   /** Only for the empty state, which reads differently once a filter is on. */
@@ -212,7 +214,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
       this._filterUserId() !== null ||
       this._filterTeamId() !== null ||
       this._filterProviderId() !== null ||
-      this._filterErrorsOnly(),
+      this._filterErrorsOnly() ||
+      this._filterModelIds().length > 0,
   );
 
   /**
@@ -319,6 +322,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
     if (changes['filterTeamId']) this._filterTeamId.set(this.filterTeamId);
     if (changes['filterProviderId']) this._filterProviderId.set(this.filterProviderId);
     if (changes['filterErrorsOnly']) this._filterErrorsOnly.set(this.filterErrorsOnly);
+    if (changes['filterModelIds']) this._filterModelIds.set(this.filterModelIds);
     if (changes['filterStatus']) this._filterStatus.set(this.filterStatus);
     // A new range or a new scope invalidates every page cut out of the previous
     // one. No fetch follows: page 0 is the live feed either way, and the
@@ -328,7 +332,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
       (changes['filterTeamId'] && !changes['filterTeamId'].firstChange) ||
       (changes['filterProviderId'] && !changes['filterProviderId'].firstChange) ||
       (changes['filterErrorsOnly'] && !changes['filterErrorsOnly'].firstChange) ||
-      (changes['filterStatus'] && !changes['filterStatus'].firstChange);
+      (changes['filterStatus'] && !changes['filterStatus'].firstChange) ||
+      (changes['filterModelIds'] && !changes['filterModelIds'].firstChange);
     if ((changes['range'] && !changes['range'].firstChange) || scopeChanged) {
       this.resetToFirstPage();
     }
@@ -417,7 +422,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
         PAGE_SIZE,
         { userId: this._filterUserId(), teamId: this._filterTeamId(),
           providerId: this._filterProviderId(), errorsOnly: this._filterErrorsOnly(),
-          status: this._filterStatus() },
+          status: this._filterStatus(), modelIds: this._filterModelIds().map(Number) },
         cursor,
       );
       // Scope or range moved on while we waited — drop the stale page.
@@ -647,11 +652,6 @@ export class RecentRequests implements OnChanges, OnDestroy {
   elapsedOf(item: RequestItem): string {
     if (!item.scheduled_ts) return '0.0s';
     return formatElapsed((this.now() - new Date(item.scheduled_ts).getTime()) / 1000);
-  }
-
-  errorSnippet(msg: string | null): string {
-    if (!msg) return '';
-    return msg.length > 60 ? msg.slice(0, 60) + '...' : msg;
   }
 
   formatCount(v: number): string {

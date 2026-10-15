@@ -158,6 +158,11 @@ class SessionSummary(BaseModel):
     # ('<event-kind>'). Null for sessions a person created.
     trigger_kind: str | None = None
     trigger_ref: str | None = None
+    # For a repository analysis: which linked repository and whose team it
+    # is, so the session list says what is being analysed. The slug stays
+    # after the link is removed; the team name does not.
+    repo_slug: str | None = None
+    team_name: str | None = None
     # How urgent this work is, and the sentence explaining it.
     priority: int = 50
     priority_reason: str | None = None
@@ -250,6 +255,10 @@ class CapacityState(BaseModel):
     load: float  # 0..1, reserved share of local serving slots
     total_slots: int
     busy_slots: int
+    # How many of those busy slots this runner holds (sessions and the
+    # subagents they started). The rest are other production traffic.
+    own_slots: int = 0
+    other_slots: int = 0
     sessions_running: int
     sessions_queued: int
     sessions_paused: int

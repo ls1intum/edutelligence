@@ -25,6 +25,9 @@ class CompletionArguments:
     ``logprobs``; there is no separate capability flag — backends that
     ignore it simply return plain logprobs, and confidence scoring falls
     back from the uncertainty method to the mean-logprob method.
+
+    ``tool_choice`` (for example ``"none"``) is forwarded by the OpenAI client
+    when tools are sent.
     """
 
     def __init__(
@@ -37,6 +40,7 @@ class CompletionArguments:
         logprobs: bool = False,
         top_logprobs: int = None,
         stream_handler: Optional[Callable[[Optional[str]], None]] = None,
+        tool_choice: Optional[str] = None,
     ):
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -46,3 +50,6 @@ class CompletionArguments:
         self.logprobs = logprobs
         self.top_logprobs = top_logprobs
         self.stream_handler = stream_handler
+        # Sent only with tools, and only by the OpenAI client. "none" keeps the
+        # tool list (and so the cached prompt prefix) but forbids tool calls.
+        self.tool_choice = tool_choice

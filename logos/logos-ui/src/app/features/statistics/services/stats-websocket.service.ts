@@ -70,6 +70,8 @@ export interface StatsWsConnectOptions {
    * scope, so the KPI cards and charts keep their full team/user totals.
    */
   feedStatus?: string | null;
+  feedModelIds?: number[];
+  feedProviderIds?: number[];
   /**
    * Which tab is on screen. Only that tab's channel is pushed — Local
    * Providers gets VRAM, Requests gets aggregates and the feed. Stored so a
@@ -177,6 +179,15 @@ export class StatsWebsocketService {
     }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ action: 'set_feed_status', status }));
+    }
+  }
+
+  setFeedFilters(status: string | null, modelIds: number[], providerIds: number[]): void {
+    if (this.opts) {
+      this.opts = { ...this.opts, feedStatus: status, feedModelIds: modelIds, feedProviderIds: providerIds };
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: 'set_feed_filters', status, model_ids: modelIds, provider_ids: providerIds }));
     }
   }
 
@@ -362,6 +373,8 @@ export class StatsWebsocketService {
           provider_id: current.scope?.providerId ?? null,
           errors_only: current.scope?.errorsOnly || null,
           status: current.feedStatus ?? null,
+          model_ids: current.feedModelIds ?? [],
+          provider_ids: current.feedProviderIds ?? [],
           interest: current.interest ?? null,
         })
       );

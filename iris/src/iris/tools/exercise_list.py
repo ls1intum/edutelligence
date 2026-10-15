@@ -35,6 +35,8 @@ def create_tool_get_exercise_list(
         The submissions array tells you about the status of the student in this exercise:
         You see when the student submitted the exercise and what score they got.
         A 100% score means the student solved the exercise correctly and completed it.
+        The list only contains exercises that are released to students. An empty list means
+        that no exercise is released yet: tell the student this instead of asking them for exercise details.
 
         Returns:
             list[dict]: List of exercise data without problem statements.

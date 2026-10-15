@@ -20,6 +20,7 @@ from iris.pipeline.shared.global_search_intent_classifier import (
 )
 from iris.tracing import init_langfuse, shutdown_langfuse
 from iris.web.routers.health.health_endpoint import router as health_router
+from iris.web.routers.ingestion_census import router as ingestion_census_router
 from iris.web.routers.ingestion_status import router as ingestion_status_router
 from iris.web.routers.memiris import router as memiris_router
 from iris.web.routers.pipelines import router as pipelines_router
@@ -51,8 +52,17 @@ async def lifespan(_: FastAPI):
     scheduler.add_job(memory_sleep_task, trigger="cron", hour=1, minute=0)
     scheduler.start()
     logger.info("Scheduler started")
+
+    # Pull-based ingestion worker: claims jobs from Artemis and heartbeats its
+    # running jobs. Import here to keep the pipeline stack out of module load.
+    from iris.ingestion.worker import (  # noqa: E402 pylint: disable=import-outside-toplevel
+        ingestion_worker,
+    )
+
+    ingestion_worker.start()
     yield
 
+    ingestion_worker.stop()
     shutdown_langfuse()
     scheduler.shutdown()
     logger.info("Scheduler stopped")
@@ -152,6 +162,7 @@ app.include_router(health_router)
 app.include_router(pipelines_router)
 app.include_router(webhooks_router)
 app.include_router(ingestion_status_router)
+app.include_router(ingestion_census_router)
 app.include_router(memiris_router)
 app.include_router(search_router)
 

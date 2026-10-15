@@ -18,12 +18,3 @@ services:
         target: /mnt/ramcache
         tmpfs:
           size: ${TMPFS_SIZE:-0}
-
-  # Calibration one-shot also gets the tmpfs mount so calibration benefits
-  # from RAM-cached models.
-  logos-workernode-calibrate:
-    volumes:
-      - type: tmpfs
-        target: /mnt/ramcache
-        tmpfs:
-          size: ${TMPFS_SIZE:-0}

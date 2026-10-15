@@ -389,6 +389,98 @@
   }
 }
 
+// ── CSV import: mapping + preview ─────────────────────────────────────
+.import-mapping {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.import-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.import-count {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-300));
+}
+
+.import-toolbar__actions {
+  display: inline-flex;
+  gap: 14px;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: rgb(var(--color-text-accent));
+  cursor: pointer;
+
+  &:hover:not(:disabled) { text-decoration: underline; }
+  &:disabled { opacity: var(--opacity-disabled); cursor: not-allowed; }
+}
+
+.import-preview-scroll {
+  max-height: 360px;
+  overflow: auto;
+  border-radius: 8px;
+
+  // .table-card belongs to the data table component (global styles), so the
+  // rules need ::ng-deep to reach it from this scoped stylesheet.
+  // The data table carries its own margin-top; drop it inside the scroll box.
+  ::ng-deep .table-card { margin-top: 0; }
+
+  // A wide CSV's minimum track widths (48px + 120px per column + 96px) can
+  // exceed the scroll box. Without a floor the card keeps the box's width,
+  // the grid overflows it, and the card's overflow:hidden clips every column
+  // beyond it. Floored at its content size, the card grows past the box
+  // instead and the box gets a horizontal scrollbar.
+  // Desktop only: below 769px the rows stack and the cells clip with an
+  // ellipsis, where a content-sized card would only add sideways scroll.
+  @media (min-width: 769px) {
+    ::ng-deep .table-card { min-width: fit-content; }
+  }
+}
+
+.import-preview-row {
+  &--existing {
+    opacity: var(--opacity-muted);
+  }
+}
+
+.col-select {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-row-cb {
+  width: 15px;
+  height: 15px;
+  accent-color: rgb(var(--color-primary-500));
+  cursor: pointer;
+}
+
+.import-preview-cell {
+  font-size: var(--font-size-sm);
+  color: rgb(var(--color-typography-0));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-status.status-new {
+  background: rgb(var(--color-primary-400) / var(--opacity-faint));
+  color: rgb(var(--color-typography-300));
+}
+
 // ── Mobile ────────────────────────────────────────────────────────────
 @media (max-width: 768px) {
   .user-management { padding: 24px 16px 32px; }
@@ -413,6 +505,13 @@
   .col-role { display: none; }
   .col-actions { display: none; }
 
+  // Preview table row checkbox floats to the card's top-left on mobile.
+  .import-preview-row .col-select {
+    position: absolute;
+    top: 8px;
+    left: 10px;
+  }
+
   .name-mobile-actions {
     display: flex;
     align-items: center;
@@ -420,5 +519,9 @@
     flex-shrink: 0;
   }
 
-  .table-row { padding-top: 12px; }
+  // The data table's mobile rows reserve 44px above the content for the
+  // control that floats into the card's top corner; the preview row's Include
+  // checkbox floats into exactly that space, so it keeps the reservation.
+  // Only the main table's rows, which float nothing, drop to the tighter 12px.
+  .table-row:not(.import-preview-row) { padding-top: 12px; }
 }
