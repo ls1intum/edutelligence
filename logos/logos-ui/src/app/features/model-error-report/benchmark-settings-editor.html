@@ -80,7 +80,7 @@
       <input type="number" min="0" max="2147483647" step="1" required [ngModel]="settings().seed" (ngModelChange)="update('seed', $event)" />
     </label>
   </div>
-  <details class="dataset-preview" open>
+  <details class="dataset-preview">
     <summary>Dataset preview</summary>
     @if (loading()) {
       <p role="status">Loading examples…</p>

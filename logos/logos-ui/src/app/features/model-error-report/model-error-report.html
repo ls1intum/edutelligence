@@ -515,8 +515,8 @@
 
           <div class="performance-header">
             <div>
-              <h2>Provider Performance</h2>
-              <p>Statistics for this model grouped by provider configuration.</p>
+              <h2>Performance</h2>
+              <p>Run a benchmark, then compare results across provider configurations.</p>
             </div>
             <span class="performance-live">
               <i class="pi pi-circle-fill" aria-hidden="true"></i>
@@ -568,7 +568,7 @@
               <header class="benchmark-runner__header">
                 <div>
                   <h3>Run benchmark</h3>
-                  <p>{{ benchmarkSettings().dataset }} · {{ benchmarkSettings().subset }}/{{ benchmarkSettings().split }} · {{ benchmarkSettings().max_output_tokens }} max output tokens · one unmeasured warm-up request</p>
+                  <p>Choose a provider and sample size. Review the settings before starting.</p>
                 </div>
                 @if (selectedBenchmarkPair()?.provider_type === 'logosnode') {
                   <button type="button" class="benchmark-run-button" (click)="useComparisonBaseline()"
@@ -578,16 +578,13 @@
                 }
               </header>
 
-              <label class="benchmark-worker-select">Worker / provider for the next benchmark
+              <label class="benchmark-worker-select">Provider
                 <select [value]="selectedBenchmarkPair()?.model_provider_id" (change)="selectedBenchmarkPairId.set(+$any($event.target).value)">
                   @for (pair of benchmarkPairs(); track pair.model_provider_id) {
                     <option [value]="pair.model_provider_id">{{ pair.provider_name }} · {{ pair.model_name }}</option>
                   }
                 </select>
               </label>
-              <app-benchmark-settings-editor [pair]="selectedBenchmarkPair()"
-                [settings]="benchmarkSettings()" (settingsChange)="benchmarkSettings.set($event)"
-                (validChange)="benchmarkSettingsValid.set($event)" (limitsChange)="benchmarkWorkerLimits.set($event)" />
               <div class="benchmark-sample-control">
                 <div class="benchmark-sample-control__heading">
                   <label class="benchmark-sample-control__label" for="benchmark-sample-size">Sample size</label>
@@ -619,12 +616,23 @@
                 </div>
               </div>
 
+              <details class="benchmark-settings-panel" [open]="!benchmarkSettingsValid()">
+                <summary>
+                  <strong>Dataset and settings</strong>
+                  <span>{{ benchmarkSettings().dataset }} · {{ benchmarkSettings().max_output_tokens }} max tokens · {{ benchmarkSettings().profile === 'synchronous' ? '1 request at a time' : benchmarkSettings().concurrency + ' concurrent requests' }}</span>
+                </summary>
+              <app-benchmark-settings-editor [pair]="selectedBenchmarkPair()"
+                [settings]="benchmarkSettings()" (settingsChange)="benchmarkSettings.set($event)"
+                (validChange)="benchmarkSettingsValid.set($event)" (limitsChange)="benchmarkWorkerLimits.set($event)" />
+              </details>
+
               <app-benchmark-batch-editor [settings]="benchmarkSettings()" [samples]="benchmarkSampleSize()"
                 [worker]="selectedBenchmarkPair()?.provider_type === 'logosnode'" [limits]="benchmarkWorkerLimits()"
                 (planChange)="benchmarkBatch.set($event)" (validChange)="benchmarkBatchValid.set($event)" />
 
               <div class="benchmark-runner__pairs">
                 @for (pair of benchmarkPairs(); track pair.model_provider_id) {
+                  @if (selectedBenchmarkPair()?.model_provider_id === pair.model_provider_id || providerHasActiveBenchmark(pair.provider_id)) {
                   <div class="benchmark-pair">
                     <div class="benchmark-pair__identity">
                       <strong>{{ pair.provider_name }}</strong>
@@ -670,6 +678,7 @@
                       }
                     </div>
 
+                    @if (selectedBenchmarkPair()?.model_provider_id === pair.model_provider_id) {
                     <div class="benchmark-start-action">
                       <button
                         class="benchmark-run-button"
@@ -688,7 +697,9 @@
                         }
                       </button>
                     </div>
+                    }
                   </div>
+                  }
                 }
               </div>
 

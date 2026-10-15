@@ -435,3 +435,25 @@
   &:disabled { cursor: wait; opacity: 0.6; }
   &:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 }
+
+.benchmark-settings-panel {
+  border-bottom: 1px solid rgb(var(--color-outline-200));
+
+  > summary {
+    padding: 16px;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+
+    span {
+      display: block;
+      margin-top: 4px;
+      color: rgb(var(--color-typography-500));
+      font-size: var(--font-size-sm);
+    }
+
+    &:focus-visible {
+      outline: 2px solid rgb(var(--color-primary-500));
+      outline-offset: -2px;
+    }
+  }
+}

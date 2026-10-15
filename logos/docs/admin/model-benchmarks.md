@@ -24,11 +24,10 @@ Only one benchmark job can run on a provider at a time.
 2. Select the model.
 3. Open **Performance**.
 4. Select the worker or provider.
-5. Select the dataset, dataset variant, split and prompt column.
-6. Set the sample size and maximum output tokens.
-7. Select the sequential or concurrent profile.
-8. Set the concurrent requests and seed.
-9. If necessary, change the vLLM settings for the selected Logos worker.
+5. Set the sample size.
+6. Open **Dataset and settings** to change the dataset, request profile or output limit.
+7. If necessary, change the vLLM settings for the selected Logos worker.
+8. Enable **Run a batch** to repeat runs or compare parameter values.
 
 The default dataset is `openai/gsm8k`, variant `main`, split `test`, with the `question` prompt column.
 The default run uses 50 samples, a sequential profile, seed 42 and at most 512 output tokens per request.
@@ -42,7 +41,7 @@ One warm-up request runs before measurement. Its result is not part of the measu
 | Dataset | Public Hugging Face dataset with a plain-text prompt column |
 | vLLM overrides | Logos workers only |
 
-The dataset picker shows up to five example rows.
+Open **Dataset preview** to show up to five example rows.
 **Open in Hugging Face** opens the selected dataset variant and split.
 Private datasets, gated datasets and structured conversation columns are not supported by this editor.
 The orchestrator downloads the dataset when the job starts.
@@ -52,7 +51,8 @@ A small sample size does not necessarily limit the dataset download size.
 
 The screenshot shows the actual Performance component with synthetic example data.
 It omits the application shell and live services. It does not verify a GPU run.
-The settings appear above the start action. The charts show one completed measurement.
+Dataset and request settings stay collapsed until needed. The charts show one completed measurement.
+The selected provider has one start action. Active runs on other providers remain visible.
 
 ![Desktop benchmark settings and single-run results](/img/benchmarks/performance-desktop.png)
 
