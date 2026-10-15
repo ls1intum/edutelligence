@@ -216,3 +216,68 @@ def test_reserved_reclaim_is_not_credited_to_vram_budget(lease):
     planner = object.__new__(CapacityPlanner)
     action = SimpleNamespace(action="stop", provider_id=9001, model_name="model")
     assert planner._validate_vram_budget([action]) == []
+
+
+async def test_queue_dispatch_admits_request_before_waiter_resumes():
+    import asyncio
+
+    lease = BenchmarkReservations()
+    queue = PriorityQueueManager()
+    admitted = asyncio.get_running_loop().create_future()
+    waiting = asyncio.get_running_loop().create_future()
+    queue.enqueue(admitted, 1, request_id="dispatched", api_key_id=12)
+    queue.enqueue(waiting, 1, request_id="still-queued", api_key_id=12)
+
+    def dequeue(owner):
+        return queue.dequeue_with_entry(1, 2, required_api_key_id=-owner if owner is not None else None)
+
+    assert lease.admit_queued(2, "m", dequeue)[0] is admitted
+    lease.reserve(2, "m", 7)
+    assert lease.allows(2, "m", "dispatched")
+    assert not lease.allows(2, "m", "still-queued")
+    assert lease.admit_queued(2, "m", dequeue) == (None, None)
+    lease.finish_request("dispatched")
+    assert not lease.admitted_requests(2, "m")
+    lease.release(7)
+    assert lease.admit_queued(2, "m", dequeue)[0] is waiting
+
+
+@pytest.mark.parametrize("action", ["infer", "infer_stream"])
+async def test_released_queue_request_keeps_transport_access_during_benchmark(action):
+    import asyncio
+
+    from logos.pipeline.base_scheduler import BaseScheduler
+
+    queue = PriorityQueueManager()
+    future = asyncio.get_running_loop().create_future()
+    queue.enqueue(future, 1, request_id="released-production", api_key_id=12)
+    facade = MagicMock()
+    facade.get_model_name.return_value = "queued-model"
+    facade.get_model_status.return_value = SimpleNamespace(active_requests=0)
+    facade.get_parallel_capacity.return_value = (1, None)
+    scheduler = SimpleNamespace(
+        _model_registry={(1, 9030): "logosnode"},
+        _logosnode=facade,
+        _queue_mgr=queue,
+        _admission_batch_limit=lambda *args: 1,
+    )
+    BaseScheduler.reevaluate_model_queues(scheduler, "queued-model")
+    # The queue release is scheduled, but its waiter has not resumed yet.
+    benchmark_reservations.reserve(9030, "queued-model", 9031)
+    try:
+        assert (await future).provider_id == 9030
+        session = SimpleNamespace(
+            provider_id=9030, latest_runtime={"lanes": [{"lane_id": "lane", "model": "queued-model"}]}
+        )
+        LogosNodeRuntimeRegistry._check_benchmark_reservation(
+            session, action, {"lane_id": "lane"}, "released-production"
+        )
+        assert not benchmark_reservations.allows(9030, "queued-model", "new-production")
+        benchmark_reservations.finish_request("released-production")
+        with pytest.raises(LogosNodeCommandError, match="reserved"):
+            LogosNodeRuntimeRegistry._check_benchmark_reservation(
+                session, action, {"lane_id": "lane"}, "released-production"
+            )
+    finally:
+        benchmark_reservations.finish_request("released-production")
+        benchmark_reservations.release(9031)

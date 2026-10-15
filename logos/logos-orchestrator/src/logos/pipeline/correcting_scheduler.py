@@ -19,6 +19,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from logos import perf_trace
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.context_budget import estimate_prompt_tokens
 from logos.monitoring import prometheus_metrics as prom
 from logos.queue.priority_queue import Priority
@@ -957,6 +958,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             raw_priority=priority_int,
             role_rank=request.role_rank,
             api_key_id=request.api_key_id,
+            request_id=request.request_id,
         )
         # Start the hold timer immediately after enqueue so that logging,
         # queue-depth reads, and the capacity-task setup are included in the
@@ -1029,6 +1031,7 @@ class ClassificationCorrectingScheduler(BaseScheduler):
 
             return result
         except asyncio.TimeoutError:
+            benchmark_reservations.finish_request(request.request_id)
             self._queue_mgr.remove(entry_id)
             raise QueueTimeoutError(
                 request_id=request.request_id,
@@ -1037,5 +1040,6 @@ class ClassificationCorrectingScheduler(BaseScheduler):
                 timeout_s=timeout,
             )
         except asyncio.CancelledError:
+            benchmark_reservations.finish_request(request.request_id)
             self._queue_mgr.remove(entry_id)
             raise

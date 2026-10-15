@@ -1,5 +1,6 @@
 """Process-local ownership of worker model lanes during an internal benchmark."""
 
+from asyncio import Future
 from collections.abc import Callable
 from threading import RLock
 
@@ -33,6 +34,17 @@ class BenchmarkReservations:
                 return False
             self._admitted[request_id] = (provider_id, model)
             return True
+
+    def admit_queued(self, provider_id: int, model: str, dequeue: Callable):
+        """Keep queue removal and admission atomic with benchmark acquisition."""
+        with self._lock:
+            owner = self._owners.get((provider_id, model))
+            task, entry = dequeue(owner)
+            if isinstance(task, Future) and not task.done() and entry is not None:
+                request_id = getattr(entry, "request_id", None)
+                if request_id:
+                    self._admitted[request_id] = (provider_id, model)
+            return task, entry
 
     def admitted_requests(self, provider_id: int, model: str) -> set[str]:
         with self._lock:

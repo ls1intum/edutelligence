@@ -284,13 +284,14 @@ class BaseScheduler(SchedulerInterface):
 
             dispatched = 0
             while dispatched < available_slots:
-                reserved_job = benchmark_reservations.owner(
-                    provider_id, self._logosnode.get_model_name(model_id, provider_id)
-                )
-                task, entry = self._queue_mgr.dequeue_with_entry(
-                    model_id,
+                task, entry = benchmark_reservations.admit_queued(
                     provider_id,
-                    **({"required_api_key_id": -reserved_job} if reserved_job is not None else {}),
+                    self._logosnode.get_model_name(model_id, provider_id),
+                    lambda reserved_job: self._queue_mgr.dequeue_with_entry(
+                        model_id,
+                        provider_id,
+                        **({"required_api_key_id": -reserved_job} if reserved_job is not None else {}),
+                    ),
                 )
                 if task is None:
                     break
