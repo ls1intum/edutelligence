@@ -205,6 +205,20 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
 | `cost_per_million_output_token` | No           | Cost tracking: output token price                                                      |
 | `cost_per_1k_requests`          | No           | Cost tracking: per-request price (rerankers)                                           |
 
+### Output budgets and reasoning models
+
+Some pipelines send a small `max_tokens`. Providers count reasoning tokens against that limit, so a reasoning model can use the whole budget before it writes the answer. Give such models a `reasoning_token_allowance`; it is added to every pipeline's budget.
+
+| Pipeline                                        | `max_tokens` | If the answer is cut                                |
+| ----------------------------------------------- | ------------ | --------------------------------------------------- |
+| Session title                                   | 60           | No title update                                     |
+| Lecture retrieval (query rewrite)               | 400          | The rewrite raises an error                         |
+| Global search answer                            | 600          | Sources without an answer, and a warning in the log |
+| Summary                                         | 1000         | Raises an error (handling depends on the caller)    |
+| Ingestion, retrieval rewrites, guide refinement | 2000         | Raises an error (handling depends on the caller)    |
+
+"Raises an error" applies to models on the Responses API (`use_responses_api: true`); on Chat Completions a cut call returns empty text instead. The chat agent itself sends no `max_tokens`.
+
 ### Model Types
 
 | Type                   | Provider       | Class                                                     |
