@@ -1,7 +1,11 @@
 """The callback token Artemis issues per run must never leave Iris except as the Authorization header."""
 
+import http.server
+import io
 import json
+import logging
 import socket
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -19,6 +23,7 @@ from iris.common.callback_token import (  # noqa: E402
     CallbackToken,
     scrub_callback_credentials,
 )
+from iris.common.logging_config import IrisFormatter  # noqa: E402
 from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
     PipelineExecutionSettingsDTO,
 )
@@ -344,6 +349,119 @@ def test_without_run_id_a_failed_callback_reports_to_sentry_without_the_token(
 
     assert sentry_events, "the failure must be reported"
     assert all(LEGACY not in envelope for envelope in sentry_events)
+
+
+# An older Artemis used the client-generated UUID of a global search request as its token.
+LEGACY_UUID = "4f1d2c3b-9a8e-4b7c-8d6e-5f4a3b2c1d0e"
+
+
+def _legacy_uuid_callback(base_url="https://artemis.example") -> ChatRunCallback:
+    return ChatRunCallback(
+        run_id=LEGACY_UUID, base_url=base_url, auth_token=CallbackToken(LEGACY_UUID)
+    )
+
+
+def test_a_uuid_shaped_legacy_token_is_scrubbed_from_traces():
+    callback = _legacy_uuid_callback()
+
+    traced = mask_callback_credentials(data={"args": [callback], "url": callback.url})
+
+    assert LEGACY_UUID in callback.url
+    assert LEGACY_UUID not in json.dumps(traced)
+
+
+def test_a_uuid_shaped_legacy_token_is_scrubbed_from_sentry_errors(sentry_events):
+    callback = _legacy_uuid_callback(base_url=f"http://127.0.0.1:{_closed_port()}")
+
+    callback.fail("boom")
+    sentry_sdk.flush()
+
+    assert sentry_events
+    assert all(LEGACY_UUID not in envelope for envelope in sentry_events)
+
+
+@pytest.mark.parametrize("token", [LEGACY, LEGACY_UUID])
+def test_legacy_tokens_are_scrubbed_from_application_logs(token):
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(IrisFormatter())
+    status_logger = logging.getLogger("iris.web.status.status_update")
+    status_logger.addHandler(handler)
+    previous_level = status_logger.level
+    status_logger.setLevel(logging.INFO)
+    try:
+
+        class _Response:
+            status_code = 200
+
+            def raise_for_status(self):
+                return None
+
+        succeeding = ChatRunCallback(
+            run_id=token,
+            base_url="https://artemis.example",
+            auth_token=CallbackToken(token),
+        )
+        with patch("requests.post", return_value=_Response()):
+            succeeding.finish()
+        failing = ChatRunCallback(
+            run_id=token,
+            base_url=f"http://127.0.0.1:{_closed_port()}",
+            auth_token=CallbackToken(token),
+        )
+        with patch("iris.web.status.status_update.capture_exception"), patch(
+            "iris.web.status.status_update.capture_message"
+        ):
+            failing.fail("boom")
+    finally:
+        status_logger.removeHandler(handler)
+        status_logger.setLevel(previous_level)
+
+    output = stream.getvalue()
+    assert "Status callback to" in output, "the successful callback must be logged"
+    assert "Error sending status update" in output, "the failure must be logged"
+    assert token not in output
+
+
+def test_a_legacy_token_is_scrubbed_from_sentry_transactions():
+    """With tracing on, the HTTP span of a successful callback names its URL."""
+    received = []
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # pylint: disable=invalid-name
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            received.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, *_args):  # pylint: disable=arguments-differ
+            return None
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    transport = _CapturingTransport()
+    sentry_sdk.init(
+        dsn="http://public@127.0.0.1:9/1",
+        transport=transport,
+        send_default_pii=True,
+        traces_sample_rate=1.0,
+        **credential_safety_options(),
+    )
+    try:
+        callback = _legacy_uuid_callback(
+            base_url=f"http://127.0.0.1:{server.server_port}"
+        )
+        with sentry_sdk.start_transaction(name="callback"):
+            callback.finish()
+        sentry_sdk.flush()
+    finally:
+        sentry_sdk.init(dsn=None)
+        server.shutdown()
+
+    assert received and LEGACY_UUID in received[0], "the callback must have been sent"
+    assert any('"type":"transaction"' in envelope for envelope in transport.envelopes)
+    assert all(LEGACY_UUID not in envelope for envelope in transport.envelopes)
 
 
 # --------------------------------------------------------------------------- 422

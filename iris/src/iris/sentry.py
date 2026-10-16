@@ -28,6 +28,7 @@ def credential_safety_options() -> dict:
     """The client options that keep callback credentials out of Sentry events."""
     return {
         "before_send": _scrub_event,
+        "before_send_transaction": _scrub_event,
         "before_breadcrumb": _scrub_event,
         # send_default_pii as in init, so only the credential keys are added to what was scrubbed before.
         "event_scrubber": EventScrubber(

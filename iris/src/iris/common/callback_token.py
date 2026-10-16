@@ -12,7 +12,9 @@ here: it keeps the value in an attribute, which the Langfuse serializer exports.
 
 import hashlib
 import re
+import threading
 import uuid
+from collections import OrderedDict
 from typing import Any
 
 from pydantic import GetCoreSchemaHandler, GetJsonSchemaHandler
@@ -35,7 +37,30 @@ def hash_run_id(value: str) -> str:
     return "run-" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
 
 
+# Tokens that an Artemis without run ids uses as run ids, as registered by the callbacks of their runs.
+# Their shape tells nothing: a global search token of such an Artemis is a UUID like any run id.
+_LEGACY_TOKEN_LIMIT = 10_000
+_legacy_tokens: "OrderedDict[str, None]" = OrderedDict()
+_legacy_tokens_lock = threading.Lock()
+
+
+def register_legacy_run_token(value: str) -> None:
+    """Remember a callback token that also serves as run id, so every scrub replaces it."""
+    with _legacy_tokens_lock:
+        _legacy_tokens[value] = None
+        _legacy_tokens.move_to_end(value)
+        while len(_legacy_tokens) > _LEGACY_TOKEN_LIMIT:
+            _legacy_tokens.popitem(last=False)
+
+
+def _is_legacy_token(segment: str) -> bool:
+    with _legacy_tokens_lock:
+        return segment in _legacy_tokens
+
+
 def _is_plain_run_id(segment: str) -> bool:
+    if _is_legacy_token(segment):
+        return False
     if _HASHED_RUN_ID.fullmatch(segment):
         return True
     try:
@@ -47,8 +72,9 @@ def _is_plain_run_id(segment: str) -> bool:
 def scrub_callback_credentials(value: Any) -> Any:
     """Replace every callback URL run id segment that is not a plain run id with its hash.
 
-    Plain run ids are UUIDs. Any other segment is a callback token that an older Artemis
-    expects in the URL. Strings inside dicts, lists and tuples are scrubbed as well.
+    Plain run ids are UUIDs. A segment that is no UUID, or that a callback registered as
+    token (see register_legacy_run_token), is a callback token that an older Artemis expects
+    in the URL. Strings inside dicts, lists and tuples are scrubbed as well.
     """
     if isinstance(value, str):
         return _RUN_SEGMENT.sub(
