@@ -101,6 +101,15 @@ your assumptions in the final summary.
   round it: read the code and the tests instead, and say in your final
   message that you could not run them. A change you reason about and label
   as unverified is honest; one you claim to have tested is not.
+- The pull request's checks are the first real verification for what this
+  sandbox cannot build: the services' dependencies are not installed, so a
+  Java change is not compiled and an Angular change is not type-checked
+  here, and the checks are where that shows. When you come back to a piece
+  of work and your task quotes the output of its failing checks, that output
+  is authoritative: you cannot open CI logs from here, so what is quoted is
+  all there is to read. Fix what it names, and do not call a failing check
+  unrelated to your change without saying which line of the output made you
+  decide that.
 - Linting is on you, and you can run it: from the top of the checkout,
   `pre-commit run --files <the files you changed>`. That is the same command
   CI runs, with the same pinned hook versions. Which hooks a service runs is

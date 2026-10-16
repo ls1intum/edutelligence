@@ -1092,6 +1092,355 @@ class TestWatchingEveryCheck:
         assert status == "timeout"
 
 
+class TestWhatTheFailingChecksReport:
+    """What a note that says "the checks failed" owes the session: why.
+
+    The session cannot read the checks itself — no network, no credential —
+    so the runner reads them and the follow-up's note carries what they
+    report: a check's annotations where it carries them, the end of the
+    failed step's log where it does not.
+    """
+
+    SHA = "a" * 40
+    REPO = "ls1intum/edutelligence"
+
+    @staticmethod
+    def _api(monkeypatch, answers):
+        """Serve one payload per exact API path; unknown paths 404."""
+        asked: list = []
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append(path)
+            answer = answers.get(path, 404)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(github, "_get", fake_get)
+        return asked
+
+    @staticmethod
+    def _log_client(monkeypatch, text, log_calls):
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None, params=None):
+                log_calls.append(url)
+                return FakeResponse(200, {}, text=text)
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+
+    async def test_a_failing_check_carries_what_its_annotations_say(self, monkeypatch):
+        asked = self._api(
+            monkeypatch,
+            {
+                f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": {
+                    "check_runs": [{"id": 1, "name": "Logos Test", "conclusion": "failure"}]
+                },
+                f"/repos/{self.REPO}/check-runs/1/annotations": [
+                    {"annotation_level": "failure", "message": "  line 12 of app.py:\n        return 1\n"}
+                ],
+            },
+        )
+
+        detail = await github.check_failure_details(self.SHA)
+
+        # The annotation is quoted with its whitespace collapsed: the note
+        # is text, and the block it reports is carried in that shape.
+        assert detail == "Logos Test: line 12 of app.py: return 1"
+        # The job log was not fetched: the annotations already answered it.
+        assert not any("actions/runs" in path for path in asked)
+
+    async def test_the_note_carries_two_annotations_of_a_check(self, monkeypatch):
+        self._api(
+            monkeypatch,
+            {
+                f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": {
+                    "check_runs": [{"id": 1, "name": "Lint", "conclusion": "failure"}]
+                },
+                f"/repos/{self.REPO}/check-runs/1/annotations": [
+                    {"annotation_level": "failure", "message": "first"},
+                    {"annotation_level": "failure", "message": "second"},
+                    {"annotation_level": "failure", "message": "third"},
+                ],
+            },
+        )
+
+        detail = await github.check_failure_details(self.SHA)
+
+        # Two is the allowance per check: a linter with a hundred findings
+        # spends the note on the first of them.
+        assert detail == "Lint: first\nLint: second"
+
+    async def test_a_check_without_annotations_carries_its_summary(self, monkeypatch):
+        asked = self._api(
+            monkeypatch,
+            {
+                f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": {
+                    "check_runs": [
+                        {"id": 1, "name": "Build", "conclusion": "failure", "output": {"summary": "compilation failed"}}
+                    ]
+                },
+                f"/repos/{self.REPO}/check-runs/1/annotations": [],
+            },
+        )
+
+        detail = await github.check_failure_details(self.SHA)
+
+        assert detail == "Build: compilation failed"
+        assert not any("actions/runs" in path for path in asked)
+
+    async def test_a_check_with_nothing_else_carries_the_failed_step(self, monkeypatch):
+        # The shape the issue was about: a build that dies on a compile
+        # error writes it to the log, nowhere else.
+        log_calls: list = []
+        self._api(
+            monkeypatch,
+            {
+                f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": {
+                    "check_runs": [{"id": 1, "name": "Build", "conclusion": "failure"}]
+                },
+                f"/repos/{self.REPO}/check-runs/1/annotations": [],
+                f"/repos/{self.REPO}/actions/runs": {"workflow_runs": [{"id": 9, "conclusion": "failure"}]},
+                f"/repos/{self.REPO}/actions/runs/9/jobs": {
+                    "jobs": [{"id": 77, "name": "Build", "conclusion": "failure"}]
+                },
+            },
+        )
+        self._log_client(monkeypatch, "compiling\n##[error]error: cannot find symbol\n", log_calls)
+
+        detail = await github.check_failure_details(self.SHA)
+
+        assert detail == "Build:\n##[error]error: cannot find symbol"
+        assert log_calls == [f"https://api.github.com/repos/{self.REPO}/actions/jobs/77/logs"]
+
+    async def test_one_failed_job_answers_every_check_that_says_nothing(self, monkeypatch):
+        # A single failed job is the answer for a silent check whatever the
+        # check is named: with one job there is nothing to match by name.
+        log_calls: list = []
+        self._api(
+            monkeypatch,
+            {
+                f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": {
+                    "check_runs": [{"id": 1, "name": "Test", "conclusion": "failure"}]
+                },
+                f"/repos/{self.REPO}/check-runs/1/annotations": [],
+                f"/repos/{self.REPO}/actions/runs": {"workflow_runs": [{"id": 9, "conclusion": "failure"}]},
+                f"/repos/{self.REPO}/actions/runs/9/jobs": {
+                    "jobs": [{"id": 77, "name": "Build", "conclusion": "failure"}]
+                },
+            },
+        )
+        self._log_client(monkeypatch, "##[error]boom\n", log_calls)
+
+        detail = await github.check_failure_details(self.SHA)
+
+        assert detail == "Test:\n##[error]boom"
+
+    async def test_each_silent_check_is_answered_by_the_job_it_names(self, monkeypatch):
+        # Two failed runs, two silent checks: each check is met by the
+        # tail of the job that carries its name, not by whichever tail
+        # came first.
+        log_calls: list = []
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None, params=None):
+                log_calls.append(url)
+                return FakeResponse(200, {}, text=f"##[error]failure of {url.rsplit('/', 2)[-2]}\n")
+
+        monkeypatch.setattr(github.httpx, "AsyncClient", FakeClient)
+        self._api(
+            monkeypatch,
+            {
+                f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": {
+                    "check_runs": [
+                        {"id": 1, "name": "Java Build", "conclusion": "failure"},
+                        {"id": 2, "name": "Angular Build", "conclusion": "failure"},
+                    ]
+                },
+                f"/repos/{self.REPO}/check-runs/1/annotations": [],
+                f"/repos/{self.REPO}/check-runs/2/annotations": [],
+                f"/repos/{self.REPO}/actions/runs": {
+                    "workflow_runs": [
+                        {"id": 9, "conclusion": "failure"},
+                        {"id": 10, "conclusion": "failure"},
+                    ]
+                },
+                f"/repos/{self.REPO}/actions/runs/9/jobs": {
+                    "jobs": [{"id": 77, "name": "Java Build", "conclusion": "failure"}]
+                },
+                f"/repos/{self.REPO}/actions/runs/10/jobs": {
+                    "jobs": [{"id": 78, "name": "Angular Build", "conclusion": "failure"}]
+                },
+            },
+        )
+
+        detail = await github.check_failure_details(self.SHA)
+
+        assert detail == "Java Build:\n##[error]failure of 77\nAngular Build:\n##[error]failure of 78"
+        assert log_calls == [
+            f"https://api.github.com/repos/{self.REPO}/actions/jobs/77/logs",
+            f"https://api.github.com/repos/{self.REPO}/actions/jobs/78/logs",
+        ]
+
+    async def test_a_green_commit_quotes_nothing(self, monkeypatch):
+        asked = self._api(
+            monkeypatch,
+            {
+                f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": {
+                    "check_runs": [{"id": 1, "name": "Build", "conclusion": "success"}]
+                }
+            },
+        )
+
+        assert await github.check_failure_details(self.SHA) == ""
+        assert asked == [f"/repos/{self.REPO}/commits/{self.SHA}/check-runs"]
+
+    async def test_a_read_that_fails_yields_nothing_to_quote(self, monkeypatch):
+        # Best effort, one direction only: a GitHub that will not answer
+        # shortens the note; it does not fail the follow-up.
+        self._api(
+            monkeypatch,
+            {f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": github.GitHubError("502")},
+        )
+
+        assert await github.check_failure_details(self.SHA) == ""
+
+    async def test_the_note_stays_within_its_allowance(self, monkeypatch):
+        self._api(
+            monkeypatch,
+            {
+                f"/repos/{self.REPO}/commits/{self.SHA}/check-runs": {
+                    "check_runs": [{"id": i, "name": f"check {i}", "conclusion": "failure"} for i in range(1, 4)]
+                },
+                **{
+                    f"/repos/{self.REPO}/check-runs/{i}/annotations": [
+                        {"annotation_level": "failure", "message": "x" * 500}
+                    ]
+                    for i in range(1, 4)
+                },
+            },
+        )
+
+        detail = await github.check_failure_details(self.SHA, limit=100)
+
+        assert len(detail) <= 100
+
+
+class TestTheEndOfAFailingStep:
+    """Where a job log is quoted from: the end of the step that failed."""
+
+    def test_the_tail_starts_at_the_last_error_mark(self):
+        text = "setup\n##[error]first failure\nmiddle\n##[error]second failure\ndone\n"
+
+        tail = github._failed_step_tail(text)
+
+        # The step ends with the last mark; the first failure, already
+        # diagnosed, stays out of the quote.
+        assert tail.startswith("##[error]second failure")
+        assert "first failure" not in tail
+
+    def test_a_log_without_a_mark_is_quoted_from_its_end(self):
+        text = "".join(f"line {i}\n" for i in range(2000))
+
+        tail = github._failed_step_tail(text)
+
+        assert len(tail) <= 900
+        assert tail.endswith("line 1999")
+
+    def test_a_short_log_after_the_mark_is_kept_whole(self):
+        assert github._failed_step_tail("noise\n##[error]the only error\n") == "##[error]the only error"
+
+
+class TestThePullRequestOfAHead:
+    """Whether a branch is still open work, asked before a push to it.
+
+    A push to a branch whose pull request was merged or closed in the
+    meantime would open a duplicate of finished work, so the lookup asks
+    for every state — the caller needs the settled answer as much as the
+    open one.
+    """
+
+    BRANCH = "logos-agent/ws/session-1211"
+
+    @staticmethod
+    def _pulls(monkeypatch, answer):
+        asked: list = []
+
+        async def fake_get(path, params=None, **kwargs):
+            asked.append((path, params))
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(github, "_get", fake_get)
+        return asked
+
+    async def test_an_open_pull_request_wins_over_a_settled_one(self, monkeypatch):
+        asked = self._pulls(
+            monkeypatch,
+            [
+                {"number": 771, "state": "closed", "merged": True},
+                {"number": 772, "state": "open", "merged": False},
+            ],
+        )
+
+        pull = await github.pull_request_for_head(self.BRANCH)
+
+        assert pull["number"] == 772
+        # Every state is asked, and the head is qualified with the
+        # repository's owner — the shape GitHub filters by.
+        assert asked == [
+            (
+                "/repos/ls1intum/edutelligence/pulls",
+                {"head": f"ls1intum:{self.BRANCH}", "state": "all", "per_page": 10},
+            )
+        ]
+
+    async def test_a_settled_branch_answers_with_its_newest_pull_request(self, monkeypatch):
+        self._pulls(
+            monkeypatch,
+            [
+                {"number": 770, "state": "closed", "merged": False},
+                {"number": 771, "state": "closed", "merged": True},
+            ],
+        )
+
+        pull = await github.pull_request_for_head(self.BRANCH)
+
+        assert pull["number"] == 771
+
+    async def test_a_branch_with_no_pull_request_answers_nothing(self, monkeypatch):
+        self._pulls(monkeypatch, [])
+
+        assert await github.pull_request_for_head(self.BRANCH) is None
+
+    async def test_a_refused_lookup_reaches_the_caller(self, monkeypatch):
+        # None would say "no pull request"; an error says "cannot say".
+        # The caller fails open on the second, and the difference must
+        # survive the trip.
+        self._pulls(monkeypatch, github.GitHubError("403"))
+
+        with pytest.raises(github.GitHubError):
+            await github.pull_request_for_head(self.BRANCH)
+
+
 class TestAskingWhoIsInATeam:
     """Who may direct a session, asked of the organisation rather than of
     the repository.

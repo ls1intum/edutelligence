@@ -382,6 +382,141 @@ async def wait_for_checks(
         return "timeout", f"could not read the checks of {head_sha[:7]}: {exc}"
 
 
+# How much of a failing job's log the follow-up's task may carry. The task
+# is the only document the session can read of what the checks saw, and it
+# already holds the request itself: enough to find the error in, not enough
+# to drown it.
+_FAILED_LOG_TAIL = 900
+
+
+def _failed_step_tail(text: str, *, tail_chars: int = _FAILED_LOG_TAIL) -> str:
+    """The end of a failed step, out of a job log.
+
+    The runner marks every error line of a failed step, and the step ends
+    with the last of them, so the log's own end is where the failure is.
+    Starting at the last error mark keeps an earlier, already-diagnosed
+    failure out of the tail when a job failed a second time.
+    """
+    window = text[-(tail_chars * 4) :]
+    index = window.rfind("##[error]")
+    if index != -1:
+        window = window[index:]
+    if len(window) > tail_chars:
+        window = window[-tail_chars:]
+    return window.strip()
+
+
+async def check_failure_details(head_sha: str, *, limit: int = 1200) -> str:
+    """What the failing checks on ``head_sha`` report, as text for a task.
+
+    The session that made the commit cannot read this: its sandbox holds no
+    network and no credential, so a note that says the checks failed without
+    saying why is an answer the agent has to guess. This is the runner's
+    read of what broke — the check-run annotations where a check carries
+    them, and, for a job whose annotations are empty, the end of the log
+    where the step failed: a build step that dies on a compile error writes
+    the error to the log, nowhere else.
+
+    Best effort toward the note, one direction only: a read that fails
+    shortens the answer, it never fails the follow-up. Empty when nothing
+    readable came back.
+    """
+    slug = settings.repo_slug
+    try:
+        runs = (await _get(f"/repos/{slug}/commits/{head_sha}/check-runs", {"per_page": 100})).get("check_runs", [])
+        broken = [run for run in runs if (run.get("conclusion") or "") in _BROKEN][:3]
+    except Exception as exc:
+        logger.info("could not read the failing checks of %s: %s", head_sha[:7], exc)
+        return ""
+    if not broken:
+        return ""
+
+    # The failed step's end, per failed job of this commit's failed runs:
+    # the read a check without annotations is met by. Fetched once for all
+    # of them, and only when at least one of them is annotation-less.
+    job_tails: list[tuple[str, str]] = []
+
+    def jobs_for(check_name: str) -> str:
+        """The tail of the job a check names, or the only one when there is one."""
+        if len(job_tails) == 1:
+            return job_tails[0][1]
+        return next((tail for name, tail in job_tails if name == check_name), "")
+
+    lines: list[str] = []
+    for run in broken:
+        name = str(run.get("name") or "a check")
+        noted = False
+        try:
+            payload = await _get(f"/repos/{slug}/check-runs/{run.get('id')}/annotations", {"per_page": 10})
+            annotations = payload if isinstance(payload, list) else []
+            failures = [a for a in annotations if a.get("annotation_level") == "failure"] or annotations
+            for annotation in failures[:2]:
+                message = " ".join(str(annotation.get("message") or "").split())
+                if message:
+                    lines.append(f"{name}: {message[:400]}")
+                    noted = True
+        except Exception as exc:
+            logger.info("could not read the annotations of check %s: %s", name, exc)
+        if not noted:
+            # The check's own output is the next read: a summary where the
+            # job wrote one, nothing where it did not.
+            summary = " ".join(str(((run.get("output") or {}).get("summary")) or "").split())
+            if summary:
+                lines.append(f"{name}: {summary[:400]}")
+                noted = True
+        if not noted and not job_tails:
+            job_tails = await _failing_job_tails(head_sha)
+        if not noted and job_tails:
+            tail = jobs_for(name)
+            if tail:
+                lines.append(f"{name}:\n{tail}")
+    return "\n".join(lines)[:limit]
+
+
+async def _failing_job_tails(head_sha: str) -> list[tuple[str, str]]:
+    """The failed step's end, per failed job of this commit's failed runs.
+
+    Read per job, so a job that cannot be read leaves the others in the
+    answer rather than emptying it. A job that has no log to read is
+    skipped, which is how the list stays short enough for a task.
+    """
+    tails: list[tuple[str, str]] = []
+    try:
+        payload = await _get(f"/repos/{settings.repo_slug}/actions/runs", {"head_sha": head_sha, "per_page": 20})
+        broken = [
+            run
+            for run in (payload or {}).get("workflow_runs", [])
+            if (run.get("conclusion") or "") in ("failure", "timed_out")
+        ]
+    except Exception as exc:
+        logger.info("could not read the actions runs of %s: %s", head_sha[:7], exc)
+        return tails
+    for run in broken[:2]:
+        try:
+            jobs = (
+                await _get(f"/repos/{settings.repo_slug}/actions/runs/{run.get('id')}/jobs", {"per_page": 100})
+            ).get("jobs", [])
+        except Exception as exc:
+            logger.info("could not read the jobs of run %s: %s", run.get("id"), exc)
+            continue
+        for job in [j for j in jobs if (j.get("conclusion") or "") in ("failure", "timed_out")][:1]:
+            try:
+                async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+                    response = await client.get(
+                        f"{_API}/repos/{settings.repo_slug}/actions/jobs/{job.get('id')}/logs",
+                        headers=_headers(),
+                    )
+                if response.status_code != 200:
+                    logger.info("job log of %s answered %s", job.get("id"), response.status_code)
+                    continue
+                tail = _failed_step_tail(response.text)
+                if tail:
+                    tails.append((str(job.get("name") or ""), tail))
+            except Exception as exc:
+                logger.info("could not read the log of job %s: %s", job.get("id"), exc)
+    return tails
+
+
 async def _get(path: str, params: dict[str, Any] | None = None, *, timeout_s: float = 30.0) -> Any:
     """One authenticated read of the repository. Raises on anything but 200."""
     async with httpx.AsyncClient(timeout=timeout_s) as client:
@@ -1502,3 +1637,30 @@ async def pull_request_state(pr_url: str) -> dict[str, object] | None:
         "deletions": payload.get("deletions"),
         "changed_files": payload.get("changed_files"),
     }
+
+
+async def pull_request_for_head(branch: str, *, repo_slug: str | None = None) -> dict[str, Any] | None:
+    """The pull request whose head is ``branch`` — open or already settled.
+
+    A round that is about to push to a branch has to know whether the
+    branch's pull request is still open: a push to a branch whose pull
+    request was merged or closed in the meantime would open a duplicate of
+    finished work, not update it. The lookup therefore asks for every
+    state, and when the branch has more than one pull request the open one
+    wins: the settled one is history, the open one is what a push would
+    land in.
+
+    None when the branch has no pull request at all — a first round is
+    nothing a settlement could stop. Raises on a lookup that GitHub will
+    not answer: a caller that fails open on that has decided the work is
+    worth the risk of a duplicate, which is the caller's to decide.
+    """
+    slug = repo_slug or settings.repo_slug
+    owner = slug.split("/", 1)[0] if "/" in slug else ""
+    pulls = await _get(f"/repos/{slug}/pulls", {"head": f"{owner}:{branch}", "state": "all", "per_page": 10})
+    if not isinstance(pulls, list) or not pulls:
+        return None
+    open_pull = next((p for p in pulls if p.get("state") == "open"), None)
+    if open_pull is not None:
+        return open_pull
+    return max(pulls, key=lambda p: int(p.get("number") or 0))

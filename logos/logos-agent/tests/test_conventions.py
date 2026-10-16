@@ -163,6 +163,16 @@ class TestThePromptDoesNotDuplicateTheRepositoryConventions:
         assert "iris/" not in notes
         assert "memiris/" not in notes
 
+    def test_the_notes_name_the_checks_as_the_first_verification(self):
+        # The sandbox cannot build the services, so the checks are where a
+        # broken change shows — and a session coming back to red work is
+        # told the quoted failure is authoritative, because it cannot read
+        # the checks itself.
+        notes = conventions.ENVIRONMENT_NOTES
+
+        assert "first real verification" in notes
+        assert "cannot open CI logs" in notes
+
     def test_the_rules_do_not_restate_the_comment_convention(self):
         rules = conventions.HOUSE_RULES
 
