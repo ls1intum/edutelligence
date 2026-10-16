@@ -85,7 +85,7 @@ def test_session_title_prompt_uses_answer_language(language):
         "session_title_generation_prompt.j2", {"language": language}
     )
     assert f"The current title is not written in {language}." in rendered
-    assert f"Generate the title in {language}" in rendered
+    assert f"is written in {language}, the language of the latest answer" in rendered
 
 
 @pytest.mark.parametrize("language", ["German", "English"])

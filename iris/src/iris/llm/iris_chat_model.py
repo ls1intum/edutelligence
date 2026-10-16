@@ -16,6 +16,7 @@ from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm.completion_arguments import CompletionArguments
 from iris.llm.errors import IncompleteModelResponse
 from iris.llm.request_handler.request_handler_interface import RequestHandler
+from iris.llm.structured_output import ModelT, parse_structured_output
 
 
 def message_text(message: PyrisMessage) -> str:
@@ -74,6 +75,17 @@ class IrisChatModel:
             self.last_token_logprob_entries = response.token_logprob_entries
         self._record_usage(response.token_usage)
         return response
+
+    def structured(self, messages: list[PyrisMessage], schema: type[ModelT]) -> ModelT:
+        """Ask for an answer that follows ``schema`` and return it validated."""
+        arguments = copy.copy(self.completion_args)
+        arguments.response_schema = schema
+        previous, self.completion_args = self.completion_args, arguments
+        try:
+            response = self.chat(messages)
+        finally:
+            self.completion_args = previous
+        return parse_structured_output(schema, message_text(response))
 
     def _record_usage(self, usage: TokenUsageDTO) -> None:
         self.tokens = usage.model_copy(update={"pipeline": PipelineEnum.NOT_SET})

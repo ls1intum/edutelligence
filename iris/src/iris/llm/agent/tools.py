@@ -24,13 +24,22 @@ class ToolArgumentError(ValueError):
 
 
 def _strip_titles(schema: Any) -> Any:
-    if isinstance(schema, dict):
-        return {
-            key: _strip_titles(value) for key, value in schema.items() if key != "title"
-        }
+    """Drop "title" keywords (keys of property/definition maps are names)."""
     if isinstance(schema, list):
         return [_strip_titles(item) for item in schema]
-    return schema
+    if not isinstance(schema, dict):
+        return schema
+    stripped: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key == "title":
+            continue
+        if key in ("properties", "$defs") and isinstance(value, dict):
+            stripped[key] = {
+                name: _strip_titles(child) for name, child in value.items()
+            }
+        else:
+            stripped[key] = _strip_titles(value)
+    return stripped
 
 
 def _is_optional(annotation: Any) -> bool:

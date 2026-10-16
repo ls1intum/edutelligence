@@ -1006,6 +1006,8 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 suggestion_dto = InteractionSuggestionPipelineExecutionDTO()
                 suggestion_dto.chat_history = state.dto.chat_history
                 suggestion_dto.last_message = result
+                if self.chat_mode == IrisChatMode.EXERCISE:
+                    suggestion_dto.problem_statement = _guide_problem_statement(state)
                 suggestions = self.suggestion_pipeline(
                     suggestion_dto,
                     language=getattr(state, "answer_language", None)

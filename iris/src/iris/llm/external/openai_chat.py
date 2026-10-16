@@ -45,6 +45,7 @@ from ...llm import CompletionArguments
 from ...llm.errors import IncompleteModelResponse
 from ...llm.external.model import ChatModel
 from ...llm.retry import RetryState
+from ...llm.structured_output import schema_name, strict_json_schema
 
 logger = get_logger(__name__)
 
@@ -892,6 +893,10 @@ class OpenAIChatModel(ChatModel):
     # Chat Completions only (vLLM-served gpt-oss/Qwen): send the reasoning text a
     # tool-call turn returned back with that turn. Off until verified per server.
     replay_reasoning_content: bool = False
+    # Whether the endpoint enforces a JSON schema (OpenAI/Azure json_schema with
+    # strict, vLLM guided decoding). Without it a schema request falls back to
+    # JSON mode and the answer is validated afterwards.
+    supports_structured_output: bool = True
 
     @property
     def effective_strict_tools(self) -> bool:
@@ -1160,7 +1165,16 @@ class OpenAIChatModel(ChatModel):
         if arguments.max_tokens is not None:
             params["max_output_tokens"] = self._output_token_limit(arguments.max_tokens)
 
-        if arguments.response_format == "JSON":
+        if arguments.response_schema is not None and self.supports_structured_output:
+            params["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": schema_name(arguments.response_schema),
+                    "schema": strict_json_schema(arguments.response_schema),
+                    "strict": True,
+                }
+            }
+        elif arguments.response_format == "JSON" or arguments.response_schema:
             params["text"] = {"format": {"type": "json_object"}}
 
         if tools:
@@ -1360,7 +1374,19 @@ class OpenAIChatModel(ChatModel):
                             1, min(int(arguments.top_logprobs), 20)
                         )
 
-                if arguments.response_format == "JSON":
+                if (
+                    arguments.response_schema is not None
+                    and self.supports_structured_output
+                ):
+                    params["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": schema_name(arguments.response_schema),
+                            "schema": strict_json_schema(arguments.response_schema),
+                            "strict": True,
+                        },
+                    }
+                elif arguments.response_format == "JSON" or arguments.response_schema:
                     params["response_format"] = ResponseFormatJSONObject(
                         type="json_object"
                     )

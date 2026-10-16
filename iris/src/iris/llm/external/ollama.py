@@ -319,12 +319,14 @@ class OllamaModel(
         if self.leading_system_message_only:
             ollama_messages = keep_ollama_system_messages_leading(ollama_messages)
 
+        schema = getattr(arguments, "response_schema", None)
         response = self._client.chat(
             model=self.model,
             messages=ollama_messages,
             tools=tools_for_client,
             think=self.think,
             options=self.options,
+            format=schema.model_json_schema() if schema is not None else None,
         )
 
         msg = response.get("message", {}) or {}

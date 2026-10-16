@@ -43,6 +43,7 @@ class CompletionArguments:
         stream_handler: Optional[Callable[[Optional[str]], None]] = None,
         tool_choice: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
+        response_schema: Optional[type] = None,
     ):
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -57,3 +58,6 @@ class CompletionArguments:
         self.tool_choice = tool_choice
         # Set when the run is cancelled; retry waits wake up and stop early.
         self.cancel_event = cancel_event
+        # A Pydantic model the answer must follow (see iris.llm.structured_output).
+        # Takes precedence over response_format.
+        self.response_schema = response_schema
