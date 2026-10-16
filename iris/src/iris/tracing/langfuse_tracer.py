@@ -353,21 +353,43 @@ def clear_current_context():
 F = TypeVar("F", bound=Callable[..., Any])
 
 
-def _is_sensitive(value: Any) -> bool:
-    """Whether a function argument holds a callback credential or student names."""
-    for holder in (value, getattr(value, "execution", None)):
-        settings = getattr(holder, "settings", None)
-        if settings is not None and getattr(settings, "authentication_token", None):
-            return True
+_SENSITIVE_SCAN_DEPTH = 3
+
+
+def _is_sensitive_here(value: Any) -> bool:
+    settings = getattr(value, "settings", None)
+    if settings is not None and getattr(settings, "authentication_token", None):
+        return True
     # A status callback: it holds the run's bearer token as run_id.
     if getattr(value, "run_id", None) and hasattr(value, "url"):
         return True
-    user = getattr(value, "user", None)
-    if user is not None and (
-        getattr(user, "first_name", None) or getattr(user, "last_name", None)
-    ):
+    if getattr(value, "authentication_token", None):
         return True
-    return False
+    return bool(getattr(value, "first_name", None) or getattr(value, "last_name", None))
+
+
+def _children(value: Any) -> list[Any]:
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    if isinstance(value, (str, bytes, int, float, bool)) or value is None:
+        return []
+    attributes = getattr(value, "__dict__", None)
+    return list(attributes.values()) if isinstance(attributes, dict) else []
+
+
+def _is_sensitive(value: Any, depth: int = _SENSITIVE_SCAN_DEPTH) -> bool:
+    """Whether an argument holds a callback credential or student names.
+
+    Langfuse serializes object attributes recursively, so execution states that
+    carry the DTO or the callback a few levels down count as well.
+    """
+    if _is_sensitive_here(value):
+        return True
+    if depth <= 0:
+        return False
+    return any(_is_sensitive(child, depth - 1) for child in _children(value))
 
 
 def carries_sensitive_data(args: tuple, kwargs: dict) -> bool:

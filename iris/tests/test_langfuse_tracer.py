@@ -100,3 +100,25 @@ def test_observe_does_not_export_inputs_that_carry_credentials_or_names():
         assert retrieval("what is a heap?") == "what is a heap?"
 
     assert [call["capture_input"] for call in captured] == [False, False, True]
+
+
+def test_observe_detects_credentials_nested_in_an_execution_state():
+    from iris.tracing.langfuse_tracer import (  # pylint: disable=import-outside-toplevel
+        carries_sensitive_data,
+    )
+
+    class _State:  # pylint: disable=too-few-public-methods
+        def __init__(self):
+            self.dto = SimpleNamespace(
+                settings=SimpleNamespace(authentication_token="sentinel-token")
+            )
+            self.result = "draft"
+
+    class _CallbackOnly:  # pylint: disable=too-few-public-methods
+        def __init__(self):
+            self.callback = SimpleNamespace(run_id="sentinel-token", url="https://a")
+
+    assert carries_sensitive_data((_State(),), {})
+    assert carries_sensitive_data((), {"state": _CallbackOnly()})
+    assert carries_sensitive_data(([{"user": SimpleNamespace(last_name="L")}],), {})
+    assert not carries_sensitive_data(("query", 3, ["a", "b"]), {"limit": 5})
