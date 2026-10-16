@@ -214,10 +214,9 @@ Some pipelines send a small `max_tokens`. Providers count reasoning tokens again
 | Session title                                   | 60           | No title update                                     |
 | Lecture retrieval (query rewrite)               | 400          | The rewrite raises an error                         |
 | Global search answer                            | 600          | Sources without an answer, and a warning in the log |
-| Summary                                         | 1000         | Raises an error (handling depends on the caller)    |
 | Ingestion, retrieval rewrites, guide refinement | 2000         | Raises an error (handling depends on the caller)    |
 
-"Raises an error" applies to models on the Responses API (`use_responses_api: true`); on Chat Completions a cut call returns empty text instead. The chat agent itself sends no `max_tokens`.
+"Raises an error" applies to models on the Responses API (`use_responses_api: true`); on Chat Completions a cut call returns empty or truncated text instead. The chat agent itself sends no `max_tokens`. The table and `reasoning_token_allowance` apply to OpenAI-type entries (`openai_chat`, `azure_chat`); Ollama entries send no token limit.
 
 ### Model Types
 
