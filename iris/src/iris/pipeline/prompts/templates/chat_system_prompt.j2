@@ -63,9 +63,7 @@ You are currently helping with the lecture "{{ lecture_name }}" of the course "{
 - **Programming Language**: {{ programming_language }}
 {% endif %}
 - **Problem Statement**:
-<problem_statement>
-{{ problem_statement }}
-</problem_statement>
+{{ problem_statement | as_data("problem_statement") }}
 {% endif %}
 {% if not lecture_name and not exercise_id %}
 You are helping in the course "{{ course_name }}".

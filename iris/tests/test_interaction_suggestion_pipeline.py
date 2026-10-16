@@ -2,8 +2,6 @@
 
 import os
 
-from jinja2 import Environment, FileSystemLoader
-
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.pipeline_enum import PipelineEnum  # noqa: E402
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage  # noqa: E402
@@ -19,6 +17,7 @@ from iris.pipeline.chat.interaction_suggestion_pipeline import (  # noqa: E402
     InteractionSuggestionPipeline,
     Questions,
 )
+from iris.pipeline.prompts.environment import prompt_environment  # noqa: E402
 
 
 class _Handler:
@@ -49,9 +48,9 @@ def _pipeline(answer, variant="exercise"):
     template_dir = os.path.join(
         os.path.dirname(suggestion_module.__file__), "..", "prompts", "templates"
     )
-    pipeline.prompt_template = Environment(
-        loader=FileSystemLoader(template_dir)
-    ).get_template("interaction_suggestion_prompt.j2")
+    pipeline.prompt_template = prompt_environment(template_dir).get_template(
+        "interaction_suggestion_prompt.j2"
+    )
     return pipeline, handler
 
 

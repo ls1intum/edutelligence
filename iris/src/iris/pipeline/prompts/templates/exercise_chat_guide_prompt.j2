@@ -1,7 +1,5 @@
 The exercise's problem statement:
-<problem_statement>
-{{ problem_statement }}
-</problem_statement>
+{{ problem_statement | as_data("problem_statement") }}
 
 {% if support_level == "high" %}
 The tutor is operating in comprehensive help mode. The draft may contain detailed conceptual explanations and step-by-step reasoning, but no code that solves the exercise or could be used directly in the student's solution:

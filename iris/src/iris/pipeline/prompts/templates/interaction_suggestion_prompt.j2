@@ -10,9 +10,7 @@ Examples of good questions:
 - What does my past activity tell me about how to study now?
 {% elif variant == "exercise" %}
 The chat is about the student's current programming exercise. Its problem statement:
-<problem_statement>
-{{ problem_statement }}
-</problem_statement>
+{{ problem_statement | as_data("problem_statement") }}
 
 Examples of good questions:
 - How can I find the cause of this error myself?
