@@ -9,7 +9,7 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
-from iris.vector_database.lecture_unit_schema import _add_property_if_missing
+from iris.vector_database.schema_properties import add_property_if_missing
 
 
 class LectureUnitPageChunkSchema(Enum):
@@ -69,7 +69,7 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 )
             )
 
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
@@ -79,7 +79,7 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
             ),
         )
 
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,

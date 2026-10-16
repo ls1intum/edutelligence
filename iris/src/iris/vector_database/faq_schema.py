@@ -1,13 +1,15 @@
 from enum import Enum
 
 from weaviate import WeaviateClient
-from weaviate.classes.config import Property
+from weaviate.classes.config import Property, Tokenization
 from weaviate.collections import Collection
 from weaviate.collections.classes.config import (
     Configure,
     DataType,
     VectorDistances,
 )
+
+from .schema_properties import add_property_if_missing
 
 
 class FaqSchema(Enum):
@@ -23,6 +25,30 @@ class FaqSchema(Enum):
     FAQ_ID = "faq_id"
     QUESTION_TITLE = "question_title"
     QUESTION_ANSWER = "question_answer"
+    BASE_URL = "base_url"
+    CONTENT_FINGERPRINT = "content_fingerprint"
+
+
+def _base_url_property() -> Property:
+    # Field tokenization keeps the URL whole: with the default word tokenization, an equality filter on
+    # "https://artemis.example" would also match "https://artemis-test.artemis.example", which contains all
+    # its words. Tokenization cannot change once the property exists.
+    return Property(
+        name=FaqSchema.BASE_URL.value,
+        description="The base URL of the Artemis instance the FAQ belongs to",
+        data_type=DataType.TEXT,
+        tokenization=Tokenization.FIELD,
+        index_searchable=False,
+    )
+
+
+def _content_fingerprint_property() -> Property:
+    return Property(
+        name=FaqSchema.CONTENT_FINGERPRINT.value,
+        description="Fingerprint of the FAQ content, computed by Artemis and reported back by the FAQ census",
+        data_type=DataType.TEXT,
+        index_searchable=False,
+    )
 
 
 def init_faq_schema(client: WeaviateClient) -> Collection:
@@ -31,19 +57,17 @@ def init_faq_schema(client: WeaviateClient) -> Collection:
     """
     if client.collections.exists(FaqSchema.COLLECTION_NAME.value):
         collection = client.collections.get(FaqSchema.COLLECTION_NAME.value)
-        # Check and add 'course_language' property if missing
-        if not any(
-            property.name == FaqSchema.COURSE_LANGUAGE.value
-            for property in collection.config.get(simple=False).properties
-        ):
-            collection.config.add_property(
-                Property(
-                    name=FaqSchema.COURSE_LANGUAGE.value,
-                    description="The language of the COURSE",
-                    data_type=DataType.TEXT,
-                    index_searchable=False,
-                )
-            )
+        add_property_if_missing(
+            collection,
+            Property(
+                name=FaqSchema.COURSE_LANGUAGE.value,
+                description="The language of the COURSE",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+        )
+        add_property_if_missing(collection, _base_url_property())
+        add_property_if_missing(collection, _content_fingerprint_property())
         return collection
 
     return client.collections.create(
@@ -94,5 +118,7 @@ def init_faq_schema(client: WeaviateClient) -> Collection:
                 description="The answer of the faq",
                 data_type=DataType.TEXT,
             ),
+            _base_url_property(),
+            _content_fingerprint_property(),
         ],
     )

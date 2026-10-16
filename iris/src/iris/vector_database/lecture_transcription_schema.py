@@ -9,7 +9,7 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
-from iris.vector_database.lecture_unit_schema import _add_property_if_missing
+from iris.vector_database.schema_properties import add_property_if_missing
 
 
 class LectureTranscriptionSchema(Enum):
@@ -61,7 +61,7 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
             LectureTranscriptionSchema.COLLECTION_NAME.value
         )
         for stamp_property in _stamp_properties():
-            _add_property_if_missing(collection, stamp_property)
+            add_property_if_missing(collection, stamp_property)
         return collection
 
     return client.collections.create(
