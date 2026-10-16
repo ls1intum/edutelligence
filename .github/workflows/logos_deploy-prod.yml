@@ -19,6 +19,14 @@ jobs:
       # Deploy each node independently: one unreachable host must not cancel
       # the in-flight deploys of the other (healthy) nodes.
       fail-fast: false
+      # One node at a time, so that at most one worker is out of service at any
+      # moment.
+      max-parallel: 1
+      # `node-manager: true` puts a worker under the node manager. The workflow
+      # then asks the node manager of the host to replace the worker container.
+      # The node manager checks the new container and rolls back if it does not
+      # come up. Without the flag, the workflow runs `docker compose pull` and
+      # `up -d` on the host itself. See logos/logos-node-manager/README.md.
       matrix:
         include:
           - environment: "Logos - Prod"
@@ -27,15 +35,19 @@ jobs:
           - environment: "Logos Worker - Prod - deioma"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
+            node-manager: false
           - environment: "Logos Worker - Prod - deimama"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
+            node-manager: false
           - environment: "Logos Worker - Prod - deipapa"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
+            node-manager: false
           - environment: "Logos Worker - hochbruegge-vm-1"
             compose-file: ./logos/logos-workernode/docker-compose.yml
             base-path: /opt/logos-workernode
+            node-manager: false
     environment:
       name: ${{ matrix.environment }}
     steps:
@@ -110,10 +122,18 @@ jobs:
             | to_entries[]
             | "\(.key)=\(.value | @json)"
           ' >> .env
+
+          # A worker under the node manager needs the compose profile that
+          # starts the node manager service. The line comes last, so it also
+          # wins over a COMPOSE_PROFILES variable of the environment.
+          if [ "$NODE_MANAGER" = "true" ]; then
+            echo "COMPOSE_PROFILES=node-manager" >> .env
+          fi
         env:
           VARS_CONTEXT: ${{ toJson(vars) }}
           SECRETS_CONTEXT: ${{ toJson(secrets) }}
           WORKSPACE_IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
+          NODE_MANAGER: ${{ matrix.node-manager }}
 
       - name: Copy .env file to VM
         uses: appleboy/scp-action@v1.0.0
@@ -128,7 +148,87 @@ jobs:
           source: .env
           target: ${{ matrix.base-path }}
 
+      # The next three steps run for workers under the node manager only. The
+      # node manager pulls, replaces, checks and, if need be, rolls back on the
+      # host. This job only asks for it and waits for the result.
+      - name: Update node manager
+        if: ${{ matrix.node-manager }}
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          LOGOS_HARBOR_PASSWORD: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          command_timeout: 15m
+          envs: LOGOS_HARBOR_PASSWORD
+          script: |
+            set -eu
+            # The node manager mounts this login to pull the worker image.
+            printf '%s' "$LOGOS_HARBOR_PASSWORD" | docker login ${{ vars.LOGOS_HARBOR_REGISTRY }} -u '${{ vars.LOGOS_HARBOR_USER }}' --password-stdin
+            compose() {
+              docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env "$@"
+            }
+            compose pull logos-node-manager
+            # Recreated on every run: `docker login` replaces config.json with a new file, and the node manager
+            # mounts that one file, so a container that is kept would go on with the old login.
+            compose up -d --force-recreate logos-node-manager
+            for attempt in $(seq 1 30); do
+              if docker exec logos-node-manager node-manager ping; then
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "The node manager did not start." >&2
+            docker logs --tail 50 logos-node-manager >&2
+            exit 1
+
+      - name: Deploy through node manager
+        if: ${{ matrix.node-manager }}
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          # Through the environment rather than into the script text: the tag
+          # comes from whoever dispatched the workflow.
+          WORKSPACE_IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
+          DEPLOY_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          # `deploy --wait` gives up after 40 minutes. The deployment itself
+          # keeps running on the host if this connection drops, and
+          # `node-manager wait <id>` attaches to it again.
+          command_timeout: 45m
+          envs: WORKSPACE_IMAGE_TAG,DEPLOY_ID,RUN_URL
+          script: |
+            set -eu
+            docker exec logos-node-manager node-manager deploy --id "$DEPLOY_ID" --tag "$WORKSPACE_IMAGE_TAG" --requested-by "$RUN_URL" --wait
+
+      - name: Show node manager log
+        if: ${{ (success() || failure()) && matrix.node-manager }}
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ vars.VM_HOST }}
+          username: ${{ vars.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          proxy_host: ${{ vars.DEPLOYMENT_GATEWAY_HOST }}
+          proxy_username: ${{ vars.DEPLOYMENT_GATEWAY_USER }}
+          proxy_key: ${{ secrets.DEPLOYMENT_GATEWAY_SSH_KEY }}
+          proxy_port: ${{ vars.DEPLOYMENT_GATEWAY_PORT }}
+          script: |
+            docker logs --tail 80 logos-node-manager 2>&1 || true
+
       - name: Pull new images
+        if: ${{ !matrix.node-manager }}
         uses: appleboy/ssh-action@v1.2.5
         env:
           LOGOS_HARBOR_PASSWORD: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
@@ -153,6 +253,7 @@ jobs:
             docker compose -f ${{ matrix.base-path }}/${{ steps.extract-basename.outputs.basename }} --env-file=${{ matrix.base-path }}/.env pull
 
       - name: Deploy with docker compose
+        if: ${{ !matrix.node-manager }}
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ vars.VM_HOST }}
@@ -197,7 +298,11 @@ jobs:
               docker compose -f "$COMPOSE_FILE" --env-file="$ENV_FILE" up -d --remove-orphans
             fi
 
+      # Skipped under the node manager: `prune -af` would delete the previous
+      # worker image, which a rollback needs. The node manager removes only the
+      # image that is two versions old.
       - name: Clean up old images
+        if: ${{ !matrix.node-manager }}
         uses: appleboy/ssh-action@v1.2.5
         env:
           LOGOS_HARBOR_PASSWORD: ${{ secrets.LOGOS_HARBOR_PASSWORD }}

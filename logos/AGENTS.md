@@ -13,6 +13,7 @@
 | `logos-ui/` | Angular 22, npm | Web application for teams, keys, models, stats. See its own `AGENTS.md`. |
 | `logos-workernode/` | Python | GPU worker-node control plane: vLLM lane lifecycle, calibration, websocket bridge to the orchestrator. See its own `AGENTS.md`. |
 | `logos-agent/` | Python, FastAPI | Runs coding agents in isolated containers on spare serving capacity. See its own `AGENTS.md` and `README.md`. |
+| `logos-node-manager/` | Python | Handles GPU worker node deployments. See its own `AGENTS.md` and `README.md`. |
 | `e2e/` | pytest, Playwright | GPU-less end-to-end suite. See its own `AGENTS.md` and `README.md`. |
 | `agent-gateway/`, `rate-limit-gateway/` | nginx | Edge proxies around the agent runner and the orchestrator. |
 | `keycloak/` | — | Dev realm seed (`tum-realm.json`); all seeded dev users have password `password`. |

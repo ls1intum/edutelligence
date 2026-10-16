@@ -104,7 +104,57 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      # The worker opens its port only after its startup finishes.
+      # The startup includes the FlashInfer kernel warmup, which takes minutes when the kernel cache is empty.
+      # Failed checks do not count during the start period.
+      start_period: 10m
+  # ── Node manager (optional) ────────────────────────────────────────────────
+  # Replaces the worker container on a deploy: it pulls the new image, starts
+  # the new container, checks that it comes up, and starts the previous version
+  # again if it does not. See logos-node-manager/README.md.
+  #
+  # The service only exists on hosts that enable its profile. The deploy
+  # workflows write this line to .env for every worker with `node-manager: true`
+  # in its matrix entry:
+  #   COMPOSE_PROFILES=node-manager
+  # Where the node manager runs, it is the only thing that restarts the worker.
+  #
+  # The worker directory is mounted at the SAME path as on the host. Compose
+  # turns the relative bind mounts of the worker into absolute host paths before
+  # it sends them to the Docker engine, so the path has to mean the same thing in
+  # both places. The directory is read-only except for the state of the manager.
+  #
+  # The Docker login of the host user is mounted read-only, for registries that
+  # need a login (run `docker login` on the host first). The mount does not
+  # create the file: a host without a login fails to start the service, instead
+  # of getting a directory in place of config.json. A new `docker login` replaces
+  # that file and the mount keeps showing the old one, so recreate the service
+  # after it (`docker compose up -d --force-recreate logos-node-manager`).
+  logos-node-manager:
+    profiles: ["node-manager"]
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-node-manager:${NODE_MANAGER_IMAGE_TAG:-${IMAGE_TAG:-latest}}
+    container_name: logos-node-manager
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      NODE_MANAGER_PROJECT_DIR: ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}:${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}:ro
+      - ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}/node-manager:${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}/node-manager
+      - type: bind
+        source: ${NODE_MANAGER_DOCKER_CONFIG:-${HOME}/.docker/config.json}
+        target: /root/.docker/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "node-manager", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 # The pre-upgrade model volume name is kept for one release so
 # in-place upgrades resolve to the volume that already holds the cached
