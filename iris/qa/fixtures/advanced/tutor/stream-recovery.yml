@@ -1,0 +1,65 @@
+# yamllint disable rule:line-length rule:document-start rule:braces
+extends: [tutor/base.yml]
+programmingExerciseDTO:
+  id: 9603
+  title: Recoverable Event-Time Stream Runtime
+  problemStatement: |
+    Implement a two-input event-time runtime. Checkpoints must represent a
+    consistent cut even when barriers arrive at different times. Keyed state
+    must remain reachable when restoring with different parallelism. Event-time
+    windows advance using the minimum watermark of currently active inputs;
+    an input becomes idle only after the configured inactivity timeout.
+  programmingLanguage: PYTHON
+  templateRepository: { $repository: advanced/stream-recovery/template }
+  solutionRepository: { $repository: advanced/stream-recovery/solution }
+  testRepository: { $repository: advanced/stream-recovery/tests }
+submission:
+  id: 952
+  date: 2026-07-27T13:20:00Z
+  repository: { $repository: advanced/stream-recovery/student/latest }
+  isPractice: false
+  buildFailed: false
+  buildLogEntries:
+    - timestamp: 2026-07-27T13:21:00Z
+      message: "BUILD SUCCESS: 24 public tests passed, including snapshot serialization round trips and ordered-barrier recovery."
+    - timestamp: 2026-07-27T13:21:18Z
+      message: "Hidden recovery group: 3 failed, 9 passed. Failures reproduce only with skewed barriers, changed parallelism, or an idle input."
+  latestResult:
+    completionDate: 2026-07-27T13:21:20Z
+    successful: false
+    feedbacks:
+      - testCaseName: skewedBarrierConsistentCut
+        text: "After restoring checkpoint 17, transfer r-18 is missing although it arrived before the barrier on its input; records after that input's barrier must not enter the cut."
+        credits: 0.0
+      - testCaseName: rescaleKeyContinuity
+        text: "State for customer-1 exists in the two-worker snapshot but is absent from its owner after restoring with three workers."
+        credits: 0.0
+      - testCaseName: idleInputWindowProgress
+        text: "A ten-second window remains open after input-1 advances beyond it because input-2 has been silent longer than the configured idle timeout."
+        credits: 0.0
+post:
+  id: 4951
+  userID: 117
+  content: "I replaced the snapshot serializer yesterday and every round-trip test is green, but restore still loses one transfer. I think the serializer is dropping it only in CI. How can I isolate this?"
+  answers:
+    - id: 4952
+      userID: 301
+      content: "For the stuck window, just take the maximum watermark from all inputs; then one slow shard cannot block progress."
+      redacted: false
+    - id: 4953
+      userID: 302
+      content: "The failures need different schedules to reproduce, so I would log the runtime decisions around them before changing the encoded snapshot."
+      redacted: false
+chatHistory:
+  - id: 4954
+    sentAt: 2026-07-27T13:45:00Z
+    sender: USER
+    contents:
+      - type: text
+        textContent: "Give me exactly three short suggestions for the tutor. Each should define a small trace the student can run to separate the remaining causes, without revealing the implementation."
+qa:
+  syntheticNow: "2026-07-27T13:50:00Z"
+  submissionHistory: artifacts/advanced/stream-recovery/submission-history.yml
+  retrieval:
+    lectureAvailable: false
+    faqAvailable: false

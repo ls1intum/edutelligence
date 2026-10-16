@@ -1,0 +1,10 @@
+# yamllint disable rule:line-length rule:document-start
+exercise: hindley-milner-inference
+student: 117
+submissions:
+  - id: 941
+    commit: a8c43d1
+    date: 2026-07-23T14:40:00Z
+    snapshot: student/latest
+    build: passed
+    note: The AST and basic inference tests pass, including concrete integer and Boolean uses of a let-bound identity; three higher-order hidden cases fail.

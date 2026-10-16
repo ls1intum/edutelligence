@@ -3,6 +3,11 @@
 #######################
 application.local.yml
 llm_config.local.yml
+qa/config/rates.local.yml
+qa/.spend-ledger.jsonl
+qa/.spend-ledger.jsonl.lock
+qa/qa-results/
+qa-results/
 
 ######################
 # Docker

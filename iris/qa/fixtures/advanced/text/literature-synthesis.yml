@@ -1,0 +1,25 @@
+# yamllint disable rule:line-length rule:document-start
+extends: [base/chat.yml]
+textExercise:
+  id: 9305
+  title: Evidence Synthesis Across Study Designs
+  problemStatement: |
+    Synthesize three supplied study summaries without overstating comparability.
+    Study A is an observational analysis of 8,000 course records: forum use is
+    associated with completion after measured adjustment, but unmeasured
+    motivation remains possible. Study B randomly assigns 240 volunteers to
+    retrieval-practice or rereading quizzes and reports a 6-point delayed-test
+    difference. Study C interviews 24 students about why automated hints feel
+    useful or intrusive; it does not estimate learning effects. Attribute each
+    finding correctly and explain what the designs jointly do and do not show.
+  startDate: 2026-06-28T08:00:00Z
+  endDate: 2026-07-09T18:00:00Z
+  exampleSolution: "Confidential reference: organize the synthesis by outcomes and design strength, keep Study B's causal estimate separate from A's association and C's experiential themes, and state remaining uncertainty."
+textExerciseSubmission: |
+  Study A randomly assigned 8,000 students and proved that forums raise exam
+  scores by six points. Study B's interviews explain that hints feel intrusive,
+  while Study C confirms through controlled testing that retrieval practice
+  increases course completion. All three estimate the same intervention and
+  unanimously demonstrate a causal improvement in learning outcomes.
+qa:
+  syntheticNow: "2026-06-28T12:00:00Z"

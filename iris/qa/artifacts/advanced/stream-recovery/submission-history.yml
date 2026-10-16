@@ -1,0 +1,16 @@
+# yamllint disable rule:line-length rule:document-start
+exercise: recoverable-event-time-stream-runtime
+student: 117
+submissions:
+  - id: 951
+    commit: 81c49e2
+    date: 2026-07-26T16:10:00Z
+    snapshot: student/serializer-failure
+    build: failed
+    note: The initial snapshot encoder dropped negative values and failed public serialization round-trip tests.
+  - id: 952
+    commit: ca7421d
+    date: 2026-07-27T13:20:00Z
+    snapshot: student/latest
+    build: passed
+    note: Serialization and all public tests pass; hidden failures remain for skewed barriers, rescaling, and idle inputs.

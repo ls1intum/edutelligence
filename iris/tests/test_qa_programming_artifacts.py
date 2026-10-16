@@ -1,0 +1,339 @@
+import runpy
+import shutil
+import subprocess  # nosec B404 - fixed local javac/java commands
+import sys
+from pathlib import Path
+
+import pytest
+
+QA_ROOT = Path(__file__).parents[1] / "qa"
+
+
+def _java_tools() -> tuple[str, str]:
+    javac = shutil.which("javac")
+    java = shutil.which("java")
+    if not javac or not java:
+        pytest.skip("A JDK is required to execute the Java QA repository fixture")
+    return javac, java
+
+
+def _compile_and_run_sort(source: Path, tmp_path: Path) -> subprocess.CompletedProcess:
+    javac, java = _java_tools()
+    harness = tmp_path / "SortHarness.java"
+    harness.write_text(
+        """package de.tum.in.ase;
+import java.util.Arrays;
+
+public final class SortHarness {
+    public static void main(String[] args) {
+        int[] values = {3, -1, 3, 0};
+        Sort.insertionSort(values);
+        if (!Arrays.equals(values, new int[]{-1, 0, 3, 3})) {
+            throw new AssertionError(Arrays.toString(values));
+        }
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    classes = tmp_path / "classes"
+    classes.mkdir()
+    compiled = subprocess.run(  # nosec B603 - argument list, fixed executables
+        [javac, "-d", str(classes), str(source), str(harness)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+    return subprocess.run(  # nosec B603 - argument list, fixed executables
+        [java, "-cp", str(classes), "de.tum.in.ase.SortHarness"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_python_maze_reference_solution_matches_its_public_tests():
+    module = runpy.run_path(
+        str(QA_ROOT / "artifacts/programming/maze/solution/src/maze.py")
+    )
+    shortest_path = module["shortest_path"]
+
+    grid = [[0, 1, 0], [0, 0, 0], [1, 0, 0]]
+    assert shortest_path(grid, (0, 0), (0, 2)) == 4
+    assert shortest_path([[0, 1], [1, 0]], (0, 0), (1, 1)) is None
+
+
+def test_student_maze_snapshot_reproduces_the_recorded_failure():
+    module = runpy.run_path(
+        str(QA_ROOT / "artifacts/programming/maze/student/latest/src/maze.py")
+    )
+    shortest_path = module["shortest_path"]
+
+    grid = [[0, 1, 0], [0, 0, 0], [1, 0, 0]]
+    assert shortest_path(grid, (0, 0), (0, 2)) is None
+
+
+def test_java_sorting_reference_solution_matches_its_hidden_test(tmp_path):
+    source = QA_ROOT / "artifacts/programming/sorting/solution/src/Sort.java"
+
+    completed = _compile_and_run_sort(source, tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_java_sorting_student_snapshot_reproduces_hidden_test_failure(tmp_path):
+    source = (
+        QA_ROOT / "artifacts/programming/sorting/student/failing-tests/src/Sort.java"
+    )
+
+    completed = _compile_and_run_sort(source, tmp_path)
+
+    assert completed.returncode != 0
+    assert "AssertionError" in completed.stderr
+
+
+def test_java_sorting_compile_failure_snapshot_reproduces_build_failure(tmp_path):
+    javac, _ = _java_tools()
+    source = (
+        QA_ROOT / "artifacts/programming/sorting/student/compile-failure/src/Sort.java"
+    )
+
+    completed = subprocess.run(  # nosec B603 - argument list, fixed executable
+        [javac, "-d", str(tmp_path), str(source)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "error" in completed.stderr.casefold()
+
+
+def _run_hm_inference(source_root: Path) -> subprocess.CompletedProcess:
+    harness = """
+from infer import (
+    Apply,
+    InfiniteTypeError,
+    Inferencer,
+    IntLiteral,
+    Lambda,
+    Let,
+    Pair,
+    TFunction,
+    TInt,
+    TPair,
+    TVariable,
+    Var,
+)
+
+failures = []
+
+expression = Let(
+    "id",
+    Lambda("x", Var("x")),
+    Pair(Apply(Var("id"), IntLiteral(1)), Var("id")),
+)
+inferred = Inferencer().infer_type(expression)
+if not (
+    isinstance(inferred, TPair)
+    and isinstance(inferred.left, TInt)
+    and isinstance(inferred.right, TFunction)
+    and isinstance(inferred.right.argument, TVariable)
+    and inferred.right.argument == inferred.right.result
+):
+    failures.append("later identity instantiation was constrained by an earlier use")
+
+try:
+    Inferencer().infer_type(Lambda("x", Apply(Var("x"), Var("x"))))
+except InfiniteTypeError:
+    pass
+except Exception:
+    failures.append("self application raised the wrong failure")
+else:
+    failures.append("self application was assigned a finite type")
+
+expression = Lambda(
+    "f",
+    Lambda("x", Apply(Var("f"), Apply(Var("f"), Var("x")))),
+)
+inferred = Inferencer().infer_type(expression)
+if not (
+    isinstance(inferred, TFunction)
+    and isinstance(inferred.argument, TFunction)
+    and isinstance(inferred.result, TFunction)
+    and inferred.argument.argument == inferred.argument.result
+    and inferred.argument.argument == inferred.result.argument
+    and inferred.result.argument == inferred.result.result
+):
+    failures.append("repeated application inferred a non-principal type")
+
+if failures:
+    raise AssertionError("; ".join(failures))
+"""
+    return subprocess.run(  # nosec B603 - fixed interpreter and local fixture
+        [sys.executable, "-c", harness],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PYTHONPATH": str(source_root)},
+    )
+
+
+def test_hm_inference_reference_solution_satisfies_hidden_cases():
+    source_root = QA_ROOT / "artifacts/advanced/hm-inference/solution/src"
+
+    completed = _run_hm_inference(source_root)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_hm_inference_student_snapshot_reproduces_hidden_failures():
+    source_root = QA_ROOT / "artifacts/advanced/hm-inference/student/latest/src"
+
+    completed = _run_hm_inference(source_root)
+
+    assert completed.returncode != 0
+    assert "later identity instantiation was constrained" in completed.stderr
+    assert "self application was assigned a finite type" in completed.stderr
+    assert "repeated application inferred a non-principal type" in completed.stderr
+
+
+def _run_incremental_workbook(source_root: Path) -> subprocess.CompletedProcess:
+    harness = """
+from workbook import CellRef, Formula, WorkbookEngine
+
+failures = []
+
+engine = WorkbookEngine()
+source = CellRef("Inputs", "A1")
+middle = CellRef("Summary", "B1")
+result = CellRef("Dashboard", "C1")
+engine.set_value(source, 2)
+engine.set_formula(middle, Formula((source,), offset=1))
+engine.set_formula(result, Formula((middle,), offset=3))
+if engine.value(result) != 6:
+    failures.append("initial dependency chain was incorrect")
+engine.set_value(source, 5)
+if engine.value(result) != 9:
+    failures.append("transitive cached result remained stale")
+
+engine = WorkbookEngine()
+source = CellRef("Inputs", "A1")
+left = CellRef("Summary", "B1")
+result = CellRef("Dashboard", "C1")
+engine.set_value(source, 2)
+engine.set_formula(left, Formula((source,), offset=1))
+engine.set_formula(result, Formula((left, source), offset=3))
+try:
+    value = engine.value(result)
+    if value != 8:
+        failures.append("shared dependency produced the wrong value")
+except Exception:
+    failures.append("shared acyclic dependency was reported as a cycle")
+
+engine = WorkbookEngine()
+inputs = CellRef("Inputs", "A1")
+summary = CellRef("Summary", "A1")
+engine.set_value(inputs, 11)
+engine.set_value(summary, 2)
+engine.value(inputs)
+if engine.value(summary) != 2:
+    failures.append("same-named cells on different sheets shared a cached value")
+
+if failures:
+    raise AssertionError("; ".join(failures))
+"""
+    environment = {"PYTHONPATH": str(source_root)}
+    return subprocess.run(  # nosec B603 - fixed interpreter and local fixture
+        [sys.executable, "-c", harness],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+
+
+def test_incremental_workbook_reference_solution_satisfies_hidden_sequences():
+    source_root = QA_ROOT / "artifacts/advanced/incremental-workbook/solution/src"
+
+    completed = _run_incremental_workbook(source_root)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_incremental_workbook_student_snapshot_reproduces_hidden_failures():
+    source_root = QA_ROOT / "artifacts/advanced/incremental-workbook/student/latest/src"
+
+    completed = _run_incremental_workbook(source_root)
+
+    assert completed.returncode != 0
+    assert "transitive cached result remained stale" in completed.stderr
+    assert "shared acyclic dependency was reported as a cycle" in completed.stderr
+    assert (
+        "same-named cells on different sheets shared a cached value" in completed.stderr
+    )
+
+
+def _run_stream_recovery(source_root: Path) -> subprocess.CompletedProcess:
+    harness = """
+import zlib
+
+from streamlab.model import Record
+from streamlab.runtime import Runtime
+from streamlab.state import partition_snapshot, restore_worker
+from streamlab.watermarks import WatermarkTracker
+
+failures = []
+
+runtime = Runtime(2)
+runtime.process(Record(0, "opening", 10, 5))
+runtime.barrier(0, 17)
+runtime.process(Record(1, "r-18", 11, 18))
+checkpoint = runtime.barrier(1, 17)
+if checkpoint is None or checkpoint.state.get("r-18") != 18:
+    failures.append("skewed barrier snapshot omitted a pre-barrier record")
+
+values = {"customer-1": 23, "customer-2": 8}
+snapshot = partition_snapshot(values, 2)
+group = zlib.crc32(b"customer-1") % 128
+new_owner = min(2, group * 3 // 128)
+if restore_worker(snapshot, new_owner, 3).get("customer-1") != 23:
+    failures.append("rescaled owner could not recover keyed state")
+
+tracker = WatermarkTracker(2, idle_timeout_ms=100)
+tracker.observe_watermark(1, 40, 0)
+tracker.observe_record(0, 200)
+tracker.observe_watermark(0, 120, 200)
+if tracker.current(200) != 120:
+    failures.append("idle input prevented event-time progress")
+
+if failures:
+    raise AssertionError("; ".join(failures))
+"""
+    return subprocess.run(  # nosec B603 - fixed interpreter and local fixture
+        [sys.executable, "-c", harness],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PYTHONPATH": str(source_root)},
+    )
+
+
+def test_stream_recovery_reference_solution_satisfies_hidden_schedules():
+    source_root = QA_ROOT / "artifacts/advanced/stream-recovery/solution/src"
+
+    completed = _run_stream_recovery(source_root)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_stream_recovery_student_snapshot_reproduces_hidden_failures():
+    source_root = QA_ROOT / "artifacts/advanced/stream-recovery/student/latest/src"
+
+    completed = _run_stream_recovery(source_root)
+
+    assert completed.returncode != 0
+    assert "skewed barrier snapshot omitted a pre-barrier record" in completed.stderr
+    assert "rescaled owner could not recover keyed state" in completed.stderr
+    assert "idle input prevented event-time progress" in completed.stderr
