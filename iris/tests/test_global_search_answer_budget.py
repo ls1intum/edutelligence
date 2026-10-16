@@ -1,12 +1,15 @@
-"""A global-search answer cut at its output budget is retried once, then given up.
+"""A global-search answer cut at its output budget gives no answer, not a failure.
 
-A model that reasons before it answers can spend the whole budget on reasoning.
-The Responses API then raises IncompleteModelResponse; Chat Completions return
-empty text at the limit. Either way the student must still get the sources, and
-every call must be billed once.
+A model that reasons before it answers can spend the whole budget on reasoning
+when its llm_config entry has no reasoning_token_allowance. The Responses API
+then raises IncompleteModelResponse; Chat Completions return empty text at the
+limit. Either way the student must still get the sources, the call must be
+billed once, and the log must name the missing setting.
 """
 
 # pylint: disable=protected-access
+
+import logging
 
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -27,7 +30,6 @@ from iris.llm.request_handler.request_handler_interface import (  # noqa: E402
 )
 from iris.pipeline.global_search_pipeline import (  # noqa: E402
     ANSWER_MAX_TOKENS,
-    RETRY_ANSWER_MAX_TOKENS,
     GlobalSearchPipeline,
 )
 
@@ -90,49 +92,37 @@ def _pipeline(outcomes):
     return pipeline, handler
 
 
-def _billed(pipeline):
-    """Output tokens of every call: those billed inside, then the caller's."""
-    return [t.num_output_tokens for t in pipeline.tokens] + [
-        pipeline.answer_llm.tokens.num_output_tokens
-    ]
+def test_a_cut_answer_gives_no_answer_and_bills_the_call(caplog):
+    pipeline, handler = _pipeline([_cut(600)])
 
+    with caplog.at_level(logging.WARNING):
+        raw = pipeline._generate_answer("q", [])
 
-def test_a_reasoning_only_cut_is_retried_with_a_larger_budget():
-    pipeline, handler = _pipeline([_cut(600), _answer("Use the slides [1]", 900)])
-
-    raw = pipeline._generate_answer("q", [])
-
-    assert raw == "Use the slides [1]"
-    assert handler.budgets == [ANSWER_MAX_TOKENS, RETRY_ANSWER_MAX_TOKENS]
-    assert _billed(pipeline) == [600, 900]
-    assert pipeline.answer_llm.completion_args.max_tokens == ANSWER_MAX_TOKENS
-
-
-def test_empty_text_at_the_limit_is_retried_too():
-    pipeline, handler = _pipeline(
-        [_answer("", ANSWER_MAX_TOKENS), _answer("Answer [1]", 700)]
-    )
-
-    assert pipeline._generate_answer("q", []) == "Answer [1]"
-    assert handler.budgets == [ANSWER_MAX_TOKENS, RETRY_ANSWER_MAX_TOKENS]
-    assert _billed(pipeline) == [ANSWER_MAX_TOKENS, 700]
-
-
-def test_a_second_cut_gives_no_answer_and_bills_both_calls():
-    pipeline, handler = _pipeline([_cut(600), _cut(2400)])
-
-    assert pipeline._generate_answer("q", []) == ""
-    assert handler.budgets == [ANSWER_MAX_TOKENS, RETRY_ANSWER_MAX_TOKENS]
-    assert _billed(pipeline) == [600, 2400]
-    assert pipeline.answer_llm.completion_args.max_tokens == ANSWER_MAX_TOKENS
-
-
-def test_empty_text_below_the_limit_is_not_retried():
-    pipeline, handler = _pipeline([_answer("", 40)])
-
-    assert pipeline._generate_answer("q", []) == ""
+    assert raw == ""
     assert handler.budgets == [ANSWER_MAX_TOKENS]
+    # The caller bills answer_llm.tokens: it must be the cut call's usage.
+    assert pipeline.answer_llm.tokens.num_output_tokens == 600
     assert not pipeline.tokens
+    assert "reasoning_token_allowance" in caplog.text
+
+
+def test_empty_text_at_the_limit_is_logged_with_the_setting(caplog):
+    pipeline, handler = _pipeline([_answer("", ANSWER_MAX_TOKENS)])
+
+    with caplog.at_level(logging.WARNING):
+        assert pipeline._generate_answer("q", []) == ""
+
+    assert handler.budgets == [ANSWER_MAX_TOKENS]
+    assert "reasoning_token_allowance" in caplog.text
+
+
+def test_empty_text_below_the_limit_is_not_reported_as_a_cut(caplog):
+    pipeline, _ = _pipeline([_answer("", 40)])
+
+    with caplog.at_level(logging.WARNING):
+        assert pipeline._generate_answer("q", []) == ""
+
+    assert "reasoning_token_allowance" not in caplog.text
 
 
 def test_a_normal_answer_makes_one_call():
@@ -140,16 +130,16 @@ def test_a_normal_answer_makes_one_call():
 
     assert pipeline._generate_answer("q", []) == "!none!"
     assert handler.budgets == [ANSWER_MAX_TOKENS]
-    assert not pipeline.tokens
+    assert pipeline.answer_llm.tokens.num_output_tokens == 5
 
 
-def test_the_client_drops_partial_text_before_the_retry():
-    pipeline, _ = _pipeline([_cut(600), _answer("Answer [1]", 300)])
+def test_the_client_drops_partial_text_of_a_cut_answer():
+    pipeline, _ = _pipeline([_cut(600)])
     events = []
 
     pipeline._generate_answer("q", [], stream_handler=events.append)
 
-    assert None in events
+    assert events == [None]
     assert pipeline.answer_llm.completion_args.stream_handler is None
 
 

@@ -157,12 +157,11 @@ _SINGLE_MARKER_RE = re.compile(r"\[(\d+)\]")
 # the question (plain-text contract; measured 8/8 discipline on nano).
 _NO_ANSWER_SENTINEL = "!none!"
 
-# Output budget of the answer call. It includes reasoning: a model that reasons
-# before answering can use all of it and stop without an answer. Such a call is
-# retried once with the larger budget; a second cut gives no answer, and the
-# student still gets the sources.
+# Output budget of the answer call. The provider counts reasoning against it,
+# so a model that reasons needs `reasoning_token_allowance` in its llm_config
+# entry; without it the call can stop before the answer. Then the student gets
+# the sources without an answer, as when the model finds none.
 ANSWER_MAX_TOKENS = 600
-RETRY_ANSWER_MAX_TOKENS = 2400
 
 
 def _is_deliberate_refusal(raw: str) -> bool:
@@ -938,30 +937,15 @@ class GlobalSearchPipeline(SubPipeline):
         try:
             raw = self._invoke_answer(prompt, variables, stream_handler)
         except IncompleteModelResponse as error:
-            raw = None
-            logger.warning("[global-search] answer call stopped early: %s", error)
-        if raw is None or self._cut_without_answer(raw):
-            # The caller bills the last call; the cut one is billed here.
-            self._append_tokens(
-                self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
-            )
+            # The caller bills the call: the wrapper now holds its usage.
+            raw = ""
             if stream_handler is not None:
                 # Drop any partial text of the cut call from the client.
                 stream_handler(None)
-            logger.info(
-                "[global-search] retrying the answer with max_tokens=%d",
-                RETRY_ANSWER_MAX_TOKENS,
-            )
-            try:
-                raw = self._invoke_answer(
-                    prompt, variables, stream_handler, RETRY_ANSWER_MAX_TOKENS
-                )
-            except IncompleteModelResponse as error:
-                logger.warning(
-                    "[global-search] retried answer stopped early, no answer: %s",
-                    error,
-                )
-                raw = ""
+            self._warn_cut_answer(str(error))
+        else:
+            if self._cut_without_answer(raw):
+                self._warn_cut_answer("empty text at the output limit")
         # raw_len=0 + output_tokens>0 is the fingerprint of a reasoning model
         # exhausting max_tokens on reasoning and returning an empty message
         # (finish_reason=length) — the call returns WITHOUT an exception.
@@ -983,18 +967,24 @@ class GlobalSearchPipeline(SubPipeline):
         prompt: ChatPromptTemplate,
         variables: dict[str, str],
         stream_handler=None,
-        max_tokens: int = ANSWER_MAX_TOKENS,
     ) -> str:
-        """One answer call with the given output budget."""
+        """One answer call, streamed through the sentinel gate if requested."""
         args = self.answer_llm.completion_args
         if stream_handler is not None:
             args.stream_handler = _SentinelGateStreamHandler(stream_handler)
-        args.max_tokens = max_tokens
         try:
             return (prompt | self.answer_pipeline).invoke(variables)
         finally:
             args.stream_handler = None
-            args.max_tokens = ANSWER_MAX_TOKENS
+
+    def _warn_cut_answer(self, reason: str) -> None:
+        logger.warning(
+            "[global-search] answer of model %s stopped at its output budget "
+            "(%s); no answer, sources only. A model that reasons needs "
+            "reasoning_token_allowance in its llm_config entry.",
+            self.answer_llm.model_name,
+            reason,
+        )
 
     def _cut_without_answer(self, raw: str) -> bool:
         """Whether the last call used its whole budget and wrote no text.
