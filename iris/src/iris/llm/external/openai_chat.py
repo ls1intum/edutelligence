@@ -644,25 +644,29 @@ def extract_response_output_text(response) -> str:
     return "".join(texts)
 
 
-def _completed_answer_text(output_items, fallback_output_text: str = "") -> str:
-    """The visible answer text of message items that were written completely.
+def _completed_answer_text(output_items) -> Optional[str]:
+    """The answer of a response that did not complete, if it was fully written.
 
-    When a gateway returns no message items at all, the streamed text is the
-    only evidence and is used as it is.
+    Returns the text only when the response has message items and every one of
+    them was written completely; otherwise None. Streamed text alone is no proof
+    that the answer was complete, so a response without message items is
+    rejected.
     """
     messages = [
         item for item in output_items if getattr(item, "type", None) == "message"
     ]
-    if not messages:
-        return fallback_output_text
-    texts = []
-    for item in messages:
-        if getattr(item, "status", None) not in (None, "completed"):
-            continue
-        for content in getattr(item, "content", []) or []:
-            if getattr(content, "type", None) == "output_text":
-                texts.append(getattr(content, "text", "") or "")
-    return "".join(texts)
+    if not messages or any(
+        getattr(item, "status", None) != "completed" for item in messages
+    ):
+        return None
+    texts = [
+        getattr(content, "text", "") or ""
+        for item in messages
+        for content in getattr(item, "content", []) or []
+        if getattr(content, "type", None) == "output_text"
+    ]
+    text = "".join(texts)
+    return text or None
 
 
 def raise_for_failed_responses_status(response) -> None:
@@ -786,7 +790,9 @@ def convert_responses_to_iris_message(
         for item in function_calls
         if getattr(item, "status", None) not in (None, "completed")
     ]
-    if function_calls and (status == "incomplete" or unfinished_calls):
+    # Tools run only from a completed response (a missing status, which some
+    # gateways leave out, counts as completed) with completed call items.
+    if function_calls and (status not in (None, "completed") or unfinished_calls):
         reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
         raise IncompleteModelResponse(
             f"Responses API stopped before its tool calls were complete "
@@ -797,7 +803,8 @@ def convert_responses_to_iris_message(
         # Only a fully written answer is usable from a response that stopped
         # early; a cut during reasoning or inside the answer is a failure, not
         # an empty or half answer.
-        if not _completed_answer_text(output_items, fallback_output_text):
+        completed_text = _completed_answer_text(output_items)
+        if completed_text is None:
             reason = getattr(
                 getattr(response, "incomplete_details", None), "reason", None
             )
@@ -809,6 +816,12 @@ def convert_responses_to_iris_message(
         logger.warning(
             "Responses API returned non-completed status %s with a complete answer",
             status,
+        )
+        return PyrisMessage(
+            sender=map_str_to_role("assistant"),
+            contents=[TextMessageContentDTO(textContent=completed_text)],
+            sendAt=datetime.now(),
+            token_usage=token_usage,
         )
 
     current_time = datetime.now()

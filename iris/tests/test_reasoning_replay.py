@@ -230,6 +230,85 @@ def test_an_incomplete_response_with_a_completely_written_answer_is_kept():
     assert message.contents[0].text_content == "A heap is a tree."
 
 
+def test_streamed_text_alone_is_no_proof_of_a_complete_answer():
+    response = _response("incomplete", [], incomplete_reason="max_output_tokens")
+
+    with pytest.raises(IncompleteModelResponse) as raised:
+        convert_responses_to_iris_message(
+            response, "luna", fallback_output_text="The heap property"
+        )
+
+    assert raised.value.token_usage.num_input_tokens == 10
+
+
+def test_a_completed_commentary_does_not_carry_an_incomplete_answer():
+    response = _response(
+        "incomplete",
+        [
+            _item(
+                type="message",
+                status="completed",
+                content=[_item(type="output_text", text="Let me think. ")],
+            ),
+            _item(
+                type="message",
+                status="incomplete",
+                content=[_item(type="output_text", text="The answer is")],
+            ),
+        ],
+        incomplete_reason="max_output_tokens",
+    )
+
+    with pytest.raises(IncompleteModelResponse):
+        convert_responses_to_iris_message(response, "luna")
+
+
+@pytest.mark.parametrize("status", ["in_progress", "cancelled", "queued"])
+def test_tool_calls_run_only_from_completed_responses(status):
+    response = _response(
+        status,
+        [
+            _item(
+                type="message",
+                status="completed",
+                content=[_item(type="output_text", text="Checking.")],
+            ),
+            _item(
+                type="function_call",
+                call_id="call_1",
+                name="lookup",
+                arguments="{}",
+                status="completed",
+            ),
+        ],
+    )
+
+    with pytest.raises(IncompleteModelResponse) as raised:
+        convert_responses_to_iris_message(response, "luna", keep_items=True)
+    assert raised.value.token_usage.num_input_tokens == 10
+
+    tool_runs = []
+
+    def lookup() -> str:
+        """Look up."""
+        tool_runs.append(1)
+        return "x"
+
+    class _Handler:
+        model_id = "luna"
+
+        def chat(self, messages, arguments, tools):
+            del messages, arguments, tools
+            return convert_responses_to_iris_message(response, "luna", keep_items=True)
+
+    chat_model = IrisChatModel(_Handler(), CompletionArguments())
+    loop = AgentLoop(model=chat_model, tools=[AgentTool.from_function(lookup)])
+    with pytest.raises(IncompleteModelResponse):
+        loop.run([])
+    assert not tool_runs
+    assert chat_model.tokens.num_input_tokens == 10
+
+
 def test_a_streamed_answer_cut_during_reasoning_fails_and_resets_the_draft():
     deltas = []
 
@@ -360,3 +439,34 @@ def test_chat_completions_reasoning_content_is_sent_back_only_when_enabled():
 
     assert "reasoning_content" not in default[1]
     assert enabled[1]["reasoning_content"] == "I should look it up."
+
+
+def test_a_streamed_delta_followed_by_an_empty_incomplete_response_fails():
+    deltas = []
+    events = [
+        _item(type="response.output_text.delta", delta="The heap"),
+        _item(
+            type="response.incomplete",
+            response=_response("incomplete", [], incomplete_reason="max_output_tokens"),
+        ),
+    ]
+    model = DirectOpenAIChatModel.model_construct(
+        id="luna",
+        name="luna",
+        description="",
+        model="luna",
+        api_key="k",  # pragma: allowlist secret
+        use_responses_api=True,
+        replay_reasoning_items=True,
+    )
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **_kwargs: iter(events))
+    )
+
+    with pytest.raises(IncompleteModelResponse) as raised:
+        model._create_streamed_responses_completion(  # pylint: disable=protected-access
+            client, [], CompletionArguments(), None, deltas.append
+        )
+
+    assert deltas == ["The heap"]
+    assert raised.value.token_usage.num_input_tokens == 10
