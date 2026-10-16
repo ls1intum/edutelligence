@@ -1,3 +1,4 @@
+import hashlib
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -25,5 +26,20 @@ class PipelineExecutionSettingsDTO(BaseModel):
 
     @property
     def callback_run_id(self) -> str:
-        """The run id to put into callback URLs, logs and traces."""
+        """The run id to put into callback URLs.
+
+        Artemis versions without a run id expect the token there, so it is the token then.
+        """
         return self.run_id or self.authentication_token.reveal()
+
+    @property
+    def trace_run_id(self) -> str:
+        """An id of this run that never contains the token, for traces that leave Iris.
+
+        The run id, or for Artemis versions that send none, a hash of the token: stable per
+        run, so traces of one run still group together.
+        """
+        if self.run_id:
+            return self.run_id
+        digest = hashlib.sha256(self.authentication_token.reveal().encode("utf-8"))
+        return "run-" + digest.hexdigest()[:24]

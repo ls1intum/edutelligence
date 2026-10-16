@@ -191,7 +191,7 @@ class TracingContext:
         # Extract session/run ID and Artemis URL
         if hasattr(dto, "settings") and dto.settings:
             # The run id, never the callback token: traces leave Iris.
-            ctx.session_id = getattr(dto.settings, "callback_run_id", None)
+            ctx.session_id = getattr(dto.settings, "trace_run_id", None)
             ctx.artemis_base_url = getattr(dto.settings, "artemis_base_url", None)
 
         # Extract course info from CourseDTO

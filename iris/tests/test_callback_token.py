@@ -88,6 +88,39 @@ def test_run_id_and_token_are_separate_and_older_artemis_uses_the_token_as_run_i
     assert older.callback_run_id == "legacy-value"
 
 
+def test_the_trace_run_id_never_contains_the_token():
+    assert _settings().trace_run_id == "run-1"
+    older = PipelineExecutionSettingsDTO.model_validate(
+        {"authenticationToken": SECRET, "artemisBaseUrl": "https://a"}
+    )
+    assert SECRET not in older.trace_run_id
+    assert older.trace_run_id.startswith("run-")
+    assert older.trace_run_id == older.model_copy().trace_run_id
+
+
+def test_the_langfuse_session_is_the_run_id_or_a_hash_without_runid():
+    """Older Artemis versions send no run id; the session id must not fall back to the token."""
+    # pylint: disable=import-outside-toplevel
+    from iris.tracing.langfuse_tracer import TracingContext
+
+    class Dto(BaseModel):
+        settings: PipelineExecutionSettingsDTO
+
+    with_run_id = TracingContext.from_dto(Dto(settings=_settings()), "chat")
+    without_run_id = TracingContext.from_dto(
+        Dto(
+            settings=PipelineExecutionSettingsDTO.model_validate(
+                {"authenticationToken": SECRET, "artemisBaseUrl": "https://a"}
+            )
+        ),
+        "chat",
+    )
+
+    assert with_run_id.session_id == "run-1"
+    assert without_run_id.session_id is not None
+    assert SECRET not in without_run_id.session_id
+
+
 def test_an_empty_token_is_rejected():
     with pytest.raises(ValidationError):
         _settings(authenticationToken="")
