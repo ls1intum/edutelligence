@@ -4232,3 +4232,22 @@ async def test_lane_occupancy_follows_a_tensor_parallel_override_in_extra_args()
     manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
     count = LaneManager._launch_gpu_count(vc, [])  # noqa: SLF001
     assert await manager._lane_occupied_gpu_devices(lane, "1,0", count) == "1"  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [0, 1])
+async def test_explicit_benchmark_restart_with_unchanged_configuration(active):
+    manager = LaneManager(WorkerConfig(), lane_port_start=15100, lane_port_end=15110)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["lane"] = _StubHandle(current)
+    manager._active_requests["lane"] = active
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    if active:
+        with pytest.raises(RuntimeError, match="still has 1 active request"):
+            await manager.reconfigure_lane("lane", {"model": current.model}, force_restart=True)
+        manager._restart_lane_unlocked.assert_not_awaited()
+    else:
+        await manager.reconfigure_lane("lane", {"model": current.model}, force_restart=True)
+        manager._restart_lane_unlocked.assert_awaited_once()

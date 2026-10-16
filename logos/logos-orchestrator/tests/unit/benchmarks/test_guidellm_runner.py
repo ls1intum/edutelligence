@@ -362,3 +362,25 @@ async def test_worker_preparation_failure_keeps_specific_error_and_skips_warmup(
     assert failure["model"] == "org/model"
     assert failure["settings"]["max_output_tokens"] == 32
     warmup.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "extra_args,expected", [([], 1), (["--pipeline-parallel-size", "2"], 2), (["--pipeline-parallel-size=3"], 3)]
+)
+def test_reported_vllm_lane_captures_effective_pipeline_parallelism(extra_args, expected):
+    snapshot = {
+        "runtime": {
+            "lanes": [
+                {
+                    "model": "m",
+                    "lane_config": {"vllm": True, "vllm_config": {"tensor_parallel_size": 1, "extra_args": extra_args}},
+                }
+            ]
+        }
+    }
+    assert extract_serving_configuration(snapshot, "m")["pipeline_parallel_size"] == expected
+
+
+def test_missing_worker_configuration_does_not_invent_pipeline_parallelism():
+    snapshot = {"runtime": {"lanes": [{"model": "m", "lane_config": {"vllm": True}}]}}
+    assert "pipeline_parallel_size" not in extract_serving_configuration(snapshot, "m")

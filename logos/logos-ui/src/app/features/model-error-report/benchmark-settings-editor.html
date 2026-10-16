@@ -80,7 +80,7 @@
       <input type="number" min="0" max="2147483647" step="1" required [ngModel]="settings().seed" (ngModelChange)="update('seed', $event)" />
     </label>
   </div>
-  <details class="dataset-preview" open>
+  <details class="dataset-preview">
     <summary>Dataset preview</summary>
     @if (loading()) {
       <p role="status">Loading examples…</p>
@@ -112,10 +112,13 @@
     @if (pair()?.provider_type === 'logosnode') {
       <p>{{ pair()!.provider_name }}: {{ limits()?.gpu_count ?? 'unknown' }} GPUs available for this model.
         Limits include GPU assignments. Model architecture and available memory can impose additional restrictions.</p>
+      <button type="button" (click)="loadLimits()" [disabled]="limitsLoading()">{{ limitsLoading() ? 'Loading GPU limits…' : 'Reload GPU limits' }}</button>
       @if (limitsLoading()) { <p role="status">Checking worker capacity…</p> }
+      @if (!limitsLoading() && !limitsError() && limits()?.gpu_count == null) {
+        <p role="status">The worker has not reported its GPU capacity yet. Wait for its next status update, then select Reload GPU limits.</p>
+      }
       @if (limitsError()) {
         <div class="settings-feedback"><p role="alert" class="settings-error">{{ limitsError() }}</p>
-          <button type="button" (click)="loadLimits()" [disabled]="limitsLoading()">Retry worker limits</button>
         </div>
       }
     }

@@ -118,7 +118,7 @@ export function servingValidationErrors(settings: BenchmarkSettings, limits: Ben
     const choices = SERVING_CHOICES[field.key];
     if (choices && !choices.includes(String(value))) errors.push(`${field.label}: choose a supported value.`);
   }
-  if (limits?.gpu_count == null) return [...errors, 'Worker GPU limits are unavailable. Reload the limits before changing vLLM settings.'];
+  if (limits?.gpu_count == null) return [...errors, 'Worker GPU limits are unavailable. Select Reload GPU limits to check again before changing vLLM settings.'];
   if (limits.gpu_count === 0) return [...errors, 'No NVIDIA GPUs are available for this model on the selected worker.'];
   const effective = { ...limits.current, ...overrides };
   const restriction = limits.attention_backend_restrictions?.[String(effective['attention_backend'] ?? '')];

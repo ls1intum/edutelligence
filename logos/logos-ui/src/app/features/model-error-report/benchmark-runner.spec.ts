@@ -75,7 +75,7 @@ describe('Benchmark runner', () => {
     await first;
     expect(component.benchmarkCancellingJobId()).toBeNull();
   });
-  it('submits a full batch once and closes the anchored notice', async () => {
+  it('submits a full batch once and closes the confirmation dialog', async () => {
     const batch = { repetitions: 20, configurations: [{ ...component.benchmarkSettings(), samples: 50 }] };
     component.benchmarkBatch.set(batch);
     component.benchmarkConfirmPairId.set(1);

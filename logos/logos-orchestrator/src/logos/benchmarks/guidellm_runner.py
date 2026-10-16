@@ -310,6 +310,11 @@ def extract_serving_configuration(snapshot: dict[str, Any] | None, model: str) -
                         result[key] = json.loads(raw)
                     except (ValueError, TypeError):
                         result[key] = raw
+        # The worker represents pipeline parallelism only in extra_args.
+        # Its absence on a reported vLLM lane means the engine default of 1,
+        # not an unknown value. Persist it so default runs can be compared.
+        if lane_config.get("vllm") and vllm_config:
+            result.setdefault("pipeline_parallel_size", 1)
         if "kv_cache_memory_bytes" in result:
             result["kv_cache_memory"] = result.pop("kv_cache_memory_bytes")
         if lane_config.get("gpu_devices"):

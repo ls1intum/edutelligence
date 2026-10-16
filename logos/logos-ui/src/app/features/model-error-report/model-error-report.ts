@@ -35,6 +35,7 @@ import {
 import { priceProviderCards } from './model-prices';
 import { ModelPricesTab } from './model-prices-tab';
 
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { ModelAccess } from '../model-access/model-access';
 import {
@@ -629,6 +630,7 @@ const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
     BenchmarkBatchEditor,
     BenchmarkComparison,
     BenchmarkRunFailure,
+    ModalConfirmComponent,
     ScrollingModule,
     ErrorMessageComponent,
     ModelAccess,
@@ -722,6 +724,19 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly benchmarkBatchValid = signal(true);
   readonly benchmarkWorkerLimits = signal<BenchmarkWorkerLimits | null>(null);
   readonly benchmarkConfirmPairId = signal<number | null>(null);
+  readonly benchmarkConfirmPair = computed(() => this.benchmarkPairs().find(
+    pair => pair.model_provider_id === this.benchmarkConfirmPairId(),
+  ) ?? null);
+  readonly benchmarkConfirmationMessage = computed(() => {
+    const count = this.benchmarkTotalRuns();
+    const parts = [`Start ${count} ${count === 1 ? 'run' : 'runs'} on ${this.benchmarkConfirmPair()?.provider_name ?? ''}?`,
+      this.benchmarkConfirmPair()?.provider_type === 'logosnode'
+        ? 'The model lanes on this worker will be reserved for the benchmark. Existing requests finish first; new production requests wait or use another worker. The reservation ends when the benchmark finishes or is stopped.'
+        : 'The benchmark runs alongside other requests. Concurrent traffic can affect measured performance.'];
+    if (this.hasServingOverrides()) parts.push('The selected vLLM settings may reload the model and remain active after the run.');
+    if (this.benchmarkBatch()) parts.push('The entire batch starts once, with no confirmation between runs.');
+    return parts.join(' ');
+  });
   readonly benchmarkTotalRuns = computed(() => {
     const batch = this.benchmarkBatch();
     return batch ? batch.configurations.length * batch.repetitions : 1;

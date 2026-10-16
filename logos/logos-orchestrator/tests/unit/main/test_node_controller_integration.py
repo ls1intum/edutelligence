@@ -777,7 +777,7 @@ async def test_context_resolver_prefers_request_time_prepared_lane(monkeypatch):
             }
 
     class _FakeRegistry:
-        async def select_lane_for_model(self, provider_id: int, model_name: str):  # noqa: ARG002
+        async def select_lane_for_model(self, provider_id: int, model_name: str, *, request_id=None):  # noqa: ARG002
             return {"lane_id": "lane-fallback"}
 
     class _FakeLanePreparer:
@@ -820,7 +820,7 @@ async def test_context_resolver_allows_logosnode_without_api_key(monkeypatch):
             }
 
     class _FakeRegistry:
-        async def select_lane_for_model(self, provider_id: int, model_name: str):  # noqa: ARG002
+        async def select_lane_for_model(self, provider_id: int, model_name: str, *, request_id=None):  # noqa: ARG002
             return {"lane_id": "lane-9"}
 
     monkeypatch.setattr("logos.pipeline.context_resolver.DBManager", _FakeDB)

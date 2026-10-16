@@ -396,15 +396,19 @@ class RequestPipeline:
         # 3. Resolve execution context (with authorization check)
         #    For logosnode providers, the lane may be starting (not yet ready to
         #    accept requests). Retry with backoff instead of failing immediately.
-        with perf_trace.phase(request_id, "pipeline.context"):
-            ctx_result = await self._resolve_context_with_retry(
-                scheduling_result=scheduling_result,
-                classification_result=classification_result,
-                request_path=request.request_path,
-                request_id=request_id,
-                schedule_start_s=schedule_start_s,
-                deployment_info=self._scheduled_deployment(request, scheduling_result),
-            )
+        try:
+            with perf_trace.phase(request_id, "pipeline.context"):
+                ctx_result = await self._resolve_context_with_retry(
+                    scheduling_result=scheduling_result,
+                    classification_result=classification_result,
+                    request_path=request.request_path,
+                    request_id=request_id,
+                    schedule_start_s=schedule_start_s,
+                    deployment_info=self._scheduled_deployment(request, scheduling_result),
+                )
+        except asyncio.CancelledError:
+            self._release_scheduler_safe(scheduling_result, request_id, "cancellation")
+            raise
         if not ctx_result.success:
             return ctx_result
 

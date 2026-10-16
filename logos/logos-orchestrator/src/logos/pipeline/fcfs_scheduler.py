@@ -9,6 +9,7 @@ import asyncio
 import logging
 from typing import Optional
 
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.queue.priority_queue import Priority
 from logos.timeouts import global_timeout_s
 
@@ -103,6 +104,7 @@ class FcfScheduler(BaseScheduler):
             raw_priority=priority_int,
             role_rank=request.role_rank,
             api_key_id=request.api_key_id,
+            request_id=request.request_id,
         )
         logger.info(
             "Request %s queued for model %s provider %s (weight=%.2f, depth=%s)",
@@ -137,6 +139,7 @@ class FcfScheduler(BaseScheduler):
 
             return result
         except asyncio.TimeoutError:
+            benchmark_reservations.finish_request(request.request_id)
             self._queue_mgr.remove(entry_id)
             raise QueueTimeoutError(
                 request_id=request.request_id,
@@ -145,5 +148,6 @@ class FcfScheduler(BaseScheduler):
                 timeout_s=timeout,
             )
         except asyncio.CancelledError:
+            benchmark_reservations.finish_request(request.request_id)
             self._queue_mgr.remove(entry_id)
             raise
