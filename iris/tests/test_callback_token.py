@@ -21,6 +21,9 @@ from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO  # noqa: E402
 from iris.domain.status.run_state_dto import RunStateEnum  # noqa: E402
 from iris.sentry import credential_safety_options  # noqa: E402
+from iris.web.status.ingestion_status_callback import (  # noqa: E402
+    IngestionStatusCallback,
+)
 from iris.web.status.status_update import ChatRunCallback  # noqa: E402
 from iris.web.validation_errors import validation_exception_handler  # noqa: E402
 
@@ -117,6 +120,35 @@ def test_the_callback_sends_the_token_only_as_bearer_and_the_run_id_in_the_url()
     url = post.call_args.args[0]
     assert url.endswith("/chat/runs/run-1/status")
     assert SECRET not in url
+    assert post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {SECRET}"
+    assert SECRET not in json.dumps(post.call_args.kwargs["json"])
+
+
+def test_the_ingestion_callback_sends_the_token_only_as_bearer_and_the_run_id_in_the_url():
+    callback = IngestionStatusCallback(
+        run_id="run-1",
+        base_url="https://artemis.example",
+        lecture_unit_id=7,
+        auth_token=CallbackToken(SECRET),
+    )
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+    with patch(
+        "iris.web.status.ingestion_status_callback.http_requests.post",
+        return_value=_Response(),
+    ) as post:
+        callback.fail("boom")
+
+    url = post.call_args.args[0]
+    assert (
+        url
+        == "https://artemis.example/api/iris/internal/webhooks/ingestion/runs/run-1/status"
+    )
     assert post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {SECRET}"
     assert SECRET not in json.dumps(post.call_args.kwargs["json"])
 

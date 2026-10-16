@@ -360,9 +360,16 @@ def _start_environment(handler):
 
 @contextmanager
 def _failure_callbacks(construct_error=None):
-    """Replace IngestionStatusCallback; ``reported`` collects (constructor args, message)."""
-    reported = []
-    tokens_reported = []
+    """Replace IngestionStatusCallback; ``reported`` collects (constructor args, message).
+
+    ``reported.tokens`` collects the callback token each reporting callback was given.
+    """
+
+    class _Reported(list):
+        tokens: list = []
+
+    reported = _Reported()
+    reported.tokens = []
 
     class _Callback:
         def __init__(self, run_id, base_url, lecture_unit_id=None, *, auth_token):
@@ -372,8 +379,8 @@ def _failure_callbacks(construct_error=None):
             self.auth_token = auth_token
 
         def fail(self, message):
+            reported.tokens.append(self.auth_token)
             reported.append((self.args, message))
-            tokens_reported.append(self.auth_token)
 
     with patch(
         "iris.web.status.ingestion_status_callback.IngestionStatusCallback", _Callback
@@ -496,12 +503,7 @@ class TestBatchStart:
         bad = {"settings": {"authenticationToken": "secret-bad", "runId": "run-bad"}}
         good = _job("secret-good")
         good["settings"]["runId"] = "run-good"
-        with (
-            _failure_callbacks() as reported,
-            patch(
-                "iris.ingestion.worker.CallbackToken", wraps=CallbackToken
-            ) as token_type,
-        ):
+        with _failure_callbacks() as reported:
             _, started = self._claim(worker, [bad, good])
             assert _wait_for(lambda: len(reported) == 1)
         assert started == 1
@@ -509,7 +511,8 @@ class TestBatchStart:
         assert list(worker._active) == ["run-good"]  # pylint: disable=protected-access
         (run_id, _, _), _ = reported[0]
         assert run_id == "run-bad"
-        token_type.assert_any_call("secret-bad")
+        # The report presents the bad run's own token: not its run id, not another run's token.
+        assert reported.tokens == [CallbackToken("secret-bad")]
 
     def test_bad_job_does_not_block_the_good_one_and_is_reported_once(self):
         worker = IngestionWorker()
