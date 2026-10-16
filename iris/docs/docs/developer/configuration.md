@@ -177,26 +177,32 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
 
 ### Parameter Reference
 
-| Parameter                       | Required     | Description                                                                     |
-| ------------------------------- | ------------ | ------------------------------------------------------------------------------- |
-| `id`                            | Yes          | Unique identifier across all models                                             |
-| `name`                          | Yes          | Human-readable display name                                                     |
-| `description`                   | Yes          | Additional description                                                          |
-| `type`                          | Yes          | Model type (see below)                                                          |
-| `model`                         | Yes          | Vendor model name — used for version matching (e.g., `gpt-5-mini`)              |
-| `api_key`                       | Provider     | API key for external providers; omit for passthrough                            |
-| `endpoint`                      | Azure/Cohere | Provider endpoint URL                                                           |
-| `host`                          | Ollama       | Ollama server host URL                                                          |
-| `base_url`                      | No           | OpenAI-compatible endpoint for `openai_chat` (e.g. Logos, vLLM)                 |
-| `extra_body`                    | No           | Provider-specific request fields, e.g. Qwen3 `chat_template_kwargs`             |
-| `leading_system_message_only`   | No           | Rewrite later system messages for templates that reject them (Qwen3.x)          |
-| `reasoning_token_allowance`     | No           | Tokens added to each pipeline's `max_tokens` for reasoning models (default `0`) |
-| `api_version`                   | Azure        | Azure API version                                                               |
-| `azure_deployment`              | Azure        | Azure deployment name                                                           |
-| `tools`                         | No           | Supported tool types (default: `[]`)                                            |
-| `cost_per_million_input_token`  | No           | Cost tracking: input token price                                                |
-| `cost_per_million_output_token` | No           | Cost tracking: output token price                                               |
-| `cost_per_1k_requests`          | No           | Cost tracking: per-request price (rerankers)                                    |
+| Parameter                       | Required     | Description                                                                            |
+| ------------------------------- | ------------ | -------------------------------------------------------------------------------------- |
+| `id`                            | Yes          | Unique identifier across all models                                                    |
+| `name`                          | Yes          | Human-readable display name                                                            |
+| `description`                   | Yes          | Additional description                                                                 |
+| `type`                          | Yes          | Model type (see below)                                                                 |
+| `model`                         | Yes          | Vendor model name — used for version matching (e.g., `gpt-5-mini`)                     |
+| `api_key`                       | Provider     | API key for external providers; omit for passthrough                                   |
+| `endpoint`                      | Azure/Cohere | Provider endpoint URL                                                                  |
+| `host`                          | Ollama       | Ollama server host URL                                                                 |
+| `base_url`                      | No           | OpenAI-compatible endpoint for `openai_chat` (e.g. Logos, vLLM)                        |
+| `extra_body`                    | No           | Provider-specific request fields, e.g. Qwen3 `chat_template_kwargs`                    |
+| `leading_system_message_only`   | No           | Rewrite later system messages for templates that reject them (Qwen3.x)                 |
+| `reasoning_token_allowance`     | No           | Tokens added to each pipeline's `max_tokens` for reasoning models (default `0`)        |
+| `api_version`                   | Azure        | Azure API version                                                                      |
+| `azure_deployment`              | Azure        | Azure deployment name                                                                  |
+| `tools`                         | No           | Supported tool types (default: `[]`)                                                   |
+| `use_responses_api`             | No           | Use the OpenAI Responses API instead of Chat Completions (`openai_chat`, `azure_chat`) |
+| `strict_tools`                  | No           | Send tool schemas with `strict: true`. Unset: on for the Responses API, off otherwise  |
+| `supports_tool_choice`          | No           | Whether the endpoint honours `tool_choice` (default `true`)                            |
+| `replay_reasoning_items`        | No           | Responses API: send encrypted reasoning items back within a tool loop (default `true`) |
+| `replay_reasoning_content`      | No           | Chat Completions: send reasoning text back with its tool-call turn (default `false`)   |
+| `supports_structured_output`    | No           | Whether the endpoint enforces a JSON schema; otherwise JSON mode (default `true`)      |
+| `cost_per_million_input_token`  | No           | Cost tracking: input token price                                                       |
+| `cost_per_million_output_token` | No           | Cost tracking: output token price                                                      |
+| `cost_per_1k_requests`          | No           | Cost tracking: per-request price (rerankers)                                           |
 
 ### Model Types
 

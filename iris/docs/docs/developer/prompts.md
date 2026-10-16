@@ -120,21 +120,24 @@ The block carries a worked example per direction — switching to an exercise, a
 
 ### Loading Templates
 
-Pipelines load Jinja2 templates in their `__init__`. Since the chat pipeline lives in `pipeline/chat/`, the path navigates up to the `prompts/templates/` directory:
+All pipelines load templates through one shared Jinja environment, `prompt_environment()` in `pipeline/prompts/environment.py`:
 
 ```python
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from iris.pipeline.prompts.environment import prompt_environment
 
-# From ChatPipeline in pipeline/chat/
-template_dir = os.path.join(os.path.dirname(__file__), "..", "prompts", "templates")
-self.jinja_env = Environment(
-    loader=FileSystemLoader(template_dir),
-    autoescape=select_autoescape(["j2"]),
-)
+self.jinja_env = prompt_environment()
 self.system_prompt_template = self.jinja_env.get_template("chat_system_prompt.j2")
 ```
 
-Pipelines that live directly in `pipeline/` (like `SessionTitleGenerationPipeline`) use a simpler path without the `..`.
+The environment turns HTML escaping **off**. Prompts are plain text for a model, not HTML: with escaping on, code in a student's submission or an instructor's problem statement reached the model as `&lt;`, `&gt;` and `&#39;`, which changes the meaning of code such as `if (a < b)`.
+
+Text that comes from students or instructors goes through the `as_data` filter instead:
+
+```jinja
+{{ problem_statement | as_data("problem_statement") }}
+```
+
+`as_data` puts the text inside `<problem_statement>` tags and breaks any closing tag of the same name inside the text, so the text cannot close the block early and pose as instructions. The system prompt also tells the model that everything tools return, including the student's code, is material to work with and not instructions to follow.
 
 ## Python Prompt Builders
 
@@ -176,46 +179,16 @@ The four citation prompts are the one group where the wording is part of a wire 
 
 ## How Prompts Are Assembled
 
-In `AbstractAgentPipeline`, the full prompt is assembled in two steps:
+`AbstractAgentPipeline.build_prompt_messages()` builds the message list for the agent loop in this order:
 
-### 1. System Message Construction
+1. The system prompt from `build_system_message()`.
+2. The compaction summary, if older turns were compacted. It is a **user** message, not a system message: it is built from student messages and tool output, so it must not gain system authority.
+3. The chat history, normalized by `normalize_history_message()` (context-switch markers become `[context_switch]` notes; quiz messages are described as text).
+4. The per-turn context from `build_turn_context_message()`, as the last message.
 
-Each pipeline implements `build_system_message()` to produce the system prompt string:
+The order matters for cost. Providers cache the longest prefix that matches an earlier request. Everything that stays the same between turns (system prompt, summary, history) comes first, and the part that changes every turn (submission, build status, current time) comes last. The next turn can then reuse the cache up to the latest student message.
 
-```python
-def build_system_message(self, state):
-    # Render the Jinja2 template with context
-    return self.system_prompt_template.render(
-        current_date=...,
-        custom_instructions=...,
-        # ... pipeline-specific variables
-    )
-```
-
-### 2. History and Scratchpad Assembly
-
-The `assemble_prompt_with_history()` method combines the system message with chat history and the agent scratchpad:
-
-```python
-def assemble_prompt_with_history(self, state, system_prompt):
-    prefix_messages = [
-        ("system", system_prompt.replace("{", "{{").replace("}", "}}"))
-    ]
-    history_lc_messages = [
-        convert_iris_message_to_langchain_message(msg)
-        for msg in state.message_history
-    ]
-    combined = (
-        prefix_messages
-        + history_lc_messages
-        + [("placeholder", "{agent_scratchpad}")]
-    )
-    return ChatPromptTemplate.from_messages(combined)
-```
-
-:::note
-The `{` and `}` characters in the system prompt are escaped to `{{` and `}}` to prevent LangChain from interpreting them as template variables. Only `{agent_scratchpad}` remains as a true placeholder.
-:::
+There is no LangChain prompt template on this path, so `{` and `}` in prompts need no escaping.
 
 ## Prompt Design Patterns
 
@@ -236,8 +209,8 @@ Prompts use several patterns to inject runtime context:
 | Pattern          | Example                                 | Used For                                     |
 | ---------------- | --------------------------------------- | -------------------------------------------- |
 | Jinja2 variables | `{{ current_date }}`                    | Date, custom instructions, exercise metadata |
-| Chat history     | Converted to LangChain messages         | Prior conversation turns                     |
-| Tool results     | Injected by agent scratchpad            | Data retrieved during execution              |
+| Chat history     | Normalized Iris messages                | Prior conversation turns                     |
+| Tool results     | Tool messages added by the agent loop   | Data retrieved during execution              |
 | Guide prompts    | Separate template rendered and appended | Detailed behavioral instructions             |
 
 ### Custom Instructions
