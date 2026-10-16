@@ -63,3 +63,40 @@ def test_tracing_context_keeps_credentials_and_names_out_of_traces():
     assert params["user_id"] == "42"
     assert "secret-callback-token" not in str(params)
     assert "Ada" not in str(params) and "Lovelace" not in str(params)
+
+
+def test_observe_does_not_export_inputs_that_carry_credentials_or_names():
+    captured = []
+
+    def fake_observe(**kwargs):
+        captured.append(kwargs)
+        return lambda function: function
+
+    langfuse = SimpleNamespace(observe=fake_observe)
+    dto = SimpleNamespace(
+        settings=SimpleNamespace(authentication_token="sentinel-token"),
+        user=SimpleNamespace(first_name="Ada", last_name="Lovelace"),
+    )
+    callback = SimpleNamespace(run_id="sentinel-token", url="https://artemis.example")
+
+    @observe(name="pipeline")
+    def pipeline(dto_argument, callback_argument=None):
+        del dto_argument, callback_argument
+        return "ok"
+
+    @observe(name="retrieval")
+    def retrieval(query):
+        return query
+
+    with (
+        patch(
+            "iris.tracing.langfuse_tracer._get_langfuse_module",
+            return_value=langfuse,
+        ),
+        patch("iris.tracing.langfuse_tracer._is_enabled", return_value=True),
+    ):
+        assert pipeline(dto) == "ok"
+        assert pipeline("plain", callback_argument=callback) == "ok"
+        assert retrieval("what is a heap?") == "what is a heap?"
+
+    assert [call["capture_input"] for call in captured] == [False, False, True]

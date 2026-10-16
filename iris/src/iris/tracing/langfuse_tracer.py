@@ -353,6 +353,28 @@ def clear_current_context():
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+def _is_sensitive(value: Any) -> bool:
+    """Whether a function argument holds a callback credential or student names."""
+    for holder in (value, getattr(value, "execution", None)):
+        settings = getattr(holder, "settings", None)
+        if settings is not None and getattr(settings, "authentication_token", None):
+            return True
+    # A status callback: it holds the run's bearer token as run_id.
+    if getattr(value, "run_id", None) and hasattr(value, "url"):
+        return True
+    user = getattr(value, "user", None)
+    if user is not None and (
+        getattr(user, "first_name", None) or getattr(user, "last_name", None)
+    ):
+        return True
+    return False
+
+
+def carries_sensitive_data(args: tuple, kwargs: dict) -> bool:
+    """Whether any argument of an observed call must not be exported as input."""
+    return any(_is_sensitive(value) for value in (*args, *kwargs.values()))
+
+
 def observe(
     name: Optional[str] = None,
     as_type: Optional[str] = None,
@@ -396,7 +418,12 @@ def observe(
             # observed call must propagate without executing the function twice.
             try:
                 langfuse_observe = langfuse_mod.observe
-                observed_func = langfuse_observe(name=name, as_type=as_type)(func)
+                # Arguments that carry the run's callback credential or student
+                # names are not exported as the span input.
+                capture_input = not carries_sensitive_data(args, kwargs)
+                observed_func = langfuse_observe(
+                    name=name, as_type=as_type, capture_input=capture_input
+                )(func)
             except Exception as e:
                 logger.debug(
                     "LangFuse observe failed, executing without tracing: %s", e
