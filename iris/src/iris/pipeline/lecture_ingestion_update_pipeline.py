@@ -36,6 +36,7 @@ from iris.pipeline.transcription_ingestion_pipeline import (
 from iris.tracing import observe
 from iris.vector_database.batch_verify import delete_many_with_retry, fetch_with_retry
 from iris.vector_database.database import VectorDatabase, batch_update_lock
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -698,8 +699,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         lecture_unit = self.dto.lecture_unit
         collection = init_lecture_unit_page_chunk_schema(client)
         unit_filter = (
-            Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
-                self.dto.settings.artemis_base_url
+            artemis_instance_filter(
+                LectureUnitPageChunkSchema, self.dto.settings.artemis_base_url
             )
             & Filter.by_property(LectureUnitPageChunkSchema.COURSE_ID.value).equal(
                 lecture_unit.course_id
@@ -744,8 +745,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         lecture_unit = self.dto.lecture_unit
         collection = init_lecture_transcription_schema(client)
         unit_filter = (
-            Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
-                self.dto.settings.artemis_base_url
+            artemis_instance_filter(
+                LectureTranscriptionSchema, self.dto.settings.artemis_base_url
             )
             & Filter.by_property(LectureTranscriptionSchema.COURSE_ID.value).equal(
                 lecture_unit.course_id
@@ -798,8 +799,8 @@ class LectureIngestionUpdatePipeline(Pipeline):
         lecture_unit = self.dto.lecture_unit
         segments = init_lecture_unit_segment_schema(client)
         segment_filter = (
-            Filter.by_property(LectureUnitSegmentSchema.BASE_URL.value).equal(
-                self.dto.settings.artemis_base_url
+            artemis_instance_filter(
+                LectureUnitSegmentSchema, self.dto.settings.artemis_base_url
             )
             & Filter.by_property(LectureUnitSegmentSchema.COURSE_ID.value).equal(
                 lecture_unit.course_id

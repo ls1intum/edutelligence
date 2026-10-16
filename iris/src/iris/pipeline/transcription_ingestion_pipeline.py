@@ -43,6 +43,7 @@ from iris.vector_database.batch_verify import (
     write_batch_with_retry,
 )
 from iris.vector_database.database import batch_update_lock
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -177,8 +178,8 @@ class TranscriptionIngestionPipeline(SubPipeline):
             & Filter.by_property(
                 LectureTranscriptionSchema.LECTURE_UNIT_ID.value
             ).equal(transcription.lecture_unit_id)
-            & Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
-                self.dto.settings.artemis_base_url
+            & artemis_instance_filter(
+                LectureTranscriptionSchema, self.dto.settings.artemis_base_url
             )
         )
 
@@ -416,6 +417,7 @@ class TranscriptionIngestionPipeline(SubPipeline):
                     LectureTranscriptionSchema.SEGMENT_TEXT.value: segment.text,
                     LectureTranscriptionSchema.PAGE_NUMBER.value: segment.slide_number,
                     LectureTranscriptionSchema.BASE_URL.value: self.dto.settings.artemis_base_url,
+                    LectureTranscriptionSchema.BASE_URL_EXACT.value: self.dto.settings.artemis_base_url,
                     LectureTranscriptionSchema.CONTENT_FINGERPRINT.value: transcription.content_fingerprint,
                     LectureTranscriptionSchema.INGESTION_RUN_ID.value: transcription.ingestion_run_id,
                 }

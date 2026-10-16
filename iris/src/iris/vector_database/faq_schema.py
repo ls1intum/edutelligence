@@ -9,7 +9,11 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
+from iris.common.logging_config import get_logger
+
 from .schema_properties import add_property_if_missing
+
+logger = get_logger(__name__)
 
 
 class FaqSchema(Enum):
@@ -122,3 +126,27 @@ def init_faq_schema(client: WeaviateClient) -> Collection:
             _content_fingerprint_property(),
         ],
     )
+
+
+def faq_base_url_is_exact(collection: Collection) -> bool:
+    """Whether the FAQ base_url uses field tokenization, so an equality filter on it matches exactly.
+
+    Auto-schema creates a property with word tokenization when a write reaches the collection before the
+    property was added; that cannot be changed later, so callers then compare the values themselves.
+    """
+    base_url = next(
+        (
+            prop
+            for prop in collection.config.get().properties
+            if prop.name == FaqSchema.BASE_URL.value
+        ),
+        None,
+    )
+    exact = base_url is not None and base_url.tokenization == Tokenization.FIELD
+    if not exact:
+        logger.error(
+            "%s.%s is missing or not field-tokenized; FAQ rows are matched by comparing values instead",
+            FaqSchema.COLLECTION_NAME.value,
+            FaqSchema.BASE_URL.value,
+        )
+    return exact

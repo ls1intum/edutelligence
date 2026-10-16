@@ -20,7 +20,11 @@ from ..llm.langchain import IrisLangchainChatModel
 from ..tracing import observe
 from ..vector_database.batch_verify import delete_many_with_retry, fetch_with_retry
 from ..vector_database.database import batch_update_lock
-from ..vector_database.faq_schema import FaqSchema, init_faq_schema
+from ..vector_database.faq_schema import (
+    FaqSchema,
+    faq_base_url_is_exact,
+    init_faq_schema,
+)
 from ..web.status.faq_ingestion_status_callback import FaqIngestionStatus
 from . import Pipeline
 
@@ -122,17 +126,16 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
     def delete_faq(self, faq_id: int, course_id: int, base_url: Optional[str]) -> bool:
         """Delete the FAQ's rows of this Artemis instance and its legacy rows without a base URL.
 
-        Rows of other instances are never matched: the owned rows are deleted by a filter on this
-        instance's base URL, so a row another
-        instance writes at the same moment cannot fall under it, and that filter also reaches ghost
-        rows that a scan still returns but the
-        object store no longer holds. Legacy rows are deleted by the ids a scan found; every row
-        written now carries a base URL, so no new
-        legacy row can appear in between. A legacy ghost row may survive that delete by id, but the
-        census never reports ghost rows. Without
-        a base URL (a request without settings) the FAQ's rows are matched by identity, as before.
-        Raises when the delete fails, so a
-        caller never inserts next to rows it could not remove.
+        Rows of other instances are never matched. The owned rows are deleted by a filter on this
+        instance's base URL, so a row another instance writes at the same moment cannot fall under it,
+        and the filter also reaches ghost rows that a scan still returns but the object store no longer
+        holds. That filter is exact only while base_url uses field tokenization; if auto-schema created
+        it with word tokenization, the owned rows are picked by an exact comparison of the scanned rows
+        and deleted by id instead. Legacy rows are deleted by the ids the scan found; every row written
+        now carries a base URL, so no new legacy row can appear in between. A legacy ghost row may
+        survive a delete by id, but the census never reports ghost rows. Without a base URL (a request
+        without settings) the FAQ's rows are matched by identity, as before. Raises when the delete
+        fails, so a caller never inserts next to rows it could not remove.
 
         :return: True once the rows are gone (also when there were none)
         """
@@ -142,11 +145,13 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
         if not base_url:
             delete_many_with_retry(self.collection, identity, f"faq {faq_id}")
             return True
-        delete_many_with_retry(
-            self.collection,
-            identity & Filter.by_property(FaqSchema.BASE_URL.value).equal(base_url),
-            f"faq {faq_id}",
-        )
+        exact = faq_base_url_is_exact(self.collection)
+        if exact:
+            delete_many_with_retry(
+                self.collection,
+                identity & Filter.by_property(FaqSchema.BASE_URL.value).equal(base_url),
+                f"faq {faq_id}",
+            )
         rows = fetch_with_retry(
             lambda: self.collection.query.fetch_objects(
                 filters=identity,
@@ -154,16 +159,17 @@ class FaqIngestionPipeline(AbstractIngestion, Pipeline):
                 return_properties=[FaqSchema.BASE_URL.value],
             )
         ).objects
-        legacy_uuids = [
+        by_id = [
             str(row.uuid)
             for row in rows
             if not row.properties.get(FaqSchema.BASE_URL.value)
+            or (not exact and row.properties.get(FaqSchema.BASE_URL.value) == base_url)
         ]
-        if legacy_uuids:
+        if by_id:
             delete_many_with_retry(
                 self.collection,
-                identity & Filter.by_id().contains_any(legacy_uuids),
-                f"legacy rows of faq {faq_id}",
+                identity & Filter.by_id().contains_any(by_id),
+                f"rows of faq {faq_id}",
             )
         logger.info("successfully deleted faq with id %s", faq_id)
         return True
