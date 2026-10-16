@@ -1,7 +1,6 @@
 import logging
 from typing import Literal, Optional
 
-from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from openai import APIError
 
@@ -9,6 +8,7 @@ from iris.tracing import observe
 
 from ...llm.external.model import EmbeddingModel
 from ...llm.retry import RetryState
+from ...llm.semantic_chunker import split_semantically
 
 
 class OpenAIEmbeddingModel(EmbeddingModel):
@@ -57,14 +57,13 @@ class OpenAIEmbeddingModel(EmbeddingModel):
         breakpoint_threshold_amount: float = 95.0,
         min_chunk_size: int = 512,
     ):
-        chunker = SemanticChunker(
-            self._client,
+        return split_semantically(
+            text,
+            self._client.embed_documents,
             breakpoint_threshold_type=breakpoint_threshold_type,
             breakpoint_threshold_amount=breakpoint_threshold_amount,
             min_chunk_size=min_chunk_size,
         )
-
-        return chunker.split_text(text)
 
 
 class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
