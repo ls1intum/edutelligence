@@ -198,6 +198,22 @@ class TestBackfillCollection:
         collection.config.update.assert_not_called()
 
 
+class TestCollapsedSpellingsOnAMarkedCollection:
+    """A marked collection that later finds two spellings stays exact and says so."""
+
+    def test_stays_exact_and_keeps_the_marker(self):
+        instance_filter.mark_exact(LectureUnitSchema.COLLECTION_NAME.value)
+        collection = _collection(
+            [_row("a", OWN, exact=OWN), _row("b", OWN + "/", exact=OWN + "/")],
+            description=BASE_URL_EXACT_MARKER,
+        )
+
+        assert backfill.backfill_collection(_client(collection), LectureUnitSchema)
+
+        collection.config.update.assert_not_called()
+        assert instance_filter.is_exact(LectureUnitSchema.COLLECTION_NAME.value)
+
+
 class TestPrepareFailures:
     """A collection whose configuration cannot be read does not stop the others."""
 
