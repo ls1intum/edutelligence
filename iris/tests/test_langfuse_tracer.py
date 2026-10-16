@@ -43,3 +43,23 @@ def test_observe_falls_back_once_when_tracing_setup_fails():
         assert observed() == "result"
 
     business_function.assert_called_once_with()
+
+
+def test_tracing_context_keeps_credentials_and_names_out_of_traces():
+    from iris.tracing.langfuse_tracer import (  # pylint: disable=import-outside-toplevel
+        TracingContext,
+    )
+
+    dto = SimpleNamespace(
+        user=SimpleNamespace(id=42, first_name="Ada", last_name="Lovelace"),
+        settings=SimpleNamespace(
+            authentication_token="secret-callback-token",
+            artemis_base_url="https://artemis.example",
+        ),
+    )
+
+    params = TracingContext.from_dto(dto, "ChatPipeline").to_langfuse_params()
+
+    assert params["user_id"] == "42"
+    assert "secret-callback-token" not in str(params)
+    assert "Ada" not in str(params) and "Lovelace" not in str(params)
