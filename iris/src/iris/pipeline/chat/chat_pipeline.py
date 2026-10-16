@@ -56,6 +56,7 @@ from .mcq_chat_mixin import (
     mcq_execute_agent,
     mcq_post_agent_hook,
     mcq_pre_agent_hook,
+    previous_answer_was_quiz,
 )
 
 logger = get_logger(__name__)
@@ -455,7 +456,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         # Detect MCQ intent for modes that support it
         if self.chat_mode in {IrisChatMode.COURSE, IrisChatMode.LECTURE}:
-            is_mcq, count = detect_mcq_intent(state.query_text)
+            is_mcq, count = detect_mcq_intent(
+                state.query_text,
+                previous_answer_was_quiz(state.dto.chat_history or []),
+            )
             if is_mcq:
                 state.mcq_parallel = True
                 state.mcq_count = count

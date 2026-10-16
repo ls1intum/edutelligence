@@ -12,6 +12,7 @@ from typing import Any, Optional
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
+from iris.common.pyris_message import IrisMessageRole
 from iris.common.reply_language import previous_reply_language
 from iris.domain.status.activity_dto import ActivityKind
 from iris.llm.iris_chat_model import message_text
@@ -37,50 +38,117 @@ _MAX_MCQ_VISIBLE_CHUNKS = 50
 _MAX_MCQ_CONTENT_CHARS = 40_000
 
 
-def detect_mcq_intent(user_message: str) -> tuple[bool, int]:
+_QUESTION_WORDS = r"(?:questions?|mcqs?|quiz(?:zes)?|quizfragen?|fragen?)"
+_GENERATE_VERBS = (
+    r"(?:generate|create|give\s+me|make|prepare|erstell(?:e)?|generier(?:e)?|"
+    r"gib\s+mir|mach(?:e)?\s+mir|stell(?:e)?\s+mir)"
+)
+
+# Explicit count + generation intent, in English and German.
+_COUNT_PATTERNS = [
+    re.compile(
+        _GENERATE_VERBS
+        + r"\s+(\d+)\s*(?:more\s+|weitere\s+|neue\s+)?"
+        + _QUESTION_WORDS
+    ),
+    re.compile(
+        r"(\d+)\s*(?:more\s+)?(?:questions?|mcqs?|quiz)\s+(?:about|on|for|from|regarding)"
+    ),
+    re.compile(r"(\d+)\s*(?:quizfragen|multiple[- ]choice[- ]fragen)"),
+    re.compile(r"(?:another|more)\s+(\d+)\s*(?:questions?|mcqs?|quiz)"),
+]
+
+# Phrases that request question generation on their own.
+_KEYWORDS = [
+    "quiz me",
+    "multiple choice",
+    "multiple-choice",
+    "test me",
+    "test my knowledge",
+    "generate a question",
+    "generate questions",
+    "ask me a question",
+    "ask me questions",
+    "ask me some questions",
+    "give me a question",
+    "give me questions",
+    "quizfrage",
+    "teste mich",
+    "teste mein wissen",
+    "frag mich ab",
+    "frage mich ab",
+    "stell mir eine frage",
+    "stell mir ein paar fragen",
+    "stell mir fragen",
+    "mach ein quiz",
+    "mache ein quiz",
+]
+
+# Follow-ups that only mean "another quiz question" right after a quiz; elsewhere
+# ("I have another question about recursion") they are ordinary questions.
+_FOLLOW_UPS = [
+    "another question",
+    "another one",
+    "one more",
+    "more questions",
+    "noch eine",
+    "noch eine frage",
+    "weitere fragen",
+    "noch mehr fragen",
+]
+
+
+def detect_mcq_intent(
+    user_message: str, previous_answer_was_quiz: bool = False
+) -> tuple[bool, int]:
     """Detect MCQ generation intent from user message.
 
     Only triggers on phrasing that clearly requests question *generation*,
-    not on messages merely mentioning quizzes (e.g. "When is the quiz?").
+    not on messages merely mentioning quizzes (e.g. "When is the quiz?") or
+    announcing a question ("I have another question"). Short follow-ups such
+    as "one more" count only directly after a quiz.
 
     Returns:
         Tuple of (is_mcq_intent, question_count). Count defaults to 1.
     """
     message_lower = user_message.lower()
 
-    # Check for explicit count + generation-intent patterns
-    count_patterns = [
-        r"(?:generate|create|give\s+me|make|prepare)\s+(\d+)\s*(?:more\s+)?(?:question|mcq|quiz)",
-        r"(\d+)\s*(?:more\s+)?(?:question|mcq|quiz)\s+(?:about|on|for|from|regarding)",
-        r"(?:another|more)\s+(\d+)\s*(?:question|mcq|quiz)",
-    ]
-    for pattern in count_patterns:
-        match = re.search(pattern, message_lower)
+    for pattern in _COUNT_PATTERNS:
+        match = pattern.search(message_lower)
         if match:
             count = max(1, min(int(match.group(1)), _MAX_MCQ_COUNT))
             return True, count
 
-    # Keyword phrases that unambiguously request question generation
-    mcq_keywords = [
-        "quiz me",
-        "multiple choice",
-        "test me",
-        "test my knowledge",
-        "generate a question",
-        "generate questions",
-        "ask me a question",
-        "ask me questions",
-        "ask me some questions",
-        "give me a question",
-        "give me questions",
-        "another question",
-        "more questions",
-        "one more",
-    ]
-    if any(kw in message_lower for kw in mcq_keywords):
+    if any(keyword in message_lower for keyword in _KEYWORDS):
+        return True, 1
+
+    if previous_answer_was_quiz and any(
+        follow_up in message_lower for follow_up in _FOLLOW_UPS
+    ):
         return True, 1
 
     return False, 0
+
+
+def previous_answer_was_quiz(history: list) -> bool:
+    """Whether the latest assistant message in the history contained a quiz."""
+    for message in reversed(history or []):
+        sender = getattr(message, "sender", None)
+        if sender == IrisMessageRole.USER:
+            continue
+        if sender != IrisMessageRole.ASSISTANT:
+            continue
+        for content in getattr(message, "contents", []) or []:
+            json_content = getattr(content, "json_content", None)
+            if isinstance(json_content, dict) and str(
+                json_content.get("type", "")
+            ).startswith("mcq"):
+                return True
+            text = getattr(content, "text_content", None) or ""
+            if '"type": "mcq' in text or '"type":"mcq' in text:
+                return True
+        return False
+    return False
 
 
 def retrieve_lecture_content_for_mcq(
