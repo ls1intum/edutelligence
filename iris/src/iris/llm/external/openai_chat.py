@@ -42,6 +42,7 @@ from ...domain.data.json_message_content_dto import JsonMessageContentDTO
 from ...domain.data.tool_call_dto import ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
+from ...llm.errors import IncompleteModelResponse
 from ...llm.external.model import ChatModel
 from ...llm.retry import RetryState
 
@@ -143,12 +144,15 @@ def create_openai_tool_calls(tool_calls):
 
 def convert_to_open_ai_messages(
     messages: list[PyrisMessage],
+    replay_reasoning_content: bool = False,
 ) -> list[ChatCompletionMessageParam]:
     """
     Convert a list of PyrisMessage to a list of ChatCompletionMessageParam.
 
     Args:
         messages: List of PyrisMessage objects to convert
+        replay_reasoning_content: Send the reasoning text a tool-call turn
+            returned back with that turn (vLLM-served reasoning models)
 
     Returns:
         List of messages in OpenAI's format
@@ -180,6 +184,8 @@ def convert_to_open_ai_messages(
         # Add tool calls if present
         if isinstance(message, PyrisAIMessage) and message.tool_calls:
             openai_message["tool_calls"] = create_openai_tool_calls(message.tool_calls)
+            if replay_reasoning_content and message.reasoning_content:
+                openai_message["reasoning_content"] = message.reasoning_content
 
         openai_messages.append(openai_message)
 
@@ -327,12 +333,16 @@ def handle_responses_tool_message(content):
     return None
 
 
-def convert_to_responses_input(messages: list[PyrisMessage]) -> list[dict[str, Any]]:
+def convert_to_responses_input(
+    messages: list[PyrisMessage], replay_provider_items: bool = False
+) -> list[dict[str, Any]]:
     """
     Convert a list of PyrisMessage to a Responses API input array.
 
     Args:
         messages: List of PyrisMessage objects to convert
+        replay_provider_items: Send an assistant message's original output items
+            (with reasoning) instead of rebuilding it from text and tool calls
 
     Returns:
         List of Responses input items
@@ -345,6 +355,12 @@ def convert_to_responses_input(messages: list[PyrisMessage]) -> list[dict[str, A
                 tool_message = handle_responses_tool_message(content)
                 if tool_message:
                     responses_input.append(tool_message)
+            continue
+
+        if replay_provider_items and message.provider_items:
+            # The response this message came from, item by item and in order
+            # (reasoning, preamble text, function calls), exactly once.
+            responses_input.extend(copy.deepcopy(message.provider_items))
             continue
 
         message_content = create_responses_message_content(message.contents)
@@ -639,6 +655,22 @@ def raise_for_failed_responses_status(response) -> None:
     raise RuntimeError(f"Responses API returned failed status: {error}")
 
 
+def reasoning_text(message_or_delta: Any) -> Optional[str]:
+    """The reasoning text an OpenAI-compatible server returned, if any.
+
+    vLLM reports it as ``reasoning_content`` (older) or ``reasoning`` (newer);
+    the OpenAI SDK keeps such unknown fields as extra attributes.
+    """
+    for name in ("reasoning_content", "reasoning"):
+        value = getattr(message_or_delta, name, None)
+        if value is None:
+            extra = getattr(message_or_delta, "model_extra", None) or {}
+            value = extra.get(name)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def convert_to_iris_message(
     message: ChatCompletionMessage,
     usage: Optional[CompletionUsage],
@@ -668,6 +700,7 @@ def convert_to_iris_message(
             contents=[TextMessageContentDTO(textContent=content)],
             sendAt=current_time,
             token_usage=token_usage,
+            reasoning_content=reasoning_text(message),
         )
 
     return PyrisMessage(
@@ -680,8 +713,25 @@ def convert_to_iris_message(
     )
 
 
+def _item_dict(item: Any) -> Any:
+    """A JSON-ready copy of a Responses output item (SDK model or plain object)."""
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_none=True)
+    if isinstance(item, dict):
+        return {key: _item_dict(value) for key, value in item.items()}
+    if isinstance(item, (list, tuple)):
+        return [_item_dict(value) for value in item]
+    if hasattr(item, "__dict__"):
+        return {
+            key: _item_dict(value)
+            for key, value in vars(item).items()
+            if value is not None
+        }
+    return item
+
+
 def convert_responses_to_iris_message(
-    response, model: str, fallback_output_text: str = ""
+    response, model: str, fallback_output_text: str = "", keep_items: bool = False
 ) -> PyrisMessage:
     """
     Convert a Responses API response to a PyrisMessage.
@@ -689,20 +739,41 @@ def convert_responses_to_iris_message(
     Args:
         response: The Responses API response to convert
         model: The model name used for the completion
+        keep_items: Keep the output items on a tool-call message, so the next
+            request of the tool loop can replay them (reasoning continuity)
 
     Returns:
         PyrisMessage or PyrisAIMessage depending on presence of function calls
+
+    Raises:
+        IncompleteModelResponse: The response stopped before it was complete and
+            contains function calls, which may be truncated. No tool may run.
     """
-    output_items = getattr(response, "output", [])
+    output_items = getattr(response, "output", []) or []
     if response_has_refusal(output_items):
         raise ContentFilterFinishReasonError()
 
     status = getattr(response, "status", None)
     raise_for_failed_responses_status(response)
+    token_usage = create_token_usage(getattr(response, "usage", None), model)
+    function_calls = [
+        item for item in output_items if getattr(item, "type", None) == "function_call"
+    ]
+    unfinished_calls = [
+        item
+        for item in function_calls
+        if getattr(item, "status", None) not in (None, "completed")
+    ]
+    if function_calls and (status == "incomplete" or unfinished_calls):
+        reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+        raise IncompleteModelResponse(
+            f"Responses API stopped before its tool calls were complete "
+            f"(status={status}, reason={reason})",
+            token_usage,
+        )
     if status is not None and status != "completed":
         logger.warning("Responses API returned non-completed status: %s", status)
 
-    token_usage = create_token_usage(getattr(response, "usage", None), model)
     current_time = datetime.now()
     output_text = extract_response_output_text(response) or fallback_output_text
     tool_calls = create_iris_tool_calls_from_responses(output_items)
@@ -713,6 +784,9 @@ def convert_responses_to_iris_message(
             contents=[TextMessageContentDTO(textContent=output_text)],
             sendAt=current_time,
             token_usage=token_usage,
+            provider_items=(
+                [_item_dict(item) for item in output_items] if keep_items else None
+            ),
         )
 
     return PyrisMessage(
@@ -761,6 +835,13 @@ class OpenAIChatModel(ChatModel):
     # Completions, where OpenAI-compatible gateways may not support it.
     strict_tools: Optional[bool] = None
     supports_tool_choice: bool = True
+    # Responses API only: request the encrypted reasoning items and send them back
+    # within the same tool loop, so the model keeps its reasoning across tool
+    # calls. Probed on gpt-6-luna and gpt-6.1-sol through Logos (store=false).
+    replay_reasoning_items: bool = True
+    # Chat Completions only (vLLM-served gpt-oss/Qwen): send the reasoning text a
+    # tool-call turn returned back with that turn. Off until verified per server.
+    replay_reasoning_content: bool = False
 
     @property
     def effective_strict_tools(self) -> bool:
@@ -932,10 +1013,12 @@ class OpenAIChatModel(ChatModel):
         stream_handler: Callable[[Optional[str]], None],
     ) -> PyrisMessage:
         content_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_call_fragments: dict[int, dict[str, Any]] = {}
         usage: Optional[CompletionUsage] = None
         tool_call_turn = False
         reset_sent = False
+        stopped_at_limit = False
 
         for chunk in response:
             chunk_usage = getattr(chunk, "usage", None)
@@ -945,10 +1028,16 @@ class OpenAIChatModel(ChatModel):
             for choice in getattr(chunk, "choices", []) or []:
                 if getattr(choice, "finish_reason", None) == "content_filter":
                     raise ContentFilterFinishReasonError()
+                if getattr(choice, "finish_reason", None) == "length":
+                    stopped_at_limit = True
 
                 delta = getattr(choice, "delta", None)
                 if delta is None:
                     continue
+
+                reasoning_delta = reasoning_text(delta)
+                if reasoning_delta:
+                    reasoning_parts.append(reasoning_delta)
 
                 tool_calls = getattr(delta, "tool_calls", None)
                 if tool_calls:
@@ -972,6 +1061,12 @@ class OpenAIChatModel(ChatModel):
                 self.model,
             )
 
+        if stopped_at_limit and tool_call_fragments:
+            raise IncompleteModelResponse(
+                "Chat completion stopped at the output limit inside a tool call",
+                create_token_usage(usage, self.model),
+            )
+
         message = ChatCompletionMessage(
             role="assistant",
             content="".join(content_parts),
@@ -981,7 +1076,10 @@ class OpenAIChatModel(ChatModel):
                 else None
             ),
         )
-        return convert_to_iris_message(message, usage, self.model)
+        converted = convert_to_iris_message(message, usage, self.model)
+        if isinstance(converted, PyrisAIMessage) and reasoning_parts:
+            converted.reasoning_content = "".join(reasoning_parts)
+        return converted
 
     def _responses_model_name(self) -> str:
         return self.model
@@ -999,6 +1097,8 @@ class OpenAIChatModel(ChatModel):
             "input": responses_input,
             "store": False,
         }
+        if self.replay_reasoning_items:
+            params["include"] = ["reasoning.encrypted_content"]
 
         if arguments.temperature is not None and self.supports_temperature:
             params["temperature"] = arguments.temperature
@@ -1093,6 +1193,7 @@ class OpenAIChatModel(ChatModel):
                     fallback_output_text=(
                         "" if tool_call_turn else "".join(content_parts)
                     ),
+                    keep_items=self.replay_reasoning_items,
                 )
 
             if event_type == "response.incomplete":
@@ -1105,6 +1206,7 @@ class OpenAIChatModel(ChatModel):
                     fallback_output_text=(
                         "" if tool_call_turn else "".join(content_parts)
                     ),
+                    keep_items=self.replay_reasoning_items,
                 )
 
             if event_type == "response.failed":
@@ -1136,9 +1238,13 @@ class OpenAIChatModel(ChatModel):
         client = self.get_client()
 
         if self.use_responses_api:
-            responses_input = convert_to_responses_input(messages)
+            responses_input = convert_to_responses_input(
+                messages, replay_provider_items=self.replay_reasoning_items
+            )
         else:
-            messages = convert_to_open_ai_messages(messages)
+            messages = convert_to_open_ai_messages(
+                messages, replay_reasoning_content=self.replay_reasoning_content
+            )
             if self.leading_system_message_only:
                 messages = keep_system_messages_leading(messages)
 
@@ -1162,6 +1268,7 @@ class OpenAIChatModel(ChatModel):
                     return convert_responses_to_iris_message(
                         response,
                         self._responses_model_name(),
+                        keep_items=self.replay_reasoning_items,
                     )
 
                 params: dict[str, Any] = {"model": self.model, "messages": messages}
@@ -1233,6 +1340,13 @@ class OpenAIChatModel(ChatModel):
                     # We don't want to retry because the same message will likely be rejected again.
                     # Raise an exception to trigger the global error handler and report a fatal error to the client.
                     raise ContentFilterFinishReasonError()
+                if choice.finish_reason == "length" and choice.message.tool_calls:
+                    # The output limit cut the tool call arguments; running the
+                    # tool with them would act on truncated input.
+                    raise IncompleteModelResponse(
+                        "Chat completion stopped at the output limit inside a tool call",
+                        create_token_usage(usage, self.model),
+                    )
 
                 if choice.message is None or (
                     (choice.message.content is None or len(choice.message.content) == 0)

@@ -14,19 +14,8 @@ from iris.common.token_logprob_dto import TokenLogprobEntry
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm.completion_arguments import CompletionArguments
+from iris.llm.errors import IncompleteModelResponse
 from iris.llm.request_handler.request_handler_interface import RequestHandler
-
-
-class IncompleteModelResponse(RuntimeError):
-    """The provider stopped before the response was complete.
-
-    Raised instead of returning a response whose tool calls or output items may
-    be truncated. Carries the usage of the call so it can still be billed.
-    """
-
-    def __init__(self, message: str, token_usage: Optional[TokenUsageDTO] = None):
-        super().__init__(message)
-        self.token_usage = token_usage
 
 
 def message_text(message: PyrisMessage) -> str:
