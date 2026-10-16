@@ -21,6 +21,7 @@ from iris.domain.search.global_search_dto import (
 )
 from iris.domain.search.search_intent_dto import SearchIntent
 from iris.llm import CompletionArguments, LlmRequestHandler
+from iris.llm.errors import IncompleteModelResponse
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.global_search_prompts import (
@@ -155,6 +156,13 @@ _SINGLE_MARKER_RE = re.compile(r"\[(\d+)\]")
 # Literal the model outputs INSTEAD of an answer when the sources cannot answer
 # the question (plain-text contract; measured 8/8 discipline on nano).
 _NO_ANSWER_SENTINEL = "!none!"
+
+# Output budget of the answer call. It includes reasoning: a model that reasons
+# before answering can use all of it and stop without an answer. Such a call is
+# retried once with the larger budget; a second cut gives no answer, and the
+# student still gets the sources.
+ANSWER_MAX_TOKENS = 600
+RETRY_ANSWER_MAX_TOKENS = 2400
 
 
 def _is_deliberate_refusal(raw: str) -> bool:
@@ -521,7 +529,7 @@ class GlobalSearchPipeline(SubPipeline):
         # Plain-text output (markers carry the attribution, !none! carries the
         # no-answer state) — a JSON envelope would make streamed partials
         # unrenderable fragments.
-        answer_completion_args = CompletionArguments(max_tokens=600)
+        answer_completion_args = CompletionArguments(max_tokens=ANSWER_MAX_TOKENS)
         self.answer_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=answer_model),
             completion_args=answer_completion_args,
@@ -927,14 +935,33 @@ class GlobalSearchPipeline(SubPipeline):
         variables: dict[str, str] = {"context": context, "query": query}
         if not navigate:
             variables["today_line"] = _today_line(access_context)
-        if stream_handler is not None:
-            self.answer_llm.completion_args.stream_handler = _SentinelGateStreamHandler(
-                stream_handler
-            )
         try:
-            raw = (prompt | self.answer_pipeline).invoke(variables)
-        finally:
-            self.answer_llm.completion_args.stream_handler = None
+            raw = self._invoke_answer(prompt, variables, stream_handler)
+        except IncompleteModelResponse as error:
+            raw = None
+            logger.warning("[global-search] answer call stopped early: %s", error)
+        if raw is None or self._cut_without_answer(raw):
+            # The caller bills the last call; the cut one is billed here.
+            self._append_tokens(
+                self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
+            )
+            if stream_handler is not None:
+                # Drop any partial text of the cut call from the client.
+                stream_handler(None)
+            logger.info(
+                "[global-search] retrying the answer with max_tokens=%d",
+                RETRY_ANSWER_MAX_TOKENS,
+            )
+            try:
+                raw = self._invoke_answer(
+                    prompt, variables, stream_handler, RETRY_ANSWER_MAX_TOKENS
+                )
+            except IncompleteModelResponse as error:
+                logger.warning(
+                    "[global-search] retried answer stopped early, no answer: %s",
+                    error,
+                )
+                raw = ""
         # raw_len=0 + output_tokens>0 is the fingerprint of a reasoning model
         # exhausting max_tokens on reasoning and returning an empty message
         # (finish_reason=length) — the call returns WITHOUT an exception.
@@ -950,3 +977,32 @@ class GlobalSearchPipeline(SubPipeline):
             getattr(answer_usage, "num_output_tokens", None),
         )
         return raw
+
+    def _invoke_answer(
+        self,
+        prompt: ChatPromptTemplate,
+        variables: dict[str, str],
+        stream_handler=None,
+        max_tokens: int = ANSWER_MAX_TOKENS,
+    ) -> str:
+        """One answer call with the given output budget."""
+        args = self.answer_llm.completion_args
+        if stream_handler is not None:
+            args.stream_handler = _SentinelGateStreamHandler(stream_handler)
+        args.max_tokens = max_tokens
+        try:
+            return (prompt | self.answer_pipeline).invoke(variables)
+        finally:
+            args.stream_handler = None
+            args.max_tokens = ANSWER_MAX_TOKENS
+
+    def _cut_without_answer(self, raw: str) -> bool:
+        """Whether the last call used its whole budget and wrote no text.
+
+        Chat Completions report this as finish_reason=length with empty
+        content and no error; the Responses API raises IncompleteModelResponse.
+        """
+        if raw.strip():
+            return False
+        output_tokens = getattr(self.answer_llm.tokens, "num_output_tokens", 0) or 0
+        return output_tokens >= ANSWER_MAX_TOKENS
