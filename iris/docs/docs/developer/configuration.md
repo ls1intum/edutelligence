@@ -207,16 +207,11 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
 
 ### Output budgets and reasoning models
 
-Some pipelines send a small `max_tokens`. Providers count reasoning tokens against that limit, so a reasoning model can use the whole budget before it writes the answer. Give such models a `reasoning_token_allowance`; it is added to every pipeline's budget.
+The prompts and schemas set the length of every output. Pipelines with a short output (session title, query rewrites, global search answer, ingestion summaries, guide refinement) send only an emergency limit, `max_tokens` = 16,000 (`EMERGENCY_MAX_TOKENS` in `iris.llm.completion_arguments`). It stops a runaway generation and is far above any normal output, so a reasoning model does not run out of tokens while it reasons. It stays below 16,384, the smallest output cap of the OpenAI models in `llm_config.example.yml` (gpt-4o-mini); providers reject a larger `max_tokens` for such models. The chat agent itself sends no `max_tokens`.
 
-| Pipeline                                        | `max_tokens` | If the answer is cut                                |
-| ----------------------------------------------- | ------------ | --------------------------------------------------- |
-| Session title                                   | 60           | No title update                                     |
-| Lecture retrieval (query rewrite)               | 400          | The rewrite raises an error                         |
-| Global search answer                            | 600          | Sources without an answer, and a warning in the log |
-| Ingestion, retrieval rewrites, guide refinement | 2000         | Raises an error (handling depends on the caller)    |
+`reasoning_token_allowance` is added to the emergency limit. With the emergency limit it is normally not needed; keep the sum below the model's output cap.
 
-"Raises an error" applies to models on the Responses API (`use_responses_api: true`); on Chat Completions a cut call returns empty or truncated text instead. The chat agent itself sends no `max_tokens`. The table and `reasoning_token_allowance` apply to OpenAI-type entries (`openai_chat`, `azure_chat`); Ollama entries send no token limit.
+If a call still reaches the limit: the session title is not updated, the global search shows the sources without an answer and logs a warning, and other pipelines raise an error (handling depends on the caller). This applies to models on the Responses API (`use_responses_api: true`); on Chat Completions a cut call returns empty or truncated text instead. The limit and `reasoning_token_allowance` apply to OpenAI-type entries (`openai_chat`, `azure_chat`); Ollama entries send no token limit.
 
 ### Model Types
 

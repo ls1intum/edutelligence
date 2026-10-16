@@ -27,7 +27,7 @@ from iris.domain.search.global_search_dto import (  # noqa: E402
     LectureUnitInfo,
 )
 from iris.domain.search.search_intent_dto import SearchIntent  # noqa: E402
-from iris.llm import CompletionArguments  # noqa: E402
+from iris.llm import EMERGENCY_MAX_TOKENS, CompletionArguments  # noqa: E402
 from iris.llm.errors import IncompleteModelResponse  # noqa: E402
 from iris.llm.langchain.iris_langchain_chat_model import (  # noqa: E402
     IrisLangchainChatModel,
@@ -35,10 +35,7 @@ from iris.llm.langchain.iris_langchain_chat_model import (  # noqa: E402
 from iris.llm.request_handler.request_handler_interface import (  # noqa: E402
     RequestHandler,
 )
-from iris.pipeline.global_search_pipeline import (  # noqa: E402
-    ANSWER_MAX_TOKENS,
-    GlobalSearchPipeline,
-)
+from iris.pipeline.global_search_pipeline import GlobalSearchPipeline  # noqa: E402
 from tests.test_global_search_entity_sources import _entity_source  # noqa: E402
 
 
@@ -87,7 +84,7 @@ def _pipeline(outcomes):
     pipeline.tokens = []
     pipeline.answer_llm = IrisLangchainChatModel(
         request_handler=handler,
-        completion_args=CompletionArguments(max_tokens=ANSWER_MAX_TOKENS),
+        completion_args=CompletionArguments(max_tokens=EMERGENCY_MAX_TOKENS),
     )
     pipeline.answer_pipeline = pipeline.answer_llm | StrOutputParser()
     prompt = ChatPromptTemplate.from_messages(
@@ -107,21 +104,21 @@ def test_a_cut_answer_gives_no_answer_and_bills_the_call(caplog):
         raw = pipeline._generate_answer("q", [])
 
     assert raw == ""
-    assert handler.budgets == [ANSWER_MAX_TOKENS]
+    assert handler.budgets == [EMERGENCY_MAX_TOKENS]
     # The caller bills answer_llm.tokens: it must be the cut call's usage.
     assert pipeline.answer_llm.tokens.num_output_tokens == 600
     assert not pipeline.tokens
-    assert "reasoning_token_allowance" in caplog.text
+    assert "emergency output limit" in caplog.text
 
 
 def test_empty_text_at_the_limit_is_logged_with_the_setting(caplog):
-    pipeline, handler = _pipeline([_answer("", ANSWER_MAX_TOKENS)])
+    pipeline, handler = _pipeline([_answer("", EMERGENCY_MAX_TOKENS)])
 
     with caplog.at_level(logging.WARNING):
         assert pipeline._generate_answer("q", []) == ""
 
-    assert handler.budgets == [ANSWER_MAX_TOKENS]
-    assert "reasoning_token_allowance" in caplog.text
+    assert handler.budgets == [EMERGENCY_MAX_TOKENS]
+    assert "emergency output limit" in caplog.text
 
 
 def test_empty_text_below_the_limit_is_not_reported_as_a_cut(caplog):
@@ -137,7 +134,7 @@ def test_a_normal_answer_makes_one_call():
     pipeline, handler = _pipeline([_answer("!none!", 5)])
 
     assert pipeline._generate_answer("q", []) == "!none!"
-    assert handler.budgets == [ANSWER_MAX_TOKENS]
+    assert handler.budgets == [EMERGENCY_MAX_TOKENS]
     assert pipeline.answer_llm.tokens.num_output_tokens == 5
 
 
@@ -226,7 +223,7 @@ def test_a_cut_answer_returns_the_lecture_sources_without_an_answer():
 def test_a_cut_answer_with_entity_sources_skips_the_navigation_call():
     lecture, entity = _lecture(3), _entity()
     response, pipeline, handler, _ = _run(
-        [lecture, entity], [_answer("", ANSWER_MAX_TOKENS)]
+        [lecture, entity], [_answer("", EMERGENCY_MAX_TOKENS)]
     )
 
     assert response.answer is None

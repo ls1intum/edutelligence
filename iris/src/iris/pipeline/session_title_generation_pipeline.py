@@ -8,7 +8,7 @@ from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.llm import CompletionArguments, LlmRequestHandler
+from iris.llm import EMERGENCY_MAX_TOKENS, CompletionArguments, LlmRequestHandler
 from iris.llm.iris_chat_model import IrisChatModel
 from iris.llm.llm_configuration import resolve_model
 from iris.pipeline.prompts.environment import prompt_environment
@@ -51,7 +51,7 @@ class SessionTitleGenerationPipeline(SubPipeline):
         model = resolve_model(pipeline_id, "default", "chat", local=local)
         self.llm = IrisChatModel(
             LlmRequestHandler(model_id=model),
-            CompletionArguments(temperature=0.0, max_tokens=60),
+            CompletionArguments(temperature=0.0, max_tokens=EMERGENCY_MAX_TOKENS),
         )
         # Set up Jinja2 environment and load the prompt template
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")

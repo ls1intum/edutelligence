@@ -31,6 +31,7 @@ from ...domain.chat.interaction_suggestion_dto import (
 from ...domain.retrieval.lecture.lecture_retrieval_dto import printed_page_number
 from ...domain.variant.variant import Dep, Variant
 from ...llm import (
+    EMERGENCY_MAX_TOKENS,
     CompletionArguments,
     LlmRequestHandler,
 )
@@ -910,7 +911,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
 
         completion_args = CompletionArguments(
             temperature=0.5,
-            max_tokens=2000,
+            max_tokens=EMERGENCY_MAX_TOKENS,
             stream_handler=stream_handler,
         )
         refinement_model = self._resolve_guide_model(state)

@@ -8,6 +8,7 @@ from weaviate import WeaviateClient
 from iris.common.pipeline_enum import PipelineEnum
 from iris.domain.lecture.lecture_unit_dto import LectureUnitDTO
 from iris.llm import (
+    EMERGENCY_MAX_TOKENS,
     CompletionArguments,
     LlmRequestHandler,
 )
@@ -44,7 +45,9 @@ class LectureUnitSummaryPipeline(SubPipeline):
         pipeline_id = "lecture_unit_summary_pipeline"
         chat_model = resolve_model(pipeline_id, "default", "chat", local=local)
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        completion_args = CompletionArguments(
+            temperature=0, max_tokens=EMERGENCY_MAX_TOKENS
+        )
 
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args

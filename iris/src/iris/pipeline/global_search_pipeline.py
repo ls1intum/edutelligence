@@ -20,7 +20,7 @@ from iris.domain.search.global_search_dto import (
     LectureSearchResultDTO,
 )
 from iris.domain.search.search_intent_dto import SearchIntent
-from iris.llm import CompletionArguments, LlmRequestHandler
+from iris.llm import EMERGENCY_MAX_TOKENS, CompletionArguments, LlmRequestHandler
 from iris.llm.errors import IncompleteModelResponse
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
@@ -156,12 +156,6 @@ _SINGLE_MARKER_RE = re.compile(r"\[(\d+)\]")
 # Literal the model outputs INSTEAD of an answer when the sources cannot answer
 # the question (plain-text contract; measured 8/8 discipline on nano).
 _NO_ANSWER_SENTINEL = "!none!"
-
-# Output budget of the answer call. The provider counts reasoning against it,
-# so a model that reasons needs `reasoning_token_allowance` in its llm_config
-# entry; without it the call can stop before the answer. Then the student gets
-# the retrieved sources without an answer.
-ANSWER_MAX_TOKENS = 600
 
 
 def _sources_without_answer(
@@ -546,7 +540,7 @@ class GlobalSearchPipeline(SubPipeline):
         # Plain-text output (markers carry the attribution, !none! carries the
         # no-answer state) — a JSON envelope would make streamed partials
         # unrenderable fragments.
-        answer_completion_args = CompletionArguments(max_tokens=ANSWER_MAX_TOKENS)
+        answer_completion_args = CompletionArguments(max_tokens=EMERGENCY_MAX_TOKENS)
         self.answer_llm = IrisLangchainChatModel(
             request_handler=LlmRequestHandler(model_id=answer_model),
             completion_args=answer_completion_args,
@@ -1004,9 +998,8 @@ class GlobalSearchPipeline(SubPipeline):
 
     def _warn_cut_answer(self, reason: str) -> None:
         logger.warning(
-            "[global-search] answer of model %s stopped at its output budget "
-            "(%s); no answer, sources only. If the model reasons, set or raise "
-            "reasoning_token_allowance in its llm_config entry.",
+            "[global-search] answer of model %s stopped at the emergency output "
+            "limit (%s); no answer, sources only.",
             self.answer_llm.model_name,
             reason,
         )
@@ -1020,4 +1013,4 @@ class GlobalSearchPipeline(SubPipeline):
         if raw.strip():
             return False
         output_tokens = getattr(self.answer_llm.tokens, "num_output_tokens", 0) or 0
-        return output_tokens >= ANSWER_MAX_TOKENS
+        return output_tokens >= EMERGENCY_MAX_TOKENS

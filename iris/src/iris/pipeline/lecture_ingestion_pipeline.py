@@ -46,6 +46,7 @@ from ..domain.data.text_message_content_dto import TextMessageContentDTO
 from ..ingestion.abstract_ingestion import AbstractIngestion
 from ..ingestion.ingestion_job_handler import ingestion_job_handler
 from ..llm import (
+    EMERGENCY_MAX_TOKENS,
     CompletionArguments,
     LlmRequestHandler,
 )
@@ -293,7 +294,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.llm_chat = LlmRequestHandler(chat_model)
         self.llm_embedding = LlmRequestHandler(embedding_model)
         request_handler = LlmRequestHandler(chat_model)
-        completion_args = CompletionArguments(temperature=0.2, max_tokens=2000)
+        completion_args = CompletionArguments(
+            temperature=0.2, max_tokens=EMERGENCY_MAX_TOKENS
+        )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

@@ -24,6 +24,7 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import (
     LectureUnitSegmentRetrievalDTO,
 )
 from iris.llm import (
+    EMERGENCY_MAX_TOKENS,
     CompletionArguments,
 )
 from iris.llm.langchain import IrisLangchainChatModel
@@ -96,7 +97,9 @@ class LectureRetrieval(SubPipeline):
             pipeline_id, "default", "embedding", local=False
         )
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=400)
+        completion_args = CompletionArguments(
+            temperature=0, max_tokens=EMERGENCY_MAX_TOKENS
+        )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )

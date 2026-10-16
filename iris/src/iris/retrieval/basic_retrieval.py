@@ -13,6 +13,7 @@ from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.token_usage_dto import TokenUsageDTO
 from iris.llm import (
+    EMERGENCY_MAX_TOKENS,
     CompletionArguments,
     LlmRequestHandler,
 )
@@ -91,7 +92,9 @@ class BaseRetrieval(SubPipeline, ABC):
             pipeline_id, "default", "embedding", local=False
         )
         request_handler = LlmRequestHandler(model_id=chat_model)
-        completion_args = CompletionArguments(temperature=0, max_tokens=2000)
+        completion_args = CompletionArguments(
+            temperature=0, max_tokens=EMERGENCY_MAX_TOKENS
+        )
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
