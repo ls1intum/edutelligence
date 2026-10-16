@@ -9,7 +9,11 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
-from .schema_properties import add_property_if_missing
+from .schema_properties import (
+    BASE_URL_EXACT_MARKER,
+    add_property_if_missing,
+    base_url_exact_property,
+)
 
 
 class LectureUnitSchema(Enum):
@@ -28,6 +32,7 @@ class LectureUnitSchema(Enum):
     LECTURE_UNIT_NAME = "lecture_unit_name"
     LECTURE_UNIT_LINK = "lecture_unit_link"
     BASE_URL = "base_url"
+    BASE_URL_EXACT = "base_url_exact"
     LECTURE_UNIT_SUMMARY = "lecture_unit_summary"
     VIDEO_LINK = "video_link"
     RELEASE_DATE = "release_date"
@@ -120,9 +125,11 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
         )
         for ledger_property in _ledger_properties():
             add_property_if_missing(collection, ledger_property)
+        add_property_if_missing(collection, base_url_exact_property())
         return collection
     return client.collections.create(
         name=LectureUnitSchema.COLLECTION_NAME.value,
+        description=BASE_URL_EXACT_MARKER,
         vector_config=Configure.Vectors.self_provided(
             vector_index_config=Configure.VectorIndex.hnsw(
                 distance_metric=VectorDistances.COSINE
@@ -195,6 +202,7 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
+            base_url_exact_property(),
             Property(
                 name=LectureUnitSchema.LECTURE_UNIT_SUMMARY.value,
                 description="The summary of the lecture unit",

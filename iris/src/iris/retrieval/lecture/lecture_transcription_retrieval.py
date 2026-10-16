@@ -21,6 +21,7 @@ from iris.llm.request_handler.rerank_request_handler import (
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.retrieval.lecture.lecture_visibility import is_transcription_visible
 from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -172,9 +173,9 @@ class LectureTranscriptionRetrieval(SubPipeline):
                 else filter_weaviate & lecture_unit_filter
             )
         if lecture_unit_dto.base_url is not None:
-            base_url_filter = Filter.by_property(
-                LectureTranscriptionSchema.BASE_URL.value
-            ).equal(lecture_unit_dto.base_url)
+            base_url_filter = artemis_instance_filter(
+                LectureTranscriptionSchema, lecture_unit_dto.base_url
+            )
             filter_weaviate = (
                 base_url_filter
                 if filter_weaviate is None
@@ -248,10 +249,11 @@ class LectureTranscriptionRetrieval(SubPipeline):
                     LectureTranscriptionSchema.LECTURE_UNIT_ID.value
                 ]
             )
-            lecture_unit_filter &= Filter.by_property(
-                LectureUnitSchema.BASE_URL.value
-            ).equal(
-                lecture_transcription_segment[LectureTranscriptionSchema.BASE_URL.value]
+            lecture_unit_filter &= artemis_instance_filter(
+                LectureUnitSchema,
+                lecture_transcription_segment[
+                    LectureTranscriptionSchema.BASE_URL.value
+                ],
             )
 
             lecture_units = self.lecture_unit_collection.query.fetch_objects(
@@ -321,9 +323,7 @@ class LectureTranscriptionRetrieval(SubPipeline):
                     Filter.by_property(
                         LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
                     ).equal(cache_key[2]),
-                    Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
-                        cache_key[3]
-                    ),
+                    artemis_instance_filter(LectureUnitPageChunkSchema, cache_key[3]),
                 ]
             )
             chunks = self.lecture_unit_page_chunk_collection.query.fetch_objects(

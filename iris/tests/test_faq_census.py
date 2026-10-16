@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from weaviate.classes.config import Tokenization
 
 from iris.domain.data.faq_dto import FaqDTO
 from iris.domain.ingestion.deletion_pipeline_execution_dto import (
@@ -191,8 +192,15 @@ class TestDeleteFaq:
         ]
 
     @staticmethod
-    def _collection(rows):
+    def _collection(rows, tokenization=Tokenization.FIELD):
         collection = MagicMock()
+        collection.config.get.return_value = SimpleNamespace(
+            properties=[
+                SimpleNamespace(
+                    name=FaqSchema.BASE_URL.value, tokenization=tokenization
+                )
+            ]
+        )
         collection.query.fetch_objects.return_value = SimpleNamespace(objects=rows)
         collection.data.delete_many.return_value = SimpleNamespace(
             failed=0, successful=1, objects=None
@@ -228,6 +236,21 @@ class TestDeleteFaq:
 
         (owned,) = self._deletes(collection)
         assert ("is", "base_url", OWN) in owned
+
+    def test_a_word_tokenized_base_url_deletes_owned_rows_by_exact_comparison(self):
+        # Auto-schema created base_url with word tokenization: a filter would also match the longer URL
+        longer = "https://artemis-test.artemis.example"
+        collection = self._collection(
+            [_row(1, 10, OWN, uuid=OWN_UUID), _row(1, 10, longer, uuid=OTHER_UUID)],
+            tokenization=Tokenization.WORD,
+        )
+
+        _pipeline(collection).delete_faq(10, 1, OWN)
+
+        (by_id,) = self._deletes(collection)
+        assert ("is", "_id", OWN_UUID) in by_id
+        assert not any(part[1] == "base_url" for part in by_id)
+        assert not any(OTHER_UUID in part for part in by_id)
 
     def test_without_a_base_url_matches_by_identity(self):
         collection = self._collection([])

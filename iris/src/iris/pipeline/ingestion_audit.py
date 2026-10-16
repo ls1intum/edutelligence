@@ -33,6 +33,7 @@ from iris.vector_database.batch_verify import (
     confirmed_rows,
     fetch_with_retry,
 )
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -455,9 +456,7 @@ class IngestionAudit:
     @staticmethod
     def _identity_filter(dto: IngestionPipelineExecutionDto, schema):
         return (
-            Filter.by_property(schema.BASE_URL.value).equal(
-                dto.settings.artemis_base_url
-            )
+            artemis_instance_filter(schema, dto.settings.artemis_base_url)
             & Filter.by_property(schema.COURSE_ID.value).equal(
                 dto.lecture_unit.course_id
             )

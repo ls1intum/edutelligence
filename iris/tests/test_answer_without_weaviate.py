@@ -102,6 +102,8 @@ def fresh_database(monkeypatch):
     monkeypatch.setattr(database.time, "monotonic", lambda: clock.now)
     for name in SCHEMA_INITS[1:]:
         monkeypatch.setattr(database, name, MagicMock(return_value=MagicMock()))
+    # The exact base URL filters are covered in test_base_url_exact_backfill; these tests count connection handles
+    monkeypatch.setattr(database, "prepare_exact_filters", MagicMock(return_value=[]))
     retries = []
 
     class _HeldThread:
