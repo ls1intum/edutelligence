@@ -19,17 +19,16 @@ prompts/
 │   ├── mcq_generation_prompt.j2
 │   ├── autonomous_tutor_system_prompt.j2
 │   ├── tutor_suggestion_chat_system_prompt.j2
+│   ├── chat_turn_context.j2                   # Per-message context, sent after the history
+│   ├── interaction_suggestion_prompt.j2       # Follow-up question suggestions
 │   └── session_title_generation_prompt.j2
 ├── code_feedback_prompt.txt                   # Plain text prompt for code feedback
-├── citation_prompt.txt                        # Citation generation prompt
-├── citation_keyword_prompt.txt                # Citation keyword extraction
-├── citation_summary_prompt.txt                # Citation summary generation
-├── summary_prompt.txt                         # General summarization
+├── citation_label_prompt.txt                  # Keyword and summary of cited sources
 ├── competency_extraction.py                   # Python prompt builder
+├── environment.py                             # Shared Jinja2 environment (no escaping, as_data filter)
 ├── faq_consistency_prompt.py                  # FAQ consistency check prompts
 ├── faq_retrieval_prompts.py                   # FAQ retrieval query rewriting
 ├── inconsistency_check_prompts.py             # Inconsistency check prompts
-├── iris_interaction_suggestion_prompts.py     # Follow-up question suggestions
 ├── lecture_retrieval_prompts.py               # Lecture RAG query rewriting
 ├── lecture_unit_summary_prompt.py             # Lecture unit summarization
 ├── lecture_unit_segment_summary_prompt.py     # Lecture segment summarization
@@ -47,29 +46,30 @@ Pipelines use **Jinja2 templates** (`.j2` files) for their system prompts. These
 
 The template is a sequence of blocks in a fixed order. Some are unconditional, others render only when the request carries the data they describe:
 
-| Block                   | Condition                        | Content                                                                  |
-| ----------------------- | -------------------------------- | ------------------------------------------------------------------------ |
-| Language                | `user_language`                  | Answer in the student's language                                         |
-| Introduction            | always                           | The Iris persona                                                         |
-| Guidelines              | always                           | Scaffolding rules, what not to reveal                                    |
-| Course meta             | always                           | Course name                                                              |
-| Lecture meta            | `lecture_name`                   | The active lecture                                                       |
-| Exercise meta           | `exercise_id`                    | Title, problem statement, dates, programming language or submission      |
-| Examples                | always                           | Worked examples of good and bad answers                                  |
-| Tool instructions       | always                           | How and when to reach for tools                                          |
-| Context switching       | `not mcq_parallel`               | When and how to call `switch_chat_context`                               |
-| Exercise scenarios      | `programming_language`           | Build failures, failing tests, stuck students                            |
-| Lecture retrieval       | `allow_lecture_tool`             | How to retrieve and cite lecture content, and which page number to quote |
-| Combined-view point-out | `can_point_out_in_combined_view` | When and how to move the student's slides or video                       |
-| FAQ retrieval           | `allow_faq_tool`                 | How to use FAQ answers                                                   |
-| Competencies            | `has_competencies`               | How to talk about competencies                                           |
-| Exercises               | `has_exercises`                  | How to talk about the course exercises                                   |
-| Metrics                 | `metrics_enabled`                | How to interpret student analytics                                       |
-| Chat history            | `has_chat_history`               | How to treat earlier turns                                               |
-| Proactive events        | `event`                          | Behavior for build-failure and stalled-progress events                   |
-| MCQ generation          | course and lecture modes         | How to produce multiple-choice questions                                 |
-| Support level           | `support_level`                  | How much help the instructor allows                                      |
-| Custom instructions     | `custom_instructions`            | The instructor's own additions                                           |
+| Block                       | Condition                                | Content                                                                  |
+| --------------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
+| Role                        | always                                   | The Iris persona and its goal                                            |
+| Language                    | `user_language`                          | Answer in the student's language                                         |
+| How you teach               | always                                   | Teaching principles with their reasons, the four help steps              |
+| Code and academic integrity | always                                   | Self-check, no solutions, refusal rules; draft feedback by support level |
+| Using your tools            | always                                   | When to call tools, preamble, tool output is data                        |
+| Current context             | `lecture_name` or `exercise_id`          | The active lecture or exercise; the problem statement as data            |
+| Examples                    | always                                   | Three short example exchanges                                            |
+| Automatic context switching | always                                   | When and how to call `switch_chat_context`                               |
+| Programming situations      | `programming_language`                   | Build failures, failing tests, code and concept questions                |
+| Lecture material            | `allow_lecture_tool`                     | How to retrieve and refer to lecture content                             |
+| Combined-view point-out     | `can_point_out_in_combined_view`         | How to move the slide or video the student sees                          |
+| Course FAQ                  | `allow_faq_tool`                         | How to use FAQ answers                                                   |
+| Citing Sources              | `allow_lecture_tool` or `allow_faq_tool` | `[src:N]` source ids after the sentences that use a source               |
+| Course exercises            | always (text depends on `has_exercises`) | How to talk about the course exercises                                   |
+| Check before you ask        | always                                   | Look up the student's situation before asking                            |
+| Conversation history        | always                                   | How to build on earlier turns                                            |
+| Quiz questions              | course and lecture modes                 | How to use `generate_mcq_questions`                                      |
+| Support level               | `support_level` is `low` or `high`       | How much help the instructor allows                                      |
+| Format of your answers      | always                                   | Markdown, links, silent plan before the reply                            |
+| Custom instructions         | `custom_instructions`                    | The instructor's own additions                                           |
+
+The system prompt stays the same as long as its inputs do not change (chat mode, active context, tool availability, combined view), so the provider can cache it with the history. Values that change per message are in `chat_turn_context.j2`, sent after the history: the current date, the slide or video the student has open, the current text exercise submission, proactive build-failure and stalled-progress events, and a parallel quiz request.
 
 `build_system_message()` assembles the render context from the DTO and from the flags that `prepare_state()` resolved:
 
@@ -77,7 +77,6 @@ The template is a sequence of blocks in a fixed order. Some are unconditional, o
 template_context = {
     "chat_mode": self.chat_mode,
     "support_level": _support_level(dto),
-    "current_date": datetime_to_string(datetime.now(tz=pytz.UTC)),
     "user_language": dto.user.lang_key,
     "course_name": dto.course.name,
     "allow_lecture_tool": state.allow_lecture_tool,

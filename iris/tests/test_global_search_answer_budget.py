@@ -127,7 +127,8 @@ def test_empty_text_below_the_limit_is_not_reported_as_a_cut(caplog):
     with caplog.at_level(logging.WARNING):
         assert pipeline._generate_answer("q", []) == ""
 
-    assert "reasoning_token_allowance" not in caplog.text
+    assert pipeline._answer_cut is False
+    assert "emergency output limit" not in caplog.text
 
 
 def test_a_normal_answer_makes_one_call():

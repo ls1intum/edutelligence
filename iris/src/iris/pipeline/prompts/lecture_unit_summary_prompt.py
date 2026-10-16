@@ -22,6 +22,7 @@ def lecture_unit_summary_prompt(
         1. Summarize the combined information in a clear and accurate manner.
         2. Do not add additional information.
         3. Only answer in complete sentences.
+        4. Keep the summary under 1,000 words.
         This is summary of the lecture:
         {safe_summary}
     """
