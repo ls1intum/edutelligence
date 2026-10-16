@@ -1,3 +1,5 @@
+import threading
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Type, Union
 
 from langchain_core.tools import BaseTool
@@ -13,6 +15,36 @@ from iris.llm.llm_manager import LlmManager
 
 logger = get_logger(__name__)
 
+# After a failed rerank call, the same reranker is skipped for this long so that a
+# down service does not add its timeout to every retrieval. It is then tried again:
+# a single transient error must not switch reranking off until the next restart.
+RERANK_FAILURE_COOLDOWN_SECONDS = 60.0
+
+_cooldown_lock = threading.Lock()
+_cooldown_until: dict[str, float] = {}
+
+
+def _in_cooldown(model_id: str) -> bool:
+    with _cooldown_lock:
+        until = _cooldown_until.get(model_id)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            del _cooldown_until[model_id]
+            return False
+        return True
+
+
+def _start_cooldown(model_id: str) -> None:
+    with _cooldown_lock:
+        _cooldown_until[model_id] = time.monotonic() + RERANK_FAILURE_COOLDOWN_SECONDS
+
+
+def reset_rerank_cooldowns() -> None:
+    """Forget all cooldowns (used by tests)."""
+    with _cooldown_lock:
+        _cooldown_until.clear()
+
 
 class RerankRequestHandler(RequestHandler):
     """RerankRequestHandler handles document reranking based on a query and a specified content field using a language
@@ -21,7 +53,6 @@ class RerankRequestHandler(RequestHandler):
 
     model_id: str
     llm_manager: LlmManager | None = None
-    _rerank_available: bool = True
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, model_id: str):
@@ -68,9 +99,9 @@ class RerankRequestHandler(RequestHandler):
         if not valid_documents:
             return []
 
-        # Skip an unavailable external reranker after its first failure to avoid
-        # repeated timeout delays. Passthrough behavior is identical here.
-        if not self._rerank_available:
+        # Skip a reranker that just failed, to avoid repeated timeout delays.
+        # Passthrough behavior is identical here.
+        if _in_cooldown(self.model_id):
             return valid_documents[:top_n]
 
         document_contents = list(
@@ -80,7 +111,7 @@ class RerankRequestHandler(RequestHandler):
         reranker = self.llm_manager.get_llm_by_id(self.model_id)
         if reranker is None:
             # A missing config entry (typo'd id, or the entry commented out) is permanent,
-            # not the transient failure _rerank_available exists to back off from — conflating
+            # not the transient failure the cooldown exists to back off from — conflating
             # the two hides a config error behind a generic "reranking failed" for the rest of
             # the process, with no lead pointing at the actual model_id that isn't configured.
             logger.warning(
@@ -109,10 +140,12 @@ class RerankRequestHandler(RequestHandler):
             return [valid_documents[item.index] for item in response.results]
         except Exception as e:
             logger.warning(
-                "Reranking failed, disabling for subsequent calls. "
+                "Reranking with %s failed, skipping it for %.0f s. "
                 "Returning top %d unranked documents: %s",
+                self.model_id,
+                RERANK_FAILURE_COOLDOWN_SECONDS,
                 top_n,
                 str(e),
             )
-            RerankRequestHandler._rerank_available = False
+            _start_cooldown(self.model_id)
             return valid_documents[:top_n]
