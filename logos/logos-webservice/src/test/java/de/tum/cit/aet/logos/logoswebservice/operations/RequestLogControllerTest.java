@@ -56,6 +56,19 @@ class RequestLogControllerTest {
     }
 
     @Test
+    void latestRequests_narrowsToOneApiKey() throws Exception {
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"api_key_id\":3001}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(2));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"api_key_id\":3002}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.requests").isEmpty())
+            .andExpect(jsonPath("$.total").value(0));
+    }
+
+    @Test
     void requestPayloads_preservesMissingAndStreamingContent() throws Exception {
         jdbc.update("UPDATE log_entry SET response_payload = CAST(? AS jsonb) WHERE request_id = ?",
             "\"data: chunk\\n\\ndata: [DONE]\"", "req-aaa-111");

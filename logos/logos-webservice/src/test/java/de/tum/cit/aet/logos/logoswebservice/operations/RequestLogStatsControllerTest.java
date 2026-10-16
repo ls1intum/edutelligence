@@ -261,6 +261,36 @@ class RequestLogStatsControllerTest {
     }
 
     @Test
+    void scopeOptions_listApiKeysAndAKeyNarrowsTheAggregates() throws Exception {
+        // Both seeded requests went through the developer key 3001, which is
+        // labelled by its name and owner.
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.apiKeys.length()").value(1))
+           .andExpect(jsonPath("$.apiKeys[0].id").value(3001))
+           .andExpect(jsonPath("$.apiKeys[0].label").value("dev key · Test User"))
+           .andExpect(jsonPath("$.apiKeys[0].requestCount").value(2));
+
+        mvc.perform(post("/logosdb/request_log_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"api_key_id\": 3001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.stats.totals.requests").value(2));
+
+        // A key with no traffic narrows everything to nothing.
+        mvc.perform(post("/logosdb/request_log_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"api_key_id\": 3002}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.stats.totals.requests").value(0));
+    }
+
+    @Test
     void scopeOptions_narrowRequestersToTheTeam() throws Exception {
         mvc.perform(post("/logosdb/request_log_scope_options")
                 .with(TestJwt.logosAdmin())

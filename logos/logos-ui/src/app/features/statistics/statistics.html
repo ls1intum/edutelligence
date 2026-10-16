@@ -79,13 +79,21 @@
         />
         <app-searchable-select
           class="stats-scope__select"
+          label="API keys"
+          [options]="apiKeyFilterOptions()"
+          [value]="selectedApiKeyValue()"
+          ariaLabel="Filter by API key"
+          (valueChange)="setApiKeyFilter($event)"
+        />
+        <app-searchable-select
+          class="stats-scope__select"
           label="Providers"
           [options]="providerFilterOptions()"
           [value]="selectedProviderValue()"
           ariaLabel="Filter by provider"
           (valueChange)="setProviderFilter($event)"
         />
-        <!-- Models narrow the whole page, like the three filters above. The
+        <!-- Models narrow the whole page, like the four filters above. The
              state filter after it narrows the recent-requests list alone. -->
         <app-multi-select
           class="stats-scope__select"
@@ -255,6 +263,7 @@
           [filterUserId]="filterUserId()"
           [filterTeamId]="filterTeamId()"
           [filterProviderId]="filterProviderId()"
+          [filterApiKeyId]="filterApiKeyId()"
           [filterStatus]="feedStatus()"
           [filterModelIds]="feedModelIds()"
         />
