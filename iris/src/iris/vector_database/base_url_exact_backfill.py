@@ -20,7 +20,7 @@ from weaviate.exceptions import UnexpectedStatusCodeError
 
 from iris.common.logging_config import get_logger
 
-from .instance_filter import mark_exact
+from .instance_filter import is_exact, mark_exact
 from .lecture_transcription_schema import LectureTranscriptionSchema
 from .lecture_unit_page_chunk_schema import LectureUnitPageChunkSchema
 from .lecture_unit_schema import LectureUnitSchema
@@ -53,7 +53,15 @@ def prepare_exact_filters_for(client: WeaviateClient, schemas) -> list:
     eligible = []
     for schema in schemas:
         name = schema.COLLECTION_NAME.value
-        config = client.collections.get(name).config.get()
+        try:
+            config = client.collections.get(name).config.get()
+        except Exception:
+            logger.warning(
+                "Could not read the configuration of %s; its base URL filters stay as they are until the next start",
+                name,
+                exc_info=True,
+            )
+            continue
         exact_property = next(
             (prop for prop in config.properties if prop.name == BASE_URL_EXACT), None
         )
@@ -146,13 +154,19 @@ def backfill_collection(client: WeaviateClient, schema) -> bool:
         return False
     collapsed = _collapsed_spellings(spellings)
     if collapsed:
+        consequence = (
+            "Its filters already match exactly (it was marked before), so rows of the other spelling are not matched"
+            if is_exact(name)
+            else "Exact filters would no longer match the rows of the other spelling, so its filters stay on the "
+            "word-tokenized base_url"
+        )
         logger.warning(
-            "%s holds base URLs that differ only in case or a trailing slash: %s. Exact filters would no longer "
-            "match the rows of the other spelling, so its filters stay on the word-tokenized base_url",
+            "%s holds base URLs that differ only in case or a trailing slash: %s. %s",
             name,
             collapsed,
+            consequence,
         )
-        return False
+        return is_exact(name)
     if collection.config.get().description != BASE_URL_EXACT_MARKER:
         collection.config.update(description=BASE_URL_EXACT_MARKER)
     mark_exact(name)

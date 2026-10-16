@@ -217,3 +217,15 @@ def test_a_run_goes_on_without_memories_while_weaviate_is_unavailable(monkeypatc
         ChatPipeline._has_memories(SimpleNamespace(dto=state.dto, memiris_wrapper=None))
         is False
     )
+
+
+@pytest.mark.usefixtures("fresh_database")
+def test_a_failing_exact_filter_preparation_does_not_fail_the_schema_setup(monkeypatch):
+    monkeypatch.setattr(database, SCHEMA_INITS[0], MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(
+        database, "prepare_exact_filters", MagicMock(side_effect=RuntimeError("boom"))
+    )
+
+    VectorDatabase()
+
+    assert VectorDatabase._schemas_ready is True

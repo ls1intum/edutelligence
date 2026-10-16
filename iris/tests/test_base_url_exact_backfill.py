@@ -198,6 +198,29 @@ class TestBackfillCollection:
         collection.config.update.assert_not_called()
 
 
+class TestPrepareFailures:
+    """A collection whose configuration cannot be read does not stop the others."""
+
+    def test_a_failing_collection_is_skipped(self):
+        configs = {
+            schema.COLLECTION_NAME.value: _config()
+            for schema in backfill.LECTURE_SCHEMAS
+        }
+
+        def get(name):
+            if name == LectureUnitPageChunkSchema.COLLECTION_NAME.value:
+                raise RuntimeError("timeout")
+            return SimpleNamespace(config=SimpleNamespace(get=lambda: configs[name]))
+
+        client = MagicMock()
+        client.collections.get.side_effect = get
+
+        eligible = backfill.prepare_exact_filters(client)
+
+        assert LectureUnitPageChunkSchema not in eligible
+        assert LectureUnitSchema in eligible
+
+
 class TestStartBackfill:
     """The background pass runs once per process."""
 
