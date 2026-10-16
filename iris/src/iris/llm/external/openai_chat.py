@@ -644,6 +644,27 @@ def extract_response_output_text(response) -> str:
     return "".join(texts)
 
 
+def _completed_answer_text(output_items, fallback_output_text: str = "") -> str:
+    """The visible answer text of message items that were written completely.
+
+    When a gateway returns no message items at all, the streamed text is the
+    only evidence and is used as it is.
+    """
+    messages = [
+        item for item in output_items if getattr(item, "type", None) == "message"
+    ]
+    if not messages:
+        return fallback_output_text
+    texts = []
+    for item in messages:
+        if getattr(item, "status", None) not in (None, "completed"):
+            continue
+        for content in getattr(item, "content", []) or []:
+            if getattr(content, "type", None) == "output_text":
+                texts.append(getattr(content, "text", "") or "")
+    return "".join(texts)
+
+
 def raise_for_failed_responses_status(response) -> None:
     """Raise if a Responses API response ended with a failed status."""
     status = getattr(response, "status", None)
@@ -747,7 +768,8 @@ def convert_responses_to_iris_message(
 
     Raises:
         IncompleteModelResponse: The response stopped before it was complete and
-            contains function calls, which may be truncated. No tool may run.
+            contains function calls (which may be truncated; no tool may run) or
+            no completely written answer.
     """
     output_items = getattr(response, "output", []) or []
     if response_has_refusal(output_items):
@@ -772,7 +794,22 @@ def convert_responses_to_iris_message(
             token_usage,
         )
     if status is not None and status != "completed":
-        logger.warning("Responses API returned non-completed status: %s", status)
+        # Only a fully written answer is usable from a response that stopped
+        # early; a cut during reasoning or inside the answer is a failure, not
+        # an empty or half answer.
+        if not _completed_answer_text(output_items, fallback_output_text):
+            reason = getattr(
+                getattr(response, "incomplete_details", None), "reason", None
+            )
+            raise IncompleteModelResponse(
+                f"Responses API stopped before the answer was complete "
+                f"(status={status}, reason={reason})",
+                token_usage,
+            )
+        logger.warning(
+            "Responses API returned non-completed status %s with a complete answer",
+            status,
+        )
 
     current_time = datetime.now()
     output_text = extract_response_output_text(response) or fallback_output_text

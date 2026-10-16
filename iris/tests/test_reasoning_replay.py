@@ -178,17 +178,114 @@ def test_incomplete_response_with_tool_calls_is_rejected_with_its_usage():
     assert raised.value.token_usage.num_input_tokens == 10
 
 
-def test_truncation_during_reasoning_without_text_is_an_empty_answer_not_a_tool_run():
+def test_truncation_during_reasoning_fails_instead_of_an_empty_answer():
     response = _response(
         "incomplete",
         [_item(type="reasoning", id="rs_1", encrypted_content="gAAAA")],
         incomplete_reason="max_output_tokens",
     )
 
-    message = convert_responses_to_iris_message(response, "luna", keep_items=True)
+    with pytest.raises(IncompleteModelResponse) as raised:
+        convert_responses_to_iris_message(response, "luna", keep_items=True)
+
+    assert raised.value.token_usage.num_input_tokens == 10
+
+
+def test_truncation_inside_the_answer_fails_instead_of_a_half_answer():
+    response = _response(
+        "incomplete",
+        [
+            _item(type="reasoning", id="rs_1", encrypted_content="gAAAA"),
+            _item(
+                type="message",
+                status="incomplete",
+                content=[_item(type="output_text", text="The heap property says")],
+            ),
+        ],
+        incomplete_reason="max_output_tokens",
+    )
+
+    with pytest.raises(IncompleteModelResponse):
+        convert_responses_to_iris_message(
+            response, "luna", fallback_output_text="The heap property says"
+        )
+
+
+def test_an_incomplete_response_with_a_completely_written_answer_is_kept():
+    response = _response(
+        "incomplete",
+        [
+            _item(
+                type="message",
+                status="completed",
+                content=[_item(type="output_text", text="A heap is a tree.")],
+            )
+        ],
+        incomplete_reason="max_output_tokens",
+    )
+
+    message = convert_responses_to_iris_message(response, "luna")
 
     assert not isinstance(message, PyrisAIMessage)
-    assert message.contents[0].text_content == ""
+    assert message.contents[0].text_content == "A heap is a tree."
+
+
+def test_a_streamed_answer_cut_during_reasoning_fails_and_resets_the_draft():
+    deltas = []
+
+    def stream_handler(delta):
+        deltas.append(delta)
+
+    events = [
+        _item(type="response.output_text.delta", delta="Partial"),
+        _item(
+            type="response.incomplete",
+            response=_response(
+                "incomplete",
+                [
+                    _item(
+                        type="message",
+                        status="incomplete",
+                        content=[_item(type="output_text", text="Partial")],
+                    )
+                ],
+                incomplete_reason="max_output_tokens",
+            ),
+        ),
+    ]
+    model = DirectOpenAIChatModel.model_construct(
+        id="luna",
+        name="luna",
+        description="",
+        model="luna",
+        api_key="k",
+        use_responses_api=True,
+        replay_reasoning_items=True,
+    )
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=lambda **_kwargs: iter(events))
+    )
+
+    with pytest.raises(IncompleteModelResponse):
+        model._create_streamed_responses_completion(  # pylint: disable=protected-access
+            client, [], CompletionArguments(), None, stream_handler
+        )
+    assert deltas == ["Partial"]
+
+    # IrisChatModel turns the failure into a draft reset before it propagates.
+    handler = SimpleNamespace(
+        model_id="luna",
+        chat=lambda *_args: (_ for _ in ()).throw(
+            IncompleteModelResponse("cut", TokenUsageDTO(numInputTokens=3))
+        ),
+    )
+    chat_model = IrisChatModel(
+        handler, CompletionArguments(stream_handler=stream_handler)
+    )
+    with pytest.raises(IncompleteModelResponse):
+        chat_model.chat([])
+    assert deltas == ["Partial", None]
+    assert chat_model.tokens.num_input_tokens == 3
 
 
 def test_a_completed_call_then_an_incomplete_call_fails_the_run_and_keeps_both_usages():
