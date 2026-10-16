@@ -163,12 +163,12 @@ class IngestionWorkerSettings(BaseModel):
     upstream configuration here and Iris keeps no standing knowledge of its
     callers. It claims lecture ingestion jobs from every discovered upstream
     when it has free capacity and renews a lease for every run it executes on
-    the fixed heartbeat interval. capacity is shared across all upstreams and
-    replaces Artemis's global max-concurrent-jobs as the effective
-    parallelism: in pull mode this process only ever takes what it can run.
+    the fixed heartbeat interval. capacity is shared across all upstreams and is
+    the effective parallelism: this process only ever takes what it can run.
+    The worker always runs: Artemis no longer pushes lecture ingestion jobs, so
+    the worker is the only way they reach Iris.
     """
 
-    enabled: bool = Field(default=True)
     capacity: int = Field(
         default=2,
         ge=1,
