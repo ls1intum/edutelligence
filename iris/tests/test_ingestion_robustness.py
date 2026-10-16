@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common.callback_token import CallbackToken
 from iris.common.custom_exceptions import IngestionCancelledException  # noqa: E402
 from iris.common.ingestion_errors import (  # noqa: E402
     TRANSCRIPT_INGESTION_FAILED,
@@ -219,6 +220,7 @@ def test_lecture_update_worker_reports_failure_without_lecture_unit_payload():
 
     callback_cls.assert_called_once_with(
         run_id="run-1",
+        auth_token=CallbackToken("run-1"),
         base_url="https://artemis.example",
         lecture_unit_id=77,
     )
@@ -250,7 +252,8 @@ def test_terminal_callback_is_skipped_when_run_is_no_longer_current():
     dto = SimpleNamespace(
         lecture_unit=lecture_unit,
         settings=SimpleNamespace(
-            authentication_token="token",
+            authentication_token=CallbackToken("token"),
+            callback_run_id="token",
             artemis_base_url="https://artemis.example",
             artemis_llm_selection="OPENAI",
         ),

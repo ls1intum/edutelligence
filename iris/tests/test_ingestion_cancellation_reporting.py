@@ -8,6 +8,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from iris.common.callback_token import CallbackToken
 from iris.pipeline.lecture_ingestion_update_pipeline import (
     LectureIngestionUpdatePipeline,
 )
@@ -24,7 +25,8 @@ def _pipeline(cancel_event):
     dto = MagicMock()
     dto.lecture_unit = lecture_unit
     dto.settings = SimpleNamespace(
-        authentication_token="token",
+        authentication_token=CallbackToken("token"),
+        callback_run_id="token",
         artemis_base_url="https://artemis.example",
         artemis_llm_selection="OPENAI",
     )

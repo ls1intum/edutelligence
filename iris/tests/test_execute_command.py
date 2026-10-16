@@ -11,6 +11,7 @@ or crashes on a command.
 import pytest
 import requests
 
+from iris.common.callback_token import CallbackToken
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.point_out_command_dto import (
     PointOutCommandDTO,
@@ -40,6 +41,7 @@ def _callback(
         url=url,
         run_id="run-1",
         status=ChatStatusUpdateDTO(run_state=RunStateEnum.RUNNING),
+        auth_token=CallbackToken("token-for-run-1"),
     )
 
 
@@ -66,7 +68,7 @@ def test_applied_true_round_trip(monkeypatch):
     assert (
         captured["url"] == "https://artemis.example/pipelines/chat/runs/run-1/command"
     )
-    assert captured["kwargs"]["headers"]["Authorization"] == "Bearer run-1"
+    assert captured["kwargs"]["headers"]["Authorization"] == "Bearer token-for-run-1"
     assert captured["kwargs"]["timeout"] == COMMAND_TIMEOUT_SECONDS
     # Body is camelCased by alias for the Artemis wire format.
     assert captured["kwargs"]["json"] == {

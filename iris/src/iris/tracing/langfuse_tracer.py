@@ -138,7 +138,7 @@ class TracingContext:
 
     # Core identifiers
     user_id: Optional[str] = None
-    session_id: Optional[str] = None  # authentication_token from Artemis
+    session_id: Optional[str] = None  # run id from Artemis
 
     # Course context
     course_id: Optional[int] = None
@@ -190,7 +190,8 @@ class TracingContext:
 
         # Extract session/run ID and Artemis URL
         if hasattr(dto, "settings") and dto.settings:
-            ctx.session_id = getattr(dto.settings, "authentication_token", None)
+            # The run id, never the callback token: traces leave Iris.
+            ctx.session_id = getattr(dto.settings, "callback_run_id", None)
             ctx.artemis_base_url = getattr(dto.settings, "artemis_base_url", None)
 
         # Extract course info from CourseDTO

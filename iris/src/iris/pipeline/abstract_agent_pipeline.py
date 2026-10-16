@@ -720,7 +720,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
 
         return PartialResultSender(
             state.callback.url,
-            state.callback.run_id,
+            state.dto.settings.authentication_token,
         )
 
     def _start_partial_result_sender(

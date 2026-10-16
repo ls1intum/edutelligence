@@ -88,7 +88,8 @@ def run_lecture_update_pipeline_worker(
             exc_info=True,
         )
         callback = IngestionStatusCallback(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             lecture_unit_id=lecture_unit_id,
         )
@@ -110,7 +111,8 @@ def run_lecture_deletion_pipeline_worker(dto: LecturesDeletionExecutionDto):
     callback = None
     try:
         callback = LecturesDeletionStatusCallback(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
         )
         db = VectorDatabase()
@@ -136,7 +138,8 @@ def run_faq_update_pipeline_worker(
     callback = None
     try:
         callback = FaqIngestionStatus(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             faq_id=dto.faq.faq_id,
         )
@@ -166,7 +169,8 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str
     callback = None
     try:
         callback = FaqIngestionStatus(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
             faq_id=dto.faq.faq_id,
         )

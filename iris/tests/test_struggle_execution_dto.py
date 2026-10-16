@@ -43,7 +43,7 @@ def test_execution_dto_carries_signal_and_settings():
         "chatHistory": [],
     }
     dto = StruggleInterventionPipelineExecutionDTO.model_validate(payload)
-    assert dto.settings.authentication_token == "job-token-1"
+    assert dto.settings.authentication_token.reveal() == "job-token-1"
     assert dto.struggle_signal.alert.primary_boundary == "FM"
 
 

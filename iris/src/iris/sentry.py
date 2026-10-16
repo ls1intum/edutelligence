@@ -4,6 +4,31 @@ import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.openai import OpenAIIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
+from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
+
+# Keys whose values are callback credentials. Request bodies from Artemis carry the token in
+# settings.authenticationToken, and claimed ingestion jobs are dicts with the same key.
+_CREDENTIAL_KEYS = [
+    "authenticationToken",
+    "authentication_token",
+    "auth_token",
+    "_auth_token",
+]
+
+
+def credential_safety_options() -> dict:
+    """The client options that keep callback credentials out of Sentry events."""
+    return {
+        # send_default_pii as in init, so only the credential keys are added to what was scrubbed before.
+        "event_scrubber": EventScrubber(
+            denylist=DEFAULT_DENYLIST + _CREDENTIAL_KEYS,
+            recursive=True,
+            send_default_pii=True,
+        ),
+        # Without local variables: once a callback token is put into a request header, it sits as
+        # plain bytes in locals of the HTTP client, where no key-based scrubbing can find it.
+        "include_local_variables": False,
+    }
 
 
 def init():
@@ -24,6 +49,7 @@ def init():
         attach_stacktrace=os.environ.get("SENTRY_ATTACH_STACKTRACE", "False").lower()
         in ("true", "1"),
         max_request_body_size="always",
+        **credential_safety_options(),
         traces_sample_rate=sample_rate if tracing_enabled else 0.0,
         profiles_sample_rate=sample_rate if tracing_enabled else 0.0,
         send_default_pii=True,

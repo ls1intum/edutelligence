@@ -88,7 +88,8 @@ def run_chat_pipeline_worker(
     set_request_id(request_id)
     try:
         callback = ChatRunCallback(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
         )
     except Exception as e:
@@ -131,7 +132,8 @@ def run_competency_extraction_pipeline_worker(
     set_request_id(request_id)
     try:
         callback = CompetencyExtractionCallback(
-            run_id=dto.execution.settings.authentication_token,
+            run_id=dto.execution.settings.callback_run_id,
+            auth_token=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
         )
     except Exception as e:
@@ -177,7 +179,8 @@ def run_rewriting_pipeline_worker(
     set_request_id(request_id)
     try:
         callback = RewritingCallback(
-            run_id=dto.execution.settings.authentication_token,
+            run_id=dto.execution.settings.callback_run_id,
+            auth_token=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
         )
     except Exception as e:
@@ -222,7 +225,8 @@ def run_inconsistency_check_pipeline_worker(
     set_request_id(request_id)
     try:
         callback = InconsistencyCheckCallback(
-            run_id=dto.execution.settings.authentication_token,
+            run_id=dto.execution.settings.callback_run_id,
+            auth_token=dto.execution.settings.authentication_token,
             base_url=dto.execution.settings.artemis_base_url,
         )
     except Exception as e:
@@ -269,7 +273,8 @@ def run_communication_tutor_suggestions_pipeline_worker(
     logger.info("Communication tutor suggestions pipeline started")
     try:
         callback = TutorSuggestionCallback(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
         )
     except Exception as e:
@@ -314,7 +319,8 @@ def run_autonomous_tutor_pipeline_worker(
     logger.info("Autonomous tutor pipeline started")
     try:
         callback = AutonomousTutorCallback(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
         )
     except Exception as e:
@@ -357,7 +363,8 @@ def run_struggle_intervention_pipeline_worker(
     logger.info("Struggle intervention pipeline started")
     try:
         callback = StruggleInterventionCallback(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
         )
     except Exception as e:
@@ -392,7 +399,8 @@ def run_global_search_pipeline_worker(dto: GlobalSearchRequestDTO, request_id: s
     set_request_id(request_id)
     try:
         callback = GlobalSearchCallback(
-            run_id=dto.settings.authentication_token,
+            run_id=dto.settings.callback_run_id,
+            auth_token=dto.settings.authentication_token,
             base_url=dto.settings.artemis_base_url,
         )
     except Exception as e:

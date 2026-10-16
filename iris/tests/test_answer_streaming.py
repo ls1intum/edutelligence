@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from iris.common.callback_token import CallbackToken
 from iris.domain.search.global_search_dto import CourseInfo, EntitySourceDTO
 from iris.domain.status.global_search_status_update_dto import (
     GlobalSearchStatusUpdateDTO,
@@ -176,7 +177,7 @@ class TestPartialResultSenderFactory:
     def test_global_search_payload_uses_the_injected_dto(self):
         sender = PartialResultSender(
             "http://unused",
-            "run",
+            CallbackToken("run"),
             status_dto_factory=lambda text, seq: GlobalSearchStatusUpdateDTO(
                 run_state=RunStateEnum.RUNNING,
                 partial_result=text,
@@ -194,7 +195,7 @@ class TestPartialResultSenderFactory:
         assert "answer" not in payload  # exclude_none keeps the draft minimal
 
     def test_default_factory_still_produces_the_chat_payload(self):
-        sender = PartialResultSender("http://unused", "run")
+        sender = PartialResultSender("http://unused", CallbackToken("run"))
         sender.on_delta("token")
         payload_info = sender._next_payload()  # pylint: disable=protected-access
         assert payload_info is not None
