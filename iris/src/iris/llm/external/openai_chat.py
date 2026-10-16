@@ -1,7 +1,6 @@
 import copy
 import json
 import re
-import time
 from datetime import datetime
 from typing import (
     Any,
@@ -19,14 +18,7 @@ from typing import (
 from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langfuse.openai import AzureOpenAI, OpenAI
-from openai import (
-    APIConnectionError,
-    APIError,
-    APIStatusError,
-    ContentFilterFinishReasonError,
-    InternalServerError,
-    RateLimitError,
-)
+from openai import APIError, APIStatusError, ContentFilterFinishReasonError
 from openai.types import CompletionUsage
 from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
 from openai.types.chat.chat_completion_message_function_tool_call import (
@@ -51,6 +43,7 @@ from ...domain.data.tool_call_dto import ToolCallDTO
 from ...domain.data.tool_message_content_dto import ToolMessageContentDTO
 from ...llm import CompletionArguments
 from ...llm.external.model import ChatModel
+from ...llm.retry import RetryState
 
 logger = get_logger(__name__)
 
@@ -64,26 +57,6 @@ ReasoningEffortValue = Literal["none", "minimal", "low", "medium", "high", "xhig
 _REASONING_EFFORT_INDEX = {
     effort: index for index, effort in enumerate(_REASONING_EFFORT_ORDER)
 }
-_RETRYABLE_OPENAI_ERRORS = (RateLimitError, APIConnectionError, InternalServerError)
-
-
-def _retry_after_openai_error(
-    attempt: int,
-    initial_delay: int,
-    backoff_factor: int,
-) -> None:
-    wait_time = initial_delay * (backoff_factor**attempt)
-    logger.exception("OpenAI error on attempt %s:", attempt + 1)
-    logger.info("Retrying in %s seconds...", wait_time)
-    time.sleep(wait_time)
-
-
-def _is_retryable_openai_error(error: Exception) -> bool:
-    if isinstance(error, _RETRYABLE_OPENAI_ERRORS):
-        return True
-    if isinstance(error, APIStatusError):
-        return error.status_code >= 500 or error.status_code in (408, 409)
-    return False
 
 
 def _close_stream(stream: Any) -> None:
@@ -1148,12 +1121,8 @@ class OpenAIChatModel(ChatModel):
             Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
         ],
     ) -> PyrisMessage:
-        # noinspection PyTypeChecker
-        retries = 5
-        backoff_factor = 2
-        initial_delay = 1
+        retry_state = RetryState(cancel_event=arguments.cancel_event)
         client = self.get_client()
-        # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
 
         if self.use_responses_api:
             responses_input = convert_to_responses_input(messages)
@@ -1162,7 +1131,7 @@ class OpenAIChatModel(ChatModel):
             if self.leading_system_message_only:
                 messages = keep_system_messages_leading(messages)
 
-        for attempt in range(retries):
+        for attempt in range(retry_state.max_attempts):
             try:
                 if self.use_responses_api:
                     if arguments.stream_handler is not None:
@@ -1272,36 +1241,31 @@ class OpenAIChatModel(ChatModel):
                     self.model,
                     getattr(choice, "logprobs", None),
                 )
-            except (RateLimitError, APIConnectionError, InternalServerError):
-                if arguments.stream_handler is not None:
-                    arguments.stream_handler(None)
-                _retry_after_openai_error(attempt, initial_delay, backoff_factor)
-            except APIStatusError as error:
-                # 408/409 are transient (the SDK's own retry predicate retries
-                # them); since the client runs with max_retries=0, this loop is
-                # the only retry layer.
-                if _is_retryable_openai_error(error):
-                    if arguments.stream_handler is not None:
-                        arguments.stream_handler(None)
-                    _retry_after_openai_error(attempt, initial_delay, backoff_factor)
-                else:
+            except APIError as error:
+                # The client runs with max_retries=0, so this loop is the only
+                # retry layer (see iris.llm.retry for the policy).
+                if not retry_state.should_retry(error, attempt):
                     logger.exception(
-                        "Non-retryable OpenAI API status error for model id=%s "
-                        "(model=%s, status_code=%s):",
+                        "OpenAI API error for model id=%s (model=%s, status_code=%s) "
+                        "on attempt %d; not retrying:",
                         self.id,
                         self.model,
-                        error.status_code,
+                        getattr(error, "status_code", None),
+                        attempt + 1,
                     )
                     raise
-            except APIError:
-                logger.exception(
-                    "Non-retryable OpenAI API error for model id=%s (model=%s):",
+                logger.warning(
+                    "OpenAI API error for model id=%s (model=%s) on attempt %d: %s",
                     self.id,
                     self.model,
+                    attempt + 1,
+                    error,
                 )
-                raise
+                if arguments.stream_handler is not None:
+                    arguments.stream_handler(None)
+                retry_state.wait(error, attempt)
         raise RuntimeError(
-            f"Failed to get response from OpenAI after {retries} retries"
+            f"Failed to get response from OpenAI after {retry_state.max_attempts} attempts"
         )
 
 

@@ -1,3 +1,4 @@
+import threading
 from enum import Enum
 from typing import Callable, Optional
 
@@ -41,6 +42,7 @@ class CompletionArguments:
         top_logprobs: int = None,
         stream_handler: Optional[Callable[[Optional[str]], None]] = None,
         tool_choice: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
     ):
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -53,3 +55,5 @@ class CompletionArguments:
         # Sent only with tools, and only by the OpenAI client. "none" keeps the
         # tool list (and so the cached prompt prefix) but forbids tool calls.
         self.tool_choice = tool_choice
+        # Set when the run is cancelled; retry waits wake up and stop early.
+        self.cancel_event = cancel_event

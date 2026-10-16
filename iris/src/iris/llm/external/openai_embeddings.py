@@ -1,19 +1,14 @@
 import logging
-import time
 from typing import Literal, Optional
 
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
-from openai import (
-    APIError,
-    APITimeoutError,
-    InternalServerError,
-    RateLimitError,
-)
+from openai import APIError
 
 from iris.tracing import observe
 
 from ...llm.external.model import EmbeddingModel
+from ...llm.retry import RetryState
 
 
 class OpenAIEmbeddingModel(EmbeddingModel):
@@ -34,26 +29,23 @@ class OpenAIEmbeddingModel(EmbeddingModel):
 
     @observe(name="OpenAI Embedding", as_type="embedding")
     def embed(self, text: str) -> list[float]:
-        retries = 5
-        backoff_factor = 2
-        initial_delay = 1
-        # Maximum wait time: 1 + 2 + 4 + 8 + 16 = 31 seconds
-
-        for attempt in range(retries):
+        retry_state = RetryState()
+        for attempt in range(retry_state.max_attempts):
             try:
                 return self._client.embed_query(text)
-            except (
-                APIError,
-                APITimeoutError,
-                RateLimitError,
-                InternalServerError,
-            ):
-                wait_time = initial_delay * (backoff_factor**attempt)
-                logging.exception("OpenAI error on attempt %s", attempt + 1)
-                logging.info("Retrying in %s seconds...", wait_time)
-                time.sleep(wait_time)
+            except APIError as error:
+                if not retry_state.should_retry(error, attempt):
+                    logging.exception(
+                        "OpenAI embedding error on attempt %s; not retrying",
+                        attempt + 1,
+                    )
+                    raise
+                logging.warning(
+                    "OpenAI embedding error on attempt %s: %s", attempt + 1, error
+                )
+                retry_state.wait(error, attempt)
         raise RuntimeError(
-            f"Failed to get embedding from OpenAI after {retries} retries."
+            f"Failed to get embedding from OpenAI after {retry_state.max_attempts} attempts."
         )
 
     def split_text_semantically(
