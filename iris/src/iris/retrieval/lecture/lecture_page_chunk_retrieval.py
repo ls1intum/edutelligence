@@ -282,7 +282,7 @@ class LecturePageChunkRetrieval(SubPipeline):
             lecture_transcription_dto = LectureUnitPageChunkRetrievalDTO(
                 uuid=uuid,
                 course_id=lecture_unit[LectureUnitSchema.COURSE_ID.value],
-                course_name=lecture_unit[LectureUnitSchema.COURSE_DESCRIPTION.value],
+                course_name=lecture_unit[LectureUnitSchema.COURSE_NAME.value],
                 course_description=lecture_unit[
                     LectureUnitSchema.COURSE_DESCRIPTION.value
                 ],

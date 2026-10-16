@@ -204,6 +204,7 @@ class LectureRetrieval(SubPipeline):
                     course_id,
                     lecture_id,
                     lecture_unit_id,
+                    base_url,
                 )
                 lecture_unit = lecture_unit_future.result()
                 transcriptions_exist = transcriptions_exist_future.result()
@@ -332,8 +333,9 @@ class LectureRetrieval(SubPipeline):
         course_id: int,
         lecture_id: int = None,
         lecture_unit_id: int = None,
+        base_url: Optional[str] = None,
     ) -> bool:
-        cache_key = (course_id, lecture_id, lecture_unit_id)
+        cache_key = (course_id, lecture_id, lecture_unit_id, base_url)
         if not hasattr(self, "_transcription_presence_cache"):
             self._transcription_presence_cache = {}
         if cache_key in self._transcription_presence_cache:
@@ -350,6 +352,12 @@ class LectureRetrieval(SubPipeline):
             transcription_filter &= Filter.by_property(
                 LectureTranscriptionSchema.LECTURE_UNIT_ID.value
             ).equal(lecture_unit_id)
+        # Another Artemis instance can use the same course id; only its own
+        # transcriptions may decide whether the transcription search runs.
+        if base_url:
+            transcription_filter &= Filter.by_property(
+                LectureTranscriptionSchema.BASE_URL.value
+            ).equal(base_url)
 
         transcriptions = self.lecture_transcription_collection.query.fetch_objects(
             filters=transcription_filter,
@@ -610,7 +618,7 @@ class LectureRetrieval(SubPipeline):
                 ],
                 course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
                 lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
-                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
                 lecture_unit_id=lecture_unit[LectureUnitSchema.LECTURE_UNIT_ID.value],
                 lecture_unit_name=lecture_unit[
                     LectureUnitSchema.LECTURE_UNIT_NAME.value
@@ -644,7 +652,7 @@ class LectureRetrieval(SubPipeline):
                 ],
                 course_language=lecture_unit[LectureUnitSchema.COURSE_LANGUAGE.value],
                 lecture_id=lecture_unit[LectureUnitSchema.LECTURE_ID.value],
-                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_UNIT_NAME.value],
+                lecture_name=lecture_unit[LectureUnitSchema.LECTURE_NAME.value],
                 lecture_unit_id=None,
                 lecture_unit_name=None,
                 lecture_unit_link=None,

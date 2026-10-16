@@ -280,7 +280,7 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
     if not state.allow_faq_tool:
         return None
     course_id = state.dto.course.id
-    faq_retriever = FaqRetrieval(state.db.client)
+    faq_retriever = FaqRetrieval(state.db.client, local=state.local)
 
     return create_tool_faq_content_retrieval(
         faq_retriever,
