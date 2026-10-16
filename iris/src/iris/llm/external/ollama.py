@@ -20,7 +20,7 @@ from ollama import Client, Message
 from pydantic import BaseModel, Field
 from requests.auth import HTTPBasicAuth
 
-from iris.tracing import observe
+from iris.tracing import observe, record_generation
 
 from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
@@ -330,12 +330,14 @@ class OllamaModel(
         )
 
         msg = response.get("message", {}) or {}
-        return convert_to_iris_message(
+        message = convert_to_iris_message(
             msg,
             int(response.get("prompt_eval_count", 0) or 0),
             int(response.get("eval_count", 0) or 0),
             response.get("model", self.model),
         )
+        record_generation(self.model, message.token_usage)
+        return message
 
     @observe(name="Ollama Embedding", as_type="embedding")
     def embed(self, text: str) -> list[float]:

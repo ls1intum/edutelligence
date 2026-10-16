@@ -30,7 +30,7 @@ from openai.types.shared_params import ResponseFormatJSONObject
 from pydantic import BaseModel, Field, model_validator
 
 from iris.domain.data.text_message_content_dto import TextMessageContentDTO
-from iris.tracing import observe
+from iris.tracing import observe, record_generation
 
 from ...common.logging_config import get_logger
 from ...common.message_converters import map_role_to_str, map_str_to_role
@@ -1293,8 +1293,24 @@ class OpenAIChatModel(ChatModel):
         )
         raise RuntimeError("Responses stream ended without a final response")
 
-    @observe(name="OpenAI Chat Completion")
+    @observe(name="OpenAI Chat Completion", as_type="generation")
     def chat(
+        self,
+        messages: list[PyrisMessage],
+        arguments: CompletionArguments,
+        tools: Optional[
+            Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]]
+        ],
+    ) -> PyrisMessage:
+        try:
+            response = self._chat(messages, arguments, tools)
+        except IncompleteModelResponse as error:
+            record_generation(self.model, error.token_usage)
+            raise
+        record_generation(self.model, response.token_usage)
+        return response
+
+    def _chat(
         self,
         messages: list[PyrisMessage],
         arguments: CompletionArguments,
