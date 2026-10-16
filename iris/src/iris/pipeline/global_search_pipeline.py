@@ -160,8 +160,26 @@ _NO_ANSWER_SENTINEL = "!none!"
 # Output budget of the answer call. The provider counts reasoning against it,
 # so a model that reasons needs `reasoning_token_allowance` in its llm_config
 # entry; without it the call can stop before the answer. Then the student gets
-# the sources without an answer, as when the model finds none.
+# the retrieved sources without an answer.
 ANSWER_MAX_TOKENS = 600
+
+
+def _sources_without_answer(
+    grounded_sources: list["LectureSearchResultDTO | EntitySourceDTO"],
+) -> GlobalSearchResponseDTO:
+    """The result when the answer call stopped at its budget.
+
+    The sources are what retrieval found, in retrieval order. Without an answer
+    there are no citation markers, and the navigation fallback is skipped: it
+    would run into the same budget.
+    """
+    logger.info("[global-search] outcome=answer_cut sources=%d", len(grounded_sources))
+    return GlobalSearchResponseDTO(
+        answer=None,
+        sources=[s for s in grounded_sources if isinstance(s, LectureSearchResultDTO)],
+        entity_sources=[s for s in grounded_sources if isinstance(s, EntitySourceDTO)],
+        citation_source_types=[],
+    )
 
 
 def _is_deliberate_refusal(raw: str) -> bool:
@@ -690,6 +708,8 @@ class GlobalSearchPipeline(SubPipeline):
         self._append_tokens(
             self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
         )
+        if getattr(self, "_answer_cut", False):
+            return _sources_without_answer(grounded_sources)
         answer, used_indices = parse_answer_response(raw, len(grounded_sources))
         used_sources = [s for i, s in enumerate(grounded_sources) if i in used_indices]
 
@@ -723,6 +743,8 @@ class GlobalSearchPipeline(SubPipeline):
                 self._append_tokens(
                     self.answer_llm.tokens, PipelineEnum.IRIS_GLOBAL_SEARCH_PIPELINE
                 )
+                if getattr(self, "_answer_cut", False):
+                    return _sources_without_answer(grounded_sources)
                 answer, used_indices = parse_answer_response(raw, len(entity_grounded))
                 used_sources = [
                     s for i, s in enumerate(entity_grounded) if i in used_indices
@@ -934,6 +956,7 @@ class GlobalSearchPipeline(SubPipeline):
         variables: dict[str, str] = {"context": context, "query": query}
         if not navigate:
             variables["today_line"] = _today_line(access_context)
+        self._answer_cut = False
         try:
             raw = self._invoke_answer(prompt, variables, stream_handler)
         except IncompleteModelResponse as error:
@@ -942,9 +965,11 @@ class GlobalSearchPipeline(SubPipeline):
             if stream_handler is not None:
                 # Drop any partial text of the cut call from the client.
                 stream_handler(None)
+            self._answer_cut = True
             self._warn_cut_answer(str(error))
         else:
             if self._cut_without_answer(raw):
+                self._answer_cut = True
                 self._warn_cut_answer("empty text at the output limit")
         # raw_len=0 + output_tokens>0 is the fingerprint of a reasoning model
         # exhausting max_tokens on reasoning and returning an empty message

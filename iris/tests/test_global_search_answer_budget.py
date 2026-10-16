@@ -20,6 +20,13 @@ from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
 from iris.domain.data.text_message_content_dto import (  # noqa: E402
     TextMessageContentDTO,
 )
+from iris.domain.search.global_search_dto import (  # noqa: E402
+    CourseInfo,
+    LectureInfo,
+    LectureSearchResultDTO,
+    LectureUnitInfo,
+)
+from iris.domain.search.search_intent_dto import SearchIntent  # noqa: E402
 from iris.llm import CompletionArguments  # noqa: E402
 from iris.llm.errors import IncompleteModelResponse  # noqa: E402
 from iris.llm.langchain.iris_langchain_chat_model import (  # noqa: E402
@@ -32,6 +39,7 @@ from iris.pipeline.global_search_pipeline import (  # noqa: E402
     ANSWER_MAX_TOKENS,
     GlobalSearchPipeline,
 )
+from tests.test_global_search_entity_sources import _entity_source  # noqa: E402
 
 
 class _ScriptedHandler(RequestHandler):
@@ -166,3 +174,71 @@ def test_a_cut_without_usage_reports_zero_tokens():
         pass
 
     assert pipeline.answer_llm.tokens.num_output_tokens == 0
+
+
+# Through the whole pipeline call: a cut answer shows the retrieved sources.
+
+
+def _lecture(unit_id):
+    return LectureSearchResultDTO(
+        course=CourseInfo(id=1, name="Algorithms"),
+        lecture=LectureInfo(id=2, name="Sorting"),
+        lectureUnit=LectureUnitInfo(
+            id=unit_id,
+            name=f"Slides {unit_id}",
+            link=f"/l{unit_id}",
+            pageNumber=1,
+            sourceType="lecture_unit_slide",
+        ),
+        snippet=f"Content {unit_id}.",
+    )
+
+
+def _entity():
+    return _entity_source(title="Sorting exercise")
+
+
+def _run(sources, outcomes):
+    pipeline, handler = _pipeline(outcomes)
+    pipeline._retrieve_sources = lambda *args, **kwargs: sources
+    events = []
+    response = pipeline(
+        query="how does merge sort work?",
+        intent=SearchIntent.TRIGGER_AI,
+        base_url="http://a",
+        stream_handler=events.append,
+    )
+    return response, pipeline, handler, events
+
+
+def test_a_cut_answer_returns_the_lecture_sources_without_an_answer():
+    sources = [_lecture(3), _lecture(4)]
+    response, pipeline, handler, events = _run(sources, [_cut(600)])
+
+    assert response.answer is None
+    assert response.sources == sources
+    assert response.entity_sources == []
+    assert len(handler.budgets) == 1
+    assert [t.num_output_tokens for t in pipeline.tokens] == [600]
+    assert None in events
+
+
+def test_a_cut_answer_with_entity_sources_skips_the_navigation_call():
+    lecture, entity = _lecture(3), _entity()
+    response, pipeline, handler, _ = _run(
+        [lecture, entity], [_answer("", ANSWER_MAX_TOKENS)]
+    )
+
+    assert response.answer is None
+    assert response.sources == [lecture]
+    assert response.entity_sources == [entity]
+    assert len(handler.budgets) == 1
+    assert len(pipeline.tokens) == 1
+
+
+def test_a_deliberate_no_answer_still_returns_no_sources():
+    response, _, handler, _ = _run([_lecture(3)], [_answer("!none!", 5)])
+
+    assert response.answer is None
+    assert response.sources == []
+    assert len(handler.budgets) == 1
