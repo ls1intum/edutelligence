@@ -64,4 +64,6 @@
     <include file="liquibase/changelog/058_central_model_profiles.xml"/>
     <include file="liquibase/changelog/059_notifications.xml"/>
 
+    <include file="liquibase/changelog/060_nightly_benchmarks.xml"/>
+    <include file="liquibase/changelog/061_maintenance_calibration.xml"/>
 </databaseChangeLog>

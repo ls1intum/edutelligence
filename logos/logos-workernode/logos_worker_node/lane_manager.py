@@ -966,7 +966,7 @@ class LaneManager:
             await asyncio.sleep(_LANE_SLEEP_DRAIN_POLL_S)
 
     async def reconfigure_lane(
-        self, lane_id: str, updates: dict[str, Any], *, require_idle: bool = False
+        self, lane_id: str, updates: dict[str, Any], *, require_idle: bool = False, force_restart: bool = False
     ) -> LaneStatus:
         """Apply partial updates to an existing lane (stop-then-start if restart needed)."""
         async with self._lock:
@@ -985,7 +985,7 @@ class LaneManager:
                     current_data[key] = value
                     changed = True
 
-            if not changed:
+            if not changed and not force_restart:
                 return await self._get_status_unlocked(lane_id)
 
             parallel_changed = False
@@ -1016,8 +1016,10 @@ class LaneManager:
             self._validate_vllm_runtime_requirements([new_lc])
             # Benchmark settings include spawn-time options such as KV cache size
             # that the planner's automatic tuning deliberately excludes.
-            restart_needed = _lane_needs_restart(current, new_lc) or (
-                require_idle and current.vllm_config != new_lc.vllm_config
+            restart_needed = (
+                force_restart
+                or _lane_needs_restart(current, new_lc)
+                or (require_idle and current.vllm_config != new_lc.vllm_config)
             )
             if restart_needed:
                 active = self._active_requests.get(lane_id, 0)

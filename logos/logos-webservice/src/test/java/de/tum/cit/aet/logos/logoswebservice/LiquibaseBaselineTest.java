@@ -49,6 +49,20 @@ class LiquibaseBaselineTest {
     }
 
     @Test
+    void nightlySchedulesCoexistWithCentralProfilesAndKeepMigrationIdentity() {
+        assertThat(tableExists("model_profiles")).isTrue();
+        assertThat(tableExists("model_calibrations")).isTrue();
+        assertThat(tableExists("nightly_benchmarks")).isTrue();
+        assertThat(tableExists("maintenance_calibration")).isTrue();
+        assertThat(tableExists("maintenance_benchmark")).isTrue();
+        assertThat(columnExists("nightly_benchmarks", "recovery")).isTrue();
+        assertThat(jdbc.queryForList(
+            "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
+            String.class, "057-nightly-benchmarks", "logos"))
+            .containsExactly("liquibase/changelog/057_nightly_benchmarks.xml");
+    }
+
+    @Test
     void migration045_teamRepositoriesExist() {
         assertThat(tableExists("team_repositories")).isTrue();
         assertThat(columnExists("team_repositories", "repo_url")).isTrue();

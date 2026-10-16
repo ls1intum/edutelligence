@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
+from logos.benchmarks.nightly import NIGHTLY_CONTEXT
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
     BOLD,
@@ -43,6 +45,10 @@ class LogosNodeOfflineError(RuntimeError):
 
 class LogosNodeCommandError(RuntimeError):
     """Raised when a worker command RPC returns an error."""
+
+
+class MaintenanceBusyError(LogosNodeCommandError):
+    """Another maintenance operation owns the cluster slot."""
 
 
 class LogosNodeSessionConflictError(RuntimeError):
@@ -1158,6 +1164,32 @@ class LogosNodeRuntimeRegistry:
                 }
             )
 
+    @staticmethod
+    def _check_benchmark_reservation(session, action, params, request_id) -> None:
+        if (
+            action
+            in {
+                "add_lane",
+                "delete_lane",
+                "reconfigure_lane",
+                "sleep_lane",
+                "wake_lane",
+                "apply_lanes",
+                "start_calibration_session",
+            }
+            and benchmark_reservations.owner(session.provider_id, "*") is not None
+            and not NIGHTLY_CONTEXT.get()
+        ):
+            raise LogosNodeCommandError("Worker is reserved for nightly benchmarks")
+        if action not in {"infer", "infer_stream"}:
+            return
+        lane_id = (params or {}).get("lane_id")
+        lanes = (session.latest_runtime or {}).get("lanes") or []
+        lane = next((lane for lane in lanes if lane.get("lane_id") == lane_id), None)
+        model = lane.get("model") if lane else ((params or {}).get("payload") or {}).get("model")
+        if model and not benchmark_reservations.allows(session.provider_id, model, request_id):
+            raise LogosNodeCommandError("The lane is reserved for an active benchmark")
+
     async def send_command(
         self,
         provider_id: int,
@@ -1166,6 +1198,44 @@ class LogosNodeRuntimeRegistry:
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
         on_sent: Callable[[], None] | None = None,
+        request_id: str | None = None,
+        on_dispatched: Callable[[asyncio.Future], None] | None = None,
+    ) -> dict[str, Any]:
+        coordinator = getattr(self, "maintenance", None)
+
+        async def send(dispatched=on_dispatched):
+            def notify(future):
+                if dispatched:
+                    dispatched(future)
+                if on_dispatched and on_dispatched is not dispatched:
+                    on_dispatched(future)
+
+            return await self._send_command(
+                provider_id,
+                action,
+                params,
+                timeout_seconds,
+                stale_after_seconds,
+                on_sent,
+                request_id,
+                notify if dispatched or on_dispatched else None,
+            )
+
+        if coordinator is not None and action == "start_calibration_session":
+            return await coordinator.start_calibration(provider_id, send)
+        if coordinator is not None and action == "stop_calibration_session":
+            return await coordinator.stop_calibration(provider_id, send)
+        return await send()
+
+    async def _send_command(
+        self,
+        provider_id: int,
+        action: str,
+        params: dict[str, Any] | None = None,
+        timeout_seconds: int = 20,
+        stale_after_seconds: int = 30,
+        on_sent: Callable[[], None] | None = None,
+        request_id: str | None = None,
         on_dispatched: Callable[[asyncio.Future], None] | None = None,
     ) -> dict[str, Any]:
         """Send a command to the worker and wait for its answer.
@@ -1218,6 +1288,8 @@ class LogosNodeRuntimeRegistry:
         writing = False
         try:
             async with session.send_lock:
+                self._check_benchmark_reservation(session, action, params, request_id)
+
                 # Handed over right before the frame is written: a caller
                 # cancelled while it is being written cannot tell whether the
                 # worker got it, so the answer must already be in its hands.
@@ -1307,6 +1379,7 @@ class LogosNodeRuntimeRegistry:
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
         on_sent: Callable[[], None] | None = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[bytes]:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         cmd_id = str(uuid.uuid4())
@@ -1321,6 +1394,7 @@ class LogosNodeRuntimeRegistry:
         }
         try:
             async with session.send_lock:
+                self._check_benchmark_reservation(session, action, params, request_id)
                 await session.websocket.send_json(message)
         except Exception as exc:  # noqa: BLE001
             session.pending_streams.pop(cmd_id, None)
@@ -1635,8 +1709,11 @@ class LogosNodeRuntimeRegistry:
         provider_id: int,
         model_name: str,
         stale_after_seconds: int = 30,
+        request_id: str | None = None,
     ) -> dict[str, Any] | None:
         session = await self._get_active_session(provider_id, stale_after_seconds)
+        if not benchmark_reservations.allows(provider_id, model_name, request_id):
+            return None
         if session.capabilities_models and model_name not in session.capabilities_models:
             return None
         lanes = (session.latest_runtime or {}).get("lanes") or []

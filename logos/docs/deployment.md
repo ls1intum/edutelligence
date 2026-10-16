@@ -84,6 +84,53 @@ pass `--build-arg GIT_SHA=$(git rev-parse HEAD)`. For a pull-request build, the
 version is the commit of the pull request. The image is that pull request merged
 into `main` as of the build.
 
+## Nightly benchmarks
+
+Nightly benchmarks require updates to the webservice, orchestrator, web application and selected workers.
+The webservice applies `060_nightly_benchmarks.xml` before the new scheduler starts.
+Workers report `supports_benchmark_restart` in their runtime status.
+The activation API rejects workers without this capability.
+All schedules default to disabled.
+
+The selected model requires 1 loaded, awake vLLM lane on its worker.
+Admission requires at least 1 other healthy worker.
+The scheduler reserves 1 worker at a time and waits for its existing requests to finish.
+
+Each night selects at most 2 enabled model/worker pairs.
+Untested pairs come first, followed by the oldest previous attempt.
+Unavailable pairs do not consume a place in that night's limit.
+Failed or cancelled plans consume a place after admission.
+The limit persists across restarts and changes to activation.
+
+New configurations and retries start between 03:00 and 04:50 in `Europe/Berlin`.
+At 05:00, a run continues only if at least 50% of its requests completed successfully.
+A run stops after 5 minutes without output content or a successful request completion.
+A stalled configuration gets at most 1 retry before 04:50.
+The existing 2-hour measurement timeout also applies.
+
+The scheduler restores the original worker configuration after the plan.
+If restoration fails, the worker remains reserved and further plans stop until recovery succeeds.
+The recovery journal stays in PostgreSQL until the original configuration is ready.
+Do not delete the journal to release a worker.
+
+Before activation:
+
+1. Deploy the matching components to a test environment.
+2. Confirm that the migration succeeds and the workers report restart support.
+3. Test a benchmark, result storage, cancellation, retry and restoration.
+4. Test the time limits and rotation with a controlled test clock.
+5. Check that another worker still accepts production requests.
+
+Automatic calibration runs first, from 03:00 to 05:00 in `Europe/Berlin` by default.
+Benchmarks use the remaining time and start no new configuration after 04:50.
+At most 1 calibration or benchmark runs across the cluster, including manual starts.
+Apply `061_maintenance_calibration.xml` and update workers for the `get_calibration_status` command.
+The coordinator releases calibration claims only after worker confirmation.
+The `LOGOS_CALIB_WINDOW_*` variables control calibration. They do not change benchmark time limits.
+
+See the [nightly benchmark guide](admin/nightly-benchmarks.md)
+for activation, the fixed workload, parameter values, API requests and diagnostic states.
+
 ## Security & rate limiting
 
 The API surface of the orchestrator has tiers:

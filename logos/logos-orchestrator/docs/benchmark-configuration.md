@@ -2,6 +2,25 @@
 
 The Models → Performance runner supports public Hugging Face datasets with a plain-text prompt column. Search selects a repository; configuration, split and prompt column are loaded from the HF Dataset Viewer. Private/gated datasets and structured conversation or multimodal columns are not supported by this editor.
 
+## Manual runs and nightly runs
+
+This guide describes the manual runner and its batches. The
+[nightly rotation](../../docs/admin/nightly-benchmarks.md) is a separate opt-in schedule on the
+same Performance tab.
+
+| Behavior | Manual runner | Nightly rotation |
+|---|---|---|
+| Selection | Admin selects a pair and starts a run or batch | Up to 2 enabled, available pairs per night; oldest attempts first |
+| Workload | Editable dataset, sample count and request settings | GSM8K main/test, 50 requests, 512 max output tokens, concurrency 4, seed 42 |
+| Parameter search | Admin's overrides or batch sweep | Baseline and ±25% variants of known sequence/batch-token limits |
+| Admission window | Explicit admin start | 03:00–04:50 Europe/Berlin, including retries |
+| Failure handling | Failed batch stops its remaining runs | One retry after a stall; skip the configuration after another stall |
+| After the run | Applied serving overrides remain active | Restore the original production configuration |
+
+The dataset editor and its question previews do not configure nightly runs.
+During nightly execution or pending worker recovery, the orchestrator rejects
+new manual benchmarks. Existing manual benchmarks finish before nightly admission.
+
 ## Data loading
 
 The default remains `openai/gsm8k`, configuration `main`, split `test`, prompt column `question`. Search and schema discovery query Hugging Face metadata APIs; the browser does not download the dataset. When the job starts, GuideLLM 0.7.2 uses `datasets.load_dataset` on the orchestrator. This downloads/prepares data and reuses the Hugging Face cache on subsequent runs while that cache exists. The dataset is not bundled in the Logos image. Cache survival across container replacement depends on deployment storage; the code does not guarantee it. A small sample count limits benchmark requests, not necessarily the volume downloaded by the datasets library.
@@ -24,7 +43,7 @@ A historical result's Configuration section offers **Use for next benchmark**. I
 
 vLLM overrides apply only to Logos workers. Blank fields keep the current worker value; explicit false is preserved. The orchestrator prepares an idle lane, prevents routing during reconfiguration, merges the selected overrides, and asks the worker to reload. The worker checks its active-request counters under the lane lock before restarting. The orchestrator waits for the updated configuration to appear in worker status before measuring. Unsupported settings, worker errors and timeouts fail the job instead of recording a successful run.
 
-Changed vLLM settings remain active after the benchmark, including if measurement fails or is cancelled after reconfiguration. There is no automatic rollback. Deploy the updated workernode together with the orchestrator to enforce the `require_idle` reconfiguration guard.
+For manual runs, changed vLLM settings remain active after the benchmark, including if measurement fails or is cancelled after reconfiguration. There is no automatic rollback. Deploy the updated workernode together with the orchestrator to enforce the `require_idle` reconfiguration guard.
 
 `attention_backend` can be fixed for a run or varied in a batch: `FLASHINFER`,
 `FLASH_ATTN`, `TRITON_ATTN`, `FLEX_ATTENTION`, and `TURBOQUANT`. An empty
@@ -46,7 +65,7 @@ All Spring endpoints below require `logos_admin` and forward to the internal orc
 - `POST /logosdb/model_benchmarks/datasets/metadata`: `{ "dataset": "openai/gsm8k", "subset": "main", "split": "test" }` (subset and split are optional)
 - `POST /logosdb/model_benchmarks/run`: existing target and sample fields plus `dataset`, `subset`, `split`, `text_column`, `profile`, `concurrency`, `seed` and optional `serving_overrides`.
 
-The selected settings are persisted with the job; successful results store the actual GuideLLM scenario and the worker's serving snapshot. No database migration is required.
+The selected settings are persisted with the job; successful results store the actual GuideLLM scenario and the worker's serving snapshot. The manual configuration API requires no additional migration. Nightly schedules require `060_nightly_benchmarks.xml`.
 
 
 ## Benchmark batches and comparison
@@ -70,8 +89,20 @@ installed-library or runtime compatibility. Missing architecture telemetry does 
 A failed run records its configuration, selected attention backend and diagnostic text. The worker
 preserves useful exception lines ahead of generic engine shutdown messages. The UI exposes these
 under **View error details & configuration**; historical records may contain only the old truncated error.
-Batches still stop at the first failed run. No automatic probing or recovery has been added.
+Manual batches stop at the first failed run and do not retry automatically. Nightly runs use the separate retry and restoration policy linked above.
 
 **Load comparison preset** fills the comparison template; **Clear vLLM changes** removes draft
 serving overrides, and **Stop varying** removes a parameter from the sweep. These actions do not
 restore settings already applied to a worker.
+
+## Shared maintenance admission
+
+Calibration runs first during its configured window (03:00–05:00 Europe/Berlin
+by default). Benchmarks use the remaining time; new nightly configurations stop
+at 04:50. Manual starts share the same PostgreSQL admission lock and durable
+claims. At most one calibration or benchmark runs across all providers.
+Conflicting manual starts return HTTP 409 rather than queueing.
+Migration `061_maintenance_calibration.xml` and workers with
+`get_calibration_status` support are required. Calibration completion and
+benchmark cleanup must finish before their claims are released.
+See the [operator guide](../../docs/admin/nightly-benchmarks.md#calibration-priority-and-shared-execution).

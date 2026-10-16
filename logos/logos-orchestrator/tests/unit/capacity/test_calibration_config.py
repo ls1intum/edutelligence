@@ -1,9 +1,4 @@
-"""CalibrationConfig.from_env() must never drift from the dataclass's own
-field defaults — that drift (window_start/window_end defaulting to
-02:00-05:00 on the dataclass but 03:00-08:00 in from_env's fallback,
-while the deployed docker-compose default was 03:00-08:00 too) is the
-exact bug this guards against.
-"""
+"""Calibration window defaults match the shared overnight maintenance window."""
 
 from __future__ import annotations
 
@@ -33,12 +28,12 @@ def test_from_env_defaults_match_dataclass_defaults():
     assert CalibrationConfig.from_env() == CalibrationConfig()
 
 
-def test_from_env_window_defaults_are_03_to_08():
-    """Regression for the specific mismatch: both must read 03:00-08:00,
+def test_from_env_window_defaults_are_03_to_05():
+    """Regression for the specific mismatch: both must read 03:00-05:00,
     matching the deployed docker-compose default."""
     config = CalibrationConfig.from_env()
     assert str(config.window_start) == "03:00:00"
-    assert str(config.window_end) == "08:00:00"
+    assert str(config.window_end) == "05:00:00"
 
 
 def test_from_env_reads_overrides(monkeypatch):
@@ -56,7 +51,7 @@ def test_from_env_reads_overrides(monkeypatch):
     assert config.enabled is False
     assert config.tick_seconds == 15.0
     # Untouched fields still fall back to the dataclass default.
-    assert str(config.window_end) == "08:00:00"
+    assert str(config.window_end) == "05:00:00"
 
 
 def test_from_env_invalid_time_falls_back_to_dataclass_default(monkeypatch):

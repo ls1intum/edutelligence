@@ -13,6 +13,32 @@ See the [request lifecycle reference](logos-orchestrator/src/logos/pipeline/READ
 
 See the [agent runner](logos-agent/README.md) for how Logos runs coding agents in isolated containers on its own spare serving capacity, and the boundaries those sessions work within.
 
+## Nightly model benchmarks
+
+Automatic calibration runs first (03:00–05:00 Europe/Berlin by default).
+Benchmarks use the remaining time. Only one calibration or benchmark runs
+across the cluster, including manual starts.
+
+Logos admins can add model/worker pairs to a persistent nightly rotation from
+**Model Details → Performance**. Both activation and deactivation require
+confirmation. Schedules start disabled.
+
+- Test at most **2 enabled pairs per night**, one worker at a time. Untested
+  pairs come first, then the oldest previous attempt. Unavailable pairs are skipped.
+- Start configurations between **03:00 and 04:50 Europe/Berlin**. At 05:00,
+  continue only if at least 50% of measured requests completed successfully.
+- Stop after **5 minutes without output or completed requests**. Retry a stalled
+  configuration once before 04:50, then skip it if it stalls again.
+- Compare the current settings with selected batching-parameter variants on a
+  fixed dataset. Show the model and planned values above the dataset previews.
+- Restore the original worker configuration after the plan. Store results for
+  review; do not automatically apply a winning configuration to production.
+
+See the [nightly benchmark guide](docs/admin/nightly-benchmarks.md)
+for activation, selection, limits, deployment, recovery and API details. The
+[manual benchmark guide](logos-orchestrator/docs/benchmark-configuration.md)
+describes the separate dataset editor and benchmark batches.
+
 # Setup
 
 ## Prerequisites
