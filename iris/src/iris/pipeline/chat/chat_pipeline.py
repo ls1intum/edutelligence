@@ -1082,7 +1082,10 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             logger.error(
                 "An error occurred while running the chat pipeline.", exc_info=e
             )
+            # self.tokens is the run's usage list (bound at the start of the run),
+            # so calls that completed before the error are still billed.
             callback.fail(
                 "An error occurred while running the chat pipeline.",
                 exception=e,
+                tokens=self.tokens,
             )

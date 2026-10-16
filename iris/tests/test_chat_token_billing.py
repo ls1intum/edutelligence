@@ -225,3 +225,38 @@ def test_mcq_intro_usage_is_billed_once_with_the_chat_pipeline():
         assert state.tokens == [usage]
         assert state.tokens[0].pipeline == expected
         assert state.tokens[0].num_cached_input_tokens == 32
+
+
+def test_failed_run_reports_the_usage_of_every_call_once(monkeypatch):
+    """A run that dies in its second model call still bills both calls, once."""
+    from iris.llm.errors import IncompleteModelResponse
+    from iris.pipeline.abstract_agent_pipeline import AbstractAgentPipeline
+
+    first = TokenUsageDTO(numInputTokens=10)
+    truncated = TokenUsageDTO(numInputTokens=20)
+    llm = _ScriptedModel([(_tool_call_turn(), first)])
+
+    def chat_then_truncate(messages, tools=None, tool_choice=None):
+        if llm.script:
+            return _ScriptedModel.chat(llm, messages, tools, tool_choice)
+        llm.tokens = truncated
+        raise IncompleteModelResponse("truncated", token_usage=truncated)
+
+    llm.chat = chat_then_truncate
+    pipeline = _pipeline(IrisChatMode.COURSE)
+    callback, outbox = _callback_with_outbox()
+
+    def run(self, dto, variant, callback, local=False):
+        state = _agent_state(llm)
+        self.tokens = state.tokens
+        self._run_agent_loop(state)
+
+    monkeypatch.setattr(AbstractAgentPipeline, "__call__", run)
+    monkeypatch.setattr(
+        "iris.web.status.status_update.capture_exception", lambda *_: None
+    )
+
+    pipeline(dto=SimpleNamespace(settings=None), variant=None, callback=callback)
+
+    assert outbox[-1]["runState"] == "FAILED"
+    assert _input_counts(outbox[-1]) == [10, 20]
