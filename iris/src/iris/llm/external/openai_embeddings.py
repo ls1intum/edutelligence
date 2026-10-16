@@ -29,10 +29,21 @@ class OpenAIEmbeddingModel(EmbeddingModel):
 
     @observe(name="OpenAI Embedding", as_type="embedding")
     def embed(self, text: str) -> list[float]:
+        return self._with_retries(self._client.embed_query, text)
+
+    def _embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._with_retries(self._client.embed_documents, texts)
+
+    def _with_retries(self, call, payload):
+        """Run one embedding request under the shared retry policy.
+
+        The SDK clients are built with ``max_retries=0``, so this is the only
+        retry layer, as for chat calls.
+        """
         retry_state = RetryState()
         for attempt in range(retry_state.max_attempts):
             try:
-                return self._client.embed_query(text)
+                return call(payload)
             except APIError as error:
                 if not retry_state.should_retry(error, attempt):
                     logging.exception(
@@ -59,7 +70,7 @@ class OpenAIEmbeddingModel(EmbeddingModel):
     ):
         return split_semantically(
             text,
-            self._client.embed_documents,
+            self._embed_documents,
             breakpoint_threshold_type=breakpoint_threshold_type,
             breakpoint_threshold_amount=breakpoint_threshold_amount,
             min_chunk_size=min_chunk_size,
@@ -87,9 +98,12 @@ class DirectOpenAIEmbeddingModel(OpenAIEmbeddingModel):
                 api_key=self.api_key,
                 base_url=self.base_url,
                 check_embedding_ctx_length=False,
+                max_retries=0,
             )
         else:
-            self._client = OpenAIEmbeddings(model=self.model, api_key=self.api_key)
+            self._client = OpenAIEmbeddings(
+                model=self.model, api_key=self.api_key, max_retries=0
+            )
 
     def __str__(self):
         return f"OpenAIEmbedding('{self.model}')"
@@ -112,6 +126,7 @@ class AzureOpenAIEmbeddingModel(OpenAIEmbeddingModel):
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
             api_key=self.api_key,
+            max_retries=0,
         )
 
     def __str__(self):
