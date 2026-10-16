@@ -14,13 +14,18 @@ from pydantic import BaseModel, ValidationError
 from sentry_sdk.transport import Transport
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
-from iris.common.callback_token import MASK, CallbackToken  # noqa: E402
+from iris.common.callback_token import (  # noqa: E402
+    MASK,
+    CallbackToken,
+    scrub_callback_credentials,
+)
 from iris.domain.pipeline_execution_settings_dto import (  # noqa: E402
     PipelineExecutionSettingsDTO,
 )
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO  # noqa: E402
 from iris.domain.status.run_state_dto import RunStateEnum  # noqa: E402
 from iris.sentry import credential_safety_options  # noqa: E402
+from iris.tracing.langfuse_tracer import mask_callback_credentials  # noqa: E402
 from iris.web.status.ingestion_status_callback import (  # noqa: E402
     IngestionStatusCallback,
 )
@@ -274,6 +279,71 @@ def test_request_bodies_with_the_token_are_scrubbed():
 
     assert SECRET not in str(event)
     assert "run-1" in str(event)
+
+
+# --------------------------------------------------------------------------- Artemis without run ids
+
+LEGACY = (
+    "artemis_example_org-node1-1760000000000-AbCdE12345"  # pragma: allowlist secret
+)
+
+
+def _legacy_settings() -> PipelineExecutionSettingsDTO:
+    return PipelineExecutionSettingsDTO.model_validate(
+        {"authenticationToken": LEGACY, "artemisBaseUrl": "https://artemis.example"}
+    )
+
+
+def _legacy_callback() -> ChatRunCallback:
+    settings = _legacy_settings()
+    return ChatRunCallback(
+        run_id=settings.callback_run_id,
+        base_url="https://artemis.example",
+        auth_token=settings.authentication_token,
+    )
+
+
+def test_without_run_id_the_token_is_only_in_the_url_older_artemis_expects():
+    callback = _legacy_callback()
+
+    assert LEGACY in callback.url
+    assert LEGACY not in callback.run_id
+    assert callback.run_id == _legacy_settings().trace_run_id
+
+
+def test_without_run_id_the_traced_inputs_carry_no_token():
+    """What Langfuse receives for an observed pipeline call with the DTO and the callback."""
+    traced = mask_callback_credentials(
+        data={
+            "args": [_legacy_settings(), _legacy_callback()],
+            "kwargs": {"callback": _legacy_callback(), "url": _legacy_callback().url},
+        }
+    )
+
+    assert LEGACY not in json.dumps(traced)
+    assert _legacy_settings().trace_run_id in json.dumps(traced)
+
+
+def test_plain_run_ids_are_not_scrubbed():
+    url = "https://a/api/iris/internal/pipelines/chat/runs/0b7c2f4e-5d2a-4f43-9d55-0d6c51a0a7e1/status"
+    assert scrub_callback_credentials(url) == url
+
+
+def test_without_run_id_a_failed_callback_reports_to_sentry_without_the_token(
+    sentry_events,
+):
+    settings = _legacy_settings()
+    callback = ChatRunCallback(
+        run_id=settings.callback_run_id,
+        base_url=f"http://127.0.0.1:{_closed_port()}",
+        auth_token=settings.authentication_token,
+    )
+
+    callback.fail("boom")
+    sentry_sdk.flush()
+
+    assert sentry_events, "the failure must be reported"
+    assert all(LEGACY not in envelope for envelope in sentry_events)
 
 
 # --------------------------------------------------------------------------- 422

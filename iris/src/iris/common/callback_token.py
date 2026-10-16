@@ -10,6 +10,9 @@ error reporting and logging all see only a mask. Even Pydantic's ``SecretStr`` i
 here: it keeps the value in an attribute, which the Langfuse serializer exports.
 """
 
+import hashlib
+import re
+import uuid
 from typing import Any
 
 from pydantic import GetCoreSchemaHandler, GetJsonSchemaHandler
@@ -17,6 +20,52 @@ from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import core_schema
 
 MASK = "**********"
+
+# The run id segment of an Artemis callback URL (".../runs/<run id>/status").
+_RUN_SEGMENT = re.compile(r"(/runs/)([^/?#\s\"'<>]+)")
+_HASHED_RUN_ID = re.compile(r"run-[0-9a-f]{24}")
+
+
+def hash_run_id(value: str) -> str:
+    """A stable id for a run that does not contain ``value``.
+
+    Artemis versions that send no run id use the callback token as run id, so that value
+    must not leave Iris in traces or error reports; this hash stands in for it there.
+    """
+    return "run-" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+
+
+def _is_plain_run_id(segment: str) -> bool:
+    if _HASHED_RUN_ID.fullmatch(segment):
+        return True
+    try:
+        return str(uuid.UUID(segment)) == segment.lower()
+    except ValueError:
+        return False
+
+
+def scrub_callback_credentials(value: Any) -> Any:
+    """Replace every callback URL run id segment that is not a plain run id with its hash.
+
+    Plain run ids are UUIDs. Any other segment is a callback token that an older Artemis
+    expects in the URL. Strings inside dicts, lists and tuples are scrubbed as well.
+    """
+    if isinstance(value, str):
+        return _RUN_SEGMENT.sub(
+            lambda match: (
+                match.group(0)
+                if _is_plain_run_id(match.group(2))
+                else match.group(1) + hash_run_id(match.group(2))
+            ),
+            value,
+        )
+    if isinstance(value, dict):
+        return {key: scrub_callback_credentials(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [scrub_callback_credentials(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(scrub_callback_credentials(item) for item in value)
+    return value
 
 
 class CallbackToken:

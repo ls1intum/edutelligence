@@ -1,9 +1,8 @@
-import hashlib
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from iris.common.callback_token import CallbackToken
+from iris.common.callback_token import CallbackToken, hash_run_id
 
 
 class PipelineExecutionSettingsDTO(BaseModel):
@@ -39,7 +38,4 @@ class PipelineExecutionSettingsDTO(BaseModel):
         The run id, or for Artemis versions that send none, a hash of the token: stable per
         run, so traces of one run still group together.
         """
-        if self.run_id:
-            return self.run_id
-        digest = hashlib.sha256(self.authentication_token.reveal().encode("utf-8"))
-        return "run-" + digest.hexdigest()[:24]
+        return self.run_id or hash_run_id(self.authentication_token.reveal())

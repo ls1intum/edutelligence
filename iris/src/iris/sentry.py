@@ -6,6 +6,8 @@ from sentry_sdk.integrations.openai import OpenAIIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
 
+from iris.common.callback_token import scrub_callback_credentials
+
 # Keys whose values are callback credentials. Request bodies from Artemis carry the token in
 # settings.authenticationToken, and claimed ingestion jobs are dicts with the same key.
 _CREDENTIAL_KEYS = [
@@ -16,9 +18,17 @@ _CREDENTIAL_KEYS = [
 ]
 
 
+def _scrub_event(event, hint):  # pylint: disable=unused-argument
+    # An older Artemis puts the callback token into the callback URL, which shows up in
+    # exception messages, log messages and breadcrumbs.
+    return scrub_callback_credentials(event)
+
+
 def credential_safety_options() -> dict:
     """The client options that keep callback credentials out of Sentry events."""
     return {
+        "before_send": _scrub_event,
+        "before_breadcrumb": _scrub_event,
         # send_default_pii as in init, so only the credential keys are added to what was scrubbed before.
         "event_scrubber": EventScrubber(
             denylist=DEFAULT_DENYLIST + _CREDENTIAL_KEYS,
