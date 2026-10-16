@@ -128,3 +128,15 @@ def test_guide_prompt_moderate_support_level_injects_nothing():
     assert "Socratic" not in rendered
     assert "comprehensive help mode" not in rendered
     assert "minimal help mode" not in rendered
+
+
+@pytest.mark.parametrize("support_level", ["low", "moderate", "high"])
+def test_renamed_exercise_algorithm_counts_as_a_solution(support_level):
+    # A pressured answer once gave a complete insertion sort as a renamed
+    # "sketch"; the self-check rule must close that for every support level.
+    prompt = _render_template(
+        "chat_system_prompt.j2",
+        _system_prompt_context("PROGRAMMING_EXERCISE_CHAT", support_level),
+    )
+
+    assert "is a solution even when it is renamed" in prompt
