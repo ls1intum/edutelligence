@@ -227,12 +227,6 @@ llm_configuration:
         local: qwen3.8-27b
         cloud: oai-gpt-5-mini
 
-  summary_pipeline:
-    default:
-      chat:
-        local: qwen3.8-27b
-        cloud: oai-gpt-5-nano
-
   global_search_pipeline:
     default:
       answer:
