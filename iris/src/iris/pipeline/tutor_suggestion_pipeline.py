@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Callable, List, cast
+from typing import Callable, List, cast
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -232,20 +232,6 @@ class TutorSuggestionPipeline(
         }
         complete_system_prompt = self.system_prompt_template.render(template_context)
         return complete_system_prompt
-
-    def get_agent_params(
-        self,
-        state: AgentPipelineExecutionState[
-            CommunicationTutorSuggestionPipelineExecutionDTO, Variant
-        ],
-    ) -> dict[str, Any]:
-        """
-        Return the parameter dict passed to the agent executor.
-
-        Returns:
-            dict[str, Any]: Parameters for the agent executor
-        """
-        return {}
 
     def post_agent_hook(
         self,

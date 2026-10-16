@@ -1,8 +1,7 @@
 from datetime import datetime
-from typing import Callable, List, Optional
+from typing import Optional
 
 import pytz
-from langchain_core.tools import StructuredTool
 
 from ...common.logging_config import get_logger
 from ...domain.data.post_dto import PostDTO
@@ -13,31 +12,6 @@ logger = get_logger(__name__)
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 REDACTED_ANSWER_PLACEHOLDER = "[message hidden - user opted out of AI]"
-
-
-def generate_structured_tool_from_function(
-    tool_function: Callable,
-) -> StructuredTool:
-    """
-    Generates a structured tool from a function
-    :param tool_function: The tool function
-    :return: The structured tool
-    """
-    # A raising tool must not abort the whole agent run: with handle_tool_error
-    # the exception becomes an observation, the activity item is marked FAILED,
-    # and the agent can still answer (possibly without that tool's data).
-    return StructuredTool.from_function(tool_function, handle_tool_error=True)
-
-
-def generate_structured_tools_from_functions(
-    tools: List[Callable],
-) -> List[StructuredTool]:
-    """
-    Generates a list of structured tools from a list of functions
-    :param tools: The list of tool functions
-    :return: The list of structured tools
-    """
-    return [generate_structured_tool_from_function(tool) for tool in tools]
 
 
 def format_custom_instructions(

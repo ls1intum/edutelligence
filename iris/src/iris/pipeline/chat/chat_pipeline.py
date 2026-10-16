@@ -258,20 +258,6 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def __str__(self):
         return f"{self.__class__.__name__}(context={self.chat_mode.value})"
 
-    def on_agent_step(
-        self,
-        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
-        step: dict[str, Any],
-    ) -> None:
-        """
-        Handle each agent execution step.
-
-        Args:
-            state: The current pipeline execution state.
-            step: The current step information.
-        """
-        del state, step
-
     def pre_agent_hook(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],

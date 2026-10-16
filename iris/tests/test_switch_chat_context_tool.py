@@ -20,11 +20,11 @@ from iris.domain.retrieval.lecture.lecture_retrieval_dto import LectureRetrieval
 from iris.domain.status.chat_status_update_dto import ChatStatusUpdateDTO
 from iris.domain.status.run_state_dto import RunStateEnum
 from iris.domain.status.suggested_context_dto import SuggestedContextDTO
+from iris.llm.agent import AgentTool
 from iris.pipeline.abstract_agent_pipeline import AgentPipelineExecutionState
 from iris.pipeline.chat.chat_pipeline import ChatPipeline
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
 from iris.pipeline.shared.citation_sources import CitationSourceRegistry
-from iris.pipeline.shared.utils import generate_structured_tool_from_function
 from iris.tools.chat_tool_providers import (
     provide_additional_exercise_details,
     provide_build_logs_analysis,
@@ -344,12 +344,10 @@ def test_exercise_tools_keep_their_data_when_the_switch_targets_the_active_exerc
 
 def test_guarded_exercise_tool_keeps_its_name_and_arguments():
     """The agent sees the guarded tool exactly like the unguarded one."""
-    structured = generate_structured_tool_from_function(
-        provide_file_lookup(_exercise_chat_state())
-    )
+    structured = AgentTool.from_function(provide_file_lookup(_exercise_chat_state()))
 
     assert structured.name == "file_lookup"
-    assert list(structured.args) == ["file_path"]
+    assert list(structured.parameters["properties"]) == ["file_path"]
 
 
 def _course_chat_state() -> AgentPipelineExecutionState:
@@ -407,12 +405,12 @@ def test_problem_statement_of_unswitchable_or_unknown_exercises_carries_no_remin
 
 
 def test_problem_statement_tool_keeps_its_name_and_arguments():
-    structured = generate_structured_tool_from_function(
+    structured = AgentTool.from_function(
         provide_exercise_problem_statement(_course_chat_state())
     )
 
     assert structured.name == "get_exercise_problem_statement"
-    assert list(structured.args) == ["exercise_id"]
+    assert list(structured.parameters["properties"]) == ["exercise_id"]
 
 
 def test_course_chat_prompt_does_not_claim_retrieval_is_scoped_to_a_lecture():

@@ -756,6 +756,17 @@ class OpenAIChatModel(ChatModel):
     # limit also covers reasoning, so a reasoning model would otherwise spend a
     # tight budget (e.g. 30 tokens for a session title) before answering.
     reasoning_token_allowance: int = Field(default=0, ge=0)
+    # Send agent tool schemas with strict: true, so the provider enforces them.
+    # Unset: on for the Responses API path (OpenAI/Azure), off for Chat
+    # Completions, where OpenAI-compatible gateways may not support it.
+    strict_tools: Optional[bool] = None
+    supports_tool_choice: bool = True
+
+    @property
+    def effective_strict_tools(self) -> bool:
+        if self.strict_tools is None:
+            return self.use_responses_api
+        return self.strict_tools
 
     @model_validator(mode="after")
     def validate_logprobs_config(self):

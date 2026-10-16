@@ -28,9 +28,38 @@ from iris.domain.data.tool_call_dto import FunctionDTO, ToolCallDTO
 from iris.domain.data.tool_message_content_dto import ToolMessageContentDTO
 
 
-def convert_iris_message_to_langchain_message(
-    iris_message: PyrisMessage,
-) -> BaseMessage:
+def _context_switch_text(content: JsonMessageContentDTO) -> str:
+    marker = ContextSwitchMarker.model_validate(content.json_content or {})
+    name = marker.name
+    entity_id = marker.entity_id
+    match marker.transition:
+        case ContextSwitchTransition.ADDED:
+            text = f"The student added the context '{name}' with ID '{entity_id}' to the chat."
+        case ContextSwitchTransition.REMOVED:
+            text = (
+                "The student removed the active context and returned to the "
+                "course-level chat."
+            )
+        case ContextSwitchTransition.CHANGED:
+            text = f"The student switched the chat context to '{name}' with ID '{entity_id}'."
+        case _:
+            text = f"The student changed the chat context to '{name}' with ID '{entity_id}'."
+    return f"[context_switch] {text}"
+
+
+def _text_message(sender: IrisMessageRole, text: str) -> PyrisMessage:
+    return PyrisMessage(
+        sender=sender, contents=[TextMessageContentDTO(textContent=text)]
+    )
+
+
+def normalize_history_message(iris_message: PyrisMessage) -> PyrisMessage:
+    """Turn a stored chat message into the message the model receives.
+
+    Context-switch and command markers become system text, earlier tutor
+    suggestions (ARTIFACT) become a system note. User, assistant and system text
+    pass through unchanged; an assistant message keeps its tool calls.
+    """
     if iris_message is None or len(iris_message.contents) == 0:
         raise ValueError("IrisMessage contents must not be empty")
     message = iris_message.contents[0]
@@ -38,55 +67,58 @@ def convert_iris_message_to_langchain_message(
     if iris_message.sender == IrisMessageRole.CTXSWAP:
         if not isinstance(message, JsonMessageContentDTO):
             raise ValueError("CTXSWAP message must be of type JsonMessageContentDTO")
-        marker = ContextSwitchMarker.model_validate(message.json_content or {})
-        name = marker.name
-        entity_id = marker.entity_id
-        match marker.transition:
-            case ContextSwitchTransition.ADDED:
-                text = f"The student added the context '{name}' with ID '{entity_id}' to the chat."
-            case ContextSwitchTransition.REMOVED:
-                text = (
-                    "The student removed the active context and returned to the "
-                    "course-level chat."
-                )
-            case ContextSwitchTransition.CHANGED:
-                text = f"The student switched the chat context to '{name}' with ID '{entity_id}'."
-            case _:
-                text = f"The student changed the chat context to '{name}' with ID '{entity_id}'."
-        return SystemMessage(content=f"[context_switch] {text}")
+        return _text_message(IrisMessageRole.SYSTEM, _context_switch_text(message))
 
     if iris_message.sender == IrisMessageRole.COMMAND:
         # COMMAND markers (e.g. past point-outs) arrive as the JSON Artemis stored them as; the
         # wording the agent reads is built here so it stays next to the prompts.
         if not isinstance(message, JsonMessageContentDTO):
             raise ValueError("COMMAND message must be of type JsonMessageContentDTO")
-        return SystemMessage(
-            content=describe_command_marker(message.json_content or {})
+        return _text_message(
+            IrisMessageRole.SYSTEM, describe_command_marker(message.json_content or {})
         )
 
     if not isinstance(message, TextMessageContentDTO):
         raise ValueError("Message must be of type TextMessageContentDTO")
     match iris_message.sender:
         case IrisMessageRole.USER:
-            return HumanMessage(content=message.text_content)
+            return _text_message(IrisMessageRole.USER, message.text_content)
         case IrisMessageRole.ASSISTANT:
-            if isinstance(iris_message, PyrisAIMessage):
+            if isinstance(iris_message, PyrisAIMessage) and iris_message.tool_calls:
+                return iris_message
+            return _text_message(IrisMessageRole.ASSISTANT, message.text_content)
+        case IrisMessageRole.SYSTEM:
+            return _text_message(IrisMessageRole.SYSTEM, message.text_content)
+        case IrisMessageRole.ARTIFACT:
+            return _text_message(
+                IrisMessageRole.SYSTEM, "Previous suggestion: " + message.text_content
+            )
+        case _:
+            raise ValueError(f"Unknown message role: {iris_message.sender}")
+
+
+def convert_iris_message_to_langchain_message(
+    iris_message: PyrisMessage,
+) -> BaseMessage:
+    normalized = normalize_history_message(iris_message)
+    text = normalized.contents[0].text_content
+    match normalized.sender:
+        case IrisMessageRole.USER:
+            return HumanMessage(content=text)
+        case IrisMessageRole.ASSISTANT:
+            if isinstance(normalized, PyrisAIMessage) and normalized.tool_calls:
                 tool_calls = [
                     ToolCall(
                         name=tc.function.name,
                         args=tc.function.arguments,
                         id=tc.id,
                     )
-                    for tc in iris_message.tool_calls
+                    for tc in normalized.tool_calls
                 ]
-                return AIMessage(content=message.text_content, tool_calls=tool_calls)
-            return AIMessage(content=message.text_content)
-        case IrisMessageRole.SYSTEM:
-            return SystemMessage(content=message.text_content)
-        case IrisMessageRole.ARTIFACT:
-            return SystemMessage(content="Previous suggestion: " + message.text_content)
+                return AIMessage(content=text, tool_calls=tool_calls)
+            return AIMessage(content=text)
         case _:
-            raise ValueError(f"Unknown message role: {iris_message.sender}")
+            return SystemMessage(content=text)
 
 
 def convert_iris_message_to_langchain_human_message(

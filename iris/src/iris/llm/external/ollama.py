@@ -15,7 +15,7 @@ from uuid import uuid4
 from httpx import Client as HTTPXClient
 from httpx import HTTPTransport, Timeout
 from langchain_core.tools import BaseTool
-from langchain_experimental.llms.ollama_functions import convert_to_ollama_tool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from ollama import Client, Message
 from pydantic import BaseModel, Field
 from requests.auth import HTTPBasicAuth
@@ -227,6 +227,9 @@ class OllamaModel(
     think: Optional[Union[bool, Literal["low", "medium", "high"]]] = None
     # The model's chat template accepts a system message only at the start (Qwen3.x).
     leading_system_message_only: bool = False
+    # Ollama's chat API has no tool_choice; a forced final answer omits the tools.
+    supports_tool_choice: bool = False
+    effective_strict_tools: bool = False
     _client: Client
 
     def model_post_init(self, context) -> None:  # pylint: disable=unused-argument
@@ -286,16 +289,14 @@ class OllamaModel(
 
         for tool in tools:
             if isinstance(tool, BaseTool):
-                schema = convert_to_ollama_tool(tool)
-                tools_for_client.append({"type": "function", "function": schema})
+                tools_for_client.append(convert_to_openai_tool(tool))
             elif isinstance(tool, dict):
                 if tool.get("type") == "function":
                     tools_for_client.append(tool)
                 else:
                     tools_for_client.append({"type": "function", "function": tool})
             elif isinstance(tool, type) and issubclass(tool, BaseModel):
-                schema = convert_to_ollama_tool(tool)
-                tools_for_client.append({"type": "function", "function": schema})
+                tools_for_client.append(convert_to_openai_tool(tool))
             elif callable(tool):
                 # Plain functions: Ollama converts them from docstrings
                 tools_for_client.append(tool)

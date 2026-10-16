@@ -12,8 +12,6 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from langchain_core.agents import AgentActionMessageLog
-from langchain_core.messages import AIMessage
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.callback_token import CallbackToken  # noqa: E402
@@ -39,7 +37,6 @@ from iris.pipeline.chat.mcq_chat_mixin import (  # noqa: E402
     _strip_stray_citations,
     mcq_post_agent_hook,
 )
-from iris.pipeline.shared.activity_tracker import ActivityTracker  # noqa: E402
 from iris.pipeline.shared.citation_pipeline import (  # noqa: E402
     CitationPipeline,
     parse_labels,
@@ -523,6 +520,10 @@ def _user(text):
     )
 
 
+def _texts(messages) -> list[str]:
+    return [m.contents[0].text_content for m in messages]
+
+
 def test_chat_history_and_summary_reach_the_agent_without_citations():
     pipeline = ChatPipeline.__new__(ChatPipeline)
     state = SimpleNamespace(
@@ -535,15 +536,15 @@ def test_chat_history_and_summary_reach_the_agent_without_citations():
         ],
     )
 
-    prompt = pipeline.assemble_prompt_with_history(state, "system")
-    messages = prompt.format_messages(agent_scratchpad=[])
+    texts = _texts(pipeline.build_prompt_messages(state, "system"))
 
-    texts = [m.content for m in messages]
     assert "Parts die with the whole." in texts
     assert all("[cite:" not in t for t in texts)
     assert any("Earlier: composition." in t and "[src:" not in t for t in texts)
     # Student text is not touched.
     assert "What is composition? [src:2]" in texts
+    # The stored history stays as it was.
+    assert "[src:1]" in state.message_history[1].contents[0].text_content
 
 
 def test_history_stays_unchanged_in_pipelines_without_citations():
@@ -556,42 +557,33 @@ def test_history_stays_unchanged_in_pipelines_without_citations():
         message_history=[_assistant("Kept. [cite:L:7:13:::C:S]")],
     )
 
-    messages = (
-        MinimalAgentPipeline()
-        .assemble_prompt_with_history(state, "s")
-        .format_messages(agent_scratchpad=[])
-    )
+    texts = _texts(MinimalAgentPipeline().build_prompt_messages(state, "s"))
 
-    assert messages[-1].content == "Kept. [cite:L:7:13:::C:S]"
+    assert texts[-1] == "Kept. [cite:L:7:13:::C:S]"
 
 
 def test_narration_between_tool_calls_is_sent_without_markers():
+    from tests.test_agent_intermediate_messages import (  # pylint: disable=import-outside-toplevel
+        ScriptedModel,
+        answer,
+        make_state,
+        tool_turn,
+    )
+
     pipeline = ChatPipeline.__new__(ChatPipeline)
+    pipeline.chat_mode = IrisChatMode.COURSE
     sent = []
     callback = SimpleNamespace(send_intermediate=sent.append)
-    message = AIMessage(
-        content="Slide 13 says parts die with the whole. [src:1] Let me check the FAQ.",
-        tool_calls=[{"name": "faq", "args": {}, "id": "c1"}],
-    )
-    action = AgentActionMessageLog(
-        tool="faq", tool_input={}, log="", message_log=[message]
+    model = ScriptedModel(
+        [
+            tool_turn(
+                "Slide 13 says parts die with the whole. [src:1] Let me check the FAQ."
+            ),
+            answer("Final. [src:1]"),
+        ]
     )
 
-    class Executor:
-        def iter(self, params, callbacks=None):  # pylint: disable=unused-argument
-            yield {"intermediate_step": [(action, "faq result")]}
-            yield {"output": "Final. [src:1]"}
-
-    state = SimpleNamespace(
-        activity_tracker=ActivityTracker(lambda items, seq: None),
-        callback=callback,
-        llm=None,
-        tokens=[],
-        tracing_context=None,
-    )
-    pipeline.on_agent_step = lambda state, step: None
-
-    output = pipeline._run_agent_iterations(state, Executor(), {})
+    output = pipeline._run_agent_loop(make_state(callback, model))
 
     assert sent == ["Slide 13 says parts die with the whole. Let me check the FAQ."]
     # The final answer keeps its markers; they become cite blocks afterwards.

@@ -146,7 +146,7 @@ def _run_pipeline(pipeline: ChatPipeline, callback: _RecordingCallback) -> None:
             "iris.pipeline.abstract_agent_pipeline.get_compaction_settings",
             return_value=None,
         ),
-        patch("iris.pipeline.abstract_agent_pipeline.IrisLangchainChatModel"),
+        patch("iris.pipeline.abstract_agent_pipeline.IrisChatModel"),
     ):
         pipeline(_make_dto(), variant, callback)
 

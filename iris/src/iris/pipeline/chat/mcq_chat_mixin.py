@@ -14,6 +14,7 @@ from weaviate.classes.query import Filter
 from iris.common.logging_config import get_logger
 from iris.common.reply_language import previous_reply_language
 from iris.domain.status.activity_dto import ActivityKind
+from iris.llm.iris_chat_model import message_text
 from iris.pipeline.shared.citation_sources import strip_source_markers
 from iris.pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
@@ -328,9 +329,8 @@ def mcq_execute_agent(state: Any) -> str:
     Bypasses the full agent loop (which can waste time calling tools) since
     the only job is to write 1-2 sentences acknowledging the quiz request.
     """
-    messages = state.prompt.format_messages(agent_scratchpad=[])
-    response = state.llm.invoke(messages)
-    content = response.content if hasattr(response, "content") else str(response)
+    response = state.llm.chat(state.prompt_messages)
+    content = message_text(response)
     logger.info("MCQ intro generated via direct LLM call | length=%d", len(content))
     return content
 
