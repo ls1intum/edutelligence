@@ -45,7 +45,11 @@ from ...llm import CompletionArguments
 from ...llm.errors import IncompleteModelResponse
 from ...llm.external.model import ChatModel
 from ...llm.retry import RetryState
-from ...llm.structured_output import schema_name, strict_json_schema
+from ...llm.structured_output import (
+    json_schema_instruction,
+    schema_name,
+    strict_json_schema,
+)
 
 logger = get_logger(__name__)
 
@@ -1300,6 +1304,24 @@ class OpenAIChatModel(ChatModel):
     ) -> PyrisMessage:
         retry_state = RetryState(cancel_event=arguments.cancel_event)
         client = self.get_client()
+
+        if (
+            arguments.response_schema is not None
+            and not self.supports_structured_output
+        ):
+            # JSON mode only: the schema reaches the model as an instruction.
+            messages = list(messages) + [
+                PyrisMessage(
+                    sender=map_str_to_role("system"),
+                    contents=[
+                        TextMessageContentDTO(
+                            textContent=json_schema_instruction(
+                                arguments.response_schema
+                            )
+                        )
+                    ],
+                )
+            ]
 
         if self.use_responses_api:
             responses_input = convert_to_responses_input(

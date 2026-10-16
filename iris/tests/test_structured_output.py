@@ -125,3 +125,87 @@ def test_responses_api_sends_the_schema_as_text_format():
 
     text_format = client.responses.create.call_args.kwargs["text"]["format"]
     assert text_format["type"] == "json_schema" and text_format["strict"] is True
+
+
+def _sent_texts(messages):
+    texts = []
+    for message in messages:
+        content = message["content"] if isinstance(message, dict) else message
+        if isinstance(content, str):
+            texts.append(content)
+        else:
+            texts.extend(str(part) for part in content)
+    return "\n".join(texts)
+
+
+def test_json_mode_fallback_sends_the_schema_as_an_instruction():
+    client = MagicMock()
+    client.chat.completions.create.return_value = _completion('{"decision":"keep"}')
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: client):
+        _model(supports_structured_output=False).chat(
+            [_user()], CompletionArguments(response_schema=_Answer), None
+        )
+
+    sent = _sent_texts(client.chat.completions.create.call_args.kwargs["messages"])
+    assert "JSON" in sent
+    assert '"decision"' in sent and '"items"' in sent
+
+
+def test_json_mode_fallback_on_the_responses_api_sends_the_schema_too():
+    client = MagicMock()
+    client.responses.create.return_value = SimpleNamespace(
+        status="completed",
+        output=[],
+        output_text='{"decision":"keep"}',
+        error=None,
+        usage=SimpleNamespace(
+            input_tokens=1,
+            output_tokens=1,
+            input_tokens_details=SimpleNamespace(cached_tokens=0),
+        ),
+    )
+
+    with patch.object(DirectOpenAIChatModel, "get_client", lambda self: client):
+        _model(use_responses_api=True, supports_structured_output=False).chat(
+            [_user()], CompletionArguments(response_schema=_Answer), None
+        )
+
+    kwargs = client.responses.create.call_args.kwargs
+    assert kwargs["text"]["format"] == {"type": "json_object"}
+    assert "JSON" in str(kwargs["input"]) and '"decision"' in str(kwargs["input"])
+
+
+def test_the_session_title_pipeline_works_in_json_mode():
+    """The complete title request, with a model that cannot enforce schemas."""
+    # pylint: disable=import-outside-toplevel
+    from iris.llm.iris_chat_model import IrisChatModel
+    from iris.pipeline.session_title_generation_pipeline import (
+        SessionTitleGenerationPipeline,
+    )
+
+    client = MagicMock()
+    client.chat.completions.create.return_value = _completion(
+        '{"decision": "update", "title": "Merge sort"}'
+    )
+    model = _model(supports_structured_output=False)
+    handler = SimpleNamespace(model_id="m", chat=model.chat)
+    with (
+        patch.object(DirectOpenAIChatModel, "get_client", lambda self: client),
+        patch(
+            "iris.pipeline.session_title_generation_pipeline.resolve_model",
+            lambda *a, **k: "m",
+        ),
+        patch(
+            "iris.pipeline.session_title_generation_pipeline.LlmRequestHandler",
+            lambda model_id: handler,
+        ),
+    ):
+        pipeline = SessionTitleGenerationPipeline()
+        assert isinstance(pipeline.llm, IrisChatModel)
+        result = pipeline("New chat", ["How does merge sort work?"])
+
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert dict(kwargs["response_format"]) == {"type": "json_object"}
+    assert "JSON" in _sent_texts(kwargs["messages"])
+    assert result is not None and "Merge sort" in result

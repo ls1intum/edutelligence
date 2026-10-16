@@ -9,6 +9,7 @@ UPDATE: <title>".
 """
 
 import copy
+import json
 import re
 from typing import Any, TypeVar
 
@@ -53,6 +54,18 @@ def strict_json_schema(model: type[BaseModel]) -> dict:
 
 def schema_name(model: type[BaseModel]) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", model.__name__)[:64]
+
+
+def json_schema_instruction(model: type[BaseModel]) -> str:
+    """Instruction for endpoints that cannot enforce a schema (JSON mode).
+
+    JSON mode needs the word JSON in the messages (Azure rejects the request
+    otherwise), and without the schema the model does not know the fields.
+    """
+    return (
+        "Answer with one JSON object and nothing else. It must follow this "
+        "JSON schema:\n" + json.dumps(strict_json_schema(model), ensure_ascii=False)
+    )
 
 
 def parse_structured_output(model: type[ModelT], text: str) -> ModelT:
