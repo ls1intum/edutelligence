@@ -282,9 +282,11 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     def execute_agent(self, state):
         """Use a direct LLM call when MCQ parallel is active, else default agent."""
         if getattr(state, "mcq_parallel", False):
-            result = mcq_execute_agent(state)
-            self._track_llm_usage(state)
-            return result
+            try:
+                return mcq_execute_agent(state)
+            finally:
+                # Also a call that stopped early is billed.
+                self._track_llm_usage(state)
         return super().execute_agent(state)
 
     def should_stream_agent_response(
@@ -842,6 +844,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         citation_sources = getattr(state, "citation_sources", None)
         if citation_sources is None:
             return strip_source_markers(result)
+        label_call_started = False
         try:
             answer_language = getattr(state, "answer_language", None) or reply_language(
                 result,
@@ -849,15 +852,19 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 getattr(state.dto, "chat_history", None),
                 state.dto.user.lang_key,
             )
+            label_call_started = True
             result = self.citation_pipeline(
                 result, citation_sources, language=answer_language
             )
-            for token in self.citation_pipeline.tokens:
-                self._track_tokens(state, token)
             return result
         except Exception as e:
             logger.error("Error adding citations", exc_info=e)
             return strip_source_markers(result)
+        finally:
+            # Also the usage of a failed or cut label call is billed; only this run's call.
+            if label_call_started:
+                for token in getattr(self.citation_pipeline, "tokens", None) or []:
+                    self._track_tokens(state, token)
 
     def _generate_session_title(
         self,

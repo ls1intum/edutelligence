@@ -617,6 +617,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         model_id = state.llm.request_handler.model_id
 
         def run() -> None:
+            llm = None
             try:
                 llm = IrisChatModel(
                     request_handler=LlmRequestHandler(model_id=model_id),
@@ -656,6 +657,14 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                     )
             except Exception as exc:
                 logger.exception("Compaction failed", exc_info=exc)
+                # A call that stopped early reported its usage; bill it.
+                if (
+                    llm is not None
+                    and llm.tokens is not None
+                    and "tokens" not in holder
+                ):
+                    llm.tokens.pipeline = PipelineEnum.IRIS_CHAT_COMPACTION
+                    holder["tokens"] = llm.tokens
 
         thread = Thread(target=run, name="iris-compaction", daemon=True)
         thread.start()
