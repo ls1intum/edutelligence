@@ -47,6 +47,7 @@ public class RequestLogController {
         Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
         Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
         Integer providerId = body.get("provider_id") instanceof Number n ? n.intValue() : null;
+        Integer apiKeyId = body.get("api_key_id") instanceof Number n ? n.intValue() : null;
         boolean errorsOnly = Boolean.TRUE.equals(body.get("errors_only"));
         // The feed's state bucket; absent means all states. A supplied value
         // that names none of the four buckets matches no rows — the same
@@ -64,7 +65,7 @@ public class RequestLogController {
         int limit = body.get("limit") instanceof Number n
             ? n.intValue() : RequestLogService.LATEST_REQUESTS_PAGE_SIZE;
         return ResponseEntity.ok(requestLogService.getLatestRequests(
-            start, end, userId, teamId, providerId, errorsOnly, status, cursorTs, cursorId, limit, true,
+            start, end, userId, teamId, providerId, apiKeyId, errorsOnly, status, cursorTs, cursorId, limit, true,
             RequestLogService.readFeedIds(body, "model_ids"), RequestLogService.readFeedIds(body, "provider_ids")));
     }
 

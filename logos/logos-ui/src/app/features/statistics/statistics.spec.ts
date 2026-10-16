@@ -406,6 +406,68 @@ describe('recent request model and state filters', () => {
   });
 });
 
+describe('API key scope', () => {
+  let fixture: ComponentFixture<Statistics>;
+  afterEach(() => {
+    fixture?.destroy();
+    vi.useRealTimers();
+  });
+
+  const keyOptions = () => ({
+    teams: [],
+    requesters: [],
+    providers: [],
+    models: [],
+    apiKeys: [
+      { id: 41, label: 'Artemis · PROD', requestCount: 900 },
+      { id: 42, label: 'Artemis · staging', requestCount: 12 },
+    ],
+  });
+
+  it('narrows the whole page to the picked key and names it above the totals', async () => {
+    const page = await pageAt(vi.fn().mockResolvedValue(keyOptions()));
+    fixture = page.fx;
+    await Promise.resolve();
+    expect(page.component.apiKeyFilterOptions()).toEqual([
+      { value: '', label: 'All API keys' },
+      { value: '41', label: 'Artemis · PROD (900)' },
+      { value: '42', label: 'Artemis · staging (12)' },
+    ]);
+    page.component.statsPending.set(false);
+
+    page.component.setApiKeyFilter('41');
+
+    expect(page.ws.setScope).toHaveBeenLastCalledWith(expect.objectContaining({ apiKeyId: 41 }));
+    // The cards and charts are blanked until the server answers for the key.
+    expect(page.component.statsPending()).toBe(true);
+    expect(page.component.filterActive()).toBe(true);
+    expect(page.component.filterLabel()).toBe('Artemis · PROD');
+    expect(page.getScopeOptions).toHaveBeenLastCalledWith(
+      expect.any(String), expect.any(String), expect.objectContaining({ apiKeyId: 41 }),
+    );
+
+    page.component.clearFilters();
+    expect(page.ws.setScope).toHaveBeenLastCalledWith(expect.objectContaining({ apiKeyId: null }));
+    expect(page.component.filterActive()).toBe(false);
+  });
+
+  it('drops a selected key the new range no longer holds', async () => {
+    let calls = 0;
+    const getScopeOptions = vi.fn(() =>
+      Promise.resolve(calls++ === 0 ? keyOptions() : { ...keyOptions(), apiKeys: [] }),
+    );
+    const page = await pageAt(getScopeOptions);
+    fixture = page.fx;
+    await Promise.resolve();
+    page.component.setApiKeyFilter('42');
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.component.filterApiKeyId()).toBeNull();
+    expect(page.ws.setScope).toHaveBeenLastCalledWith(expect.objectContaining({ apiKeyId: null }));
+  });
+});
+
 describe('selector placement on the requests tab', () => {
   let fixture: ComponentFixture<Statistics>;
   afterEach(() => {
@@ -427,10 +489,10 @@ describe('selector placement on the requests tab', () => {
     // page scope ...
     expect(scope.querySelector('app-multi-select')).not.toBeNull();
     expect(scope.querySelector('select[aria-label="Filter requests by state"]')).not.toBeNull();
-    // ... team / requester / provider are searchable single-selects (not a
-    // second multi-select beside the feed), and outcomes are gone — only the
-    // feed state selector remains for lifecycle buckets ...
-    expect(scope.querySelectorAll('app-searchable-select')).toHaveLength(3);
+    // ... team / requester / API key / provider are searchable single-selects
+    // (not a second multi-select beside the feed), and outcomes are gone —
+    // only the feed state selector remains for lifecycle buckets ...
+    expect(scope.querySelectorAll('app-searchable-select')).toHaveLength(4);
     expect(scope.querySelector('[aria-label="Filter by outcome"]')).toBeNull();
     expect(
       el.querySelectorAll('[aria-label^="Filter by provider"]'),

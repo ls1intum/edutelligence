@@ -214,6 +214,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly feedUsers = signal<FeedFilterOption[]>([]);
   readonly feedTeams = signal<FeedFilterOption[]>([]);
   readonly feedProviders = signal<FeedFilterOption[]>([]);
+  readonly feedApiKeys = signal<FeedFilterOption[]>([]);
   readonly feedModels = signal<FeedFilterOption[]>([]);
 
   // ── Scope ─────────────────────────────────────────────────────────────────
@@ -228,6 +229,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly filterUserId = signal<number | null>(null);
   readonly filterTeamId = signal<number | null>(null);
   readonly filterProviderId = signal<number | null>(null);
+  readonly filterApiKeyId = signal<number | null>(null);
 
   // Every loadScopeOptions bumps this; a response that resolves for an older
   // value is stale — its range or team moved on while the request was in
@@ -239,7 +241,8 @@ export class Statistics implements OnInit, OnDestroy {
     () =>
       this.filterUserId() !== null ||
       this.filterTeamId() !== null ||
-      this.filterProviderId() !== null,
+      this.filterProviderId() !== null ||
+      this.filterApiKeyId() !== null,
   );
 
   // Both lists carry their request count, so the dropdown says which entries
@@ -272,6 +275,16 @@ export class Statistics implements OnInit, OnDestroy {
     })),
   ]);
 
+  // Application keys are how a team tells its deployments apart (PROD, staging,
+  // …), which no requester filter can express: there is no person behind them.
+  readonly apiKeyFilterOptions = computed<AppSelectOption[]>(() => [
+    { value: '', label: 'All API keys' },
+    ...this.feedApiKeys().map((k) => ({
+      value: String(k.id),
+      label: `${k.label} (${k.requestCount.toLocaleString()})`,
+    })),
+  ]);
+
   /**
    * Nobody in the selected team sent anything in this range, so the requester
    * dropdown has nothing but its "everyone" entry. Worth saying outright — an
@@ -296,6 +309,11 @@ export class Statistics implements OnInit, OnDestroy {
     return id === null ? '' : String(id);
   });
 
+  readonly selectedApiKeyValue = computed(() => {
+    const id = this.filterApiKeyId();
+    return id === null ? '' : String(id);
+  });
+
   /** What the active filter narrows to, for the label above the KPI strip. */
   readonly filterLabel = computed(() => {
     const parts: string[] = [];
@@ -306,6 +324,10 @@ export class Statistics implements OnInit, OnDestroy {
     const userId = this.filterUserId();
     if (userId !== null) {
       parts.push(this.feedUsers().find((u) => u.id === userId)?.label ?? `user ${userId}`);
+    }
+    const apiKeyId = this.filterApiKeyId();
+    if (apiKeyId !== null) {
+      parts.push(this.feedApiKeys().find((k) => k.id === apiKeyId)?.label ?? `key ${apiKeyId}`);
     }
     const providerId = this.filterProviderId();
     if (providerId !== null) {
@@ -321,6 +343,7 @@ export class Statistics implements OnInit, OnDestroy {
       userId: this.filterUserId(),
       teamId: this.filterTeamId(),
       providerId: this.filterProviderId(),
+      apiKeyId: this.filterApiKeyId(),
       // Outcomes are no longer a page-scope control — the feed's state filter
       // covers error/finished buckets. Keep the wire field for the socket.
       errorsOnly: false,
@@ -1054,6 +1077,15 @@ export class Statistics implements OnInit, OnDestroy {
     void this.loadScopeOptions();
   }
 
+  setApiKeyFilter(value: string | null): void {
+    const id = value ? Number(value) : null;
+    const next = Number.isFinite(id as number) ? id : null;
+    if (next === this.filterApiKeyId()) return;
+    this.filterApiKeyId.set(next);
+    this.applyScope();
+    void this.loadScopeOptions();
+  }
+
   /**
    * Reset every selector in the page-top filter row: the page scope and the
    * feed-only selections. Each group is only re-sent when it was active — an
@@ -1068,6 +1100,7 @@ export class Statistics implements OnInit, OnDestroy {
       this.filterUserId.set(null);
       this.filterTeamId.set(null);
       this.filterProviderId.set(null);
+      this.filterApiKeyId.set(null);
       this.applyScope();
       void this.loadScopeOptions();
     }
@@ -1115,6 +1148,7 @@ export class Statistics implements OnInit, OnDestroy {
         teamId: scope.teamId,
         userId: scope.userId,
         providerId: scope.providerId,
+        apiKeyId: scope.apiKeyId,
         errorsOnly: scope.errorsOnly,
       });
       if (generation !== this.scopeOptionsGeneration) {
@@ -1127,6 +1161,7 @@ export class Statistics implements OnInit, OnDestroy {
       this.feedTeams.set(options.teams ?? []);
       this.feedUsers.set(options.requesters ?? []);
       this.feedProviders.set(options.providers ?? []);
+      this.feedApiKeys.set(options.apiKeys ?? []);
       this.feedModels.set(options.models ?? []);
 
       // The model multi-select keeps ids that vanish from the new option list
@@ -1153,6 +1188,11 @@ export class Statistics implements OnInit, OnDestroy {
       const providerId = this.filterProviderId();
       if (providerId !== null && !this.feedProviders().some((p) => p.id === providerId)) {
         this.filterProviderId.set(null);
+        this.applyScope();
+      }
+      const apiKeyId = this.filterApiKeyId();
+      if (apiKeyId !== null && !this.feedApiKeys().some((k) => k.id === apiKeyId)) {
+        this.filterApiKeyId.set(null);
         this.applyScope();
       }
     } catch {

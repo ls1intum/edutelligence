@@ -61,12 +61,12 @@ class StatsV2WebSocketHandlerInterestTest {
         vramService = mock(VramService.class);
         requestLogService = mock(RequestLogService.class);
         statsService = mock(RequestLogStatsService.class);
-        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any()))
+        when(statsService.getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), any(), anyBoolean(), any()))
             .thenReturn(Map.of("bucketSeconds", 60));
         when(vramService.getVramStats(anyString(), anyInt()))
             .thenReturn(Map.of("providers", List.of(), "last_snapshot_id", 0));
         when(requestLogService.getLatestRequests(
-                any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any()))
+                any(), any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any()))
             .thenAnswer(inv -> {
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("requests", List.of());
@@ -131,7 +131,7 @@ class StatsV2WebSocketHandlerInterestTest {
 
         assertThat(pushedTypes()).contains("vram_init");
         assertThat(pushedTypes()).doesNotContain("timeline_init", "requests", "stats");
-        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any());
+        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -159,7 +159,7 @@ class StatsV2WebSocketHandlerInterestTest {
         }
 
         verify(requestLogService, never()).getLatestRequests(
-            any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any());
+            any(), any(), any(), any(), any(), any(), anyBoolean(), any(), any(), any(), anyInt(), anyBoolean(), any(), any());
         // Delta path reuses getVramStats with the cursor; init already cleared.
         verify(vramService, atLeastOnce()).getVramStats(anyString(), anyInt());
         assertThat(pushedTypes()).doesNotContain("requests", "stats", "timeline_init");
@@ -217,6 +217,6 @@ class StatsV2WebSocketHandlerInterestTest {
 
         assertThat(pushedTypes()).contains("vram_init");
         assertThat(pushedTypes()).doesNotContain("timeline_init", "requests", "stats");
-        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), anyBoolean(), any());
+        verify(statsService, never()).getRequestLogStats(any(), any(), anyInt(), any(), any(), any(), any(), anyBoolean(), any());
     }
 }
