@@ -191,6 +191,7 @@ The `LlmManager` singleton reads the YAML file and creates typed model objects. 
 | `extra_body`                    | No           | Provider-specific request fields, e.g. Qwen3 `chat_template_kwargs`                    |
 | `leading_system_message_only`   | No           | Rewrite later system messages for templates that reject them (Qwen3.x)                 |
 | `reasoning_token_allowance`     | No           | Tokens added to each pipeline's `max_tokens` for reasoning models (default `0`)        |
+| `request_timeout_seconds`       | No           | Client timeout per request; one retry after a timeout (default `300`)                  |
 | `api_version`                   | Azure        | Azure API version                                                                      |
 | `azure_deployment`              | Azure        | Azure deployment name                                                                  |
 | `tools`                         | No           | Supported tool types (default: `[]`)                                                   |

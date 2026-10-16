@@ -885,6 +885,10 @@ class OpenAIChatModel(ChatModel):
     # limit also covers reasoning, so a reasoning model would otherwise spend a
     # tight budget (e.g. 30 tokens for a session title) before answering.
     reasoning_token_allowance: int = Field(default=0, ge=0)
+    # Client timeout of one request, in seconds. A timed-out request is retried
+    # once, so a call can wait about twice this long. Keep it below the Artemis
+    # job timeout for models that answer students live.
+    request_timeout_seconds: float = Field(default=REQUEST_TIMEOUT_SECONDS, gt=0)
     # Send agent tool schemas with strict: true, so the provider enforces them.
     # Unset: on for the Responses API path (OpenAI/Azure), off for Chat
     # Completions, where OpenAI-compatible gateways may not support it.
@@ -1529,13 +1533,13 @@ class DirectOpenAIChatModel(OpenAIChatModel):
             self._client = OpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
-                timeout=REQUEST_TIMEOUT_SECONDS,
+                timeout=self.request_timeout_seconds,
                 max_retries=0,
             )
         else:
             self._client = OpenAI(
                 api_key=self.api_key,
-                timeout=REQUEST_TIMEOUT_SECONDS,
+                timeout=self.request_timeout_seconds,
                 max_retries=0,
             )
 
@@ -1562,7 +1566,7 @@ class AzureOpenAIChatModel(OpenAIChatModel):
                 base_url=self.endpoint.rstrip("/") + "/openai/v1",
                 api_key=self.api_key,
                 default_headers={"api-key": self.api_key},
-                timeout=REQUEST_TIMEOUT_SECONDS,
+                timeout=self.request_timeout_seconds,
                 max_retries=0,
             )
             return
@@ -1572,7 +1576,7 @@ class AzureOpenAIChatModel(OpenAIChatModel):
             azure_deployment=self.azure_deployment,
             api_version=self.api_version,
             api_key=self.api_key,
-            timeout=REQUEST_TIMEOUT_SECONDS,
+            timeout=self.request_timeout_seconds,
             max_retries=0,
         )
 
