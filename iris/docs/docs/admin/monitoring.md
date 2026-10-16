@@ -62,7 +62,7 @@ LangFuse tracing is deeply integrated into Iris's pipeline system:
 
 - The `@observe` decorator traces any function, with support for span types like `generation`, `agent`, `tool`, and `retriever`.
 - `TracingContext` propagates rich metadata (user ID, course, exercise, lecture, variant) through the pipeline, linking every LLM call to its educational context.
-- Every chat model call (OpenAI, Azure OpenAI, Ollama) is a generation with the model name and its input and output token counts, also when the call stopped early.
+- Every chat model call is a generation with the model name and token counts: OpenAI and Azure OpenAI through the instrumented `langfuse.openai` client, Ollama through `record_generation`.
 - `TracedThreadPoolExecutor` ensures that threaded operations produce properly nested traces instead of orphaned top-level entries.
 
 ### Configuration

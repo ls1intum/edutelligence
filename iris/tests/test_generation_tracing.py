@@ -1,14 +1,9 @@
 """Model calls are Langfuse generations with the model name and token counts."""
 
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
-
-import pytest
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
 from iris.common.token_usage_dto import TokenUsageDTO  # noqa: E402
-from iris.llm.errors import IncompleteModelResponse  # noqa: E402
-from iris.llm.external.openai_chat import OpenAIChatModel  # noqa: E402
 from iris.tracing.langfuse_tracer import record_generation  # noqa: E402
 
 TRACER = "iris.tracing.langfuse_tracer"
@@ -67,29 +62,82 @@ def test_a_tracing_error_does_not_reach_the_caller():
         record_generation("gpt-x", _usage())
 
 
-def _model(chat):
-    return SimpleNamespace(model="gpt-x", _chat=chat)
+def test_an_openai_call_is_one_generation_with_usage():
+    """langfuse.openai already records each request as a generation with model
+    and usage; the outer span must not record a second one. Real SDK, fake
+    HTTP transport, spans collected in memory."""
+    # pylint: disable=import-outside-toplevel
+    import httpx
+    from langfuse import Langfuse
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
 
+    from iris.common.pyris_message import IrisMessageRole, PyrisMessage
+    from iris.domain.data.text_message_content_dto import TextMessageContentDTO
+    from iris.llm import CompletionArguments
+    from iris.llm.external.openai_chat import DirectOpenAIChatModel, OpenAI
 
-def test_openai_chat_records_the_usage_of_its_response():
-    response = SimpleNamespace(token_usage=_usage(output_tokens=7))
-    with patch("iris.llm.external.openai_chat.record_generation") as record:
-        result = OpenAIChatModel.chat(
-            _model(lambda *_args: response), [], SimpleNamespace(), None
+    client = Langfuse(
+        public_key="pk-lf-test",  # pragma: allowlist secret
+        secret_key="sk-lf-test",  # pragma: allowlist secret
+        host="http://127.0.0.1:9",
+    )
+    exporter = InMemorySpanExporter()
+    trace.get_tracer_provider().add_span_processor(SimpleSpanProcessor(exporter))
+
+    def completion(request):  # pylint: disable=unused-argument
+        return httpx.Response(
+            200,
+            json={
+                "id": "c1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-x",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "hi"},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                },
+            },
         )
 
-    assert result is response
-    record.assert_called_once_with("gpt-x", response.token_usage)
+    model = DirectOpenAIChatModel(
+        id="x",
+        type="openai_chat",
+        model="gpt-x",
+        api_key="sk-test",  # pragma: allowlist secret
+    )
+    model._client = OpenAI(  # pylint: disable=protected-access
+        api_key="sk-test",  # pragma: allowlist secret
+        base_url="http://fake/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(completion)),
+        max_retries=0,
+    )
+    message = PyrisMessage(
+        sender=IrisMessageRole.USER,
+        contents=[TextMessageContentDTO(textContent="hello")],
+    )
+    with (
+        patch(f"{TRACER}._is_enabled", return_value=True),
+        patch(f"{TRACER}._langfuse_client", client),
+        patch(f"{TRACER}._is_initialized", True),
+    ):
+        model.chat([message], CompletionArguments(), None)
 
-
-def test_openai_chat_records_the_usage_of_a_cut_response():
-    usage = _usage(output_tokens=600)
-
-    def cut(*_args):
-        raise IncompleteModelResponse("stopped", usage)
-
-    with patch("iris.llm.external.openai_chat.record_generation") as record:
-        with pytest.raises(IncompleteModelResponse):
-            OpenAIChatModel.chat(_model(cut), [], SimpleNamespace(), None)
-
-    record.assert_called_once_with("gpt-x", usage)
+    usage_generations = [
+        span
+        for span in exporter.get_finished_spans()
+        if span.attributes.get("langfuse.observation.type") == "generation"
+        and span.attributes.get("langfuse.observation.usage_details")
+    ]
+    assert len(usage_generations) == 1
