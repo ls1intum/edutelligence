@@ -6,6 +6,7 @@ import json
 import logging
 import socket
 import threading
+from collections import OrderedDict
 from unittest.mock import patch
 
 import pytest
@@ -18,9 +19,11 @@ from pydantic import BaseModel, ValidationError
 from sentry_sdk.transport import Transport
 
 import iris.pipeline.pipeline  # noqa: F401  pylint: disable=unused-import
+from iris.common import callback_token as callback_token_module  # noqa: E402
 from iris.common.callback_token import (  # noqa: E402
     MASK,
     CallbackToken,
+    register_legacy_run_token,
     scrub_callback_credentials,
 )
 from iris.common.logging_config import IrisFormatter  # noqa: E402
@@ -462,6 +465,31 @@ def test_a_legacy_token_is_scrubbed_from_sentry_transactions():
     assert received and LEGACY_UUID in received[0], "the callback must have been sent"
     assert any('"type":"transaction"' in envelope for envelope in transport.envelopes)
     assert all(LEGACY_UUID not in envelope for envelope in transport.envelopes)
+
+
+def test_when_the_registry_overflows_every_run_id_segment_is_scrubbed(monkeypatch):
+    """A token dropped from the full registry must still never pass as a run id."""
+    monkeypatch.setattr(callback_token_module, "_LEGACY_TOKEN_LIMIT", 3)
+    monkeypatch.setattr(callback_token_module, "_legacy_tokens", OrderedDict())
+    monkeypatch.setattr(callback_token_module, "_legacy_tokens_dropped", False)
+    kept = _legacy_uuid_callback()
+    for index in range(3):
+        register_legacy_run_token(f"other-legacy-token-{index}")
+
+    traced = json.dumps(
+        mask_callback_credentials(data={"args": [kept], "url": kept.url})
+    )
+    record = logging.LogRecord(
+        "x", logging.INFO, "", 0, "Status callback to %s", (kept.url,), None
+    )
+    logged = IrisFormatter().format(record)
+    event = credential_safety_options()["before_send"](
+        {"message": f"Error sending status update to {kept.url}"}, None
+    )
+
+    assert LEGACY_UUID not in traced
+    assert LEGACY_UUID not in logged
+    assert LEGACY_UUID not in json.dumps(event)
 
 
 # --------------------------------------------------------------------------- 422

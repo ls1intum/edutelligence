@@ -39,27 +39,32 @@ def hash_run_id(value: str) -> str:
 
 # Tokens that an Artemis without run ids uses as run ids, as registered by the callbacks of their runs.
 # Their shape tells nothing: a global search token of such an Artemis is a UUID like any run id.
+# Once a token had to be dropped to stay within the limit, the registry can no longer tell every
+# token apart from a run id, so from then on every run id segment is scrubbed (fail closed).
 _LEGACY_TOKEN_LIMIT = 10_000
 _legacy_tokens: "OrderedDict[str, None]" = OrderedDict()
 _legacy_tokens_lock = threading.Lock()
+_legacy_tokens_dropped = False  # pylint: disable=invalid-name
 
 
 def register_legacy_run_token(value: str) -> None:
     """Remember a callback token that also serves as run id, so every scrub replaces it."""
+    global _legacy_tokens_dropped  # pylint: disable=global-statement,invalid-name
     with _legacy_tokens_lock:
         _legacy_tokens[value] = None
         _legacy_tokens.move_to_end(value)
         while len(_legacy_tokens) > _LEGACY_TOKEN_LIMIT:
             _legacy_tokens.popitem(last=False)
+            _legacy_tokens_dropped = True
 
 
-def _is_legacy_token(segment: str) -> bool:
+def _may_be_legacy_token(segment: str) -> bool:
     with _legacy_tokens_lock:
-        return segment in _legacy_tokens
+        return _legacy_tokens_dropped or segment in _legacy_tokens
 
 
 def _is_plain_run_id(segment: str) -> bool:
-    if _is_legacy_token(segment):
+    if _may_be_legacy_token(segment):
         return False
     if _HASHED_RUN_ID.fullmatch(segment):
         return True
