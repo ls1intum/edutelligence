@@ -6,7 +6,6 @@ from queue import Queue
 from threading import Thread
 from typing import List, Optional
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 
@@ -16,6 +15,7 @@ from iris.common.pyris_message import PyrisMessage
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.langchain import IrisLangchainChatModel
 from iris.llm.llm_configuration import resolve_model
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.web.status.status_update import StatusCallback
 
@@ -34,10 +34,7 @@ class McqGenerationPipeline(SubPipeline):
         template_dir = os.path.join(
             os.path.dirname(__file__), "..", "prompts", "templates"
         )
-        jinja_env = Environment(
-            loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml", "j2"]),
-        )
+        jinja_env = prompt_environment(template_dir)
         self.prompt_template = jinja_env.get_template("mcq_generation_prompt.j2")
 
         # Create LLM

@@ -2,8 +2,6 @@ import json
 import os
 from typing import Callable, List, cast
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-
 from iris.common.logging_config import get_logger
 from iris.common.pyris_message import IrisMessageRole
 from iris.domain.communication.communication_tutor_suggestion_pipeline_execution_dto import (
@@ -14,6 +12,7 @@ from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.shared.utils import (
     format_post_discussion,
     get_current_utc_datetime_string,
@@ -77,10 +76,7 @@ class TutorSuggestionPipeline(
         self.faq_retriever = None
 
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
-        self.jinja_env = Environment(
-            loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml", "j2"]),
-        )
+        self.jinja_env = prompt_environment(template_dir)
         self.system_prompt_template = self.jinja_env.get_template(
             "tutor_suggestion_chat_system_prompt.j2"
         )

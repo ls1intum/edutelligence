@@ -17,22 +17,22 @@ REDACTED_ANSWER_PLACEHOLDER = "[message hidden - user opted out of AI]"
 def format_custom_instructions(
     custom_instructions: str,
 ) -> str:
-    """Adds the custom instructions to the prompt
+    """Render the instructors' own instructions for the end of a system prompt.
+
+    They come last so they take precedence over the general guidance above.
     :param custom_instructions: The custom instructions
     """
     if not custom_instructions or custom_instructions == "":
         return ""
     return f"""
-## Additional Instructions
-The instructors of the course gave you these additional instructions that are specific to this course or exercise.
-Please adhere to these instructions! It's very important that you follow them thoroughly.
-Even if the instruction instructions go against your other instructions, you have to follow the additional instructions
-by the instructor. Their word always counts.
-<important_instructions>
+# Instructions from the course instructors
+The instructors of this course added the following instructions for this course or exercise.
+Follow them closely. If they conflict with the general guidance above, the instructors'
+instructions take precedence.
+<instructor_instructions>
 {custom_instructions}
-</important_instructions>
-Remember, always follow the additional instructions by the instructor.
-    """
+</instructor_instructions>
+"""
 
 
 def get_current_utc_datetime_string() -> str:

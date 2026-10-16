@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any, Callable, Optional
 
 import pytz
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -16,6 +15,7 @@ from iris.common.timing import timed_span
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
 from iris.pipeline.chat.iris_chat_mode import IrisChatMode
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.session_title_generation_pipeline import (
     SessionTitleGenerationPipeline,
 )
@@ -208,7 +208,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
     suggestion_pipeline: Optional[InteractionSuggestionPipeline]
     code_feedback_pipeline: Optional[CodeFeedbackPipeline]
     mcq_pipeline: McqGenerationPipeline
-    jinja_env: Environment
+    jinja_env: Any
     system_prompt_template: Any
     guide_prompt_template: Any
     _guide_model_cache: dict[tuple[str, bool], str]
@@ -239,9 +239,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         template_dir = os.path.join(
             os.path.dirname(__file__), "..", "prompts", "templates"
         )
-        self.jinja_env = Environment(
-            loader=FileSystemLoader(template_dir), autoescape=select_autoescape(["j2"])
-        )
+        self.jinja_env = prompt_environment(template_dir)
         # Setup system prompt
         self.system_prompt_template = self.jinja_env.get_template(
             "chat_system_prompt.j2"

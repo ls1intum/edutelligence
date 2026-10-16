@@ -1,7 +1,6 @@
 import os
 from typing import List
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel, Field
 
 from iris.common.logging_config import get_logger
@@ -10,6 +9,7 @@ from iris.common.token_usage_dto import TokenUsageDTO
 from iris.domain.chat.interaction_suggestion_dto import (
     InteractionSuggestionPipelineExecutionDTO,
 )
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.tracing import observe
 
 from ...common.message_converters import normalize_history_message
@@ -66,10 +66,9 @@ class InteractionSuggestionPipeline(SubPipeline):
         template_dir = os.path.join(
             os.path.dirname(__file__), "..", "prompts", "templates"
         )
-        self.prompt_template = Environment(
-            loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml"]),
-        ).get_template("interaction_suggestion_prompt.j2")
+        self.prompt_template = prompt_environment(template_dir).get_template(
+            "interaction_suggestion_prompt.j2"
+        )
 
     def __repr__(self):
         return f"{self.__class__.__name__}(llm={self.llm}, local={self.local})"

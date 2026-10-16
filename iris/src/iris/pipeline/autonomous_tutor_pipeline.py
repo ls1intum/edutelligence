@@ -1,8 +1,6 @@
 import os
 from typing import Callable, List, cast
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-
 from iris.common.logging_config import get_logger
 from iris.domain.autonomous_tutor.autonomous_tutor_pipeline_execution_dto import (
     AutonomousTutorPipelineExecutionDTO,
@@ -12,6 +10,7 @@ from iris.pipeline.abstract_agent_pipeline import (
     AbstractAgentPipeline,
     AgentPipelineExecutionState,
 )
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.shared.confidence_scoring import (
     is_large_model,
     logprob_confidence,
@@ -75,10 +74,7 @@ class AutonomousTutorPipeline(
         self.faq_retriever = None
 
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
-        self.jinja_env = Environment(
-            loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml", "j2"]),
-        )
+        self.jinja_env = prompt_environment(template_dir)
         self.system_prompt_template = self.jinja_env.get_template(
             "autonomous_tutor_system_prompt.j2"
         )

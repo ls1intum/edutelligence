@@ -6,12 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 from langchain_core.messages import SystemMessage
 from langchain_core.runnables import RunnableLambda
 
 from iris.domain.status.activity_dto import ActivityState
 from iris.pipeline.chat.mcq_chat_mixin import mcq_post_agent_hook, mcq_pre_agent_hook
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.shared.activity_tracker import ActivityTracker
 from iris.pipeline.shared.mcq_generation_pipeline import (
     McqGenerationPipeline,
@@ -79,10 +79,7 @@ def _make_pipeline(llm_return: str) -> McqGenerationPipeline:
         "prompts",
         "templates",
     )
-    jinja_env = Environment(
-        loader=FileSystemLoader(template_dir),
-        autoescape=select_autoescape(["html", "xml", "j2"]),
-    )
+    jinja_env = prompt_environment(template_dir)
     pipeline.prompt_template = jinja_env.get_template("mcq_generation_prompt.j2")
     pipeline.llm = SimpleNamespace(
         tokens=SimpleNamespace(pipeline=None),

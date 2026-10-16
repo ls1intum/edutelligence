@@ -1,7 +1,6 @@
 import os
 from typing import Literal, Optional
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 from pydantic import BaseModel, Field
 
 from iris.common.logging_config import get_logger
@@ -12,6 +11,7 @@ from iris.domain.data.text_message_content_dto import TextMessageContentDTO
 from iris.llm import CompletionArguments, LlmRequestHandler
 from iris.llm.iris_chat_model import IrisChatModel
 from iris.llm.llm_configuration import resolve_model
+from iris.pipeline.prompts.environment import prompt_environment
 from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 
@@ -55,10 +55,7 @@ class SessionTitleGenerationPipeline(SubPipeline):
         )
         # Set up Jinja2 environment and load the prompt template
         template_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
-        self.jinja_env = Environment(
-            loader=FileSystemLoader(template_dir),
-            autoescape=select_autoescape(["html", "xml", "j2"]),
-        )
+        self.jinja_env = prompt_environment(template_dir)
         self.prompt_template = self.jinja_env.get_template(
             "session_title_generation_prompt.j2"
         )
