@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from langchain_core.messages import (
     AIMessage,
@@ -78,23 +78,87 @@ def normalize_history_message(iris_message: PyrisMessage) -> PyrisMessage:
             IrisMessageRole.SYSTEM, describe_command_marker(message.json_content or {})
         )
 
-    if not isinstance(message, TextMessageContentDTO):
-        raise ValueError("Message must be of type TextMessageContentDTO")
+    if isinstance(iris_message, PyrisAIMessage) and iris_message.tool_calls:
+        return iris_message
+    text = "\n\n".join(
+        part
+        for part in (_content_text(content) for content in iris_message.contents)
+        if part
+    )
     match iris_message.sender:
         case IrisMessageRole.USER:
-            return _text_message(IrisMessageRole.USER, message.text_content)
+            return _text_message(IrisMessageRole.USER, text)
         case IrisMessageRole.ASSISTANT:
-            if isinstance(iris_message, PyrisAIMessage) and iris_message.tool_calls:
-                return iris_message
-            return _text_message(IrisMessageRole.ASSISTANT, message.text_content)
+            return _text_message(IrisMessageRole.ASSISTANT, text)
         case IrisMessageRole.SYSTEM:
-            return _text_message(IrisMessageRole.SYSTEM, message.text_content)
+            return _text_message(IrisMessageRole.SYSTEM, text)
         case IrisMessageRole.ARTIFACT:
-            return _text_message(
-                IrisMessageRole.SYSTEM, "Previous suggestion: " + message.text_content
-            )
+            return _text_message(IrisMessageRole.SYSTEM, "Previous suggestion: " + text)
         case _:
             raise ValueError(f"Unknown message role: {iris_message.sender}")
+
+
+def _content_text(content) -> str:
+    """The text a model reads for one message content (text, or a described quiz)."""
+    if isinstance(content, TextMessageContentDTO):
+        return content.text_content or ""
+    if isinstance(content, JsonMessageContentDTO):
+        return describe_json_content(content.json_content)
+    raise ValueError(f"Unsupported message content: {type(content).__name__}")
+
+
+def _describe_mcq(question: dict, number: Optional[int] = None) -> str:
+    label = "Quiz question" if number is None else f"Quiz question {number}"
+    question_text = question.get("question", "")
+    lines = [f"{label} shown to the student: {question_text}"]
+    options = question.get("options") or []
+    for index, option in enumerate(options, start=1):
+        marker = " (correct)" if option.get("correct") else ""
+        option_text = option.get("text", "")
+        lines.append(f"  {index}) {option_text}{marker}")
+    explanation = question.get("explanation")
+    if explanation:
+        lines.append(f"  Explanation: {explanation}")
+    response = question.get("response") or {}
+    selected = response.get("selectedIndex")
+    if (
+        response.get("submitted")
+        and isinstance(selected, int)
+        and 0 <= selected < len(options)
+    ):
+        verdict = "correct" if options[selected].get("correct") else "incorrect"
+        lines.append(f"  The student answered option {selected + 1} ({verdict}).")
+    else:
+        lines.append("  The student has not answered it yet.")
+    return "\n".join(lines)
+
+
+def describe_json_content(json_content) -> str:
+    """Describe structured message content (quiz widgets) as text for the model.
+
+    Without this, an assistant message that only consists of a quiz could not be
+    sent to the model at all, and the follow-up turn failed.
+    """
+    if not isinstance(json_content, dict):
+        return json.dumps(json_content, ensure_ascii=False)[:2000]
+    kind = json_content.get("type")
+    if kind == "mcq":
+        return "[" + _describe_mcq(json_content) + "]"
+    if kind == "mcq-set":
+        questions = json_content.get("questions") or []
+        return (
+            "["
+            + "\n".join(
+                _describe_mcq(question, number)
+                for number, question in enumerate(questions, start=1)
+            )
+            + "]"
+        )
+    return (
+        "[Structured content: "
+        + json.dumps(json_content, ensure_ascii=False)[:2000]
+        + "]"
+    )
 
 
 def convert_iris_message_to_langchain_message(
