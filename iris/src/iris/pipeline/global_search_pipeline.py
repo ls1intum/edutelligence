@@ -980,7 +980,7 @@ class GlobalSearchPipeline(SubPipeline):
     def _warn_cut_answer(self, reason: str) -> None:
         logger.warning(
             "[global-search] answer of model %s stopped at its output budget "
-            "(%s); no answer, sources only. A model that reasons needs "
+            "(%s); no answer, sources only. If the model reasons, set or raise "
             "reasoning_token_allowance in its llm_config entry.",
             self.answer_llm.model_name,
             reason,
