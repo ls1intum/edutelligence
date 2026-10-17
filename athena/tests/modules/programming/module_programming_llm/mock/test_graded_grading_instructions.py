@@ -1,6 +1,14 @@
-from athena.schemas import GradingCriterion, StructuredGradingInstruction
+from unittest.mock import patch
 
-from module_programming_llm.generate_graded_suggestions_by_file import get_grading_instructions_for_file
+from athena.module_config import ModuleConfig
+from athena.schemas import GradingCriterion, StructuredGradingInstruction
+from athena.schemas.exercise_type import ExerciseType
+
+# Importing the generator loads `athena.programming`, whose module-level get_module_config() reads a module.conf that
+# only exists next to a real module, so the import is patched during collection.
+_stub = ModuleConfig(name="module_programming_llm", type=ExerciseType.programming, port=5001)
+with patch("athena.module_config.get_module_config", return_value=_stub):
+    from module_programming_llm.generate_graded_suggestions_by_file import get_grading_instructions_for_file
 
 FILE_PATH = "src/BubbleSort.java"
 
