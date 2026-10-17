@@ -12,6 +12,7 @@ from iris.domain.ingestion.lecture_visibility_update_dto import (
 )
 from iris.pipeline.lecture_update_lock import lecture_update_lock
 from iris.vector_database.database import batch_update_lock
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
@@ -162,9 +163,7 @@ class LectureVisibilityUpdatePipeline:
     def _lecture_unit_filter(dto: LectureUnitVisibilityUpdateDTO):
         return Filter.all_of(
             [
-                Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                    dto.base_url
-                ),
+                artemis_instance_filter(LectureUnitSchema, dto.base_url),
                 Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
                     dto.course_id
                 ),
@@ -185,7 +184,7 @@ class LectureVisibilityUpdatePipeline:
     ):
         return Filter.all_of(
             [
-                Filter.by_property(schema.BASE_URL.value).equal(dto.base_url),
+                artemis_instance_filter(schema, dto.base_url),
                 Filter.by_property(schema.COURSE_ID.value).equal(dto.course_id),
                 Filter.by_property(schema.LECTURE_ID.value).equal(dto.lecture_id),
                 Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(

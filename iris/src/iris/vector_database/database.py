@@ -10,6 +10,7 @@ from weaviate.connect import ConnectionParams
 from iris.common.logging_config import get_logger
 from iris.config import settings
 
+from .base_url_exact_backfill import prepare_exact_filters, start_backfill
 from .faq_schema import FaqSchema, init_faq_schema
 from .lecture_transcription_schema import (
     LectureTranscriptionSchema,
@@ -159,6 +160,7 @@ class VectorDatabase:
                 "faqs": init_faq_schema(client),
             }
             cls._schemas_ready = True
+            cls._prepare_exact_base_url_filters(client)
         except Exception:
             cls._next_schema_attempt = time.monotonic() + _SCHEMA_RETRY_SECONDS
             if not client.is_connected():
@@ -176,6 +178,20 @@ class VectorDatabase:
             )
         finally:
             cls._schema_attempted = True
+
+    @staticmethod
+    def _prepare_exact_base_url_filters(client) -> None:
+        """Switch marked lecture collections to exact base URL filters and start the backfill of the others.
+
+        A failure here never fails the setup: the filters then stay on the word-tokenized base_url, as before.
+        """
+        try:
+            start_backfill(client, prepare_exact_filters(client))
+        except Exception:
+            logger.warning(
+                "Could not prepare the exact base URL filters; they stay on base_url",
+                exc_info=True,
+            )
 
     def delete_collection(self, collection_name):
         """

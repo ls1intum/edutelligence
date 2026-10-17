@@ -24,6 +24,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_unit_released,
 )
 from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
     init_lecture_unit_schema,
@@ -172,9 +173,9 @@ class LectureUnitSegmentRetrieval(SubPipeline):
                 else lecture_unit_filter
             )
         if lecture_unit_dto.base_url is not None:
-            base_url_filter = Filter.by_property(
-                LectureUnitSegmentSchema.BASE_URL.value
-            ).equal(lecture_unit_dto.base_url)
+            base_url_filter = artemis_instance_filter(
+                LectureUnitSegmentSchema, lecture_unit_dto.base_url
+            )
             filter_weaviate = (
                 filter_weaviate & base_url_filter
                 if filter_weaviate is not None
@@ -238,9 +239,10 @@ class LectureUnitSegmentRetrieval(SubPipeline):
             ).equal(
                 lecture_unit_segment[LectureUnitSegmentSchema.LECTURE_UNIT_ID.value]
             )
-            lecture_unit_filter &= Filter.by_property(
-                LectureUnitSchema.BASE_URL.value
-            ).equal(lecture_unit_segment[LectureUnitSegmentSchema.BASE_URL.value])
+            lecture_unit_filter &= artemis_instance_filter(
+                LectureUnitSchema,
+                lecture_unit_segment[LectureUnitSegmentSchema.BASE_URL.value],
+            )
 
             lecture_units = self.lecture_unit_collection.query.fetch_objects(
                 filters=lecture_unit_filter
