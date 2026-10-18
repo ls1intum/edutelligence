@@ -33,7 +33,7 @@ from typing import Any, Dict, FrozenSet, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-# Snapshot of vLLM 0.31.0's ChatCompletionRequest.reasoning_effort Literal,
+# Snapshot of vLLM 0.32.0's ChatCompletionRequest.reasoning_effort Literal,
 # kept in sync with the workernode's VLLM_PIP_SPEC (the "Logos - Update
 # vLLM" workflow bumps that pin). It only drives a coverage test: every value
 # but "none" must have its place in EFFORT_LEVELS below. Runtime
