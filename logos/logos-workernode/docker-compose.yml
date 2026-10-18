@@ -108,6 +108,7 @@ services:
       # The startup includes the FlashInfer kernel warmup, which takes minutes when the kernel cache is empty.
       # Failed checks do not count during the start period.
       start_period: 10m
+
   # ── Node manager (optional) ────────────────────────────────────────────────
   # Replaces the worker container on a deploy: it pulls the new image, starts
   # the new container, checks that it comes up, and starts the previous version
@@ -130,6 +131,13 @@ services:
   # of getting a directory in place of config.json. A new `docker login` replaces
   # that file and the mount keeps showing the old one, so recreate the service
   # after it (`docker compose up -d --force-recreate logos-node-manager`).
+  #
+  # The Docker socket is root on the host, and a read-only mount does not change
+  # that. The container therefore gets nothing else: no published port, no new
+  # privileges, no Linux capability except DAC_OVERRIDE, and a read-only root
+  # filesystem. Root keeps DAC_OVERRIDE because it must read files of the deploy
+  # user (for example the .env) and write a state directory that the deploy user
+  # owns. See "Security model" in logos-node-manager/README.md.
   logos-node-manager:
     profiles: ["node-manager"]
     image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-node-manager:${NODE_MANAGER_IMAGE_TAG:-${IMAGE_TAG:-latest}}
@@ -137,6 +145,15 @@ services:
     init: true
     restart: unless-stopped
     stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
     environment:
       NODE_MANAGER_PROJECT_DIR: ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}
     volumes:

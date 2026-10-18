@@ -86,6 +86,8 @@ The service needs three things from the host:
   showing the old one. After each login, recreate the service with
   `docker compose up -d --force-recreate logos-node-manager`. The deploy workflows do this on every run.
 
+The socket is root on the host. "Security model" below says what that allows and how the container is limited.
+
 Commands (run them with `docker exec logos-node-manager node-manager …`):
 
 | Command | Purpose |
@@ -143,6 +145,46 @@ A missing, malformed or non-positive timeout falls back to its default.
   already begun, for example stopping a container, goes on and is not undone. The rollback tries again for this reason.
 * The manager never runs a global image prune. When a deployment has ended it removes only the images listed under
   "Images on the host", by ID.
+
+## Security model
+
+The manager controls the Docker engine of the host through the mounted socket. That socket is root on the host: a
+process that can use it can start any container with any mount. A read-only mount does not change this, because the
+engine API is not read-only. The manager cannot do its job without the socket, because its job is to run `docker compose`
+for the worker. The risk is accepted for these reasons:
+
+* The manager has no way in from the network. It publishes no port and runs no server. It is reached with
+  `docker exec`, which needs access to `docker` on the host (root-equivalent anyway), and through the files in its state
+  directory. Whoever can write there can queue a deployment of any tag that exists in the registry.
+* Every command is an argument list and never goes through a shell. The command line checks a deployment id and a tag
+  against strict patterns before it accepts a request. The free text of `--requested-by` is only stored in the record.
+* The container sees little of the host: the worker directory (read-only), the Docker login of the host user
+  (read-only), its own state directory and the socket. The worker directory includes the `.env` with the secrets of the
+  worker, because Compose needs that file. No output of `docker compose config` and no environment is logged (see
+  "Rules the code keeps").
+
+The container gets nothing more than that. It starts with `no-new-privileges`, drops all Linux capabilities except
+`DAC_OVERRIDE`, and has a read-only root filesystem with a 16 MB `/tmp`. `DAC_OVERRIDE` stays because the manager runs
+as root and must read files of the deploy user, for example a `.env` with mode 600, and write a state directory that the
+deploy user owns. Without it, root cannot do either. This hardening limits what a compromised manager can do inside its
+own container. It does not limit what the socket allows. The smoke test runs the manager with the same options.
+
+A socket proxy that allows only some API calls was considered and not added. It filters by URL and method, not by the
+content of a request. The manager has to create containers, and a request to create one can mount the whole disk of the
+host. A proxy would add a second container that holds the socket and would not remove the root access.
+
+For operators:
+
+* Use a registry account that can pull but not push for the `docker login` on the host. The manager can read the login
+  file, and so can every user who can run `docker` on the host.
+* Limit who can run `docker` and `docker exec` on the host, and who can write to the state directory. These users are
+  root-equivalent with or without the manager.
+
+For people who change the code:
+
+* Do not publish a port or add a network listener.
+* Do not start a command through a shell. Check every value that comes from outside before it reaches a command.
+* Do not mount more of the host into the container, and do not add capabilities.
 
 ## Tests
 
