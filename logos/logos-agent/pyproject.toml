@@ -4,12 +4,12 @@ version = "0.1.0"
 description = "Runs coding agents in isolated containers on capacity Logos is not otherwise using"
 requires-python = ">=3.13,<4.0"
 dependencies = [
-    "fastapi[standard]==0.143.0",
+    "fastapi[standard]==0.146.0",
     # Pinned explicitly: starlette arrives transitively through fastapi.
-    "starlette==1.8.0",
+    "starlette==1.9.0",
     "uvicorn[standard]==0.54.0",
     "httpx==0.28.1",
-    "sqlalchemy[asyncio]==2.1.4",
+    "sqlalchemy[asyncio]==2.1.5",
     "asyncpg==0.32.0",
     "pydantic==2.14.1",
     "pyjwt[crypto]==2.15.1",
