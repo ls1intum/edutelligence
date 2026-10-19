@@ -1,0 +1,19 @@
+:host {
+  display: block;
+}
+
+.cell-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-strong {
+  font-weight: var(--font-weight-semibold);
+}
+
+.cell-errors {
+  margin-left: 4px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-error));
+}

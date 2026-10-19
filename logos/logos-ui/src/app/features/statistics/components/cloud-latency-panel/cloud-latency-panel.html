@@ -1,0 +1,36 @@
+<app-data-table
+  [columns]="columns"
+  [gridCols]="gridCols"
+  [loading]="loading()"
+  [empty]="rows().length === 0"
+  [emptyMessage]="
+    failed()
+      ? 'Could not load cloud request delays.'
+      : 'No finished cloud requests in the selected range.'
+  "
+>
+  @for (row of rows(); track row.modelName + '|' + row.providerName) {
+    <div class="table-row" role="row">
+      <div role="cell" data-label="Model" class="cell-name">{{ row.modelName }}</div>
+      <div role="cell" data-label="Provider" class="cell-name">{{ row.providerName }}</div>
+      <div role="cell" data-label="Requests">
+        {{ row.requestCount }}
+        @if (row.errorCount > 0) {
+          <span class="cell-errors">({{ row.errorCount }} failed)</span>
+        }
+      </div>
+      <div role="cell" data-label="Logos wait p50">{{ formatDelay(row.queueP50Ms) }}</div>
+      <div role="cell" data-label="Logos wait p95" class="cell-strong">
+        {{ formatDelay(row.queueP95Ms) }}
+      </div>
+      <div role="cell" data-label="Provider p50">{{ formatDelay(row.upstreamP50Ms) }}</div>
+      <div role="cell" data-label="Provider p95" class="cell-strong">
+        {{ formatDelay(row.upstreamP95Ms) }}
+      </div>
+      <div role="cell" data-label="TTFT p50">{{ formatDelay(row.ttftP50Ms) }}</div>
+      <div role="cell" data-label="TTFT p95" class="cell-strong">
+        {{ formatDelay(row.ttftP95Ms) }}
+      </div>
+    </div>
+  }
+</app-data-table>
