@@ -468,9 +468,9 @@ jobs:
       platforms: linux/amd64
       runner: ubuntu-latest
       sign: false
-      # Harbor only, no GHCR mirror: see the note at the top of this file.
       meta-images: |
         ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-node-manager
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-node-manager' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
