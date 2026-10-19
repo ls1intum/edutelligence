@@ -470,6 +470,12 @@ variables:
 | `LOGOS_URL` | — | the core node's URL, e.g. `https://logos.example.org` |
 | `LOGOS_API_KEY` | — | the worker's shared key from the registration response |
 
+These optional variables change the behavior of the capacity planner:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LOGOS_IDLE_SLEEP_L1_S` | `1800` | The number of seconds that a lane can stay idle before the capacity planner puts it to sleep. A locked lane never sleeps. |
+
 The hardware configuration of the worker is in its `config.yml`, never in `.env`.
 It includes the models, the lane port range and the vLLM overrides. See the
 [worker node guide](admin/worker-node.md) and the

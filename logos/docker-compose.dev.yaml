@@ -164,6 +164,11 @@ services:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      # Seconds a vLLM lane may stay idle before the capacity planner puts it to
+      # sleep (level 1). Waking a sleeping lane costs seconds on the next
+      # request, so the default keeps lanes warm through ordinary pauses.
+      # Locked lanes (statistics page) never sleep, whatever this value is.
+      LOGOS_IDLE_SLEEP_L1_S: "${LOGOS_IDLE_SLEEP_L1_S:-1800}"
       ECCS_DECISION_LOG: "${ECCS_DECISION_LOG:-/tmp/eccs_decisions.jsonl}"
       # Kill switch for prefix-cache-aware placement (see
       # logos-orchestrator/docs/ettft-scheduling.md §11).

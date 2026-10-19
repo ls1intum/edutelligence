@@ -44,6 +44,25 @@ copy the commit. With this information, you can find which workers have the
 update. If a worker cannot report a commit, the page shows `version: unknown`.
 The icon then shows the reason.
 
+### Idle lanes and lane locks
+
+The capacity planner puts a lane to sleep after the lane has no requests for
+30 minutes (`LOGOS_IDLE_SLEEP_L1_S`, see
+[deployment](../deployment.md#environment-variables)). A sleeping lane frees
+most of its GPU memory. The next request to the lane must wait until the lane
+wakes.
+
+To keep a lane warm, lock it. In the lane list of a worker, click the lock icon
+next to the lane. A closed lock shows a locked lane. The capacity planner does
+not put a locked lane to sleep and does not unload it to make memory free for
+other models. If a locked lane sleeps, the planner wakes it. To release the
+lane, click the lock icon again. The lock stays after a restart of Logos. Only a
+Logos admin can lock or unlock a lane.
+
+The **Sleep** action on a locked lane still puts the lane to sleep. Use it only
+if you must make memory free at once. The planner then wakes the locked lane
+again.
+
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 
 ## Models
