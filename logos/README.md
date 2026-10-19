@@ -384,8 +384,9 @@ discarding fractional audio duration while retaining the integer usage schema.
 `POST /v1/systemone` answers typed questions about a text (yes/no, choice,
 score) with calibrated probabilities. The endpoint uses the schema of TypeSafe's
 Jev API. Logos serves it with decision models such as `autotrust/JEV-27B-VL` on
-a plain vLLM lane. See [Decision models](docs/decision-models.md) for the API and
-for the worker-node configuration.
+a plain vLLM lane. Requests for other models go to the model's lane, where
+vLLM answers them itself. See [Decision models](docs/decision-models.md) for the
+API and for the worker-node configuration.
 
 ### Batch processing
 
