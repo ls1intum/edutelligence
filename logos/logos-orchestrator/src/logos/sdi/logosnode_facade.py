@@ -192,6 +192,35 @@ class LogosNodeSchedulingDataFacade:
                 return self.queue_manager.get_total_depth_by_deployment(model_id, provider_id)
         return 0
 
+    # A tracked request older than this is not counted as in flight: every
+    # request releases its tracking when it ends, so an entry this old was
+    # leaked, and it must not keep a lane awake forever.
+    INFLIGHT_TRACKING_MAX_AGE_S = 900.0
+
+    def get_inflight_request_count_by_model_name(self, model_name: str, provider_id: int) -> int:
+        """Requests the scheduler placed on this (model, provider) that have not ended.
+
+        Counts every tracked request, including one that holds a reservation
+        but has not reached the worker yet. The worker's own active_requests
+        cannot see that one, which is what the capacity planner needs this
+        figure for: it must not sleep the lane such a request is about to use.
+        """
+        provider = self._providers.get(int(provider_id))
+        if not provider:
+            return 0
+        model_ids = {mid for mid, name in provider._model_id_to_name.items() if name == model_name}
+        if not model_ids:
+            return 0
+        cutoff = time.time() - self.INFLIGHT_TRACKING_MAX_AGE_S
+        with self._lock:
+            return sum(
+                1
+                for data in self._request_tracking.values()
+                if data.get("model_id") in model_ids
+                and data.get("provider_id") == int(provider_id)
+                and (data.get("arrival_time") or 0.0) >= cutoff
+            )
+
     def has_cold_queued_entries_by_model_name(self, model_name: str, provider_id: int) -> bool:
         """Return True iff any queued entry for this (model, provider) was flagged
         is_cold_at_queue at enqueue time. Used by the planner to extend lane

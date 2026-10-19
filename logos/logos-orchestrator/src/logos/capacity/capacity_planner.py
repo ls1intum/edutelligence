@@ -69,7 +69,14 @@ class CapacityPlanner:
     """
 
     # Idle tier thresholds (seconds of no activity)
-    IDLE_SLEEP_L1 = 120  # vLLM lane idle 2min → sleep level 1
+    # An awake lane with no requests for this long goes to sleep level 1.
+    # Sleeping frees VRAM on a shared GPU, but every request that then arrives
+    # pays a wake, and a request that lands while a lane is going to sleep
+    # used to wait for a wake that nobody triggered. Demand-driven eviction
+    # still sleeps an idle lane at once when another model needs its VRAM, so
+    # the timer only covers the case without contention: 30 minutes keeps
+    # lanes warm through normal gaps in traffic.
+    IDLE_SLEEP_L1 = 1800  # 30 min
     # L1→L2 deepening was previously a 10-min timer that fired unconditionally,
     # dropping the residual cache (~1.5 GB/lane) even when the GPU had ample
     # headroom. Result: idle lanes silently lost their fast-wake state and were
@@ -292,6 +299,7 @@ class CapacityPlanner:
         enabled: bool = True,
         on_state_change: Optional[Any] = None,
         latency_store: Optional[LatencyStore] = None,
+        lane_lock_reader: Optional[Callable[[], Optional[List[tuple[int, str]]]]] = None,
     ) -> None:
         self._facade = logosnode_facade
         self._registry = logosnode_registry
@@ -300,6 +308,10 @@ class CapacityPlanner:
         self._enabled = enabled
         self._on_state_change = on_state_change
         self._latency_store = latency_store
+        # Returns the operator lane locks as (provider_id, lane_id) pairs, or
+        # None when they could not be read. Wired to the database at startup;
+        # without one no lane is ever locked.
+        self._lane_lock_reader = lane_lock_reader
         self._lane_idle_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_since: dict[tuple[int, str], float] = {}
         self._lane_sleep_level: dict[tuple[int, str], int] = {}
@@ -455,6 +467,18 @@ class CapacityPlanner:
         # Key: model_name → (provider_id, registered_at)
         self._pending_capacity: dict[str, tuple[int, float]] = {}
 
+        # Requests that hold a reservation for a model on a provider but found
+        # no ready lane there (the lane went to sleep, or is still waking).
+        # They are not in the scheduler queue any more, so without this the
+        # planner would see no queued demand and never wake a lane for them.
+        # Key: request_id → (provider_id, model_name, registered_at).
+        self._lane_waiters: dict[str, tuple[int, str, float]] = {}
+
+        # Lanes an operator locked warm: never idle-slept, never evicted for
+        # another model, and woken when found asleep. Read from the
+        # ``lane_locks`` table once per cycle. Key: (provider_id, lane_id).
+        self._locked_lanes: set[tuple[int, str]] = set()
+
         # Structural load-failure cooldown: lanes whose add_lane was rejected
         # by the worker for a non-transient reason (e.g. no feasible GPU
         # subset). Suppresses new load actions on the lane until expiry.
@@ -607,6 +631,131 @@ class CapacityPlanner:
         """
         self._announced_use.pop(model_name, None)
 
+    # A waiter older than this is treated as gone: the request resolves within
+    # its own context timeout, so an entry this old was leaked by a caller that
+    # never cleared it.
+    LANE_WAITER_TTL_SECONDS = 900.0
+
+    def register_lane_waiter(self, request_id: str, provider_id: int, model_name: str) -> None:
+        """Record that ``request_id`` waits for a ready lane of ``model_name``.
+
+        The request already holds a reservation, so it is not in the scheduler
+        queue that the demand pass reads. Registering it makes it count as
+        queued demand for the model on this provider: the wake gate's queued
+        bypass applies, and the idle pass does not sleep the model's lanes
+        while it waits. Also wakes the cycle at once.
+        """
+        if not request_id or not model_name:
+            return
+        self._waiters()[request_id] = (int(provider_id), model_name, time.time())
+        self.hint_capacity_needed(model_name, provider_id=provider_id)
+
+    def clear_lane_waiter(self, request_id: str) -> None:
+        """Forget a waiter once its request has a lane, moved elsewhere, or ended."""
+        self._waiters().pop(request_id, None)
+
+    def _waiters(self) -> dict[str, tuple[int, str, float]]:
+        # Tolerates a planner built without __init__ (several tests do that).
+        waiters = getattr(self, "_lane_waiters", None)
+        if waiters is None:
+            waiters = self._lane_waiters = {}
+        return waiters
+
+    def _lane_waiter_count(self, provider_id: int, model_name: str) -> int:
+        """Live waiters for ``model_name`` on ``provider_id`` (expired ones are dropped)."""
+        waiters = self._waiters()
+        if not waiters:
+            return 0
+        cutoff = time.time() - self.LANE_WAITER_TTL_SECONDS
+        expired = [rid for rid, (_, _, at) in waiters.items() if at < cutoff]
+        for rid in expired:
+            waiters.pop(rid, None)
+        return sum(1 for pid, model, _ in waiters.values() if pid == provider_id and model == model_name)
+
+    def is_lane_locked(self, provider_id: int, lane_id: str) -> bool:
+        """Whether an operator locked this lane warm."""
+        return (int(provider_id), lane_id) in getattr(self, "_locked_lanes", ())
+
+    def _refresh_lane_locks(self) -> None:
+        """Reload the operator lane locks.
+
+        A failed read keeps the previous set: dropping every lock because the
+        database blinked would let the next idle pass sleep a locked lane.
+        """
+        reader = getattr(self, "_lane_lock_reader", None)
+        if reader is None:
+            return
+        try:
+            locks = reader()
+        except Exception:  # noqa: BLE001 — a lock read must never break the cycle
+            logger.warning("Could not read lane locks; keeping the previous set", exc_info=True)
+            return
+        if locks is None:
+            return
+        self._locked_lanes = {(int(pid), str(lane_id)) for pid, lane_id in locks}
+
+    def _compute_lock_wake_actions(
+        self,
+        provider_id: int,
+        lanes: List[LaneSchedulerSignals],
+        cycle_planned_models: Optional[set[str]] = None,
+    ) -> List[CapacityPlanAction]:
+        """Wake locked lanes that are asleep.
+
+        A lock means the lane stays warm, so one found asleep (it was asleep
+        when it was locked, or an operator slept it on purpose) is woken. The
+        wake goes through VRAM validation like any other; it never evicts.
+        """
+        actions: List[CapacityPlanAction] = []
+        for lane in lanes:
+            if not self.is_lane_locked(provider_id, lane.lane_id):
+                continue
+            if lane.sleep_state != "sleeping" and lane.runtime_state != "sleeping":
+                continue
+            if self._lane_is_in_wake_failure_cooldown(provider_id, lane.lane_id):
+                continue
+            if cycle_planned_models is not None and lane.model_name in cycle_planned_models:
+                continue
+            actions.append(
+                CapacityPlanAction(
+                    action="wake",
+                    provider_id=provider_id,
+                    lane_id=lane.lane_id,
+                    model_name=lane.model_name,
+                    reason="Lane is locked warm",
+                )
+            )
+            if cycle_planned_models is not None:
+                cycle_planned_models.add(lane.model_name)
+        return actions
+
+    def _model_inflight_without_other_lane(self, provider_id: int, model_name: str, lane_id: str) -> bool:
+        """Whether taking ``lane_id`` away would strand requests reserved for its model.
+
+        A request reserved for the model on this provider but not yet at the
+        worker does not show in the lane's active_requests. If no other awake
+        lane of the model on the provider can take it, sleeping ``lane_id``
+        leaves it waiting for a wake.
+        """
+        try:
+            reported = self._facade.get_inflight_request_count_by_model_name(model_name, provider_id)
+        except Exception:  # noqa: BLE001
+            reported = 0
+        # Only a real count is trusted; a facade that cannot tell must not
+        # keep lanes awake.
+        inflight = reported if isinstance(reported, int) and not isinstance(reported, bool) else 0
+        inflight += self._lane_waiter_count(provider_id, model_name)
+        if inflight <= 0:
+            return False
+        for other in self._safe_get_lanes(provider_id):
+            if other.lane_id == lane_id or other.model_name != model_name:
+                continue
+            if self.is_lane_marked_cold(provider_id, other.lane_id):
+                continue
+            if other.runtime_state in ("loaded", "running") and other.sleep_state != "sleeping":
+                return False
+        return True
+
     async def stop(self) -> None:
         """Stop the planner."""
         if self._task and not self._task.done():
@@ -729,6 +878,7 @@ class CapacityPlanner:
             logger.warning("Cleaned %d stale host-RAM reservations", stale_host_ram)
 
         self._demand.decay_all()
+        await asyncio.to_thread(self._refresh_lane_locks)
 
         # Keep pending-capacity models alive in the demand signal. A model lands
         # in _pending_capacity when a request is actively waiting but its lane
@@ -840,6 +990,7 @@ class CapacityPlanner:
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
+            all_actions.extend(self._compute_lock_wake_actions(provider_id, lanes, cycle_planned_models))
             all_actions.extend(
                 self._compute_demand_actions(
                     provider_id,
@@ -1549,6 +1700,8 @@ class CapacityPlanner:
             if lane.model_name == loading_model:
                 continue
             if lane.sleep_state != "sleeping":
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
                 continue
             stop_action = CapacityPlanAction(
                 action="stop",
@@ -2581,7 +2734,7 @@ class CapacityPlanner:
             model_name,
             provider_id,
         )
-        return lane_total + scheduler_queue
+        return lane_total + scheduler_queue + self._lane_waiter_count(provider_id, model_name)
 
     def _get_queue_depth_across_deployments(self, model_name: str) -> int:
         """Sum scheduler queue depth across every provider serving this model.
@@ -2719,6 +2872,9 @@ class CapacityPlanner:
             # intentionally allow same-model siblings through).
             if target_lane_id is not None and lane.lane_id == target_lane_id:
                 skipped.append((lane.lane_id, lane.model_name, "is-wake-target"))
+                continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                skipped.append((lane.lane_id, lane.model_name, "locked"))
                 continue
             total_demand = self._get_queue_depth_for_model(provider_id, lane.model_name, lanes)
             # Phase 3.1: under LOGOS_EVICTION_GATE_V2, hard-block only on
@@ -3188,7 +3344,11 @@ class CapacityPlanner:
         for lane in lanes:
             key = self._lane_key(provider_id, lane.lane_id)
             active_keys.add(key)
-            is_active = lane.active_requests > 0 or lane.queue_waiting > 0
+            is_active = (
+                lane.active_requests > 0
+                or lane.queue_waiting > 0
+                or self._lane_waiter_count(provider_id, lane.model_name) > 0
+            )
             is_sleeping = lane.sleep_state == "sleeping"
             was_sleeping = key in self._lane_sleep_since or self._lane_sleep_level.get(key, 0) > 0
 
@@ -3273,6 +3433,16 @@ class CapacityPlanner:
 
             # Skip lanes that are already stopped/error
             if lane.runtime_state in ("stopped", "error", "cold"):
+                continue
+
+            # A lane an operator locked warm never goes to sleep on a timer.
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue
+
+            # Requests already reserved for this model that have not reached
+            # the worker yet do not show in active_requests. Sleeping the only
+            # lane that could serve them strands them until a wake.
+            if self._model_inflight_without_other_lane(provider_id, lane.model_name, lane.lane_id):
                 continue
 
             # Sleep L2 after 10 minutes of observed L1 sleep
@@ -5518,6 +5688,8 @@ class CapacityPlanner:
         for lane in lanes:
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
                 # Lane is busy — add as reclaim candidate if it qualifies for eviction.
                 # Prefer sleep_l1 over stop: sleeping frees most VRAM while keeping
@@ -7142,6 +7314,7 @@ class CapacityPlanner:
                         lane_id=lane_id,
                         model_name=model,
                         reason="manual drain: the operator took a busy lane offline",
+                        operator_initiated=True,
                     )
                 else:
                     unload_reason = (
@@ -7166,6 +7339,7 @@ class CapacityPlanner:
                         # reclaiming a lane it just placed, not to refuse an
                         # operator taking a lane offline.
                         bypass_load_cooldown=True,
+                        operator_initiated=True,
                     )
 
                 # The executor owns the desired-lane sync, the VRAM ledger, and
@@ -8684,6 +8858,17 @@ class CapacityPlanner:
         """
         key = (action.provider_id, action.lane_id)
         marks_cold = action.action in ("sleep_l1", "sleep_l2", "stop")
+        if marks_cold and not action.operator_initiated and self.is_lane_locked(action.provider_id, action.lane_id):
+            # Last line of defence: the planning passes skip locked lanes, but
+            # a path that does not (or a lock taken after planning) must not
+            # sleep or unload a lane an operator locked warm.
+            logger.info(
+                "Skipping %s of lane %s on worker=%s: the lane is locked warm",
+                action.action,
+                action.lane_id,
+                self._facade.get_provider_name(action.provider_id) or action.provider_id,
+            )
+            return False
         confirmed = False
         if marks_cold:
             self._hold_cold_mark(key)
@@ -8882,6 +9067,22 @@ class CapacityPlanner:
                         logger.warning(
                             "Cannot sleep lane %s for reclaim: " "active requests did not drain within 60s",
                             action.lane_id,
+                        )
+                        return False
+                    # The lane is out of the rotation now, but a request the
+                    # scheduler reserved for the model before the cold mark
+                    # landed may still be on its way to this lane. If no other
+                    # awake lane of the model can take it, sleeping now strands
+                    # it until something wakes the lane again.
+                    if not action.operator_initiated and self._model_inflight_without_other_lane(
+                        action.provider_id, action.model_name, action.lane_id
+                    ):
+                        logger.info(
+                            "Aborting %s of lane %s on worker=%s: requests reserved for %s " "have no other awake lane",
+                            action.action,
+                            action.lane_id,
+                            self._facade.get_provider_name(action.provider_id) or action.provider_id,
+                            action.model_name,
                         )
                         return False
 

@@ -337,6 +337,10 @@ class CapacityPlanAction:
     # (e.g. sleep→stop under host-RAM pressure) where the cycle the
     # cooldown would prolong is precisely the thing we're trying to break.
     bypass_load_cooldown: bool = False
+    # True for an action an operator asked for (the panel's drain). The
+    # planner never sleeps or stops a locked lane on its own, but an operator
+    # taking a lane offline explicitly is still honoured.
+    operator_initiated: bool = False
 
     def to_dict(self) -> dict:
         return {

@@ -1193,6 +1193,12 @@ def _prefer_deployments_with_context_room(
     return fitting or deployments
 
 
+def _read_lane_locks() -> Optional[list[tuple[int, str]]]:
+    """Operator lane locks for the capacity planner; ``None`` when unreadable."""
+    with DBManager() as db:
+        return db.get_lane_locks()
+
+
 async def start_pipeline():
     """Initialize the new request pipeline components."""
     global _pipeline, _queue_mgr, _logosnode_facade, _azure_facade, _context_resolver
@@ -1251,6 +1257,7 @@ async def start_pipeline():
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
         latency_store=_latency_store,
+        lane_lock_reader=_read_lane_locks,
     )
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
