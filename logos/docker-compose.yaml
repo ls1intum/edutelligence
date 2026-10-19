@@ -213,6 +213,8 @@ services:
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      LOGOS_SHARED_PROFILES: "${LOGOS_SHARED_PROFILES:-1}"
+      LOGOS_SHARED_PROFILE_MAX_AGE_DAYS: "${LOGOS_SHARED_PROFILE_MAX_AGE_DAYS:-30}"
       # Global request-lifecycle timeout knob. When set (>0) it overrides the
       # scheduler queue-wait, execution-context resolve, and worker stream
       # timeouts so a request effectively never times out (benchmark uses

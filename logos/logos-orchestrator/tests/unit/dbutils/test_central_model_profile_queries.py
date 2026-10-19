@@ -164,3 +164,10 @@ def test_a_legacy_import_does_not_overwrite_a_reset_that_won_the_race():
     assert db.import_legacy_model_profiles(7, legacy, {}) == 0
     assert db.session.execute.call_count == 2
     assert "model_profiles.sync_revision = 0" in inspect.getsource(DBManager.import_legacy_model_profiles)
+
+
+def test_an_implausible_gpu_count_is_dropped_instead_of_failing_the_report():
+    db = _db()
+    db.update_reported_calibration_keys(7, {"a": "H1", "b": "H2", "c": "H3"}, {"a": 10**12, "b": -1, "c": 4})
+    _sql, params = db.session.execute.call_args.args
+    assert params["slice_counts"] == [None, None, 4]

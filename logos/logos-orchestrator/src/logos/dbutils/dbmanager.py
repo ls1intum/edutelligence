@@ -272,6 +272,12 @@ def _text(value: Any) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
+def _slice_gpu_count(value: Any) -> Optional[int]:
+    """A plausible GPU count, else None; an unchecked value must not fail a report."""
+    count = _number(value, int)
+    return count if count is not None and 0 < count <= 4096 else None
+
+
 def _model_profile_column_params(data: Dict[str, Any]) -> Dict[str, Any]:
     """Bind values for the typed model_profiles columns of one profile dict.
 
@@ -2023,7 +2029,7 @@ class DBManager:
                 "provider_id": provider_id,
                 "model_names": list(key_hashes),
                 "key_hashes": list(key_hashes.values()),
-                "slice_counts": [_number(counts.get(name), int) for name in key_hashes],
+                "slice_counts": [_slice_gpu_count(counts.get(name)) for name in key_hashes],
             },
         )
         self.session.commit()
@@ -2057,6 +2063,7 @@ class DBManager:
                 WHERE mp.model_name = :model_name
                   AND mp.provider_id <> :provider_id
                   AND mp.calibration_key_hash = own.calibration_key_hash
+                ORDER BY mp.provider_id
             """),
             {"provider_id": provider_id, "model_name": model_name},
         ).fetchall()
@@ -2116,7 +2123,8 @@ class DBManager:
         if snapshot is None:
             return None
         shared = json.loads(snapshot.profile) if isinstance(snapshot.profile, str) else dict(snapshot.profile)
-        merged = {**profile, **shared}
+        kept = {key: value for key, value in profile.items() if key not in CALIBRATION_FIELDS}
+        merged = {**kept, **shared}
         assignments = ", ".join(f"{column} = :{column}" for column in _RESET_PROFILE_COLUMNS)
         self.session.execute(
             text(f"""
