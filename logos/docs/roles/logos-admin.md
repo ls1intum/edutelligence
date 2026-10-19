@@ -59,6 +59,8 @@ other models. If a locked lane sleeps, the planner wakes it. To release the
 lane, click the lock icon again. The lock stays after a restart of Logos. Only a
 Logos admin can lock or unlock a lane.
 
+![Lanes of two workers, the upper lane locked](/img/roles/logos-admin-statistics-lanes.png)
+
 The **Sleep** action on a locked lane still puts the lane to sleep. Use it only
 if you must make memory free at once. The planner then wakes the locked lane
 again.
@@ -89,6 +91,8 @@ the median (p50) and as the 95th percentile (p95):
 
 If the **Logos wait** values increase, Logos itself slows the requests down.
 Use the time range bar of the tab to select the period.
+
+![Cloud Delays tab of a model](/img/roles/logos-admin-model-details-cloud-delays.png)
 
 ## Providers
 
