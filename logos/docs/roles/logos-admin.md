@@ -22,13 +22,18 @@ trash icon marks the entry as deleted.
 
 On the **Requests** tab, the filter row narrows the page to one team,
 requester and provider, and to a set of models. A requester is a person or an
-application key. Application keys have no person behind them, so they appear
-in the **Requesters** list as `App key: <team> · <environment>`, for example
-the production key of a team. The time range and every filter apply to the
-whole tab at once: the totals, the charts and the recent requests always show
-the same requests. This is also true when you drag across the request volume
-chart to select a time range. Only the state filter applies to the recent
-requests alone.
+application key. An application key has no person behind it, so the
+**Requesters** list shows it as `App key: <team> · <environment>`. Use this
+entry to see the traffic of one deployment only, for example the production
+key of a team. The list shows the number of requests for each entry and puts
+the entries with the most requests first.
+
+![Requesters list with people and application keys](/img/roles/logos-admin-statistics-requesters.png)
+
+The time range and every filter apply to the whole tab at once. The totals,
+the charts and the recent requests always show the same requests. This is also
+true when you drag across the request volume chart to select a time range. Only
+the state filter applies to the recent requests alone.
 
 On the **Local Providers** tab, each worker node has its own section. The
 section shows memory, lane health and GPU metrics. Next to the name of the
