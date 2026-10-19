@@ -156,6 +156,34 @@ class RequestLogStatsRollupTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void an_api_key_scope_reads_past_the_rollup_and_counts_only_that_key() {
+        populateRollup();
+        assertThat(rollupRowCount()).isGreaterThan(0);
+
+        // The rollup grain has no key, so a key-scoped aggregate must not take
+        // the rolled-up hours: those would count every key alike.
+        Map<String, Object> seeded = stats(statsService.getRequestLogStats(
+            start(), end(), 24, null, null, null, 3001, false, java.util.List.of()));
+        Map<String, Object> seededTotals = (Map<String, Object>) seeded.get("totals");
+        assertThat(((Number) seededTotals.get("requests")).longValue()).isEqualTo(7L);
+        assertThat(((Number) seededTotals.get("totalTokens")).longValue()).isEqualTo(2800L);
+        long seriesTotal = ((java.util.List<Map<String, Object>>) seeded.get("timeSeries")).stream()
+            .mapToLong(p -> ((Number) p.get("total")).longValue()).sum();
+        assertThat(seriesTotal).isEqualTo(7L);
+
+        Map<String, Object> other = stats(statsService.getRequestLogStats(
+            start(), end(), 24, null, null, null, 999_999, false, java.util.List.of()));
+        Map<String, Object> otherTotals = (Map<String, Object>) other.get("totals");
+        assertThat(((Number) otherTotals.get("requests")).longValue()).isZero();
+        assertThat((Map<String, Object>) other.get("statusCounts")).isEmpty();
+        assertThat((java.util.List<?>) other.get("modelBreakdown")).isEmpty();
+        long otherSeries = ((java.util.List<Map<String, Object>>) other.get("timeSeries")).stream()
+            .mapToLong(p -> ((Number) p.get("total")).longValue()).sum();
+        assertThat(otherSeries).isZero();
+    }
+
+    @Test
     void status_counts_and_model_breakdown_are_the_same_from_either_source() {
         assertRollupIsEmpty();
         Map<String, Object> live = stats(query(24, null, null));
