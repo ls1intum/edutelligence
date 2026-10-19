@@ -1991,6 +1991,28 @@ async def test_auto_place_prefers_co_residency_over_alignment() -> None:
 
 
 @pytest.mark.asyncio
+async def test_auto_place_does_not_align_into_combined_overflow() -> None:
+    """Every candidate is pairwise compatible here: A (20 GB/GPU on 0+1) and C
+    (40 GB on 0) each fit next to a 30 GB/GPU shard of B. On 0+1, however,
+    GPU 0 would need 90 GB to hold all three awake. On 1+2, all three fit at
+    once, so alignment must not win over the combined per-GPU footprint.
+    """
+    manager = _co_residency_manager(
+        {"org/tp2-a": 40_000.0, "org/tp2-b": 60_000.0, "org/tp1-c": 40_000.0},
+        free_mb=[77_920.0, 79_920.0, 81_920.0],
+    )
+    manager._handles["planner-a"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-a", _co_residency_lane("org/tp2-a", "0,1", tp=2), sleeping=True
+    )
+    manager._handles["planner-c"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-c", _co_residency_lane("org/tp1-c", "0"), sleeping=True
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-b", _co_residency_lane("org/tp2-b", tp=2))  # noqa: SLF001
+    assert placed.gpu_devices == "1,2"
+
+
+@pytest.mark.asyncio
 async def test_auto_place_keeps_sleeping_lane_wakeable() -> None:
     """A sleeping 70 GB lane on GPU 0 leaves that GPU nearly empty, but a 30 GB
     lane placed there could never be awake together with it. The new lane goes

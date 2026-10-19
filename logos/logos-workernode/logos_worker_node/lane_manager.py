@@ -2123,7 +2123,7 @@ class LaneManager:
         residents = resident_lanes or []
         total_by_gpu = {int(row["index"]): float(row.get("total_mb", 0.0) or 0.0) for row in device_rows}
         best_indices: list[int] | None = None
-        best_score: tuple[int, int, int, int, float, float, tuple[int, ...]] | None = None
+        best_score: tuple[int, float, int, int, int, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
             candidate = frozenset(indices)
@@ -2141,6 +2141,21 @@ class LaneManager:
                     for i in candidate & gpus
                 )
             )
+            # Pairwise compatibility alone misses lanes that each fit next to
+            # the new one but not all at once. Sum the footprints of every
+            # compatible resident on each candidate GPU and penalise the VRAM
+            # that would not fit with all of them awake.
+            overflow_mb = 0.0
+            for i in candidate:
+                total_mb = total_by_gpu.get(i, 0.0)
+                if total_mb <= 0:
+                    continue
+                load_mb = per_gpu_threshold_mb + sum(
+                    share_mb
+                    for gpus, share_mb in residents
+                    if i in gpus and share_mb + per_gpu_threshold_mb <= total_mb
+                )
+                overflow_mb += max(0.0, load_mb - total_mb)
             # A multi-GPU lane that overlaps the candidate only partially
             # fragments the node: the GPUs outside the overlap become a
             # leftover that other lanes conflict with asymmetrically. Sharing
@@ -2161,7 +2176,7 @@ class LaneManager:
             # (spread): it maximises headroom for the new lane and keeps the
             # emptiest GPUs intact for larger models.
             free_mb = sum(float(row["free_mb"]) for row in combo)
-            score = (conflicts, misaligned, collocated, awake_lane_count, awake_used_mb, -free_mb, indices)
+            score = (conflicts, overflow_mb, misaligned, collocated, awake_lane_count, awake_used_mb, -free_mb, indices)
             if best_score is None or score < best_score:
                 best_score = score
                 best_indices = list(indices)
@@ -2175,8 +2190,9 @@ class LaneManager:
         - Preserve the current placement when it still fits.
         - Otherwise choose the feasible GPU subset in the worker's allowed
           GPU pool that leaves the most lanes loadable together with the new
-          one (fewest VRAM conflicts with placed lanes, awake or asleep), then
-          the one that does not partially overlap a multi-GPU lane.
+          one (fewest VRAM conflicts with placed lanes, awake or asleep, then
+          the least VRAM that would not fit with all compatible lanes awake),
+          then the one that does not partially overlap a multi-GPU lane.
         - Among those, prefer the subset that shares the least with awake
           lanes, breaking ties toward the most free VRAM (spread, not
           best-fit packing: a GPU whose only occupants are sleeping lanes is
