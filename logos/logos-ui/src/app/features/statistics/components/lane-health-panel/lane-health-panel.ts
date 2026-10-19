@@ -226,6 +226,11 @@ export function laneSleepAction(lane: LaneSignalData): LaneSleepAction {
   return null;
 }
 
+/** Identity of a lane lock: the lane id is only unique within its provider. */
+export function laneLockKey(providerId: number, laneId: string): string {
+  return `${providerId}/${laneId}`;
+}
+
 @Component({
   selector: 'app-stats-lane-health-panel',
   standalone: true,
@@ -258,6 +263,13 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
   anyLaneActionInFlight = computed(
     () => this.sleepingLaneId() !== null || this.drainingLaneId() !== null || this.wakingLaneId() !== null,
   );
+
+  // ── Lane-lock state ──────────────────────────────────────────────────────
+  /** Locked lanes of every provider, keyed by laneLockKey(). */
+  lockedLanes = signal<Set<string>>(new Set());
+  lockingLaneId = signal<string | null>(null);
+  lockError = signal<string | null>(null);
+  private locksRequested = false;
 
   // ── Load-lane state ──────────────────────────────────────────────────────
   pickerOpen = signal(false);
@@ -647,6 +659,7 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
       this.sleepingLaneId.set(null);
       this.drainingLaneId.set(null);
       this.wakingLaneId.set(null);
+      this.lockError.set(null);
       // The in-flight calls are abandoned as well: when they settle later,
       // their counters no longer match, so they cannot touch the shared
       // signal or error of the worker the operator is on now.
@@ -671,6 +684,54 @@ export class LaneHealthPanel implements OnChanges, OnDestroy {
         this.acceptedLaneIds = null;
         this.stopLoadStatusPoll();
       }
+    }
+    // Locks are written only from this panel, so they are read once and after
+    // every toggle — not on each status tick, which arrives every few seconds.
+    if (!this.locksRequested) {
+      this.locksRequested = true;
+      void this.refreshLocks();
+    }
+  }
+
+  // ── Lane locks ───────────────────────────────────────────────────────────
+
+  /** Whether the capacity planner is told to keep this lane warm. */
+  isLocked(laneId: string): boolean {
+    const pid = this.providerId;
+    return pid != null && this.lockedLanes().has(laneLockKey(pid, laneId));
+  }
+
+  /** Re-reads the locks of every provider; a failed read keeps the last known set. */
+  async refreshLocks(): Promise<void> {
+    try {
+      const locks = await this.statisticsService.getLaneLocks();
+      this.lockedLanes.set(new Set((locks ?? []).map((l) => laneLockKey(l.provider_id, l.lane_id))));
+    } catch (err: unknown) {
+      this.lockError.set(`Could not read lane locks: ${this.failureDetail(err)}`);
+    }
+  }
+
+  /**
+   * Locks or unlocks a lane. The toggle writes the lock table only; the
+   * capacity planner picks the change up on its next cycle.
+   */
+  async handleToggleLock(row: LaneRow): Promise<void> {
+    const pid = this.providerId;
+    if (pid == null || this.lockingLaneId() !== null) return;
+    const locked = this.isLocked(row.laneId);
+    this.lockingLaneId.set(row.laneId);
+    this.lockError.set(null);
+    try {
+      if (locked) {
+        await this.statisticsService.unlockLane(pid, row.laneId);
+      } else {
+        await this.statisticsService.lockLane(pid, row.laneId, row.lane.model);
+      }
+      await this.refreshLocks();
+    } catch (err: unknown) {
+      this.lockError.set(`${locked ? 'Unlock' : 'Lock'} of ${row.laneId} failed: ${this.failureDetail(err)}`);
+    } finally {
+      this.lockingLaneId.set(null);
     }
   }
 

@@ -13,6 +13,18 @@ export interface ProviderModel {
   model_name: string;
 }
 
+/**
+ * A lane an administrator locked warm, as `GET /api/logosdb/providers/logosnode/lanes/locks`
+ * returns it. The capacity planner never sleeps, drains or unloads a locked lane.
+ */
+export interface LaneLock {
+  provider_id: number;
+  lane_id: string;
+  model_name: string | null;
+  locked_by: string | null;
+  locked_at: string;
+}
+
 /** Position to continue a request-feed page from, as the server hands it back. */
 export interface RequestCursor {
   ts: string;
@@ -224,6 +236,28 @@ export class StatisticsService {
 
   wakeLane(providerId: number, laneId: string): Promise<unknown> {
     return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/wake', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  /** Every lane lock across all providers. */
+  getLaneLocks(): Promise<LaneLock[]> {
+    return firstValueFrom(this.http.get<LaneLock[]>('/api/logosdb/providers/logosnode/lanes/locks'));
+  }
+
+  /** Lock a lane warm. Idempotent. */
+  lockLane(providerId: number, laneId: string, modelName: string | null): Promise<LaneLock> {
+    return firstValueFrom(this.http.post<LaneLock>('/api/logosdb/providers/logosnode/lanes/lock', {
+      provider_id: providerId,
+      lane_id: laneId,
+      model_name: modelName,
+    }));
+  }
+
+  /** Release a lane lock. Idempotent. */
+  unlockLane(providerId: number, laneId: string): Promise<{ unlocked: boolean }> {
+    return firstValueFrom(this.http.post<{ unlocked: boolean }>('/api/logosdb/providers/logosnode/lanes/unlock', {
       provider_id: providerId,
       lane_id: laneId,
     }));
