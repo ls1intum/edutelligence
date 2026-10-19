@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 # Import the benchmark script by path (it's a standalone module, no package).
 _BM_PATH = Path(__file__).resolve().parent.parent / "benchmark_logos.py"
 _spec = importlib.util.spec_from_file_location("benchmark_logos_under_test", _BM_PATH)
@@ -398,3 +400,48 @@ def test_wipe_weights_falls_back_to_ollama_models_mount():
     script = _flatten(wipe[-1])
     assert "^LOGOS_MODELS_MOUNT=" in script
     assert "^OLLAMA_MODELS_MOUNT=" in script
+
+
+class _ResetResponse:
+    status_code = 200
+    text = ""
+
+    def __init__(self, shared):
+        self._shared = shared
+
+    def json(self):
+        body = {"reset": ["m1"]}
+        if self._shared is not None:
+            body["shared_profiles"] = self._shared
+        return body
+
+
+def _reset_with(shared, expect):
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def post(self, *a, **k):
+            return _ResetResponse(shared)
+
+    with patch.object(bm.httpx, "AsyncClient", _Client):
+        return asyncio.run(bm._reset_profiles_via_rest("https://x", "k", 1, expect_shared=expect))
+
+
+def test_a_reset_for_the_wrong_sharing_arm_is_refused():
+    with pytest.raises(RuntimeError, match="LOGOS_SHARED_PROFILES=0"):
+        _reset_with(True, False)
+    with pytest.raises(RuntimeError, match="LOGOS_SHARED_PROFILES=1"):
+        _reset_with(False, True)
+
+
+def test_a_reset_for_the_matching_or_unchecked_arm_goes_through():
+    assert _reset_with(True, True) == ["m1"]
+    assert _reset_with(False, None) == ["m1"]
+    assert _reset_with(None, False) == ["m1"]  # an older Logos does not say

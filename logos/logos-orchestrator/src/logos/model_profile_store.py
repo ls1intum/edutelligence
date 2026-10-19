@@ -28,6 +28,7 @@ CALIBRATION_FIELDS = frozenset(
         "calibration_max_num_seqs",
         "tensor_parallel_size",
         "enforce_eager_at_calibration",
+        "sleep_mode_disabled",
         "engine",
         "sleeping_residual_mb",
         "sleep_l1_transient_host_ram_mb",

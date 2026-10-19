@@ -4075,3 +4075,46 @@ async def test_a_command_answer_carries_the_lifecycle_revision_after_the_command
 
     assert sent[-1]["cmd_id"] == "cmd-1"
     assert sent[-1]["lifecycle_revision"] == 7
+
+
+@pytest.mark.asyncio
+async def test_a_model_calibrated_meanwhile_is_not_calibrated_again(tmp_path, monkeypatch):
+    """Logos may hand the node a calibration measured elsewhere during the
+    session; probing that model anyway would be wasted GPU time."""
+    from logos_worker_node import config as _wcfg
+    from logos_worker_node.hf_model_info import HfModelMetadata
+
+    monkeypatch.setattr(_wcfg, "STATE_DIR", tmp_path)
+    app = _make_app_for_calibration(tmp_path)
+    cfg = LogosConfig(
+        enabled=True,
+        logos_url="https://logos.example",
+        shared_key="secret",
+        configured_models=["org/first", "org/second"],
+    )
+    client = LogosBridgeClient(app, cfg)
+    monkeypatch.setattr(
+        "logos_worker_node.hf_model_info.fetch_hf_model_metadata",
+        lambda *a, **k: HfModelMetadata(weight_bytes=200 * 1024 * 1024 * 1024, source="hf"),
+    )
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.query_gpu_vram",
+        lambda *a, **k: {0: {"total_mb": 24000.0, "used_mb": 0.0, "free_mb": 24000.0}},
+    )
+    probed: list[str] = []
+    monkeypatch.setattr(
+        "logos_worker_node.calibration.calibrate_with_tp_escalation",
+        lambda plan, **kwargs: probed.append(plan["model"]),
+    )
+    monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
+    answers = iter([["org/first", "org/second"], ["org/first", "org/second"], []])
+    monkeypatch.setattr(client, "_list_uncalibrated_models", lambda: next(answers))  # noqa: SLF001
+
+    response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
+    assert response["ok"] is True
+    await _drain_session(client)
+
+    events = [(e.event, e.model, e.details) for e in app.state.lane_manager._event_log]
+    assert ("calibration_model_skipped", "org/second", "calibrated meanwhile") in events
+    assert probed == []
+    assert not any(e == "calibration_model_started" and m == "org/second" for e, m, _ in events)

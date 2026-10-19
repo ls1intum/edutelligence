@@ -1924,6 +1924,13 @@ class LogosBridgeClient:
                     terminal_event = "calibration_session_cancelled"
                     break
 
+                # Logos may have handed it a calibration measured elsewhere.
+                if model_name not in self._list_uncalibrated_models():
+                    self._record_calibration_event(
+                        "calibration_model_skipped", model=model_name, details="calibrated meanwhile"
+                    )
+                    continue
+
                 session.current_model = model_name
                 plan = plan_by_model.get(model_name) or {"model": model_name}
 

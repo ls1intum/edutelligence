@@ -192,9 +192,14 @@ An adopted calibration shows `calibration_origin: shared`. It is only used if
 the node has at least as many GPUs as its tensor-parallel size and it is at
 most 30 days old (`LOGOS_SHARED_PROFILE_MAX_AGE_DAYS`). If the node cannot
 start the model with it before ever having loaded the model, the worker
-reports it and Logos invalidates it for every node, which then calibrate
-themselves. Set `LOGOS_SHARED_PROFILES=0` on the Logos server to switch
-sharing off.
+reports it: that node drops the calibration, never adopts it again and
+calibrates itself. When a second node fails the same way, Logos invalidates
+it for every node. A shared calibration that no longer fits a node's GPUs
+(e.g. after re-pinning to fewer) is dropped as well. Set
+`LOGOS_SHARED_PROFILES=0` on the Logos server to switch sharing off. Reset
+(below) empties a profile, but with sharing on the node then adopts an
+identical node's calibration instead of measuring; for benchmarks that must
+measure from scratch, switch sharing off first.
 
 Three admin requests (root key, like step 7) change stored profiles. Logos
 pushes the result to a connected worker right away:

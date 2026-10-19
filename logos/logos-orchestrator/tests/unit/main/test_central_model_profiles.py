@@ -95,8 +95,8 @@ class _FakeDB:
         self.adopted.append((provider_id, model_names, max_age_days))
         return self.adoptions
 
-    def adopt_shared_calibration_for_siblings(self, provider_id, model_name, max_age_days):
-        return self.sibling_adopters.get(model_name, [])
+    def adopt_shared_calibration_for_siblings(self, provider_id, model_name, max_age_days, skip=None):
+        return [(p, c) for p, c in self.sibling_adopters.get(model_name, []) if skip is None or not skip(p)]
 
     def reject_shared_calibration(self, provider_id, model_name, calibration_id):
         self.rejected.append((provider_id, model_name, calibration_id))
@@ -345,7 +345,7 @@ def test_reset_is_a_central_change_pushed_to_the_worker(monkeypatch):
     data = LogosNodeResetProfilesRequest(logos_key="k", provider_id=1, model_names=["org/model"])
     result = asyncio.run(logosnode_mod.logosnode_reset_profiles(data))
     assert db.reset == (1, ["org/model"])
-    assert result == {"provider_id": 1, "reset": ["org/model"]}
+    assert result == {"provider_id": 1, "reset": ["org/model"], "shared_profiles": True}
     assert pushed == [(1, ["org/model"])]
     assert (1, "org/model") not in logosnode_mod._recorded_calibrations
     assert not logosnode_mod._profile_write_cache.unchanged(1, "org/model", "d")
@@ -551,13 +551,46 @@ def test_sharing_can_be_switched_off(monkeypatch):
 
 def test_a_fresh_calibration_is_offered_to_the_nodes_of_its_key(monkeypatch):
     db = _FakeDB()
-    db.sibling_adopters = {"org/model": [7, 8]}
+    db.sibling_adopters = {"org/model": [(7, 21), (8, None)]}
     monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
     monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
     assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model", "other"]) == {
         7: ["org/model"],
         8: ["org/model"],
     }
+
+
+def test_a_node_calibrating_the_model_is_not_offered_one(monkeypatch):
+    db = _FakeDB()
+    db.sibling_adopters = {"org/model": [(7, 21), (8, 21)]}
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
+    monkeypatch.setattr(logosnode_mod, "_calibrating_model", lambda pid: "org/model" if pid == 7 else None)
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {8: ["org/model"]}
+
+
+def test_a_reconnecting_node_does_not_adopt_the_model_it_is_calibrating(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
+    monkeypatch.setattr(logosnode_mod, "_calibrating_model", lambda pid: "org/busy")
+    logosnode_mod._update_reported_calibration_keys(5, {"org/busy": "H1", "org/idle": "H2"}, {})
+    assert db.adopted == [(5, ["org/idle"], 30)]
+
+
+def test_a_reset_says_whether_calibration_sharing_is_on(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: None)
+
+    async def _push(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(logosnode_mod, "_push_model_profiles", _push)
+    data = LogosNodeResetProfilesRequest(logos_key="k", provider_id=1, model_names=["org/model"])
+    assert asyncio.run(logosnode_mod.logosnode_reset_profiles(data))["shared_profiles"] is True
+    monkeypatch.setenv("LOGOS_SHARED_PROFILES", "0")
+    assert asyncio.run(logosnode_mod.logosnode_reset_profiles(data))["shared_profiles"] is False
 
 
 def test_the_calibration_duration_is_stored_with_the_snapshot(monkeypatch):

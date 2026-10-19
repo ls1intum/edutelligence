@@ -269,6 +269,15 @@ CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
 # calibrating the moment it dispatches this, rather than waiting for the
 # worker's started event — see send_command for why.
 START_CALIBRATION_SESSION_ACTION = "start_calibration_session"
+CALIBRATION_MODEL_STARTED_EVENT = "calibration_model_started"
+CALIBRATION_MODEL_ENDED_EVENTS = frozenset(
+    {
+        "calibration_model_completed",
+        "calibration_model_failed",
+        "calibration_model_skipped",
+        "calibration_model_cancelled",
+    }
+)
 TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
 # How long the optimistic mark set when start_calibration_session is dispatched
@@ -359,6 +368,9 @@ class ProviderSession:
     # worker has freed all VRAM for its probes, so its idle lanes and free
     # VRAM are reserved rather than available.
     calibrating: bool = False
+    # The model the running session is calibrating right now, from its live
+    # events; None between models.
+    calibrating_model: str | None = None
     # Set when start_calibration_session is dispatched: until it passes, a
     # status reporting no session is treated as a snapshot that predates the
     # command rather than as proof the session ended. See
@@ -1004,7 +1016,12 @@ class LogosNodeRuntimeRegistry:
             self._set_calibrating(session, True, event_name)
         elif event_name in TERMINAL_CALIBRATION_SESSION_EVENTS:
             session.optimistic_calibration_until = None
+            session.calibrating_model = None
             self._set_calibrating(session, False, event_name)
+        elif event_name == CALIBRATION_MODEL_STARTED_EVENT:
+            session.calibrating_model = str(event.get("model") or "") or None
+        elif event_name in CALIBRATION_MODEL_ENDED_EVENTS:
+            session.calibrating_model = None
 
     def _reconcile_calibrating_from_status(self, session: ProviderSession, calibrating: bool) -> None:
         """Settle ``session.calibrating`` from the worker's own status snapshot.
@@ -1056,6 +1073,11 @@ class LogosNodeRuntimeRegistry:
                 session.worker_id or str(session.provider_id),
                 source,
             )
+
+    def calibrating_model(self, provider_id: int) -> str | None:
+        """The model a node is calibrating right now, if it reported one."""
+        session = self._sessions.get(int(provider_id))
+        return session.calibrating_model if session is not None and session.calibrating else None
 
     def is_calibrating(self, provider_id: int) -> bool:
         """Return True while the worker is running a calibration session."""

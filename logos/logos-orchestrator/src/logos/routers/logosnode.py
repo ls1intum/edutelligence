@@ -506,7 +506,10 @@ def _update_reported_calibration_keys(
         db.update_reported_calibration_keys(provider_id, calibration_key_hashes, slice_gpu_counts)
         if not shared_profiles_enabled():
             return
-        adopted = db.adopt_shared_calibrations(provider_id, list(calibration_key_hashes), shared_profile_max_age_days())
+        # Its own result for the model in progress would be discarded.
+        busy = _calibrating_model(provider_id)
+        models = [name for name in calibration_key_hashes if name != busy]
+        adopted = db.adopt_shared_calibrations(provider_id, models, shared_profile_max_age_days())
     for model_name, calibration_id in adopted:
         _profile_write_cache.forget(provider_id, model_name)
         logger.info(
@@ -518,27 +521,39 @@ def _update_reported_calibration_keys(
         )
 
 
+def _calibrating_model(provider_id: int) -> str | None:
+    lookup = getattr(_main._logosnode_registry, "calibrating_model", None)
+    return lookup(provider_id) if lookup is not None else None
+
+
 def _offer_calibrations_to_siblings(provider_id: int, model_names: list[str]) -> Dict[int, list[str]]:
     """Let every other node of the same key adopt what this node just measured."""
     if not shared_profiles_enabled():
         return {}
     adopters: Dict[int, list[str]] = {}
+    adopted: list[tuple[int, str, int]] = []
     with DBManager() as db:
         for model_name in model_names:
-            for sibling in db.adopt_shared_calibration_for_siblings(
-                provider_id, model_name, shared_profile_max_age_days()
+            for sibling, calibration_id in db.adopt_shared_calibration_for_siblings(
+                provider_id,
+                model_name,
+                shared_profile_max_age_days(),
+                skip=lambda sibling, model_name=model_name: _calibrating_model(sibling) == model_name,
             ):
                 adopters.setdefault(sibling, []).append(model_name)
+                if calibration_id is not None:
+                    adopted.append((sibling, model_name, calibration_id))
     for sibling, names in adopters.items():
         for model_name in names:
             _profile_write_cache.forget(sibling, model_name)
-            logger.info(
-                "calibration_adopted provider=%s model=%s source_provider=%s at=%s",
-                _resolve_provider_name(sibling),
-                model_name,
-                _resolve_provider_name(provider_id),
-                datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            )
+    for sibling, model_name, calibration_id in adopted:
+        logger.info(
+            "calibration_adopted provider=%s model=%s calibration_id=%s at=%s",
+            _resolve_provider_name(sibling),
+            model_name,
+            calibration_id,
+            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        )
     return adopters
 
 
@@ -1195,4 +1210,4 @@ async def logosnode_reset_profiles(data: LogosNodeResetProfilesRequest):
         _recorded_calibrations.pop((data.provider_id, model_name), None)
     if reset:
         await _push_model_profiles(data.provider_id, reset)
-    return {"provider_id": data.provider_id, "reset": reset}
+    return {"provider_id": data.provider_id, "reset": reset, "shared_profiles": shared_profiles_enabled()}
