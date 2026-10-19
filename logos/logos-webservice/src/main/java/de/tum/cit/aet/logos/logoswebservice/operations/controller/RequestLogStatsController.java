@@ -63,6 +63,33 @@ public class RequestLogStatsController {
     }
 
     /**
+     * Delay percentiles of finished cloud requests per model and provider:
+     * time spent inside Logos before the provider call, the provider's own
+     * time, and the time to first token. Takes the same range and scope as
+     * {@code /logosdb/request_log_stats}.
+     */
+    @PostMapping("/logosdb/cloud_latency_stats")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> cloudLatencyStats(@RequestAttribute("authContext") AuthContext auth,
+                                               @RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = Map.of();
+        String startDate = (String) body.get("start_date");
+        String endDate   = (String) body.get("end_date");
+        Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
+        Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
+        Integer providerId = body.get("provider_id") instanceof Number n ? n.intValue() : null;
+        Integer apiKeyId = body.get("api_key_id") instanceof Number n ? n.intValue() : null;
+        boolean errorsOnly = Boolean.TRUE.equals(body.get("errors_only"));
+        try {
+            return ResponseEntity.ok(requestLogStatsService.getCloudLatencyStats(
+                startDate, endDate, userId, teamId, providerId, apiKeyId, errorsOnly,
+                RequestLogService.readFeedIds(body, "model_ids")));
+        } catch (IllegalArgumentException | java.time.format.DateTimeParseException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
      * The teams and requesters worth offering in the statistics filter for a
      * range — those that actually sent something.
      *

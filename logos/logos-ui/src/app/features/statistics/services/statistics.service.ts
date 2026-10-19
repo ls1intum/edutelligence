@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { RequestItem, VramV2Payload } from '../statistics.models';
+import { CloudLatencyScope, CloudLatencyStats } from './cloud-latency.models';
 
 /**
  * Lane-picker view of POST /api/logosdb/get_provider_models. The endpoint also
@@ -120,6 +121,26 @@ export class StatisticsService {
       errors_only: scope.errorsOnly || null,
     }));
   }
+
+  // ── Cloud request delays ──────────────────────────────────────────────────
+
+  /**
+   * Delay percentiles of finished cloud requests inside `[startIso, endIso]`,
+   * per model and provider, narrowed to the page scope.
+   */
+  getCloudLatencyStats(startIso: string, endIso: string, scope: CloudLatencyScope): Promise<CloudLatencyStats> {
+    return firstValueFrom(this.http.post<CloudLatencyStats>('/api/logosdb/cloud_latency_stats', {
+      start_date: startIso,
+      end_date: endIso,
+      team_id: scope.teamId,
+      user_id: scope.userId,
+      provider_id: scope.providerId,
+      api_key_id: scope.apiKeyId,
+      model_ids: scope.modelIds.length ? scope.modelIds : null,
+    }));
+  }
+
+  // ── End cloud request delays ──────────────────────────────────────────────
 
   /**
    * One page of the request feed inside `[startIso, endIso]`, newest first.

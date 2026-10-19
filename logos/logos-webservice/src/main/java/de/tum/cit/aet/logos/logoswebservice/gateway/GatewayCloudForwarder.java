@@ -8,6 +8,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -59,7 +60,8 @@ public class GatewayCloudForwarder {
      * @param onSuccess     invoked once the body has been fully streamed, with the
      *                      response's canonical token usage and, when retained,
      *                      its body
-     * @param onFailure     invoked when the upstream call or stream fails
+     * @param onFailure     invoked when the upstream call or stream fails, with the
+     *                      error and the instants the forward reached
      */
     public ResponseEntity<StreamingResponseBody> forward(
             GatewayDeployment deployment,
@@ -70,7 +72,7 @@ public class GatewayCloudForwarder {
             Map<String, List<String>> inboundHeaders,
             boolean retainResponseBody,
             java.util.function.Consumer<GatewayForwardResult> onSuccess,
-            java.util.function.Consumer<String> onFailure) throws IOException {
+            java.util.function.BiConsumer<String, GatewayForwardTimings> onFailure) throws IOException {
 
         String forwardUrl = CloudForwardUrlBuilder.build(
             deployment.baseUrl(), inferencePath, deployment.endpoint());
@@ -122,17 +124,19 @@ public class GatewayCloudForwarder {
         builder.method(method.toUpperCase(Locale.ROOT), publisher);
 
         HttpResponse<InputStream> upstream;
+        Instant providerCall = Instant.now();
         try {
             upstream = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             if (onFailure != null) {
-                onFailure.accept("Interrupted while forwarding to cloud");
+                onFailure.accept("Interrupted while forwarding to cloud",
+                    new GatewayForwardTimings(providerCall, null, Instant.now()));
             }
             throw new IOException("Interrupted while forwarding to cloud", e);
         } catch (IOException e) {
             if (onFailure != null) {
-                onFailure.accept(e.getMessage());
+                onFailure.accept(e.getMessage(), new GatewayForwardTimings(providerCall, null, Instant.now()));
             }
             throw e;
         }
@@ -164,19 +168,21 @@ public class GatewayCloudForwarder {
             } catch (IOException e) {
                 streamError = e;
             }
+            GatewayForwardTimings timings = new GatewayForwardTimings(
+                providerCall, capture.firstByteAt(), Instant.now());
             if (streamError != null) {
                 if (onFailure != null) {
-                    onFailure.accept(streamError.getMessage());
+                    onFailure.accept(streamError.getMessage(), timings);
                 }
                 throw streamError;
             }
             if (upstreamOk) {
                 if (onSuccess != null) {
                     onSuccess.accept(new GatewayForwardResult(
-                        capture.usage(), capture.capturedBody(), capture.serviceTier()));
+                        capture.usage(), capture.capturedBody(), capture.serviceTier(), timings));
                 }
             } else if (onFailure != null) {
-                onFailure.accept("Upstream HTTP " + status);
+                onFailure.accept("Upstream HTTP " + status, timings);
             }
         };
 

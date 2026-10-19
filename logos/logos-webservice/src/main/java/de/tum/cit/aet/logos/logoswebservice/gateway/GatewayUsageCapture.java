@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Map;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -54,6 +55,7 @@ final class GatewayUsageCapture extends OutputStream {
     private Map<String, Long> usage = Map.of();
     private String serviceTier;
     private byte[] capturedBody;
+    private Instant firstByteAt;
 
     GatewayUsageCapture(OutputStream delegate, ObjectMapper objectMapper, String upstreamContentType) {
         this(delegate, objectMapper, upstreamContentType, false);
@@ -70,6 +72,14 @@ final class GatewayUsageCapture extends OutputStream {
     static boolean isEventStream(String contentType) {
         return contentType != null
             && contentType.toLowerCase(java.util.Locale.ROOT).contains("text/event-stream");
+    }
+
+    /**
+     * When the first response body byte passed through, i.e. the first token
+     * of a stream or the start of a JSON body; null while none has.
+     */
+    Instant firstByteAt() {
+        return firstByteAt;
     }
 
     /** The usage seen so far; empty when the response carried none. */
@@ -92,6 +102,7 @@ final class GatewayUsageCapture extends OutputStream {
 
     @Override
     public void write(int b) throws IOException {
+        markFirstByte(1);
         delegate.write(b);
         capture(new byte[] {(byte) b}, 0, 1);
     }
@@ -100,6 +111,7 @@ final class GatewayUsageCapture extends OutputStream {
     public void write(byte[] b, int off, int len) throws IOException {
         // Overridden so the pass-through stays a bulk copy: FilterOutputStream's
         // default would forward this byte by byte.
+        markFirstByte(len);
         delegate.write(b, off, len);
         capture(b, off, len);
     }
@@ -119,6 +131,12 @@ final class GatewayUsageCapture extends OutputStream {
             }
         } finally {
             delegate.close();
+        }
+    }
+
+    private void markFirstByte(int len) {
+        if (firstByteAt == null && len > 0) {
+            firstByteAt = Instant.now();
         }
     }
 
