@@ -53,6 +53,11 @@ class _FakeDB:
         self.reported_keys: list = []
         self.cleared: list = []
         self.invalidated: list = []
+        self.adopted: list = []
+        self.sibling_adopters: dict = {}
+        self.rejected: list = []
+        self.reject_result: list = []
+        self.adoptions: list = [("org/model", 11)]
 
     def __enter__(self):
         return self
@@ -71,16 +76,31 @@ class _FakeDB:
         self.reported = reported
         return self.accept
 
-    def record_model_calibration(self, provider_id, model_name, snapshot, key, key_hash, calibrated_at):
+    def record_model_calibration(
+        self, provider_id, model_name, snapshot, key, key_hash, calibrated_at, duration_s=None
+    ):
         self.calibrations.append((provider_id, model_name, snapshot, key, key_hash, calibrated_at))
+        self.durations = getattr(self, "durations", []) + [duration_s]
         return self.new_revision
 
     def import_legacy_model_profiles(self, provider_id, profiles, unsupported):
         self.imports.append((provider_id, profiles, unsupported))
         return len(profiles)
 
-    def update_reported_calibration_keys(self, provider_id, key_hashes):
+    def update_reported_calibration_keys(self, provider_id, key_hashes, slice_gpu_counts=None):
         self.reported_keys.append((provider_id, key_hashes))
+        self.slice_counts = slice_gpu_counts
+
+    def adopt_shared_calibrations(self, provider_id, model_names, max_age_days):
+        self.adopted.append((provider_id, model_names, max_age_days))
+        return self.adoptions
+
+    def adopt_shared_calibration_for_siblings(self, provider_id, model_name, max_age_days):
+        return self.sibling_adopters.get(model_name, [])
+
+    def reject_shared_calibration(self, provider_id, model_name, calibration_id):
+        self.rejected.append((provider_id, model_name, calibration_id))
+        return self.reject_result
 
     def get_central_model_profiles(self, provider_id, model_names=None):
         return [
@@ -236,6 +256,7 @@ def test_push_sends_effective_profiles(monkeypatch):
     db = _FakeDB()
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
     monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-1")
     asyncio.run(logosnode_mod._push_model_profiles(1, ["org/model"], {"org/model": "H1"}))
     assert db.reported_keys == [(1, {"org/model": "H1"})]
     provider_id, action, params = registry.sent[0]
@@ -508,3 +529,68 @@ def test_the_admin_endpoints_check_the_root_key_off_the_event_loop(monkeypatch):
     loop_thread = asyncio.run(_run())
     assert len(threads) == 3
     assert loop_thread not in threads
+
+
+def test_a_reported_key_lets_the_node_adopt_a_shared_calibration(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
+    logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H1"}, {"org/model": 2})
+    assert db.slice_counts == {"org/model": 2}
+    assert db.adopted == [(5, ["org/model"], 30)]
+
+
+def test_sharing_can_be_switched_off(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setenv("LOGOS_SHARED_PROFILES", "0")
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H1"}, {"org/model": 2})
+    assert db.reported_keys and db.adopted == []
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {}
+
+
+def test_a_fresh_calibration_is_offered_to_the_nodes_of_its_key(monkeypatch):
+    db = _FakeDB()
+    db.sibling_adopters = {"org/model": [7, 8]}
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model", "other"]) == {
+        7: ["org/model"],
+        8: ["org/model"],
+    }
+
+
+def test_the_calibration_duration_is_stored_with_the_snapshot(monkeypatch):
+    db = _FakeDB()
+    echoed = dict(_CALIBRATED, calibration_duration_s=412.5)
+    logosnode_mod._persist_model_profiles(db, 1, {"org/model": echoed})
+    assert db.durations == [412.5]
+
+
+def test_a_rejected_shared_calibration_is_pushed_to_every_node_that_lost_it(monkeypatch):
+    db = _FakeDB()
+    db.reject_result = [(1, "org/model"), (2, "org/model")]
+    pushed: list = []
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(
+        logosnode_mod, "_schedule_model_profile_push", lambda pid, names=None: pushed.append((pid, names))
+    )
+
+    async def _run():
+        await logosnode_mod._handle_calibration_rejected(2, {"model": "org/model", "details": "11"})
+
+    asyncio.run(_run())
+    assert db.rejected == [(2, "org/model", 11)]
+    assert pushed == [(1, ["org/model"]), (2, ["org/model"])]
+
+
+def test_a_rejection_without_a_calibration_id_is_ignored(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    asyncio.run(logosnode_mod._handle_calibration_rejected(2, {"model": "org/model", "details": "n/a"}))
+    assert db.rejected == []
+
+
+def test_gpu_counts_from_the_worker_are_kept_only_when_positive_integers():
+    assert logosnode_mod._int_map({"a": 2, "b": 0, "c": "3", "d": True, "e": -1}) == {"a": 2}
+    assert logosnode_mod._int_map(None) == {}

@@ -3843,6 +3843,7 @@ def _central_client(tmp_path) -> LogosBridgeClient:
     # Startup leaves models without a profile out of the capabilities.
     cfg.capabilities_models = ["org/ready"]
     app.state.model_profiles.set_calibration_keys({"org/ready": {"schema": 1}, "org/pending": {"schema": 1}})
+    app.state.model_profiles.set_slice_gpu_counts({"org/ready": 2})
     return LogosBridgeClient(app, cfg)
 
 
@@ -3856,6 +3857,7 @@ async def test_hello_offers_profile_sync_with_the_current_calibration_keys(tmp_p
     assert "sync_model_profiles" in hello["actions"]
     assert set(hello["calibration_key_hashes"]) == {"org/ready", "org/pending"}
     assert hello["calibration_key_hashes"] == client._app.state.model_profiles.calibration_key_hashes()  # noqa: SLF001
+    assert hello["slice_gpu_counts"] == {"org/ready": 2}
 
 
 @pytest.mark.asyncio
@@ -4012,12 +4014,17 @@ async def test_startup_fetch_posts_keys_and_legacy_files(tmp_path, monkeypatch):
     monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=15.0: _Http())
     legacy = {"model_profiles": {}, "unsupported_models": {"org/bad": "invalid-repo-id"}}
 
-    profiles = await client.fetch_model_profiles({"org/ready": "h"}, legacy)
+    profiles = await client.fetch_model_profiles({"org/ready": "h"}, {"org/ready": 2}, legacy)
 
     assert profiles == {"org/ready": {"base_residency_mb": 5.0, "sync_revision": 1}}
     url, body = posted[0]
     assert url == "https://logos.example/logosdb/providers/logosnode/model-profiles"
-    assert body == {"shared_key": "secret", "calibration_key_hashes": {"org/ready": "h"}, "legacy_import": legacy}
+    assert body == {
+        "shared_key": "secret",
+        "calibration_key_hashes": {"org/ready": "h"},
+        "slice_gpu_counts": {"org/ready": 2},
+        "legacy_import": legacy,
+    }
 
 
 @pytest.mark.asyncio
@@ -4041,7 +4048,7 @@ async def test_startup_fetch_rejects_an_orchestrator_without_central_profiles(tm
 
     monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", lambda timeout=15.0: _Http())
     with pytest.raises(RuntimeError, match="HTTP 404"):
-        await client.fetch_model_profiles({}, None)
+        await client.fetch_model_profiles({}, {}, None)
 
 
 @pytest.mark.asyncio

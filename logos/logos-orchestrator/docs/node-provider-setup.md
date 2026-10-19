@@ -185,6 +185,17 @@ it was measured under. When any of them changes, the profile keeps serving
 but is reported with `calibration_stale: true`, and the next calibration
 window measures it again.
 
+Nodes with the same calibration key share calibrations. A node that has none
+for a model adopts the newest valid one measured on another node, as soon as
+it connects or that node finishes calibrating, and skips its own calibration.
+An adopted calibration shows `calibration_origin: shared`. It is only used if
+the node has at least as many GPUs as its tensor-parallel size and it is at
+most 30 days old (`LOGOS_SHARED_PROFILE_MAX_AGE_DAYS`). If the node cannot
+start the model with it before ever having loaded the model, the worker
+reports it and Logos invalidates it for every node, which then calibrate
+themselves. Set `LOGOS_SHARED_PROFILES=0` on the Logos server to switch
+sharing off.
+
 Three admin requests (root key, like step 7) change stored profiles. Logos
 pushes the result to a connected worker right away:
 

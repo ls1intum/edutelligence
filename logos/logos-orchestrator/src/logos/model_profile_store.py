@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 import time
 from typing import Any, Mapping
@@ -48,9 +49,22 @@ SYNC_METADATA_FIELDS = frozenset(
         "calibration_stale",
         "calibration_key",
         "calibration_key_hash",
+        "calibration_duration_s",
         "overridden_fields",
     }
 )
+
+
+def shared_profiles_enabled() -> bool:
+    """Whether a node may take over another node's calibration."""
+    return os.environ.get("LOGOS_SHARED_PROFILES", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def shared_profile_max_age_days() -> int:
+    try:
+        return max(1, int(os.environ.get("LOGOS_SHARED_PROFILE_MAX_AGE_DAYS", "30")))
+    except ValueError:
+        return 30
 
 
 def is_central_profile_payload(profiles: Mapping[str, Any]) -> bool:

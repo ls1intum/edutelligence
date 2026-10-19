@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- adoptions counts the nodes that took a snapshot over instead of
+         calibrating; calibration_duration_s is the wall time of the run. -->
+    <changeSet id="061-model-calibrations-sharing" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="model_calibrations" columnName="adoptions"/></not>
+        </preConditions>
+        <sql><![CDATA[
+            ALTER TABLE model_calibrations
+                ADD COLUMN adoptions INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN calibration_duration_s DOUBLE PRECISION;
+        ]]></sql>
+        <rollback>
+            <sql>
+                ALTER TABLE model_calibrations
+                    DROP COLUMN IF EXISTS calibration_duration_s,
+                    DROP COLUMN IF EXISTS adoptions;
+            </sql>
+        </rollback>
+    </changeSet>
+
+    <!-- GPUs the node can calibrate this model on. The calibration key
+         leaves the count out, so a shared tensor_parallel_size is checked
+         against it. -->
+    <changeSet id="061-model-profiles-slice-gpu-count" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="model_profiles" columnName="slice_gpu_count"/></not>
+        </preConditions>
+        <sql>ALTER TABLE model_profiles ADD COLUMN slice_gpu_count INTEGER;</sql>
+        <rollback>
+            <sql>ALTER TABLE model_profiles DROP COLUMN IF EXISTS slice_gpu_count;</sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

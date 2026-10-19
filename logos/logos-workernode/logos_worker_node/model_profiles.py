@@ -209,6 +209,7 @@ class ModelProfileRecord:
     calibration_origin: str | None = None
     calibration_stale: bool | None = None
     calibration_key: dict[str, Any] | None = None
+    calibration_duration_s: float | None = None
 
     def known_base_residency_mb(self) -> float | None:
         """Return base_residency_mb only if it came from a real source, else None."""
@@ -277,6 +278,7 @@ class ModelProfileRecord:
             "calibration_origin": self.calibration_origin,
             "calibration_stale": self.calibration_stale,
             "calibration_key": self.calibration_key,
+            "calibration_duration_s": self.calibration_duration_s,
         }
 
     def estimate_host_ram_mb(self) -> float:
@@ -317,6 +319,7 @@ class ModelProfileRegistry:
         self._lock = threading.Lock()
         # model -> (calibration key this node computes for it now, its hash)
         self._calibration_keys: dict[str, tuple[dict[str, Any], str]] = {}
+        self._slice_gpu_counts: dict[str, int] = {}
         self._manual_overrides: dict[str, dict[str, Any]] = {}
         if model_profile_overrides:
             for model_name, ov in model_profile_overrides.items():
@@ -945,6 +948,14 @@ class ModelProfileRegistry:
             entry = self._calibration_keys.get(model_name)
         return entry[0] if entry is not None else None
 
+    def set_slice_gpu_counts(self, counts: dict[str, int]) -> None:
+        with self._lock:
+            self._slice_gpu_counts = dict(counts)
+
+    def slice_gpu_counts(self) -> dict[str, int]:
+        with self._lock:
+            return dict(self._slice_gpu_counts)
+
     def calibration_key_hashes(self) -> dict[str, str]:
         with self._lock:
             return {name: digest for name, (_, digest) in self._calibration_keys.items()}
@@ -984,7 +995,9 @@ class ModelProfileRegistry:
                 replaced.append(name)
         return replaced
 
-    def apply_calibration_result(self, model_name: str, measured: dict[str, Any]) -> None:
+    def apply_calibration_result(
+        self, model_name: str, measured: dict[str, Any], duration_s: float | None = None
+    ) -> None:
         """Layer a fresh local calibration over the model's record.
 
         Logos snapshots it from the next runtime status and replies with the
@@ -1001,6 +1014,7 @@ class ModelProfileRegistry:
             record.calibration_stale = False
             key = self._calibration_keys.get(model_name)
             record.calibration_key = dict(key[0]) if key is not None else None
+            record.calibration_duration_s = round(duration_s, 1) if duration_s is not None else None
             self._profiles[model_name] = record
             self._apply_manual_overrides(model_name, record)
 
@@ -1015,6 +1029,13 @@ def _awaits_snapshot(profile: ModelProfileRecord) -> bool:
 
 def _optional_int(value: Any) -> int | None:
     return int(value) if value else None
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        return float(value) if value else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _record_from_dict(data: dict[str, Any]) -> ModelProfileRecord:
@@ -1066,4 +1087,5 @@ def _record_from_dict(data: dict[str, Any]) -> ModelProfileRecord:
         calibration_origin=data.get("calibration_origin"),
         calibration_stale=data.get("calibration_stale"),
         calibration_key=key if isinstance(key, dict) else None,
+        calibration_duration_s=_optional_float(data.get("calibration_duration_s")),
     )

@@ -54,6 +54,8 @@ from logos.model_profile_store import (
     persistable_profile,
     profile_digest,
     reported_profile,
+    shared_profile_max_age_days,
+    shared_profiles_enabled,
 )
 from logos.role_auth import require_logos_admin_key
 
@@ -253,12 +255,48 @@ async def _write_status_samples(provider_id: int) -> None:
             changed_models, rejected_models = persisted
             if changed_models:
                 _schedule_model_profile_push(provider_id, changed_models)
+                await _offer_to_siblings(provider_id, changed_models)
             if rejected_models:
                 _schedule_model_profile_resync(provider_id, rejected_models)
             elif not count_only:
                 _resync_rounds.pop(provider_id, None)
     finally:
         _sample_writers.pop(provider_id, None)
+
+
+async def _handle_calibration_rejected(provider_id: int, event: Dict[str, Any]) -> None:
+    """Drop a shared calibration a node could not start its lane with."""
+    model_name = str(event.get("model") or "")
+    try:
+        calibration_id = int(str(event.get("details") or "").strip())
+    except ValueError:
+        return
+
+    def _reject() -> list[tuple[int, str]]:
+        with DBManager() as db:
+            return db.reject_shared_calibration(provider_id, model_name, calibration_id)
+
+    try:
+        affected = await asyncio.to_thread(_reject)
+    except Exception:
+        logger.warning("Failed to reject calibration %s of provider %s", calibration_id, provider_id, exc_info=True)
+        return
+    by_provider: Dict[int, list[str]] = {}
+    for affected_provider, affected_model in affected:
+        _profile_write_cache.forget(affected_provider, affected_model)
+        by_provider.setdefault(affected_provider, []).append(affected_model)
+    for affected_provider, names in by_provider.items():
+        _schedule_model_profile_push(affected_provider, names)
+
+
+async def _offer_to_siblings(provider_id: int, model_names: list[str]) -> None:
+    try:
+        adopters = await asyncio.to_thread(_offer_calibrations_to_siblings, provider_id, model_names)
+    except Exception:
+        logger.warning("Failed to share calibrations of provider %s", provider_id, exc_info=True)
+        return
+    for sibling, names in adopters.items():
+        _schedule_model_profile_push(sibling, names)
 
 
 def _persist_logosnode_status(
@@ -386,6 +424,7 @@ def _persist_model_profiles(
             echoed.get("calibration_key") if isinstance(echoed.get("calibration_key"), dict) else None,
             key_hash,
             datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc),
+            echoed.get("calibration_duration_s"),
         )
         recorded[model_name] = epoch
         if new_revision is not None:
@@ -431,13 +470,16 @@ async def _push_model_profiles(
     provider_id: int,
     model_names: list[str] | None = None,
     calibration_key_hashes: Dict[str, str] | None = None,
+    slice_gpu_counts: Dict[str, int] | None = None,
 ) -> None:
     """Send the stored profiles to a worker that syncs with the database."""
     if not _main._logosnode_registry.supports_action(provider_id, SYNC_MODEL_PROFILES_ACTION):
         return
     try:
         if calibration_key_hashes:
-            await asyncio.to_thread(_update_reported_calibration_keys, provider_id, calibration_key_hashes)
+            await asyncio.to_thread(
+                _update_reported_calibration_keys, provider_id, calibration_key_hashes, slice_gpu_counts
+            )
         profiles = await asyncio.to_thread(_load_effective_profiles, provider_id, model_names)
         await _main._logosnode_registry.send_command(
             provider_id,
@@ -454,17 +496,59 @@ async def _push_model_profiles(
         )
 
 
-def _update_reported_calibration_keys(provider_id: int, calibration_key_hashes: Dict[str, str]) -> None:
+def _update_reported_calibration_keys(
+    provider_id: int,
+    calibration_key_hashes: Dict[str, str],
+    slice_gpu_counts: Dict[str, int] | None = None,
+) -> None:
+    """Store what a node reports about its models, then let it adopt."""
     with DBManager() as db:
-        db.update_reported_calibration_keys(provider_id, calibration_key_hashes)
+        db.update_reported_calibration_keys(provider_id, calibration_key_hashes, slice_gpu_counts)
+        if not shared_profiles_enabled():
+            return
+        adopted = db.adopt_shared_calibrations(provider_id, list(calibration_key_hashes), shared_profile_max_age_days())
+    for model_name, calibration_id in adopted:
+        _profile_write_cache.forget(provider_id, model_name)
+        logger.info(
+            "calibration_adopted provider=%s model=%s calibration_id=%s at=%s",
+            _resolve_provider_name(provider_id),
+            model_name,
+            calibration_id,
+            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        )
+
+
+def _offer_calibrations_to_siblings(provider_id: int, model_names: list[str]) -> Dict[int, list[str]]:
+    """Let every other node of the same key adopt what this node just measured."""
+    if not shared_profiles_enabled():
+        return {}
+    adopters: Dict[int, list[str]] = {}
+    with DBManager() as db:
+        for model_name in model_names:
+            for sibling in db.adopt_shared_calibration_for_siblings(
+                provider_id, model_name, shared_profile_max_age_days()
+            ):
+                adopters.setdefault(sibling, []).append(model_name)
+    for sibling, names in adopters.items():
+        for model_name in names:
+            _profile_write_cache.forget(sibling, model_name)
+            logger.info(
+                "calibration_adopted provider=%s model=%s source_provider=%s at=%s",
+                _resolve_provider_name(sibling),
+                model_name,
+                _resolve_provider_name(provider_id),
+                datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            )
+    return adopters
 
 
 def _schedule_model_profile_push(
     provider_id: int,
     model_names: list[str] | None = None,
     calibration_key_hashes: Dict[str, str] | None = None,
+    slice_gpu_counts: Dict[str, int] | None = None,
 ) -> None:
-    task = asyncio.create_task(_push_model_profiles(provider_id, model_names, calibration_key_hashes))
+    task = asyncio.create_task(_push_model_profiles(provider_id, model_names, calibration_key_hashes, slice_gpu_counts))
     _main._background_tasks.add(task)
     task.add_done_callback(_main._background_tasks.discard)
 
@@ -510,6 +594,12 @@ def _forget_provider_state(provider_id: int) -> None:
     for key in [key for key in _recorded_calibrations if key[0] == provider_id]:
         del _recorded_calibrations[key]
     _profile_write_cache.forget(provider_id)
+
+
+def _int_map(value: Any) -> Dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): v for k, v in value.items() if isinstance(v, int) and not isinstance(v, bool) and v > 0}
 
 
 def _string_map(value: Any) -> Dict[str, str]:
@@ -735,7 +825,7 @@ async def logosnode_model_profiles(data: LogosNodeModelProfilesRequest, request:
                     _resolve_provider_name(provider_id),
                 )
         if data.calibration_key_hashes:
-            _update_reported_calibration_keys(provider_id, data.calibration_key_hashes)
+            _update_reported_calibration_keys(provider_id, data.calibration_key_hashes, data.slice_gpu_counts)
         return _load_effective_profiles(provider_id)
 
     _profile_write_cache.forget(provider_id)
@@ -791,6 +881,7 @@ async def logosnode_session(websocket: WebSocket, token: str):
                 _schedule_model_profile_push(
                     ticket.provider_id,
                     calibration_key_hashes=_string_map(payload.get("calibration_key_hashes")),
+                    slice_gpu_counts=_int_map(payload.get("slice_gpu_counts")),
                 )
             elif msg_type == "status":
                 runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
@@ -826,6 +917,8 @@ async def logosnode_session(websocket: WebSocket, token: str):
                             _resolve_provider_name(ticket.provider_id),
                             exc_info=True,
                         )
+                elif event.get("event") == "calibration_rejected":
+                    await _handle_calibration_rejected(ticket.provider_id, event)
             elif msg_type == "heartbeat":
                 await _main._logosnode_registry.mark_heartbeat(ticket.provider_id)
             elif msg_type == "vllm_metrics":

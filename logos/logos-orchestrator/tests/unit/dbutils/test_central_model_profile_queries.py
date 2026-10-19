@@ -130,10 +130,15 @@ def test_reset_is_a_revision_bump_that_keeps_the_context_high_water_mark():
 
 def test_reported_key_hashes_are_updated_in_one_statement():
     db = _db()
-    db.update_reported_calibration_keys(7, {"a": "H1", "b": "H2"})
+    db.update_reported_calibration_keys(7, {"a": "H1", "b": "H2"}, {"a": 2})
     assert db.session.execute.call_count == 1
     _sql, params = db.session.execute.call_args.args
-    assert params == {"provider_id": 7, "model_names": ["a", "b"], "key_hashes": ["H1", "H2"]}
+    assert params == {
+        "provider_id": 7,
+        "model_names": ["a", "b"],
+        "key_hashes": ["H1", "H2"],
+        "slice_counts": [2, None],
+    }
 
 
 def test_no_reported_key_hashes_cost_no_round_trip():

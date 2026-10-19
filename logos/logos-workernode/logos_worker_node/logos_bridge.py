@@ -346,6 +346,7 @@ class LogosBridgeClient:
     async def fetch_model_profiles(
         self,
         calibration_key_hashes: dict[str, str],
+        slice_gpu_counts: dict[str, int],
         legacy_import: dict[str, Any] | None,
     ) -> dict[str, dict[str, Any]]:
         """This node's profiles from Logos, the only place they are stored."""
@@ -353,6 +354,7 @@ class LogosBridgeClient:
         payload: dict[str, Any] = {
             "shared_key": self._cfg.shared_key,
             "calibration_key_hashes": calibration_key_hashes,
+            "slice_gpu_counts": slice_gpu_counts,
         }
         if legacy_import is not None:
             payload["legacy_import"] = legacy_import
@@ -552,8 +554,10 @@ class LogosBridgeClient:
         if hasattr(self._app, "state") and hasattr(self._app.state, "lane_manager"):
             static_lane_ids = sorted(self._app.state.lane_manager._static_lane_ids)
         calibration_key_hashes: dict[str, str] = {}
+        slice_gpu_counts: dict[str, int] = {}
         if hasattr(self._app, "state") and hasattr(self._app.state, "model_profiles"):
             calibration_key_hashes = self._app.state.model_profiles.calibration_key_hashes()
+            slice_gpu_counts = self._app.state.model_profiles.slice_gpu_counts()
         await self._send_json(
             ws,
             {
@@ -574,6 +578,7 @@ class LogosBridgeClient:
                 # worker from placement for as long as no new session begins.
                 "calibrating": self._calibration_session_is_live(),
                 "calibration_key_hashes": calibration_key_hashes,
+                "slice_gpu_counts": slice_gpu_counts,
                 "actions": [
                     "infer",
                     "infer_stream",
@@ -1812,16 +1817,21 @@ class LogosBridgeClient:
             return
         try:
             from logos_worker_node.calibration import plans_from_config  # noqa: PLC0415
-            from logos_worker_node.profile_fingerprint import node_calibration_keys  # noqa: PLC0415
+            from logos_worker_node.profile_fingerprint import (  # noqa: PLC0415
+                node_calibration_keys,
+                node_slice_gpu_counts,
+            )
 
             snapshot = await gpu_collector.get_snapshot()
             config_path = self._resolve_config_path()
             plans = plans_from_config(config_path) if config_path.exists() else []
             # Resolving an unknown vLLM version may fork a subprocess.
             keys = await asyncio.to_thread(node_calibration_keys, self._app.state.config, plans, list(snapshot.devices))
+            counts = node_slice_gpu_counts(self._app.state.config, plans, list(snapshot.devices))
         except Exception:  # noqa: BLE001
             logger.warning("[Calibration] Could not refresh calibration keys; keeping the previous ones", exc_info=True)
             return
+        self._app.state.model_profiles.set_slice_gpu_counts(counts)
         changed = self._app.state.model_profiles.set_calibration_keys(keys)
         if changed:
             logger.info("[Calibration] Calibration key changed for %s — re-measuring", ", ".join(sorted(changed)))
@@ -2060,6 +2070,7 @@ class LogosBridgeClient:
                         )
                         return False
 
+                started_at = time.monotonic()
                 try:
                     if is_metal_backend():
                         # No TP escalation, no KV sweep, no sleep/wake — see
@@ -2118,7 +2129,9 @@ class LogosBridgeClient:
                 if result.success:
                     # Logos snapshots it from the next runtime status (pushed
                     # right below) and answers with its calibration_id.
-                    model_profiles.apply_calibration_result(model_name, result_to_profile_dict(result))
+                    model_profiles.apply_calibration_result(
+                        model_name, result_to_profile_dict(result), time.monotonic() - started_at
+                    )
                     # Models pruned from capabilities at startup for lack of a
                     # profile must be announced now, or Logos never learns the
                     # worker can serve them.

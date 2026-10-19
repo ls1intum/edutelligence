@@ -415,6 +415,7 @@ class LaneManager:
             _stuck_dwell = 180.0
         self._stuck_duration_seconds = _stuck_dwell if _stuck_dwell > 0 else 180.0
         self._last_crash_restart_attempt_at: dict[str, float] = {}
+        self._rejected_calibrations: set[tuple[str, int]] = set()
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
         # GPUs held by a running calibration session. Non-None while
@@ -1496,6 +1497,7 @@ class LaneManager:
             self._last_crash_restart_attempt_at[lid] = now
             new_count = restart_count + 1
             self._crash_restart_counts[lid] = new_count
+            self._reject_unproven_shared_calibration(lid, lane_config.model)
             self._record_event(
                 lid,
                 "crash_restart_attempt",
@@ -2852,6 +2854,7 @@ class LaneManager:
                         f"return_code={status.return_code})"
                     )
             except Exception:
+                self._reject_unproven_shared_calibration(lane_id, lane_config.model)
                 # Keep apply_lanes transactional: failed startup must not leak ports
                 # or dangling handles.
                 self._port_alloc.release(lane_id)
@@ -3167,6 +3170,24 @@ class LaneManager:
     # ------------------------------------------------------------------
     # Event log
     # ------------------------------------------------------------------
+
+    def _reject_unproven_shared_calibration(self, lane_id: str, model: str) -> None:
+        """Report a calibration taken from another node that never served here.
+
+        Logos then stops handing it out; a node that loaded the model before
+        keeps it, since the failure is then not the calibration's.
+        """
+        profile = self._model_profiles.get_profile(model) if self._model_profiles is not None else None
+        if (
+            profile is None
+            or profile.calibration_origin != "shared"
+            or profile.calibration_id is None
+            or profile.measurement_count > 0
+            or (model, profile.calibration_id) in self._rejected_calibrations
+        ):
+            return
+        self._rejected_calibrations.add((model, profile.calibration_id))
+        self._record_event(lane_id, "calibration_rejected", model=model, details=str(profile.calibration_id))
 
     def _record_event(
         self,

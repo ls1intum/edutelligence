@@ -4373,3 +4373,34 @@ async def test_lane_occupancy_follows_a_tensor_parallel_override_in_extra_args()
     manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
     count = LaneManager._launch_gpu_count(vc, [])  # noqa: SLF001
     assert await manager._lane_occupied_gpu_devices(lane, "1,0", count) == "1"  # noqa: SLF001
+
+
+def _shared_profile_manager(**profile: Any) -> LaneManager:
+    registry = ModelProfileRegistry()
+    registry.replace_from_sync(
+        {"org/m": {"base_residency_mb": 5.0, "sync_revision": 1, "calibration_id": 11, **profile}}
+    )
+    return LaneManager(WorkerConfig(), lane_port_start=15200, lane_port_end=15210, model_profiles=registry)
+
+
+def _rejections(manager: LaneManager) -> list[tuple[str, str]]:
+    return [(e.model, e.details) for e in manager._event_log if e.event == "calibration_rejected"]  # noqa: SLF001
+
+
+def test_an_unproven_shared_calibration_is_reported_once_when_its_lane_fails() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    manager._reject_unproven_shared_calibration("lane-1", "org/m")  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m")  # noqa: SLF001
+    assert _rejections(manager) == [("org/m", "11")]
+
+
+def test_a_shared_calibration_that_served_here_is_not_blamed() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared", measurement_count=3)
+    manager._reject_unproven_shared_calibration("lane-1", "org/m")  # noqa: SLF001
+    assert _rejections(manager) == []
+
+
+def test_a_local_calibration_is_never_reported_as_rejected() -> None:
+    manager = _shared_profile_manager(calibration_origin="local")
+    manager._reject_unproven_shared_calibration("lane-1", "org/m")  # noqa: SLF001
+    assert _rejections(manager) == []
