@@ -84,9 +84,11 @@ Each task builds its own `IrisLangchainChatModel` over the shared request handle
 | `chat`            | Placing the citations into the answer.              |
 | `keyword_summary` | Generating each cited source's keyword and summary. |
 
-Two roles rather than one because the two calls have different shapes: placement is a single call over the whole answer and every retrieved source, enrichment is many small calls over one paragraph each. Splitting them lets a deployment put the enrichment calls on a cheaper model without touching the placement call.
+Two roles rather than one because the two calls have different shapes: placement is a single call over the whole answer and every retrieved source, enrichment with keyword and summary is many small calls over one paragraph each. Splitting them lets a deployment put the enrichment calls on a cheaper model without touching the placement call.
 
-Which model each role resolves to is deployment configuration — see [LLM configuration](../admin/llm-configuration.md). The pipeline itself offers a `default` and an `advanced` variant for the `chat` role, and `ChatPipeline` declares `Dep("citation_pipeline", variant="same")`, so the chat variant selects the citation variant too. See the [variant system](./variant-system.md).
+Which model each role resolves to is deployment configuration: the `citation_pipeline` entry under `llm_configuration` in `application.yml` names a model per role and variant, and those names must exist in `llm_config.yml` — see the [variant system](./variant-system.md) for the mechanism and [LLM configuration](../admin/llm-configuration.md) for how the models themselves are declared.
+
+The pipeline offers a `default` and an `advanced` variant for the `chat` role. The `keyword_summary` role always resolves through `default`, so a deployment cannot vary the enrichment model per chat variant. `ChatPipeline` declares `Dep("citation_pipeline", variant="same")`, so the chat variant selects the citation variant too.
 
 ## What gets cited
 
