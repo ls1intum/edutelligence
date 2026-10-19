@@ -403,6 +403,21 @@ Optional `.env` options:
   is gone. The gateway sets it to zero.
 - `LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS` (default `60`) — the
   interval at which each replica looks for such stale reservations.
+- `LOGOS_WEBSERVICE_DB_POOL_SIZE` (default `100`) and
+  `LOGOS_WEBSERVICE_DB_POOL_MIN_IDLE` (default `10`) — the maximum and the
+  idle floor of the database connection pool of each webservice replica.
+  Authentication, admission and settlement each need a connection, so a few
+  slow queries must not take all of them.
+- `LOGOS_DB_MAX_CONNECTIONS` (default `200`) — `max_connections` of `logos-db`.
+  It must be larger than the sum of all pools at their maximum: the replicas
+  times `LOGOS_WEBSERVICE_DB_POOL_SIZE`, the orchestrator pools
+  (`LOGOS_DB_POOL_SIZE` + `LOGOS_DB_MAX_OVERFLOW` per process) and
+  `logos-agent`. Each connection uses memory, so do not set a value far above
+  that sum. If you add webservice replicas, then increase this value.
+- `LOGOS_DB_SHARED_BUFFERS` (default `2GB`) — `shared_buffers` of `logos-db`,
+  the page cache of Postgres. Use approximately 25 % of the host memory.
+- A change to `LOGOS_DB_MAX_CONNECTIONS` or `LOGOS_DB_SHARED_BUFFERS` takes
+  effect only after `logos-db` restarts.
 
 ### Failover verification
 
