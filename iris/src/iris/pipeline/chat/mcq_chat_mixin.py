@@ -20,6 +20,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_slide_visible,
     is_unit_released,
 )
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
@@ -111,9 +112,7 @@ def retrieve_lecture_content_for_mcq(
         chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.COURSE_ID.value
         ).equal(course_id)
-        chunk_filter &= Filter.by_property(
-            LectureUnitPageChunkSchema.BASE_URL.value
-        ).equal(base_url)
+        chunk_filter &= artemis_instance_filter(LectureUnitPageChunkSchema, base_url)
 
         if lecture_id is not None:
             chunk_filter &= Filter.by_property(
@@ -123,9 +122,7 @@ def retrieve_lecture_content_for_mcq(
         unit_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
             course_id
         )
-        unit_filter &= Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-            base_url
-        )
+        unit_filter &= artemis_instance_filter(LectureUnitSchema, base_url)
         unit_results = db.lecture_units.query.fetch_objects(
             filters=unit_filter,
             limit=10_000,

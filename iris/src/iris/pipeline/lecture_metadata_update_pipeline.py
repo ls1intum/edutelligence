@@ -6,6 +6,7 @@ from iris.domain.ingestion.lecture_metadata_update_dto import (
 )
 from iris.pipeline.lecture_update_lock import lecture_update_lock
 from iris.vector_database.database import batch_update_lock
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_unit_schema import LectureUnitSchema
 
 
@@ -43,9 +44,7 @@ class LectureMetadataUpdatePipeline:
     def _filter(dto: LectureUnitMetadataUpdateDTO):
         return Filter.all_of(
             [
-                Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                    dto.base_url
-                ),
+                artemis_instance_filter(LectureUnitSchema, dto.base_url),
                 Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
                     dto.course_id
                 ),

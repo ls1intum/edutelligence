@@ -7,7 +7,7 @@
 # .env, and a self-built stack points it at wherever those images were pushed.
 services:
   traefik:
-    image: traefik:v3.7.14
+    image: traefik:v3.7.15
     container_name: traefik
     restart: unless-stopped
     command:
@@ -171,6 +171,16 @@ services:
       - "traefik.http.routers.public-rate-gateway.entrypoints=websecure,secure8080"
       - "traefik.http.routers.public-rate-gateway.tls=true"
       - "traefik.http.routers.public-rate-gateway.tls.certresolver=letsencrypt"
+      # ACME takes its domain set from the router's Host matcher, and this
+      # router deliberately has none — the catch-all above is what funnels
+      # every path through the per-IP budget. Without a domain Traefik has
+      # nothing to ask Let's Encrypt for: it never registers an account,
+      # acme.json stays empty, and every request is served the built-in
+      # TRAEFIK DEFAULT CERT. Worse, that is a WARN and Traefik's default
+      # log level is ERROR, so it fails in total silence — add
+      # --log.level=INFO above when diagnosing a resolver that will not
+      # fire. Name the domain explicitly instead.
+      - "traefik.http.routers.public-rate-gateway.tls.domains[0].main=${LOGOS_DOMAIN:-localhost}"
       - "traefik.http.routers.public-rate-gateway.service=logos-rate-gateway-svc"
       - "traefik.http.routers.public-rate-gateway.priority=100"
       - "traefik.http.services.logos-rate-gateway-svc.loadbalancer.server.port=80"

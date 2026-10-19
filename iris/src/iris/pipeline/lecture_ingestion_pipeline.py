@@ -36,6 +36,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.domain.variant.variant import Variant
+from iris.vector_database.instance_filter import artemis_instance_filter
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -234,6 +235,7 @@ def create_page_data(
             LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
+            LectureUnitPageChunkSchema.BASE_URL_EXACT.value: base_url,
             LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
             LectureUnitPageChunkSchema.HIDDEN_UNTIL.value: hidden_until,
             LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: lecture_unit_dto.ingestion_run_id,
@@ -407,8 +409,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         units = self.lecture_unit_collection.query.fetch_objects(
             filters=Filter.all_of(
                 [
-                    Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                        self.dto.settings.artemis_base_url
+                    artemis_instance_filter(
+                        LectureUnitSchema, self.dto.settings.artemis_base_url
                     ),
                     Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
                         self.dto.lecture_unit.course_id
@@ -587,9 +589,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         return {int(page): int(count) for page, count in json.loads(serialized).items()}
 
     def _get_page_chunk_filter(self):
-        page_chunk_filter = Filter.by_property(
-            LectureUnitPageChunkSchema.BASE_URL.value
-        ).equal(self.dto.settings.artemis_base_url)
+        page_chunk_filter = artemis_instance_filter(
+            LectureUnitPageChunkSchema, self.dto.settings.artemis_base_url
+        )
         page_chunk_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.COURSE_ID.value
         ).equal(self.dto.lecture_unit.course_id)
@@ -606,8 +608,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         units = self.lecture_unit_collection.query.fetch_objects(
             filters=Filter.all_of(
                 [
-                    Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                        self.dto.settings.artemis_base_url
+                    artemis_instance_filter(
+                        LectureUnitSchema, self.dto.settings.artemis_base_url
                     ),
                     Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
                         self.dto.lecture_unit.course_id

@@ -29,6 +29,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_unit_released,
 )
 from iris.tracing import TracedThreadPoolExecutor
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -1216,7 +1217,7 @@ class LectureGlobalSearchRetrieval:
                 if owner != base_url or course_id is None or unit_id is None:
                     continue
                 filters = [
-                    Filter.by_property(schema.BASE_URL.value).equal(base_url),
+                    artemis_instance_filter(schema, base_url),
                     Filter.by_property(schema.COURSE_ID.value).equal(course_id),
                     Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(unit_id),
                 ]
@@ -1385,9 +1386,7 @@ class LectureGlobalSearchRetrieval:
         filters = _course_scope_filter(
             LectureUnitSegmentSchema.COURSE_ID.value, course_ids, exclude_course_ids
         )
-        instance_filter = Filter.by_property(
-            LectureUnitSegmentSchema.BASE_URL.value
-        ).equal(base_url)
+        instance_filter = artemis_instance_filter(LectureUnitSegmentSchema, base_url)
         filters = (
             Filter.all_of([instance_filter, filters])
             if filters is not None
@@ -1426,9 +1425,7 @@ class LectureGlobalSearchRetrieval:
         )
         filters = [
             page_filter,
-            Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
-                base_url
-            ),
+            artemis_instance_filter(LectureTranscriptionSchema, base_url),
         ]
         if course_filter is not None:
             filters.append(course_filter)
@@ -1458,9 +1455,7 @@ class LectureGlobalSearchRetrieval:
                     Filter.by_property(
                         LectureTranscriptionSchema.LECTURE_UNIT_ID.value
                     ).contains_any(unit_ids),
-                    Filter.by_property(LectureTranscriptionSchema.BASE_URL.value).equal(
-                        base_url
-                    ),
+                    artemis_instance_filter(LectureTranscriptionSchema, base_url),
                 ]
             ),
             limit=10_000,
@@ -1501,9 +1496,7 @@ class LectureGlobalSearchRetrieval:
                     Filter.by_property(
                         LectureUnitSchema.LECTURE_UNIT_ID.value
                     ).contains_any(unit_ids),
-                    Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                        base_url
-                    ),
+                    artemis_instance_filter(LectureUnitSchema, base_url),
                 ]
             ),
             limit=max(100, len(unit_ids) * 10),
@@ -1549,9 +1542,7 @@ class LectureGlobalSearchRetrieval:
                     Filter.by_property(
                         LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
                     ).contains_any(unit_ids),
-                    Filter.by_property(LectureUnitPageChunkSchema.BASE_URL.value).equal(
-                        base_url
-                    ),
+                    artemis_instance_filter(LectureUnitPageChunkSchema, base_url),
                 ]
             ),
             limit=10_000,
