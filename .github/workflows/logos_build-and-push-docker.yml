@@ -17,11 +17,6 @@
 # artifact for Macs, never deployed, so GHCR is its only registry and it
 # keeps its own pr-<number> and version tags there.
 #
-# The node manager is the exception in the other direction: it is published to
-# Harbor only. Only the project's own worker hosts run it, and a new GHCR
-# package starts private, so the mirror is left out until a self-hosted install
-# has a reason to run the node manager.
-#
 # NOTE: check the visibility of a package the first time it appears — a new
 # image, or one whose package was deleted. A package that comes out private
 # serves a 403 to the self-hosted installs the guide tells to pull without a
@@ -468,9 +463,9 @@ jobs:
       platforms: linux/amd64
       runner: ubuntu-latest
       sign: false
-      # Harbor only, no GHCR mirror: see the note at the top of this file.
       meta-images: |
         ${{ vars.LOGOS_HARBOR_REGISTRY }}/logos/logos-node-manager
+        ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'ghcr.io/ls1intum/edutelligence/logos-node-manager' || '' }}
       meta-tags: |
         type=ref,event=pr
         type=raw,value=latest,enable=${{ github.event_name != 'pull_request' }}
