@@ -3,6 +3,7 @@ package de.tum.cit.aet.logos.logoswebservice.gateway;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -404,8 +405,14 @@ public class GatewayCloudAccounting {
             .addValue("providerResponse", utc(t.providerResponse()));
     }
 
+    /**
+     * The instant as a UTC timestamp at the column's precision. The JVM clock
+     * can carry nanoseconds, which the JDBC driver would round to microseconds;
+     * truncating here keeps every stored timestamp at or before the instant it
+     * stands for, so the intervals between them never come out negative.
+     */
     private static OffsetDateTime utc(Instant instant) {
-        return instant == null ? null : instant.atOffset(ZoneOffset.UTC);
+        return instant == null ? null : instant.truncatedTo(ChronoUnit.MICROS).atOffset(ZoneOffset.UTC);
     }
 
     /** Normalise a resolved level to a value {@code logging_enum} accepts. */
