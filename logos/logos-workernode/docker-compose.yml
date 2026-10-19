@@ -107,6 +107,7 @@ services:
       # The worker opens its port only after its startup finishes.
       # The startup includes the FlashInfer kernel warmup, which takes minutes when the kernel cache is empty.
       # Failed checks do not count during the start period.
+      # The node manager waits longer: keep NODE_MANAGER_VERIFY_TIMEOUT_S (below) at least 35 s above this value.
       start_period: 10m
 
   # ── Node manager (optional) ────────────────────────────────────────────────
@@ -156,6 +157,10 @@ services:
       - /tmp:size=16m
     environment:
       NODE_MANAGER_PROJECT_DIR: ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}
+      # How long the manager waits for the first healthy state, in seconds. It must stay above the start period of the
+      # worker health check (10 min) by the check interval (30 s) plus the poll interval of the manager (5 s): a worker
+      # that opens its port at the end of the start period is seen as healthy up to 35 s later. 660 s leaves margin.
+      NODE_MANAGER_VERIFY_TIMEOUT_S: ${NODE_MANAGER_VERIFY_TIMEOUT_S:-660}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}:${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}:ro

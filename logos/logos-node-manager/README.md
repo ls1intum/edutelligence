@@ -12,7 +12,7 @@ A deployment is one request to run a given image tag. The daemon takes requests 
 | `pulling` | Notes the running container, then pulls the new image. If the pull fails, nothing else happens and the running container is not touched. |
 | `draining` | Reserved. This version passes through it without waiting. |
 | `swapping` | If the new image differs from the running one, keeps the running image under the name `<image>:previous`. Then runs `docker compose up -d --no-deps` for the worker service. Compose recreates the container when its image or its configuration changed. If nothing changed, the deployment ends as `unchanged`. |
-| `verifying` | Waits until the container is healthy and stays healthy for the stability window (60 s). It fails if the container exits, restarts, reports `unhealthy`, runs another image, or is not healthy after 10 minutes. |
+| `verifying` | Waits until the container is healthy and stays healthy for the stability window (60 s). It fails if the container exits, restarts, reports `unhealthy`, runs another image, or is not healthy after `VERIFY_TIMEOUT_S` (10 minutes by default, 11 minutes in the worker compose file). |
 | `rolling_back` | Runs the previous image again. It points the compose image name back at it and recreates the container without a pull, then runs the same check. If the recreation fails, it tries again after 5 s and once more after 10 s, three attempts in all: a replacement that was cut off can leave containers behind that make the first attempt fail. |
 
 The result of a deployment is one of these:
@@ -125,7 +125,7 @@ All settings are environment variables with the prefix `NODE_MANAGER_`.
 | `STATE_DIR` | `<PROJECT_DIR>/node-manager` | |
 | `PULL_TIMEOUT_S` | 1800 | |
 | `SWAP_TIMEOUT_S` | 300 | The old container can take 2 minutes to stop. |
-| `VERIFY_TIMEOUT_S` | 600 | How long to wait for the first healthy state. |
+| `VERIFY_TIMEOUT_S` | 600 | How long to wait for the first healthy state. The worker compose file sets 660: it must stay at least 35 s above the start period of the worker health check (10 minutes). |
 | `ROLLBACK_VERIFY_TIMEOUT_S` | 300 | |
 | `STABILITY_WINDOW_S` | 60 | How long the container must stay healthy. 0 switches the wait off. |
 | `POLL_INTERVAL_S`, `LOOP_INTERVAL_S` | 5, 2 | |
