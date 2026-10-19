@@ -266,7 +266,10 @@ public class GatewayCloudAccounting {
      * get that far. Each batch is its own statement, so a long backlog never
      * holds one connection or one set of row locks for the whole sweep, and
      * {@code SKIP LOCKED} lets replicas sweep at once without waiting on each
-     * other or on a settle in progress. The predicate is the one
+     * other or on a settle in progress. The batch is collected with
+     * {@code ARRAY(...)}, which runs once; a plain {@code IN (SELECT ...
+     * LIMIT)} may be re-run by the planner and lock more rows than the limit.
+     * The predicate is the one
      * {@code idx_log_entry_gateway_unfinalized} is defined on, which keeps the
      * sweep proportional to the rows still unpriced rather than to the table.
      *
@@ -285,14 +288,14 @@ public class GatewayCloudAccounting {
         int total = 0;
         for (int batch = 0; batch < finalizeMaxBatches; batch++) {
             int updated = jdbc.update(SETTLED_COST_SNAPSHOT_SQL.formatted("""
-                le.id IN (
+                le.id = ANY(ARRAY(
                     SELECT id FROM log_entry
                      WHERE result_status = 'success'
                        AND cost_finalized = FALSE
                        AND request_id LIKE 'gw-%'
                      ORDER BY id
                      LIMIT :limit
-                       FOR UPDATE SKIP LOCKED)
+                       FOR UPDATE SKIP LOCKED))
                 """), snapshotParams().addValue("limit", finalizeBatchSize));
             total += updated;
             if (updated < finalizeBatchSize) {
