@@ -1132,6 +1132,80 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("errorsOnly") Boolean errorsOnly);
 
     /**
+     * How long finished cloud requests waited and ran, per model and provider:
+     * the 50th and 95th percentile of the Logos-side wait (arrival to the
+     * provider call), of the provider's own time (provider call to provider
+     * response) and of the time to first token (arrival to first token).
+     *
+     * The window predicate, the scope and the provider-call split are the ones
+     * {@link #findModelBreakdown} uses, so a model's averages there and its
+     * percentiles here describe the same requests. "Cloud" means what
+     * {@link #findTotals} counts as cloud: a provider whose privacy level is
+     * not LOCAL. Percentiles need the single rows, so this reads log_entry
+     * directly instead of the hourly rollup; it runs when the range or the
+     * scope changes, not on the push cadence.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        WITH finished AS (
+            SELECT le.model_id, le.model_name, le.provider_id,
+                   (le.result_status IS DISTINCT FROM 'success'
+                    OR (le.error_message IS NOT NULL AND le.error_message <> '')) AS failed,
+                   CASE WHEN le.timestamp_request IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
+                                                - le.timestamp_request)) * 1000 END AS queue_ms,
+                   CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                                - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding))) * 1000
+                   END AS upstream_ms,
+                   CASE WHEN le.timestamp_request IS NOT NULL AND le.time_at_first_token IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.time_at_first_token - le.timestamp_request)) * 1000 END AS ttft_ms
+            FROM log_entry le
+            JOIN providers pv ON pv.id = le.provider_id
+            WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+              AND le.timestamp_response IS NOT NULL
+              AND pv.privacy_level IS NOT NULL AND pv.privacy_level != 'LOCAL'
+              AND (le.model_id IS NOT NULL OR le.model_name IS NOT NULL)
+              AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+              AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+              AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
+              AND (:allModels = TRUE OR le.model_id IN (:modelIds))
+              AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
+        )
+        SELECT f.model_id AS modelId,
+               COALESCE(m.name, f.model_name, 'Model ' || f.model_id) AS modelName,
+               f.provider_id AS providerId,
+               COALESCE(p.name, 'Provider ' || f.provider_id) AS providerName,
+               COUNT(*)::bigint AS requestCount,
+               COUNT(*) FILTER (WHERE f.failed)::bigint AS errorCount,
+               (percentile_cont(0.5)  WITHIN GROUP (ORDER BY f.queue_ms))::double precision    AS queueP50Ms,
+               (percentile_cont(0.95) WITHIN GROUP (ORDER BY f.queue_ms))::double precision    AS queueP95Ms,
+               (percentile_cont(0.5)  WITHIN GROUP (ORDER BY f.upstream_ms))::double precision AS upstreamP50Ms,
+               (percentile_cont(0.95) WITHIN GROUP (ORDER BY f.upstream_ms))::double precision AS upstreamP95Ms,
+               COUNT(f.ttft_ms)::bigint AS ttftSamples,
+               (percentile_cont(0.5)  WITHIN GROUP (ORDER BY f.ttft_ms))::double precision     AS ttftP50Ms,
+               (percentile_cont(0.95) WITHIN GROUP (ORDER BY f.ttft_ms))::double precision     AS ttftP95Ms
+        FROM finished f
+        LEFT JOIN models m ON m.id = f.model_id
+        LEFT JOIN providers p ON p.id = f.provider_id
+        GROUP BY f.model_id, f.model_name, m.name, f.provider_id, p.name
+        ORDER BY requestCount DESC, modelName, providerName
+        """, nativeQuery = true)
+    List<CloudLatencyProjection> findCloudLatency(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId,
+        @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
+        @Param("errorsOnly") Boolean errorsOnly);
+
+    /**
      * The request-volume series.
      *
      * {@code useRollup} is false for the sub-hour buckets, which the hourly
