@@ -104,7 +104,79 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      # The worker opens its port only after its startup finishes.
+      # The startup includes the FlashInfer kernel warmup, which takes minutes when the kernel cache is empty.
+      # Failed checks do not count during the start period.
+      # The node manager waits longer: keep NODE_MANAGER_VERIFY_TIMEOUT_S (below) at least 35 s above this value.
+      start_period: 10m
+
+  # ── Node manager (optional) ────────────────────────────────────────────────
+  # Replaces the worker container on a deploy: it pulls the new image, starts
+  # the new container, checks that it comes up, and starts the previous version
+  # again if it does not. See logos-node-manager/README.md.
+  #
+  # The service only exists on hosts that enable its profile. The deploy
+  # workflows write this line to .env for every worker with `node-manager: true`
+  # in its matrix entry:
+  #   COMPOSE_PROFILES=node-manager
+  # Where the node manager runs, it is the only thing that restarts the worker.
+  #
+  # The worker directory is mounted at the SAME path as on the host. Compose
+  # turns the relative bind mounts of the worker into absolute host paths before
+  # it sends them to the Docker engine, so the path has to mean the same thing in
+  # both places. The directory is read-only except for the state of the manager.
+  #
+  # The Docker login of the host user is mounted read-only, for registries that
+  # need a login (run `docker login` on the host first). The mount does not
+  # create the file: a host without a login fails to start the service, instead
+  # of getting a directory in place of config.json. A new `docker login` replaces
+  # that file and the mount keeps showing the old one, so recreate the service
+  # after it (`docker compose up -d --force-recreate logos-node-manager`).
+  #
+  # The Docker socket is root on the host, and a read-only mount does not change
+  # that. The container therefore gets nothing else: no published port, no new
+  # privileges, no Linux capability except DAC_OVERRIDE, and a read-only root
+  # filesystem. Root keeps DAC_OVERRIDE because it must read files of the deploy
+  # user (for example the .env) and write a state directory that the deploy user
+  # owns. See "Security model" in logos-node-manager/README.md.
+  logos-node-manager:
+    profiles: ["node-manager"]
+    image: ${REGISTRY:-ghcr.io/ls1intum/edutelligence}/logos-node-manager:${NODE_MANAGER_IMAGE_TAG:-${IMAGE_TAG:-latest}}
+    container_name: logos-node-manager
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      NODE_MANAGER_PROJECT_DIR: ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}
+      # How long the manager waits for the first healthy state, in seconds. It must stay above the start period of the
+      # worker health check (10 min) by the check interval (30 s) plus the poll interval of the manager (5 s): a worker
+      # that opens its port at the end of the start period is seen as healthy up to 35 s later. 660 s leaves margin.
+      NODE_MANAGER_VERIFY_TIMEOUT_S: ${NODE_MANAGER_VERIFY_TIMEOUT_S:-660}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}:${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}:ro
+      - ${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}/node-manager:${NODE_MANAGER_PROJECT_DIR:-/opt/logos-workernode}/node-manager
+      - type: bind
+        source: ${NODE_MANAGER_DOCKER_CONFIG:-${HOME}/.docker/config.json}
+        target: /root/.docker/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "node-manager", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 # The pre-upgrade model volume name is kept for one release so
 # in-place upgrades resolve to the volume that already holds the cached
