@@ -35,6 +35,21 @@ the charts and the recent requests always show the same requests. This is also
 true when you drag across the request volume chart to select a time range. Only
 the state filter applies to the recent requests alone.
 
+The **Cloud request delays** panel at the bottom of the **Requests** tab shows
+where the time of a cloud request goes. The panel has one row for each model
+and provider. The row shows these values, each as the median (p50) and as the
+95th percentile (p95):
+
+- **Logos wait**: the time from the arrival of the request at Logos until the
+  call to the provider. This includes the authentication, the rate limit and the
+  budget check.
+- **Provider**: the time from the call to the provider until the end of the
+  response.
+- **TTFT**: the time from the arrival of the request until the first token.
+
+If the **Logos wait** values increase, Logos itself slows the requests down.
+The panel uses the same time range and filters as the rest of the tab.
+
 On the **Local Providers** tab, each worker node has its own section. The
 section shows memory, lane health and GPU metrics. Next to the name of the
 worker, the page shows `version: <commit>` and an info icon. `<commit>` is the
