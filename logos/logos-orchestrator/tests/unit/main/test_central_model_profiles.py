@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -461,3 +462,49 @@ def test_only_a_session_without_successor_drops_the_bookkeeping(monkeypatch, new
     asyncio.run(logosnode_mod.logosnode_session(_DisconnectingSocket(), token="t"))
 
     assert (1 in logosnode_mod._last_runtime_ts) is newer_session
+
+
+def test_a_reset_landing_between_commit_and_cache_update_is_not_masked():
+    """The status write commits, a reset commits and forgets, then the
+    writer updates the cache: the old echo must still reach the database."""
+
+    class _ResetRacingDB(_FakeDB):
+        def persist_central_model_profile(self, provider_id, model_name, *args):
+            accepted = super().persist_central_model_profile(provider_id, model_name, *args)
+            logosnode_mod._profile_write_cache.forget(provider_id, model_name)
+            return accepted
+
+    echo = {"org/model": {"base_residency_mb": 1.0, "sync_revision": 3}}
+    logosnode_mod._persist_model_profiles(_ResetRacingDB(), 1, echo)
+    later = _FakeDB(accept=False)
+    _, rejected = logosnode_mod._persist_model_profiles(later, 1, echo)
+    assert len(later.persisted) == 1
+    assert rejected == ["org/model"]
+
+
+def test_the_admin_endpoints_check_the_root_key_off_the_event_loop(monkeypatch):
+    """The loop also relays every worker's stream; a slow key lookup must
+    not stall it."""
+    threads: list = []
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: _FakeDB())
+    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: threads.append(threading.get_ident()))
+
+    async def _push(provider_id, model_names=None, calibration_key_hashes=None):
+        return None
+
+    monkeypatch.setattr(logosnode_mod, "_push_model_profiles", _push)
+
+    async def _run():
+        loop_thread = threading.get_ident()
+        await logosnode_mod.logosnode_clear_unsupported(
+            LogosNodeClearUnsupportedRequest(logos_key="k", provider_id=1, model_name="org/model")
+        )
+        await logosnode_mod.logosnode_invalidate_calibration(
+            LogosNodeInvalidateCalibrationRequest(logos_key="k", calibration_id=9)
+        )
+        await logosnode_mod.logosnode_reset_profiles(LogosNodeResetProfilesRequest(logos_key="k", provider_id=1))
+        return loop_thread
+
+    loop_thread = asyncio.run(_run())
+    assert len(threads) == 3
+    assert loop_thread not in threads

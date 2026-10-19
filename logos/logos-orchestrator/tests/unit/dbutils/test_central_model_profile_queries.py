@@ -145,3 +145,17 @@ def test_no_reported_key_hashes_cost_no_round_trip():
 def test_an_echo_keeps_the_stored_values_of_overridden_fields():
     assert "FROM jsonb_each(model_profiles.profile)" in _PERSIST_CENTRAL_PROFILE_SQL
     assert ":overridden_fields" in _PERSIST_CENTRAL_PROFILE_SQL
+
+
+def test_a_legacy_import_does_not_overwrite_a_reset_that_won_the_race():
+    """A reset committed after the already-central check owns the row; the
+    import write is rejected and must not re-link the old calibration."""
+    db = _db()
+    db.session.execute.side_effect = [
+        MagicMock(fetchone=MagicMock(return_value=None)),
+        SimpleNamespace(rowcount=0),
+    ]
+    legacy = {"org/m": {"base_residency_mb": 1.0, "residency_source": "calibrated", "last_measured_epoch": 1e9}}
+    assert db.import_legacy_model_profiles(7, legacy, {}) == 0
+    assert db.session.execute.call_count == 2
+    assert "model_profiles.sync_revision = 0" in inspect.getsource(DBManager.import_legacy_model_profiles)

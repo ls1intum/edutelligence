@@ -2037,14 +2037,18 @@ class DBManager:
             entry = merged.setdefault(str(model_name), {})
             entry["calibration_unsupported"] = True
             entry["calibration_unsupported_reason"] = reason
+        # A central change (e.g. a reset) committed since the check above
+        # owns the row; the import must not write over it.
         upsert = text(
             _upsert_model_profile_sql(
                 extra={"profile": "CAST(:profile AS jsonb)"},
                 conflict_set={"profile": "EXCLUDED.profile"},
+                where="model_profiles.profile = '{}'::jsonb AND model_profiles.sync_revision = 0",
             )
         )
+        imported = 0
         for model_name, data in merged.items():
-            self.session.execute(
+            written = self.session.execute(
                 upsert,
                 {
                     "provider_id": provider_id,
@@ -2052,7 +2056,10 @@ class DBManager:
                     **_model_profile_column_params(data),
                     "profile": _json_for_jsonb(data),
                 },
-            )
+            ).rowcount
+            if not written:
+                continue
+            imported += 1
             calibrated_at = _epoch_to_datetime(data.get("last_measured_epoch"))
             if data.get("residency_source") != "calibrated" or calibrated_at is None:
                 continue
@@ -2061,7 +2068,7 @@ class DBManager:
             )
             self._link_calibration(provider_id, model_name, calibration_id)
         self.session.commit()
-        return len(merged)
+        return imported
 
     def clear_calibration_unsupported(self, provider_id: int, model_name: str) -> Optional[int]:
         """Drop a node's unsupported verdict; returns the new sync_revision."""

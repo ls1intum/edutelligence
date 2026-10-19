@@ -148,3 +148,19 @@ def test_volatile_only_changes_wait_for_the_flush_interval():
     assert not cache.unchanged(1, "m", "d2", "material", now=300.0)
     assert not cache.unchanged(1, "m", "d2", "other", now=1.0)
     assert not cache.unchanged(1, "m", "d2", now=1.0)
+
+
+def test_a_write_overtaken_by_an_invalidation_is_not_remembered():
+    cache = ProfileWriteCache()
+    before = cache.generation(1, "m")
+    cache.forget(1, "m")
+    cache.remember(1, "m", "d", generation=before)
+    assert not cache.unchanged(1, "m", "d")
+
+    before = cache.generation(1, "m")
+    cache.forget(1)
+    cache.remember(1, "m", "d", generation=before)
+    assert not cache.unchanged(1, "m", "d")
+
+    cache.remember(1, "m", "d", generation=cache.generation(1, "m"))
+    assert cache.unchanged(1, "m", "d")
