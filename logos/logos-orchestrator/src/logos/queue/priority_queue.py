@@ -7,8 +7,26 @@ model. Individual internal requests may carry a provider affinity when their
 result must be attributable to one exact worker.
 
 For backward compatibility every public method that previously took a
-``provider_id`` still accepts it. Enqueue and aggregate metrics ignore it;
-dequeue uses it only to keep provider-affine entries on their required worker.
+``provider_id`` still accepts it (positional or kwarg) and silently ignores
+it. The kwarg pattern lets callers be migrated gradually. Enqueue and
+aggregate metrics ignore it; dequeue uses it only to keep provider-affine
+entries on their required worker.
+
+Within one priority level the entries tied on the highest
+``(raw_priority, role_rank)`` pair dispatch in a bounded interleave of
+SLO fast-lane entries (``QueueEntry.slo_fast_lane``, from
+``logos.request_slo``) and regular entries — one fast-lane, then two
+regular, repeating (see ``_select_dispatch_head``) — each class in
+arrival order. Raw priority and role rank always dominate the fast lane:
+the interleave only reorders entries that would otherwise tie, so a
+fast-lane entry can never jump a higher-priority or higher-ranked regular
+entry. The fast lane is the request-SLO attribute for latency-sensitive
+background traffic (today ``x-app: cli-bg``) that a full queue of
+interactive traffic would otherwise starve for the whole wait window; the
+interleave gives it a lane without letting a steady fast-lane stream
+starve ordinary same-priority traffic in return. Ordinary traffic keeps
+exactly its old relative order, so the reordering only touches the
+fast-lane entries.
 """
 
 import heapq
@@ -20,6 +38,17 @@ from threading import RLock
 from typing import Dict, List, Optional, Tuple, Union
 
 from logos.queue.models import Priority, QueueEntry, QueueStatePerPriority
+
+# Bounded dispatch interleave inside one priority level: the cursor
+# ``_regular_since_flagged`` counts regular dispatches since the last
+# SLO fast-lane one; a fast-lane entry may dispatch once the cursor
+# reaches ``_REGULAR_PER_CYCLE`` (cycle F R R | F R R | ...). The cursor
+# tracks actual dequeues — not enqueue-time ranks — so it cannot drift
+# while one class idles: a steady fast-lane stream can never occupy more
+# than 1 of every ``_REGULAR_PER_CYCLE + 1`` dispatch slots, so the
+# request-SLO fast lane (``x-app: cli-bg``) cannot starve a same-priority
+# queue.
+_REGULAR_PER_CYCLE = 2
 
 
 class PriorityQueueManager:
@@ -52,6 +81,11 @@ class PriorityQueueManager:
       provider without splitting the model-wide queue.
     - Backward-compatible: every method that previously accepted
       ``provider_id`` still accepts it; unpinned behavior stays model-wide.
+    - Within a priority level: the entries tied on the highest
+      (raw_priority, role_rank) pair dispatch in a bounded interleave of
+      SLO fast-lane and regular entries, each class in arrival order; raw
+      priority and role rank dominate the fast lane (see
+      ``_select_dispatch_head``).
     """
 
     def __init__(self):
@@ -71,6 +105,22 @@ class PriorityQueueManager:
         self._lock = RLock()
         self._entry_counter = 0
 
+        # Interleave cursor per (model_id, priority): regular dispatches
+        # since the last SLO fast-lane dispatch, capped at
+        # ``_REGULAR_PER_CYCLE``. It starts full (the cycle begins with
+        # the fast-lane slot) and advances on actual dequeues only, so the
+        # 1:2 bound holds for the manager's lifetime no matter how long a
+        # class idled: a fast-lane burst arriving after a long regular-only
+        # stretch still gets at most 1 of every 3 dispatch slots. A fresh
+        # fast-lane arrival may jump the regular entries waiting ahead of
+        # it — among entries tied on the top (raw_priority, role_rank)
+        # pair — only while the fast-lane slot is owed (fresh level, or a
+        # regular-only stretch); mid-cycle it waits for the owed regular
+        # pair.
+        self._regular_since_flagged: Dict[int, Dict[Priority, int]] = defaultdict(
+            lambda: defaultdict(lambda: _REGULAR_PER_CYCLE)
+        )
+
         logging.info("PriorityQueueManager initialized (model-only queue)")
 
     def enqueue(
@@ -80,6 +130,7 @@ class PriorityQueueManager:
         provider_id: int = None,  # Ignored — kept for back-compat.
         priority: Priority = Priority.NORMAL,
         is_cold_at_queue: bool = False,
+        slo_fast_lane: bool = False,
         provider_affinity: int | None = None,
         raw_priority: int | None = None,
         role_rank: int = 0,
@@ -90,6 +141,13 @@ class PriorityQueueManager:
         ``provider_id`` is accepted but ignored (back-compat). Unless
         ``provider_affinity`` is set, any provider with capability for
         ``model_id`` can later dispatch this task.
+
+        ``slo_fast_lane`` marks a request-SLO same-bucket fast lane (see
+        ``logos.request_slo``): the entry takes its place in the bounded
+        interleave among the entries tied on its (raw_priority, role_rank)
+        pair — a fast lane while the fast-lane slot is owed, never a
+        monopoly, and never ahead of a higher raw priority or role rank
+        (see ``_select_dispatch_head``).
 
         ``raw_priority`` is the full-precision priority the request resolved
         to (1..10 scale); it refines the ordering inside the bucket that
@@ -115,6 +173,7 @@ class PriorityQueueManager:
                 role_rank=role_rank,
                 enqueue_time=datetime.now(),
                 is_cold_at_queue=is_cold_at_queue,
+                slo_fast_lane=slo_fast_lane,
                 provider_affinity=provider_affinity,
                 api_key_id=api_key_id,
             )
@@ -172,6 +231,52 @@ class PriorityQueueManager:
                     return task, entry
             return None, None
 
+    def _select_dispatch_head(
+        self,
+        model_id: int,
+        priority: Priority,
+        provider_id: int | None = None,
+    ) -> Optional[int]:
+        """Index of the entry the interleave rule dispatches next in
+        ``self._queues[model_id][priority]``, or None if none is eligible.
+
+        The eligible entries are first restricted to the group tied on the
+        highest ``(raw_priority, role_rank)`` pair: raw priority and role
+        rank always dominate the SLO fast lane, so a fast-lane entry can
+        never jump a higher-priority or higher-ranked regular entry.
+        Within that group the fast-lane head dispatches when no regular
+        entry is in the group or when ``_REGULAR_PER_CYCLE`` regular
+        dispatches followed the last fast-lane one (the
+        ``_regular_since_flagged`` cursor); otherwise the regular head
+        dispatches. Within a class, ``(ts, entry_id)`` decides. Pinned
+        entries only match their required provider. Caller must hold
+        ``_lock``.
+        """
+        queue = self._queues[model_id][priority]
+        eligible = [item for item in queue if provider_id is None or item[4].provider_affinity in (None, provider_id)]
+        if not eligible:
+            return None
+        # Highest (raw_priority, role_rank) pair among the eligible entries;
+        # the interleave may only reorder entries tied on it.
+        top_rank = min(item[:2] for item in eligible)
+        group = [item for item in eligible if item[:2] == top_rank]
+        fast_lane_head = min(
+            (item for item in group if item[4].slo_fast_lane),
+            key=lambda item: item[2:4],
+            default=None,
+        )
+        regular_head = min(
+            (item for item in group if not item[4].slo_fast_lane),
+            key=lambda item: item[2:4],
+            default=None,
+        )
+        cursor = self._regular_since_flagged[model_id][priority]
+        if fast_lane_head is not None and (regular_head is None or cursor >= _REGULAR_PER_CYCLE):
+            return queue.index(fast_lane_head)
+        if regular_head is not None:
+            return queue.index(regular_head)
+        return None
+
     def _dequeue_from_priority(
         self,
         model_id: int,
@@ -183,23 +288,25 @@ class PriorityQueueManager:
         if not queue:
             return None, None
 
-        eligible_index = next(
-            (
-                index
-                for index, (*_ordering, candidate) in sorted(
-                    # Order by the heap's leading keys:
-                    # (-raw_priority, -role_rank, ts, entry_id).
-                    enumerate(queue),
-                    key=lambda item: item[1][:4],
-                )
-                if provider_id is None or candidate.provider_affinity in (None, provider_id)
-            ),
-            None,
-        )
+        # Dispatch order within this priority level: the entries tied on
+        # the highest (raw_priority, role_rank) pair dispatch in a bounded
+        # interleave of SLO fast-lane and regular entries, each class in
+        # arrival order (``_select_dispatch_head``); raw priority and role
+        # rank dominate the fast lane. The cursor advances on actual
+        # dequeues, so a dispatched entry's slot stays burned and the
+        # interleave state cannot drift across quiescent periods.
+        eligible_index = self._select_dispatch_head(model_id, priority, provider_id)
         if eligible_index is None:
             return None, None
 
         _, _, _, entry_id, entry = queue[eligible_index]
+        if entry.slo_fast_lane:
+            # A fast-lane dispatch: the next ``_REGULAR_PER_CYCLE`` slots
+            # are owed to regular traffic again.
+            self._regular_since_flagged[model_id][priority] = 0
+        else:
+            cursor = self._regular_since_flagged[model_id][priority]
+            self._regular_since_flagged[model_id][priority] = min(cursor + 1, _REGULAR_PER_CYCLE)
         if eligible_index == 0:
             heapq.heappop(queue)
         else:
@@ -218,16 +325,22 @@ class PriorityQueueManager:
         model_id: int,
         provider_id: int = None,
     ) -> Optional[Tuple[any, Priority]]:
-        """Peek at the highest-priority queued task without removing it.
+        """Peek at the dispatch head without removing it.
 
-        ``provider_id`` is accepted but ignored.
+        Returns the entry ``_dequeue_from_priority`` would pick first at the
+        highest non-empty priority level, so callers see the true dispatch
+        order of the bounded interleave (a fast-lane head mid-regular-pair
+        is not the head). ``provider_id`` is accepted but ignored.
         """
         with self._lock:
             for priority in [Priority.HIGH, Priority.NORMAL, Priority.LOW]:
-                queue = self._queues[model_id][priority]
-                if queue:
-                    _, _, _, _, entry = queue[0]
-                    return entry.task, priority
+                if not self._queues[model_id][priority]:
+                    continue
+                index = self._select_dispatch_head(model_id, priority, None)
+                if index is None:
+                    continue
+                _, _, _, _, entry = self._queues[model_id][priority][index]
+                return entry.task, priority
             return None
 
     def move_priority(self, entry_id: str, new_priority: Priority) -> bool:
@@ -256,9 +369,13 @@ class PriorityQueueManager:
                 return False
 
             entry_to_move.escalate(new_priority)
-            # Escalation changes the bucket, not the caller: keep the entry's
-            # raw priority and role rank so its position inside the new
-            # bucket matches where it would have sat.
+            # An escalation is a fresh arrival at the new level: the
+            # re-stamped heap ts makes it tail of its class there, and the
+            # new level's interleave cursor is independent. Escalation
+            # changes the bucket, not the caller: keep the entry's raw
+            # priority and role rank so its position inside the new bucket
+            # matches where it would have sat — except the bucket floor,
+            # which tracks the new priority.
             entry_to_move.raw_priority = int(new_priority)
 
             heap_entry = (

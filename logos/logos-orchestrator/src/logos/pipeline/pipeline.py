@@ -19,6 +19,7 @@ from logos.dbutils.types import Deployment, get_unique_models_from_deployments
 from logos.monitoring import prometheus_metrics as prom
 from logos.monitoring.recorder import MonitoringRecorder
 from logos.queue.models import Priority
+from logos.request_slo import resolve_request_slo
 from logos.timeouts import global_timeout_s
 
 from .context_resolver import ContextResolver, ExecutionContext
@@ -156,6 +157,12 @@ class PipelineRequest:
     # Calling API key. Seeds the prefix-affinity hash so two keys never share
     # a stream identity, and so one key's parallel agent loops stay separate.
     api_key_id: Optional[int] = None
+    # time.monotonic() stamp of request ingress (sync path only). Forwarded to
+    # the scheduler, which recomputes the queue-wait cap from it at wait time
+    # (``remaining_queue_wait_s``) — so auth, the worker reconnect wait,
+    # classification and the synchronous scheduling phase all count against
+    # the client window, and the queue-timeout 429 still beats its watchdog.
+    ingress_at: Optional[float] = None
 
 
 @dataclass
@@ -169,6 +176,11 @@ class PipelineResult:
     classification_stats: Dict[str, Any]
     scheduling_stats: Dict[str, Any]
     error: Optional[str] = None
+    # Set when the failure was a queue-wait timeout (``QueueTimeoutError``),
+    # carrying the window the request was held. Lets the caller answer with
+    # overload semantics (429 + Retry-After) instead of a generic 503 — the
+    # client's wait budget was spent, not the service's availability.
+    queue_timeout_s: Optional[float] = None
 
 
 class RequestPipeline:
@@ -274,7 +286,12 @@ class RequestPipeline:
             if top_name:
                 self._demand_tracker.record_request(top_name)
 
-        # 2. Scheduling
+        # 2. Scheduling — the request SLO (logos.request_slo) is resolved
+        # against the candidate priority, which resolve_queue_priority
+        # already set to the key/team/policy SLO value: the queue bucket
+        # stays the key's SLO, and only the same-bucket fast lane (today
+        # x-app: cli-bg) layers on top of it.
+        request_slo = resolve_request_slo(request.headers, priority_int)
         scheduling_request = SchedulingRequest(
             request_id=request_id,
             classified_models=classification_result.candidates,
@@ -283,6 +300,12 @@ class RequestPipeline:
             timeout_s=request.payload.get("timeout_s"),
             required_provider_id=request.required_provider_id,
             affinity_keys=affinity_keys(request.api_key_id, request.payload),
+            slo_fast_lane=request_slo.fast_lane,
+            # Absolute ingress stamp, not a precomputed remainder: the
+            # scheduler recomputes what is left of the client window at wait
+            # time, so the synchronous scheduling phase in between (which can
+            # block on per-candidate SDI refreshes) counts against it too.
+            ingress_at=request.ingress_at,
             role_rank=request.role_rank,
             api_key_id=request.api_key_id,
         )
@@ -322,6 +345,7 @@ class RequestPipeline:
                     "error": "Queue wait timeout",
                 },
                 error=str(exc),
+                queue_timeout_s=exc.timeout_s,
             )
 
         if not scheduling_result:
