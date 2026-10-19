@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, effect, inject, input, signal } from '@angular/core';
-import { DataTableComponent } from '../../../../shared/components/data-table/data-table';
-import { StatisticsService } from '../../services/statistics.service';
-import { CloudLatencyRow, CloudLatencyScope } from '../../services/cloud-latency.models';
+import { DataTableComponent } from '../../../shared/components/data-table/data-table';
+import { StatisticsService } from '../../statistics/services/statistics.service';
+import { CloudLatencyRow, CloudLatencyScope } from '../../statistics/services/cloud-latency.models';
 
 /**
  * Format a delay in milliseconds for a table cell: below a second in whole

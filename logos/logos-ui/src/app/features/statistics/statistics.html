@@ -360,21 +360,6 @@
 
       </div>
 
-      <!-- ── Row 4: Cloud request delays ─────────────────────────────────── -->
-      <!-- Where cloud requests spend their time: inside Logos before the
-           provider call (key lookup, rate limit, budget check, connection
-           wait), at the provider, and until the first token. -->
-      <app-stats-chart-panel
-        title="Cloud request delays"
-        subtitle="Logos wait before the provider call, provider time and time to first token, per model and provider."
-      >
-        <app-stats-cloud-latency-panel
-          [start]="wsTimelineConfig().start"
-          [end]="wsTimelineConfig().end"
-          [scope]="cloudLatencyScope()"
-        />
-      </app-stats-chart-panel>
-
 
     <!-- ── Local Providers: what the hardware is doing right now ──────── -->
     } @else {

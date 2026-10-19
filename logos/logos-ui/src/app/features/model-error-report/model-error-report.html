@@ -882,6 +882,37 @@
 
         }
 
+        <!-- Cloud Delays -->
+        @case ('cloud_delays') {
+
+          <div class="cloud-delays">
+            <div class="cloud-delays__header">
+              <div>
+                <h2 class="cloud-delays__title">Cloud request delays</h2>
+                <p class="cloud-delays__subtitle">
+                  Where the time of a cloud request goes, per provider: the wait inside Logos before
+                  the provider call (key lookup, rate limit, budget check), the provider time, and the
+                  time to the first token.
+                </p>
+              </div>
+              <app-time-range-bar
+                [preset]="cloudDelayPreset()"
+                [offset]="cloudDelayOffset()"
+                (presetChange)="cloudDelayPreset.set($event)"
+                (offsetChange)="cloudDelayOffset.set($event)"
+              />
+            </div>
+            @if (modelId() !== null) {
+              <app-stats-cloud-latency-panel
+                [start]="cloudDelayWindow().start"
+                [end]="cloudDelayWindow().end"
+                [scope]="cloudDelayScope()"
+              />
+            }
+          </div>
+
+        }
+
         <!-- Access -->
         @case ('access') {
 

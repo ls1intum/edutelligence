@@ -64,8 +64,6 @@ import type {
 
 // Child components
 import { ChartPanel } from './components/chart-panel/chart-panel';
-import { CloudLatencyPanel } from './components/cloud-latency-panel/cloud-latency-panel';
-import type { CloudLatencyScope } from './services/cloud-latency.models';
 import { EmptyState } from './components/empty-state/empty-state';
 import { LaneHealthPanel } from './components/lane-health-panel/lane-health-panel';
 import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
@@ -128,7 +126,6 @@ type ProviderGlassRow = {
   imports: [
     CommonModule,
     ChartPanel,
-    CloudLatencyPanel,
     EmptyState,
     LaneHealthPanel,
     LaneMemoryPieComponent,
@@ -517,29 +514,6 @@ export class Statistics implements OnInit, OnDestroy {
       targetBuckets: chooseDynamicTargetBuckets(spanMs),
     };
   });
-
-  /**
-   * The page scope the cloud delay table is narrowed to. Its own computed so
-   * the table reloads only when the scope actually changes — a fresh object
-   * on every read would refetch on each change detection pass.
-   */
-  readonly cloudLatencyScope = computed<CloudLatencyScope>(
-    () => ({
-      teamId: this.filterTeamId(),
-      userId: this.filterUserId(),
-      providerId: this.filterProviderId(),
-      apiKeyId: this.filterApiKeyId(),
-      modelIds: this.feedModelIds().map(Number),
-    }),
-    {
-      equal: (a, b) =>
-        a.teamId === b.teamId &&
-        a.userId === b.userId &&
-        a.providerId === b.providerId &&
-        a.apiKeyId === b.apiKeyId &&
-        a.modelIds.join(',') === b.modelIds.join(','),
-    },
-  );
 
   // ── Provider derivations ──────────────────────────────────────────────────────
 

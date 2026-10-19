@@ -1,12 +1,12 @@
 import { TestBed } from '@angular/core/testing';
 
 import { CloudLatencyPanel, formatDelayMs } from './cloud-latency-panel';
-import { StatisticsService } from '../../services/statistics.service';
+import { StatisticsService } from '../../statistics/services/statistics.service';
 import type {
   CloudLatencyRow,
   CloudLatencyScope,
   CloudLatencyStats,
-} from '../../services/cloud-latency.models';
+} from '../../statistics/services/cloud-latency.models';
 
 const row = (over: Partial<CloudLatencyRow> = {}): CloudLatencyRow => ({
   modelId: 1,

@@ -34,6 +34,10 @@ import {
 } from '../../shared/models/provider.model';
 import { priceProviderCards } from './model-prices';
 import { ModelPricesTab } from './model-prices-tab';
+import { CloudLatencyPanel } from './cloud-latency-panel/cloud-latency-panel';
+import type { CloudLatencyScope } from '../statistics/services/cloud-latency.models';
+import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
+import { TimePreset, calendarRange } from '../../shared/utils/time-range';
 
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { ModelAccess } from '../model-access/model-access';
@@ -51,6 +55,7 @@ type ModelErrorTab =
   | 'error_report'
   | 'complete_logs'
   | 'performance'
+  | 'cloud_delays'
   | 'access'
   | 'prices';
 
@@ -633,6 +638,8 @@ const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
     ErrorMessageComponent,
     ModelAccess,
     ModelPricesTab,
+    CloudLatencyPanel,
+    TimeRangeBarComponent,
   ],
 
   templateUrl: './model-error-report.html',
@@ -790,6 +797,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     'error_report',
     'complete_logs',
     'performance',
+    'cloud_delays',
     'access',
     'prices',
   ];
@@ -798,6 +806,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     error_report: 'Error Report',
     complete_logs: 'Complete Logs',
     performance: 'Performance',
+    cloud_delays: 'Cloud Delays',
     access: 'Access',
     prices: 'Prices',
   };
@@ -813,17 +822,41 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly showSelectedFailure = computed(() => this.selectedLog()?.success === false);
 
   /**
-   * The Prices tab only exists for cloud models: a model served solely by
-   * local (logosnode) providers has no catalogue pricing to show. Until a
-   * successful response proves that, the tab stays visible so its loading
-   * and error states remain reachable.
+   * The Prices and Cloud Delays tabs only exist for cloud models: a model
+   * served solely by local (logosnode) providers has no catalogue pricing and
+   * no cloud requests to show. Until a successful response proves that, the
+   * tabs stay visible so their loading and error states remain reachable.
    */
   readonly visibleTabs = computed<readonly ModelErrorTab[]>(() => {
     const hasCloudProvider = this.priceProviders().some(
       provider => provider.provider_type === 'cloud'
     );
     if (hasCloudProvider || !this.pricesLoaded()) return this.tabs;
-    return this.tabs.filter(tab => tab !== 'prices');
+    return this.tabs.filter(tab => tab !== 'prices' && tab !== 'cloud_delays');
+  });
+
+  // ==========================================================================
+  // Cloud Delays
+  // ==========================================================================
+
+  /** Same presets and paging as the statistics page, so the ranges read alike. */
+  readonly cloudDelayPreset = signal<TimePreset>('30d');
+  readonly cloudDelayOffset = signal(0);
+
+  /**
+   * The window the delay table covers. Recomputed only when the preset or the
+   * offset changes, so the table does not refetch on every change detection
+   * pass.
+   */
+  readonly cloudDelayWindow = computed(() => {
+    const range = calendarRange(this.cloudDelayPreset(), this.cloudDelayOffset());
+    return { start: range.currStart.toISOString(), end: range.currEnd.toISOString() };
+  });
+
+  /** The delay table narrowed to this model, across all its cloud providers. */
+  readonly cloudDelayScope = computed<CloudLatencyScope>(() => {
+    const id = this.modelId();
+    return { teamId: null, userId: null, providerId: null, apiKeyId: null, modelIds: id === null ? [] : [id] };
   });
 
   /** Cloud providers of this model with their price rows grouped for display. */
