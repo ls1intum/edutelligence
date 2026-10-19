@@ -1893,6 +1893,125 @@ async def test_auto_place_breaks_awake_ties_by_least_awake_vram() -> None:
     assert placed.gpu_devices == "0"
 
 
+_CO_RESIDENCY_GPU_TOTAL_MB = 81_920.0
+
+
+def _co_residency_manager(profile_vram_mb: dict[str, float], free_mb: list[float]) -> LaneManager:
+    """LaneManager over equal 80 GB GPUs with the given free VRAM per GPU."""
+    from logos_worker_node.model_profiles import ModelProfileRecord, ModelProfileRegistry
+
+    profiles = ModelProfileRegistry()
+    for model, vram_mb in profile_vram_mb.items():
+        profiles._profiles[model] = ModelProfileRecord(loaded_vram_mb=vram_mb, engine="vllm")  # noqa: SLF001
+
+    async def _snapshot() -> DeviceSummary:
+        return DeviceSummary(
+            timestamp=datetime.now(timezone.utc),
+            mode="nvidia",
+            nvidia_smi_available=True,
+            devices=[
+                DeviceInfo(
+                    device_id=f"gpu{index}",
+                    kind="nvidia",
+                    memory_total_mb=_CO_RESIDENCY_GPU_TOTAL_MB,
+                    memory_free_mb=free,
+                    extra={"index": index},
+                )
+                for index, free in enumerate(free_mb)
+            ],
+            total_memory_mb=len(free_mb) * _CO_RESIDENCY_GPU_TOTAL_MB,
+            free_memory_mb=sum(free_mb),
+        )
+
+    return LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        lane_port_start=15100,
+        lane_port_end=15110,
+        model_profiles=profiles,
+        gpu_snapshot=_snapshot,
+    )
+
+
+def _co_residency_lane(model: str, gpu_devices: str = "", tp: int = 1) -> LaneConfig:
+    return LaneConfig(
+        model=model,
+        vllm=True,
+        gpu_devices=gpu_devices,
+        vllm_config=VllmConfig(tensor_parallel_size=tp),
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_place_aligns_tp2_lane_with_existing_tp2_lane() -> None:
+    """A TP=2 lane A sleeps on GPUs 0+1 and a TP=1 lane C is awake on GPU 0.
+    A second TP=2 lane B must stack on A's GPUs 0+1, not take 1+2.
+
+    A and B exclude each other either way (two 45 GB shards do not fit one
+    80 GB GPU). On 0+1, C stays loadable with A and with B, and GPU 2 stays
+    whole. On 1+2, B is a partial overlap: it blocks A through GPU 1 and
+    strands GPU 2. The snapshot score alone picked 1+2 because it holds no
+    awake lane.
+    """
+    manager = _co_residency_manager(
+        {"org/tp2-a": 90_000.0, "org/tp2-b": 90_000.0, "org/tp1-c": 20_000.0},
+        # GPU 0: A's sleep residue + C; GPU 1: A's sleep residue; GPU 2: empty.
+        free_mb=[59_920.0, 79_920.0, 81_920.0],
+    )
+    manager._handles["planner-a"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-a", _co_residency_lane("org/tp2-a", "0,1", tp=2), sleeping=True
+    )
+    manager._handles["planner-c"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-c", _co_residency_lane("org/tp1-c", "0"), sleeping=False
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-b", _co_residency_lane("org/tp2-b", tp=2))  # noqa: SLF001
+    assert placed.gpu_devices == "0,1"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_prefers_co_residency_over_alignment() -> None:
+    """Alignment is not applied blindly. If C (40 GB) cannot share a GPU with a
+    45 GB TP=2 shard, stacking B on 0+1 would make B conflict with both A and C.
+    1+2 conflicts with A only, so B and C can still be loaded together.
+    """
+    manager = _co_residency_manager(
+        {"org/tp2-a": 90_000.0, "org/tp2-b": 90_000.0, "org/tp1-c": 40_000.0},
+        # A and C both sleep: only their residues remain on GPUs 0 and 1.
+        free_mb=[77_920.0, 79_920.0, 81_920.0],
+    )
+    manager._handles["planner-a"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-a", _co_residency_lane("org/tp2-a", "0,1", tp=2), sleeping=True
+    )
+    manager._handles["planner-c"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-c", _co_residency_lane("org/tp1-c", "0"), sleeping=True
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-b", _co_residency_lane("org/tp2-b", tp=2))  # noqa: SLF001
+    assert placed.gpu_devices == "1,2"
+
+
+@pytest.mark.asyncio
+async def test_auto_place_keeps_sleeping_lane_wakeable() -> None:
+    """A sleeping 70 GB lane on GPU 0 leaves that GPU nearly empty, but a 30 GB
+    lane placed there could never be awake together with it. The new lane goes
+    next to the small awake lane on GPU 1 instead. Both fit there, so all
+    three lanes can stay loaded together.
+    """
+    manager = _co_residency_manager(
+        {"org/big": 70_000.0, "org/small": 10_000.0, "org/new": 30_000.0},
+        free_mb=[78_920.0, 71_920.0],
+    )
+    manager._handles["planner-big"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-big", _co_residency_lane("org/big", "0"), sleeping=True
+    )
+    manager._handles["planner-small"] = _OccupyingLaneStub(  # noqa: SLF001
+        "planner-small", _co_residency_lane("org/small", "1"), sleeping=False
+    )
+
+    placed = await manager._auto_place_gpu_devices("planner-new", _co_residency_lane("org/new"))  # noqa: SLF001
+    assert placed.gpu_devices == "1"
+
+
 @pytest.mark.asyncio
 async def test_remove_lane_releases_bookkeeping_on_destroy_timeout() -> None:
     manager = LaneManager(WorkerConfig(), lane_port_start=15080, lane_port_end=15090)

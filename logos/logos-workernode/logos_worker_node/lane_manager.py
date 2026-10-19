@@ -2104,6 +2104,7 @@ class LaneManager:
         awake_lanes_by_gpu: dict[int, int] | None = None,
         awake_used_mb_by_gpu: dict[int, float] | None = None,
         gmu: float | None = None,
+        resident_lanes: list[tuple[frozenset[int], float]] | None = None,
     ) -> list[int] | None:
         # Per-row: vLLM's startup gate is per card (free >= gmu × that card's
         # total), so on mixed-size nodes each row is checked against its own
@@ -2119,10 +2120,32 @@ class LaneManager:
         occupied = multi_gpu_indices or set()
         awake_lanes = awake_lanes_by_gpu or {}
         awake_used = awake_used_mb_by_gpu or {}
+        residents = resident_lanes or []
+        total_by_gpu = {int(row["index"]): float(row.get("total_mb", 0.0) or 0.0) for row in device_rows}
         best_indices: list[int] | None = None
-        best_score: tuple[int, int, float, float, tuple[int, ...]] | None = None
+        best_score: tuple[int, int, int, int, float, float, tuple[int, ...]] | None = None
         for combo in combinations(feasible, tp_size):
             indices = tuple(sorted(int(row["index"]) for row in combo))
+            candidate = frozenset(indices)
+            # Score the layout the placement leaves behind, not only the
+            # current snapshot: every configured lane counts, awake or asleep,
+            # since a sleeping lane will be woken again. A resident lane
+            # conflicts with the new one when both footprints do not fit on
+            # some GPU they share — they can then never be loaded together.
+            # Fewer conflicts means more lanes that can be resident at once.
+            conflicts = sum(
+                1
+                for gpus, share_mb in residents
+                if any(
+                    total_by_gpu.get(i, 0.0) > 0 and share_mb + per_gpu_threshold_mb > total_by_gpu[i]
+                    for i in candidate & gpus
+                )
+            )
+            # A multi-GPU lane that overlaps the candidate only partially
+            # fragments the node: the GPUs outside the overlap become a
+            # leftover that other lanes conflict with asymmetrically. Sharing
+            # an identical GPU set keeps the remaining GPUs whole.
+            misaligned = sum(1 for gpus, _ in residents if len(gpus) > 1 and gpus & candidate and gpus != candidate)
             # Penalise combos that share GPUs with active TP>1 lane shards.
             # A non-collocated placement always beats a collocated one regardless
             # of free-memory leftover.
@@ -2138,7 +2161,7 @@ class LaneManager:
             # (spread): it maximises headroom for the new lane and keeps the
             # emptiest GPUs intact for larger models.
             free_mb = sum(float(row["free_mb"]) for row in combo)
-            score = (collocated, awake_lane_count, awake_used_mb, -free_mb, indices)
+            score = (conflicts, misaligned, collocated, awake_lane_count, awake_used_mb, -free_mb, indices)
             if best_score is None or score < best_score:
                 best_score = score
                 best_indices = list(indices)
@@ -2151,9 +2174,13 @@ class LaneManager:
         - Respect explicit lane gpu_devices.
         - Preserve the current placement when it still fits.
         - Otherwise choose the feasible GPU subset in the worker's allowed
-          GPU pool that shares the least with awake lanes, breaking ties
-          toward the most free VRAM (spread, not best-fit packing: a GPU
-          whose only occupants are sleeping lanes is treated as empty).
+          GPU pool that leaves the most lanes loadable together with the new
+          one (fewest VRAM conflicts with placed lanes, awake or asleep), then
+          the one that does not partially overlap a multi-GPU lane.
+        - Among those, prefer the subset that shares the least with awake
+          lanes, breaking ties toward the most free VRAM (spread, not
+          best-fit packing: a GPU whose only occupants are sleeping lanes is
+          treated as empty).
         """
         if lane_config.vllm_config is None:
             return lane_config
@@ -2289,10 +2316,18 @@ class LaneManager:
         # host RAM are not VRAM occupancy).
         awake_lanes_by_gpu: dict[int, int] = {}
         awake_used_mb_by_gpu: dict[int, float] = {}
+        # Every placed vLLM lane with its per-GPU footprint, regardless of
+        # sleep state, so the subset picker can score which lanes stay
+        # loadable alongside the new one.
+        resident_lanes: list[tuple[frozenset[int], float]] = []
         for other_id, h in self._handles.items():
             if other_id == lane_id:
                 continue  # this lane's own (old) footprint is being replaced
             lc = h.lane_config
+            if lc is not None and lc.vllm:
+                gpus = self._lane_gpu_set(lc.gpu_devices)
+                if gpus:
+                    resident_lanes.append((gpus, self._estimate_lane_vram_mb(lc) / len(gpus)))
             if (
                 lc
                 and lc.vllm
@@ -2347,6 +2382,7 @@ class LaneManager:
                 awake_lanes_by_gpu,
                 awake_used_mb_by_gpu,
                 gmu,
+                resident_lanes,
             )
         if selected_indices is None:
             # Fail fast: an unset gpu_devices makes vLLM default to cuda:0,
