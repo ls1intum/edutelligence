@@ -123,7 +123,7 @@ manager removes no image.
 
 The node manager writes the record of each deployment to the directory
 `node-manager/` in the worker directory. The image `logos-node-manager` is in the
-deployment registry only. It is not in the public mirror.
+deployment registry and, for builds of `main`, in the public mirror.
 
 CAUTION: On a host with the node manager, do not run `docker compose up` for the
 worker service. Use the node manager instead.
@@ -132,8 +132,9 @@ To use the node manager on a host without the deploy workflow, do these steps:
 
 1. If the registry needs a login, run `docker login` on the host.
 2. Add `COMPOSE_PROFILES=node-manager` to the `.env` file of the worker.
-3. Set `REGISTRY` in the `.env` file of the worker to the deployment registry
-   (`<registry>/logos`). The node manager image is not in the public mirror.
+3. To pull a version tag, set `REGISTRY` in the `.env` file of the worker to
+   the deployment registry (`<registry>/logos`). Then set `IMAGE_TAG`. The
+   public mirror has only the tag `latest`.
 4. In the worker directory, run `docker compose up -d logos-node-manager`.
 
 The node manager keeps the login that existed when it started. If you run

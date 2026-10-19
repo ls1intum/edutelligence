@@ -71,9 +71,10 @@ COMPOSE_PROFILES=node-manager
 
 The deploy workflows write this line for every worker whose matrix entry has `node-manager: true`.
 
-The image of the service is `${REGISTRY}/logos-node-manager`. The default registry is the public GHCR mirror, which does
-not have this image, so set `REGISTRY` in the `.env` of the worker to the deployment registry (`<registry>/logos`). The
-deploy workflows write it.
+The image of the service is `${REGISTRY}/logos-node-manager`. The default registry is the public GHCR mirror, which
+carries the image of `main` (tag `latest`). The deploy workflows set `REGISTRY` in the `.env` of the worker to the
+deployment registry (`<registry>/logos`). Set it there as well to pull a version tag or a pull request build, which the
+mirror does not carry.
 
 The service needs three things from the host:
 
@@ -208,4 +209,3 @@ purpose. It needs a running Docker engine and network access to pull the base im
   does.
 * The removal of old images starts after the result is saved. `deploy --wait` can return a moment before it ends, and a
   manager that stops in between leaves those images on the host. `docker rmi` removes them.
-* The image is published to the project registry only, not to the public GHCR mirror.

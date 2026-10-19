@@ -482,6 +482,9 @@ jobs:
         - registry: ${{ vars.LOGOS_HARBOR_REGISTRY }}
           username: ${{ vars.LOGOS_HARBOR_USER }}
           password: ${{ secrets.LOGOS_HARBOR_PASSWORD }}
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
   build-agent:
     name: Build Logos Agent Runner
