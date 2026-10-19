@@ -21,14 +21,14 @@ views. The historical requests stay under the former name of the model. A
 trash icon marks the entry as deleted.
 
 On the **Requests** tab, the filter row narrows the page to one team,
-requester, API key or provider, and to a set of models. Use the **API keys**
-filter to see the traffic of one application key only, for example the
-production key of a team. Application keys show the team and the
-environment, other keys show the key name and the owner. The time range and
-every filter apply to the whole tab at once: the totals, the charts and the
-recent requests always show the same requests. This is also true when you
-drag across the request volume chart to select a time range. Only the state
-filter applies to the recent requests alone.
+requester and provider, and to a set of models. A requester is a person or an
+application key. Application keys have no person behind them, so they appear
+in the **Requesters** list as `App key: <team> · <environment>`, for example
+the production key of a team. The time range and every filter apply to the
+whole tab at once: the totals, the charts and the recent requests always show
+the same requests. This is also true when you drag across the request volume
+chart to select a time range. Only the state filter applies to the recent
+requests alone.
 
 On the **Local Providers** tab, each worker node has its own section. The
 section shows memory, lane health and GPU metrics. Next to the name of the

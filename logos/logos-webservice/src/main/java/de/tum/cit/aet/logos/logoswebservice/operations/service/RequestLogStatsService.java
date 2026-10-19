@@ -141,9 +141,10 @@ public class RequestLogStatsService {
     }
 
     /**
-     * Same as above, with the API key picker. Keys are narrowed by team,
-     * requester and provider like the provider list is; the provider and model
-     * lists are narrowed by the selected key in turn.
+     * Same as above, with the application and service keys the requester
+     * picker offers next to the people. Like the requesters they are narrowed
+     * by team and provider; the provider and model lists are narrowed by the
+     * selected key in turn.
      */
     public Map<String, Object> getScopeOptions(String startDate, String endDate, Integer teamId,
                                                Integer userId, Integer providerId, Integer apiKeyId,
@@ -166,7 +167,7 @@ public class RequestLogStatsService {
         payload.put("providers",
             toScopeOptions(logEntryRepository.findProvidersWithTraffic(startTs, endTs, teamId, userId, apiKeyId, errorsOnly)));
         payload.put("apiKeys",
-            toScopeOptions(logEntryRepository.findApiKeysWithTraffic(startTs, endTs, teamId, userId, providerId, errorsOnly)));
+            toScopeOptions(logEntryRepository.findApiKeysWithTraffic(startTs, endTs, teamId, providerId, errorsOnly)));
         payload.put("models",
             toScopeOptions(logEntryRepository.findModelsWithTraffic(startTs, endTs, teamId, userId, providerId, apiKeyId, errorsOnly)));
         return payload;

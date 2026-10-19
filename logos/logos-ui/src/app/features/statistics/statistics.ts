@@ -83,6 +83,9 @@ import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
 const RAW_VRAM_SAMPLE_CAP = 720;
+/** Value prefixes of the requester picker, which offers users and application keys. */
+const REQUESTER_USER = 'u:';
+const REQUESTER_KEY = 'k:';
 
 /** One Local Providers glass row — everything the panels for a single worker need. */
 type ProviderGlassRow = {
@@ -248,15 +251,31 @@ export class Statistics implements OnInit, OnDestroy {
   // Both lists carry their request count, so the dropdown says which entries
   // are worth opening instead of being an alphabet of names. Ordered busiest
   // first by the server, which only reads as deliberate once the numbers show.
+  //
+  // A requester is either a person or an application key: the keys a team's
+  // deployments call with (PROD, staging, …) have no person behind them, so
+  // they share this picker with the users instead of taking a row of their
+  // own. Developer keys are not offered — their requests are the owner's.
+  // Values carry the kind, since a user and a key can share an id.
   readonly userFilterOptions = computed<AppSelectOption[]>(() => [
     {
       value: '',
       label: this.filterTeamId() === null ? 'All requesters' : 'Everyone in this team',
     },
-    ...this.feedUsers().map((u) => ({
-      value: String(u.id),
-      label: `${u.label} (${u.requestCount.toLocaleString()})`,
-    })),
+    ...[
+      ...this.feedUsers().map((u) => ({
+        value: `${REQUESTER_USER}${u.id}`,
+        label: `${u.label} (${u.requestCount.toLocaleString()})`,
+        count: u.requestCount,
+      })),
+      ...this.feedApiKeys().map((k) => ({
+        value: `${REQUESTER_KEY}${k.id}`,
+        label: `App key: ${k.label} (${k.requestCount.toLocaleString()})`,
+        count: k.requestCount,
+      })),
+    ]
+      .sort((a, b) => b.count - a.count)
+      .map(({ value, label }) => ({ value, label })),
   ]);
 
   readonly teamFilterOptions = computed<AppSelectOption[]>(() => [
@@ -275,28 +294,21 @@ export class Statistics implements OnInit, OnDestroy {
     })),
   ]);
 
-  // Application keys are how a team tells its deployments apart (PROD, staging,
-  // …), which no requester filter can express: there is no person behind them.
-  readonly apiKeyFilterOptions = computed<AppSelectOption[]>(() => [
-    { value: '', label: 'All API keys' },
-    ...this.feedApiKeys().map((k) => ({
-      value: String(k.id),
-      label: `${k.label} (${k.requestCount.toLocaleString()})`,
-    })),
-  ]);
-
   /**
    * Nobody in the selected team sent anything in this range, so the requester
    * dropdown has nothing but its "everyone" entry. Worth saying outright — an
    * empty picker otherwise reads as a page that failed to load its options.
    */
   readonly noRequestersInScope = computed(
-    () => this.feedUsers().length === 0 && this.feedTeams().length > 0,
+    () =>
+      this.feedUsers().length === 0 && this.feedApiKeys().length === 0 && this.feedTeams().length > 0,
   );
 
   readonly selectedUserValue = computed(() => {
-    const id = this.filterUserId();
-    return id === null ? '' : String(id);
+    const userId = this.filterUserId();
+    if (userId !== null) return `${REQUESTER_USER}${userId}`;
+    const keyId = this.filterApiKeyId();
+    return keyId === null ? '' : `${REQUESTER_KEY}${keyId}`;
   });
 
   readonly selectedTeamValue = computed(() => {
@@ -306,11 +318,6 @@ export class Statistics implements OnInit, OnDestroy {
 
   readonly selectedProviderValue = computed(() => {
     const id = this.filterProviderId();
-    return id === null ? '' : String(id);
-  });
-
-  readonly selectedApiKeyValue = computed(() => {
-    const id = this.filterApiKeyId();
     return id === null ? '' : String(id);
   });
 
@@ -1043,11 +1050,18 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Scope handlers ────────────────────────────────────────────────────────
 
+  /** Pick a requester: a user or an application key, never both at once. */
   setUserFilter(value: string | null): void {
-    const id = value ? Number(value) : null;
-    const next = Number.isFinite(id as number) ? id : null;
-    if (next === this.filterUserId()) return;
-    this.filterUserId.set(next);
+    const parse = (prefix: string): number | null => {
+      if (!value?.startsWith(prefix)) return null;
+      const id = Number(value.slice(prefix.length));
+      return Number.isFinite(id) ? id : null;
+    };
+    const userId = parse(REQUESTER_USER);
+    const keyId = parse(REQUESTER_KEY);
+    if (userId === this.filterUserId() && keyId === this.filterApiKeyId()) return;
+    this.filterUserId.set(userId);
+    this.filterApiKeyId.set(keyId);
     this.applyScope();
     void this.loadScopeOptions();
   }
@@ -1073,15 +1087,6 @@ export class Statistics implements OnInit, OnDestroy {
     const next = Number.isFinite(id as number) ? id : null;
     if (next === this.filterProviderId()) return;
     this.filterProviderId.set(next);
-    this.applyScope();
-    void this.loadScopeOptions();
-  }
-
-  setApiKeyFilter(value: string | null): void {
-    const id = value ? Number(value) : null;
-    const next = Number.isFinite(id as number) ? id : null;
-    if (next === this.filterApiKeyId()) return;
-    this.filterApiKeyId.set(next);
     this.applyScope();
     void this.loadScopeOptions();
   }

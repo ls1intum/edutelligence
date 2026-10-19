@@ -220,7 +220,7 @@ describe('Statistics scope options', () => {
     expect(page.component.feedTeams()).toEqual(fresh.teams);
 
     // ...and narrows to a requester the stale response would not recognise.
-    page.component.setUserFilter('7');
+    page.component.setUserFilter('u:7');
     await Promise.resolve();
     await Promise.resolve();
     const scopesBefore = page.ws.setScope.mock.calls.length;
@@ -281,7 +281,7 @@ describe('Statistics scope options', () => {
     expect(page.component.feedUsers()).toEqual(fresh.requesters);
     expect(page.component.feedTeams()).toEqual(fresh.teams);
 
-    page.component.setUserFilter('7');
+    page.component.setUserFilter('u:7');
     await Promise.resolve();
     await Promise.resolve();
     const scopesBefore = page.ws.setScope.mock.calls.length;
@@ -406,16 +406,16 @@ describe('recent request model and state filters', () => {
   });
 });
 
-describe('API key scope', () => {
+describe('requester picker: users and application keys', () => {
   let fixture: ComponentFixture<Statistics>;
   afterEach(() => {
     fixture?.destroy();
     vi.useRealTimers();
   });
 
-  const keyOptions = () => ({
+  const options = () => ({
     teams: [],
-    requesters: [],
+    requesters: [{ id: 41, label: 'Ada Lovelace', requestCount: 30 }],
     providers: [],
     models: [],
     apiKeys: [
@@ -424,42 +424,61 @@ describe('API key scope', () => {
     ],
   });
 
-  it('narrows the whole page to the picked key and names it above the totals', async () => {
-    const page = await pageAt(vi.fn().mockResolvedValue(keyOptions()));
+  it('offers people and application keys in one list, busiest first', async () => {
+    const page = await pageAt(vi.fn().mockResolvedValue(options()));
     fixture = page.fx;
     await Promise.resolve();
-    expect(page.component.apiKeyFilterOptions()).toEqual([
-      { value: '', label: 'All API keys' },
-      { value: '41', label: 'Artemis · PROD (900)' },
-      { value: '42', label: 'Artemis · staging (12)' },
+    // A user and a key may share an id, so the value carries the kind.
+    expect(page.component.userFilterOptions()).toEqual([
+      { value: '', label: 'All requesters' },
+      { value: 'k:41', label: 'App key: Artemis · PROD (900)' },
+      { value: 'u:41', label: 'Ada Lovelace (30)' },
+      { value: 'k:42', label: 'App key: Artemis · staging (12)' },
     ]);
+  });
+
+  it('narrows the page to either a user or a key, never both', async () => {
+    const page = await pageAt(vi.fn().mockResolvedValue(options()));
+    fixture = page.fx;
+    await Promise.resolve();
     page.component.statsPending.set(false);
 
-    page.component.setApiKeyFilter('41');
-
-    expect(page.ws.setScope).toHaveBeenLastCalledWith(expect.objectContaining({ apiKeyId: 41 }));
+    page.component.setUserFilter('k:41');
+    expect(page.ws.setScope).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: null, apiKeyId: 41 }),
+    );
     // The cards and charts are blanked until the server answers for the key.
     expect(page.component.statsPending()).toBe(true);
-    expect(page.component.filterActive()).toBe(true);
+    expect(page.component.selectedUserValue()).toBe('k:41');
     expect(page.component.filterLabel()).toBe('Artemis · PROD');
     expect(page.getScopeOptions).toHaveBeenLastCalledWith(
       expect.any(String), expect.any(String), expect.objectContaining({ apiKeyId: 41 }),
     );
 
+    // Switching to a person drops the key.
+    page.component.setUserFilter('u:41');
+    expect(page.ws.setScope).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 41, apiKeyId: null }),
+    );
+    expect(page.component.selectedUserValue()).toBe('u:41');
+
+    page.component.setUserFilter('k:42');
     page.component.clearFilters();
-    expect(page.ws.setScope).toHaveBeenLastCalledWith(expect.objectContaining({ apiKeyId: null }));
+    expect(page.ws.setScope).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: null, apiKeyId: null }),
+    );
     expect(page.component.filterActive()).toBe(false);
   });
 
   it('drops a selected key the new range no longer holds', async () => {
     let calls = 0;
     const getScopeOptions = vi.fn(() =>
-      Promise.resolve(calls++ === 0 ? keyOptions() : { ...keyOptions(), apiKeys: [] }),
+      Promise.resolve(calls++ === 0 ? options() : { ...options(), apiKeys: [] }),
     );
     const page = await pageAt(getScopeOptions);
     fixture = page.fx;
     await Promise.resolve();
-    page.component.setApiKeyFilter('42');
+    page.component.setUserFilter('k:42');
     await Promise.resolve();
     await Promise.resolve();
 
@@ -489,10 +508,10 @@ describe('selector placement on the requests tab', () => {
     // page scope ...
     expect(scope.querySelector('app-multi-select')).not.toBeNull();
     expect(scope.querySelector('select[aria-label="Filter requests by state"]')).not.toBeNull();
-    // ... team / requester / API key / provider are searchable single-selects
-    // (not a second multi-select beside the feed), and outcomes are gone —
-    // only the feed state selector remains for lifecycle buckets ...
-    expect(scope.querySelectorAll('app-searchable-select')).toHaveLength(4);
+    // ... team / requester / provider are searchable single-selects (not a
+    // second multi-select beside the feed), and outcomes are gone — only the
+    // feed state selector remains for lifecycle buckets ...
+    expect(scope.querySelectorAll('app-searchable-select')).toHaveLength(3);
     expect(scope.querySelector('[aria-label="Filter by outcome"]')).toBeNull();
     expect(
       el.querySelectorAll('[aria-label^="Filter by provider"]'),
