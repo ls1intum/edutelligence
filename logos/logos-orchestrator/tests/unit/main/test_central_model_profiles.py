@@ -11,6 +11,7 @@ from fastapi import WebSocketDisconnect
 
 import logos as main_mod
 from logos.dbutils.dbrequest import (
+    LogosKeyModel,
     LogosNodeClearUnsupportedRequest,
     LogosNodeInvalidateCalibrationRequest,
     LogosNodeModelProfilesRequest,
@@ -91,9 +92,9 @@ class _FakeDB:
         self.reported_keys.append((provider_id, key_hashes))
         self.slice_counts = slice_gpu_counts
 
-    def adopt_shared_calibrations(self, provider_id, model_names, max_age_days):
-        self.adopted.append((provider_id, model_names, max_age_days))
-        return self.adoptions
+    def adopt_shared_calibrations(self, provider_id, model_names, max_age_days, adopt=True):
+        self.adopted.append((provider_id, model_names, max_age_days, adopt))
+        return self.adoptions if adopt else []
 
     def adopt_shared_calibration_for_siblings(self, provider_id, model_name, max_age_days, skip=None):
         return [(p, c) for p, c in self.sibling_adopters.get(model_name, []) if skip is None or not skip(p)]
@@ -537,7 +538,7 @@ def test_a_reported_key_lets_the_node_adopt_a_shared_calibration(monkeypatch):
     monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
     logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H1"}, {"org/model": 2})
     assert db.slice_counts == {"org/model": 2}
-    assert db.adopted == [(5, ["org/model"], 30)]
+    assert db.adopted == [(5, ["org/model"], 30, True)]
 
 
 def test_sharing_can_be_switched_off(monkeypatch):
@@ -545,7 +546,8 @@ def test_sharing_can_be_switched_off(monkeypatch):
     monkeypatch.setenv("LOGOS_SHARED_PROFILES", "0")
     monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
     logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H1"}, {"org/model": 2})
-    assert db.reported_keys and db.adopted == []
+    assert db.reported_keys
+    assert db.adopted == [(5, ["org/model"], 30, False)]  # a misfit calibration is still dropped
     assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {}
 
 
@@ -575,7 +577,7 @@ def test_a_reconnecting_node_does_not_adopt_the_model_it_is_calibrating(monkeypa
     monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
     monkeypatch.setattr(logosnode_mod, "_calibrating_model", lambda pid: "org/busy")
     logosnode_mod._update_reported_calibration_keys(5, {"org/busy": "H1", "org/idle": "H2"}, {})
-    assert db.adopted == [(5, ["org/idle"], 30)]
+    assert db.adopted == [(5, ["org/idle"], 30, True)]
 
 
 def test_a_reset_says_whether_calibration_sharing_is_on(monkeypatch):
@@ -627,3 +629,26 @@ def test_a_rejection_without_a_calibration_id_is_ignored(monkeypatch):
 def test_gpu_counts_from_the_worker_are_kept_only_when_positive_integers():
     assert logosnode_mod._int_map({"a": 2, "b": 0, "c": "3", "d": True, "e": -1}) == {"a": 2}
     assert logosnode_mod._int_map(None) == {}
+
+
+def test_a_failing_adoption_never_keeps_a_worker_from_its_profiles(monkeypatch):
+    class _BrokenAdoption(_FakeDB):
+        def adopt_shared_calibrations(self, provider_id, model_names, max_age_days):
+            raise RuntimeError("sql error")
+
+    db = _BrokenAdoption()
+    rollbacks: list = []
+    db.session.rollback = lambda: rollbacks.append(1)
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H1"}, {"org/model": 2})
+    assert db.reported_keys == [(5, {"org/model": "H1"})]
+    assert rollbacks == [1]
+
+
+def test_the_sharing_setting_can_be_read_without_changing_it(monkeypatch):
+    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: None)
+    data = LogosKeyModel(logos_key="k")
+    result = asyncio.run(logosnode_mod.logosnode_calibration_sharing(data))
+    assert result == {"shared_profiles": True, "max_age_days": 30}
+    monkeypatch.setenv("LOGOS_SHARED_PROFILES", "0")
+    assert asyncio.run(logosnode_mod.logosnode_calibration_sharing(data))["shared_profiles"] is False

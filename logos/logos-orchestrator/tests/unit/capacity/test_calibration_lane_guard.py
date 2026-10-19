@@ -74,6 +74,15 @@ def test_the_model_in_calibration_follows_the_worker_events():
     assert registry.calibrating_model(1) is None
 
 
+def test_a_reconnecting_worker_restores_the_model_it_is_probing():
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.on_hello(1, "worker-a", calibrating=True, calibrating_model="org/m"))
+    assert registry.calibrating_model(1) == "org/m"
+
+    asyncio.run(registry.on_hello(1, "worker-a", calibrating=False, calibrating_model="org/m"))
+    assert registry.calibrating_model(1) is None  # not calibrating: nothing to protect
+
+
 def test_cancelled_session_also_clears_the_flag():
     """A stop mid-session must not strand the worker as permanently excluded."""
     registry, _ = _registry_with_session()

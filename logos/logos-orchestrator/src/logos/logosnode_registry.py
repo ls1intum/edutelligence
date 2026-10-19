@@ -779,6 +779,7 @@ class LogosNodeRuntimeRegistry:
         configured_models: list[str] | None = None,
         calibrating: bool | None = None,
         actions: list[str] | None = None,
+        calibrating_model: str | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -803,6 +804,9 @@ class LogosNodeRuntimeRegistry:
         if calibrating is not None:
             session.optimistic_calibration_until = None
             self._set_calibrating(session, bool(calibrating), "hello")
+            # A new session knows nothing of the model its worker is probing;
+            # the replayed start event is never applied.
+            session.calibrating_model = (calibrating_model or None) if calibrating else None
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:

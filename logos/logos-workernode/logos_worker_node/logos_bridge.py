@@ -577,6 +577,7 @@ class LogosBridgeClient:
                 # start clears it, and reporting that as live would exclude this
                 # worker from placement for as long as no new session begins.
                 "calibrating": self._calibration_session_is_live(),
+                "calibrating_model": self._calibrating_model(),
                 "calibration_key_hashes": calibration_key_hashes,
                 "slice_gpu_counts": slice_gpu_counts,
                 "actions": [
@@ -975,6 +976,10 @@ class LogosBridgeClient:
             return await self._handle_run_compatibility_precheck(params)
 
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _calibrating_model(self) -> str | None:
+        session = self._active_calibration_session
+        return session.current_model if session is not None and self._calibration_session_is_live() else None
 
     def _handle_sync_model_profiles(self, params: dict[str, Any]) -> dict[str, Any]:
         """Adopt profiles Logos changed centrally (a new calibration snapshot,
@@ -1728,7 +1733,7 @@ class LogosBridgeClient:
         )
         self._record_calibration_probe_log(model_name, result, None)
 
-    def _list_uncalibrated_models(self) -> list[str]:
+    def _list_uncalibrated_models(self, log_skips: bool = True) -> list[str]:
         """Pick configured models that still need calibration.
 
         Mirrors the previous server-side selection logic so behaviour is
@@ -1757,11 +1762,12 @@ class LogosBridgeClient:
         ordered: list[str] = []
         for model_name in candidates:
             if model_name in session_skip_models:
-                logger.info(
-                    "[Calibration] skipping %s — orchestrator flagged it as "
-                    "too large for this node's known capacity",
-                    model_name,
-                )
+                if log_skips:
+                    logger.info(
+                        "[Calibration] skipping %s — orchestrator flagged it as "
+                        "too large for this node's known capacity",
+                        model_name,
+                    )
                 continue
             profile = model_profiles.get_profile(model_name)
             if profile is not None and profile.calibration_unsupported:
@@ -1925,7 +1931,7 @@ class LogosBridgeClient:
                     break
 
                 # Logos may have handed it a calibration measured elsewhere.
-                if model_name not in self._list_uncalibrated_models():
+                if model_name not in self._list_uncalibrated_models(log_skips=False):
                     self._record_calibration_event(
                         "calibration_model_skipped", model=model_name, details="calibrated meanwhile"
                     )

@@ -2039,19 +2039,46 @@ class DBManager:
         self.session.commit()
 
     def adopt_shared_calibrations(
-        self, provider_id: int, model_names: List[str], max_age_days: int
+        self, provider_id: int, model_names: List[str], max_age_days: int, adopt: bool = True
     ) -> List[Tuple[str, int]]:
         """Give a node another node's calibration for each model it fits.
 
-        Returns the (model, calibration_id) pairs adopted; commits once.
+        With ``adopt`` off, a shared calibration that no longer fits is only
+        dropped. Returns the (model, calibration_id) pairs adopted; commits
+        once.
         """
         adopted = []
-        for model_name in model_names:
-            _, calibration_id = self._adopt_shared_calibration(provider_id, model_name, max_age_days)
+        for model_name in self._adoption_candidates(provider_id, model_names):
+            _, calibration_id = self._adopt_shared_calibration(provider_id, model_name, max_age_days, adopt)
             if calibration_id is not None:
                 adopted.append((model_name, calibration_id))
         self.session.commit()
         return adopted
+
+    def _adoption_candidates(self, provider_id: int, model_names: List[str]) -> List[str]:
+        """The models whose calibration may need to change; a reconnecting node
+        that is already settled costs this one query."""
+        if not model_names:
+            return []
+        rows = self.session.execute(
+            text("""
+                SELECT mp.model_name
+                FROM model_profiles mp
+                LEFT JOIN model_calibrations mc ON mc.id = mp.calibration_id
+                WHERE mp.provider_id = :provider_id
+                  AND mp.model_name = ANY(CAST(:model_names AS text[]))
+                  AND mp.calibration_key_hash IS NOT NULL
+                  AND COALESCE(mp.slice_gpu_count, 0) > 0
+                  AND (mc.calibration_key_hash IS DISTINCT FROM mp.calibration_key_hash
+                       OR (mc.source_provider_id IS DISTINCT FROM mp.provider_id
+                           AND CASE WHEN mc.profile->>'tensor_parallel_size' ~ '^[0-9]+$'
+                                    THEN (mc.profile->>'tensor_parallel_size')::int ELSE 1 END
+                               > mp.slice_gpu_count))
+                ORDER BY mp.model_name
+            """),
+            {"provider_id": provider_id, "model_names": list(model_names)},
+        ).fetchall()
+        return [str(row.model_name) for row in rows]
 
     def adopt_shared_calibration_for_siblings(
         self,
@@ -2106,19 +2133,23 @@ class DBManager:
         ).fetchone()
 
     def _adopt_shared_calibration(
-        self, provider_id: int, model_name: str, max_age_days: int
+        self, provider_id: int, model_name: str, max_age_days: int, adopt: bool = True
     ) -> Tuple[bool, Optional[int]]:
         """Drop a shared calibration the node's GPUs no longer fit, else adopt one.
 
         Returns whether the row changed and the snapshot adopted. The
         snapshot is locked before the row, as invalidation does, so one
-        invalidated meanwhile is never linked.
+        invalidated meanwhile is never linked; FOR UPDATE keeps two adopters
+        from deadlocking on its counter.
         """
         hint = self._node_calibration_state(provider_id, model_name)
         if hint is None or not hint.calibration_key_hash or not hint.slice_gpu_count:
             return False, None
-        snapshot = self.session.execute(
-            text("""
+        snapshot = (
+            None
+            if not adopt
+            else self.session.execute(
+                text("""
                 SELECT id, profile
                 FROM model_calibrations
                 WHERE model_name = :model_name
@@ -2131,16 +2162,17 @@ class DBManager:
                            THEN (profile->>'tensor_parallel_size')::int ELSE 1 END <= :slice_gpu_count
                 ORDER BY calibrated_at DESC
                 LIMIT 1
-                FOR SHARE
+                FOR UPDATE
             """),
-            {
-                "model_name": model_name,
-                "key_hash": hint.calibration_key_hash,
-                "provider_id": provider_id,
-                "max_age_days": int(max_age_days),
-                "slice_gpu_count": int(hint.slice_gpu_count),
-            },
-        ).fetchone()
+                {
+                    "model_name": model_name,
+                    "key_hash": hint.calibration_key_hash,
+                    "provider_id": provider_id,
+                    "max_age_days": int(max_age_days),
+                    "slice_gpu_count": int(hint.slice_gpu_count),
+                },
+            ).fetchone()
+        )
         node = self._node_calibration_state(provider_id, model_name, lock=True)
         if (
             node is None

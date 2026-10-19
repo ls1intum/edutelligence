@@ -171,3 +171,16 @@ def test_an_implausible_gpu_count_is_dropped_instead_of_failing_the_report():
     db.update_reported_calibration_keys(7, {"a": "H1", "b": "H2", "c": "H3"}, {"a": 10**12, "b": -1, "c": 4})
     _sql, params = db.session.execute.call_args.args
     assert params["slice_counts"] == [None, None, 4]
+
+
+def test_a_settled_node_costs_one_query_to_find_nothing_to_adopt():
+    db = _db()
+    db.session.execute.return_value.fetchall.return_value = []
+    assert db.adopt_shared_calibrations(7, ["a", "b"], 30) == []
+    assert db.session.execute.call_count == 1
+
+
+def test_no_models_cost_no_query():
+    db = _db()
+    assert db.adopt_shared_calibrations(7, [], 30) == []
+    db.session.execute.assert_not_called()

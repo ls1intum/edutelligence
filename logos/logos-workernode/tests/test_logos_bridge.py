@@ -3858,6 +3858,7 @@ async def test_hello_offers_profile_sync_with_the_current_calibration_keys(tmp_p
     assert set(hello["calibration_key_hashes"]) == {"org/ready", "org/pending"}
     assert hello["calibration_key_hashes"] == client._app.state.model_profiles.calibration_key_hashes()  # noqa: SLF001
     assert hello["slice_gpu_counts"] == {"org/ready": 2}
+    assert hello["calibrating"] is False and hello["calibrating_model"] is None
 
 
 @pytest.mark.asyncio
@@ -4108,7 +4109,7 @@ async def test_a_model_calibrated_meanwhile_is_not_calibrated_again(tmp_path, mo
     )
     monkeypatch.setattr("logos_worker_node.calibration.plans_from_config", lambda _p: [])
     answers = iter([["org/first", "org/second"], ["org/first", "org/second"], []])
-    monkeypatch.setattr(client, "_list_uncalibrated_models", lambda: next(answers))  # noqa: SLF001
+    monkeypatch.setattr(client, "_list_uncalibrated_models", lambda **_kw: next(answers))  # noqa: SLF001
 
     response = await client._handle_start_calibration_session({"sleep_level": 0})  # noqa: SLF001
     assert response["ok"] is True

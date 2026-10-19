@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 import logos.main as _main
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbrequest import (
+    LogosKeyModel,
     LogosNodeApplyLanesRequest,
     LogosNodeAuthRequest,
     LogosNodeClearUnsupportedRequest,
@@ -504,12 +505,20 @@ def _update_reported_calibration_keys(
     """Store what a node reports about its models, then let it adopt."""
     with DBManager() as db:
         db.update_reported_calibration_keys(provider_id, calibration_key_hashes, slice_gpu_counts)
-        if not shared_profiles_enabled():
-            return
         # Its own result for the model in progress would be discarded.
         busy = _calibrating_model(provider_id)
         models = [name for name in calibration_key_hashes if name != busy]
-        adopted = db.adopt_shared_calibrations(provider_id, models, shared_profile_max_age_days())
+        try:
+            # Switched off, a calibration that stopped fitting still goes.
+            adopted = db.adopt_shared_calibrations(
+                provider_id, models, shared_profile_max_age_days(), adopt=shared_profiles_enabled()
+            )
+        except Exception:
+            # Sharing is an optimisation; it must not keep a worker from
+            # starting or from receiving its profiles.
+            db.session.rollback()
+            logger.warning("Calibration sharing failed for provider %s", provider_id, exc_info=True)
+            return
     for model_name, calibration_id in adopted:
         _profile_write_cache.forget(provider_id, model_name)
         logger.info(
@@ -892,6 +901,9 @@ async def logosnode_session(websocket: WebSocket, token: str):
                         bool(payload.get("calibrating")) if isinstance(payload.get("calibrating"), bool) else None
                     ),
                     actions=(payload.get("actions") if isinstance(payload.get("actions"), list) else None),
+                    calibrating_model=(
+                        payload["calibrating_model"] if isinstance(payload.get("calibrating_model"), str) else None
+                    ),
                 )
                 _schedule_model_profile_push(
                     ticket.provider_id,
@@ -1189,6 +1201,13 @@ async def logosnode_invalidate_calibration(data: LogosNodeInvalidateCalibrationR
         "calibration_id": data.calibration_id,
         "affected": [{"provider_id": pid, "model_name": name} for pid, name in affected],
     }
+
+
+@router.post("/logosdb/providers/logosnode/calibration-sharing", tags=["logosnode"])
+async def logosnode_calibration_sharing(data: LogosKeyModel):
+    """Whether nodes may adopt each other's calibrations; changes nothing."""
+    await asyncio.to_thread(_require_root_access, data.logos_key)
+    return {"shared_profiles": shared_profiles_enabled(), "max_age_days": shared_profile_max_age_days()}
 
 
 @router.post("/logosdb/providers/logosnode/model-profiles/reset", tags=["logosnode"])

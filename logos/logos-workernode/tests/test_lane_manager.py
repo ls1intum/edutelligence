@@ -4380,27 +4380,59 @@ def _shared_profile_manager(**profile: Any) -> LaneManager:
     registry.replace_from_sync(
         {"org/m": {"base_residency_mb": 5.0, "sync_revision": 1, "calibration_id": 11, **profile}}
     )
-    return LaneManager(WorkerConfig(), lane_port_start=15200, lane_port_end=15210, model_profiles=registry)
+    manager = LaneManager(WorkerConfig(), lane_port_start=15200, lane_port_end=15210, model_profiles=registry)
+    manager._note_lane_spawn("lane-1", "org/m")  # noqa: SLF001
+    return manager
 
 
 def _rejections(manager: LaneManager) -> list[tuple[str, str]]:
     return [(e.model, e.details) for e in manager._event_log if e.event == "calibration_rejected"]  # noqa: SLF001
 
 
-def test_an_unproven_shared_calibration_is_reported_once_when_its_lane_fails() -> None:
+_OOM = SimpleNamespace(recent_log_tail="INFO loading | torch.OutOfMemoryError: CUDA out of memory. Tried to allocate")
+
+
+def test_an_unproven_shared_calibration_is_reported_once_when_its_lane_runs_out_of_memory() -> None:
     manager = _shared_profile_manager(calibration_origin="shared")
-    manager._reject_unproven_shared_calibration("lane-1", "org/m")  # noqa: SLF001
-    manager._reject_unproven_shared_calibration("lane-1", "org/m")  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
     assert _rejections(manager) == [("org/m", "11")]
 
 
-def test_a_shared_calibration_that_served_here_is_not_blamed() -> None:
-    manager = _shared_profile_manager(calibration_origin="shared", measurement_count=3)
-    manager._reject_unproven_shared_calibration("lane-1", "org/m")  # noqa: SLF001
+def test_a_start_failing_for_another_reason_says_nothing_about_the_calibration() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    for tail in ("OSError: Can't load tokenizer", "Address already in use", ""):
+        handle = SimpleNamespace(recent_log_tail=tail)
+        manager._reject_unproven_shared_calibration("lane-1", "org/m", handle)  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", None)  # noqa: SLF001
     assert _rejections(manager) == []
+
+
+def test_a_shared_calibration_whose_lane_was_seen_serving_is_not_blamed() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    manager._note_lane_served("lane-1", "org/m")  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
+    assert _rejections(manager) == []
+
+
+def test_a_lane_started_before_the_calibration_changed_is_not_blamed_for_it() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    manager._lane_calibration_at_spawn["lane-1"] = 7  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
+    assert _rejections(manager) == []
+    # it is up under the old numbers; that proves nothing for the new ones
+    manager._note_lane_served("lane-1", "org/m")  # noqa: SLF001
+    assert manager._served_models == {}  # noqa: SLF001
+
+
+def test_serving_is_recorded_even_when_no_vram_is_measured() -> None:
+    manager = _shared_profile_manager(calibration_origin="shared")
+    status = SimpleNamespace(lane_id="lane-1", model="org/m", runtime_state="running", effective_vram_mb=0.0)
+    manager._record_profile_from_status(status)  # noqa: SLF001
+    assert manager._served_models == {"org/m": 11}  # noqa: SLF001
 
 
 def test_a_local_calibration_is_never_reported_as_rejected() -> None:
     manager = _shared_profile_manager(calibration_origin="local")
-    manager._reject_unproven_shared_calibration("lane-1", "org/m")  # noqa: SLF001
+    manager._reject_unproven_shared_calibration("lane-1", "org/m", _OOM)  # noqa: SLF001
     assert _rejections(manager) == []

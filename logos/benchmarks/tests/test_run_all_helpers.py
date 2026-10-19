@@ -445,3 +445,92 @@ def test_a_reset_for_the_matching_or_unchecked_arm_goes_through():
     assert _reset_with(True, True) == ["m1"]
     assert _reset_with(False, None) == ["m1"]
     assert _reset_with(None, False) == ["m1"]  # an older Logos does not say
+
+
+def _sharing_setting(shared, status=200):
+    class _Resp:
+        status_code = status
+        text = ""
+
+        def json(self):
+            return {"shared_profiles": shared}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def post(self, *a, **k):
+            return _Resp()
+
+    return patch.object(bm.httpx, "AsyncClient", _Client)
+
+
+def test_the_sharing_setting_is_read_without_changing_anything():
+    with _sharing_setting(True):
+        asyncio.run(bm._verify_sharing_arm("https://x", "k", True))
+        asyncio.run(bm._verify_sharing_arm("https://x", "k", None))
+        with pytest.raises(RuntimeError, match="LOGOS_SHARED_PROFILES=0"):
+            asyncio.run(bm._verify_sharing_arm("https://x", "k", False))
+
+
+def test_an_older_logos_without_the_setting_falls_back_to_the_reset_check():
+    with _sharing_setting(None, status=404):
+        asyncio.run(bm._verify_sharing_arm("https://x", "k", False))
+
+
+def test_the_wrong_arm_is_refused_before_workers_stop_or_profiles_change():
+    with (
+        _sharing_setting(True),
+        patch.object(bm, "_stop_workernode_via_ssh") as stop,
+        patch.object(bm, "_reset_profiles_via_rest", new=AsyncMock(return_value=[])) as reset,
+        patch.object(bm, "_wipe_calibration_and_weights_via_ssh") as wipe,
+    ):
+        with pytest.raises(RuntimeError, match="calibration sharing on"):
+            asyncio.run(
+                bm._reset_and_calibrate_all_nodes(
+                    ["h1"],
+                    "u",
+                    None,
+                    "/opt/wn",
+                    ["m1"],
+                    None,
+                    10.0,
+                    "https://x",
+                    "k",
+                    [3],
+                    443,
+                    True,
+                    expect_shared_profiles=False,
+                )
+            )
+    stop.assert_not_called()
+    reset.assert_not_awaited()
+    wipe.assert_not_called()
+
+
+def test_the_incomplete_calibration_flow_checks_the_arm_even_when_nothing_is_pending():
+    with _sharing_setting(True), patch.object(bm, "_stop_workernode_via_ssh") as stop:
+        with pytest.raises(RuntimeError, match="calibration sharing on"):
+            asyncio.run(
+                bm._ensure_calibration_complete_all_nodes(
+                    ["h1"],
+                    "u",
+                    None,
+                    "/opt/wn",
+                    ["m1"],
+                    10.0,
+                    "https://x",
+                    "k",
+                    [3],
+                    443,
+                    True,
+                    expect_shared_profiles=False,
+                )
+            )
+    stop.assert_not_called()

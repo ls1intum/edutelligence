@@ -5260,6 +5260,32 @@ async def _wait_for_calibration_complete(
             await asyncio.sleep(poll_interval_s)
 
 
+def _sharing_mismatch_message(shared: bool, expect_shared: bool) -> str:
+    return (
+        f"Logos runs with calibration sharing {'on' if shared else 'off'} but --shared-profiles "
+        f"{'on' if expect_shared else 'off'} was given. Set LOGOS_SHARED_PROFILES="
+        f"{1 if expect_shared else 0} on the Logos server and restart it, or drop the option."
+    )
+
+
+async def _verify_sharing_arm(admin_url: str, logos_key: str, expect_shared: Optional[bool]) -> None:
+    """Refuse the wrong sharing arm before any node is stopped or any profile reset."""
+    if expect_shared is None:
+        return
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        r = await client.post(
+            f"{admin_url}/logosdb/providers/logosnode/calibration-sharing", json={"logos_key": logos_key}
+        )
+    if r.status_code == 404:
+        print("  [calib] WARNING: this Logos cannot report its sharing setting; the reset response is checked instead.")
+        return
+    if r.status_code != 200:
+        raise RuntimeError(f"Cannot read the calibration sharing setting: HTTP {r.status_code} {r.text[:200]}")
+    shared = bool((r.json() or {}).get("shared_profiles"))
+    if shared != expect_shared:
+        raise RuntimeError(_sharing_mismatch_message(shared, expect_shared))
+
+
 def _expected_shared_profiles(args: argparse.Namespace) -> Optional[bool]:
     choice = getattr(args, "shared_profiles", None)
     return None if choice is None else choice == "on"
@@ -5292,11 +5318,7 @@ async def _reset_profiles_via_rest(
     state = "unknown" if shared is None else ("on" if shared else "off")
     print(f"  [calib] provider {provider_id}: reset {len(reset)} profile(s), calibration sharing {state}")
     if expect_shared is not None and shared is not None and bool(shared) != expect_shared:
-        raise RuntimeError(
-            f"Logos runs with calibration sharing {state} but --shared-profiles "
-            f"{'on' if expect_shared else 'off'} was given. Set LOGOS_SHARED_PROFILES="
-            f"{1 if expect_shared else 0} on the Logos server and restart it, or drop the option."
-        )
+        raise RuntimeError(_sharing_mismatch_message(bool(shared), expect_shared))
     return reset
 
 
@@ -5405,6 +5427,7 @@ async def _reset_and_calibrate_all_nodes(
         )
         return False
     admin_url = _admin_base_url(logos_url, admin_port)
+    await _verify_sharing_arm(admin_url, logos_key, expect_shared_profiles)
     _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
     for pid in provider_ids:
         await _reset_profiles_via_rest(admin_url, logos_key, pid, expect_shared=expect_shared_profiles)
@@ -5482,6 +5505,7 @@ async def _ensure_calibration_complete_all_nodes(
     """
     models = list(benchmark_models)
     admin_url = _admin_base_url(logos_url, admin_port)
+    await _verify_sharing_arm(admin_url, logos_key, expect_shared_profiles)
 
     print("\n[Ensure-Calibrate] Checking calibration status on all providers ...")
     pending_by_provider: dict[int, list[str]] = {}
