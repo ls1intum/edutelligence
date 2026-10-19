@@ -37,13 +37,13 @@ You never have to paste your code, an error message or a slide into the chat. Ir
 
 ## Citations
 
-When Iris answers from course content, it places **source chips** beside the sentences they support. Each chip carries a short label naming what the source is about, and its icon tells you whether it came from a slide deck, a video transcript or one of the course FAQs.
+When Iris answers from course content, it places **citation markers** inline, beside the sentences they support. Each marker carries a short label naming what the source is about, and its icon tells you whether it came from a slide deck, a video transcript or one of the course FAQs.
 
-Hover over a chip to see a one- or two-sentence summary of the source, and for lecture material the unit and lecture it belongs to. Where several sources back the same sentence, their chips sit together and you can step through them.
+Hover over a marker to see a one- or two-sentence summary of the source, and for lecture material the unit and lecture it belongs to. Where several sources back the same sentence, their markers sit together and you can step through them.
 
-Clicking a lecture chip opens that unit, with the slides at the cited page or the video at the cited moment. That is what makes a citation worth having: it shows you where Iris found support, so you can check the answer against the material rather than take it on trust.
+Clicking a lecture marker opens that unit, with the slides at the cited page or the video at the cited moment. That is what makes a citation worth having: it shows you where Iris found support, so you can check the answer against the material rather than take it on trust.
 
-![A source chip with its summary tooltip open](/img/screenshots/iris-citation.png)
+![A citation marker with its summary tooltip open](/img/screenshots/iris-citation.png)
 
 Occasionally a citation opens the unit without jumping to the exact place. That happens when the slides or the video have been replaced since the answer was written, so the page or moment named in it may no longer hold the same content. Artemis tells you which of those applies, and you can ask again for an answer based on the current material once it has been processed.
 

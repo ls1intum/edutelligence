@@ -82,7 +82,7 @@ The tool's docstring states plainly that this is not a search: it returns the on
 
 ### Citations without a tool call
 
-`_build_current_view()` also stores its content under `lecture_content_storage["current_view"]`. The citation pipeline merges that with whatever the retrieval tool retrieved, so an answer about the open slide carries a source chip even if the agent never retrieved anything. See [citations](./citations.md#what-gets-cited).
+`_build_current_view()` also stores its content under `lecture_content_storage["current_view"]`. The citation pipeline merges that with whatever the retrieval tool retrieved, so an answer about the open slide carries a citation marker even if the agent never retrieved anything. See [citations](./citations.md#what-gets-cited).
 
 ## Going stale mid-run
 

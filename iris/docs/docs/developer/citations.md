@@ -31,8 +31,8 @@ A citation is a bracketed block of colon-separated fields embedded in the answer
 | `page`      | The slide's **index in the deck**, set only for a slide citation. Empty otherwise. |
 | `start`     | A transcription segment's start time in whole seconds. Empty for a slide citation. |
 | `end`       | That segment's end time in whole seconds. Empty for a slide citation.              |
-| `keyword`   | The chip's short label, generated per citation.                                    |
-| `summary`   | The one-to-two-sentence explanation shown in the chip's tooltip.                   |
+| `keyword`   | The marker's short label, generated per citation.                                  |
+| `summary`   | The one-to-two-sentence explanation shown in the marker's tooltip.                 |
 
 A lecture citation is therefore either positioned on a slide (`page` set) or on a video moment (`start`/`end` set), never both: each citation points back at exactly one retrieved page chunk or one transcription segment. FAQ citations carry no position at all.
 
@@ -97,7 +97,7 @@ The lecture run cites the union of two sources, merged by `_merge_lecture_conten
 - **What the lecture retrieval tool retrieved**, under `lecture_content_storage["content"]`.
 - **The material at the student's current position**, under `lecture_content_storage["current_view"]`, stored before the agent ran. This is what makes an answer about the open slide carry a citation even when the agent never called the retrieval tool. See [viewing context](./viewing-context.md).
 
-De-duplication matters because the current slide is frequently also returned by RAG, and the same paragraph cited twice becomes two chips on one sentence.
+De-duplication matters because the current slide is frequently also returned by RAG, and the same paragraph cited twice becomes two markers on one sentence.
 
 The current view is dropped when the agent switched the chat context during the run: the answer is then about the target lecture, and the position the student still has open belongs to the previous one.
 
@@ -115,4 +115,4 @@ These paths preserve the answer text, but an unexpected enrichment error can lea
 
 ## Language
 
-`user_language` prepends a one-line instruction to every prompt in the run, so the keyword and summary of a chip are written in the student's language rather than in the language of the slide.
+`user_language` prepends a one-line instruction to every prompt in the run, so the keyword and summary of a marker are written in the student's language rather than in the language of the slide.

@@ -58,7 +58,7 @@ Iris stops a superseded run at a checkpoint and guards the write phases of the c
 
 ## How Iris Uses Lecture Content
 
-Once ingested, Iris draws on your lecture materials when answering student questions. A chat set to a specific lecture retrieves from that lecture, and a chat at course level retrieves across all of them. When Iris uses a slide or a passage from a recording, it attaches a source chip to the sentence it supports, and a student clicking that chip lands on the cited page or video moment.
+Once ingested, Iris draws on your lecture materials when answering student questions. A chat set to a specific lecture retrieves from that lecture, and a chat at course level retrieves across all of them. When Iris uses a slide or a passage from a recording, it attaches a citation marker to the sentence it supports, and a student clicking that marker lands on the cited page or video moment.
 
 This is particularly valuable because it means Iris does not rely solely on its general training data. It can answer questions specific to your course — including topics covered in a unique way, institutional conventions, or domain-specific terminology you use in your lectures.
 
