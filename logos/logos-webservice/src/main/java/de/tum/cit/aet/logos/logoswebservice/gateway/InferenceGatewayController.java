@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -73,6 +74,10 @@ public class InferenceGatewayController {
 
     @RequestMapping({"/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**"})
     public ResponseEntity<StreamingResponseBody> handle(HttpServletRequest request) throws IOException {
+        // Taken before the key lookup: waiting for a database connection or a
+        // budget refresh is part of what the caller waited for, and the log
+        // row should show it.
+        Instant arrivedAt = Instant.now();
         String apiKeyValue = GatewayApiKeyExtractor.extract(request);
         String path = pathWithinApp(request);
 
@@ -117,7 +122,7 @@ public class InferenceGatewayController {
                 cloudRateLimiter.enforce(ctx.key(), body);
                 String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
                 Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), body, logLevel);
+                    ctx.key(), decision.deployment(), body, logLevel, arrivedAt);
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
@@ -130,8 +135,8 @@ public class InferenceGatewayController {
                     copyHeaders(request),
                     GatewayLoggingLevel.storesPayloads(logLevel),
                     result -> cloudAccounting.settleSuccess(
-                        logId, result.usage(), result.responseBody(), result.serviceTier()),
-                    err -> cloudAccounting.settleFailure(logId, err));
+                        logId, result.usage(), result.responseBody(), result.serviceTier(), result.timings()),
+                    (err, timings) -> cloudAccounting.settleFailure(logId, err, timings));
             }
             log.debug("Orchestrator proxy {} {} reason={}",
                 request.getMethod(), path, decision.reason());
