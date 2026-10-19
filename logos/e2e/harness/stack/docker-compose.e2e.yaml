@@ -290,7 +290,7 @@ services:
       # reach the wrong service and answer with a validation or auth error —
       # and the browser tier would be exercising a route production does not
       # use. Mirrors docker-compose.dev.yaml; keep the two lists in step.
-      - "traefik.http.routers.ws-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/drain`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.ws-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/drain`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`) || Path(`/api/logosdb/providers/logosnode/lanes/locks`) || Path(`/api/logosdb/providers/logosnode/lanes/lock`) || Path(`/api/logosdb/providers/logosnode/lanes/unlock`)"
       - "traefik.http.routers.ws-logosnode-admin.entrypoints=web8080"
       - "traefik.http.routers.ws-logosnode-admin.service=ws-svc"
       - "traefik.http.routers.ws-logosnode-admin.middlewares=strip-api"

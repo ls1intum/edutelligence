@@ -20,6 +20,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -565,5 +566,127 @@ class ProviderControllerTest {
                 .content("{}"))
            .andExpect(status().isBadRequest())
            .andExpect(jsonPath("$.error").value("provider_id is required"));
+    }
+
+    // ------------------------------------------------------------ lane locks
+
+    @Test
+    void laneLocks_requireLogosAdmin() throws Exception {
+        mvc.perform(get("/logosdb/providers/logosnode/lanes/locks")
+                .with(TestJwt.testUser()))
+           .andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/lock")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isForbidden());
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/unlock")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isForbidden());
+        assertEquals(0, lockCount());
+    }
+
+    @Test
+    void lockLane_requiresProviderAndLane() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/lock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value("provider_id and lane_id are required"));
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/unlock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void lockLane_storesTheLockAndListsIt() throws Exception {
+        jdbc.update("DELETE FROM audit_log WHERE target_type = 'lane'");
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/lock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\",\"model_name\":\"embed-model\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.provider_id").value(6001))
+           .andExpect(jsonPath("$.lane_id").value("lane-1"))
+           .andExpect(jsonPath("$.model_name").value("embed-model"))
+           .andExpect(jsonPath("$.locked_at").exists());
+
+        mvc.perform(get("/logosdb/providers/logosnode/lanes/locks")
+                .with(TestJwt.logosAdmin()))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.length()").value(1))
+           .andExpect(jsonPath("$[0].lane_id").value("lane-1"))
+           .andExpect(jsonPath("$[0].model_name").value("embed-model"));
+
+        Integer audited = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'lane.locked' AND target_id = '6001/lane-1'",
+            Integer.class);
+        assertEquals(1, audited);
+    }
+
+    @Test
+    void lockLane_isIdempotent() throws Exception {
+        jdbc.update("DELETE FROM audit_log WHERE target_type = 'lane'");
+        for (int i = 0; i < 2; i++) {
+            mvc.perform(post("/logosdb/providers/logosnode/lanes/lock")
+                    .with(TestJwt.logosAdmin())
+                    .contentType("application/json")
+                    .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\",\"model_name\":\"embed-model\"}"))
+               .andExpect(status().isOk());
+        }
+        assertEquals(1, lockCount());
+        // The second lock changed nothing, so the trail holds one entry.
+        Integer audited = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'lane.locked' AND target_id = '6001/lane-1'",
+            Integer.class);
+        assertEquals(1, audited);
+    }
+
+    @Test
+    void lockLane_unknownProviderIsNotFound() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/lock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":999999,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isNotFound());
+        assertEquals(0, lockCount());
+    }
+
+    @Test
+    void unlockLane_removesTheLockAndIsIdempotent() throws Exception {
+        jdbc.update("INSERT INTO lane_locks (provider_id, lane_id, model_name) VALUES (6001, 'lane-1', 'm')");
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/unlock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.unlocked").value(true));
+        assertEquals(0, lockCount());
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/unlock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.unlocked").value(false));
+    }
+
+    @Test
+    void laneLock_isRemovedWithItsProvider() throws Exception {
+        jdbc.update("INSERT INTO lane_locks (provider_id, lane_id) VALUES (6001, 'lane-1')");
+        jdbc.update("DELETE FROM model_provider WHERE provider_id = 6001");
+        jdbc.update("DELETE FROM providers WHERE id = 6001");
+        assertEquals(0, lockCount());
+    }
+
+    private int lockCount() {
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM lane_locks", Integer.class);
+        return n == null ? 0 : n;
     }
 }
