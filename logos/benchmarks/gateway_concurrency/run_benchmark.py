@@ -10,20 +10,23 @@ as ``e2e/tests/conftest.py``: start the stack yourself first, this script
 attaches to it.
 
 What this script *does* own: the fake cloud upstream (a throwaway process,
-not part of the deployable stack) and the three measurement legs.
+not part of the deployable stack) and the four measurement legs.
 
 Prerequisites:
-  1. Postgres migrated (Liquibase) and seeded: `psql "$DB_URL" -f seed.sql`
+  1. Postgres migrated (Liquibase) and seeded: `psql "$DB_URL" -f seed.sql`,
+     then `psql "$DB_URL" -f seed_budget.sql` for the budget-admission leg
   2. The webservice stack up, e.g.:
      docker compose -f docker-compose.dev.yaml up -d --build --scale logos-webservice=2
   3. This script started from logos/benchmarks/gateway_concurrency/
 
 Environment: see gateway_client.py, load_generator.py, latency_diff.py,
-failover_under_load.py for the full list. Additionally:
+failover_under_load.py, budget_admission.py for the full list. Additionally:
   LOGOS_BENCH_GW_OUTPUT      (./reports)
   LOGOS_BENCH_GW_SKIP_FAILOVER  (set to "1" to skip the failover leg even
                                  when 2+ replicas are up — e.g. a quick local
                                  run against a single instance)
+  LOGOS_BENCH_GW_SKIP_BUDGET    (set to "1" to skip the budget-admission leg,
+                                 e.g. when seed_budget.sql was not applied)
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ import httpx
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
+import budget_admission  # noqa: E402
 import failover_under_load  # noqa: E402
 import gateway_client as gw  # noqa: E402
 import latency_diff  # noqa: E402
@@ -119,6 +123,8 @@ def run() -> int:
     out_dir = Path(os.environ.get("LOGOS_BENCH_GW_OUTPUT", str(_HERE / "reports")))
     upstream_port = int(os.environ.get("LOGOS_BENCH_GW_UPSTREAM_PORT", "9100"))
     skip_failover = os.environ.get("LOGOS_BENCH_GW_SKIP_FAILOVER") == "1"
+    skip_budget = os.environ.get("LOGOS_BENCH_GW_SKIP_BUDGET") == "1"
+    fail_on_threshold = os.environ.get("LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD") == "1"
 
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / "fake_cloud_upstream.log"
@@ -164,6 +170,16 @@ def run() -> int:
         print("== concurrency ramp ==")
         concurrency_result: Dict[str, Any] = asyncio.run(load_generator.run())
 
+        # Before the failover leg: that one kills a replica, and the budget
+        # leg should measure a stack at full strength.
+        budget_result: Dict[str, Any]
+        if skip_budget:
+            print("== budget admission (skipped: LOGOS_BENCH_GW_SKIP_BUDGET=1) ==")
+            budget_result = {"skipped": True, "reason": "LOGOS_BENCH_GW_SKIP_BUDGET=1"}
+        else:
+            print("== budget admission ==")
+            budget_result = asyncio.run(budget_admission.run())
+
         failover_result: Optional[Dict[str, Any]]
         if skip_failover:
             print("== failover (skipped: LOGOS_BENCH_GW_SKIP_FAILOVER=1) ==")
@@ -180,6 +196,7 @@ def run() -> int:
             "latency": latency_result,
             "concurrency": concurrency_result,
             "failover": failover_result,
+            "budget": budget_result,
             "env": {
                 "gateway_url": gw.gateway_url(),
                 "upstream_url": gw.upstream_url(),
@@ -188,6 +205,9 @@ def run() -> int:
         }
         paths = write_reports(result, str(out_dir))
         print(f"\n  report: {paths['md']}")
+        if fail_on_threshold and budget_result.get("threshold", {}).get("exceeded"):
+            print("  budget admission p99 above LOGOS_BENCH_GW_BUDGET_P99_MAX_MS", file=sys.stderr)
+            return 1
         return 0
     finally:
         if upstream_proc is not None and upstream_proc.poll() is None:
