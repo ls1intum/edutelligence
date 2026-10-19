@@ -5,7 +5,8 @@ name: Logos - Gateway Concurrency Benchmark
 # not the local path per_request_overhead.yml covers: how many streaming
 # requests it holds open concurrently, added latency vs. a direct call to a
 # fake upstream, behaviour at the concurrency limit, and (2 replicas) whether
-# killing one is visible to clients under real load. Informational only —
+# killing one is visible to clients under real load, and admission latency
+# for a key with a budget and a month of history. Informational only —
 # posts a PR comment, does not gate the PR. No baseline exists yet to set a
 # blocking threshold against; see the PR description that introduced this
 # workflow.
@@ -132,9 +133,14 @@ jobs:
         working-directory: logos
 
       - name: Seed benchmark data
+        # seed_budget.sql builds on seed.sql: an application key with a
+        # budget limit and a month of log_entry history, for the
+        # budget-admission leg (see the benchmark README).
         run: |
           docker exec -i logos-db psql -U postgres -d logosdb \
             < benchmarks/gateway_concurrency/seed.sql
+          docker exec -i logos-db psql -U postgres -d logosdb -v bench_budget_rows=200000 \
+            < benchmarks/gateway_concurrency/seed_budget.sql
         working-directory: logos
 
       - name: Set up Python
