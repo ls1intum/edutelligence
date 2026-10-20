@@ -984,7 +984,6 @@ See §18 for full analysis and proposed fix.
 
 Hardware: 2× GPUs, 32,768 MB total VRAM. Three models: Qwen 7B, Qwen 14B, Mistral 7B.
 Benchmark date: 2026-04-11. Full analysis: [`docs/benchmark-results-analysis.md`](benchmark-results-analysis.md).
-Charts: [`tests/performance/results/`](../logos-orchestrator/tests/performance/results/).
 
 ### 16.1 Results Summary (LogosWorkerNode with Queue-Fair Scheduling)
 

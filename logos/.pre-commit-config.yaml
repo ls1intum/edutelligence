@@ -53,6 +53,7 @@ repos:
         # for explicitly-passed paths, so filter via pre-commit instead.
         exclude: |
           (?x)^logos/(
+            logos-orchestrator/tests/performance/ |
             logos-orchestrator/src/grpclocal/model_pb2(_grpc)?\.py$ |
             logos-workernode/tools/
           )

@@ -13,6 +13,7 @@ exclude =
     shared,
     logos-ui,
     # Benchmark scripts — script style, not library code.
+    logos/logos-orchestrator/tests/performance,
     logos/logos-workernode/tools
 
 per-file-ignores =
@@ -28,3 +29,5 @@ per-file-ignores =
     logos/logos-orchestrator/src/scripts/setup_proxy.py: E402, F401, F403, F405
     # Tests sometimes deliberately use ambiguous names matching domain math.
     logos/logos-orchestrator/tests/**/*: E741, F841
+    # Performance test stubs matplotlib before importing the module under test.
+    logos/logos-orchestrator/tests/unit/performance/test_run_api_workload.py: E402
