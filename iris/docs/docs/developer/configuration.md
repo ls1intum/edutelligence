@@ -249,15 +249,16 @@ When a variant specifies `cloud_agent_model: "gpt-5-mini"`, the handler searches
 
 Beyond the two config file paths, Iris uses these environment variables:
 
-| Variable                   | Purpose                           | Default       |
-| -------------------------- | --------------------------------- | ------------- |
-| `APPLICATION_YML_PATH`     | Path to application config        | _Required_    |
-| `LLM_CONFIG_PATH`          | Path to LLM config                | _Required_    |
-| `SENTRY_ENVIRONMENT`       | Sentry environment name           | `development` |
-| `SENTRY_SERVER_NAME`       | Sentry server identifier          | `localhost`   |
-| `SENTRY_RELEASE`           | Sentry release version            | `None`        |
-| `SENTRY_ENABLE_TRACING`    | Enable Sentry performance tracing | `False`       |
-| `SENTRY_ATTACH_STACKTRACE` | Attach stack traces to events     | `False`       |
+| Variable                   | Purpose                            | Default       |
+| -------------------------- | ---------------------------------- | ------------- |
+| `APPLICATION_YML_PATH`     | Path to application config         | _Required_    |
+| `LLM_CONFIG_PATH`          | Path to LLM config                 | _Required_    |
+| `SENTRY_DSN`               | Sentry DSN; unset turns Sentry off | _unset_       |
+| `SENTRY_ENVIRONMENT`       | Sentry environment name            | `development` |
+| `SENTRY_SERVER_NAME`       | Sentry server identifier           | `localhost`   |
+| `SENTRY_RELEASE`           | Sentry release version             | `None`        |
+| `SENTRY_ENABLE_TRACING`    | Enable Sentry performance tracing  | `False`       |
+| `SENTRY_ATTACH_STACKTRACE` | Attach stack traces to events      | `False`       |
 
 Additional environment variables can be injected via the `env_vars` section of `application.yml`.
 
