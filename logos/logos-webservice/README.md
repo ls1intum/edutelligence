@@ -95,6 +95,7 @@ src/main/java/.../logoswebservice/
 ├── identity/                     — /me, /users/*, /teams/*, /admin/api-keys/*
 ├── configuration/                — /logosdb/models, providers, policies; /admin/permissions
 ├── admin/                        — /logosdb/export, /logosdb/import
+├── notifications/                — /me/notifications/*, /internal/notifications (event store, fan-out, channels)
 ├── operations/                   — /logosdb/stats, billing, request logs, VRAM
 └── websocket/                    — /ws/stats (v1) and /ws/stats/v2
 ```

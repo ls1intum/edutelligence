@@ -49,10 +49,12 @@ Role-based authorization is separate (`role_auth.py`, on `users.role`):
 
 ```text
 Request → Auth → Log
-  ├── PROXY MODE (body has "model"): → Verify access → Resolve auth/URL → Execute
+  ├── PROXY MODE (body has "model"): → Verify access → Schedule (that model only) → Resolve → Execute
   └── RESOURCE MODE (no "model"):    → Classify → Schedule → Resolve → Execute
 → Log Response (tokens, provider, classifications, scheduling stats)
 ```
+
+PROXY mode is not a scheduler bypass: it only skips classification (Laura). Privacy filtering, policy thresholds, ETTFT scoring across the model's deployments, queueing and the capacity planner still run.
 
 `log_entry` rows are inserted at request arrival and updated later with routing, lifecycle timestamps, status, usage, and settled cost.
 
@@ -77,7 +79,7 @@ pytest tests/unit -v         # full suite
 pytest tests/unit/main/test_route_and_execute.py -v   # one file
 ```
 
-Tests stub heavy dependencies (sentence_transformers, gRPC) via `tests/conftest.py`. `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` decorators needed. `run_tests.sh` also has `integration|sdi|performance|all` tiers.
+Tests stub heavy dependencies (sentence_transformers, gRPC) via `tests/conftest.py`. `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` decorators needed.
 
 ## Conventions
 
@@ -89,7 +91,6 @@ Tests stub heavy dependencies (sentence_transformers, gRPC) via `tests/conftest.
 - Provider types: `cloud` (Azure/OpenAI) and self-hosted GPU workers via `logos-workernode` (websocket bridge: `logosnode_registry.py`).
 - `api_keys.settings` JSONB: flexible per-key config (e.g. rate limits) — no migration needed for new keys.
 - Docker build: multi-stage with pinned `uv`; runtime uses slim Python with `VIRTUAL_ENV=/opt/venv`. **Python must stay 3.13** — 3.14 breaks tiktoken/PyO3 builds.
-- The repo-root `shared/` directory is symlinked in for local dev/CI: `ln -s ../../shared logos/logos-orchestrator/shared`.
 
 ## Running
 

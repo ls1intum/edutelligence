@@ -183,7 +183,8 @@ def run_faq_delete_pipeline_worker(dto: FaqDeletionExecutionDto, variant_id: str
             variant=variant,
             local=is_local,
         )
-        if pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id):
+        base_url = dto.settings.artemis_base_url if dto.settings else None
+        if pipeline.delete_faq(dto.faq.faq_id, dto.faq.course_id, base_url):
             callback.finish()
         else:
             callback.fail("Error while removing old faqs")

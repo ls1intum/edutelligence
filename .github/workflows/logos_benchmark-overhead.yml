@@ -18,7 +18,6 @@ on:
       - ready_for_review
     paths:
       - "logos/**"
-      - "shared/**"
       - ".github/workflows/logos_benchmark-overhead.yml"
 
 concurrency:
@@ -96,9 +95,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Link shared dependency
-        run: ln -s ../../shared logos/logos-orchestrator/shared
-
       - name: Restore HF model cache
         # A cache miss is fine — the Prime step below downloads while the
         # network is still healthy; the benchmark run itself is offline.
@@ -114,7 +110,7 @@ jobs:
         run: |
           # Match the orchestrator image instead of resolving newer libraries
           # whose defaults can change the database driver or request path.
-          uv sync --locked --refresh-package shared
+          uv sync --locked
           source .venv/bin/activate
           # The worker under test runs in its own venv (the director launches
           # .venv-worker/bin/python for it) so the worker's pinned
@@ -155,7 +151,7 @@ jobs:
         # needed; ignore: if the benchmark itself crashed, no report exists
         # and that failure is already the red step.
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: logos-overhead-benchmark
           path: logos/benchmarks/per_request_overhead/reports/ci

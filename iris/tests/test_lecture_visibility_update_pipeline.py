@@ -33,13 +33,13 @@ from iris.vector_database.lecture_unit_page_chunk_schema import (
 )
 from iris.vector_database.lecture_unit_schema import (
     LectureUnitSchema,
-    _add_property_if_missing,
     init_lecture_unit_schema,
 )
 from iris.vector_database.lecture_unit_segment_schema import (
     LectureUnitSegmentSchema,
     init_lecture_unit_segment_schema,
 )
+from iris.vector_database.schema_properties import add_property_if_missing
 from iris.vector_database.write_retry import (
     WeaviateRateLimitExhausted,
     WeaviateWriteRetry,
@@ -715,7 +715,7 @@ def test_concurrent_lecture_schema_property_add_is_treated_as_idempotent():
         "property already exists"
     )
 
-    _add_property_if_missing(collection, new_property)
+    add_property_if_missing(collection, new_property)
 
 
 @pytest.mark.parametrize(
@@ -782,7 +782,7 @@ def test_lecture_schema_property_add_propagates_unrelated_invalid_input():
     )
 
     with pytest.raises(WeaviateInvalidInputError, match="invalid property definition"):
-        _add_property_if_missing(collection, new_property)
+        add_property_if_missing(collection, new_property)
 
 
 def test_visibility_endpoint_returns_not_found_when_ingestion_has_not_created_unit():

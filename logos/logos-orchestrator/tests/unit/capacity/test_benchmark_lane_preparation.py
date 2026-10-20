@@ -137,6 +137,7 @@ def _configured_planner():
     planner._lane_lock = MagicMock(return_value=asyncio.Lock())
     planner._mark_lane_cold = MagicMock()
     planner._unmark_lane_cold = MagicMock()
+    planner._cold_mark_holds = {}
     current = {"dtype": "auto", "enable_sleep_mode": True, "tensor_parallel_size": 1}
     updated = {**current, "tensor_parallel_size": 2}
 

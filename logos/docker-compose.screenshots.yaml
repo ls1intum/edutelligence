@@ -143,6 +143,8 @@ services:
       KEYCLOAK_SYNC_CLIENT_SECRET: "logos-sync-secret"
       # ng serve may use :4200 (dev) or :4300 (screenshots compose companion).
       LOGOS_CORS_ALLOWED_ORIGINS: "http://localhost:4200,http://localhost:4300"
+      # One instance and no Redis here: push notifications to its own sockets.
+      LOGOS_NOTIFICATIONS_FANOUT: "local"
     ports:
       - "127.0.0.1:19082:8081"
     networks:

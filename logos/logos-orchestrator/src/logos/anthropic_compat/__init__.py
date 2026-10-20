@@ -148,10 +148,11 @@ def translate_request(
     dialect: UpstreamDialect,
     *,
     model_name: Optional[str] = None,
+    endpoint_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Rewrite a Messages request body for the upstream's dialect."""
     if dialect is UpstreamDialect.CHAT_COMPLETIONS:
-        return to_chat_completions(payload, model_name=model_name)
+        return to_chat_completions(payload, model_name=model_name, endpoint_url=endpoint_url)
     if dialect is UpstreamDialect.RESPONSES:
         return to_responses(payload)
     return payload

@@ -7,6 +7,7 @@ import {
   countLiveLanesByModel,
   filterLoadableModels,
   formatContextWindow,
+  laneDisplayState,
   laneSleepAction,
   messageIn,
 } from './lane-health-panel';
@@ -197,6 +198,35 @@ describe('laneSleepAction', () => {
     expect(laneSleepAction(lane({ sleep_state: 'unsupported' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: 'unknown' }))).toBeNull();
     expect(laneSleepAction(lane({ sleep_state: null }))).toBeNull();
+  });
+
+  it('offers nothing while a step already runs on the lane', () => {
+    expect(laneSleepAction(lane({ sleep_state: 'sleeping', transition: 'waking' }))).toBeNull();
+    expect(laneSleepAction(lane({ sleep_state: 'awake', transition: 'falling_asleep' }))).toBeNull();
+    expect(laneSleepAction(lane({ sleep_state: 'awake', active_requests: 2, cold_marked: true }))).toBeNull();
+  });
+});
+
+/**
+ * The state badge of a lane row.
+ *
+ * The worker's runtime_state names the state a lane is leaving until a sleep
+ * or wake has finished, and it knows nothing about the planner's cold mark,
+ * which takes a lane out of routing while it still reports itself loaded.
+ */
+describe('laneDisplayState', () => {
+  it('shows the step in progress over the state the lane is leaving', () => {
+    expect(laneDisplayState(lane({ runtime_state: 'sleeping', transition: 'waking' }))).toBe('waking');
+    expect(laneDisplayState(lane({ runtime_state: 'loaded', transition: 'falling_asleep' }))).toBe('falling_asleep');
+  });
+
+  it('shows a cold-marked lane as draining', () => {
+    expect(laneDisplayState(lane({ runtime_state: 'loaded', cold_marked: true }))).toBe('draining');
+  });
+
+  it('shows the reported state otherwise, also for workers without the fields', () => {
+    expect(laneDisplayState(lane({ runtime_state: 'loaded' }))).toBe('loaded');
+    expect(laneDisplayState(lane({ runtime_state: 'running', transition: null, cold_marked: false }))).toBe('running');
   });
 });
 

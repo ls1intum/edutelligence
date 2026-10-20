@@ -1,7 +1,7 @@
 # benchmark_logos.py (Logos host)
 httpx==0.28.1
-paramiko==5.0.0
-numpy==2.5.3
+paramiko==5.1.0
+numpy==2.5.4
 matplotlib==3.11.2
 
 # prepare_benchmark.py only

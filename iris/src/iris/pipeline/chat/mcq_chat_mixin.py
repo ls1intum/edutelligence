@@ -12,6 +12,7 @@ from typing import Any, Optional
 from weaviate.classes.query import Filter
 
 from iris.common.logging_config import get_logger
+from iris.common.reply_language import previous_reply_language
 from iris.domain.status.activity_dto import ActivityKind
 from iris.pipeline.shared.mcq_generation_pipeline import McqGenerationPipeline
 from iris.retrieval.lecture.lecture_retrieval_utils import should_allow_lecture_tool
@@ -19,6 +20,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_slide_visible,
     is_unit_released,
 )
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
@@ -110,9 +112,7 @@ def retrieve_lecture_content_for_mcq(
         chunk_filter = Filter.by_property(
             LectureUnitPageChunkSchema.COURSE_ID.value
         ).equal(course_id)
-        chunk_filter &= Filter.by_property(
-            LectureUnitPageChunkSchema.BASE_URL.value
-        ).equal(base_url)
+        chunk_filter &= artemis_instance_filter(LectureUnitPageChunkSchema, base_url)
 
         if lecture_id is not None:
             chunk_filter &= Filter.by_property(
@@ -122,9 +122,7 @@ def retrieve_lecture_content_for_mcq(
         unit_filter = Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
             course_id
         )
-        unit_filter &= Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-            base_url
-        )
+        unit_filter &= artemis_instance_filter(LectureUnitSchema, base_url)
         unit_results = db.lecture_units.query.fetch_objects(
             filters=unit_filter,
             limit=10_000,
@@ -315,7 +313,7 @@ def mcq_pre_agent_hook(
         mcq_pipeline.run_in_thread(
             command=user_message,
             chat_history=chat_history,
-            user_language=state.dto.user.lang_key,
+            language=previous_reply_language(chat_history, state.dto.user.lang_key),
             result_storage=getattr(state, "mcq_result_storage", {}),
             count=count,
             lecture_content=lecture_content,

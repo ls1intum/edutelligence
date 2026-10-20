@@ -6,6 +6,7 @@ import re
 import tempfile
 import time
 from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, wait
 from datetime import datetime
 from threading import Event
 from typing import Optional
@@ -15,6 +16,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langdetect import DetectorFactory, detect
+from langdetect.detector_factory import init_factory
 from langdetect.lang_detect_exception import LangDetectException
 from weaviate import WeaviateClient
 from weaviate.classes.query import Filter
@@ -34,6 +36,7 @@ from iris.domain.ingestion.ingestion_pipeline_execution_dto import (
     IngestionPipelineExecutionDto,
 )
 from iris.domain.variant.variant import Variant
+from iris.vector_database.instance_filter import artemis_instance_filter
 
 from ..common.pyris_message import IrisMessageRole, PyrisMessage
 from ..domain.data.image_message_content_dto import ImageMessageContentDTO
@@ -47,7 +50,7 @@ from ..llm import (
     LlmRequestHandler,
 )
 from ..llm.langchain import IrisLangchainChatModel
-from ..tracing import observe
+from ..tracing import TracedThreadPoolExecutor, observe
 from ..vector_database.batch_verify import (
     confirmed_generations,
     confirmed_rows,
@@ -76,6 +79,12 @@ logger = get_logger(__name__)
 # the same deck always resolves to the same language across runs. This is a
 # correctness property, not a deployment tunable, so it is not configurable.
 DetectorFactory.seed = 0
+# Load the language profiles now, while the module import holds the import lock.
+# langdetect loads them lazily on the first detect() call, and that loading is not
+# thread-safe: parallel ingestion runs right after a start would see a partly loaded
+# profile set and detect English slides as Catalan, Danish or French (or fail and
+# fall back to the default), which stamps a wrong language on the chunks.
+init_factory()
 
 
 def detect_course_language(page_texts: list[str]) -> str:
@@ -96,6 +105,37 @@ def detect_course_language(page_texts: list[str]) -> str:
         return detect(sample[: settings.lecture_ingestion.language_detection_max_chars])
     except LangDetectException:
         return settings.lecture_ingestion.default_language
+
+
+# Language names that older Iris versions stored on page chunks: they asked an LLM for
+# "the language of the text" and stored its free-text answer ("English", "Deutsch").
+_LEGACY_LANGUAGE_NAMES = {
+    "english": "en",
+    "englisch": "en",
+    "german": "de",
+    "deutsch": "de",
+}
+
+
+_LANGUAGE_CODE = re.compile(r"[a-z]{2}(-[a-z]{2})?")
+
+
+def normalize_language(value: Optional[str]) -> Optional[str]:
+    """Map a stored or requested course language to an ISO 639-1 code.
+
+    Current chunks store ISO codes, including the region codes language
+    detection returns for some languages ("zh-cn"); chunks written by older Iris
+    versions store the language name an LLM answered with. Both forms of the same
+    language must compare equal, or every legacy unit would be re-ingested only
+    because of the format. Anything that is neither a code nor a known name
+    returns None, so a garbage value never matches and its unit is rebuilt.
+    """
+    if not value:
+        return None
+    cleaned = value.strip().strip(".").strip().lower()
+    if _LANGUAGE_CODE.fullmatch(cleaned):
+        return cleaned
+    return _LEGACY_LANGUAGE_NAMES.get(cleaned)
 
 
 _UNICODE_BULLETS = (
@@ -195,6 +235,7 @@ def create_page_data(
             LectureUnitPageChunkSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
             LectureUnitPageChunkSchema.PAGE_TEXT_CONTENT.value: page_split.page_content,
             LectureUnitPageChunkSchema.BASE_URL.value: base_url,
+            LectureUnitPageChunkSchema.BASE_URL_EXACT.value: base_url,
             LectureUnitPageChunkSchema.PAGE_VERSION.value: lecture_unit_dto.attachment_version,
             LectureUnitPageChunkSchema.HIDDEN_UNTIL.value: hidden_until,
             LectureUnitPageChunkSchema.INGESTION_RUN_ID.value: lecture_unit_dto.ingestion_run_id,
@@ -247,7 +288,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         self.llm = IrisLangchainChatModel(
             request_handler=request_handler, completion_args=completion_args
         )
-        self.pipeline = self.llm | StrOutputParser()
         self.tokens = []
         self.course_language = None
         self._hidden_until_by_page: dict[int, object] = {}
@@ -369,8 +409,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         units = self.lecture_unit_collection.query.fetch_objects(
             filters=Filter.all_of(
                 [
-                    Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                        self.dto.settings.artemis_base_url
+                    artemis_instance_filter(
+                        LectureUnitSchema, self.dto.settings.artemis_base_url
                     ),
                     Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
                         self.dto.lecture_unit.course_id
@@ -493,7 +533,11 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             stored_language = chunk.properties.get(
                 LectureUnitPageChunkSchema.COURSE_LANGUAGE.value
             )
-            if not stored_language or stored_language != requested_language:
+            # Compared as ISO codes: legacy chunks store the language name ("English").
+            stored_code = normalize_language(stored_language)
+            if stored_code is None or stored_code != normalize_language(
+                requested_language
+            ):
                 return True
             # A null display number is legacy data written before the field existed
             # (or before slide detection). Re-ingest so the current pipeline
@@ -545,9 +589,9 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         return {int(page): int(count) for page, count in json.loads(serialized).items()}
 
     def _get_page_chunk_filter(self):
-        page_chunk_filter = Filter.by_property(
-            LectureUnitPageChunkSchema.BASE_URL.value
-        ).equal(self.dto.settings.artemis_base_url)
+        page_chunk_filter = artemis_instance_filter(
+            LectureUnitPageChunkSchema, self.dto.settings.artemis_base_url
+        )
         page_chunk_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.COURSE_ID.value
         ).equal(self.dto.lecture_unit.course_id)
@@ -564,8 +608,8 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         units = self.lecture_unit_collection.query.fetch_objects(
             filters=Filter.all_of(
                 [
-                    Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                        self.dto.settings.artemis_base_url
+                    artemis_instance_filter(
+                        LectureUnitSchema, self.dto.settings.artemis_base_url
                     ),
                     Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(
                         self.dto.lecture_unit.course_id
@@ -777,7 +821,6 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
         stored as -1.
         """
         doc = None
-        cancel_event = self.cancel_event
         try:
             doc = fitz.open(lecture_pdf)
             self.course_language = self._resolve_course_language(doc)
@@ -788,51 +831,17 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             logger.info("%s Starting PDF chunking: %d pages", prefix, doc.page_count)
 
             # Phase 1: vision per page — collect the merged text and the raw slide number.
-            pages: list[tuple[int, str]] = []
-            raw_display_numbers: list[int] = []
-            old_page_text = ""
-            for page_num in range(doc.page_count):
-                raise_if_cancelled(
-                    cancel_event,
-                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                    "lecture page chunking",
-                )
-                self.callback.update(
-                    stage_name="vision",
-                    stage_progress=page_num + 1,
-                    stage_total=doc.page_count,
-                )
-                page = doc.load_page(page_num)
-                page_text = page.get_text()
-
-                matrix = fitz.Matrix(5, 5)
-                pix = page.get_pixmap(matrix=matrix)
-                img_base64 = base64.b64encode(pix.tobytes("jpg")).decode("utf-8")
-
-                raise_if_cancelled(
-                    cancel_event,
-                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                    "before lecture page vision",
-                )
-                vision_result = self.interpret_image(
-                    img_base64,
-                    old_page_text,
-                    lecture_unit_slide_dto.lecture_name,
-                    self.course_language,
-                )
-                raise_if_cancelled(
-                    cancel_event,
-                    getattr(lecture_unit_slide_dto, "lecture_unit_id", None),
-                    "after lecture page vision",
-                )
-                raw_display_numbers.append(vision_result.display_page_number)
-
-                if vision_result.academic_description:
-                    page_text = self.merge_page_content_and_image_interpretation(
-                        page_text, vision_result.academic_description
-                    )
-                pages.append((page_num, page_text))
-                old_page_text = page_text
+            page_texts = [
+                doc.load_page(page_num).get_text() for page_num in range(doc.page_count)
+            ]
+            page_results = self._interpret_pages(
+                doc, page_texts, lecture_unit_slide_dto
+            )
+            pages = [
+                (page_num, page_text)
+                for page_num, (_, page_text) in enumerate(page_results)
+            ]
+            raw_display_numbers = [number for number, _ in page_results]
 
             # Phase 2: reconcile the independently-read numbers into a consistent sequence.
             display_page_numbers = self._reconcile_display_page_numbers(
@@ -940,6 +949,92 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             number if isinstance(number, int) and number > 0 else index + 1
             for index, number in enumerate(reconciled)
         ]
+
+    def _interpret_pages(
+        self,
+        doc,
+        page_texts: list[str],
+        lecture_unit_slide_dto: LectureUnitPageDTO,
+    ) -> list[tuple[int, str]]:
+        """Interpret and merge every page, ``vision_concurrency`` pages at a time, in page order.
+
+        Returns each page's raw slide number and its text merged with the vision description. Each page waits almost
+        entirely for its two LLM calls (vision, then merge), so the pages of a unit run side by side instead of one
+        after another. A page gets the extracted text of the page before it as context. That text is known before any
+        vision call, so no call waits for another; the previous page's vision description is no longer part of the
+        context. Pages are rendered here, in the calling thread, because a PyMuPDF document must not be used from
+        several threads, and only as many as are being interpreted, so the rendered images in memory stay bounded.
+        """
+        unit_id = getattr(lecture_unit_slide_dto, "lecture_unit_id", None)
+        cancel_event = self.cancel_event
+        page_count = doc.page_count
+        concurrency = settings.lecture_ingestion.vision_concurrency
+        results: list[Optional[tuple[int, str]]] = [None] * page_count
+        in_flight: dict = {}
+        next_page = 0
+        finished = 0
+        with TracedThreadPoolExecutor(max_workers=concurrency) as executor:
+            try:
+                while next_page < page_count or in_flight:
+                    while next_page < page_count and len(in_flight) < concurrency:
+                        raise_if_cancelled(
+                            cancel_event, unit_id, "before lecture page vision"
+                        )
+                        pix = doc.load_page(next_page).get_pixmap(
+                            matrix=fitz.Matrix(5, 5)
+                        )
+                        img_base64 = base64.b64encode(pix.tobytes("jpg")).decode(
+                            "utf-8"
+                        )
+                        future = executor.submit(
+                            self._interpret_and_merge_page,
+                            img_base64,
+                            page_texts[next_page],
+                            page_texts[next_page - 1] if next_page > 0 else "",
+                            lecture_unit_slide_dto.lecture_name,
+                            unit_id,
+                        )
+                        in_flight[future] = next_page
+                        next_page += 1
+                    done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        results[in_flight.pop(future)] = future.result()
+                        finished += 1
+                        self.callback.update(
+                            stage_name="vision",
+                            stage_progress=finished,
+                            stage_total=page_count,
+                        )
+                    raise_if_cancelled(
+                        cancel_event, unit_id, "after lecture page vision"
+                    )
+            finally:
+                # On a failure or cancellation, pages not yet started are dropped; the ones in progress finish their
+                # current call before the executor shuts down.
+                for future in in_flight:
+                    future.cancel()
+        return results
+
+    def _interpret_and_merge_page(
+        self,
+        img_base64: str,
+        page_text: str,
+        previous_page_text: str,
+        lecture_name: str,
+        unit_id,
+    ) -> tuple[int, str]:
+        """One page: the vision call, then the merge of the page text with the vision description."""
+        raise_if_cancelled(self.cancel_event, unit_id, "before lecture page vision")
+        vision_result = self.interpret_image(
+            img_base64, previous_page_text, lecture_name, self.course_language
+        )
+        if not vision_result.academic_description:
+            return vision_result.display_page_number, page_text
+        raise_if_cancelled(self.cancel_event, unit_id, "before lecture page merge")
+        merged = self.merge_page_content_and_image_interpretation(
+            page_text, vision_result.academic_description
+        )
+        return vision_result.display_page_number, merged
 
     def interpret_image(
         self,
@@ -1060,12 +1155,18 @@ class LectureUnitPageIngestionPipeline(AbstractIngestion, Pipeline):
             image_interpretation=image_interpretation,
         )
         prompt = ChatPromptTemplate.from_messages(prompt_val)
+        # Pages are merged in several threads, and the chat model keeps the token usage of its last call, so each
+        # call gets its own model around the shared request handler.
+        llm = IrisLangchainChatModel(
+            request_handler=self.llm.request_handler,
+            completion_args=self.llm.completion_args,
+        )
         clean_output = clean_text(
-            (prompt | self.pipeline).invoke({}),
+            (prompt | llm | StrOutputParser()).invoke({}),
             bullets=True,
             extra_whitespace=True,
         )
-        self._append_tokens(self.llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
+        self._append_tokens(llm.tokens, PipelineEnum.IRIS_LECTURE_INGESTION)
         return clean_output
 
     def _resolve_course_language(self, doc) -> str:

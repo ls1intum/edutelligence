@@ -49,7 +49,7 @@ class Variant(AbstractVariant):
         return self._role_models[role][env]
 ```
 
-A role is a job inside the pipeline — `chat`, `citation`, `rerank`. Callers ask for a role and get the model configured for the current environment. A pipeline adds a role by naming it in `ROLES` and configuring a model for it per variant.
+A role is a job inside the pipeline — `chat`, `embedding`, `keyword_summary`, `reranker`. Callers ask for a role and get the model configured for the current environment. A pipeline adds a role by naming it in `ROLES` and configuring a model for it per variant.
 
 ## How Variants Are Declared
 

@@ -86,6 +86,19 @@
   --color-accent-green:  52  211 153;  // #34D399 (success)
   --color-accent-yellow: 250 204 21;   // #FACC15 (warning)
 
+  // ── Chart series: categorical identity for charts (light) ──
+  // Muted version of a colour-blind-checked categorical palette: fixed hue
+  // order (the order keeps neighbours apart), OKLCH chroma capped at 0.13.
+  // Same values as the public stats page.
+  --color-series-1: 64  122 196;  // #407AC4
+  --color-series-2: 216 119 84;  // #D87754
+  --color-series-3: 50  173 124;  // #32AD7C
+  --color-series-4: 226 166 72;  // #E2A648
+  --color-series-5: 227 127 164;  // #E37FA4
+  --color-series-6: 55  126 51;  // #377E33
+  --color-series-7: 74  66  148;  // #4A4294
+  --color-series-8: 201 100 94;  // #C9645E
+
   // ── Status ──
   --color-error:   239 68 68;          // #EF4444 (dedicated red)
   --color-success: var(--color-accent-green);
@@ -271,4 +284,17 @@
 
   // ── Logo wordmark fallback ──
   --logo-name-color: 196 181 253; // #C4B5FD
+
+  // ── Chart series: categorical identity for charts (dark) ──
+  // Muted version of a colour-blind-checked categorical palette: fixed hue
+  // order (the order keeps neighbours apart), OKLCH chroma capped at 0.13.
+  // Same values as the public stats page.
+  --color-series-1: 77  136 211;  // #4D88D3
+  --color-series-2: 199 104 70;  // #C76846
+  --color-series-3: 25  158 112;  // #199E70
+  --color-series-4: 191 130 34;  // #BF8222
+  --color-series-5: 197 98  130;  // #C56282
+  --color-series-6: 55  126 51;  // #377E33
+  --color-series-7: 144 135 225;  // #9087E1
+  --color-series-8: 217 114 112;  // #D97270
 }

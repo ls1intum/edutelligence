@@ -1,4 +1,4 @@
-import { daysSince, formatIsoDate, formatLastUsed, formatLastUsedParts } from './date';
+import { daysSince, formatIsoDate, formatLastUsed, formatLastUsedParts, formatRelativeTime } from './date';
 
 describe('date utils', () => {
   const now = new Date('2026-08-26T12:00:00');
@@ -76,5 +76,26 @@ describe('date utils', () => {
     it('clamps future timestamps to 0', () => {
       expect(daysSince('2026-08-27T12:00:00', now)).toBe(0);
     });
+  });
+});
+
+describe('formatRelativeTime', () => {
+  const now = new Date('2026-10-14T12:00:00');
+
+  it('reads recent items in minutes and hours', () => {
+    expect(formatRelativeTime(new Date('2026-10-14T11:59:40').toISOString(), now)).toBe('just now');
+    expect(formatRelativeTime(new Date('2026-10-14T11:55:00').toISOString(), now)).toBe('5 min ago');
+    expect(formatRelativeTime(new Date('2026-10-14T09:00:00').toISOString(), now)).toBe('3 h ago');
+  });
+
+  it('switches to days, then to the date', () => {
+    expect(formatRelativeTime(new Date('2026-10-13T08:00:00').toISOString(), now)).toBe('yesterday');
+    expect(formatRelativeTime(new Date('2026-10-10T08:00:00').toISOString(), now)).toBe('4 days ago');
+    expect(formatRelativeTime(new Date('2026-09-01T08:00:00').toISOString(), now)).toBe('01.09.2026');
+  });
+
+  it('shows a dash for a missing or invalid value', () => {
+    expect(formatRelativeTime(null, now)).toBe('—');
+    expect(formatRelativeTime('nope', now)).toBe('—');
   });
 });

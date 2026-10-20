@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
+import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogStatsService;
 
 /**
@@ -49,11 +50,13 @@ public class RequestLogStatsController {
         Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
         Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
         Integer providerId = body.get("provider_id") instanceof Number n ? n.intValue() : null;
+        Integer apiKeyId = body.get("api_key_id") instanceof Number n ? n.intValue() : null;
         boolean errorsOnly = Boolean.TRUE.equals(body.get("errors_only"));
         try {
             return ResponseEntity.ok(
                     requestLogStatsService.getRequestLogStats(
-                        startDate, endDate, targetBuckets, userId, teamId, providerId, errorsOnly));
+                        startDate, endDate, targetBuckets, userId, teamId, providerId, apiKeyId, errorsOnly,
+                        RequestLogService.readFeedIds(body, "model_ids")));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -78,10 +81,11 @@ public class RequestLogStatsController {
         Integer teamId = body.get("team_id") instanceof Number n ? n.intValue() : null;
         Integer userId = body.get("user_id") instanceof Number n ? n.intValue() : null;
         Integer providerId = body.get("provider_id") instanceof Number n ? n.intValue() : null;
+        Integer apiKeyId = body.get("api_key_id") instanceof Number n ? n.intValue() : null;
         boolean errorsOnly = Boolean.TRUE.equals(body.get("errors_only"));
         try {
             return ResponseEntity.ok(requestLogStatsService.getScopeOptions(
-                startDate, endDate, teamId, userId, providerId, errorsOnly));
+                startDate, endDate, teamId, userId, providerId, apiKeyId, errorsOnly));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }

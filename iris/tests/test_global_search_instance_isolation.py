@@ -152,8 +152,10 @@ def _retriever(segments=None, transcriptions=None, units=None, chunks=None):
 @pytest.mark.parametrize("context", ROLES)
 @pytest.mark.parametrize("foreign_url", FOREIGN_TAGS)
 def test_foreign_higher_scoring_duplicate_never_suppresses_owned_result(
-    context, foreign_url
+    context, foreign_url, monkeypatch
 ):
+    # The rerank pool is what this test inspects, so the results list has to be reranked here; it is not by default.
+    monkeypatch.setattr(settings, "global_search_rerank_results_list", True)
     foreign = _row(foreign_url, score=1.0)
     if foreign_url is None:
         del foreign.properties["base_url"]

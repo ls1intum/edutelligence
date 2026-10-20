@@ -491,12 +491,7 @@ def test_lecture_search_combines_course_lecture_unit_and_base_url_filters(
     collection = Mock()
     collection.query.hybrid.return_value = SimpleNamespace(objects=[])
     setattr(retrieval, collection_attribute, collection)
-    course_builder, lecture_builder, unit_builder, base_url_builder = (
-        Mock(),
-        Mock(),
-        Mock(),
-        Mock(),
-    )
+    course_builder, lecture_builder, unit_builder = Mock(), Mock(), Mock()
     course_filter, lecture_filter, unit_filter, base_url_filter = (
         Mock(),
         Mock(),
@@ -507,17 +502,18 @@ def test_lecture_search_combines_course_lecture_unit_and_base_url_filters(
     course_builder.equal.return_value = course_filter
     lecture_builder.equal.return_value = lecture_filter
     unit_builder.equal.return_value = unit_filter
-    base_url_builder.equal.return_value = base_url_filter
     course_filter.__and__ = Mock(return_value=combined_course_lecture)
     combined_course_lecture.__and__ = Mock(return_value=combined_with_unit)
     combined_with_unit.__and__ = Mock(return_value=combined_all)
 
-    with patch(filter_module) as filter_class:
+    helper_module = filter_module.rsplit(".", 1)[0] + ".artemis_instance_filter"
+    with patch(filter_module) as filter_class, patch(
+        helper_module, return_value=base_url_filter
+    ) as base_url_helper:
         filter_class.by_property.side_effect = [
             course_builder,
             lecture_builder,
             unit_builder,
-            base_url_builder,
         ]
         retrieval.search_in_db(
             query="query",
@@ -533,6 +529,7 @@ def test_lecture_search_combines_course_lecture_unit_and_base_url_filters(
         )
 
     assert collection.query.hybrid.call_args.kwargs["filters"] is combined_all
+    assert base_url_helper.call_args.args[1] == "https://artemis.example"
 
 
 def test_lecture_unit_lookup_pages_past_unreleased_candidates():

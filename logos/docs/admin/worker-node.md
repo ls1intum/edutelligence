@@ -20,11 +20,20 @@ firewall rule or its own TLS certificate.
    the worker.
 8. Check the provider status in the Logos UI.
 
+The worker fetches its calibrated model profiles from Logos before it starts
+any lane, so it waits — logging `Waiting for model profiles from Logos` —
+until the orchestrator is reachable.
+
 By default, the production Compose file pulls the worker image
 `${REGISTRY}/logos-workernode-vllm` from the public mirror at
 `ghcr.io/ls1intum/edutelligence`. No login is necessary. To pull a version tag
 from the deployment registry or from your own mirror, set `REGISTRY` and
 `IMAGE_TAG` in the `.env` file of the worker. Do this only for that purpose.
+
+The optional node manager can replace the worker container for you. It checks
+the new container. If the new container does not become healthy, the node
+manager starts the previous version again. For the steps, see
+[Update a worker node with the node manager](../deployment.md#update-a-worker-node-with-the-node-manager).
 
 To run an image that you built yourself, build it from the worker directory.
 The worker directory is the build context. Put the values in the `.env` file
