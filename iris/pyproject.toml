@@ -109,6 +109,11 @@ autoflake = "^2.4.0"
 profile = "black"
 multi_line_output = 3
 
+[tool.pytest.ini_options]
+# The benchmark ships artifact repositories with their own tests. They run inside
+# the benchmark, not as part of the Iris suite, and cannot be imported from here.
+testpaths = ["tests"]
+
 [tool.mypy]
 mypy_path = "src"
 
