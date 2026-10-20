@@ -233,3 +233,45 @@ async def test_busy_admission_does_not_mark_calibration_attempt_completed():
     await service._start_session_on(1)
     assert service._active_provider_id is None
     assert 1 not in service._completed_this_window
+
+
+async def test_explicit_idle_refusal_releases_manual_claim_for_next_start(coordinator):
+    from logos.logosnode_registry import LogosNodeCommandRejectedError
+
+    service, state = coordinator
+
+    async def refuse(callback):
+        callback(None)
+        raise LogosNodeCommandRejectedError("Node is degraded")
+
+    with pytest.raises(LogosNodeCommandRejectedError):
+        await service.start_calibration(1, refuse)
+    service.registry.send_command.assert_awaited_once_with(1, "get_calibration_status", {}, timeout_seconds=20)
+    assert state["claim"] is None
+    await service.start_calibration(2, dispatch)
+    assert state["claim"]["provider_id"] == 2
+
+
+@pytest.mark.parametrize("result", [{"calibrating": True}, {}, TimeoutError()])
+async def test_refused_start_retains_claim_until_fresh_idle_confirmation(coordinator, result):
+    from logos.logosnode_registry import LogosNodeCommandRejectedError
+
+    service, state = coordinator
+    if isinstance(result, Exception):
+        service.registry.send_command.side_effect = result
+    else:
+        service.registry.send_command.return_value = result
+
+    async def refuse(callback):
+        callback(None)
+        raise LogosNodeCommandRejectedError("Worker refused calibration")
+
+    with pytest.raises(LogosNodeCommandRejectedError):
+        await service.start_calibration(1, refuse)
+    assert state["claim"] is not None
+    with pytest.raises(MaintenanceBusyError):
+        await service.start_calibration(2, dispatch)
+    service.registry.send_command.side_effect = None
+    service.registry.send_command.return_value = {"calibrating": False}
+    await service.reconcile()
+    assert state["claim"] is None

@@ -165,3 +165,53 @@ async def test_supervision_uses_configured_window_end(monkeypatch):
         await nightly.supervise(
             lambda: asyncio.Event().wait(), nightly.RunProgress(50, completed=24, measuring=True), lambda: True
         )
+
+
+@pytest.mark.parametrize("split", [False, True])
+async def test_terminal_sse_is_counted_before_consumer_closes_iterator(split):
+    progress = nightly.RunProgress(50, measuring=True)
+    nightly.PROGRESS[7] = progress
+
+    async def chunks():
+        yield b'data: {"choices":[{"finish_reason":"stop"}]}\r\n\r\n'
+        if split:
+            yield b"data: [DO"
+            yield b"NE]\r\n\r\n"
+        else:
+            yield b"data: [DONE]\n\n"
+        pytest.fail("Consumer must not resume the stream after its terminal event")
+
+    try:
+        stream = observe_response(StreamingResponse(chunks()), 7).body_iterator
+        async for chunk in stream:
+            if b"NE]" in chunk:
+                assert progress.completed == 1
+                await stream.aclose()
+                break
+        assert progress.completed == 1
+    finally:
+        nightly.PROGRESS.pop(7)
+
+
+@pytest.mark.parametrize(
+    "tail,expected",
+    [
+        (b"", 0),
+        (b'data: {"error":{"message":"failed"}}\n\ndata: [DONE]\n\n', 0),
+        (b"data: [DONE]\n\ndata: [DONE]\n\n", 1),
+    ],
+)
+async def test_finish_reason_requires_successful_terminal_event(tail, expected):
+    progress = nightly.RunProgress(50, measuring=True)
+    nightly.PROGRESS[7] = progress
+
+    async def chunks():
+        yield b'data: {"choices":[{"finish_reason":"stop"}]}\n\n'
+        yield tail
+
+    try:
+        async for _ in observe_response(StreamingResponse(chunks()), 7).body_iterator:
+            pass
+        assert progress.completed == expected
+    finally:
+        nightly.PROGRESS.pop(7)

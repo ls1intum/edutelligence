@@ -100,12 +100,9 @@ class NightlyScheduler:
             for row in schedules:
                 pair_id = row["model_provider_id"]
                 if row["recovery"]:
-                    if store.has_active_benchmarks():
-                        return
                     try:
-                        await self.restore(pair_id, row["recovery"])
-                        store.save(pair_id, "interrupted_recovered", row["report"], None)
-                        benchmark_reservations.release(-pair_id)
+                        if not await self.recover(row, connection):
+                            return
                     except Exception:
                         # Keep the node excluded and do not take a second node.
                         logger.exception("Nightly worker recovery requires attention")
@@ -207,9 +204,90 @@ class NightlyScheduler:
         lane = target_lanes[0]
         if lane.get("runtime_state") not in {"loaded", "running"} or lane.get("sleep_state") == "sleeping":
             raise RuntimeError("Nightly tuning requires the production model to be loaded and awake")
+        try:
+            limits = worker_limits(snapshot, model)
+            baseline = parameter_plan(limits["current"])[0]
+            validate_worker_overrides(baseline.serving_overrides, limits)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
         return target, snapshot, lane
 
+    async def recover(self, row, connection):
+        """Fence an orphaned nightly execution, confirm drain, then restore its journal."""
+        import importlib
+
+        main = importlib.import_module("logos.main")
+
+        pair_id = row["model_provider_id"]
+        with store.execution_lock(pair_id) as execution:
+            if execution is None:
+                return False
+            jobs = store.recovery_jobs(pair_id)
+            # Durable manual claims and unrelated jobs always retain their slot.
+            if store.has_active_benchmarks(excluding=jobs):
+                return False
+            if any(not task.done() for task in main._benchmark_tasks_by_job.values()):
+                return False
+
+            def held():
+                return store.lock_held(connection) and store.execution_lock_held(execution, pair_id)
+
+            token = LEASE_CHECK.set(held)
+            try:
+                if not held():
+                    return False
+                store.fence_recovery_jobs(jobs)
+                for job in jobs:
+                    benchmark_reservations.release(job)
+                # Cached telemetry cannot prove that requests from the old
+                # execution have ended. Query the worker and fail closed.
+                recovery = row["recovery"]
+                if (jobs or recovery.get("mutated", True)) and not await self.recovery_worker_idle(
+                    recovery["provider_id"]
+                ):
+                    return False
+                if not held():
+                    return False
+                store.finish_recovery_jobs(jobs)
+                await self.restore(pair_id, recovery)
+                store.save(pair_id, "interrupted_recovered", row["report"], None)
+                benchmark_reservations.release(-pair_id)
+                return True
+            finally:
+                LEASE_CHECK.reset(token)
+
+    async def recovery_worker_idle(self, provider_id):
+        if not self.healthy(provider_id):
+            return False
+        runtime = await self.registry.send_command(provider_id, "get_runtime", {}, timeout_seconds=30)
+        lanes = runtime.get("lanes")
+        if (runtime.get("node_health") or {}).get("healthy") is False:
+            return False
+        if not isinstance(lanes, list):
+            return False
+        for lane in lanes:
+            if self.planner._facade.model_inflight_requests(provider_id, lane.get("model")):
+                return False
+            if lane.get("active_requests") != 0:
+                return False
+            metrics = lane.get("backend_metrics") or {}
+            if any(float(metrics.get(key) or 0) != 0 for key in ("requests_running", "queue_waiting")):
+                return False
+        return True
+
     async def run_schedule(self, pair_id, connection):
+        with store.execution_lock(pair_id) as execution:
+            if execution is None:
+                return False
+            token = LEASE_CHECK.set(
+                lambda: store.lock_held(connection) and store.execution_lock_held(execution, pair_id)
+            )
+            try:
+                return await self._run_schedule(pair_id, connection)
+            finally:
+                LEASE_CHECK.reset(token)
+
+    async def _run_schedule(self, pair_id, connection):
         report = []
         recovery = None
         state = "completed"
@@ -229,7 +307,7 @@ class NightlyScheduler:
             }
             # Journal first; a process restart must not lose the original settings.
             store.save(pair_id, "preparing", report, recovery)
-            benchmark_reservations.reserve(pid, "*", -pair_id)
+            self.planner._facade.reserve_worker_for_drain(pid, -pair_id)
             async with asyncio.timeout(900):
                 for item in lanes:
                     while self.planner._facade.model_inflight_requests(pid, item["model"]) > 0:
@@ -249,17 +327,13 @@ class NightlyScheduler:
                         raise NightlyStopped(state)
                     if not self.healthy(pid):
                         raise RuntimeError("Worker is no longer healthy")
-                    if not store.lock_held(connection):
+                    if not LEASE_CHECK.get()():
                         raise NightlyStopped("lease_lost")
                     try:
                         validate_worker_overrides(settings.serving_overrides, worker_limits(snapshot, model))
                         recovery["mutated"] = True
                         store.save(pair_id, "running", report, recovery)
-                        lease_token = LEASE_CHECK.set(lambda: store.lock_held(connection))
-                        try:
-                            job_id, task = await self.submit(pair_id, settings)
-                        finally:
-                            LEASE_CHECK.reset(lease_token)
+                        job_id, task = await self.submit(pair_id, settings)
                         result = await task
                         outcome = {
                             "configuration": index + 1,
@@ -297,7 +371,7 @@ class NightlyScheduler:
         finally:
             if recovery:
                 try:
-                    if not store.lock_held(connection):
+                    if not LEASE_CHECK.get()():
                         raise RuntimeError("Maintenance lock lost; worker recovery remains pending")
                     await self.restore(pair_id, recovery)
                     recovery = None
@@ -310,7 +384,9 @@ class NightlyScheduler:
 
     async def submit(self, pair_id, settings):
         # Reuse the authenticated admission path and job/result persistence.
-        import logos.main as main
+        import importlib
+
+        main = importlib.import_module("logos.main")
         from logos.routers.internal import internal_run_model_benchmark
 
         request = Request(

@@ -131,14 +131,16 @@ def save(pair_id: int, state: str, report: list, recovery: dict | None) -> None:
         db.session.commit()
 
 
-def has_active_benchmarks() -> bool:
+def has_active_benchmarks(excluding: list[int] | None = None) -> bool:
     with DBManager() as db:
         return bool(
             db.session.execute(
                 text(
                     "SELECT EXISTS(SELECT 1 FROM jobs WHERE environment = 'model-provider-benchmark' "
-                    "AND status IN ('pending', 'running')) OR EXISTS(SELECT 1 FROM maintenance_benchmark)"
-                )
+                    "AND status IN ('pending', 'running') AND NOT (id = ANY(CAST(:excluded AS integer[])))) "
+                    "OR EXISTS(SELECT 1 FROM maintenance_benchmark)"
+                ),
+                {"excluded": excluding or []},
             ).scalar()
         )
 
@@ -246,4 +248,98 @@ def claim_benchmark(db, job_id):
 def release_benchmark(job_id):
     with DBManager() as db:
         db.session.execute(text("DELETE FROM maintenance_benchmark WHERE job_id = :job"), {"job": job_id})
+        db.session.commit()
+
+
+@contextmanager
+def execution_lock(pair_id: int):
+    """Hold a separate execution lease until the nightly task has finished cleanup."""
+    with _init_engine().connect() as connection:
+        acquired = connection.execute(
+            text("SELECT pg_try_advisory_lock(:namespace, :pair)"), {"namespace": LOCK_ID, "pair": pair_id}
+        ).scalar()
+        connection.commit()
+        try:
+            yield connection if acquired else None
+        finally:
+            if acquired:
+                try:
+                    connection.execute(
+                        text("SELECT pg_advisory_unlock(:namespace, :pair)"),
+                        {"namespace": LOCK_ID, "pair": pair_id},
+                    )
+                    connection.commit()
+                except Exception:
+                    connection.invalidate()
+                    raise
+
+
+def execution_lock_held(connection, pair_id: int) -> bool:
+    if connection.invalidated or connection.closed:
+        return False
+    try:
+        held = connection.execute(
+            text(
+                "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype = 'advisory' "
+                "AND pid = pg_backend_pid() AND classid = :namespace AND objid = :pair AND objsubid = 2 AND granted)"
+            ),
+            {"namespace": LOCK_ID, "pair": pair_id},
+        ).scalar()
+        connection.commit()
+        return bool(held)
+    except Exception:
+        return False
+
+
+def recovery_jobs(pair_id: int) -> list[int]:
+    """Only jobs explicitly owned by this nightly schedule are recovery candidates."""
+    with DBManager() as db:
+        return list(
+            db.session.execute(
+                text(
+                    "SELECT id FROM jobs WHERE environment = 'model-provider-benchmark' "
+                    "AND status IN ('pending', 'running') AND request_payload->>'nightly' = 'true' "
+                    "AND request_payload->>'model_provider_id' = :pair"
+                ),
+                {"pair": str(pair_id)},
+            ).scalars()
+        )
+
+
+def fence_recovery_jobs(job_ids: list[int]) -> None:
+    """Stop old runners and queued inference from admitting further worker requests."""
+    with DBManager() as db:
+        db.session.execute(
+            text(
+                "UPDATE jobs SET request_payload = request_payload || jsonb_build_object('recovery_fenced', true) "
+                "WHERE id = ANY(CAST(:ids AS integer[]))"
+            ),
+            {"ids": job_ids},
+        )
+        db.session.commit()
+
+
+def benchmark_requests_allowed(job_id: int) -> bool:
+    with DBManager() as db:
+        return bool(
+            db.session.execute(
+                text(
+                    "SELECT EXISTS(SELECT 1 FROM jobs WHERE id = :id AND status = 'running' "
+                    "AND COALESCE(request_payload->>'recovery_fenced', 'false') <> 'true')"
+                ),
+                {"id": job_id},
+            ).scalar()
+        )
+
+
+def finish_recovery_jobs(job_ids: list[int]) -> None:
+    with DBManager() as db:
+        db.session.execute(
+            text(
+                "UPDATE jobs SET status = 'failed', error_message = 'Nightly execution interrupted; worker drained', "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ANY(CAST(:ids AS integer[])) "
+                "AND request_payload->>'recovery_fenced' = 'true'"
+            ),
+            {"ids": job_ids},
+        )
         db.session.commit()

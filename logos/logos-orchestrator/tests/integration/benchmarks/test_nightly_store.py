@@ -43,7 +43,8 @@ def database(monkeypatch):
         connection.execute(
             text(
                 "CREATE TABLE jobs(id integer PRIMARY KEY, environment text, status text, "
-                "updated_at timestamptz DEFAULT CURRENT_TIMESTAMP, result_payload jsonb)"
+                "updated_at timestamptz DEFAULT CURRENT_TIMESTAMP, result_payload jsonb, "
+                "request_payload jsonb, error_message text)"
             )
         )
 
@@ -206,3 +207,47 @@ def test_old_running_job_is_not_assumed_finished(database):
     assert store.has_active_benchmarks()
     with Database() as db:
         assert not store.manual_admission(db)
+
+
+def test_execution_lease_survives_maintenance_lock_release(database):
+    with store.execution_lock(31) as execution:
+        assert execution is not None
+        assert store.execution_lock_held(execution, 31)
+        with store.cluster_lock() as first:
+            assert first is not None
+        # Another scheduler can hold maintenance, but cannot recover a live run.
+        with store.cluster_lock() as recovery:
+            assert recovery is not None
+            with store.execution_lock(31) as blocked:
+                assert blocked is None
+    with store.execution_lock(31) as recovered:
+        assert recovered is not None
+
+
+def test_orphan_fencing_targets_only_its_nightly_jobs_and_preserves_manual_claim(database):
+    engine, Database = database
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO jobs(id, environment, status, request_payload) VALUES
+            (7, 'model-provider-benchmark', 'running', '{"nightly": true, "model_provider_id": 31}'),
+            (8, 'model-provider-benchmark', 'running', '{"nightly": false, "model_provider_id": 31}'),
+            (9, 'model-provider-benchmark', 'running', '{"nightly": true, "model_provider_id": 32}')
+        """))
+    assert store.recovery_jobs(31) == [7]
+    assert store.has_active_benchmarks(excluding=[7])
+    assert store.benchmark_requests_allowed(7)
+    store.fence_recovery_jobs([7])
+    assert not store.benchmark_requests_allowed(7)
+    assert store.benchmark_requests_allowed(8)
+    with Database() as db:
+        assert not db.touch_model_benchmark_job(7)
+        assert db.touch_model_benchmark_job(8)
+    store.finish_recovery_jobs([7])
+    assert store.recovery_jobs(31) == []
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT status FROM jobs WHERE id=7")).scalar() == "failed"
+    with Database() as db:
+        store.claim_benchmark(db, 8)
+    assert store.has_active_benchmarks(excluding=[8, 9])
+    store.release_benchmark(8)
+    assert not store.has_active_benchmarks(excluding=[8, 9])

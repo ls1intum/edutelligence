@@ -3836,6 +3836,8 @@ def _benchmark_provider_affinity(
             raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=401, detail="Invalid benchmark worker affinity")
+    if payload.get("recovery_fenced"):
+        raise HTTPException(status_code=409, detail="Benchmark recovery has fenced this execution")
 
     try:
         payload_provider_id = int(payload.get("provider_id"))

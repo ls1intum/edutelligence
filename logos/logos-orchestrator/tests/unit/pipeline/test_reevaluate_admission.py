@@ -238,3 +238,22 @@ def test_a_completion_frees_the_capacity_it_held():
     scheduler.release(MODEL_ID, PROVIDER_ID, "logosnode", "finished-request")
 
     assert completions[0]["reuse_slot"] is False
+
+
+async def test_nightly_reservation_cannot_dequeue_matching_positive_production_key():
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    scheduler = _scheduler_with(_Facade(256, AdmissionDecision(can_admit=True, batch_limit=2)))
+    future = asyncio.get_running_loop().create_future()
+    scheduler._queue_mgr.enqueue(future, MODEL_ID, PROVIDER_ID, Priority.NORMAL, api_key_id=31)
+    benchmark_reservations.reserve(PROVIDER_ID, "*", -31)
+    try:
+        scheduler.reevaluate_model_queues("model-a")
+        await asyncio.sleep(0)
+        assert not future.done()
+        assert scheduler._queue_mgr.get_total_depth_by_deployment(MODEL_ID, PROVIDER_ID) == 1
+    finally:
+        benchmark_reservations.release(-31)
+    scheduler.reevaluate_model_queues("model-a")
+    await asyncio.sleep(0)
+    assert future.done()

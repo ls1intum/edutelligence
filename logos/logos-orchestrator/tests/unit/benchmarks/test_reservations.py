@@ -200,3 +200,127 @@ async def test_reserved_worker_commands_preserve_dispatch_confirmation(action, l
     session.websocket.send_json.assert_awaited_once()
     assert dispatched[0].done()
     assert not session.pending_commands
+
+
+async def test_nightly_drain_preserves_admitted_requests_through_lane_selection_and_send():
+    facade = LogosNodeSchedulingDataFacade(MagicMock())
+    provider = MagicMock(provider_id=9001)
+    provider._model_id_to_name = {1: "model"}
+    provider.get_model_status.return_value = SimpleNamespace(queue_depth=0)
+    facade._get_provider_for_model = MagicMock(return_value=provider)
+    facade.get_model_name = MagicMock(return_value="model")
+    facade.on_request_start("admitted", 1, 9001, api_key_id=31)
+    facade.reserve_worker_for_drain(9001, -31)
+    lane = {"lane_id": "lane", "model": "model", "runtime_state": "running"}
+    session = SimpleNamespace(provider_id=9001, capabilities_models=["model"], latest_runtime={"lanes": [lane]})
+    registry = LogosNodeRuntimeRegistry()
+    registry._get_active_session = AsyncMock(return_value=session)
+    try:
+        assert await registry.select_lane_for_model(9001, "model", request_id="admitted") == lane
+        assert await registry.select_lane_for_model(9001, "model", request_id="new") is None
+        for action in ("infer", "infer_stream"):
+            registry._check_benchmark_reservation(session, action, {"lane_id": "lane"}, "admitted")
+            with pytest.raises(LogosNodeCommandError):
+                registry._check_benchmark_reservation(session, action, {"lane_id": "lane"}, "new")
+        with pytest.raises(RuntimeError, match="reserved"):
+            facade.on_request_start("new", 1, 9001)
+        assert facade.model_inflight_requests(9001, "model") == 1
+        facade.on_request_complete("admitted", False, 10, provider_id=9001)
+        assert facade.model_inflight_requests(9001, "model") == 0
+        assert not benchmark_reservations.allows(9001, "model", "admitted")
+    finally:
+        benchmark_reservations.release(-31)
+
+
+def test_fenced_benchmark_cannot_send_previously_admitted_request(lease):
+    active = True
+    lease.register_request(9001, "model", 9002, "request", guard=lambda: active)
+    assert lease.allows(9001, "model", "request")
+    active = False
+    session = SimpleNamespace(provider_id=9001, latest_runtime={"lanes": [{"lane_id": "lane", "model": "model"}]})
+    with pytest.raises(LogosNodeCommandError):
+        LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "infer_stream", {"lane_id": "lane"}, "request")
+
+
+async def test_already_admitted_request_waiting_for_send_lock_survives_nightly_reservation():
+    import asyncio
+
+    facade = LogosNodeSchedulingDataFacade(MagicMock())
+    provider = MagicMock(provider_id=9001)
+    provider._model_id_to_name = {1: "model"}
+    provider.get_model_status.return_value = SimpleNamespace(queue_depth=0)
+    facade._get_provider_for_model = MagicMock(return_value=provider)
+    facade.get_model_name = MagicMock(return_value="model")
+    facade.on_request_start("admitted", 1, 9001)
+    session = SimpleNamespace(
+        provider_id=9001,
+        latest_runtime={"lanes": [{"lane_id": "lane", "model": "model"}]},
+        pending_commands={},
+        send_lock=asyncio.Lock(),
+        calibrating=False,
+        optimistic_calibration_until=None,
+    )
+
+    async def reply(message):
+        session.pending_commands.pop(message["cmd_id"]).set_result({"success": True, "result": {"choices": []}})
+
+    session.websocket = SimpleNamespace(send_json=AsyncMock(side_effect=reply))
+    registry = LogosNodeRuntimeRegistry()
+    registry._get_active_session = AsyncMock(return_value=session)
+    await session.send_lock.acquire()
+    task = asyncio.create_task(registry.send_command(9001, "infer", {"lane_id": "lane"}, request_id="admitted"))
+    await asyncio.sleep(0)
+    session.websocket.send_json.assert_not_awaited()
+    try:
+        facade.reserve_worker_for_drain(9001, -31)
+        session.send_lock.release()
+        assert await task == {"choices": []}
+        facade.on_request_complete("admitted", False, 10, provider_id=9001)
+        assert not benchmark_reservations.allows(9001, "model", "admitted")
+    finally:
+        benchmark_reservations.release(-31)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_worker_ok_false_has_an_explicit_refusal_type():
+    import asyncio
+
+    from logos.logosnode_registry import LogosNodeCommandRejectedError
+
+    registry = LogosNodeRuntimeRegistry()
+    session = SimpleNamespace(
+        provider_id=9001,
+        latest_runtime={},
+        pending_commands={},
+        send_lock=asyncio.Lock(),
+        calibrating=False,
+        optimistic_calibration_until=None,
+    )
+
+    async def reply(message):
+        session.pending_commands.pop(message["cmd_id"]).set_result(
+            {"success": True, "result": {"ok": False, "error": "Worker is degraded"}}
+        )
+
+    session.websocket = SimpleNamespace(send_json=AsyncMock(side_effect=reply))
+    registry._get_active_session = AsyncMock(return_value=session)
+    with pytest.raises(LogosNodeCommandRejectedError, match="degraded"):
+        await registry.send_command(9001, "reconfigure_lane")
+
+
+def test_lost_execution_lease_blocks_worker_mutations_but_allows_cleanup():
+    from logos.benchmarks.nightly import LEASE_CHECK, NIGHTLY_CONTEXT
+
+    nightly = NIGHTLY_CONTEXT.set(True)
+    lease = LEASE_CHECK.set(lambda: False)
+    session = SimpleNamespace(provider_id=9001)
+    try:
+        with pytest.raises(LogosNodeCommandError, match="lease was lost"):
+            LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "reconfigure_lane", {}, None)
+        LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "cancel_command", {}, None)
+        LogosNodeRuntimeRegistry._check_benchmark_reservation(session, "get_runtime", {}, None)
+    finally:
+        LEASE_CHECK.reset(lease)
+        NIGHTLY_CONTEXT.reset(nightly)

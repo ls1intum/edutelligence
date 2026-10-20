@@ -16,7 +16,7 @@ class MaintenanceCoordinator:
         return any(self.registry.is_calibrating(pid) for pid in self.registry.active_provider_ids())
 
     async def start_calibration(self, provider_id, send):
-        from logos.logosnode_registry import LogosNodeCommandError, MaintenanceBusyError
+        from logos.logosnode_registry import LogosNodeCommandError, LogosNodeCommandRejectedError, MaintenanceBusyError
 
         with store.cluster_lock() as connection:
             if connection is None:
@@ -40,6 +40,15 @@ class MaintenanceCoordinator:
 
             try:
                 result = await send(on_dispatched)
+            except LogosNodeCommandRejectedError:
+                # A refusal settles the start command. It may mean that another
+                # session is live, so only a fresh idle reply releases the claim.
+                store.confirm_calibration(token)
+                try:
+                    await self._release_if_finished({"provider_id": provider_id, "token": token})
+                except Exception:
+                    pass  # Reconciliation will retry; uncertainty keeps the slot.
+                raise
             except BaseException:
                 # A lost reply does not prove that the worker stopped. Keep the
                 # durable claim until an operator's stop is confirmed.

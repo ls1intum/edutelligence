@@ -126,8 +126,10 @@ Existing manual benchmarks finish before nightly admission.
 The selected worker must be online, healthy and not calibrating. Another
 healthy worker must remain available. The model must have exactly one existing,
 loaded and awake vLLM lane. Production requests cannot enter the reserved node;
-existing traffic drains before a benchmark starts. Other workers remain
-available. Normal capacity-planner and manual lane mutations cannot alter the
+existing traffic drains before a benchmark starts.
+Requests already accepted by the scheduler can finish, including requests that still wait for transport access.
+New requests cannot use these exceptions. The exceptions end when each request finishes.
+Other workers remain available. Normal capacity-planner and manual lane mutations cannot alter the
 reserved node.
 
 Original settings are journaled before mutation and restored after the plan,
@@ -138,6 +140,17 @@ journal remain, and further nightly plans pause. The scheduler retries recovery
 before admitting other work, including after an application restart. It does
 not interrupt existing production requests if initial draining fails before
 any benchmark changed the worker.
+
+Recovery uses a separate execution lock to detect an interrupted nightly run.
+A live execution, an unrelated job, or a manual benchmark claim prevents recovery.
+The scheduler blocks further requests from an interrupted job and requests fresh worker status.
+It marks the job as failed only after the worker confirms that its requests ended.
+The original worker configuration is then restored. Unknown worker status keeps the recovery journal active.
+Job age alone never permits recovery.
+
+Metal workers with valid measured telemetry support `max_num_seqs` and `max_num_batched_tokens` changes.
+Metal does not permit GPU topology, memory, or attention backend overrides through this benchmark path.
+The scheduler checks worker support before it reserves the worker or consumes a nightly slot.
 
 The application retains its existing single-orchestrator routing architecture;
 this feature does not introduce multi-process worker-session sharing.
@@ -189,12 +202,16 @@ A timeout or a terminal event alone does not release it.
 Update workers before use: the coordinator requires the `get_calibration_status` command.
 Manual benchmarks retain their claim until process cleanup completes.
 
+If the worker explicitly refuses calibration, the coordinator requests fresh calibration status.
+It releases the claim only when the worker confirms that no calibration is active.
+If this status request fails, reconciliation retries later and the claim stays active.
+
 If a calibration start has no reply, the claim stays active.
 Use the calibration stop action after the worker reconnects.
 The stop action confirms worker completion before it releases the claim.
 Automatic calibration also sends this stop command after its window closes.
 
-An orchestrator crash can leave a manual benchmark claim or an active job record.
+An orchestrator crash can leave a manual benchmark claim or an active manual job record.
 Age alone does not release these records.
 An operator must stop the original benchmark process and verify worker cleanup before database recovery.
 Then mark the affected job as failed and remove its matching `maintenance_benchmark` record.

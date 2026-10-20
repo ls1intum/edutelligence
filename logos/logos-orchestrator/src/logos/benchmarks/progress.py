@@ -24,11 +24,16 @@ def observe_response(response, job_id: int):
         buffer = ""
         finished = False
         failed = False
+        completed = False
+        terminal = False
         async for chunk in iterator:
             buffer += chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
                 if not line.startswith("data:"):
+                    continue
+                if line[5:].strip() == "[DONE]":
+                    terminal = True
                     continue
                 try:
                     data = json.loads(line[5:].strip())
@@ -42,9 +47,12 @@ def observe_response(response, job_id: int):
                     if delta.get("content") or delta.get("reasoning_content") or delta.get("tool_calls"):
                         progress.output()
                     finished = finished or choice.get("finish_reason") is not None
+            # Consumers can close the iterator as soon as they receive [DONE].
+            # Record completion before handing that chunk to the consumer.
+            if terminal and finished and not failed and not completed:
+                progress.finish()
+                completed = True
             yield chunk
-        if finished and not failed:
-            progress.finish()
 
     response.body_iterator = measured_stream()
     return response

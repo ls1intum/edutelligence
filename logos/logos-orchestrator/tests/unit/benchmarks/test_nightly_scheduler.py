@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import nullcontext
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,6 +16,7 @@ def scheduler(monkeypatch):
     registry.is_provider_online.return_value = True
     registry.has_received_first_status.return_value = True
     registry.is_calibrating.return_value = False
+    registry.send_command = AsyncMock(return_value={"lanes": []})
     registry.active_provider_ids.return_value = [20, 21]
     registry.peek_runtime_snapshot.return_value = {
         "runtime": {
@@ -51,6 +53,14 @@ def scheduler(monkeypatch):
     monkeypatch.setattr(module, "local_now", lambda: datetime.fromisoformat("2026-10-13T05:00:00+02:00"))
     monkeypatch.setattr(module.store, "status", lambda _: {"enabled": True})
     monkeypatch.setattr(module.store, "lock_held", lambda _: True)
+    monkeypatch.setattr(module.store, "execution_lock", lambda _: nullcontext(object()))
+    monkeypatch.setattr(module.store, "execution_lock_held", lambda *args: True)
+    monkeypatch.setattr(module.store, "recovery_jobs", lambda _: [])
+    monkeypatch.setattr(module.store, "fence_recovery_jobs", lambda _: None)
+    monkeypatch.setattr(module.store, "finish_recovery_jobs", lambda _: None)
+    planner._facade.reserve_worker_for_drain.side_effect = lambda pid, owner: benchmark_reservations.reserve(
+        pid, "*", owner
+    )
     service.saved = []
     monkeypatch.setattr(module.store, "save", lambda *args: service.saved.append(args))
     yield service
@@ -161,7 +171,7 @@ def rotation(scheduler, monkeypatch):
     claimed = set()
     monkeypatch.setattr(module.store, "rows", lambda: rows)
     monkeypatch.setattr(module.store, "cluster_lock", MagicMock())
-    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda: False)
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda **kwargs: False)
     monkeypatch.setattr(module.store, "claimed_today", lambda day: len(claimed))
 
     def claim(pair, day):
@@ -255,3 +265,111 @@ async def test_automatic_calibration_claim_is_reattached_after_restart(scheduler
     await scheduler._cycle()
     assert scheduler.calibration._active_provider_id == 20
     scheduler.calibration._tick.assert_awaited_once()
+
+
+async def test_metal_plan_runs_all_batching_configurations(scheduler):
+    snapshot = scheduler.registry.peek_runtime_snapshot.return_value
+    snapshot["runtime"]["devices"] = {
+        "mode": "metal",
+        "nvidia_smi_available": False,
+        "telemetry_available": True,
+        "devices": [{"kind": "metal", "memory_total_mb": 24000}],
+    }
+
+    async def submit(*args):
+        return 7, asyncio.create_task(asyncio.sleep(0, result=1))
+
+    scheduler.submit = AsyncMock(side_effect=submit)
+    assert await scheduler.run_schedule(31, MagicMock())
+    assert scheduler.submit.await_count == 5
+    assert scheduler.saved[-1][1] == "completed"
+
+
+async def test_unknown_inventory_is_rejected_before_worker_is_drained(scheduler):
+    scheduler.registry.peek_runtime_snapshot.return_value["runtime"]["devices"] = {}
+    scheduler.submit = AsyncMock()
+    assert await scheduler.run_schedule(31, MagicMock())
+    scheduler.planner._facade.reserve_worker_for_drain.assert_not_called()
+    scheduler.planner._drain_lane.assert_not_awaited()
+    scheduler.submit.assert_not_awaited()
+
+
+async def test_orphaned_nightly_job_is_fenced_drained_and_recovered(scheduler, rotation, monkeypatch):
+    rows, claimed = rotation
+    row = rows[0]
+    row["recovery"] = {"provider_id": 20, "mutated": True}
+    events = []
+    monkeypatch.setattr(module.store, "recovery_jobs", lambda _: [701])
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda excluding=None: excluding != [701])
+    monkeypatch.setattr(module.store, "fence_recovery_jobs", lambda ids: events.append(("fence", ids)))
+    monkeypatch.setattr(module.store, "finish_recovery_jobs", lambda ids: events.append(("failed", ids)))
+    scheduler.recovery_worker_idle = AsyncMock(side_effect=lambda _: events.append("idle") or True)
+    scheduler.restore.side_effect = lambda *args: events.append("restore")
+    await scheduler.tick()
+    assert events == [("fence", [701]), "idle", ("failed", [701]), "restore"]
+    assert scheduler.saved[-1][1] == "interrupted_recovered"
+    assert scheduler.saved[-1][3] is None
+    assert not claimed
+
+
+@pytest.mark.parametrize("blocker", ["execution", "manual", "task", "worker_busy", "lease"])
+async def test_recovery_keeps_journal_when_execution_or_cleanup_is_uncertain(scheduler, rotation, monkeypatch, blocker):
+    import importlib
+
+    main = importlib.import_module("logos.main")
+
+    rows, _ = rotation
+    rows[0]["recovery"] = {"provider_id": 20}
+    monkeypatch.setattr(module.store, "recovery_jobs", lambda _: [701])
+    monkeypatch.setattr(module.store, "has_active_benchmarks", lambda **_: blocker == "manual")
+    finish = MagicMock()
+    monkeypatch.setattr(module.store, "finish_recovery_jobs", finish)
+    if blocker == "execution":
+        monkeypatch.setattr(module.store, "execution_lock", lambda _: nullcontext(None))
+    if blocker == "task":
+        monkeypatch.setitem(main._benchmark_tasks_by_job, 701, MagicMock(done=lambda: False))
+    if blocker == "lease":
+        monkeypatch.setattr(module.store, "execution_lock_held", lambda *args: False)
+    scheduler.recovery_worker_idle = AsyncMock(return_value=blocker != "worker_busy")
+    await scheduler.tick()
+    finish.assert_not_called()
+    scheduler.restore.assert_not_awaited()
+    scheduler.run_schedule.assert_not_awaited()
+    assert not scheduler.saved
+
+
+@pytest.mark.parametrize(
+    "runtime,expected",
+    [
+        (
+            {
+                "lanes": [
+                    {
+                        "model": "model",
+                        "active_requests": 0,
+                        "backend_metrics": {"requests_running": 0, "queue_waiting": 0},
+                    }
+                ]
+            },
+            True,
+        ),
+        ({"lanes": [{"model": "model", "active_requests": 1}]}, False),
+        ({"lanes": [{"model": "model", "active_requests": 0, "backend_metrics": {"queue_waiting": 1}}]}, False),
+        ({"lanes": [{"model": "model"}]}, False),
+        ({}, False),
+    ],
+)
+async def test_recovery_uses_fresh_worker_request_counters(scheduler, runtime, expected):
+    scheduler.registry.send_command = AsyncMock(return_value=runtime)
+    assert await scheduler.recovery_worker_idle(20) == expected
+    scheduler.registry.send_command.assert_awaited_once_with(20, "get_runtime", {}, timeout_seconds=30)
+
+
+async def test_terminal_orphan_job_still_requires_worker_cleanup_before_restore(scheduler, rotation):
+    rows, _ = rotation
+    rows[0]["recovery"] = {"provider_id": 20, "mutated": True}
+    scheduler.registry.send_command.return_value = {"lanes": [{"model": "model", "active_requests": 1}]}
+    await scheduler.tick()
+    scheduler.restore.assert_not_awaited()
+    scheduler.run_schedule.assert_not_awaited()
+    assert not scheduler.saved

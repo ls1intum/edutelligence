@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
-from logos.benchmarks.nightly import NIGHTLY_CONTEXT
+from logos.benchmarks.nightly import LEASE_CHECK, NIGHTLY_CONTEXT
 from logos.benchmarks.reservations import benchmark_reservations
 from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
@@ -45,6 +45,10 @@ class LogosNodeOfflineError(RuntimeError):
 
 class LogosNodeCommandError(RuntimeError):
     """Raised when a worker command RPC returns an error."""
+
+
+class LogosNodeCommandRejectedError(LogosNodeCommandError):
+    """The worker explicitly refused a command without accepting it."""
 
 
 class MaintenanceBusyError(LogosNodeCommandError):
@@ -1166,6 +1170,14 @@ class LogosNodeRuntimeRegistry:
 
     @staticmethod
     def _check_benchmark_reservation(session, action, params, request_id) -> None:
+        if NIGHTLY_CONTEXT.get() and action not in {
+            "cancel_command",
+            "get_runtime",
+            "get_lanes",
+            "get_calibration_status",
+        }:
+            if not LEASE_CHECK.get()():
+                raise LogosNodeCommandError("Nightly execution lease was lost before worker dispatch")
         if (
             action
             in {
@@ -1368,7 +1380,7 @@ class LogosNodeRuntimeRegistry:
         # timeout — so it is raised like any other command failure.
         if isinstance(payload, dict) and payload.get("ok") is False:
             _undo_optimistic_calibration_mark()
-            raise LogosNodeCommandError(str(payload.get("error", f"worker refused '{action}'")))
+            raise LogosNodeCommandRejectedError(str(payload.get("error", f"worker refused '{action}'")))
         return payload
 
     async def send_stream_command(

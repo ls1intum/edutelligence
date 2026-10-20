@@ -285,8 +285,12 @@ class BaseScheduler(SchedulerInterface):
             dispatched = 0
             while dispatched < available_slots:
                 reserved_job = benchmark_reservations.owner(
-                    provider_id, self._logosnode.get_model_name(model_id, provider_id)
+                    provider_id, self._logosnode.get_model_name(model_id, provider_id), exact=True
                 )
+                if reserved_job is not None and reserved_job < 0:
+                    break
+                if reserved_job is None and benchmark_reservations.owner(provider_id, "*") is not None:
+                    break
                 task, entry = self._queue_mgr.dequeue_with_entry(
                     model_id,
                     provider_id,

@@ -878,7 +878,11 @@ async def internal_model_benchmark_completion(job_id: int, path: str, request: R
     request_id = secrets.token_urlsafe(16)
     try:
         benchmark_reservations.register_request(
-            int(target["provider_id"]), str(target["model_name"]), job_id, request_id
+            int(target["provider_id"]),
+            str(target["model_name"]),
+            job_id,
+            request_id,
+            guard=(lambda: nightly_store.benchmark_requests_allowed(job_id)) if payload.get("nightly") else None,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
