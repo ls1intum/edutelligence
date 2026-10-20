@@ -70,17 +70,6 @@ updates:
         applies-to: version-updates
         patterns:
           - "*"
-  # shared is consumed by the other services as a path dependency, so a stale
-  # constraint here propagates to all of them.
-  - package-ecosystem: "pip"
-    directory: "shared"
-    schedule:
-      interval: "weekly"
-    groups:
-      shared-python-dependencies:
-        applies-to: version-updates
-        patterns:
-          - "*"
   # The npm side: three docusaurus sites, the Athena playground and the Logos
   # UI. Dependabot raises one pull request per directory.
   - package-ecosystem: "npm"

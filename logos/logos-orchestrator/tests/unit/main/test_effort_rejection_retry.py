@@ -18,7 +18,12 @@ import logos as main
 from logos import ExecutionResult
 from logos.errors import UpstreamStreamError
 from logos.logosnode_registry import LogosNodeCommandError
-from logos.pipeline.effort_normalization import effort_scale_for_model, forget_learned_effort_scales
+from logos.pipeline.effort_normalization import (
+    adapt_payload_after_effort_rejection,
+    effort_scale_for_model,
+    forget_learned_effort_scales,
+    normalize_reasoning_effort,
+)
 
 MODEL = "openai/gpt-oss-120b"
 HARMONY = (
@@ -306,3 +311,116 @@ async def test_cloud_stream_resends_a_responses_request_with_the_effort_adapted(
 
     assert [payload["reasoning"]["effort"] for payload in executor.payloads] == ["xhigh", "high"]
     assert [call["result_status"] for call in completion_calls] == ["success"]
+
+
+# ── the effort recorded on the log row ───────────────────────────────────────
+
+
+def _record_efforts(monkeypatch):
+    """Capture the efforts the request notes for its log row, in order."""
+    efforts = []
+    monkeypatch.setattr(
+        main._pipeline,
+        "record_reasoning_effort",
+        lambda request_id, effort: efforts.append((request_id, effort)),
+        raising=False,
+    )
+    return efforts
+
+
+@pytest.mark.asyncio
+async def test_a_logosnode_stream_records_the_resent_effort_last(monkeypatch):
+    _install_logosnode_stream(monkeypatch, REJECTION_BODY)
+    efforts = _record_efforts(monkeypatch)
+
+    response = await main._streaming_response(
+        _context("logosnode"), dict(PAYLOAD), 42, 12, 27, -1, {}, _scheduling("logosnode")
+    )
+    await _read_stream_response(response)
+
+    assert efforts == [("req-effort", "xhigh"), ("req-effort", "high")]
+
+
+@pytest.mark.asyncio
+async def test_a_cloud_stream_records_the_resent_effort_last(monkeypatch):
+    _install_cloud(monkeypatch, REJECTION_BODY)
+    efforts = _record_efforts(monkeypatch)
+
+    response = await main._streaming_response(
+        _context("cloud"), dict(PAYLOAD), 42, 12, 27, -1, {}, _scheduling("cloud")
+    )
+    await _read_stream_response(response)
+
+    assert efforts == [("req-effort", "xhigh"), ("req-effort", "high")]
+
+
+@pytest.mark.asyncio
+async def test_a_cloud_sync_request_records_the_resent_effort_last(monkeypatch):
+    _install_cloud(monkeypatch, REJECTION_BODY)
+    monkeypatch.setattr(main, "write_queue", _FakeWriteQueueFactory(), raising=False)
+    efforts = _record_efforts(monkeypatch)
+
+    await main._sync_response(_context("cloud"), dict(PAYLOAD), 42, 12, 27, -1, {}, _scheduling("cloud"))
+
+    assert efforts == [("req-effort", "xhigh"), ("req-effort", "high")]
+
+
+@pytest.mark.asyncio
+async def test_a_logosnode_sync_request_records_the_resent_effort_last(monkeypatch):
+    sent = []
+
+    async def fake_send_command(**kwargs):
+        sent.append(kwargs["params"]["payload"])
+        if len(sent) == 1:
+            return {"status_code": 400, "body": REJECTION_BODY, "headers": {}}
+        return {"status_code": 200, "body": {"choices": [{"message": {"content": "hello"}}]}, "headers": {}}
+
+    monkeypatch.setattr(main, "_logosnode_registry", SimpleNamespace(send_command=fake_send_command), raising=False)
+    monkeypatch.setattr(main, "write_queue", _FakeWriteQueueFactory(), raising=False)
+    pipeline, _c, _r = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+    efforts = _record_efforts(monkeypatch)
+
+    await main._sync_response(_context("logosnode"), dict(PAYLOAD), 42, 12, 27, -1, {}, _scheduling("logosnode"))
+
+    assert efforts == [("req-effort", "xhigh"), ("req-effort", "high")]
+
+
+@pytest.mark.asyncio
+async def test_the_recorded_effort_is_the_remapped_one_not_the_clients(monkeypatch):
+    # The model's scale is already known, so the payload is normalized before
+    # it goes out and no rejection happens: the client asked for xhigh, the
+    # lane received high, and high is what the row records.
+    adapt_payload_after_effort_rejection(dict(PAYLOAD), MODEL, HARMONY)
+    monkeypatch.setattr(
+        main,
+        "_context_resolver",
+        SimpleNamespace(
+            prepare_headers_and_payload=lambda context, payload: (
+                {},
+                normalize_reasoning_effort(payload, context.model_name),
+            )
+        ),
+        raising=False,
+    )
+    sent = []
+
+    async def fake_send_stream_command(**kwargs):
+        sent.append(kwargs["params"]["payload"])
+        for chunk in ANSWER_CHUNKS:
+            yield chunk
+
+    monkeypatch.setattr(
+        main, "_logosnode_registry", SimpleNamespace(send_stream_command=fake_send_stream_command), raising=False
+    )
+    pipeline, _c, _r = _make_pipeline()
+    monkeypatch.setattr(main, "_pipeline", pipeline, raising=False)
+    efforts = _record_efforts(monkeypatch)
+
+    response = await main._streaming_response(
+        _context("logosnode"), dict(PAYLOAD), 42, 12, 27, -1, {}, _scheduling("logosnode")
+    )
+    await _read_stream_response(response)
+
+    assert [payload["reasoning_effort"] for payload in sent] == ["high"]
+    assert efforts == [("req-effort", "high")]

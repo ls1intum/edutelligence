@@ -398,4 +398,3 @@ print(f"Selected model {best_model.model_id}")
 
 - Priority Queue Subsystem: `src/logos/queue/README.md`
 - [Pipeline schedulers](../pipeline/README.md)
-- Integration Tests: `tests/integration/` (end-to-end SDI + scheduling tests)

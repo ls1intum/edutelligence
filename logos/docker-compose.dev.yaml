@@ -158,12 +158,15 @@ services:
       - ./logos-orchestrator/src/logos/capacity:/app/src/logos/capacity:ro
       - ./logos-orchestrator/src/logos/pipeline:/app/src/logos/pipeline:ro
       - ./logos-orchestrator/src/logos/sdi:/app/src/logos/sdi:ro
-      - ./logos-orchestrator/tests/performance/results:/app/tests/performance/results
-      - ./logos-orchestrator/tests/integration:/app/tests/integration
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_SCHEDULER_ETTFT_ENABLED: "${LOGOS_SCHEDULER_ETTFT_ENABLED:-true}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      # Seconds a vLLM lane may stay idle before the capacity planner puts it to
+      # sleep (level 1). Waking a sleeping lane costs seconds on the next
+      # request, so the default keeps lanes warm through ordinary pauses.
+      # Locked lanes (statistics page) never sleep, whatever this value is.
+      LOGOS_IDLE_SLEEP_L1_S: "${LOGOS_IDLE_SLEEP_L1_S:-1800}"
       LOGOS_SHARED_PROFILES: "${LOGOS_SHARED_PROFILES:-1}"
       LOGOS_SHARED_PROFILE_MAX_AGE_DAYS: "${LOGOS_SHARED_PROFILE_MAX_AGE_DAYS:-30}"
       ECCS_DECISION_LOG: "${ECCS_DECISION_LOG:-/tmp/eccs_decisions.jsonl}"
@@ -284,6 +287,7 @@ services:
       LOGOS_REPO_CREDENTIALS_KEY: "${LOGOS_REPO_CREDENTIALS_KEY:-}"
       LOGOS_GATEWAY_ENABLED: "${LOGOS_GATEWAY_ENABLED:-true}"
       LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS: "${LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS:-15}"
+      LOGOS_GATEWAY_BUDGET_CACHE_MAX_STALE_SECONDS: "${LOGOS_GATEWAY_BUDGET_CACHE_MAX_STALE_SECONDS:-60}"
       LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS: "${LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS:-1000000}"
       LOGOS_GATEWAY_BUDGET_RESERVATION_STALE_MINUTES: "${LOGOS_GATEWAY_BUDGET_RESERVATION_STALE_MINUTES:-30}"
       LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS: "${LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS:-60}"
@@ -364,7 +368,7 @@ services:
       # Exact paths in front of the orchestrator's logosnode catch-all (201), so
       # every action added to the UI has to be named here too — see the prod
       # compose for what happens when one is missed.
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/drain`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/drain`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`) || Path(`/api/logosdb/providers/logosnode/lanes/locks`) || Path(`/api/logosdb/providers/logosnode/lanes/lock`) || Path(`/api/logosdb/providers/logosnode/lanes/unlock`)"
       - "traefik.http.routers.webservice-logosnode-admin.entrypoints=internal8090"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api,rl-admin"

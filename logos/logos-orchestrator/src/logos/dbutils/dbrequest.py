@@ -171,6 +171,17 @@ class RefreshPipelineRequest(BaseModel):
     sync_cloud_models: bool = False
 
 
+class LaneLockChangedRequest(BaseModel):
+    """A lane lock the webservice just committed, pushed so the planner applies it at once."""
+
+    provider_id: int
+    lane_id: str
+    locked: bool
+    # Order of the change among all changes of this lane; the pushes can
+    # arrive out of order, so an older revision is ignored.
+    revision: int
+
+
 class InternalCalibrateRequest(BaseModel):
     provider_id: int
 

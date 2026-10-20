@@ -29,11 +29,7 @@ if str(SRC) not in sys.path:
 # ---------------------------------------------------------------------------
 
 collect_ignore_glob = [
-    "network_test.py",  # Reads API keys from a local file
-    "config_test.py",  # Requires a running server
-    "langchainTest.py",  # Manual LangChain experiment
     "performance/*",  # Performance benchmarks (not unit tests)
-    "support/*",  # Support / helper scripts
 ]
 
 # ---------------------------------------------------------------------------

@@ -34,6 +34,10 @@ import {
 } from '../../shared/models/provider.model';
 import { priceProviderCards } from './model-prices';
 import { ModelPricesTab } from './model-prices-tab';
+import { RequestLatencyPanel } from './request-latency-panel/request-latency-panel';
+import type { RequestLatencyScope } from '../statistics/services/request-latency.models';
+import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
+import { TimePreset, calendarRange } from '../../shared/utils/time-range';
 
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { ModelAccess } from '../model-access/model-access';
@@ -51,6 +55,7 @@ type ModelErrorTab =
   | 'error_report'
   | 'complete_logs'
   | 'performance'
+  | 'delays'
   | 'access'
   | 'prices';
 
@@ -633,6 +638,8 @@ const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
     ErrorMessageComponent,
     ModelAccess,
     ModelPricesTab,
+    RequestLatencyPanel,
+    TimeRangeBarComponent,
   ],
 
   templateUrl: './model-error-report.html',
@@ -790,6 +797,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     'error_report',
     'complete_logs',
     'performance',
+    'delays',
     'access',
     'prices',
   ];
@@ -798,6 +806,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     error_report: 'Error Report',
     complete_logs: 'Complete Logs',
     performance: 'Performance',
+    delays: 'Delays',
     access: 'Access',
     prices: 'Prices',
   };
@@ -814,9 +823,10 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   /**
    * The Prices tab only exists for cloud models: a model served solely by
-   * local (logosnode) providers has no catalogue pricing to show. Until a
-   * successful response proves that, the tab stays visible so its loading
-   * and error states remain reachable.
+   * local (logosnode) providers has no catalogue pricing. Until a successful
+   * response proves that, the tab stays visible so its loading and error
+   * states remain reachable. The Delays tab covers local and cloud providers
+   * alike, so every model has it.
    */
   readonly visibleTabs = computed<readonly ModelErrorTab[]>(() => {
     const hasCloudProvider = this.priceProviders().some(
@@ -824,6 +834,33 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     );
     if (hasCloudProvider || !this.pricesLoaded()) return this.tabs;
     return this.tabs.filter(tab => tab !== 'prices');
+  });
+
+  // ==========================================================================
+  // Delays
+  // ==========================================================================
+
+  /** Same presets and paging as the statistics page, so the ranges read alike. */
+  readonly delayPreset = signal<TimePreset>('30d');
+  readonly delayOffset = signal(0);
+  /** Bumped by Refresh and on opening the tab, so a range that ends now moves its end along. */
+  readonly delayRefresh = signal(0);
+
+  /**
+   * The window the delay table covers. Recomputed only when the preset, the
+   * offset or the refresh counter changes, so the table does not refetch on
+   * every change detection pass. Each recomputation reads the clock again.
+   */
+  readonly delayWindow = computed(() => {
+    this.delayRefresh();
+    const range = calendarRange(this.delayPreset(), this.delayOffset());
+    return { start: range.currStart.toISOString(), end: range.currEnd.toISOString() };
+  });
+
+  /** The delay table narrowed to this model, across all its local and cloud providers. */
+  readonly delayScope = computed<RequestLatencyScope>(() => {
+    const id = this.modelId();
+    return { teamId: null, userId: null, providerId: null, apiKeyId: null, modelIds: id === null ? [] : [id] };
   });
 
   /** Cloud providers of this model with their price rows grouped for display. */
@@ -1376,11 +1413,18 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   setTab(tab: ModelErrorTab): void {
     this.activeTab.set(tab);
+    if (tab === 'delays') {
+      this.refreshDelays();
+    }
     if (tab === 'performance') {
       void this.loadPerformance(this.modelId(), true);
     } else {
       this.schedulePerformancePoll();
     }
+  }
+
+  refreshDelays(): void {
+    this.delayRefresh.update(n => n + 1);
   }
 
   formatDuration(milliseconds: number | null): string {

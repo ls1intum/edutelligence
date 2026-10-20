@@ -3,7 +3,7 @@
 # the git top-level, so without this a `pre-commit run --all-files` invoked
 # anywhere in the repo would lint every other service too.
 files: '^logos/'
-exclude: '^logos/(shared|logos-ui|.*\.venv)/'
+exclude: '^logos/(logos-ui|.*\.venv)/'
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -47,14 +47,13 @@ repos:
         # pre-commit runs hooks from the repo root, where flake8's
         # auto-discovery cannot find logos/.flake8 — point at it.
         args: [ "--config=logos/logos-orchestrator/.flake8" ]
-        # Benchmark/data-generation scripts use script-style imports
+        # Worker-node tools use script-style imports
         # (sys.path mutation, deliberate long literal lines), and the
         # grpc/protobuf files are generated. flake8 ignores `exclude`
         # for explicitly-passed paths, so filter via pre-commit instead.
         exclude: |
           (?x)^logos/(
             logos-orchestrator/tests/performance/ |
-            logos-orchestrator/tests/scheduling_data/ |
             logos-orchestrator/src/grpclocal/model_pb2(_grpc)?\.py$ |
             logos-workernode/tools/
           )

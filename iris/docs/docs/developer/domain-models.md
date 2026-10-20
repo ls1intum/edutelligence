@@ -80,11 +80,11 @@ class ChatPipelineExecutionDTO(PipelineExecutionDTO):
 ```
 
 - **`chat_mode`** — The active context of the chat. Determines which entity fields Artemis populates.
-- **`chat_history`** — The conversation so far, as a list of `PyrisMessage` objects. May contain `CTXSWAP` markers.
+- **`chat_history`** — The conversation so far, as a list of `PyrisMessage` objects. May contain `CTXSWAP` and `COMMAND` markers.
 - **`user`** — The student's user information (ID, name, language preference, Memiris opt-in).
 - **`course`** — Always present, in every mode. Carries the course exercises, lectures, competencies and FAQs.
 - **`session_title`** — The current chat title (may be updated by the pipeline).
-- **`context`** — What the student is currently looking at on a lecture page (video, slides, combined view). A `model_validator` derives `lecture_unit_id` from a combined-view entry when the field is not set explicitly, which scopes RAG retrieval to that lecture unit.
+- **`context`** — What the student is currently looking at on a lecture page (video, slides, combined view). A `model_validator` derives `lecture_unit_id` from a combined-view entry when the field is not set explicitly, which scopes RAG retrieval to that lecture unit. Artemis does not persist it: it describes one message, not the session. See [viewing context](./viewing-context.md).
 
 ### Fields per Chat Mode
 
@@ -219,6 +219,7 @@ class IrisMessageRole(str, Enum):
     SYSTEM = "SYSTEM"
     TOOL = "TOOL"
     ARTIFACT = "ARTIFACT"
+    COMMAND = "COMMAND"
     CTXSWAP = "CTXSWAP"
 ```
 
@@ -226,7 +227,7 @@ Messages are converted to LangChain format for the agent loop using `convert_iri
 
 ### Context Switch Markers
 
-`CTXSWAP` is not a message anyone wrote. Artemis inserts a marker into the chat history whenever the active context of a chat changes, so the history records what the chat was about at each point. The marker is the only message type whose content is a `JsonMessageContentDTO` rather than text:
+`CTXSWAP` is not a message anyone wrote. Artemis inserts a marker into the chat history whenever the active context of a chat changes, so the history records what the chat was about at each point. Like `COMMAND`, its content is a `JsonMessageContentDTO` rather than text:
 
 ```python
 class ContextSwitchTransition(str, Enum):
@@ -251,7 +252,9 @@ class ContextSwitchMarker(BaseModel):
 | `changed`  | The student switched the chat context to '\{name\}' with ID '\{id\}'.         |
 | `removed`  | The student removed the active context and returned to the course-level chat. |
 
-`map_role_to_str()` maps `CTXSWAP` to `"system"` alongside `SYSTEM`, so the direct OpenAI and Ollama paths accept the role.
+`map_role_to_str()` maps `CTXSWAP` and `COMMAND` to `"system"` alongside `SYSTEM`, so the direct OpenAI and Ollama paths accept the role.
+
+`COMMAND` is the second marker Artemis writes rather than a participant. It records a command Iris sent that the student's browser carried out, and is documented with the rest of that round trip under [Commands](#commands).
 
 ## Status Update DTOs
 
@@ -283,3 +286,50 @@ class SuggestedContextDTO(BaseModel):
 ```
 
 The `switch_chat_context` tool records it on the execution state, and `ChatPipeline.post_agent_hook()` attaches it to the **final** result update only, never to an intermediate one — an in-flight switch that the agent revises before answering must not reach Artemis. Artemis validates the target again before it applies the switch and writes the `CTXSWAP` marker.
+
+## Commands
+
+Every DTO above travels one way: Iris reports, Artemis records. A **command** is the exception. It is a request Iris sends mid-run and blocks on, because the agent has to know whether the thing it is about to describe actually happened. Today there is one command, the combined-view point-out.
+
+Three models cover the round trip, in the order it runs.
+
+**1. What Iris sends.** `CommandDTO` is a small envelope, and a concrete command narrows its payload to a typed model so an invalid position fails in Iris rather than on the Artemis side:
+
+```python
+class CommandDTO(BaseModel):
+    type: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class PointOutCommandDTO(CommandDTO):
+    type: str = "pointOut"
+    parameters: PointOutParametersDTO
+```
+
+It goes to the command sibling of the status endpoint — `…/runs/{runId}/command` — not on a status update.
+
+**2. What Artemis answers.** One field, which is the agent's whole answer to "did it work?":
+
+```python
+class CommandResultDTO(BaseModel):
+    applied: bool
+```
+
+**3. What stays in the history.** An applied command is persisted as a message with sender `COMMAND`, holding the executed command in the same `{type, parameters}` shape it was sent in — so a reader of the history parses a marker exactly like a command instead of a second flattened format:
+
+```json
+{
+  "type": "pointOut",
+  "parameters": {
+    "lectureUnitId": 31,
+    "page": 6,
+    "displayPage": 5,
+    "timestamp": 56.2,
+    "lectureUnitName": "Concurrency"
+  }
+}
+```
+
+`PointOutParametersDTO` validates that payload in both directions. `lectureUnitName` is the one field Artemis adds, because only Artemis can resolve it.
+
+`convert_iris_message_to_langchain_message()` renders the marker as a `SystemMessage` whose wording `describe_command_marker()` builds. A marker is a record of what happened and never an instruction about what to do next; the reasoning behind that wording, the transport, and what happens to an unknown command type are in [client commands](./client-commands.md).

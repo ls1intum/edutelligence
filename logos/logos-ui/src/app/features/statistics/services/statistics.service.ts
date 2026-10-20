@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
 import { RequestItem, VramV2Payload } from '../statistics.models';
+import { RequestLatencyScope, RequestLatencyStats } from './request-latency.models';
 
 /**
  * Lane-picker view of POST /api/logosdb/get_provider_models. The endpoint also
@@ -11,6 +12,18 @@ import { RequestItem, VramV2Payload } from '../statistics.models';
 export interface ProviderModel {
   model_id: number;
   model_name: string;
+}
+
+/**
+ * A lane an administrator locked warm, as `GET /api/logosdb/providers/logosnode/lanes/locks`
+ * returns it. The capacity planner never sleeps, drains or unloads a locked lane.
+ */
+export interface LaneLock {
+  provider_id: number;
+  lane_id: string;
+  model_name: string | null;
+  locked_by: string | null;
+  locked_at: string;
 }
 
 /** Position to continue a request-feed page from, as the server hands it back. */
@@ -108,6 +121,26 @@ export class StatisticsService {
       errors_only: scope.errorsOnly || null,
     }));
   }
+
+  // ── Cloud request delays ──────────────────────────────────────────────────
+
+  /**
+   * Delay percentiles of finished cloud requests inside `[startIso, endIso]`,
+   * per model and provider, narrowed to the page scope.
+   */
+  getRequestLatencyStats(startIso: string, endIso: string, scope: RequestLatencyScope): Promise<RequestLatencyStats> {
+    return firstValueFrom(this.http.post<RequestLatencyStats>('/api/logosdb/request_latency_stats', {
+      start_date: startIso,
+      end_date: endIso,
+      team_id: scope.teamId,
+      user_id: scope.userId,
+      provider_id: scope.providerId,
+      api_key_id: scope.apiKeyId,
+      model_ids: scope.modelIds.length ? scope.modelIds : null,
+    }));
+  }
+
+  // ── End cloud request delays ──────────────────────────────────────────────
 
   /**
    * One page of the request feed inside `[startIso, endIso]`, newest first.
@@ -224,6 +257,28 @@ export class StatisticsService {
 
   wakeLane(providerId: number, laneId: string): Promise<unknown> {
     return firstValueFrom(this.http.post<unknown>('/api/logosdb/providers/logosnode/lanes/wake', {
+      provider_id: providerId,
+      lane_id: laneId,
+    }));
+  }
+
+  /** Every lane lock across all providers. */
+  getLaneLocks(): Promise<LaneLock[]> {
+    return firstValueFrom(this.http.get<LaneLock[]>('/api/logosdb/providers/logosnode/lanes/locks'));
+  }
+
+  /** Lock a lane warm. Idempotent. */
+  lockLane(providerId: number, laneId: string, modelName: string | null): Promise<LaneLock> {
+    return firstValueFrom(this.http.post<LaneLock>('/api/logosdb/providers/logosnode/lanes/lock', {
+      provider_id: providerId,
+      lane_id: laneId,
+      model_name: modelName,
+    }));
+  }
+
+  /** Release a lane lock. Idempotent. */
+  unlockLane(providerId: number, laneId: string): Promise<{ unlocked: boolean }> {
+    return firstValueFrom(this.http.post<{ unlocked: boolean }>('/api/logosdb/providers/logosnode/lanes/unlock', {
       provider_id: providerId,
       lane_id: laneId,
     }));

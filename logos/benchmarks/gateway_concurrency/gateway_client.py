@@ -5,7 +5,7 @@ no argparse, no yaml.
 
 Environment (all optional, defaults in parentheses):
   LOGOS_BENCH_GW_URL           (http://localhost:18081)  gateway base URL (Traefik)
-  LOGOS_BENCH_GW_UPSTREAM_URL  (http://localhost:9100)   fake cloud upstream, direct
+  LOGOS_BENCH_GW_UPSTREAM_URL  (http://localhost:19100)   fake cloud upstream, direct
   LOGOS_BENCH_GW_API_KEY       (lg-bench-gw-0000)
   LOGOS_BENCH_GW_MODEL         (bench-cloud-model)
   LOGOS_BENCH_COMPOSE_FILE     (docker-compose.dev.yaml, relative to the
@@ -62,7 +62,7 @@ def gateway_url() -> str:
 
 
 def upstream_url() -> str:
-    return env("LOGOS_BENCH_GW_UPSTREAM_URL", "http://localhost:9100").rstrip("/")
+    return env("LOGOS_BENCH_GW_UPSTREAM_URL", "http://localhost:19100").rstrip("/")
 
 
 def api_key() -> str:

@@ -50,7 +50,7 @@ class _FakeContextResolver:
         self.kwargs = None
 
     async def resolve_context(  # noqa: ARG002
-        self, model_id, provider_id, request_path=None, request_id=None, deployment_info=None
+        self, model_id, provider_id, request_path=None, request_id=None, deployment_info=None, wait_for_lane=True
     ):
         self.kwargs = {
             "model_id": model_id,

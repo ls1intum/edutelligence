@@ -256,6 +256,91 @@ class ClassificationCorrectingScheduler(BaseScheduler):
             self._record_affinity(request, result.model_id, result.provider_id, result.provider_type, affinity)
         return result
 
+    def try_reroute(
+        self,
+        request: SchedulingRequest,
+        model_id: int,
+        exclude_provider_id: int,
+    ) -> Optional[SchedulingResult]:
+        """Place a request whose reserved lane is not ready on a deployment that can serve now.
+
+        The scheduler can reserve a lane that goes to sleep before the request
+        reaches it. That request then waits for a wake, even when another
+        deployment of the same model is warm. This looks for such a deployment
+        on another provider and reserves it. It only takes a deployment that
+        is ready now: it never queues and never picks a sleeping or cold lane,
+        so the caller keeps its current reservation when nothing better
+        exists.
+
+        The new slot is reserved before the old one is released, so a ready
+        deployment that fills up between the check and the reservation leaves
+        the caller exactly where it was: still holding its reservation on
+        ``exclude_provider_id``, and ``None`` returned. Capacity is reserved
+        per provider, so the two reservations never collide. On success the
+        old reservation (and the request tracking that points at it) is
+        released before the result for the new deployment re-registers the
+        request.
+        """
+        if request.required_provider_id is not None:
+            return None
+        deployments = [
+            d
+            for d in request.deployments
+            if d.get("model_id") == model_id and d.get("provider_id") != exclude_provider_id
+        ]
+        if not deployments:
+            return None
+        candidates = [c for c in (request.classified_models or []) if c[0] == model_id]
+        if not candidates:
+            return None
+        scored = self._compute_candidate_scores(
+            candidates,
+            deployments,
+            None,
+            input_tokens=estimate_prompt_tokens(request.payload),
+            request_id=request.request_id,
+        )
+        ready = [
+            s
+            for s in scored
+            if s[5].tier != ReadinessTier.UNAVAILABLE
+            and not (s[2] == "logosnode" and s[5].tier in self._NOT_READY_TIERS)
+        ]
+        if not ready:
+            return None
+        best = self._try_immediate_select(ready, request.request_id)
+        if best is None:
+            logger.info(
+                "Reroute of request %s found no free slot on another deployment; " "keeps its reservation on worker=%s",
+                request.request_id,
+                self._logosnode.get_provider_name(exclude_provider_id) or exclude_provider_id,
+            )
+            return None
+        self.release(model_id, exclude_provider_id, "logosnode", request.request_id)
+        chosen_model_id, provider_id, provider_type, _score, priority_int, ettft = best
+        logger.info(
+            "Rerouted request %s for model=%s from worker=%s to worker=%s (tier=%s): "
+            "the reserved lane was not ready",
+            request.request_id,
+            self._logosnode.get_model_name(chosen_model_id, provider_id) or chosen_model_id,
+            self._logosnode.get_provider_name(exclude_provider_id) or exclude_provider_id,
+            self._logosnode.get_provider_name(provider_id) or provider_id,
+            ettft.tier.value,
+        )
+        result = self._create_result(
+            chosen_model_id,
+            provider_id,
+            provider_type,
+            priority_int,
+            request.request_id,
+            was_queued=False,
+            api_key_id=request.api_key_id,
+        )
+        result.ettft_estimate_ms = ettft.ettft_ms
+        result.ettft_tier = ettft.tier.value
+        result.warmth_state = ettft.warmth_state
+        return result
+
     # ------------------------------------------------------------------
     # Prefix-cache-aware placement
     # ------------------------------------------------------------------

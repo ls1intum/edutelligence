@@ -115,7 +115,7 @@ def test_lane_idle_long_enough_is_still_slept():
     """No recent activity: a genuinely idle lane is still slept as before."""
     planner = _planner({})  # no recorded activity for the model
     key = planner._lane_key(PROVIDER, LANE)
-    planner._lane_idle_since[key] = time.time() - 182.0
+    planner._lane_idle_since[key] = time.time() - (planner.IDLE_SLEEP_L1 + 62.0)
 
     actions = _idle_actions(planner, _lanes())
 
@@ -226,7 +226,7 @@ def test_no_activity_between_polls_still_sleeps(monkeypatch):
         demand_tracker=None,
     )
     key = planner._lane_key(PROVIDER, LANE)
-    planner._lane_idle_since[key] = time.time() - 182.0
+    planner._lane_idle_since[key] = time.time() - (planner.IDLE_SLEEP_L1 + 62.0)
 
     lanes = _lanes()
     planner._update_idle_tracking(PROVIDER, lanes)

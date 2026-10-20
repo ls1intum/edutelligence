@@ -882,6 +882,47 @@
 
         }
 
+        <!-- Delays -->
+        @case ('delays') {
+
+          <div class="delays">
+            <div class="delays__header">
+              <div>
+                <h2 class="delays__title">Request delays</h2>
+                <p class="delays__subtitle">
+                  Where the time of a request goes, per provider and reasoning effort: the wait inside
+                  Logos before the provider call (key lookup, rate limit, budget check, scheduling), the
+                  provider time, and the time to the first token. For local models the effort is the one
+                  Logos sent after mapping it onto the levels the model supports.
+                </p>
+              </div>
+              <app-time-range-bar
+                [preset]="delayPreset()"
+                [offset]="delayOffset()"
+                (presetChange)="delayPreset.set($event)"
+                (offsetChange)="delayOffset.set($event)"
+              />
+              <button
+                type="button"
+                class="btn-copy-log"
+                aria-label="Refresh request delays"
+                (click)="refreshDelays()"
+              >
+                <i class="pi pi-refresh" aria-hidden="true"></i> Refresh
+              </button>
+            </div>
+            @if (modelId() !== null) {
+              <app-request-latency-panel
+                [start]="delayWindow().start"
+                [end]="delayWindow().end"
+                [scope]="delayScope()"
+                [refresh]="delayRefresh()"
+              />
+            }
+          </div>
+
+        }
+
         <!-- Access -->
         @case ('access') {
 
