@@ -2,7 +2,16 @@
   display: block;
 }
 
+// The tag stays visible; only a long provider name is shortened.
+.cell-provider {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+}
+
 .cell-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -20,6 +29,7 @@
 
 // Same look as the Cloud/Local badge of the recent requests list.
 .cell-kind {
+  flex: none;
   display: inline-block;
   margin-left: 6px;
   font-size: var(--font-size-2xs);
@@ -33,5 +43,6 @@
 }
 
 .cell-muted {
-  color: rgb(var(--color-typography-500));
+  font-style: italic;
+  color: rgb(var(--color-typography-700));
 }

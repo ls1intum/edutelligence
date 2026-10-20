@@ -100,7 +100,7 @@ describe('RequestLatencyPanel', () => {
 
     const rows = fixture.nativeElement.querySelectorAll('.table-row');
     expect(rows.length).toBe(2);
-    expect(rows[0].textContent).toContain('gpt-x');
+    expect(rows[0].textContent).toContain('azure');
     expect(rows[0].textContent).toContain('52.0 s');
     expect(rows[1].textContent).toContain('2 failed');
   });

@@ -9,12 +9,13 @@
       : 'No finished requests in the selected range.'
   "
 >
-  @for (row of rows(); track row.modelName + '|' + row.providerName + '|' + row.reasoningEffort) {
+  @for (row of rows(); track row.modelId + '|' + row.providerId + '|' + row.reasoningEffort) {
     <div class="table-row" role="row">
-      <div role="cell" data-label="Model" class="cell-name">{{ row.modelName }}</div>
-      <div role="cell" data-label="Provider" class="cell-name">
-        {{ row.providerName }}
-        <span class="cell-kind">{{ row.local ? 'Local' : 'Cloud' }}</span>
+      <div role="cell" data-label="Provider">
+        <span class="cell-provider">
+          <span class="cell-name" [title]="row.providerName">{{ row.providerName }}</span>
+          <span class="cell-kind">{{ row.local ? 'Local' : 'Cloud' }}</span>
+        </span>
       </div>
       <div role="cell" data-label="Effort">
         @if (row.reasoningEffort) {

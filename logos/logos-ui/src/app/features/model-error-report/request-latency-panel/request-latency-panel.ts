@@ -57,8 +57,8 @@ export class RequestLatencyPanel {
   readonly loading = signal(true);
   readonly failed = signal(false);
 
+  // The panel sits in one model's details, so it has no model column.
   readonly columns = [
-    'MODEL',
     'PROVIDER',
     'EFFORT',
     'REQUESTS',
@@ -69,7 +69,7 @@ export class RequestLatencyPanel {
     'TTFT P50',
     'TTFT P95',
   ];
-  readonly gridCols = '190fr 190fr 90fr 90fr 105fr 105fr 105fr 105fr 95fr 95fr';
+  readonly gridCols = '260fr 90fr 110fr 105fr 105fr 105fr 105fr 95fr 95fr';
   readonly formatDelay = formatDelayMs;
 
   // Every load bumps this; a response for an older range or scope must not
