@@ -5268,6 +5268,13 @@ def _sharing_mismatch_message(shared: bool, expect_shared: bool) -> str:
     )
 
 
+def _sharing_unconfirmed_message() -> str:
+    return (
+        "--shared-profiles on was given, but this Logos does not report its sharing setting, "
+        "so the arm cannot be confirmed. Update Logos, or drop the option."
+    )
+
+
 async def _verify_sharing_arm(admin_url: str, logos_key: str, expect_shared: Optional[bool]) -> None:
     """Refuse the wrong sharing arm before any node is stopped or any profile reset."""
     if expect_shared is None:
@@ -5277,6 +5284,9 @@ async def _verify_sharing_arm(admin_url: str, logos_key: str, expect_shared: Opt
             f"{admin_url}/logosdb/providers/logosnode/calibration-sharing", json={"logos_key": logos_key}
         )
     if r.status_code == 404:
+        # A Logos that predates sharing never shares, which is all "off" asks for.
+        if expect_shared:
+            raise RuntimeError(_sharing_unconfirmed_message())
         print("  [calib] WARNING: this Logos cannot report its sharing setting; the reset response is checked instead.")
         return
     if r.status_code != 200:
@@ -5317,6 +5327,8 @@ async def _reset_profiles_via_rest(
     shared = body.get("shared_profiles")
     state = "unknown" if shared is None else ("on" if shared else "off")
     print(f"  [calib] provider {provider_id}: reset {len(reset)} profile(s), calibration sharing {state}")
+    if expect_shared and shared is None:
+        raise RuntimeError(_sharing_unconfirmed_message())
     if expect_shared is not None and shared is not None and bool(shared) != expect_shared:
         raise RuntimeError(_sharing_mismatch_message(bool(shared), expect_shared))
     return reset

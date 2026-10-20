@@ -445,6 +445,8 @@ def test_a_reset_for_the_matching_or_unchecked_arm_goes_through():
     assert _reset_with(True, True) == ["m1"]
     assert _reset_with(False, None) == ["m1"]
     assert _reset_with(None, False) == ["m1"]  # an older Logos does not say
+    with pytest.raises(RuntimeError, match="cannot be confirmed"):
+        _reset_with(None, True)  # nothing confirms the on arm
 
 
 def _sharing_setting(shared, status=200):
@@ -479,9 +481,11 @@ def test_the_sharing_setting_is_read_without_changing_anything():
             asyncio.run(bm._verify_sharing_arm("https://x", "k", False))
 
 
-def test_an_older_logos_without_the_setting_falls_back_to_the_reset_check():
+def test_an_older_logos_without_the_setting_is_enough_for_the_off_arm_only():
     with _sharing_setting(None, status=404):
-        asyncio.run(bm._verify_sharing_arm("https://x", "k", False))
+        asyncio.run(bm._verify_sharing_arm("https://x", "k", False))  # it never shares
+        with pytest.raises(RuntimeError, match="cannot be confirmed"):
+            asyncio.run(bm._verify_sharing_arm("https://x", "k", True))
 
 
 def test_the_wrong_arm_is_refused_before_workers_stop_or_profiles_change():
