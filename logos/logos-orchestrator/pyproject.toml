@@ -105,7 +105,6 @@ testpaths = ["tests/unit"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers --strict-config"
 markers = [
-    "integration: tests requiring a running server or database",
     "slow: tests that take more than a few seconds",
 ]
 filterwarnings = []
