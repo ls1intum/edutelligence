@@ -137,6 +137,9 @@ class EntityCandidateDTO(BaseModel):
     unit_type: str | None = Field(default=None, alias="unitType")
     faq_state: str | None = Field(default=None, alias="faqState")
     channel_is_public: bool | None = Field(default=None, alias="channelIsPublic")
+    # The part of the description that matched the query best, chosen by Artemis
+    # from the item's chunk vectors; absent when Artemis searches by keywords only.
+    passage: str | None = None
 
     @field_validator(
         "release_date",

@@ -179,7 +179,15 @@ async def put_instructions(
 
 @app.get("/capacity", response_model=CapacityState, tags=["capacity"])
 async def get_capacity(_: Principal = Depends(require_agent_operator)) -> CapacityState:
-    reading = await capacity.read_load(lane=model_policy.current().lane())
+    # Admission uses the measured figure (who filled the lane does not
+    # matter). Own-slot colouring on the page still needs the per-key split,
+    # so the key is passed with discount_own=False.
+    own_key = await db.agent_key_id(settings.agent_api_key)
+    reading = await capacity.read_load(
+        lane=model_policy.current().lane(),
+        own_api_key_id=own_key,
+        discount_own=False,
+    )
     counts = await db.count_sessions_by_status()
     running = counts.get(SessionStatus.RUNNING.value, 0)
     paused = counts.get(SessionStatus.PAUSED.value, 0)
@@ -197,12 +205,18 @@ async def get_capacity(_: Principal = Depends(require_agent_operator)) -> Capaci
     policy = await model_policy.refresh()
     if not policy.ok:
         may_start, reason = False, policy.detail
+    # own_slots and busy_slots share one population (see capacity.parse):
+    # partition against busy so agent + other + free always add up.
+    own_slots = max(0, min(reading.own_slots, reading.busy_slots))
+    other_slots = max(0, reading.busy_slots - own_slots)
     return CapacityState(
         models_local_only=policy.ok,
         models_detail=policy.detail,
         load=round(reading.load, 4),
         total_slots=reading.total_slots,
         busy_slots=reading.busy_slots,
+        own_slots=own_slots,
+        other_slots=other_slots,
         sessions_running=running,
         sessions_queued=counts.get(SessionStatus.QUEUED.value, 0),
         sessions_paused=paused,

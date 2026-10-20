@@ -106,6 +106,9 @@ def _lane_e2e_latency_p50_seconds(metrics: dict[str, Any]) -> float:
     return _histogram_quantile(metrics.get("e2e_latency_histogram"), 0.50)
 
 
+_LANE_LEAVING_TRANSITIONS = frozenset({"draining", "falling_asleep", "stopping"})
+
+
 def _lane_sort_key(lane: dict[str, Any]) -> tuple[Any, ...]:
     backend_metrics = lane.get("backend_metrics") if isinstance(lane.get("backend_metrics"), dict) else {}
     queue_waiting = _lane_metric_float(backend_metrics.get("queue_waiting"))
@@ -328,6 +331,8 @@ class ProviderSession:
     latest_events: list[dict[str, Any]] = field(default_factory=list)
     recent_samples: deque[dict[str, Any]] = field(default_factory=deque)
     pending_commands: dict[str, asyncio.Future] = field(default_factory=dict)
+    # Counts the runtime statuses received; see reflects_command.
+    runtime_status_count: int = 0
     pending_streams: dict[str, asyncio.Queue] = field(default_factory=dict)
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     desired_lanes: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -386,6 +391,10 @@ class LogosNodeRuntimeRegistry:
         # Lanes pre-marked as cold by the capacity planner — excluded from
         # scheduling so new requests don't route to lanes about to be stopped.
         self._cold_marked_lanes: set[tuple[int, str]] = set()
+        # Called with the provider id whenever a lane's cold mark changes, so
+        # the lane health snapshot can show it without waiting for the worker
+        # to push a status that differs from its last one.
+        self.on_cold_mark_changed: Callable[[int], None] | None = None
         # provider_id -> monotonic timestamp of the last live-session drop.
         # A worker that went down a moment ago is mid-reboot, not dead: the
         # request path uses this to extend the startup grace period past the
@@ -663,6 +672,9 @@ class LogosNodeRuntimeRegistry:
                     accent=YELLOW,
                 )
             )
+            # The old handler's own detach no longer matches a session, so the
+            # commands it was waiting on are failed here instead.
+            self._fail_pending_commands(old, "Worker session replaced")
             await self._close_session(old)
         else:
             body_lines = [
@@ -725,9 +737,7 @@ class LogosNodeRuntimeRegistry:
                 accent=RED,
             )
         )
-        for fut in list(session.pending_commands.values()):
-            if not fut.done():
-                fut.set_exception(LogosNodeOfflineError("Worker disconnected"))
+        self._fail_pending_commands(session, "Worker disconnected")
         for queue in list(session.pending_streams.values()):
             try:
                 queue.put_nowait(
@@ -802,6 +812,7 @@ class LogosNodeRuntimeRegistry:
             return
         old_runtime = session.latest_runtime
         session.latest_runtime = runtime if isinstance(runtime, dict) else {}
+        session.runtime_status_count += 1
         session.runtime_revision += 1
         was_first = not session.first_status_received
         session.first_status_received = True
@@ -1092,7 +1103,7 @@ class LogosNodeRuntimeRegistry:
             return
         fut = session.pending_commands.pop(cmd_id, None)
         if fut is not None and not fut.done():
-            fut.set_result(payload)
+            fut.set_result({**payload, "runtime_statuses_before": session.runtime_status_count})
 
     async def on_stream_start(self, provider_id: int, payload: dict[str, Any]) -> None:
         session = await self._get_session(provider_id)
@@ -1155,7 +1166,16 @@ class LogosNodeRuntimeRegistry:
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
         on_sent: Callable[[], None] | None = None,
+        on_dispatched: Callable[[asyncio.Future], None] | None = None,
     ) -> dict[str, Any]:
+        """Send a command to the worker and wait for its answer.
+
+        ``on_dispatched`` receives the future of the worker's answer right
+        before the command is written, once the send lock is held. That future outlives this call: if the
+        caller is cancelled or the wait times out, it still resolves when the
+        worker answers, and fails when the session ends or the send fails. A caller uses it to learn
+        when a command it stopped waiting for has actually finished.
+        """
         session = await self._get_active_session(provider_id, stale_after_seconds)
         loop = asyncio.get_running_loop()
         cmd_id = str(uuid.uuid4())
@@ -1195,13 +1215,30 @@ class LogosNodeRuntimeRegistry:
                 session.optimistic_calibration_until = prior_optimistic_until
                 self._set_calibrating(session, was_calibrating, "start_calibration_session refused")
 
+        writing = False
         try:
             async with session.send_lock:
+                # Handed over right before the frame is written: a caller
+                # cancelled while it is being written cannot tell whether the
+                # worker got it, so the answer must already be in its hands.
+                if on_dispatched is not None:
+                    on_dispatched(fut)
+                writing = True
                 await session.websocket.send_json(message)
+        except asyncio.CancelledError:
+            # Cancelled while still waiting for the send lock: nothing was
+            # sent, so no answer will come.
+            if not writing:
+                session.pending_commands.pop(cmd_id, None)
+                _undo_optimistic_calibration_mark()
+            raise
         except Exception as exc:  # noqa: BLE001
             session.pending_commands.pop(cmd_id, None)
             _undo_optimistic_calibration_mark()
-            raise LogosNodeOfflineError(f"Failed to send command: {exc}") from exc
+            error = LogosNodeOfflineError(f"Failed to send command: {exc}")
+            if not fut.done():
+                fut.set_exception(error)  # never sent: no answer is coming
+            raise error from exc
 
         # The command is on the wire; session acquisition and the send lock no
         # longer belong to the provider's own window.
@@ -1209,19 +1246,25 @@ class LogosNodeRuntimeRegistry:
             on_sent()
 
         try:
-            result = await asyncio.wait_for(fut, timeout=max(1, timeout_seconds))
+            # Shielded so that giving up on the answer leaves the future to
+            # whoever on_dispatched handed it to.
+            result = await asyncio.wait_for(
+                fut if on_dispatched is None else asyncio.shield(fut), timeout=max(1, timeout_seconds)
+            )
         except asyncio.CancelledError:
             # The caller went away — typically a client that disconnected
             # mid-request. Dropping the future only stops us from reading the
             # answer; the worker is still producing it, so tell it to stop.
             # Guarded against recursion: a cancel command cancelling itself
             # would loop.
-            session.pending_commands.pop(cmd_id, None)
+            if on_dispatched is None:
+                session.pending_commands.pop(cmd_id, None)
             if action != CANCEL_COMMAND_ACTION:
                 self._request_command_cancellation(session, cmd_id)
             raise
         except asyncio.TimeoutError as exc:
-            session.pending_commands.pop(cmd_id, None)
+            if on_dispatched is None:
+                session.pending_commands.pop(cmd_id, None)
             self._emit_session_diagnostic(
                 kind="command-timeout",
                 session=session,
@@ -1458,6 +1501,11 @@ class LogosNodeRuntimeRegistry:
             return None
         return session.worker_id, session.latest_vllm_metrics_text
 
+    def supports_action(self, provider_id: int, action: str) -> bool:
+        """Whether the connected worker listed ``action`` in its hello."""
+        session = self._sessions.get(int(provider_id))
+        return session is not None and action in session.actions
+
     def has_received_first_status(self, provider_id: int) -> bool:
         """Check if a provider has sent at least one status update since connecting."""
         session = self._sessions.get(int(provider_id))
@@ -1611,6 +1659,11 @@ class LogosNodeRuntimeRegistry:
             lid = str(lane.get("lane_id") or "")
             if lid and self.is_lane_cold_marked(provider_id, lid):
                 continue
+            # The worker is taking the lane down (draining for a sleep, falling
+            # asleep, stopping): a request sent now would queue behind that
+            # command and reach a sleeping or removed lane.
+            if lane.get("transition") in _LANE_LEAVING_TRANSITIONS:
+                continue
             candidates.append(lane)
         if not candidates:
             return None
@@ -1621,13 +1674,55 @@ class LogosNodeRuntimeRegistry:
     # Cold lane marking (for capacity planner pre-removal exclusion)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _fail_pending_commands(session: ProviderSession, reason: str) -> None:
+        for fut in list(session.pending_commands.values()):
+            if not fut.done():
+                fut.set_exception(LogosNodeOfflineError(reason))
+
+    def reflects_command(self, provider_id: int, answer: dict[str, Any]) -> bool:
+        """Whether the cached runtime already shows what an answered command changed.
+
+        The worker samples its lanes one after another, so a status can
+        arrive after a command's answer and still hold lanes sampled before
+        the command. Its ``lifecycle_revision`` is the revision taken before
+        sampling, and the answer carries the revision after the command: a
+        status at or past that revision reflects the command. A worker that
+        predates the revisions falls back to any status received after the
+        answer (``runtime_statuses_before``), and a session that has ended
+        has nothing left to wait for.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return True
+        command_revision = answer.get("lifecycle_revision")
+        status_revision = session.latest_runtime.get("lifecycle_revision")
+        if isinstance(command_revision, int) and isinstance(status_revision, int):
+            return status_revision >= command_revision
+        statuses_before = answer.get("runtime_statuses_before")
+        return not isinstance(statuses_before, int) or session.runtime_status_count > statuses_before
+
     def mark_lane_cold(self, provider_id: int, lane_id: str) -> None:
         """Pre-mark a lane as cold so it's excluded from scheduling."""
-        self._cold_marked_lanes.add((int(provider_id), lane_id))
+        key = (int(provider_id), lane_id)
+        if key not in self._cold_marked_lanes:
+            self._cold_marked_lanes.add(key)
+            self._notify_cold_mark_changed(key[0])
 
     def unmark_lane_cold(self, provider_id: int, lane_id: str) -> None:
         """Restore a lane to normal scheduling after aborted stop."""
-        self._cold_marked_lanes.discard((int(provider_id), lane_id))
+        key = (int(provider_id), lane_id)
+        if key in self._cold_marked_lanes:
+            self._cold_marked_lanes.discard(key)
+            self._notify_cold_mark_changed(key[0])
+
+    def _notify_cold_mark_changed(self, provider_id: int) -> None:
+        if self.on_cold_mark_changed is None:
+            return
+        try:
+            self.on_cold_mark_changed(provider_id)
+        except Exception:  # noqa: BLE001 — the snapshot is telemetry; routing must not depend on it
+            logger.warning("Could not publish the cold mark change of worker %s", provider_id, exc_info=True)
 
     def is_lane_cold_marked(self, provider_id: int, lane_id: str) -> bool:
         """Check if a lane is pre-marked as cold."""

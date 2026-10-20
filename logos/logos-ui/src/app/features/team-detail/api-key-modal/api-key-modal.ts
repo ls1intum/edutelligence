@@ -17,16 +17,16 @@ import { TeamManagementService } from '../../../core/services/team-management.se
 import { SearchInputComponent } from '../../../shared/components/search-input/search-input';
 import { ErrorMessageComponent } from '../../../shared/components/error-message/error-message';
 import {
-  KeySla,
-  SLA_OPTIONS,
-  SLA_PRIORITY,
-  INHERITED_SLA_HINT,
-  effectiveSla,
+  KeySlo,
+  SLO_OPTIONS,
+  SLO_PRIORITY,
+  INHERITED_SLO_HINT,
+  effectiveSlo,
   isUnsetPriority,
-  slaHint,
-  slaLabel,
-  slaOfPriority,
-} from '../tabs/key-sla';
+  sloHint,
+  sloLabel,
+  sloOfPriority,
+} from '../tabs/key-slo';
 
 const MICRO = 100_000_000;
 
@@ -73,17 +73,17 @@ export class ApiKeyModalComponent implements OnChanges {
   fLocalTpm = signal('');
   fEnv = signal('');
   /**
-   * Selected SLA, or `''` when the key still inherits team/policy priority.
+   * Selected SLO, or `''` when the key still inherits team/policy priority.
    * Keeping inherited as a distinct empty value means picking any of the three
    * real tiers — including the one that matches the effective inherited tier —
    * is a real change that can pin the key.
    */
-  fSla = signal<KeySla | ''>('');
+  fSlo = signal<KeySlo | ''>('');
   /** The selection when the dialog opened. Unset stays `''` so a budget-only
    *  save does not convert an inherited priority into an explicit one. */
-  private initialSla: KeySla | '' = '';
+  private initialSlo: KeySlo | '' = '';
   /** Effective inherited tier for the placeholder label (team → default). */
-  inheritedEffectiveSla = signal<KeySla>(slaOfPriority(0));
+  inheritedEffectiveSlo = signal<KeySlo>(sloOfPriority(0));
   fLog = signal<'BILLING' | 'FULL'>('BILLING');
   fCustom = signal(false);
 
@@ -145,13 +145,13 @@ export class ApiKeyModalComponent implements OnChanges {
     this.fLocalRpm.set(s.local_rpm_limit && s.local_rpm_limit > 0 ? String(s.local_rpm_limit) : '');
     this.fLocalTpm.set(s.local_tpm_limit && s.local_tpm_limit > 0 ? String(s.local_tpm_limit) : '');
     this.fEnv.set(key.environment ?? '');
-    this.inheritedEffectiveSla.set(effectiveSla(0, this.team?.priority));
+    this.inheritedEffectiveSlo.set(effectiveSlo(0, this.team?.priority));
     if (isUnsetPriority(key.default_priority)) {
-      this.initialSla = '';
-      this.fSla.set('');
+      this.initialSlo = '';
+      this.fSlo.set('');
     } else {
-      this.initialSla = slaOfPriority(key.default_priority);
-      this.fSla.set(this.initialSla);
+      this.initialSlo = sloOfPriority(key.default_priority);
+      this.fSlo.set(this.initialSlo);
     }
     this.fLog.set(key.log ?? 'BILLING');
     this.fCustom.set(!!key.use_custom_permissions);
@@ -296,28 +296,28 @@ export class ApiKeyModalComponent implements OnChanges {
     );
   }
 
-  readonly slaOptions = SLA_OPTIONS;
-  readonly slaLabel = slaLabel;
-  readonly inheritedSlaHint = INHERITED_SLA_HINT;
+  readonly sloOptions = SLO_OPTIONS;
+  readonly sloLabel = sloLabel;
+  readonly inheritedSloHint = INHERITED_SLO_HINT;
 
-  slaFieldHint(): string {
-    const sla = this.fSla();
-    return sla === '' ? INHERITED_SLA_HINT : slaHint(sla);
+  sloFieldHint(): string {
+    const slo = this.fSlo();
+    return slo === '' ? INHERITED_SLO_HINT : sloHint(slo);
   }
 
   /**
    * Developer keys historically used priority `0` for team/policy inheritance
-   * (and changelog `039` left many of them at legacy `1`). The SLA select only
+   * (and changelog `039` left many of them at legacy `1`). The SLO select only
    * offers the three tiers, so owners need a separate action to write `0` again
-   * after pinning — application keys keep an explicit SLA once chosen.
+   * after pinning — application keys keep an explicit SLO once chosen.
    */
-  canResetDeveloperSla(): boolean {
-    return this.key?.key_type === 'developer' && this.fSla() !== '';
+  canResetDeveloperSlo(): boolean {
+    return this.key?.key_type === 'developer' && this.fSlo() !== '';
   }
 
-  resetDeveloperSlaToInherited(): void {
-    if (!this.canResetDeveloperSla() || this.saveLoading()) return;
-    this.fSla.set('');
+  resetDeveloperSloToInherited(): void {
+    if (!this.canResetDeveloperSlo() || this.saveLoading()) return;
+    this.fSlo.set('');
   }
 
   dollarsToMc = dollarsToMc;
@@ -349,14 +349,14 @@ export class ApiKeyModalComponent implements OnChanges {
       local_tpm_limit: intOrMinus1(this.fLocalTpm()),
     };
 
-    const selectedSla = this.fSla();
-    if (selectedSla !== this.initialSla) {
-      if (selectedSla === '') {
-        // Developer-key reset-to-inherited (see canResetDeveloperSla). Application
+    const selectedSlo = this.fSlo();
+    if (selectedSlo !== this.initialSlo) {
+      if (selectedSlo === '') {
+        // Developer-key reset-to-inherited (see canResetDeveloperSlo). Application
         // keys cannot reach '' from an explicit tier through the UI.
         payload.default_priority = 0;
       } else {
-        payload.default_priority = SLA_PRIORITY[selectedSla];
+        payload.default_priority = SLO_PRIORITY[selectedSlo];
       }
     }
 

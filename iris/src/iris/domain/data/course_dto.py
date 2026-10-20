@@ -8,7 +8,7 @@ from iris.domain.data.exam_dto import ExamDTO
 from iris.domain.data.exercise_with_submissions_dto import (
     ExerciseWithSubmissionsDTO,
 )
-from iris.domain.data.programming_exercise_dto import ProgrammingLanguage
+from iris.domain.data.lecture_dto import PyrisLectureDTO
 
 
 class CourseDTO(BaseModel):
@@ -21,7 +21,10 @@ class CourseDTO(BaseModel):
     description: Optional[str] = None
     start_time: Optional[datetime] = Field(alias="startTime", default=None)
     end_time: Optional[datetime] = Field(alias="endTime", default=None)
-    default_programming_language: Optional[ProgrammingLanguage] = Field(
+    # A plain string on purpose: Artemis adds programming languages over time, and the value
+    # is only shown to the agent as course information. Validating it against a list would
+    # reject the whole chat request for every course that uses a language missing from it.
+    default_programming_language: Optional[str] = Field(
         alias="defaultProgrammingLanguage", default=None
     )
     max_complaints: Optional[int] = Field(alias="maxComplaints", default=None)
@@ -37,6 +40,7 @@ class CourseDTO(BaseModel):
     exercises: List[ExerciseWithSubmissionsDTO] = Field(alias="exercises", default=[])
     exams: List[ExamDTO] = Field(alias="exams", default=[])
     competencies: List[CompetencyDTO] = Field(alias="competencies", default=[])
+    lectures: List[PyrisLectureDTO] = Field(alias="lectures", default=[])
     student_analytics_dashboard_enabled: bool = Field(
         alias="studentAnalyticsDashboardEnabled", default=False
     )

@@ -5,6 +5,7 @@ import { RouterTestingModule } from '@angular/router/testing';
 import { AuthService } from '../../auth/services/auth.service';
 import { ThemeService } from '../../services/theme.service';
 import { MyKeysService } from '../../services/my-keys.service';
+import { NotificationService } from '../../services/notification.service';
 import { User, UserRole } from '../../auth/models/user.model';
 import { Shell } from './shell';
 
@@ -89,6 +90,10 @@ describe('Shell', () => {
         { provide: AuthService, useValue: auth },
         { provide: MyKeysService, useValue: { hasKeys: signal<boolean | null>(null) } },
         { provide: ThemeService, useValue: { isDark: signal(false), toggle: vi.fn() } },
+        {
+          provide: NotificationService,
+          useValue: { unreadCount: signal(0), latest: signal(null), start: vi.fn(), stop: vi.fn() },
+        },
       ],
     }).compileComponents();
 

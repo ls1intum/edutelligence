@@ -59,8 +59,9 @@ Angular CLI does not come with an end-to-end testing framework by default. You c
 Colors, fonts, and spacing are CSS variables in `src/styles/_tokens.scss`
 (light/dark themed). Shared buttons/typography classes live in
 `src/styles/_buttons.scss` and `_typography.scss` (`.btn-primary`,
-`.page-title`, etc). Fonts are loaded in `src/index.html`: Inter (body),
-Plus Jakarta Sans (logo wordmark), Space Mono (code/terminal blocks).
+`.page-title`, etc). No webfonts are downloaded: typography uses the system
+font stacks in `--font-family-base` / `--font-family-display` /
+`--font-family-mono` (`src/styles/_tokens.scss`).
 
 Reusable components live in `src/app/shared/components/`: `app-select`,
 `app-search-input`, `app-data-table`, `app-modal-form`, `app-modal-confirm`,

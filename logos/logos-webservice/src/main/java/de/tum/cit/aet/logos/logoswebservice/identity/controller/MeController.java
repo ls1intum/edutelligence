@@ -2,8 +2,6 @@ package de.tum.cit.aet.logos.logoswebservice.identity.controller;
 
 import java.util.Map;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -19,8 +17,6 @@ import de.tum.cit.aet.logos.logoswebservice.identity.service.MeService;
 
 @RestController
 public class MeController {
-
-    private static final Logger log = LoggerFactory.getLogger(MeController.class);
 
     private final MeService meService;
     private final ApiKeyAdminService apiKeyAdminService;
@@ -60,13 +56,7 @@ public class MeController {
 
     @GetMapping("/me/logos-keys")
     public ResponseEntity<?> getMyLogosKeys(@RequestAttribute("authContext") AuthContext auth) {
-        long start = System.nanoTime();
-        var keys = meService.getMyKeys(auth.userId());
-        // Temporary instrumentation, see JwtAuthInterceptor — isolates the
-        // service/DB time for this endpoint from the auth+sync time logged there.
-        log.info("getMyKeys took {}ms for user {} ({} keys)",
-            (System.nanoTime() - start) / 1_000_000, auth.userId(), keys.size());
-        return ResponseEntity.ok(keys);
+        return ResponseEntity.ok(meService.getMyKeys(auth.userId()));
     }
 
     @GetMapping("/me")
@@ -76,10 +66,7 @@ public class MeController {
                 Map.of("detail", "No user linked to this key. Service keys cannot log into the UI.")
             );
         }
-        long start = System.nanoTime();
-        var me = meService.getMe(auth.userId());
-        log.info("getMe took {}ms for user {}", (System.nanoTime() - start) / 1_000_000, auth.userId());
-        return me
+        return meService.getMe(auth.userId())
             .<ResponseEntity<?>>map(ResponseEntity::ok)
             .orElseGet(() -> ResponseEntity.status(404).body(
                 Map.of("detail", "No user linked to this key. Service keys cannot log into the UI.")

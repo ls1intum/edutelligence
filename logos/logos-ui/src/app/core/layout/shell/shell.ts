@@ -6,6 +6,7 @@ import { MenuItem } from '../../../shared/models/nav.model';
 import { UserRole } from '../../auth/models/user.model';
 import { Logo } from '../../../shared/components/logo/logo';
 import { ThemeToggle } from '../../../shared/components/theme-toggle/theme-toggle';
+import { NotificationBell } from '../../../shared/components/notification-bell/notification-bell';
 import { IconTileComponent } from '../../../shared/components/icon-tile/icon-tile';
 import { MyKeysService } from '../../services/my-keys.service';
 
@@ -17,7 +18,7 @@ interface NavSection {
 @Component({
   selector: 'app-shell',
   standalone: true,
-  imports: [RouterModule, Logo, ThemeToggle, IconTileComponent],
+  imports: [RouterModule, Logo, NotificationBell, ThemeToggle, IconTileComponent],
   templateUrl: './shell.html',
   changeDetection: ChangeDetectionStrategy.Eager,
   styleUrl: './shell.scss',

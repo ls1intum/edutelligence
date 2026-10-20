@@ -21,7 +21,13 @@ import { CHART_ROLE, getLaneStateColor, seriesColor, STATUS_COLOR } from './stat
 import {
   applyTimeSeriesLabels,
   chooseDynamicTargetBuckets,
+  describeWorkerVersion,
+  extractProviderGpuFaults,
+  formatTimeAgo,
+  extractProviderDiskMb,
   extractProviderHostRamMb,
+  formatStorageMb,
+  type ProviderDisk,
   extractProviderVramMb,
   formatPercent,
   formatRangeLabel,
@@ -53,6 +59,7 @@ import type {
   VramProviderMeta,
   VramV2Payload,
   VramV2Sample,
+  WorkerVersionChip,
 } from './statistics.models';
 
 // Child components
@@ -62,6 +69,7 @@ import { LaneHealthPanel } from './components/lane-health-panel/lane-health-pane
 import { LaneMemoryPieComponent } from './components/lane-memory-pie/lane-memory-pie';
 import { SelectComponent, AppSelectOption } from '../../shared/components/select/select';
 import { MultiSelectComponent } from '../../shared/components/multi-select/multi-select';
+import { SearchableSelectComponent } from '../../shared/components/searchable-select/searchable-select';
 import { RecentRequests } from './components/recent-requests/recent-requests';
 import { StatisticsService } from './services/statistics.service';
 import { RequestVolumeChartComponent, ChartTooltip } from './components/request-volume-chart/request-volume-chart';
@@ -69,17 +77,27 @@ import { SparklineComponent } from './components/sparkline/sparkline';
 import { StatKpiCardComponent } from './components/stat-kpi-card/stat-kpi-card';
 import { StatusBars } from './components/status-bars/status-bars';
 import { StatsSkeletonComponent } from './components/skeletons/skeletons';
-import { VramDonutComponent, type DonutSlice } from './components/vram-donut/vram-donut';
+import { VersionHint } from './components/version-hint/version-hint';
+import { VramDonutComponent } from './components/vram-donut/vram-donut';
 import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
 const RAW_VRAM_SAMPLE_CAP = 720;
+/** Value prefixes of the requester picker, which offers users and application keys. */
+const REQUESTER_USER = 'u:';
+const REQUESTER_KEY = 'k:';
 
 /** One Local Providers glass row — everything the panels for a single worker need. */
 type ProviderGlassRow = {
   name: string;
   online: boolean;
   calibrating: boolean;
+  versionChip: WorkerVersionChip | null;
+  /** GPUs this worker reports as failed; empty while the worker is offline,
+   *  whose last sample may predate a reset. */
+  gpuFaults: string[];
+  /** When the worker was last heard from: its last heartbeat, else its last sample. */
+  lastSeen: string | null;
   lanes: Record<string, LaneSignalData>;
   hasLanes: boolean;
   laneCount: number;
@@ -87,6 +105,8 @@ type ProviderGlassRow = {
   freeVramMb: number;
   modelsLoaded: number;
   ram: { reported: boolean; totalMb: number; freeMb: number; usedMb: number };
+  /** Space on the model volume; not reported while the worker is offline. */
+  disk: ProviderDisk;
   hasLaneRam: boolean;
   /**
    * True when the worker runs on unified memory (Apple Silicon / Metal): the
@@ -98,9 +118,6 @@ type ProviderGlassRow = {
    *  worker's device memory reading. 0 on non-unified rows. */
   unifiedTotalMb: number;
   unifiedFreeMb: number;
-  fallbackVramPie: DonutSlice[];
-  vramUsedGb: number;
-  vramTotalGb: number;
 };
 
 @Component({
@@ -114,12 +131,14 @@ type ProviderGlassRow = {
     LaneMemoryPieComponent,
     SelectComponent,
     MultiSelectComponent,
+    SearchableSelectComponent,
     RecentRequests,
     RequestVolumeChartComponent,
     SparklineComponent,
     StatKpiCardComponent,
     StatusBars,
     StatsSkeletonComponent,
+    VersionHint,
     VramDonutComponent,
     WorkerGpuPanel,
     TimeRangeBarComponent,
@@ -198,6 +217,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly feedUsers = signal<FeedFilterOption[]>([]);
   readonly feedTeams = signal<FeedFilterOption[]>([]);
   readonly feedProviders = signal<FeedFilterOption[]>([]);
+  readonly feedApiKeys = signal<FeedFilterOption[]>([]);
   readonly feedModels = signal<FeedFilterOption[]>([]);
 
   // ── Scope ─────────────────────────────────────────────────────────────────
@@ -212,7 +232,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly filterUserId = signal<number | null>(null);
   readonly filterTeamId = signal<number | null>(null);
   readonly filterProviderId = signal<number | null>(null);
-  readonly errorsOnly = signal(false);
+  readonly filterApiKeyId = signal<number | null>(null);
 
   // Every loadScopeOptions bumps this; a response that resolves for an older
   // value is stale — its range or team moved on while the request was in
@@ -225,21 +245,37 @@ export class Statistics implements OnInit, OnDestroy {
       this.filterUserId() !== null ||
       this.filterTeamId() !== null ||
       this.filterProviderId() !== null ||
-      this.errorsOnly(),
+      this.filterApiKeyId() !== null,
   );
 
   // Both lists carry their request count, so the dropdown says which entries
   // are worth opening instead of being an alphabet of names. Ordered busiest
   // first by the server, which only reads as deliberate once the numbers show.
+  //
+  // A requester is either a person or an application key: the keys a team's
+  // deployments call with (PROD, staging, …) have no person behind them, so
+  // they share this picker with the users instead of taking a row of their
+  // own. Developer keys are not offered — their requests are the owner's.
+  // Values carry the kind, since a user and a key can share an id.
   readonly userFilterOptions = computed<AppSelectOption[]>(() => [
     {
       value: '',
       label: this.filterTeamId() === null ? 'All requesters' : 'Everyone in this team',
     },
-    ...this.feedUsers().map((u) => ({
-      value: String(u.id),
-      label: `${u.label} (${u.requestCount.toLocaleString()})`,
-    })),
+    ...[
+      ...this.feedUsers().map((u) => ({
+        value: `${REQUESTER_USER}${u.id}`,
+        label: `${u.label} (${u.requestCount.toLocaleString()})`,
+        count: u.requestCount,
+      })),
+      ...this.feedApiKeys().map((k) => ({
+        value: `${REQUESTER_KEY}${k.id}`,
+        label: `App key: ${k.label} (${k.requestCount.toLocaleString()})`,
+        count: k.requestCount,
+      })),
+    ]
+      .sort((a, b) => b.count - a.count)
+      .map(({ value, label }) => ({ value, label })),
   ]);
 
   readonly teamFilterOptions = computed<AppSelectOption[]>(() => [
@@ -258,23 +294,21 @@ export class Statistics implements OnInit, OnDestroy {
     })),
   ]);
 
-  readonly outcomeFilterOptions: AppSelectOption[] = [
-    { value: '', label: 'All outcomes' },
-    { value: 'errors', label: 'Errors only' },
-  ];
-
   /**
    * Nobody in the selected team sent anything in this range, so the requester
    * dropdown has nothing but its "everyone" entry. Worth saying outright — an
    * empty picker otherwise reads as a page that failed to load its options.
    */
   readonly noRequestersInScope = computed(
-    () => this.feedUsers().length === 0 && this.feedTeams().length > 0,
+    () =>
+      this.feedUsers().length === 0 && this.feedApiKeys().length === 0 && this.feedTeams().length > 0,
   );
 
   readonly selectedUserValue = computed(() => {
-    const id = this.filterUserId();
-    return id === null ? '' : String(id);
+    const userId = this.filterUserId();
+    if (userId !== null) return `${REQUESTER_USER}${userId}`;
+    const keyId = this.filterApiKeyId();
+    return keyId === null ? '' : `${REQUESTER_KEY}${keyId}`;
   });
 
   readonly selectedTeamValue = computed(() => {
@@ -287,8 +321,6 @@ export class Statistics implements OnInit, OnDestroy {
     return id === null ? '' : String(id);
   });
 
-  readonly selectedOutcomeValue = computed(() => (this.errorsOnly() ? 'errors' : ''));
-
   /** What the active filter narrows to, for the label above the KPI strip. */
   readonly filterLabel = computed(() => {
     const parts: string[] = [];
@@ -300,13 +332,16 @@ export class Statistics implements OnInit, OnDestroy {
     if (userId !== null) {
       parts.push(this.feedUsers().find((u) => u.id === userId)?.label ?? `user ${userId}`);
     }
+    const apiKeyId = this.filterApiKeyId();
+    if (apiKeyId !== null) {
+      parts.push(this.feedApiKeys().find((k) => k.id === apiKeyId)?.label ?? `key ${apiKeyId}`);
+    }
     const providerId = this.filterProviderId();
     if (providerId !== null) {
       parts.push(
         this.feedProviders().find((p) => p.id === providerId)?.label ?? `provider ${providerId}`,
       );
     }
-    if (this.errorsOnly()) parts.push('errors only');
     return parts.join(' · ');
   });
 
@@ -315,49 +350,40 @@ export class Statistics implements OnInit, OnDestroy {
       userId: this.filterUserId(),
       teamId: this.filterTeamId(),
       providerId: this.filterProviderId(),
-      errorsOnly: this.errorsOnly(),
+      apiKeyId: this.filterApiKeyId(),
+      // Outcomes are no longer a page-scope control — the feed's state filter
+      // covers error/finished buckets. Keep the wire field for the socket.
+      errorsOnly: false,
     };
   }
 
-  // ── Request feed state filter ───────────────────────────────────────────────
-  // One lifecycle bucket the recent-requests list is narrowed to; null shows
-  // every state. Deliberately not part of the page scope: a state filter only
-  // makes sense for the list of individual requests, not for the KPI cards and
-  // charts above it, which must keep summarising the whole team/user selection.
+  // ── Request feed filters ────────────────────────────────────────────────────
+  // One lifecycle bucket and a model set; empty shows everything. The model
+  // selection narrows the whole page — request list, KPI cards and charts —
+  // like the team, requester and provider filters do. The lifecycle bucket
+  // only makes sense for the list of individual requests, so it narrows that
+  // list alone while the cards and charts keep summarising the full scope.
   readonly feedStatus = signal<string | null>(null);
   readonly feedModelIds = signal<string[]>([]);
-  readonly feedProviderIds = signal<string[]>([]);
   readonly feedFilterActive = computed(() =>
-    this.feedStatus() !== null || this.feedModelIds().length > 0 || this.feedProviderIds().length > 0,
+    this.feedStatus() !== null || this.feedModelIds().length > 0,
   );
   readonly feedModelOptions = computed<AppSelectOption[]>(() => this.feedModels().map(model => ({
     value: String(model.id), label: `${model.label} (${model.requestCount.toLocaleString()})`,
   })));
-  readonly feedProviderOptions = computed<AppSelectOption[]>(() => this.feedProviders().map(provider => ({
-    value: String(provider.id), label: `${provider.label} (${provider.requestCount.toLocaleString()})`,
-  })));
 
   setFeedModelFilter(values: string[]): void {
+    // A model selection narrows the whole page, so every range-scoped panel is
+    // blanked until the server answers — the same treatment a scope change gets.
+    this.markRangeChanged();
     this.feedModelIds.set(values);
-    this.applyFeedFilters();
-  }
-
-  setFeedProviderFilter(values: string[]): void {
-    this.feedProviderIds.set(values);
-    this.applyFeedFilters();
-  }
-
-  clearFeedFilters(): void {
-    this.feedStatus.set(null);
-    this.feedModelIds.set([]);
-    this.feedProviderIds.set([]);
     this.applyFeedFilters();
   }
 
   private applyFeedFilters(): void {
     this.liveFeedTotal.set(null);
     this.requestsPending.set(true);
-    this.statsWs.setFeedFilters(this.feedStatus(), this.feedModelIds().map(Number), this.feedProviderIds().map(Number));
+    this.statsWs.setFeedFilters(this.feedStatus(), this.feedModelIds().map(Number), []);
   }
 
   readonly feedStatusOptions = computed<AppSelectOption[]>(() => [
@@ -392,7 +418,7 @@ export class Statistics implements OnInit, OnDestroy {
     // Only the feed changes, so only it is marked loading — the KPI cards and
     // charts keep their current (unaffected) numbers.
     this.requestsPending.set(true);
-    this.statsWs.setFeedFilters(next, this.feedModelIds().map(Number), this.feedProviderIds().map(Number));
+    this.statsWs.setFeedFilters(next, this.feedModelIds().map(Number), []);
   }
 
   // ── Raw WS signals ────────────────────────────────────────────────────────────
@@ -406,6 +432,23 @@ export class Statistics implements OnInit, OnDestroy {
   readonly vramError = signal<string | null>(null);
   readonly isVramLoading = signal(false);
   readonly nowMs = signal(Date.now());
+  /**
+   * Offline workers whose last report the operator chose to look at. Hidden by
+   * default: an offline worker's last sample describes a machine that may
+   * have rebooted, lost a GPU or dropped every lane since, and drawn like live
+   * data it reads as the current state.
+   */
+  readonly expandedOfflineRows = signal<ReadonlySet<string>>(new Set());
+
+  toggleOfflineRow(name: string): void {
+    const next = new Set(this.expandedOfflineRows());
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    this.expandedOfflineRows.set(next);
+  }
+
+  readonly formatTimeAgo = formatTimeAgo;
+  readonly formatStorageMb = formatStorageMb;
   readonly refreshing = signal(false);
   readonly resetZoomCounter = signal(0);
   readonly chartTooltip = signal<ChartTooltip | null>(null);
@@ -629,6 +672,9 @@ export class Statistics implements OnInit, OnDestroy {
         name,
         online: this._isProviderOnline(name),
         calibrating: metaByName[name]?.calibrating === true,
+        versionChip: describeWorkerVersion(metaByName[name]?.worker_version_checksum, this._isProviderOnline(name)),
+        gpuFaults: this._isProviderOnline(name) ? extractProviderGpuFaults(sample) : [],
+        lastSeen: metaByName[name]?.last_heartbeat ?? sample?.timestamp ?? null,
         lanes,
         hasLanes: Object.keys(lanes).length > 0,
         laneCount: Object.keys(lanes).length,
@@ -636,6 +682,9 @@ export class Statistics implements OnInit, OnDestroy {
         freeVramMb: vram.freeMb,
         modelsLoaded,
         ram,
+        disk: this._isProviderOnline(name)
+          ? extractProviderDiskMb(sample)
+          : extractProviderDiskMb(null),
         hasLaneRam: Object.values(lanes).some((l) => typeof l.host_ram_mb === 'number'),
         unifiedMemory,
         // The single pool is the host's physical RAM; the device reading is
@@ -643,12 +692,24 @@ export class Statistics implements OnInit, OnDestroy {
         // workers that predate the host_memory summary.
         unifiedTotalMb: unifiedMemory ? (ram.reported ? ram.totalMb : vram.totalMb) : 0,
         unifiedFreeMb: unifiedMemory ? (ram.reported ? ram.freeMb : vram.freeMb) : 0,
-        fallbackVramPie: this._fallbackVramPie(point),
-        vramUsedGb: point?.used_vram_gb ?? 0,
-        vramTotalGb: point?.total_vram_gb ?? (point?.used_vram_gb ?? 0) + (point?.remaining_vram_gb ?? 0),
       };
     });
   });
+
+  /**
+   * Every online worker with a failed GPU. Shown above the tabs, on both of
+   * them: a failed GPU silently takes its capacity out of placement, so it
+   * must be seen without opening the worker's row.
+   */
+  readonly gpuFaultAlerts = computed(() =>
+    this.providerGlassRows()
+      .filter((row) => row.gpuFaults.length > 0)
+      .map((row) => ({ name: row.name, faults: row.gpuFaults })),
+  );
+
+  readonly gpuFaultCount = computed(() =>
+    this.gpuFaultAlerts().reduce((sum, alert) => sum + alert.faults.length, 0),
+  );
 
   // ── Volume line data ──────────────────────────────────────────────────────────
 
@@ -969,7 +1030,6 @@ export class Statistics implements OnInit, OnDestroy {
       scope: this.currentScope(),
       feedStatus: this.feedStatus(),
       feedModelIds: this.feedModelIds().map(Number),
-      feedProviderIds: this.feedProviderIds().map(Number),
       interest: this.activeTab(),
       handlers: {
         onVramInit: (p) => this.handleVramWsInitV2(p),
@@ -990,11 +1050,18 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Scope handlers ────────────────────────────────────────────────────────
 
+  /** Pick a requester: a user or an application key, never both at once. */
   setUserFilter(value: string | null): void {
-    const id = value ? Number(value) : null;
-    const next = Number.isFinite(id as number) ? id : null;
-    if (next === this.filterUserId()) return;
-    this.filterUserId.set(next);
+    const parse = (prefix: string): number | null => {
+      if (!value?.startsWith(prefix)) return null;
+      const id = Number(value.slice(prefix.length));
+      return Number.isFinite(id) ? id : null;
+    };
+    const userId = parse(REQUESTER_USER);
+    const keyId = parse(REQUESTER_KEY);
+    if (userId === this.filterUserId() && keyId === this.filterApiKeyId()) return;
+    this.filterUserId.set(userId);
+    this.filterApiKeyId.set(keyId);
     this.applyScope();
     void this.loadScopeOptions();
   }
@@ -1024,22 +1091,31 @@ export class Statistics implements OnInit, OnDestroy {
     void this.loadScopeOptions();
   }
 
-  setErrorsOnlyFilter(value: string | null): void {
-    const next = value === 'errors';
-    if (next === this.errorsOnly()) return;
-    this.errorsOnly.set(next);
-    this.applyScope();
-    void this.loadScopeOptions();
-  }
-
-  clearFilter(): void {
-    if (!this.filterActive()) return;
-    this.filterUserId.set(null);
-    this.filterTeamId.set(null);
-    this.filterProviderId.set(null);
-    this.errorsOnly.set(false);
-    this.applyScope();
-    void this.loadScopeOptions();
+  /**
+   * Reset every selector in the page-top filter row: the page scope and the
+   * feed-only selections. Each group is only re-sent when it was active — an
+   * already-empty group has nothing to undo, and re-sending it would blank the
+   * panels it feeds (the KPI cards in particular) for no reason.
+   */
+  clearFilters(): void {
+    const scopeActive = this.filterActive();
+    const feedActive = this.feedFilterActive();
+    if (!scopeActive && !feedActive) return;
+    if (scopeActive) {
+      this.filterUserId.set(null);
+      this.filterTeamId.set(null);
+      this.filterProviderId.set(null);
+      this.filterApiKeyId.set(null);
+      this.applyScope();
+      void this.loadScopeOptions();
+    }
+    if (feedActive) {
+      // Models are part of the page scope: clearing them re-answers the panels.
+      if (this.feedModelIds().length > 0) this.markRangeChanged();
+      this.feedStatus.set(null);
+      this.feedModelIds.set([]);
+      this.applyFeedFilters();
+    }
   }
 
   /**
@@ -1077,6 +1153,7 @@ export class Statistics implements OnInit, OnDestroy {
         teamId: scope.teamId,
         userId: scope.userId,
         providerId: scope.providerId,
+        apiKeyId: scope.apiKeyId,
         errorsOnly: scope.errorsOnly,
       });
       if (generation !== this.scopeOptionsGeneration) {
@@ -1089,22 +1166,18 @@ export class Statistics implements OnInit, OnDestroy {
       this.feedTeams.set(options.teams ?? []);
       this.feedUsers.set(options.requesters ?? []);
       this.feedProviders.set(options.providers ?? []);
+      this.feedApiKeys.set(options.apiKeys ?? []);
       this.feedModels.set(options.models ?? []);
 
-      // Feed multi-selects keep ids that vanish from the new option lists
+      // The model multi-select keeps ids that vanish from the new option list
       // after a range or team change — the trigger still says "N models" and
       // those ids keep filtering while they cannot be unchecked. Prune like
       // the single-value requester/provider scope below.
       const modelIds = new Set(this.feedModels().map((m) => String(m.id)));
-      const providerIds = new Set(this.feedProviders().map((p) => String(p.id)));
       const keptModels = this.feedModelIds().filter((id) => modelIds.has(id));
-      const keptProviders = this.feedProviderIds().filter((id) => providerIds.has(id));
-      if (
-        keptModels.length !== this.feedModelIds().length ||
-        keptProviders.length !== this.feedProviderIds().length
-      ) {
+      if (keptModels.length !== this.feedModelIds().length) {
+        this.markRangeChanged();
         this.feedModelIds.set(keptModels);
-        this.feedProviderIds.set(keptProviders);
         this.applyFeedFilters();
       }
 
@@ -1120,6 +1193,11 @@ export class Statistics implements OnInit, OnDestroy {
       const providerId = this.filterProviderId();
       if (providerId !== null && !this.feedProviders().some((p) => p.id === providerId)) {
         this.filterProviderId.set(null);
+        this.applyScope();
+      }
+      const apiKeyId = this.filterApiKeyId();
+      if (apiKeyId !== null && !this.feedApiKeys().some((k) => k.id === apiKeyId)) {
+        this.filterApiKeyId.set(null);
         this.applyScope();
       }
     } catch {
@@ -1372,6 +1450,10 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Raw-series updaters ───────────────────────────────────────────────────────
 
+  /**
+   * Replaces everything held per provider (samples, metadata, devices) with a
+   * full-day payload, as the websocket's init message delivers it.
+   */
   private replaceRawVramSeries(providers: any[]): void {
     const next: Record<string, VramV2Sample[]> = {};
     const nextMeta: Record<string, VramProviderMeta> = {};
@@ -1398,6 +1480,7 @@ export class Statistics implements OnInit, OnDestroy {
         last_heartbeat: provider.last_heartbeat,
         connected_at: provider.connected_at,
         worker_started_at: provider.worker_started_at,
+        worker_version_checksum: provider.worker_version_checksum,
         calibrating: Boolean(provider.calibrating),
       };
       if (Array.isArray(provider.devices) && provider.devices.length) {
@@ -1410,6 +1493,12 @@ export class Statistics implements OnInit, OnDestroy {
     this.devicesByProvider.set(nextDevices);
   }
 
+  /**
+   * Applies a delta payload: each provider's metadata and devices first, then
+   * its new samples merged into the series already held. A delta can carry no
+   * samples at all (a worker went offline, or reports another version), so the
+   * metadata is taken from it whether or not samples came with it.
+   */
   private appendRawVramSeries(providers: any[]): void {
     if (!providers || providers.length === 0) return;
 
@@ -1427,6 +1516,7 @@ export class Statistics implements OnInit, OnDestroy {
         last_heartbeat: provider.last_heartbeat,
         connected_at: provider.connected_at,
         worker_started_at: provider.worker_started_at,
+        worker_version_checksum: provider.worker_version_checksum,
         calibrating: Boolean(provider.calibrating),
       };
       const current = prevMeta[provider.name];
@@ -1440,6 +1530,7 @@ export class Statistics implements OnInit, OnDestroy {
         current?.last_heartbeat === meta.last_heartbeat &&
         current?.connected_at === meta.connected_at &&
         current?.worker_started_at === meta.worker_started_at &&
+        current?.worker_version_checksum === meta.worker_version_checksum &&
         Boolean(current?.calibrating) === meta.calibrating;
       if (!same) {
         if (nextMeta === prevMeta) nextMeta = { ...prevMeta };
@@ -1491,58 +1582,6 @@ export class Statistics implements OnInit, OnDestroy {
   private _isProviderOnline(name: string): boolean {
     const m = this.vramProviderMetaByName()[name];
     return m?.connection_state !== 'offline' && m?.connected !== false;
-  }
-
-  /**
-   * Legacy model-list donut used when a provider has no lane signals yet (older
-   * snapshot shape). Same accounting as the old selected-provider pie.
-   */
-  private _fallbackVramPie(
-    pt: {
-      used_vram_gb?: number;
-      remaining_vram_gb?: number;
-      total_vram_gb?: number;
-      loaded_models?: Array<{ name: string; size_gb: number }>;
-    } | null,
-  ): DonutSlice[] {
-    if (!pt) return [];
-    const usedGb = pt.used_vram_gb ?? 0;
-    const remainingGb = pt.remaining_vram_gb ?? 0;
-    const totalGb = pt.total_vram_gb ?? usedGb + remainingGb;
-    if (totalGb <= 0) return [];
-
-    const reportedModels = pt.loaded_models ?? [];
-    const rawModelSlices = reportedModels
-      .map((model, index) => ({
-        value: Number(model.size_gb || 0),
-        color: seriesColor(index),
-        text: model.name,
-      }))
-      .filter((slice) => slice.value > 0);
-
-    const attributedUsedGb = rawModelSlices.reduce((sum, s) => sum + s.value, 0);
-    const modelScale =
-      attributedUsedGb > usedGb && attributedUsedGb > 0 ? usedGb / attributedUsedGb : 1;
-    const modelSlices = rawModelSlices.map((slice) => ({
-      ...slice,
-      value: Number((slice.value * modelScale).toFixed(3)),
-    }));
-    const modeledUsedGb = modelSlices.reduce((sum, s) => sum + s.value, 0);
-    const otherUsedGb = Math.max(usedGb - modeledUsedGb, 0);
-
-    return [
-      ...modelSlices,
-      {
-        value: otherUsedGb,
-        color: CHART_ROLE.total,
-        text: modelSlices.length > 0 ? 'Other used' : 'Used',
-      },
-      {
-        value: remainingGb,
-        color: seriesColor(3),
-        text: 'Free',
-      },
-    ].filter((s) => s.value > 0);
   }
 
   isProviderOnline = (name: string): boolean => this._isProviderOnline(name);

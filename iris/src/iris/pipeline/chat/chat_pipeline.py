@@ -11,6 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from iris.common.logging_config import get_logger
 from iris.common.pipeline_enum import PipelineEnum
+from iris.common.reply_language import reply_language
 from iris.common.timing import timed_span
 from iris.domain.chat.chat_pipeline_execution_dto import ChatPipelineExecutionDTO
 from iris.domain.status.activity_dto import ActivityDTO, ActivityKind
@@ -159,6 +160,38 @@ def _merge_lecture_content(
             current_view.lecture_unit_page_chunks + retrieved.lecture_unit_page_chunks
         ),
     )
+
+
+def _effective_chat_mode(
+    state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    chat_mode: IrisChatMode,
+) -> IrisChatMode:
+    """Return the mode the answer is about: the switch target, if the agent switched."""
+    switch = getattr(state, "pending_context_switch", None)
+    return switch.mode if switch is not None else chat_mode
+
+
+def _guide_problem_statement(
+    state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+) -> str:
+    """Return the problem statement the guide checks the answer against.
+
+    After a switch the answer is about the target exercise, so the guide has
+    to check it against that exercise's assignment, not the original one's.
+    """
+    switch = getattr(state, "pending_context_switch", None)
+    if switch is not None:
+        exercise = next(
+            (
+                ex
+                for ex in state.dto.course.exercises or []
+                if ex.id == switch.entity_id
+            ),
+            None,
+        )
+        return (exercise.problem_statement or "") if exercise else ""
+    exercise = state.dto.programming_exercise or state.dto.text_exercise
+    return exercise.problem_statement if exercise else ""
 
 
 def _current_slide_label(chunks: list) -> str:
@@ -345,6 +378,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         del state
         return self.chat_mode is not IrisChatMode.EXERCISE
 
+    def should_stream_agent_delta(
+        self, state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant]
+    ) -> bool:
+        # After a switch into a programming exercise the answer has to pass the
+        # guide first, exactly like in an exercise chat, so the raw draft must not
+        # reach the client. The guide-approved answer arrives with the final result.
+        return _effective_chat_mode(state, self.chat_mode) is not IrisChatMode.EXERCISE
+
     def post_agent_hook(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -362,9 +403,18 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             result = state.result
 
             # If Programming Exercise, refine response using guide prompt
-            if self.chat_mode == IrisChatMode.EXERCISE:
+            if _effective_chat_mode(state, self.chat_mode) == IrisChatMode.EXERCISE:
                 with timed_span("ChatPipeline", "refine_response", state.start_time):
                     result = self._refine_response(state)
+
+            # Resolve the answer language once, before citations and quiz JSON are
+            # added, so that citations, title and suggestions use the same language.
+            state.answer_language = reply_language(
+                result,
+                state.query_text,
+                state.dto.chat_history,
+                state.dto.user.lang_key,
+            )
 
             # Add citations if applicable
             with timed_span("ChatPipeline", "citations", state.start_time):
@@ -394,6 +444,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     accessed_memories=state.accessed_memory_storage,
                     activities=activities,
                     activity_seq=activity_seq,
+                    suggested_context=state.pending_context_switch,
                 )
             logger.info(
                 "Chat first result delivered | mode=%s elapsed_ms=%.0f",
@@ -438,6 +489,23 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             return state.result
 
+    @staticmethod
+    def _has_memories(
+        state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
+    ) -> bool:
+        """Whether the memory tool is offered; not when the memories cannot be read, so the chat still answers."""
+        dto = state.dto
+        if not (dto.user and dto.user.memiris_enabled and state.memiris_wrapper):
+            return False
+        try:
+            return state.memiris_wrapper.has_memories()
+        except Exception:
+            logger.warning(
+                "Memories are unavailable; answering without the memory tool",
+                exc_info=True,
+            )
+            return False
+
     def prepare_state(
         self,
         state: AgentPipelineExecutionState[ChatPipelineExecutionDTO, Variant],
@@ -460,12 +528,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             )
             state.allow_lecture_tool = lecture_tool_future.result()
             state.allow_faq_tool = faq_tool_future.result()
-        state.allow_memiris_tool = bool(
-            dto.user
-            and dto.user.memiris_enabled
-            and state.memiris_wrapper
-            and state.memiris_wrapper.has_memories()
-        )
+        state.allow_memiris_tool = self._has_memories(state)
 
         # Extract lecture contexts from DTO and store in state
         lecture_contexts = self._parse_lecture_context(dto)
@@ -853,6 +916,13 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         """
 
         try:
+            answer_language = getattr(state, "answer_language", None) or reply_language(
+                result,
+                getattr(state, "query_text", None),
+                getattr(state.dto, "chat_history", None),
+                state.dto.user.lang_key,
+            )
+
             # Add FAQ citations
             if state.faq_storage.get("faqs"):
                 base_url = (
@@ -863,7 +933,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.FAQS,
                     variant=state.variant.id,
-                    user_language=state.dto.user.lang_key,
+                    language=answer_language,
                     base_url=base_url,
                 )
 
@@ -871,8 +941,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
             # currently viewing (stored before the agent ran) with whatever the
             # lecture retrieval tool retrieved, de-duplicating by uuid so the
             # same paragraph is not cited twice. Either source may be absent.
+            # The current view belongs to the original context, so an answer
+            # about the context the agent switched to does not cite it.
+            current_view = (
+                None
+                if getattr(state, "pending_context_switch", None) is not None
+                else state.lecture_content_storage.get("current_view")
+            )
             lecture_content = _merge_lecture_content(
-                state.lecture_content_storage.get("current_view"),
+                current_view,
                 state.lecture_content_storage.get("content"),
             )
             if lecture_content:
@@ -884,7 +961,7 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                     result,
                     InformationType.PARAGRAPHS,
                     variant=state.variant.id,
-                    user_language=state.dto.user.lang_key,
+                    language=answer_language,
                     base_url=base_url,
                 )
 
@@ -937,11 +1014,9 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         Returns:
             A tuple of the raw guide response and the response to use.
         """
-        exercise = state.dto.programming_exercise or state.dto.text_exercise
-        problem_statement = exercise.problem_statement if exercise else ""
         guide_prompt_rendered = self.guide_prompt_template.render(
             {
-                "problem_statement": problem_statement,
+                "problem_statement": _guide_problem_statement(state),
                 "support_level": _support_level(state.dto),
             }
         )
@@ -1015,11 +1090,15 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
         sender = None
         try:
             # Don't do anything if not programming exercise
-            if self.chat_mode is not IrisChatMode.EXERCISE:
+            if _effective_chat_mode(state, self.chat_mode) is not IrisChatMode.EXERCISE:
                 return state.result
 
             guide_stream_handler = None
-            sender = self._create_partial_result_sender(state)
+            # Only an exercise chat streams the guide output. After a switch into an
+            # exercise the run already streamed (and then held back) the agent's
+            # answer, so the guide result reaches the client with the final result.
+            if self.chat_mode is IrisChatMode.EXERCISE:
+                sender = self._create_partial_result_sender(state)
             if sender is not None:
                 sender.start()
                 guide_stream_handler = _GuideRefinementStreamHandler(sender.on_delta)
@@ -1064,7 +1143,14 @@ class ChatPipeline(AbstractAgentPipeline[ChatPipelineExecutionDTO, Variant]):
                 suggestion_dto.chat_history = state.dto.chat_history
                 suggestion_dto.last_message = result
                 suggestions = self.suggestion_pipeline(
-                    suggestion_dto, user_language=state.dto.user.lang_key
+                    suggestion_dto,
+                    language=getattr(state, "answer_language", None)
+                    or reply_language(
+                        result,
+                        getattr(state, "query_text", None),
+                        state.dto.chat_history,
+                        state.dto.user.lang_key,
+                    ),
                 )
 
                 if self.suggestion_pipeline.tokens is not None:

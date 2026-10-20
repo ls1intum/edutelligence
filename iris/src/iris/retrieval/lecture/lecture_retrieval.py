@@ -59,6 +59,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_unit_released,
 )
 from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -461,9 +462,7 @@ class LectureRetrieval(SubPipeline):
             LectureUnitSchema.LECTURE_UNIT_ID.value
         ).equal(lecture_unit_id)
         if base_url is not None:
-            unit_filter &= Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                base_url
-            )
+            unit_filter &= artemis_instance_filter(LectureUnitSchema, base_url)
         units = self.lecture_unit_collection.query.fetch_objects(
             filters=unit_filter, limit=1
         ).objects
@@ -488,9 +487,9 @@ class LectureRetrieval(SubPipeline):
             LectureUnitPageChunkSchema.PAGE_NUMBER.value
         ).equal(page_number)
         if base_url is not None:
-            page_chunk_filter &= Filter.by_property(
-                LectureUnitPageChunkSchema.BASE_URL.value
-            ).equal(base_url)
+            page_chunk_filter &= artemis_instance_filter(
+                LectureUnitPageChunkSchema, base_url
+            )
 
         # High limit so all chunks of one page are fetched, not just Weaviate's
         # default first batch.
@@ -531,9 +530,9 @@ class LectureRetrieval(SubPipeline):
             LectureTranscriptionSchema.SEGMENT_END_TIME.value
         ).greater_than(timestamp)
         if base_url is not None:
-            transcription_filter &= Filter.by_property(
-                LectureTranscriptionSchema.BASE_URL.value
-            ).equal(base_url)
+            transcription_filter &= artemis_instance_filter(
+                LectureTranscriptionSchema, base_url
+            )
 
         lecture_transcriptions = (
             self.lecture_transcription_collection.query.fetch_objects(
@@ -585,9 +584,7 @@ class LectureRetrieval(SubPipeline):
         )
 
         if base_url is not None:
-            lecture_filter &= Filter.by_property(
-                LectureUnitSchema.BASE_URL.value
-            ).equal(base_url)
+            lecture_filter &= artemis_instance_filter(LectureUnitSchema, base_url)
 
         if lecture_id is not None and lecture_unit_id is not None:
             lecture_filter &= Filter.by_property(
@@ -1156,9 +1153,9 @@ class LectureRetrieval(SubPipeline):
         transcription_filter &= Filter.by_property(
             LectureTranscriptionSchema.PAGE_NUMBER.value
         ).equal(target_page_number)
-        transcription_filter &= Filter.by_property(
-            LectureTranscriptionSchema.BASE_URL.value
-        ).equal(lecture_unit_segment.base_url)
+        transcription_filter &= artemis_instance_filter(
+            LectureTranscriptionSchema, lecture_unit_segment.base_url
+        )
 
         lecture_transcriptions = (
             self.lecture_transcription_collection.query.fetch_objects(
@@ -1206,9 +1203,9 @@ class LectureRetrieval(SubPipeline):
         page_chunk_filter &= Filter.by_property(
             LectureUnitPageChunkSchema.PAGE_NUMBER.value
         ).equal(lecture_unit_segment.page_number)
-        page_chunk_filter &= Filter.by_property(
-            LectureUnitPageChunkSchema.BASE_URL.value
-        ).equal(lecture_unit_segment.base_url)
+        page_chunk_filter &= artemis_instance_filter(
+            LectureUnitPageChunkSchema, lecture_unit_segment.base_url
+        )
 
         lecture_page_chunks = (
             self.lecture_unit_page_chunk_collection.query.fetch_objects(

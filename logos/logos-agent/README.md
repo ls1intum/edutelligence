@@ -48,6 +48,11 @@ key **LOW** priority so agent work can never outrank a user at the scheduler.
 The runner reads `/logosdb/scheduler_state` every 15 seconds and computes one
 number: the busy share of the serving slots **its own sessions would use**.
 
+A slot is one request a lane can serve at once — the concurrency its lanes
+guarantee (`lane_parallel`, the slot count the lane pages show), not the
+scheduler's loose ledger ceiling (`max_capacity`), which stands in only until
+a lane reports. A worker that is offline holds no slots.
+
 That filter matters. A fleet holds embedding models, rerankers and chat models
 that share nothing but a building, and summing them answers a question nobody
 asked — "6 of 120 slots busy" reads as an idle platform when all six of those
@@ -60,14 +65,20 @@ deployments is resident: there is nothing of ours to measure then, and the
 older signal is the better of the two answers available. A key that reaches
 *nothing* is a different question and is refused outright, so a paused
 session is never resumed into a permission it no longer has. The **queue** is
-deliberately not filtered — models share GPUs, so a person waiting on any of
-them is a person this runner gets out of the way of.
+filtered the same way: a backlog on another local model, or on a cloud
+provider, is not a person waiting for the lane this runner uses. The Agents
+page shows how many of that model's dynamic slots this runner holds versus
+other production traffic.
 
 **Minus its own share, where that is the right question.** The orchestrator
-reports how busy a model is; it does not report *who* is keeping it busy,
-and nothing in its payload could say. So the runner estimates: a running
-session has at most one request outstanding, per model, and that many come
-off the figures.
+reports how busy a model is, and *who* is keeping it busy: how many of the
+model's in-flight requests each caller key is making. A session may start
+subagents, so one session can hold several of a model's slots at once —
+every session's traffic, subagents included, goes through this runner's one
+key, and the per-key figure for it is the runner's true share. That is what
+comes off the figures. Against an orchestrator that does not report the
+split, the runner falls back to an estimate: a running session has at most
+one request outstanding, per model, and that many come off.
 
 Whether to *hand capacity back* is a question about other people, so it is
 decided on that adjusted figure. Without it a runner reads its own sessions
@@ -96,8 +107,13 @@ precedence over admitting: a pass that pauses does not also start something.
 Freezing alone would not return the slot: the generation the agent already
 started runs upstream, and a frozen client neither cancels it nor closes its
 socket — it just stops reading, and the slot stays occupied for as long as the
-pause lasts. So a paused session is also detached from the session network,
-which ends the connection and lets the orchestrator release the slot. The
+pause lasts. Detaching the container from the session network does not end
+that connection either: the gateway is sent no close and keeps waiting. So
+the model gateway tags every request with the session's address
+(`X-Logos-Client-Tag`), and a pause detaches the session and then asks the
+orchestrator to end every request carrying its tag
+(`POST /internal/client_tags/cancel`). Each one goes the way of a client that
+left — the upstream generation is aborted and the slot released at once. The
 agent meets a network error when it resumes and retries, which is the
 cheapest possible way to lose an in-flight answer. A session that cannot be
 reattached stays paused rather than being thawed without a way to work.
@@ -109,8 +125,14 @@ a session resumed at exactly the load that paused it pauses again next tick.
 
 A **workspace** is one working copy on one Docker volume. **One session runs in
 a workspace at a time** — two would write over each other. Parallelism comes
-from having several workspaces; the ceiling across all of them is
-`MAX_PARALLEL_SESSIONS`.
+from having several workspaces; the *execution* ceiling across running and
+paused sessions is `MAX_PARALLEL_SESSIONS`. The trigger poller may hold more
+workspaces than that so assigned work can wait its turn (queued or paused)
+without losing comments to the lookback window — capped at
+`MAX_QUEUE_WORKSPACES` (default: five times the parallel ceiling). Free
+workspaces are reused or re-pointed before any queue-only workspace is
+created; a queued session still waits for a real execution slot before it
+starts.
 
 Workspaces the runner creates for triggered work are named after it —
 `issue-812-oom-on-startup`, `pr-772-add-an-agent-runner` — which is also what
@@ -157,6 +179,20 @@ session's behaviour drift between builds.
 > failing. That is how the gateway once came up with nginx's stock
 > configuration and failed its health check forever.
 
+## Web search
+
+Claude Code's own `WebSearch` works in sessions. It is a server-side tool:
+Claude Code asks the API to run the searches, and the orchestrator does,
+on DuckDuckGo (see "Web search" in `docs/context-windows.md`). The request
+reaches it through the session gateway like any model call, so nothing is
+installed or configured in the session.
+
+Searches leave from the orchestrator, which honors the standard
+`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY` environment variables for a server or
+CIT proxy, and result pages are never fetched. Queries are sent to
+DuckDuckGo, so agents should avoid putting credentials or private repository
+content in them. Search results are untrusted external data.
+
 ## What a session may and may not do
 
 **May:** read and change the working copy, run tests and linters, push a branch
@@ -183,8 +219,8 @@ survive a restart, and both are visible to whoever finds the runner stopped.
 
 | Control | What it does |
 |---|---|
-| **Stop new sessions** (draining) | Nothing new starts. What is running finishes, and a paused session may still resume. |
-| **Pause everything** | Running sessions are paused on the next pass and the capacity goes back to the platform. Nothing is cancelled: resuming picks the work up mid-task. |
+| **Stop new sessions** (draining) | Nothing new starts. What is running finishes, and a paused session may still resume. Assigned work still queues. |
+| **Pause everything** | Running sessions are paused on the next pass and the capacity goes back to the platform. Nothing is cancelled: resuming picks the work up mid-task. Assigned work and analysis still queue so nothing is lost while the runner is stopped. |
 | **Sessions at once** | A ceiling for now, overriding the configured one. Zero drains without pausing. |
 
 ## What the agent is told, and changing it
@@ -245,7 +281,9 @@ has a default that is right for this deployment.
 | `LOGOS_AGENT_GITHUB_LOGIN` | `LogosOSSAgent` | The account every token must belong to |
 | `LOGOS_AGENT_DEFAULT_MODEL` | — | Model when a session does not name one. Optional: with exactly one local model reachable, that one is the default |
 | `LOGOS_AGENT_TRIGGERS_ENABLED` | `true` | Kill switch for reacting to the repository |
-| `LOGOS_AGENT_MAX_PARALLEL_SESSIONS` | `10` | Hard ceiling on concurrent sessions |
+| `LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC` | `0` | UTC hour of the nightly re-analysis of linked team repositories whose branch head moved; `-1` turns it off |
+| `LOGOS_AGENT_MAX_PARALLEL_SESSIONS` | `10` | Hard ceiling on concurrent (running + paused) sessions |
+| `LOGOS_AGENT_MAX_QUEUE_WORKSPACES` | `0` (= 5× parallel) | Cap on live workspaces holding waiting triggered work |
 | `LOGOS_AGENT_START_BELOW_LOAD` | `0.60` | Start only below this load |
 | `LOGOS_AGENT_PAUSE_ABOVE_LOAD` | `0.85` | Pause at or above this load |
 | `LOGOS_AGENT_SESSION_MEMORY_MB` | `4096` | Per-session memory ceiling |
@@ -341,15 +379,35 @@ omission is disclosed, the reporter's own included: anybody can open an
 issue on a public repository, and a maintainer can repeat what matters in
 their own words.
 
-One narrow exception, and only to *reading*: the review apps this
-repository runs on its own pull requests (`LOGOS_AGENT_REVIEW_BOTS`,
-`coderabbitai[bot]` and `Claudia-Anthropica` by default). What they wrote
-travels with a task somebody trusted has already directed, because a
-handover exists to answer a review and dropping the review left the agent
-reconstructing one from the diff — on production, every handover was losing
-between six and seventeen comments that way. They direct nothing: no review
-of theirs starts a session and no comment of theirs steers one. Setting the
-variable to nothing removes the exception.
+The review apps this repository runs on its own pull requests
+(`LOGOS_AGENT_REVIEW_BOTS`, `coderabbitai[bot]` and `Claudia-Anthropica`
+by default) are readable and, on a pull request this runner already owns,
+may also direct: a `CHANGES_REQUESTED` or `@mention` from one of them is
+the ordinary next step after the agent opened the work. What they wrote
+also travels with a task somebody trusted has already directed, because a
+handover that dropped the review left the agent reconstructing one from
+the diff. Strangers still cannot start a session or steer a push. Setting
+the variable to nothing removes the exception.
+
+**It asks Claudia to review what it opened.** A fresh pull request from an
+issue session requests `Claudia-Anthropica` (`LOGOS_AGENT_PR_REVIEWERS`)
+in addition to whatever CODEOWNERS already names. A reused pull request
+asks again — GitHub treats a repeat as a no-op when she is already
+requested. Empty the variable to leave only CODEOWNERS.
+
+**Team review requests count too.** Asking `logos-maintainers` or
+`logos-developers` (`LOGOS_AGENT_REVIEW_TEAMS`) is treated like asking the
+agent by name: GitHub never puts the bot login in `requested_reviewers` for
+a team request, so without this list the gesture was silent.
+
+**A requested review is a review, not a commit.** Being added as a
+reviewer — by name or through a team — never gets the agent the branch:
+the session reads `refs/pull/<n>/head`, may not push, and its findings land
+as one review whose inline comments (`review-comments.json`) sit on the
+lines they are about, with `reply.md` as the summary. A line GitHub cannot
+place turns the remarks into one ordinary comment instead. A change on a
+pull request the agent does not own is asked for in a comment by somebody
+whose word counts (see below).
 
 **It reads the pull request it is asked about.** A question on somebody
 else's pull request used to be answered from a checkout of the default
@@ -382,8 +440,9 @@ anyway: GitHub only assigns collaborators.
 Only a **changes-requested** review is work — an approval or a plain comment
 is not, and an approval submitted after a change request withdraws it.
 Comments are read from where the last complete pass stopped — a mark kept in
-the database, so a question asked while the runner was paused is still found
-when it comes back. Assignments and reviews are read from the repository's
+the database. A pause still queues what it finds, so a question asked while
+the runner is stopped becomes a waiting session rather than sitting only in
+the lookback window. Assignments and reviews are read from the repository's
 current state and need no window; comments are a stream, so a fresh
 deployment starts with the last 24 hours and no pass ever reaches back
 further than a week.

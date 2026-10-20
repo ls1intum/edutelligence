@@ -5,7 +5,7 @@ Shared scheduler implementation pieces.
 
 import asyncio
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 from logos.queue.priority_queue import Priority, PriorityQueueManager
 from logos.sdi.azure_facade import AzureSchedulingDataFacade
@@ -47,6 +47,7 @@ class BaseScheduler(SchedulerInterface):
         priority_int: int,
         request_id: str,
         was_queued: bool,
+        api_key_id: Optional[int] = None,
     ) -> SchedulingResult:
         """Helper to create SchedulingResult and update stats."""
         queue_depth = 0
@@ -75,6 +76,7 @@ class BaseScheduler(SchedulerInterface):
                     model_id=model_id,
                     provider_id=provider_id,
                     priority=priority.name.lower(),
+                    api_key_id=api_key_id,
                 )
                 tracking_started = True
             except (KeyError, ValueError) as exc:

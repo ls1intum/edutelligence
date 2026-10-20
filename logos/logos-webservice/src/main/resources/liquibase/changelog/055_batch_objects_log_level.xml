@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Per-request logging consent for a batch that outlives its creating
+         request. NULL means the create request sent no logos-logging header,
+         so local line execution and provider settlement keep using the key's
+         living level. No backfill: existing rows behave as before. -->
+    <changeSet id="055-batch-objects-log-level" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="batch_objects" columnName="log_level"/></not>
+        </preConditions>
+        <addColumn tableName="batch_objects">
+            <column name="log_level" type="logging_enum"/>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="batch_objects" columnName="log_level"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -15,6 +15,10 @@ logger = logging.getLogger("logos_worker_node.gpu")
 _NVIDIA_SMI_QUERY = "index,uuid,name,memory.used,memory.total,utilization.gpu," "temperature.gpu,power.draw,compute_cap"
 _NVIDIA_SMI_FORMAT = "csv,noheader,nounits"
 _SUBPROCESS_TIMEOUT = 10
+# nvidia-smi prints these in place of a reading when the GPU itself has failed
+# (Xid fault, fallen off the bus). Such a GPU can still report memory in use
+# while no process holds it, so it must not be offered for placement.
+_FAULT_MARKERS = ("GPU requires reset", "GPU is lost", "Unknown Error")
 
 
 def _parse_nvidia_float(value: str) -> float | None:
@@ -27,6 +31,15 @@ def _parse_nvidia_float(value: str) -> float | None:
         return None
 
 
+def _fault_marker(parts: list[str]) -> str | None:
+    """The first nvidia-smi fault marker in *parts*, without brackets."""
+    for part in parts:
+        for marker in _FAULT_MARKERS:
+            if marker in part:
+                return marker
+    return None
+
+
 class GpuMetricsCollector:
     def __init__(self, poll_interval: int = 5) -> None:
         self._poll_interval = poll_interval
@@ -35,6 +48,8 @@ class GpuMetricsCollector:
         self._task: asyncio.Task | None = None
         self._available = False
         self._degraded_reason = ""
+        self._gpu_faults: list[str] = []
+        self._faulted_gpu_indices: list[int] = []
 
     @property
     def available(self) -> bool:
@@ -94,6 +109,8 @@ class GpuMetricsCollector:
             devices = [device.model_copy() for device in self._devices]
             available = self._available
             degraded_reason = self._degraded_reason
+            gpu_faults = list(self._gpu_faults)
+            faulted_gpu_indices = list(self._faulted_gpu_indices)
 
         total = sum(device.memory_total_mb for device in devices)
         used = sum(device.memory_used_mb for device in devices)
@@ -110,6 +127,8 @@ class GpuMetricsCollector:
             # snapshot the same way as the Metal path does.
             telemetry_available=available,
             degraded_reason=degraded_reason,
+            gpu_faults=gpu_faults,
+            faulted_gpu_indices=faulted_gpu_indices,
             devices=devices,
             total_memory_mb=total,
             used_memory_mb=used,
@@ -132,6 +151,8 @@ class GpuMetricsCollector:
 
         devices: list[DeviceInfo] = []
         degraded_messages: list[str] = []
+        fault_messages: list[str] = []
+        faulted_indices: list[int] = []
         for line in raw.strip().splitlines():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) < 8:
@@ -142,11 +163,17 @@ class GpuMetricsCollector:
                 logger.debug("Skipping malformed nvidia-smi line: %s", line)
                 continue
 
+            fault = _fault_marker(parts[3:8])
             mem_used = _parse_nvidia_float(parts[3])
             mem_total = _parse_nvidia_float(parts[4])
             if mem_used is None or mem_total is None:
                 logger.warning("Skipping nvidia-smi line with invalid memory fields: %s", line)
-                degraded_messages.append(f"gpu{device_index}: invalid memory telemetry")
+                if fault:
+                    fault_messages.append(f"gpu{device_index} ({parts[1] or parts[0]}): {fault}")
+                    faulted_indices.append(device_index)
+                    degraded_messages.append(f"gpu{device_index}: faulted ({fault})")
+                else:
+                    degraded_messages.append(f"gpu{device_index}: invalid memory telemetry")
                 continue
 
             utilization = _parse_nvidia_float(parts[5])
@@ -159,7 +186,23 @@ class GpuMetricsCollector:
                 partial_fields.append("temperature")
             if parts[7].strip() != "[N/A]" and power_draw is None:
                 partial_fields.append("power")
-            if partial_fields:
+            health = "ok"
+            health_reason = ""
+            if fault:
+                health = "faulted"
+                health_reason = fault
+                logger.error(
+                    "GPU gpu%s (%s) is faulted: nvidia-smi reports %r; it is excluded from lane placement",
+                    device_index,
+                    parts[1] or parts[0],
+                    fault,
+                )
+                fault_messages.append(f"gpu{device_index} ({parts[1] or parts[0]}): {fault}")
+                faulted_indices.append(device_index)
+                degraded_messages.append(f"gpu{device_index}: faulted ({fault})")
+            elif partial_fields:
+                health = "degraded"
+                health_reason = f"missing {', '.join(partial_fields)}"
                 logger.warning(
                     "Partial nvidia-smi telemetry for gpu%s (%s): missing %s",
                     device_index,
@@ -179,6 +222,8 @@ class GpuMetricsCollector:
                     utilization_percent=utilization,
                     temperature_celsius=temperature,
                     power_draw_watts=power_draw,
+                    health=health,
+                    health_reason=health_reason,
                     extra={"index": device_index, "compute_capability": parts[8] if len(parts) > 8 else None},
                 )
             )
@@ -186,6 +231,8 @@ class GpuMetricsCollector:
         async with self._lock:
             self._devices = devices
             self._degraded_reason = "; ".join(degraded_messages[:3]) if degraded_messages else ""
+            self._gpu_faults = fault_messages
+            self._faulted_gpu_indices = faulted_indices
 
     @staticmethod
     def _run_nvidia_smi() -> str | None:

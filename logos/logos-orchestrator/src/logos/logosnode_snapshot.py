@@ -20,6 +20,7 @@ not affect connectedness — patch
 """
 
 import datetime
+import re
 from typing import Any, Dict, Optional
 
 from logos.dbutils.dbmanager import DBManager, derived_reported_context_length
@@ -90,10 +91,56 @@ def _planner_model_alias(model_name: str) -> str:
     return str(model_name or "").strip().replace("/", "_").replace(":", "_").replace(" ", "_")
 
 
+# Claude Code only offers a gateway model in /model when its id contains
+# "claude" or "anthropic", so GET /v1/models (Anthropic shape) also advertises
+# every model as ``claude-<id>``. ``claude_visible_id`` builds that id and
+# ``_resolve_requested_model_name`` takes the prefix off again.
+CLAUDE_MODEL_PREFIX = "claude-"
+_CLAUDE_CODE_VISIBLE = re.compile(r"claude|anthropic", re.IGNORECASE)
+
+
+# Returned by ``_resolve_exact_model_name`` when the name matches several
+# models, so the caller can tell that apart from "no match".
+_AMBIGUOUS: Any = object()
+
+
+def claude_visible_id(model_id: str) -> Optional[str]:
+    """The ``claude-`` prefixed id for ``model_id``, or None when it already
+    contains "claude"/"anthropic" and so needs no second listing."""
+    if _CLAUDE_CODE_VISIBLE.search(model_id):
+        return None
+    return f"{CLAUDE_MODEL_PREFIX}{model_id}"
+
+
 def _resolve_requested_model_name(
     requested_name: str,
     available_models: list[Dict[str, Any]],
 ) -> Optional[str]:
+    """Resolve a user-supplied model id, also accepting the advertised
+    ``claude-`` prefixed form of any model.
+
+    The name as written always wins, so a model genuinely called
+    ``claude-foo`` is never shadowed by the prefix of a model called ``foo``,
+    and an ambiguous ``claude-foo`` is refused rather than retried as ``foo``.
+    """
+    resolved = _resolve_exact_model_name(requested_name, available_models)
+    if resolved is _AMBIGUOUS:
+        # The name as written matches several models: stripping the prefix
+        # would silently pick a different one, so it stays unresolved.
+        return None
+    if resolved is not None:
+        return resolved
+    requested = str(requested_name or "").strip()
+    if requested.lower().startswith(CLAUDE_MODEL_PREFIX):
+        stripped = _resolve_exact_model_name(requested[len(CLAUDE_MODEL_PREFIX) :], available_models)
+        return None if stripped is _AMBIGUOUS else stripped
+    return None
+
+
+def _resolve_exact_model_name(
+    requested_name: str,
+    available_models: list[Dict[str, Any]],
+) -> Optional[str]:  # or _AMBIGUOUS
     """Resolve a user-supplied model id to a canonical DB model name.
 
     ``available_models`` are the accessible model rows (each with a ``name``
@@ -190,18 +237,18 @@ def _resolve_requested_model_name(
         return next(iter(canonical_matches))
     if canonical_matches:
         # duplicate normalized model names — no way to tell which one was meant
-        return None
+        return _AMBIGUOUS
     if len(stored_alias_matches) == 1:
         return next(iter(stored_alias_matches))
     if stored_alias_matches:
         # an ambiguous stored alias must not fall through to planner aliases
-        return None
+        return _AMBIGUOUS
     if len(planner_alias_matches) == 1:
         return next(iter(planner_alias_matches))
     if planner_alias_matches:
         # Two distinct models sharing one planner-safe alias is a genuine
         # ambiguity — refuse rather than guess.
-        return None
+        return _AMBIGUOUS
     if len(replica_matches) == 1:
         return next(iter(replica_matches))
     return None
@@ -439,10 +486,28 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
         "runtime_modes": ["vllm"],
     }
 
+    # Space on the volume holding the worker's Hugging Face cache. Missing on
+    # workers that predate the report, zero-filled when it could not be read:
+    # both leave the fields out so the page shows no disk rather than 0 GB.
+    disk = runtime.get("disk") if isinstance(runtime.get("disk"), dict) else {}
+    if disk.get("source") == "statvfs" and (_safe_float(disk.get("total_mb")) or 0.0) > 0:
+        provider_signals["disk_total_mb"] = _safe_float(disk.get("total_mb"))
+        provider_signals["disk_used_mb"] = _safe_float(disk.get("used_mb"))
+        provider_signals["disk_free_mb"] = _safe_float(disk.get("free_mb"))
+        provider_signals["disk_path"] = str(disk.get("path") or "")
+
+    raw_gpu_faults = devices.get("gpu_faults")
+    provider_signals["gpu_faults"] = (
+        [str(fault) for fault in raw_gpu_faults if fault] if isinstance(raw_gpu_faults, list) else []
+    )
+
     raw_device_list = devices.get("devices") or []
     provider_signals["devices"] = [
         {
             "device_id": d.get("device_id", ""),
+            # The worker's GPU index (nvidia-smi numbering), which lane
+            # placements refer to; list position differs once a GPU is skipped.
+            "index": _safe_int((d.get("extra") or {}).get("index")) if isinstance(d.get("extra"), dict) else None,
             "kind": d.get("kind", "nvidia"),
             "name": d.get("name", ""),
             "memory_used_mb": float(d.get("memory_used_mb") or 0.0),
@@ -451,6 +516,8 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "utilization_percent": _safe_float(d.get("utilization_percent")),
             "temperature_celsius": _safe_float(d.get("temperature_celsius")),
             "power_draw_watts": _safe_float(d.get("power_draw_watts")),
+            "health": d.get("health") if d.get("health") in ("ok", "degraded", "faulted") else "ok",
+            "health_reason": str(d.get("health_reason") or ""),
         }
         for d in raw_device_list
         if isinstance(d, dict)
@@ -513,8 +580,17 @@ def _build_logosnode_scheduler_signals(runtime: Dict[str, Any]) -> Dict[str, Any
             "model": model_name,
             "runtime_state": runtime_state,
             "sleep_state": lane.get("sleep_state"),
+            # The step the worker is in the middle of (waking, falling asleep,
+            # draining, stopping); runtime_state still names the state the
+            # lane is leaving until the step ends.
+            "transition": lane.get("transition"),
+            # Set while the planner keeps new requests away from the lane.
+            "cold_marked": bool(lane.get("cold_marked")),
             "gpu_devices": str(lane.get("gpu_devices") or ""),
             "effective_gpu_devices": str(lane.get("effective_gpu_devices") or ""),
+            # The GPUs the engine runs on; the selectors above only say which
+            # it can see. Empty when the worker does not know.
+            "occupied_gpu_devices": str(lane.get("occupied_gpu_devices") or ""),
             "num_parallel": _safe_int(lane.get("num_parallel")) or 0,
             "active_requests": active_requests,
             "effective_vram_mb": _safe_float(lane.get("effective_vram_mb")) or 0.0,

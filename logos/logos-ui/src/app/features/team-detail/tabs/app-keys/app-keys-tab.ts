@@ -26,17 +26,17 @@ import { ErrorMessageComponent } from '../../../../shared/components/error-messa
 import { buildKeyModelGroups, KeyModelGroup, ProviderInfo } from '../key-model-groups';
 import { isInteractiveClick } from '../../../../shared/utils/interactive-click';
 import {
-  KeySla,
-  SLA_OPTIONS,
-  SLA_PRIORITY,
-  DEFAULT_SLA,
-  INHERITED_SLA_HINT,
-  effectiveSla,
+  KeySlo,
+  SLO_OPTIONS,
+  SLO_PRIORITY,
+  DEFAULT_SLO,
+  INHERITED_SLO_HINT,
+  effectiveSlo,
   isUnsetPriority,
-  slaHint,
-  slaLabel,
-  slaRank,
-} from '../key-sla';
+  sloHint,
+  sloLabel,
+  sloRank,
+} from '../key-slo';
 import { loadKeyOrder, orderRank, saveKeyOrder } from './key-order';
 
 const MICRO = 100_000_000;
@@ -88,7 +88,7 @@ export class AppKeysTabComponent {
 
   @Output() refresh = new EventEmitter<void>();
 
-  // ── SLA tier & manual order ────────────────────────────────────────────────
+  // ── SLO tier & manual order ────────────────────────────────────────────────
   /**
    * Column track sizes for the key table. Held here rather than inline in the
    * template because it is needed twice: `app-data-table` publishes it as
@@ -98,21 +98,21 @@ export class AppKeysTabComponent {
    */
   readonly gridCols = '34px 40px 1fr 100px 165px 160px 90px 90px 90px 90px 72px';
 
-  readonly slaOptions = SLA_OPTIONS;
-  readonly slaLabel = slaLabel;
-  readonly slaHint = slaHint;
-  readonly inheritedSlaHint = INHERITED_SLA_HINT;
+  readonly sloOptions = SLO_OPTIONS;
+  readonly sloLabel = sloLabel;
+  readonly sloHint = sloHint;
+  readonly inheritedSloHint = INHERITED_SLO_HINT;
 
   /** Key ids in the drag-and-drop order, most recently persisted for this team. */
   manualOrder = signal<number[]>([]);
-  /** Optimistic tiers for keys whose SLA change is in flight or already saved. */
-  private slaOverrides = signal<Map<number, KeySla>>(new Map());
-  slaSaving = signal<Set<number>>(new Set());
-  slaError = signal('');
+  /** Optimistic tiers for keys whose SLO change is in flight or already saved. */
+  private sloOverrides = signal<Map<number, KeySlo>>(new Map());
+  sloSaving = signal<Set<number>>(new Set());
+  sloError = signal('');
 
   /**
-   * Application keys sorted by SLA first, then by the manual drag order.
-   * The SLA is the only part the orchestrator sees, so it always outranks the
+   * Application keys sorted by SLO first, then by the manual drag order.
+   * The SLO is the only part the orchestrator sees, so it always outranks the
    * manual order rather than the other way round.
    */
   orderedKeys = computed(() => {
@@ -120,7 +120,7 @@ export class AppKeysTabComponent {
     const keys = this.appKeys();
     const rankOf = new Map(keys.map((k, i) => [k.id, orderRank(order, k.id, i)]));
     return [...keys].sort((a, b) => {
-      const tier = slaRank(this.slaOf(a)) - slaRank(this.slaOf(b));
+      const tier = sloRank(this.sloOf(a)) - sloRank(this.sloOf(b));
       return tier !== 0 ? tier : (rankOf.get(a.id) ?? 0) - (rankOf.get(b.id) ?? 0);
     });
   });
@@ -129,56 +129,56 @@ export class AppKeysTabComponent {
    * Effective tier for display and sort. An unset key follows the team's
    * priority (matching the orchestrator); an in-flight override wins.
    */
-  slaOf(key: TeamApiKey): KeySla {
+  sloOf(key: TeamApiKey): KeySlo {
     return (
-      this.slaOverrides().get(key.id) ??
-      effectiveSla(key.default_priority, this.team?.priority)
+      this.sloOverrides().get(key.id) ??
+      effectiveSlo(key.default_priority, this.team?.priority)
     );
   }
 
   /** True when the key still inherits team/policy priority (no explicit pick). */
   isInherited(key: TeamApiKey): boolean {
-    return !this.slaOverrides().has(key.id) && isUnsetPriority(key.default_priority);
+    return !this.sloOverrides().has(key.id) && isUnsetPriority(key.default_priority);
   }
 
-  /** True for the first row of an SLA tier, which draws the tier separator. */
+  /** True for the first row of an SLO tier, which draws the tier separator. */
   startsTier(index: number): boolean {
     const keys = this.orderedKeys();
-    return index === 0 || this.slaOf(keys[index - 1]) !== this.slaOf(keys[index]);
+    return index === 0 || this.sloOf(keys[index - 1]) !== this.sloOf(keys[index]);
   }
 
   /**
-   * Persist an SLA the person picked.
+   * Persist an SLO the person picked.
    *
    * An unset key shows as inherited, so any of the three tiers — including
    * the one that matches the effective inherited tier — is a real write that
    * pins the key. The guard therefore compares the stored value, not just
    * the displayed tier.
    */
-  async changeSla(key: TeamApiKey, sla: KeySla): Promise<void> {
-    if (!this.canEdit || this.slaSaving().has(key.id)) return;
-    if (!(sla in SLA_PRIORITY)) return;
-    if (!isUnsetPriority(key.default_priority) && key.default_priority === SLA_PRIORITY[sla]) {
+  async changeSlo(key: TeamApiKey, slo: KeySlo): Promise<void> {
+    if (!this.canEdit || this.sloSaving().has(key.id)) return;
+    if (!(slo in SLO_PRIORITY)) return;
+    if (!isUnsetPriority(key.default_priority) && key.default_priority === SLO_PRIORITY[slo]) {
       return;
     }
-    const previous = this.slaOverrides().get(key.id);
-    this.slaError.set('');
-    this.slaOverrides.update((m) => new Map(m).set(key.id, sla));
-    this.slaSaving.update((s) => new Set(s).add(key.id));
+    const previous = this.sloOverrides().get(key.id);
+    this.sloError.set('');
+    this.sloOverrides.update((m) => new Map(m).set(key.id, slo));
+    this.sloSaving.update((s) => new Set(s).add(key.id));
     try {
-      await this.svc.updateApiKey(key.id, { default_priority: SLA_PRIORITY[sla] });
+      await this.svc.updateApiKey(key.id, { default_priority: SLO_PRIORITY[slo] });
       // Write through so a modal opened from the cached list shows the new
       // priority without waiting for the parent's refetch.
-      key.default_priority = SLA_PRIORITY[sla];
+      key.default_priority = SLO_PRIORITY[slo];
     } catch {
-      this.slaOverrides.update((m) => {
+      this.sloOverrides.update((m) => {
         const next = new Map(m);
         previous === undefined ? next.delete(key.id) : next.set(key.id, previous);
         return next;
       });
-      this.slaError.set(`Failed to update the SLA of '${key.name}'.`);
+      this.sloError.set(`Failed to update the SLO of '${key.name}'.`);
     } finally {
-      this.slaSaving.update((s) => {
+      this.sloSaving.update((s) => {
         const next = new Set(s);
         next.delete(key.id);
         return next;
@@ -191,7 +191,7 @@ export class AppKeysTabComponent {
   }
 
   /**
-   * Keyboard equivalent of a drag, so the order (and with it the SLA a row
+   * Keyboard equivalent of a drag, so the order (and with it the SLO a row
    * crosses into) is reachable without a pointer.
    */
   onHandleKeydown(event: KeyboardEvent, index: number): void {
@@ -212,18 +212,18 @@ export class AppKeysTabComponent {
     // would raise a key to the tier above whenever it is dropped directly
     // below a stricter tier, even when both rows share a tier.
     const moved = list[from];
-    // A second drag while the first SLA update is still in flight would save
-    // the new order but `changeSla` would discard the tier change — leave
-    // order and SLA alone until the pending write finishes.
-    if (this.slaSaving().has(moved.id)) return;
-    const target = this.slaOf(list[to]);
+    // A second drag while the first SLO update is still in flight would save
+    // the new order but `changeSlo` would discard the tier change — leave
+    // order and SLO alone until the pending write finishes.
+    if (this.sloSaving().has(moved.id)) return;
+    const target = this.sloOf(list[to]);
 
     moveItemInArray(list, from, to);
     const ids = list.map((k) => k.id);
     this.manualOrder.set(ids);
     saveKeyOrder(this.teamId, ids);
 
-    if (target !== this.slaOf(moved)) await this.changeSla(moved, target);
+    if (target !== this.sloOf(moved)) await this.changeSlo(moved, target);
   }
 
   // ── Create dialog ──────────────────────────────────────────────────────────
@@ -231,7 +231,7 @@ export class AppKeysTabComponent {
   createLoading = signal(false);
   createError = signal('');
   cEnv = signal('prod');
-  cSla = signal<KeySla>(DEFAULT_SLA);
+  cSlo = signal<KeySlo>(DEFAULT_SLO);
   cBudget = signal('');
   cCloudRpm = signal('');
   cCloudTpm = signal('');
@@ -265,7 +265,7 @@ export class AppKeysTabComponent {
 
   resetCreate(): void {
     this.cEnv.set('prod');
-    this.cSla.set(DEFAULT_SLA);
+    this.cSlo.set(DEFAULT_SLO);
     this.cBudget.set('');
     this.cCloudRpm.set('');
     this.cCloudTpm.set('');
@@ -284,7 +284,7 @@ export class AppKeysTabComponent {
       name: `${this.team?.name ?? 'team'}-${env}`,
       key_type: 'application',
       environment: env,
-      default_priority: SLA_PRIORITY[this.cSla()],
+      default_priority: SLO_PRIORITY[this.cSlo()],
       log: 'BILLING',
       settings: {
         budget_limit_micro_cents: this.parseMc(this.cBudget()),

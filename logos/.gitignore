@@ -1,5 +1,4 @@
 .test-deploy/
-logos-orchestrator/tests/performance/results/
 benchmarks/benchmark_results/
 benchmarks/workloads/
 benchmarks/data/
@@ -7,3 +6,7 @@ benchmarks/venv/
 letsencrypt/
 # Local link to the repository's shared Python package (also created by CI).
 /logos-orchestrator/shared
+
+# Output of the worker-node benchmark tools
+logos-workernode/**/bench_results/
+logos-workernode/data/

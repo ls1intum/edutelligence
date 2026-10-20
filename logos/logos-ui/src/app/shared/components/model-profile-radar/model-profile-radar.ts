@@ -40,7 +40,7 @@ export class ModelProfileRadarComponent {
     const levels = Array.from({ length: this.max }, (_, i) => i + 1);
 
     const point = (index: number, value: number) => {
-      const angle = (-Math.PI / 2) + (index * 2 * Math.PI) / n;
+      const angle = -Math.PI / 2 + (index * 2 * Math.PI) / n;
       const t = Math.max(0, Math.min(this.max, value)) / this.max;
       return {
         x: cx + Math.cos(angle) * r * t,
@@ -58,9 +58,18 @@ export class ModelProfileRadarComponent {
       return { x1: cx, y1: cy, x2: tip.x, y2: tip.y };
     });
 
+    // A label right of the centre starts at its spoke tip and one left of it ends
+    // there, so it grows away from the chart instead of across it.
     const labels = axes.map((axis, i) => {
       const tip = point(i, this.max + 0.55);
-      return { ...axis, x: tip.x, y: tip.y };
+      const dx = tip.x - cx;
+      const anchor = dx > 4 ? 'start' : dx < -4 ? 'end' : 'middle';
+      return {
+        ...axis,
+        x: tip.x + (anchor === 'start' ? 2 : anchor === 'end' ? -2 : 0),
+        y: tip.y,
+        anchor,
+      };
     });
 
     const values = axes.map((axis, i) => {

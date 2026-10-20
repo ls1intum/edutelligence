@@ -175,6 +175,10 @@ Iris automatically creates and manages Weaviate collections at startup. You do n
 
 If a collection already exists when Iris starts, it is reused. If it does not exist, Iris creates it with the appropriate schema.
 
+### Several Artemis instances on one Iris
+
+Every lecture and FAQ row stores the base URL of the Artemis instance that wrote it, and Iris filters by it, so several Artemis instances can share one Iris and one Weaviate. The lecture collections store the base URL twice: in `base_url`, which older versions matched word by word (a filter for `https://artemis.example` also matched `https://artemis-test.artemis.example`), and in `base_url_exact`, which matches the whole value. After an upgrade, Iris fills `base_url_exact` on older rows in the background and switches each collection to exact matching once it is complete; until then, the old matching applies. The log names each collection it filled and the base URLs it found. If two stored base URLs differ only in case or a trailing slash, the collection keeps the old matching and the log says so. Run only one Iris against a shared Weaviate while it upgrades.
+
 :::warning
 Deleting Weaviate collections means losing all indexed content. Artemis will need to re-send ingestion requests to rebuild the data. Do not delete collections unless you intend a full re-index.
 :::

@@ -45,7 +45,7 @@ services:
 
   # One-shot: bring the schema up to the same revision the webservice would.
   migrate:
-    image: liquibase/liquibase:4.31
+    image: liquibase/liquibase:4.33
     depends_on:
       logos-db:
         condition: service_healthy
@@ -187,7 +187,7 @@ services:
 
   traefik:
     profiles: [ui]
-    image: traefik:v3.7.10
+    image: traefik:v3.7.15
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
@@ -204,7 +204,7 @@ services:
 
   keycloak:
     profiles: [ui]
-    image: quay.io/keycloak/keycloak:26.7
+    image: quay.io/keycloak/keycloak:26.8
     command: ["start-dev", "--import-realm", "--health-enabled=true"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
@@ -278,7 +278,7 @@ services:
       - "traefik.http.routers.ws-config.service=ws-svc"
       - "traefik.http.routers.ws-config.middlewares=strip-api"
       - "traefik.http.routers.ws-config.priority=200"
-      - "traefik.http.routers.ws-stats.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`)"
+      - "traefik.http.routers.ws-stats.rule=Path(`/api/ws/stats`) || Path(`/api/ws/stats/v2`) || Path(`/api/ws/notifications`)"
       - "traefik.http.routers.ws-stats.entrypoints=web8080"
       - "traefik.http.routers.ws-stats.service=ws-svc"
       - "traefik.http.routers.ws-stats.middlewares=strip-api"
@@ -286,11 +286,11 @@ services:
       # The operator-facing lane actions, at priority 202 so they outrank the
       # orchestrator's /api/logosdb/providers/logosnode catch-all (201). The UI
       # sends a JWT and {provider_id, ...} to these; the orchestrator's own
-      # endpoints want a logos_key, so without this router the six paths below
+      # endpoints want a logos_key, so without this router the paths below
       # reach the wrong service and answer with a validation or auth error —
       # and the browser tier would be exercising a route production does not
       # use. Mirrors docker-compose.dev.yaml; keep the two lists in step.
-      - "traefik.http.routers.ws-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.ws-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/drain`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
       - "traefik.http.routers.ws-logosnode-admin.entrypoints=web8080"
       - "traefik.http.routers.ws-logosnode-admin.service=ws-svc"
       - "traefik.http.routers.ws-logosnode-admin.middlewares=strip-api"

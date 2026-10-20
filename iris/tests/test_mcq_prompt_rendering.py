@@ -110,6 +110,7 @@ def test_course_chat_parallel_mode_overrides_tool_in_turn_context():
     assert "being generated" in turn
     assert "MUST NOT" in turn
     assert "quiz instructions above do not apply" in turn
+    assert "context switching instructions above do not apply" in turn
 
 
 def test_lecture_chat_parallel_mode_overrides_tool_in_turn_context():

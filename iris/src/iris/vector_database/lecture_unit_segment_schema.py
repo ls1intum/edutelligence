@@ -16,7 +16,11 @@ from iris.vector_database.lecture_transcription_schema import (
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
 )
-from iris.vector_database.lecture_unit_schema import _add_property_if_missing
+from iris.vector_database.schema_properties import (
+    BASE_URL_EXACT_MARKER,
+    add_property_if_missing,
+    base_url_exact_property,
+)
 
 
 class LectureUnitSegmentSchema(Enum):
@@ -34,7 +38,9 @@ class LectureUnitSegmentSchema(Enum):
     TRANSCRIPTIONS = "transcriptions"
     SLIDES = "slides"
     BASE_URL = "base_url"
+    BASE_URL_EXACT = "base_url_exact"
     HIDDEN_UNTIL = "hidden_until"
+    CONTENT_FINGERPRINT = "content_fingerprint"
 
 
 def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
@@ -58,7 +64,7 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 )
             )
 
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
@@ -68,10 +74,25 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
             ),
         )
 
+        add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value,
+                description=(
+                    "Fingerprint of the source content this summary was "
+                    "derived from, stamped verbatim as sent by Artemis"
+                ),
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+        )
+
+        add_property_if_missing(collection, base_url_exact_property())
         return collection
 
     return client.collections.create(
         name=LectureUnitSegmentSchema.COLLECTION_NAME.value,
+        description=BASE_URL_EXACT_MARKER,
         vector_config=Configure.Vectors.self_provided(
             vector_index_config=Configure.VectorIndex.hnsw(
                 distance_metric=VectorDistances.COSINE
@@ -120,10 +141,20 @@ def init_lecture_unit_segment_schema(client: WeaviateClient) -> Collection:
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
+            base_url_exact_property(),
             Property(
                 name=LectureUnitSegmentSchema.HIDDEN_UNTIL.value,
                 description="UTC timestamp until which this slide-backed summary is hidden",
                 data_type=DataType.DATE,
+                index_searchable=False,
+            ),
+            Property(
+                name=LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value,
+                description=(
+                    "Fingerprint of the source content this summary was "
+                    "derived from, stamped verbatim as sent by Artemis"
+                ),
+                data_type=DataType.TEXT,
                 index_searchable=False,
             ),
         ],

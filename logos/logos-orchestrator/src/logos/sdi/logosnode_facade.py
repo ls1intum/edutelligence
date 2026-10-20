@@ -327,7 +327,14 @@ class LogosNodeSchedulingDataFacade:
         with self._lock:
             return self._model_last_activity.get((int(provider_id), model_name))
 
-    def on_request_start(self, request_id: str, model_id: int, provider_id: int, priority: str = "normal") -> None:
+    def on_request_start(
+        self,
+        request_id: str,
+        model_id: int,
+        provider_id: int,
+        priority: str = "normal",
+        api_key_id: Optional[int] = None,
+    ) -> None:
         with self._lock:
             provider = self._get_provider_for_model(model_id, provider_id)
             status = provider.get_model_status(model_id)
@@ -337,6 +344,10 @@ class LogosNodeSchedulingDataFacade:
                 "arrival_time": time.time(),
                 "priority": priority,
                 "queue_depth_at_arrival": status.queue_depth,
+                # Who is making this request. The in-flight figure is per model
+                # only; the key is what lets a caller tell its own share of a
+                # busy lane apart from everyone else's.
+                "api_key_id": api_key_id,
             }
 
     def on_request_begin_processing(
@@ -356,6 +367,7 @@ class LogosNodeSchedulingDataFacade:
                 request_id=request_id,
                 model_id=model_id,
                 increment_active=increment_active,
+                api_key_id=tracking_data.get("api_key_id"),
             )
             self._note_model_activity(provider.provider_id, provider._model_id_to_name.get(model_id))
             tracking_data["processing_start_time"] = time.time()
@@ -376,7 +388,9 @@ class LogosNodeSchedulingDataFacade:
             provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
             queue_wait_ms = (time.time() - tracking_data["arrival_time"]) * 1000 - duration_ms
             provider = self._get_provider_for_model(model_id, provider_id)
-            provider.decrement_active(model_id, reuse_slot=reuse_slot, request_id=request_id)
+            provider.decrement_active(
+                model_id, reuse_slot=reuse_slot, request_id=request_id, api_key_id=tracking_data.get("api_key_id")
+            )
             # A completion is the lane's most recent "did work" moment; record it
             # so the planner's idle clock can't run through this request.
             self._note_model_activity(provider.provider_id, provider._model_id_to_name.get(model_id))

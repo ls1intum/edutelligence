@@ -54,6 +54,19 @@ REPLY_FILE = "reply.md"
 # answers every thread somewhere none of them was asked.
 REPLY_DIR = "replies"
 
+# The inline comments of a review the agent was asked for: a JSON list of
+# ``{"path", "line", "body"}`` objects, ``line`` being a line of the new
+# file inside the diff. The runner posts them with the summary in
+# ``REPLY_FILE`` as one pull-request review, so each remark sits on the code
+# it is about.
+REVIEW_COMMENTS_FILE = "review-comments.json"
+
+# The commit a requested review read, relative to the session's state
+# directory: recorded by the runner right after the trusted checkout, before
+# the agent runs, and sent as the review's ``commit_id`` so its line numbers
+# are read against that commit even when the pull request moved on since.
+REVIEWED_SHA_FILE = "reviewed-sha"
+
 # The file the runner appends to whenever it freezes a session, relative to
 # the session's state directory — not the artefact directory: the state
 # directory is the runner's own, mounted into the session read-only, so the
@@ -169,25 +182,38 @@ class Settings:
         for team in os.getenv("LOGOS_AGENT_TRUSTED_TEAMS", "logos-developers,logos-maintainers").split(",")
         if team.strip()
     )
-    # The review apps this repository runs on its own pull requests. They may
-    # not direct anything — no review of theirs starts a session, no comment
-    # of theirs steers one — but what they wrote travels with a task that
-    # somebody trusted has already directed.
+    # The review apps this repository runs on its own pull requests. What
+    # they wrote travels with a task somebody trusted has already directed
+    # — without that, a handover dropped the review itself. On a pull
+    # request this runner already owns they may also direct: a
+    # CHANGES_REQUESTED or @mention from one of them is the ordinary next
+    # step after the agent opened the work, not a stranger injecting
+    # direction. Strangers still cannot.
     #
-    # Without this the agent takes over its own pull request to address a
-    # review and is handed the pull request without the review: on prod,
-    # every handover dropped between six and seventeen comments, and on the
-    # busy ones those were the entire review. An agent given a diff and told
-    # "start from what is still open" reconstructs a review from the diff,
-    # which is guesswork dressed up as work.
-    #
-    # Named accounts rather than "any bot": this is a list of two apps that
-    # this repository chose, and it is emptied by setting the variable to
+    # Named accounts rather than "any bot": this is a list of apps this
+    # repository chose, and it is emptied by setting the variable to
     # nothing.
     review_bots: tuple[str, ...] = tuple(
         name.strip().lower()
         for name in os.getenv("LOGOS_AGENT_REVIEW_BOTS", "coderabbitai[bot],Claudia-Anthropica").split(",")
         if name.strip()
+    )
+    # Who is asked to review a pull request this runner just opened. Separate
+    # from ``review_bots``: that list is who may *direct* the agent on its
+    # own work; this one is who GitHub is asked to review it. Default is
+    # Claudia alone — CodeRabbit reviews via its own app installation and
+    # does not need a review request.
+    pr_reviewers: tuple[str, ...] = tuple(
+        name.strip() for name in os.getenv("LOGOS_AGENT_PR_REVIEWERS", "Claudia-Anthropica").split(",") if name.strip()
+    )
+    # Team review requests that mean this account. GitHub lists teams and
+    # people separately on a pull request; asking ``logos-maintainers`` does
+    # not put ``LogosOSSAgent`` in ``requested_reviewers``, so the runner
+    # never saw the request until this list existed.
+    review_teams: tuple[str, ...] = tuple(
+        slug.strip().lower()
+        for slug in os.getenv("LOGOS_AGENT_REVIEW_TEAMS", "logos-maintainers,logos-developers").split(",")
+        if slug.strip()
     )
     # Wall-clock ceiling for one session, or 0 for none — which is the
     # default. A clock is the wrong thing to stop an agent with: a session
@@ -211,6 +237,12 @@ class Settings:
     # thresholds below decide how many of them actually run at any moment,
     # and each still needs a free workspace of its own.
     max_parallel_sessions: int = _int("LOGOS_AGENT_MAX_PARALLEL_SESSIONS", 10)
+    # How many live workspaces the trigger poller may leave so assigned work
+    # can wait its turn. Execution stays capped at max_parallel_sessions; the
+    # extras only hold queued (and paused) sessions so a long pause does not
+    # lose comments to the lookback window. Zero means five times the parallel
+    # ceiling. Never below max_parallel_sessions.
+    max_queue_workspaces: int = _int("LOGOS_AGENT_MAX_QUEUE_WORKSPACES", 0)
     # A session may start only while the platform's busy share is below this.
     # Expressed as a fraction of reserved-to-total serving capacity.
     start_below_load: float = _float("LOGOS_AGENT_START_BELOW_LOAD", 0.60)
@@ -282,6 +314,10 @@ class Settings:
     # restarted runner looks, how many self-queued sessions may be active —
     # is a constant in `triggers.py`, derived where it depends on anything.
     triggers_enabled: bool = _bool("LOGOS_AGENT_TRIGGERS_ENABLED", True)
+    # UTC hour of the nightly re-analysis of linked team repositories; -1
+    # turns it off. A repository whose branch head is still the commit its
+    # latest analysis described is not analysed again.
+    analysis_nightly_hour_utc: int = _int("LOGOS_AGENT_ANALYSIS_NIGHTLY_HOUR_UTC", 0)
 
     # --- storage ----------------------------------------------------------
     # Where session artefacts (logs, screenshots) are kept, on a volume shared

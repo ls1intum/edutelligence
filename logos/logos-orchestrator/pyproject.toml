@@ -14,11 +14,9 @@ fastapi = {extras = ["standard"], version = "==0.141.1"}
 httpx = "==0.27.2"
 shared = { path = "./shared", develop = true }
 requests = "==2.34.2"
-langchain = "==1.4.1"
-langchain-community = "==0.3.31"
 openai = "==1.109.1"
-pytest = "==8.4.2"
-pytest-asyncio = "==0.26.0"
+pytest = "==9.1.1"
+pytest-asyncio = "==1.4.0"
 psycopg2-binary = "==2.9.13"
 # Held on 2.0: SQLAlchemy 2.1 made psycopg (v3) the default driver for
 # `postgresql://` URLs, and the driver installed here is psycopg2-binary.
@@ -28,7 +26,6 @@ SQLAlchemy = "==2.0.54"
 grpcio = "==1.84.0"
 grpcio-tools = "==1.71.2"
 protobuf = "==5.29.6"
-tiktoken = "==0.9.0"
 python-dateutil = "==2.9.0.post0"
 sentence-transformers = "==5.7.0"
 torch = "==2.14.0"
@@ -43,8 +40,6 @@ guidellm = {version = "==0.7.2", extras = ["recommended"]}
 # runs, the benchmark workflow and local environments resolve from this
 # manifest alone, so these pins are what keep a fresh resolve off a
 # vulnerable version.
-langchain-core = "==1.6.3"
-langsmith = "==0.12.6"
 pillow = "==12.3.0"
 urllib3 = "==2.8.0"
 httpcore2 = "==2.13.0"
@@ -105,7 +100,6 @@ testpaths = ["tests/unit"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers --strict-config"
 markers = [
-    "integration: tests requiring a running server or database",
     "slow: tests that take more than a few seconds",
 ]
 filterwarnings = []

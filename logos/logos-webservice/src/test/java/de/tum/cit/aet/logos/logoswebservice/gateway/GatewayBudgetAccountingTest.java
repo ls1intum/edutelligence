@@ -195,6 +195,62 @@ class GatewayBudgetAccountingTest {
             .hasMessageContaining("Team monthly budget exceeded");
     }
 
+    @Test
+    void sponsoredProviderDoesNotDrawFromTeamDefaultBudget() {
+        Fixture f = seedFixture(ApiKeyType.developer);
+        accounting.settleSuccess(admit(f), USAGE, null, null);
+        setTeamBudget(f.teamId(), REAL_COST);
+        // Without an override the team default is already exhausted.
+        assertThatThrownBy(() -> uncachedBudgetService().enforceCloudBudget(f.key(), f.providerId()))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("Team monthly budget exceeded");
+
+        jdbc.update(
+            "INSERT INTO team_provider_budgets (team_id, provider_id, monthly_budget_micro_cents) "
+            + "VALUES (?, ?, NULL)",
+            f.teamId(), f.providerId());
+
+        // Sponsored (null) override: spend on this provider is unlimited and
+        // no longer counts against the default team bucket.
+        assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key(), f.providerId()))
+            .doesNotThrowAnyException();
+    }
+
+    @Test
+    void providerOverrideUsesItsOwnCap() {
+        Fixture f = seedFixture(ApiKeyType.developer);
+        accounting.settleSuccess(admit(f), USAGE, null, null);
+        setTeamBudget(f.teamId(), 1L); // would reject if the default bucket applied
+        jdbc.update(
+            "INSERT INTO team_provider_budgets (team_id, provider_id, monthly_budget_micro_cents) "
+            + "VALUES (?, ?, ?)",
+            f.teamId(), f.providerId(), REAL_COST + 1);
+
+        assertThatCode(() -> uncachedBudgetService().enforceCloudBudget(f.key(), f.providerId()))
+            .doesNotThrowAnyException();
+
+        jdbc.update(
+            "UPDATE team_provider_budgets SET monthly_budget_micro_cents = ? "
+            + "WHERE team_id = ? AND provider_id = ?",
+            REAL_COST, f.teamId(), f.providerId());
+        assertThatThrownBy(() -> uncachedBudgetService().enforceCloudBudget(f.key(), f.providerId()))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("Team monthly budget exceeded for this provider");
+    }
+
+    @Test
+    void zeroProviderCapBlocksThatProvider() {
+        Fixture f = seedFixture(ApiKeyType.developer);
+        jdbc.update(
+            "INSERT INTO team_provider_budgets (team_id, provider_id, monthly_budget_micro_cents) "
+            + "VALUES (?, ?, 0)",
+            f.teamId(), f.providerId());
+
+        assertThatThrownBy(() -> uncachedBudgetService().enforceCloudBudget(f.key(), f.providerId()))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("Team monthly budget exceeded for this provider");
+    }
+
     // ------------------------------------------------------- orchestrator path
 
     @Test

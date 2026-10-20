@@ -95,6 +95,18 @@ export type DeviceInfo = {
   utilization_percent: number | null;
   temperature_celsius: number | null;
   power_draw_watts: number | null;
+  /**
+   * The worker's GPU index (nvidia-smi numbering), which lane placements
+   * refer to. Absent on samples that predate it; list position stands in then.
+   */
+  index?: number | null;
+  /**
+   * "faulted": nvidia-smi reports the GPU itself as failed (e.g. "GPU requires
+   * reset"), and the worker places no lane on it. "degraded": some readings
+   * are missing. Absent on samples that predate it.
+   */
+  health?: 'ok' | 'degraded' | 'faulted';
+  health_reason?: string;
 };
 
 // LaneSignalData from logos-ui-old/components/statistics/types.ts
@@ -102,8 +114,25 @@ export type LaneSignalData = {
   model: string;
   runtime_state: string; // "running"|"loaded"|"sleeping"|"starting"|"cold"|"stopped"|"error"
   sleep_state: string | null;
+  /**
+   * Lifecycle step the worker is in the middle of. runtime_state and
+   * sleep_state keep naming the state the lane is leaving until it ends.
+   * Optional: workers that predate the field report nothing.
+   */
+  transition?: 'draining' | 'falling_asleep' | 'waking' | 'stopping' | null;
+  /**
+   * The capacity planner keeps new requests away from the lane (it is about to
+   * sleep or unload it), whatever state the worker reports.
+   */
+  cold_marked?: boolean;
   gpu_devices: string | null;
   effective_gpu_devices: string | null;
+  /**
+   * The GPUs the lane's engine runs on. The two selectors above only list the
+   * GPUs it can see: "1,0" with one GPU runs on GPU 1 alone. Empty when the
+   * worker does not know; absent on samples that predate it.
+   */
+  occupied_gpu_devices?: string;
   /**
    * Worker-reported concurrency: the lane's full-context KV budget parsed
    * from the vLLM startup log (guaranteed minimum; 0 until the log is parsed).
@@ -162,6 +191,14 @@ export interface VramV2Sample {
       host_ram_total_mb?: number;
       host_ram_used_mb?: number;
       host_ram_available_mb?: number;
+      /**
+       * Space on the volume holding the worker's Hugging Face cache (MiB).
+       * Left out when the worker predates the report or could not read it.
+       */
+      disk_total_mb?: number;
+      disk_used_mb?: number;
+      disk_free_mb?: number;
+      disk_path?: string;
       lane_count?: number;
       active_requests?: number;
       loaded_lane_count?: number;
@@ -169,6 +206,8 @@ export interface VramV2Sample {
       cold_lane_count?: number;
       total_effective_vram_mb?: number;
       devices?: DeviceInfo[];
+      /** One line per GPU the worker reports as failed, e.g. "gpu0 (GPU-…): GPU requires reset". */
+      gpu_faults?: string[];
     };
     lanes?: Record<string, LaneSignalData>;
     models?: Record<string, any>;
@@ -187,6 +226,7 @@ export interface VramV2Provider {
   last_heartbeat?: string | null;
   connected_at?: string | null;
   worker_started_at?: string | null;
+  worker_version_checksum?: string | null;
   devices?: DeviceInfo[];
   data: VramV2Sample[];
 }
@@ -238,8 +278,16 @@ export type VramProviderMeta = {
   last_heartbeat?: string | null;
   connected_at?: string | null;
   worker_started_at?: string | null;
+  worker_version_checksum?: string | null;
   calibrating?: boolean;
 };
+
+/**
+ * What a worker's header shows for its build; see describeWorkerVersion.
+ * `hint` is the sentence in the card behind the chip's info icon, and `commit`
+ * the full commit that card shows (null when there is none).
+ */
+export type WorkerVersionChip = { label: string; hint: string; commit: string | null };
 
 // VramProviderPayload from logos-ui-old/app/statistics.tsx lines 68-108
 export type VramProviderPayload = {

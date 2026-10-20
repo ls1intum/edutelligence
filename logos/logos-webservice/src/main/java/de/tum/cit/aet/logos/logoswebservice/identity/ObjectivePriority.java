@@ -8,7 +8,7 @@ import java.util.Set;
 
 /**
  * Ordered optimization objectives for an LLM call site (most important first).
- * Complements SLA: SLA answers urgency; this answers what to optimize for.
+ * Complements SLO: SLO answers urgency; this answers what to optimize for.
  */
 public final class ObjectivePriority {
 
@@ -18,12 +18,12 @@ public final class ObjectivePriority {
 
     private ObjectivePriority() {}
 
-    /** Heuristic default ranking derived from the SLA tier. */
-    public static List<String> forSla(String sla) {
-        if (sla == null) {
+    /** Heuristic default ranking derived from the SLO tier. */
+    public static List<String> forSlo(String slo) {
+        if (slo == null) {
             return DEFAULT;
         }
-        return switch (sla.trim().toLowerCase(Locale.ROOT)) {
+        return switch (slo.trim().toLowerCase(Locale.ROOT)) {
             case "ux-critical" -> List.of("latency", "quality", "price");
             case "ux-background" -> List.of("price", "quality", "latency");
             default -> List.of("quality", "latency", "price");
