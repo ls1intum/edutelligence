@@ -719,9 +719,15 @@ class CapacityPlanner:
         one worker whose wake fails VRAM validation suppress the wake of a
         locked copy on another worker that has the memory, every cycle.
         Writing it still keeps the demand pass from planning a second wake for
-        the same model in this cycle.
+        the same model in this cycle, but only for a wake that fits the free
+        VRAM now. One that does not fit is left to the demand pass: a request
+        waiting for the model can still reclaim an idle unlocked lane and wake
+        the locked one, instead of the standalone wake failing validation every
+        cycle. The caller drops this wake when the demand pass plans the same.
         """
         actions: List[CapacityPlanAction] = []
+        profiles = None
+        capacity = None
         for lane in lanes:
             if not self.is_lane_locked(provider_id, lane.lane_id):
                 continue
@@ -738,9 +744,42 @@ class CapacityPlanner:
                     reason="Lane is locked warm",
                 )
             )
-            if cycle_planned_models is not None:
+            if cycle_planned_models is None:
+                continue
+            if profiles is None:
+                profiles = self._safe_get_profiles(provider_id)
+                capacity = self._safe_get_capacity(provider_id)
+            if self._lock_wake_fits(lane.model_name, profiles, capacity):
                 cycle_planned_models.add(lane.model_name)
         return actions
+
+    @staticmethod
+    def _merge_lock_wakes(
+        lock_wakes: List[CapacityPlanAction],
+        demand_actions: List[CapacityPlanAction],
+    ) -> List[CapacityPlanAction]:
+        """One worker's lock wakes followed by its demand plan, each lane woken once.
+
+        A locked lane the demand pass also wakes (after reclaiming room for it)
+        keeps only the demand plan's wake, which runs after its victims.
+        """
+        demand_wakes = {a.lane_id for a in demand_actions if a.action == "wake"}
+        return [a for a in lock_wakes if a.lane_id not in demand_wakes] + list(demand_actions)
+
+    def _lock_wake_fits(self, model_name: str, profiles: dict, capacity) -> bool:
+        """Whether waking a sleeping lane of ``model_name`` fits the free VRAM now.
+
+        Rough like the ranking: without a profile or a capacity reading the
+        wake is assumed to fit, as before.
+        """
+        profile = profiles.get(model_name) if profiles else None
+        if profile is None or capacity is None:
+            return True
+        needed_mb = max(
+            self._estimate_model_loaded_vram(profile) - float(profile.sleeping_residual_mb or 0.0),
+            0.0,
+        )
+        return needed_mb <= float(getattr(capacity, "available_vram_mb", 0) or 0)
 
     def _model_inflight_without_other_lane(self, provider_id: int, model_name: str, lane_id: str) -> bool:
         """Whether taking ``lane_id`` away would strand requests reserved for its model.
@@ -1003,19 +1042,18 @@ class CapacityPlanner:
             self._update_idle_tracking(provider_id, lanes)
             self._record_kv_pressure_history(provider_id, lanes)
             all_actions.extend(self._compute_idle_actions(provider_id, lanes))
-            all_actions.extend(self._compute_lock_wake_actions(provider_id, lanes, cycle_planned_models))
-            all_actions.extend(
-                self._compute_demand_actions(
-                    provider_id,
-                    lanes,
-                    cycle_planned_models=cycle_planned_models,
-                    cycle_planned_additional_models=cycle_planned_additional_models,
-                    best_provider_for_model=best_provider_for_model,
-                    cluster_lanes_by_model=cluster_lanes_by_model,
-                    cycle_balance_wake_models=cycle_balance_wake_models,
-                    cycle_reserved_lane_ids=cycle_reserved_lane_ids,
-                )
+            lock_wakes = self._compute_lock_wake_actions(provider_id, lanes, cycle_planned_models)
+            demand_actions = self._compute_demand_actions(
+                provider_id,
+                lanes,
+                cycle_planned_models=cycle_planned_models,
+                cycle_planned_additional_models=cycle_planned_additional_models,
+                best_provider_for_model=best_provider_for_model,
+                cluster_lanes_by_model=cluster_lanes_by_model,
+                cycle_balance_wake_models=cycle_balance_wake_models,
+                cycle_reserved_lane_ids=cycle_reserved_lane_ids,
             )
+            all_actions.extend(self._merge_lock_wakes(lock_wakes, demand_actions))
             all_actions.extend(self._compute_demand_drain_actions(provider_id, lanes))
             # TODO: KV fleet rebalancing disabled — was computing budgets from total
             # worker VRAM instead of per-lane GPU VRAM, causing OOM on reconfigure.

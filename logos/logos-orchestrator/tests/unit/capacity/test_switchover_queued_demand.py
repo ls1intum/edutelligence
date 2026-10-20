@@ -377,3 +377,48 @@ class TestLaneWaiterWithoutDemand:
         planner.register_lane_waiter("req-b", 2, "model-b")
 
         assert planner._compute_demand_actions(1, provider.lanes) == []
+
+
+class TestLockedLaneThatNeedsRoom:
+    """B's sleeping lane is locked warm but its wake needs the memory of A's idle lane.
+
+    The standalone lock wake never evicts, so it fails validation every cycle.
+    It must not keep the demand pass from reclaiming A and waking B for a
+    waiting request, and B must then be woken once.
+    """
+
+    def _scenario(self):
+        planner, provider = _switchover_scenario(score_a=0.3, queue_b=0, b_sleeping_lane=True)
+        planner._locked_lanes = {(1, "B-s")}
+        planner._cross_provider_dedup = True
+        planner._safe_get_profiles = lambda pid: provider.profiles
+        planner._safe_get_capacity = lambda pid: planner._facade.get_capacity_info(pid)
+        planner._lane_is_in_wake_failure_cooldown = lambda *a: False
+        planner.register_lane_waiter("req-b", 1, "model-b")
+        return planner, provider
+
+    def test_a_lock_wake_that_cannot_fit_leaves_the_model_to_the_demand_pass(self):
+        planner, provider = self._scenario()
+        planned: set[str] = set()
+
+        lock_wakes = planner._compute_lock_wake_actions(1, provider.lanes, planned)
+        assert [(a.action, a.lane_id) for a in lock_wakes] == [("wake", "B-s")]
+        assert "model-b" not in planned
+
+        demand = planner._compute_demand_actions(1, provider.lanes, cycle_planned_models=planned)
+        kinds = [(a.action, a.lane_id) for a in demand]
+        assert ("sleep_l1", "A-inc") in kinds, f"the idle unlocked lane must be reclaimed; got {kinds}"
+        assert ("wake", "B-s") in kinds, f"the locked lane must be woken for the waiter; got {kinds}"
+
+        merged = [(a.action, a.lane_id) for a in planner._merge_lock_wakes(lock_wakes, demand)]
+        assert merged.count(("wake", "B-s")) == 1
+        assert merged.index(("sleep_l1", "A-inc")) < merged.index(("wake", "B-s"))
+
+    def test_a_lock_wake_that_fits_still_claims_the_model_for_this_cycle(self):
+        planner, provider = self._scenario()
+        provider.available_vram_mb = 90_000.0
+        planned: set[str] = set()
+
+        planner._compute_lock_wake_actions(1, provider.lanes, planned)
+
+        assert "model-b" in planned
