@@ -168,6 +168,11 @@ Automatic calibration runs first during the maintenance window.
 Benchmarks use the remaining time.
 
 Deploy webservice changelog `065_nightly_benchmarks.xml` before the orchestrator update.
+Its `065-*` changeSets adopt existing tables through schema preconditions.
+Earlier Liquibase history entries remain unchanged.
+Before rollback, stop maintenance admission and let active claims finish.
+Reverting parallel maintenance restores singleton keys and fails safely if either table contains multiple claims.
+A full rollback removes schedule and claim tables, including their data.
 Then deploy the orchestrator, web application and updated worker code.
 Stop the old orchestrator before the migration changes the maintenance tables. Workers advertise
 `supports_benchmark_restart`; activation rejects workers without this feature.

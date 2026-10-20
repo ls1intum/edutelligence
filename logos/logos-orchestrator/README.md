@@ -28,8 +28,8 @@ workers in parallel. Calibration and benchmark phases remain separate.
 Schedules default to disabled and are stored in PostgreSQL by the webservice's
 `065_nightly_benchmarks.xml` changelog. It also adds durable calibration and
 manual benchmark claims, keyed by provider and job. Worker confirmation is
-required before a calibration claim is released. Existing changeSet identities
-and checksums remain unchanged for upgrades.
+required before a calibration claim is released. Schema preconditions adopt existing tables
+when upgrading from earlier changeSet IDs. All changeSets provide rollbacks.
 
 The scheduler admits at most two enabled model/worker pairs per Berlin date.
 A cluster lock owns each bounded parallel batch, and persisted date claims retain the quota

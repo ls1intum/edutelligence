@@ -1,15 +1,20 @@
 package de.tum.cit.aet.logos.logoswebservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.sql.DriverManager;
 import java.util.List;
 import java.util.UUID;
 import liquibase.Contexts;
 import liquibase.LabelExpression;
 import liquibase.Liquibase;
+import liquibase.Scope;
+import liquibase.changelog.FastCheckService;
 import liquibase.database.jvm.JdbcConnection;
 import liquibase.resource.ClassLoaderResourceAccessor;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -57,7 +62,7 @@ class LiquibaseBaselineTest {
     }
 
     @Test
-    void nightlySchedulesCoexistWithCentralProfilesAndKeepMigrationIdentity() {
+    void nightlySchedulesCoexistWithCentralProfilesAndUseConsolidatedMigrationIds() {
         assertThat(tableExists("model_profiles")).isTrue();
         assertThat(tableExists("model_calibrations")).isTrue();
         assertThat(tableExists("nightly_benchmarks")).isTrue();
@@ -65,28 +70,14 @@ class LiquibaseBaselineTest {
         assertThat(tableExists("maintenance_benchmark")).isTrue();
         assertThat(columnExists("nightly_benchmarks", "recovery")).isTrue();
         assertThat(jdbc.queryForList(
-            "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
-            String.class, "057-nightly-benchmarks", "logos"))
-            .containsExactly("liquibase/changelog/057_nightly_benchmarks.xml");
-        assertThat(jdbc.queryForList(
-            "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
-            String.class, "061-maintenance-calibration", "logos"))
-            .containsExactly("liquibase/changelog/061_maintenance_calibration.xml");
-        assertThat(jdbc.queryForList(
-            "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
-            String.class, "067-parallel-maintenance", "logos"))
-            .containsExactly("liquibase/changelog/067_parallel_maintenance.xml");
-        // Checksums recorded before the maintenance changelogs were consolidated.
-        assertThat(jdbc.queryForList(
-            "SELECT md5sum FROM databasechangelog WHERE author = 'logos'"
-                + " AND id IN ('057-nightly-benchmarks', '061-maintenance-calibration', '067-parallel-maintenance')"
-                + " ORDER BY id", String.class))
-            .containsExactly("9:07a33eb8d33de94d9437ff1629a470ae",
-                "9:c13b407277eb225167567e6bb10792ff", "9:47bd15cbf792ae230e09e42f31ccffa1");
+            "SELECT id FROM databasechangelog WHERE filename = ? AND author = 'logos' ORDER BY orderexecuted",
+            String.class, "liquibase/changelog/065_nightly_benchmarks.xml"))
+            .containsExactly("065-nightly-benchmarks", "065-maintenance-calibration", "065-parallel-maintenance");
     }
 
-    @Test
-    void consolidatedMaintenanceChangelogUpgradesExistingClaimsAndDoesNotReplay() throws Exception {
+    @ParameterizedTest
+    @ValueSource(ints = {0, 2, 3})
+    void consolidatedMaintenanceChangelogUpgradesAndRollsBack(int legacyChangeSets) throws Exception {
         String schema = "maintenance_upgrade_" + UUID.randomUUID().toString().replace("-", "");
         jdbc.execute("CREATE SCHEMA " + schema);
         try (var connection = DriverManager.getConnection(
@@ -106,16 +97,75 @@ class LiquibaseBaselineTest {
             isolated.execute("INSERT INTO maintenance_calibration (provider_id, token) VALUES (42, 'existing')");
             isolated.execute("INSERT INTO maintenance_benchmark (job_id) VALUES (1)");
             connection.commit();
+            if (legacyChangeSets == 3) {
+                liquibase.update(new Contexts(), new LabelExpression());
+            }
+            if (legacyChangeSets > 0) {
+                // Reproduce the history identities recorded by earlier deployments of this schema.
+                isolated.execute("""
+                    UPDATE databasechangelog SET
+                        id = CASE id
+                            WHEN '065-nightly-benchmarks' THEN '057-nightly-benchmarks'
+                            WHEN '065-maintenance-calibration' THEN '061-maintenance-calibration'
+                            WHEN '065-parallel-maintenance' THEN '067-parallel-maintenance' END,
+                        filename = CASE id
+                            WHEN '065-nightly-benchmarks' THEN 'liquibase/changelog/057_nightly_benchmarks.xml'
+                            WHEN '065-maintenance-calibration' THEN 'liquibase/changelog/061_maintenance_calibration.xml'
+                            WHEN '065-parallel-maintenance' THEN 'liquibase/changelog/067_parallel_maintenance.xml' END
+                    """);
+                connection.commit();
+            }
+            var oldHistory = isolated.queryForList("SELECT * FROM databasechangelog WHERE id NOT LIKE '065-%' ORDER BY id");
 
             liquibase.update(new Contexts(), new LabelExpression());
             liquibase.update(new Contexts(), new LabelExpression());
 
-            assertThat(isolated.queryForObject("SELECT count(*) FROM databasechangelog", Integer.class)).isEqualTo(3);
+            assertThat(isolated.queryForObject("SELECT count(*) FROM databasechangelog", Integer.class))
+                .isEqualTo(3 + legacyChangeSets);
+            assertThat(isolated.queryForList("SELECT * FROM databasechangelog WHERE id NOT LIKE '065-%' ORDER BY id"))
+                .isEqualTo(oldHistory);
             assertThat(isolated.queryForObject("SELECT enabled FROM nightly_benchmarks", Boolean.class)).isTrue();
             assertThat(isolated.queryForObject("SELECT token FROM maintenance_calibration", String.class)).isEqualTo("existing");
             assertThat(isolated.queryForObject("SELECT provider_id FROM maintenance_benchmark", Integer.class)).isEqualTo(42);
             isolated.execute("INSERT INTO maintenance_calibration (provider_id, token) VALUES (43, 'parallel')");
             isolated.execute("INSERT INTO maintenance_benchmark (job_id, provider_id) VALUES (2, 43)");
+            connection.commit();
+
+            assertThatThrownBy(() -> liquibase.rollback(1, new Contexts(), new LabelExpression()))
+                .hasMessageContaining("maintenance_benchmark_pkey");
+            assertThat(isolated.queryForObject("SELECT count(*) FROM maintenance_benchmark WHERE provider_id IS NOT NULL",
+                Integer.class)).isEqualTo(2);
+            isolated.execute("DELETE FROM maintenance_benchmark WHERE job_id = 2");
+            connection.commit();
+            assertThatThrownBy(() -> liquibase.rollback(1, new Contexts(), new LabelExpression()))
+                .hasMessageContaining("maintenance_calibration_pkey");
+            assertThat(isolated.queryForObject("SELECT provider_id FROM maintenance_benchmark", Integer.class)).isEqualTo(42);
+            isolated.execute("DELETE FROM maintenance_calibration WHERE provider_id = 43");
+            connection.commit();
+
+            liquibase.rollback(1, new Contexts(), new LabelExpression());
+            assertThat(isolated.queryForObject("SELECT token FROM maintenance_calibration", String.class)).isEqualTo("existing");
+            assertThat(isolated.queryForList("""
+                SELECT pg_get_constraintdef(oid) FROM pg_constraint
+                WHERE connamespace = ?::regnamespace AND contype = 'p'
+                AND conrelid IN ('maintenance_calibration'::regclass, 'maintenance_benchmark'::regclass)
+                """, String.class, schema)).containsExactlyInAnyOrder("PRIMARY KEY (singleton)", "PRIMARY KEY (singleton)");
+            liquibase.rollback(2, new Contexts(), new LabelExpression());
+            assertThat(isolated.queryForObject("SELECT count(*) FROM information_schema.tables"
+                + " WHERE table_schema = ? AND table_name IN ('nightly_benchmarks', 'maintenance_calibration', 'maintenance_benchmark')",
+                Integer.class, schema)).isZero();
+            // Use a fresh Liquibase instance, as on application restart after rollback.
+            Scope.getCurrentScope().getSingleton(FastCheckService.class).clearCache();
+            try (var restartConnection = DriverManager.getConnection(
+                    postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+                    var restarted = new Liquibase("liquibase/changelog/065_nightly_benchmarks.xml",
+                        resources, new JdbcConnection(restartConnection))) {
+                restartConnection.setSchema(schema);
+                restarted.getDatabase().setDefaultSchemaName(schema);
+                restarted.getDatabase().setLiquibaseSchemaName(schema);
+                restarted.update(new Contexts(), new LabelExpression());
+            }
+            assertThat(isolated.queryForObject("SELECT count(*) FROM nightly_benchmarks", Integer.class)).isZero();
         } finally {
             jdbc.execute("DROP SCHEMA " + schema + " CASCADE");
         }
