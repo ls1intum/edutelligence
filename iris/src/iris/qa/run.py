@@ -16,6 +16,8 @@ from iris.qa.evaluate import ScenarioEvaluation, evaluation_from_worker
 from iris.qa.planning import RateCard, trial_reserve
 from iris.qa.report import write_json_report, write_markdown_report
 
+COLLECTION_FILE = "collection.json"
+
 
 def _rates(rate_card: RateCard) -> dict[str, ModelRate]:
     return {
@@ -55,8 +57,15 @@ def run_paid_suite(
     max_run_cost: Decimal,
     planned_cost: Decimal,
     output_root: Path | None = None,
+    skip_judge: bool = False,
 ) -> tuple[int, Path, list[ScenarioEvaluation]]:
-    """Run each scenario through production Iris and the independent judge."""
+    """Run each scenario through production Iris and the independent judge.
+
+    With ``skip_judge`` only the candidate answers are collected: each trial keeps
+    the exact judge input in its raw result and a ``collection.json`` lists the
+    trials, so an external judge can rate them later (see
+    ``iris.qa.external_judge``). No scores or report are produced then.
+    """
     run_id = (
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + f"-{uuid4().hex[:8]}"
     )
@@ -67,13 +76,18 @@ def run_paid_suite(
     model_rates = _rates(rate_card)
     run_start_total = ledger.total()
     evaluations: list[ScenarioEvaluation] = []
+    collected: list[dict] = []
 
     for model in models:
-        configuration = create_worker_configuration(rate_card, model)
+        configuration = create_worker_configuration(
+            rate_card, model, skip_judge=skip_judge
+        )
         try:
             for scenario in scenarios:
                 for repetition in range(1, repetitions + 1):
-                    reserve = trial_reserve(scenario, rate_card, model)
+                    reserve = trial_reserve(
+                        scenario, rate_card, model, include_judge=not skip_judge
+                    )
                     guard.require_capacity(reserve)
                     if ledger.total() - run_start_total + reserve > max_run_cost:
                         raise RuntimeError(
@@ -104,6 +118,7 @@ def run_paid_suite(
                             str(input_path),
                             "--output",
                             str(output_path),
+                            *(["--skip-judge"] if skip_judge else []),
                         ],
                         cwd=qa_root.parent,
                         env=configuration.environment,
@@ -150,7 +165,7 @@ def run_paid_suite(
                                 usage.get("outputTokens"),
                             )
                         )
-                    has_judge_usage = any(
+                    has_judge_usage = skip_judge or any(
                         rate.model == rate_card.judge.model
                         for _, rate, _, _ in verified_usage
                     )
@@ -171,6 +186,30 @@ def run_paid_suite(
                             "the full reservation remains accounted"
                         )
 
+                    if skip_judge:
+                        collected.append(
+                            {
+                                "model": model,
+                                "scenarioId": scenario.id,
+                                "repetition": repetition,
+                                "stem": stem,
+                                "durationSeconds": round(duration, 2),
+                                "executionError": payload.get("executionError"),
+                                "judgePending": bool(payload.get("judgePending")),
+                            }
+                        )
+                        collect_error = payload.get("executionError")
+                        print(
+                            f"[{len(collected):>3}] {model:<14} "
+                            f"{scenario.id:<38} run {repetition}: "
+                            + (
+                                f"ERROR {collect_error}"
+                                if collect_error
+                                else "collected"
+                            ),
+                            flush=True,
+                        )
+                        continue
                     try:
                         evaluation = evaluation_from_worker(
                             scenario,
@@ -213,7 +252,15 @@ def run_paid_suite(
         "plannedUpperBoundUsd": str(planned_cost),
         "accountedSpendUsd": str(ledger.total() - run_start_total),
         "rateSource": rate_card.source,
+        "judge": "external" if skip_judge else rate_card.judge.model,
     }
+    if skip_judge:
+        (result_root / COLLECTION_FILE).write_text(
+            json.dumps({"metadata": metadata, "trials": collected}, indent=2),
+            encoding="utf-8",
+        )
+        failed = any(item["executionError"] for item in collected)
+        return (1 if failed else 0), result_root, []
     write_json_report(result_root / "report.json", evaluations, metadata=metadata)
     write_markdown_report(result_root / "report.md", evaluations, metadata=metadata)
     has_execution_errors = any(item.execution_error for item in evaluations)

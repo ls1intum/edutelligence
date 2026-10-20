@@ -84,6 +84,28 @@ class ScenarioEvaluation:
         return sum(item.points for item in self.criteria) / len(self.criteria)
 
     @property
+    def usable(self) -> bool | None:
+        """Whether a student could rely on this chat answer, None outside chat.
+
+        Usable means no critical error, nothing the student would act on is wrong
+        or invented (trustworthy is not ``not_achieved``) and the answer helps
+        (moves-forward is not ``not_achieved``). It is a floor, not a quality bar:
+        it only separates out the answers that fail the student.
+        """
+        if self.use_case != "chat":
+            return None
+        if self.execution_error:
+            return False
+        ratings = {item.id: item.rating for item in self.criteria}
+        if "trustworthy" not in ratings or "moves-forward" not in ratings:
+            return None
+        return (
+            self.critical_error_count == 0
+            and ratings["trustworthy"] != Rating.NOT_ACHIEVED
+            and ratings["moves-forward"] != Rating.NOT_ACHIEVED
+        )
+
+    @property
     def critical_error_count(self) -> int:
         return sum(item.present for item in self.critical_errors)
 

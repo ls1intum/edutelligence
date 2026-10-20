@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from iris.qa.schema import Scenario, ScenarioSuite
+from iris.qa.schema import Scenario, ScenarioSuite, shared_criteria
 from iris.qa.yaml_utils import safe_load_unique
 
 # pylint: disable=inconsistent-quotes
@@ -72,6 +72,8 @@ def _scenario_from_raw(raw: dict[str, Any], fixture_root: Path) -> Scenario:
     if not isinstance(payload, dict):
         raise ScenarioLoadError("scenario payload must be a mapping")
     resolved_payload = _deep_merge(resolved_payload, payload)
+    if raw.get("use_case") == "chat" and not raw.get("criteria"):
+        raw = {**raw, "criteria": shared_criteria()}
     return Scenario.model_validate({**raw, "payload": resolved_payload})
 
 

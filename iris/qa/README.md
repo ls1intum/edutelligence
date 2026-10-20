@@ -47,8 +47,10 @@ Examples of advanced evidence include:
 ## Scoring
 
 An independent judge sees the scenario goal, the candidate answer, the
-production activity trace, and bounded fixture evidence. It rates each natural
-language criterion as:
+production activity trace, and bounded fixture evidence. Chat situations are
+rated on the same five criteria, explained in [RUBRIC.md](RUBRIC.md), with
+`reference` entries that tell the judge what is true in the situation. The other
+use cases bring their own criteria. The judge rates each criterion as:
 
 | Rating            | Points |
 | ----------------- | -----: |
@@ -59,7 +61,9 @@ language criterion as:
 IrisScore is the equal-weight average of the 50 scenario scores. Every
 situation counts once, even when an advanced situation has more criteria.
 Reports also show chat-mode, support-level, use-case, and difficulty breakdowns.
-Critical incidents and execution failures stay separate from IrisScore.
+Critical incidents and execution failures stay separate from IrisScore. For
+chat situations the report also shows the share of usable answers, a
+usage-weighted score, and the mean points per criterion.
 
 There is no expected-answer string, keyword scan, regular expression, required
 tool name, or pass/fail threshold. A tool call matters only when the resulting
@@ -110,6 +114,66 @@ poetry run iris-benchmark run \
   --output qa-results/effort-comparison
 ```
 
+### Collect now, judge later
+
+The built-in judge needs Azure credentials. To run without it, collect the
+candidate answers first and let a judge outside the harness rate them. With
+`--skip-judge`, `plan`, `doctor` and `run` leave the judge out of the cost and
+configuration, and an `llm_config` that contains only Logos entries is enough:
+the candidate and the helper model that Iris itself calls are both served by
+Logos.
+
+```bash
+poetry run iris-benchmark run \
+  --skip-judge \
+  --llm-config /path/to/llm_config.local.yml \
+  --rates qa/config/rates.local.yml \
+  --budget-usd 30 --max-cost-usd 30 \
+  --model gpt-6-luna-medium --model gpt-6.1-sol-medium \
+  --output qa-results/collected
+
+poetry run iris-benchmark judge-export \
+  --input-run qa-results/collected \
+  --output qa-results/judge
+```
+
+`judge-export` writes one bundle per answered trial to `qa-results/judge/bundles`.
+A bundle holds the judge system prompt and the exact request the built-in judge
+would receive. Its id (`t001`, `t002`, ...) carries no model or repetition
+information, and the order is shuffled, so the judge cannot tell which model
+wrote an answer. `qa-results/judge/key.json` maps the ids back to trials; the
+judge must not read it.
+
+The judge writes one file per bundle, `<judgments>/<id>.json`, in the shape the
+built-in judge returns:
+
+```json
+{
+  "criteria": [
+    { "id": "trustworthy", "rating": "achieved", "evidence": "..." }
+  ],
+  "criticalErrors": [
+    { "description": "<exact text>", "present": false, "evidence": "..." }
+  ]
+}
+```
+
+Then import them:
+
+```bash
+poetry run iris-benchmark judge-import \
+  --input-run qa-results/collected \
+  --judgments qa-results/judgments \
+  --key qa-results/judge/key.json \
+  --judge-label "<judge model and settings>" \
+  --output qa-results/scored
+```
+
+The import checks every judgment (exact criterion ids, valid ratings, one result
+per critical error) and lists missing or invalid ones before it writes the usual
+report. The report records the judge label; the cost column covers the
+candidate and helper calls only.
+
 To reuse paid candidate answers after changing only evaluator context:
 
 ```bash
@@ -158,6 +222,7 @@ errors. A low score is benchmark data, not a command failure.
 ## Layout
 
 - `scenarios/` — the complete 50-situation corpus.
+- `RUBRIC.md` — the five criteria every chat answer is rated on.
 - `fixtures/` — deterministic course, retrieval, lecture, memory, draft, and
   prompt context.
 - `artifacts/` — student repositories, reference repositories, tests, build

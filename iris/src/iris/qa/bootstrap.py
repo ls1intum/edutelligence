@@ -61,7 +61,12 @@ LOGOS_CANDIDATE_VARIANTS = {
     "gpt-6-luna-medium": ("gpt-6-luna", "medium"),
     "gpt-6-luna-high": ("gpt-6-luna", "high"),
 }
+# Without an Azure resource the helper model that Iris itself calls comes from
+# Logos too.
+HELPER_ROUTE_ENV = "IRIS_QA_HELPER_ROUTE"
+LOGOS_HELPER_MODEL = "gpt-5.4-mini"
 LOGOS_ENVIRONMENT_NAMES = (
+    HELPER_ROUTE_ENV,
     "IRIS_QA_LOGOS_BASE_URL",
     "IRIS_QA_LOGOS_API_KEY",
     *(entry["model_env"] for entry in LOGOS_CANDIDATES.values()),
@@ -77,8 +82,12 @@ class WorkerConfiguration:
         self.directory.cleanup()
 
 
-def apply_local_llm_config(path: Path) -> dict[str, str]:
+def apply_local_llm_config(path: Path, *, judge: bool = True) -> dict[str, str]:
     """Load unambiguous Azure and optional Logos credentials from Iris config.
+
+    The Azure judge needs an Azure resource. When the judge is skipped
+    (``judge=False``) a configuration with Logos entries only is accepted and the
+    helper model comes from Logos.
 
     This is a local-development convenience. The weekly workflow deliberately
     keeps using workload identity and never reads a credential-bearing file.
@@ -142,42 +151,52 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
         if api_version:
             api_versions.setdefault(resource_endpoint, []).append(api_version)
 
+    helper_via_logos = False
     if len(resources) != 1:
-        raise ValueError(
-            "Local LLM configuration must contain exactly one credential-bearing "
-            "Azure chat resource"
-        )
-    endpoint, resource = next(iter(resources.items()))
-    if len(resource["keys"]) != 1:
-        raise ValueError(
-            "Local LLM configuration contains multiple credentials for its Azure "
-            "chat resource; make the intended credential unambiguous"
-        )
-    key = next(iter(resource["keys"]))
-    versions = api_versions.get(endpoint, [])
-    api_version = max(versions, default="2025-04-01-preview")
-
-    requested_deployments = {}
-    for model in (*CANDIDATE_DEPLOYMENT_ENV, "gpt-5.4"):
-        candidates = deployments.get(endpoint, {}).get(model, set())
-        if len(candidates) > 1:
+        if not judge and not resources and logos_entries:
+            helper_via_logos = True
+        else:
             raise ValueError(
-                f"Local LLM configuration contains multiple deployments for {model}"
+                "Local LLM configuration must contain exactly one credential-bearing "
+                "Azure chat resource"
             )
-        requested_deployments[model] = next(iter(candidates), model)
+    configured: dict[str, str] = {}
+    endpoint = ""
+    api_version = ""
+    if helper_via_logos:
+        configured[HELPER_ROUTE_ENV] = "logos"
+    else:
+        endpoint, resource = next(iter(resources.items()))
+        if len(resource["keys"]) != 1:
+            raise ValueError(
+                "Local LLM configuration contains multiple credentials for its Azure "
+                "chat resource; make the intended credential unambiguous"
+            )
+        key = next(iter(resource["keys"]))
+        versions = api_versions.get(endpoint, [])
+        api_version = max(versions, default="2025-04-01-preview")
 
-    configured = {
-        "IRIS_QA_AZURE_ENDPOINT": endpoint,
-        "IRIS_QA_AZURE_AUTH_MODE": "api_key",
-        "IRIS_QA_AZURE_API_KEY": key,
-        "IRIS_QA_AZURE_API_VERSION": api_version,
-        "IRIS_QA_GPT_54_MINI_DEPLOYMENT": requested_deployments["gpt-5.4-mini"],
-        "IRIS_QA_GPT_55_DEPLOYMENT": requested_deployments["gpt-5.5"],
-        "IRIS_QA_GPT_56_SOL_DEPLOYMENT": requested_deployments["gpt-5.6-sol"],
-        "IRIS_QA_GPT_56_TERRA_DEPLOYMENT": requested_deployments["gpt-5.6-terra"],
-        "IRIS_QA_GPT_56_LUNA_DEPLOYMENT": requested_deployments["gpt-5.6-luna"],
-        "IRIS_QA_JUDGE_DEPLOYMENT": requested_deployments["gpt-5.4"],
-    }
+        requested_deployments = {}
+        for model in (*CANDIDATE_DEPLOYMENT_ENV, "gpt-5.4"):
+            candidates = deployments.get(endpoint, {}).get(model, set())
+            if len(candidates) > 1:
+                raise ValueError(
+                    f"Local LLM configuration contains multiple deployments for {model}"
+                )
+            requested_deployments[model] = next(iter(candidates), model)
+
+        configured = {
+            "IRIS_QA_AZURE_ENDPOINT": endpoint,
+            "IRIS_QA_AZURE_AUTH_MODE": "api_key",
+            "IRIS_QA_AZURE_API_KEY": key,
+            "IRIS_QA_AZURE_API_VERSION": api_version,
+            "IRIS_QA_GPT_54_MINI_DEPLOYMENT": requested_deployments["gpt-5.4-mini"],
+            "IRIS_QA_GPT_55_DEPLOYMENT": requested_deployments["gpt-5.5"],
+            "IRIS_QA_GPT_56_SOL_DEPLOYMENT": requested_deployments["gpt-5.6-sol"],
+            "IRIS_QA_GPT_56_TERRA_DEPLOYMENT": requested_deployments["gpt-5.6-terra"],
+            "IRIS_QA_GPT_56_LUNA_DEPLOYMENT": requested_deployments["gpt-5.6-luna"],
+            "IRIS_QA_JUDGE_DEPLOYMENT": requested_deployments["gpt-5.4"],
+        }
     for name in LOGOS_ENVIRONMENT_NAMES:
         os.environ.pop(name, None)
     if logos_entries:
@@ -208,8 +227,8 @@ def apply_local_llm_config(path: Path) -> dict[str, str]:
             configured[str(LOGOS_CANDIDATES[model]["model_env"])] = model
     os.environ.update(configured)
     metadata = {
-        "endpoint": endpoint,
-        "apiVersion": api_version,
+        "endpoint": endpoint or None,
+        "apiVersion": api_version or None,
     }
     if logos_entries:
         metadata["logosBaseUrl"] = configured["IRIS_QA_LOGOS_BASE_URL"]
@@ -425,49 +444,85 @@ def _logos_candidate(candidate_model: str) -> tuple[str, str | None] | None:
     return None
 
 
-def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfiguration:
+def _logos_helper_model(rate, api_key: str) -> dict:
+    """The model Iris calls for its own side tasks, served by Logos instead of Azure."""
+    base_url = _required("IRIS_QA_LOGOS_BASE_URL").rstrip("/")
+    _validate_logos_base_url(base_url)
+    return {
+        "id": "qa-aux-mini",
+        "type": "openai_chat",
+        "model": LOGOS_HELPER_MODEL,
+        "base_url": base_url,
+        "api_key": api_key,  # pragma: allowlist secret
+        "use_responses_api": False,
+        "supports_temperature": False,
+        "supports_reasoning_effort": True,
+        "reasoning_effort": "none",
+        "reasoning_effort_values": ["none", "low", "medium", "high", "xhigh"],
+        "cost_per_million_input_token": float(rate.input_per_million),
+        "cost_per_million_output_token": float(rate.output_per_million),
+    }
+
+
+def create_worker_configuration(
+    rate_card, candidate_model: str, *, skip_judge: bool = False
+) -> WorkerConfiguration:
     if candidate_model not in CANDIDATE_MODEL_IDS:
         raise ValueError(f"Unsupported QA candidate model: {candidate_model}")
-    endpoint = _azure_endpoint()
-    auth_mode = os.environ.get("IRIS_QA_AZURE_AUTH_MODE", "azure_ad")
-    if auth_mode not in {"azure_ad", "api_key"}:
-        raise ValueError("IRIS_QA_AZURE_AUTH_MODE must be azure_ad or api_key")
-    if auth_mode == "api_key":
-        _required("IRIS_QA_AZURE_API_KEY")
-
-    deployments = {
-        "gpt-5.4-mini": _required("IRIS_QA_GPT_54_MINI_DEPLOYMENT"),
-        "gpt-5.4": _required("IRIS_QA_JUDGE_DEPLOYMENT"),
-    }
     logos_candidate = _logos_candidate(candidate_model)
-    if candidate_model != "gpt-5.4-mini" and logos_candidate is None:
-        deployments[candidate_model] = _required(
-            CANDIDATE_DEPLOYMENT_ENV[candidate_model]
-        )
-    if len(set(deployments.values())) != len(deployments):
-        raise ValueError("Candidate, auxiliary, and judge deployments must be distinct")
+    helper_via_logos = os.environ.get(HELPER_ROUTE_ENV) == "logos"
     rates = {rate.model: rate for rate in (*rate_card.candidates, rate_card.judge)}
-    api_version = os.environ.get(
-        "IRIS_QA_AZURE_API_VERSION", "2025-04-01-preview"
-    ).strip()
-    if not api_version:
-        raise ValueError("IRIS_QA_AZURE_API_VERSION must not be empty")
-    local_api_key = os.environ.get("IRIS_QA_AZURE_API_KEY")
-    models = [
-        _model(
-            model_id=CANDIDATE_MODEL_IDS.get(model, "qa-judge"),
-            model=model,
-            deployment=deployment,
-            endpoint=endpoint,
-            api_version=api_version,
-            auth_mode=auth_mode,
-            input_rate=str(rates[model].input_per_million),
-            output_rate=str(rates[model].output_per_million),
-            reasoning_effort=(None if model in DEFAULT_REASONING_MODELS else "medium"),
-            api_key=local_api_key if auth_mode == "api_key" else None,
-        )
-        for model, deployment in deployments.items()
-    ]
+    models: list[dict] = []
+    if helper_via_logos:
+        if not skip_judge:
+            raise ValueError("A Logos-only configuration needs the judge to be skipped")
+        if logos_candidate is None:
+            raise ValueError(
+                "A Logos-only configuration can only run Logos candidates; "
+                f"{candidate_model} needs an Azure deployment"
+            )
+    else:
+        endpoint = _azure_endpoint()
+        auth_mode = os.environ.get("IRIS_QA_AZURE_AUTH_MODE", "azure_ad")
+        if auth_mode not in {"azure_ad", "api_key"}:
+            raise ValueError("IRIS_QA_AZURE_AUTH_MODE must be azure_ad or api_key")
+        if auth_mode == "api_key":
+            _required("IRIS_QA_AZURE_API_KEY")
+
+        deployments = {"gpt-5.4-mini": _required("IRIS_QA_GPT_54_MINI_DEPLOYMENT")}
+        if not skip_judge:
+            deployments["gpt-5.4"] = _required("IRIS_QA_JUDGE_DEPLOYMENT")
+        if candidate_model != "gpt-5.4-mini" and logos_candidate is None:
+            deployments[candidate_model] = _required(
+                CANDIDATE_DEPLOYMENT_ENV[candidate_model]
+            )
+        if len(set(deployments.values())) != len(deployments):
+            raise ValueError(
+                "Candidate, auxiliary, and judge deployments must be distinct"
+            )
+        api_version = os.environ.get(
+            "IRIS_QA_AZURE_API_VERSION", "2025-04-01-preview"
+        ).strip()
+        if not api_version:
+            raise ValueError("IRIS_QA_AZURE_API_VERSION must not be empty")
+        local_api_key = os.environ.get("IRIS_QA_AZURE_API_KEY")
+        models = [
+            _model(
+                model_id=CANDIDATE_MODEL_IDS.get(model, "qa-judge"),
+                model=model,
+                deployment=deployment,
+                endpoint=endpoint,
+                api_version=api_version,
+                auth_mode=auth_mode,
+                input_rate=str(rates[model].input_per_million),
+                output_rate=str(rates[model].output_per_million),
+                reasoning_effort=(
+                    None if model in DEFAULT_REASONING_MODELS else "medium"
+                ),
+                api_key=local_api_key if auth_mode == "api_key" else None,
+            )
+            for model, deployment in deployments.items()
+        ]
     if logos_candidate is not None:
         base_model, reasoning_effort = logos_candidate
         logos_model = _required(str(LOGOS_CANDIDATES[base_model]["model_env"]))
@@ -482,20 +537,25 @@ def create_worker_configuration(rate_card, candidate_model: str) -> WorkerConfig
             )
         )
     mini_rate = rates["gpt-5.4-mini"]
-    models.append(
-        _model(
-            model_id="qa-aux-mini",
-            model="gpt-5.4-mini",
-            deployment=deployments["gpt-5.4-mini"],
-            endpoint=endpoint,
-            api_version=api_version,
-            auth_mode=auth_mode,
-            input_rate=str(mini_rate.input_per_million),
-            output_rate=str(mini_rate.output_per_million),
-            reasoning_effort="none",
-            api_key=local_api_key if auth_mode == "api_key" else None,
+    if helper_via_logos:
+        models.append(
+            _logos_helper_model(mini_rate, _required("IRIS_QA_LOGOS_API_KEY"))
         )
-    )
+    else:
+        models.append(
+            _model(
+                model_id="qa-aux-mini",
+                model="gpt-5.4-mini",
+                deployment=deployments["gpt-5.4-mini"],
+                endpoint=endpoint,
+                api_version=api_version,
+                auth_mode=auth_mode,
+                input_rate=str(mini_rate.input_per_million),
+                output_rate=str(mini_rate.output_per_million),
+                reasoning_effort="none",
+                api_key=local_api_key if auth_mode == "api_key" else None,
+            )
+        )
     candidate_id = CANDIDATE_MODEL_IDS[candidate_model]
     directory = tempfile.TemporaryDirectory(prefix="iris-qa-")
     root = Path(directory.name)

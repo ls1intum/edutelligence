@@ -145,6 +145,7 @@ def _plan(args):
         hard_limit=_decimal(args.budget_usd, "--budget-usd"),
         uplift_percent=_decimal(args.uplift_percent, "--uplift-percent"),
         models=_models(args),
+        include_judge=not args.skip_judge,
     )
     return root, scenarios, rate_card, ledger_path, plan
 
@@ -158,7 +159,10 @@ def command_plan(args) -> int:
     print(f"Rate source          {rate_card.source}")
     for model, cost in plan.pipeline_costs.items():
         print(f"Pipeline {model:<13} {_money(cost):>10}")
-    print(f"Independent judge    {_money(plan.judge_cost):>10}")
+    if args.skip_judge:
+        print("Independent judge    skipped (judged outside the harness)")
+    else:
+        print(f"Independent judge    {_money(plan.judge_cost):>10}")
     print(f"Safety allowance     {_money(plan.uplift):>10}")
     print("-" * 34)
     print(f"Planned upper bound  {_money(plan.planned_total):>10}")
@@ -178,10 +182,12 @@ def command_plan(args) -> int:
 def command_doctor(args) -> int:
     from iris.qa.bootstrap import apply_local_llm_config, create_worker_configuration
 
-    apply_local_llm_config(Path(args.llm_config))
+    apply_local_llm_config(Path(args.llm_config), judge=not args.skip_judge)
     rate_card = load_rate_card(Path(args.rates), require_confirmed=False)
     for model in _models(args):
-        configuration = create_worker_configuration(rate_card, model)
+        configuration = create_worker_configuration(
+            rate_card, model, skip_judge=args.skip_judge
+        )
         configuration.close()
     _header("Local configuration preflight; no model request was sent")
     print(STYLE.good("READY  credentials, deployments, and model configuration loaded"))
@@ -198,7 +204,7 @@ def command_run(args) -> int:
     with SpendLedger(ledger_path).exclusive_paid_run():
         root, scenarios, rate_card, ledger_path, plan = _plan(args)
         _validate_contracts(root, scenarios)
-        apply_local_llm_config(Path(args.llm_config))
+        apply_local_llm_config(Path(args.llm_config), judge=not args.skip_judge)
         max_run_cost = _decimal(args.max_cost_usd, "--max-cost-usd")
         if max_run_cost <= 0:
             raise ValueError("--max-cost-usd must be greater than zero")
@@ -223,7 +229,16 @@ def command_run(args) -> int:
             max_run_cost=max_run_cost,
             planned_cost=plan.planned_total,
             output_root=Path(args.output).resolve() if args.output else None,
+            skip_judge=args.skip_judge,
         )
+    if args.skip_judge:
+        print()
+        print(STYLE.good(f"Collected answers in {report_root}"))
+        print(
+            "Next: iris-benchmark judge-export --input-run "
+            f"{report_root} --output <judge-dir>"
+        )
+        return code
     summary = summarize(evaluations)
     print()
     for model, item in summary["models"].items():
@@ -282,6 +297,50 @@ def command_rejudge(args) -> int:
     return code
 
 
+def command_judge_export(args) -> int:
+    from iris.qa.external_judge import export_judge_bundles
+
+    count = export_judge_bundles(
+        run_root=Path(args.input_run).resolve(),
+        output_root=Path(args.output).resolve(),
+        seed=args.seed,
+    )
+    _header("Blinded judge bundles; the key stays in the output directory")
+    print(STYLE.good(f"EXPORTED  {count} bundle(s) to {Path(args.output) / 'bundles'}"))
+    print(
+        "Write one judgment per bundle id to <judgments>/<id>.json, "
+        "then run judge-import."
+    )
+    return 0
+
+
+def command_judge_import(args) -> int:
+    from iris.qa.external_judge import import_judgments
+    from iris.qa.report import summarize
+
+    _, suite = _suite(args)
+    output_root = Path(args.output).resolve()
+    code, evaluations = import_judgments(
+        run_root=Path(args.input_run).resolve(),
+        judgments_root=Path(args.judgments).resolve(),
+        key_path=Path(args.key).resolve(),
+        output_root=output_root,
+        scenarios={scenario.id: scenario for scenario in suite.scenarios},
+        judge_label=args.judge_label,
+    )
+    summary = summarize(evaluations)
+    _header(f"Judged outside the harness by {args.judge_label}")
+    for model, item in summary["models"].items():
+        print(
+            STYLE.good(
+                f"{model}: IrisScore {item['score']:.2f}; "
+                f"critical errors {item['criticalErrorRate']:.1%}"
+            )
+        )
+    print(f"Report: {output_root / 'report.md'}")
+    return code
+
+
 def _add_selection(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", choices=("smoke", "weekly", "full"))
     parser.add_argument("--scenario", action="append")
@@ -299,6 +358,11 @@ def _add_run_shape(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--ledger")
     parser.add_argument("--budget-usd", default="30")
     parser.add_argument("--uplift-percent", default="10")
+    parser.add_argument(
+        "--skip-judge",
+        action="store_true",
+        help="collect the answers only; they are judged outside the harness",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -324,6 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--llm-config", required=True)
     doctor.add_argument("--rates", required=True)
     doctor.add_argument("--model", action="append", choices=CANDIDATE_MODELS)
+    doctor.add_argument("--skip-judge", action="store_true")
     doctor.set_defaults(handler=command_doctor)
 
     run = subparsers.add_parser("run", help="run the benchmark")
@@ -347,6 +412,26 @@ def build_parser() -> argparse.ArgumentParser:
     rejudge.add_argument("--scenario", action="append")
     rejudge.add_argument("--resume", action="store_true")
     rejudge.set_defaults(handler=command_rejudge)
+
+    export = subparsers.add_parser(
+        "judge-export",
+        help="write blinded judge bundles for answers collected with --skip-judge",
+    )
+    export.add_argument("--input-run", required=True)
+    export.add_argument("--output", required=True)
+    export.add_argument("--seed", type=int, default=1)
+    export.set_defaults(handler=command_judge_export)
+
+    import_ = subparsers.add_parser(
+        "judge-import",
+        help="turn external judgments of the exported bundles into the usual report",
+    )
+    import_.add_argument("--input-run", required=True)
+    import_.add_argument("--judgments", required=True)
+    import_.add_argument("--key", required=True)
+    import_.add_argument("--output", required=True)
+    import_.add_argument("--judge-label", required=True)
+    import_.set_defaults(handler=command_judge_import)
     return parser
 
 

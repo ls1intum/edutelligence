@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from iris.qa.rubric import SHARED_CRITERIA, SHARED_CRITERION_IDS
+
 # pylint: disable=missing-class-docstring
 
 
@@ -49,6 +51,12 @@ class Criterion(BaseModel):
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
     description: str = Field(min_length=16, max_length=300)
+    guidance: str | None = Field(default=None, min_length=16, max_length=1_500)
+
+
+def shared_criteria() -> list[dict[str, str]]:
+    """The rubric criteria of every chat scenario, as plain data for the loader."""
+    return [dict(item) for item in SHARED_CRITERIA]
 
 
 class Scenario(BaseModel):
@@ -68,7 +76,12 @@ class Scenario(BaseModel):
     fixtures: list[str] = Field(default_factory=list)
     event: Literal["build_failed", "progress_stalled"] | None = None
     payload: dict[str, Any]
-    criteria: list[Criterion] = Field(min_length=3, max_length=5)
+    # Chat scenarios are rated on the shared rubric (``iris.qa.rubric``); the loader
+    # fills it in. Other use cases bring their own three to five criteria.
+    criteria: list[Criterion] = Field(default_factory=list, max_length=5)
+    # What the judge may rely on for this situation: the facts, what the student
+    # needs, what to hold back and where a wrong answer is tempting.
+    reference: list[str] = Field(default_factory=list, max_length=8)
     critical_errors: list[str] = Field(default_factory=list, max_length=3)
     token_ceiling: TokenCeiling = Field(default_factory=TokenCeiling)
 
@@ -79,6 +92,13 @@ class Scenario(BaseModel):
         if invalid:
             raise ValueError(f"invalid tags: {invalid}")
         return tags
+
+    @field_validator("reference")
+    @classmethod
+    def validate_reference(cls, values: list[str]) -> list[str]:
+        if any(not 16 <= len(value.strip()) <= 500 for value in values):
+            raise ValueError("reference entries must be 16 to 500 characters")
+        return values
 
     @field_validator("critical_errors")
     @classmethod
@@ -96,6 +116,16 @@ class Scenario(BaseModel):
         criterion_ids = [criterion.id for criterion in self.criteria]
         if len(criterion_ids) != len(set(criterion_ids)):
             raise ValueError("criterion ids must be unique")
+        if self.use_case == UseCase.CHAT:
+            if tuple(criterion_ids) != SHARED_CRITERION_IDS:
+                raise ValueError(
+                    "chat scenarios are rated on the shared rubric criteria: "
+                    + ", ".join(SHARED_CRITERION_IDS)
+                )
+            if not 2 <= len(self.reference) <= 8:
+                raise ValueError("chat scenarios need 2 to 8 reference entries")
+        elif not 3 <= len(criterion_ids) <= 5:
+            raise ValueError("scenarios need 3 to 5 criteria")
         if (
             self.use_case in {UseCase.CHAT, UseCase.TUTOR_SUGGESTION}
             and self.mode is None

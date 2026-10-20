@@ -16,8 +16,9 @@ from iris.qa.evaluate import Rating, evaluation_from_worker
 from iris.qa.loader import load_suite
 from iris.qa.planning import build_cost_plan, trial_reserve
 from iris.qa.report import report_payload
+from iris.qa.rubric import SHARED_CRITERION_IDS
 from iris.qa.run import run_paid_suite, trial_stem
-from iris.qa.schema import Scenario, TokenCeiling
+from iris.qa.schema import Scenario, TokenCeiling, shared_criteria
 from iris.qa.worker import (
     _extract_callback,
     _judge_answer,
@@ -37,10 +38,10 @@ def _scenario() -> Scenario:
             "mode": "COURSE_CHAT",
             "support_level": "moderate",
             "payload": {},
-            "criteria": [
-                {"id": "grounding", "description": "Uses only supplied evidence."},
-                {"id": "pedagogy", "description": "Matches the support level."},
-                {"id": "next_step", "description": "Leaves a useful next action."},
+            "criteria": shared_criteria(),
+            "reference": [
+                "FACT: The exercise list shows one open exercise with a near deadline.",
+                "NEED: The student needs to pick what to work on next.",
             ],
             "critical_errors": ["The answer invents facts not in the evidence."],
         }
@@ -208,7 +209,7 @@ def test_paid_run_records_reservation_before_worker_timeout(tmp_path, monkeypatc
 
     monkeypatch.setattr(
         "iris.qa.run.create_worker_configuration",
-        lambda *_args: SimpleNamespace(environment={}, close=lambda: None),
+        lambda *_args, **_kwargs: SimpleNamespace(environment={}, close=lambda: None),
     )
 
     def timeout(*_args, **_kwargs):
@@ -296,7 +297,7 @@ def test_failed_judge_keeps_full_trial_reservation(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "iris.qa.run.create_worker_configuration",
-        lambda *_args: SimpleNamespace(environment={}, close=lambda: None),
+        lambda *_args, **_kwargs: SimpleNamespace(environment={}, close=lambda: None),
     )
     monkeypatch.setattr("iris.qa.run._git_value", lambda *_args: "test")
 
@@ -463,7 +464,7 @@ def test_report_includes_difficulty_breakdown():
             "judge": {
                 "criteria": [
                     {"id": item, "rating": "achieved", "evidence": "evidence"}
-                    for item in ("grounding", "pedagogy", "next_step")
+                    for item in SHARED_CRITERION_IDS
                 ],
                 "criticalErrors": [
                     {
@@ -501,19 +502,29 @@ def test_score_maps_categorical_judgements_and_keeps_critical_errors_separate():
             "judge": {
                 "criteria": [
                     {
-                        "id": "grounding",
+                        "id": "trustworthy",
                         "rating": "achieved",
                         "evidence": "Evidence used.",
                     },
                     {
-                        "id": "pedagogy",
+                        "id": "moves-forward",
                         "rating": "partly_achieved",
                         "evidence": "Some guidance.",
                     },
                     {
-                        "id": "next_step",
+                        "id": "keeps-thinking",
                         "rating": "not_achieved",
                         "evidence": "No concrete step.",
+                    },
+                    {
+                        "id": "easy-to-follow",
+                        "rating": "achieved",
+                        "evidence": "Short and clear.",
+                    },
+                    {
+                        "id": "encouraging",
+                        "rating": "achieved",
+                        "evidence": "Friendly.",
                     },
                 ],
                 "criticalErrors": [
@@ -526,7 +537,7 @@ def test_score_maps_categorical_judgements_and_keeps_critical_errors_separate():
             },
         },
     )
-    assert evaluation.score == 50
+    assert evaluation.score == 70
     assert evaluation.criteria[0].rating == Rating.ACHIEVED
     assert evaluation.critical_error_count == 0
 
@@ -548,7 +559,7 @@ def test_report_averages_repetitions_before_model_score():
                     "judge": {
                         "criteria": [
                             {"id": item, "rating": rating, "evidence": "evidence"}
-                            for item in ("grounding", "pedagogy", "next_step")
+                            for item in SHARED_CRITERION_IDS
                         ],
                         "criticalErrors": [
                             {

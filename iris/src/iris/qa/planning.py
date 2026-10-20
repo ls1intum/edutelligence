@@ -136,8 +136,17 @@ def load_rate_card(path: Path, *, require_confirmed: bool = True) -> RateCard:
     return RateCard(candidates, judge, auxiliary, confirmed, source)
 
 
+def judge_reserve(rate_card: RateCard) -> Decimal:
+    """Pessimistic price of one judge call."""
+    return rate_card.judge.cost(JUDGE_INPUT_CEILING, JUDGE_OUTPUT_CEILING)
+
+
 def trial_reserve(
-    scenario: Scenario, rate_card: RateCard, candidate_model: str
+    scenario: Scenario,
+    rate_card: RateCard,
+    candidate_model: str,
+    *,
+    include_judge: bool = True,
 ) -> Decimal:
     """Pessimistic price for one real-pipeline execution plus one judge call.
 
@@ -155,10 +164,11 @@ def trial_reserve(
             candidate.output_per_million, rate_card.auxiliary.output_per_million
         ),
     )
-    return pipeline_rate.cost(
+    pipeline = pipeline_rate.cost(
         scenario.token_ceiling.max_input_tokens,
         scenario.token_ceiling.max_output_tokens,
-    ) + rate_card.judge.cost(JUDGE_INPUT_CEILING, JUDGE_OUTPUT_CEILING)
+    )
+    return pipeline + judge_reserve(rate_card) if include_judge else pipeline
 
 
 def build_cost_plan(
@@ -170,6 +180,7 @@ def build_cost_plan(
     hard_limit: Decimal,
     uplift_percent: Decimal = Decimal("10"),
     models: Sequence[str] = CANDIDATE_MODELS,
+    include_judge: bool = True,
 ) -> CostPlan:
     if repetitions < 1:
         raise ValueError("repetitions must be at least one")
@@ -183,8 +194,7 @@ def build_cost_plan(
     pipeline_costs = {
         rate.model: sum(
             (
-                trial_reserve(scenario, rate_card, rate.model)
-                - rate_card.judge.cost(JUDGE_INPUT_CEILING, JUDGE_OUTPUT_CEILING)
+                trial_reserve(scenario, rate_card, rate.model, include_judge=False)
                 for scenario in scenarios
             ),
             Decimal(0),
@@ -193,9 +203,7 @@ def build_cost_plan(
         for rate in selected
     }
     trials = len(scenarios) * repetitions * len(selected)
-    judge_cost = (
-        rate_card.judge.cost(JUDGE_INPUT_CEILING, JUDGE_OUTPUT_CEILING) * trials
-    )
+    judge_cost = judge_reserve(rate_card) * trials if include_judge else Decimal(0)
     subtotal = sum(pipeline_costs.values(), Decimal(0)) + judge_cost
     uplift = subtotal * uplift_percent / Decimal(100)
     return CostPlan(

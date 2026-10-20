@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from iris.qa.evaluate import ScenarioEvaluation
+from iris.qa.rubric import CHAT_MODE_USAGE_WEIGHTS, SHARED_CRITERION_IDS
 
 # pylint: disable=inconsistent-quotes
 
@@ -38,6 +39,46 @@ def _score_summary(values: list[float]) -> dict[str, float]:
     }
 
 
+def _usage_weighted_score(selected: list[ScenarioEvaluation]) -> float | None:
+    """Mean of the chat-mode means, weighted by how much each mode is used."""
+    per_scenario: dict[tuple[str, str], list[float]] = defaultdict(list)
+    for evaluation in selected:
+        if evaluation.use_case == "chat" and evaluation.mode in CHAT_MODE_USAGE_WEIGHTS:
+            per_scenario[(evaluation.mode, evaluation.scenario_id)].append(
+                evaluation.score
+            )
+    by_mode: dict[str, list[float]] = defaultdict(list)
+    for (mode, _), values in per_scenario.items():
+        by_mode[mode].append(statistics.mean(values))
+    if not by_mode:
+        return None
+    total_weight = sum(CHAT_MODE_USAGE_WEIGHTS[mode] for mode in by_mode)
+    return round(
+        sum(
+            CHAT_MODE_USAGE_WEIGHTS[mode] * statistics.mean(values)
+            for mode, values in by_mode.items()
+        )
+        / total_weight,
+        2,
+    )
+
+
+def _criterion_scores(selected: list[ScenarioEvaluation]) -> dict[str, float]:
+    """Mean points per shared rubric criterion over the answered chat trials."""
+    points: dict[str, list[float]] = defaultdict(list)
+    for evaluation in selected:
+        if evaluation.use_case != "chat" or evaluation.execution_error:
+            continue
+        for item in evaluation.criteria:
+            if item.id in SHARED_CRITERION_IDS:
+                points[item.id].append(item.points)
+    return {
+        criterion: round(statistics.mean(points[criterion]), 2)
+        for criterion in SHARED_CRITERION_IDS
+        if points.get(criterion)
+    }
+
+
 def summarize(evaluations: list[ScenarioEvaluation]) -> dict:
     scenario_means = _scenario_means(evaluations)
     models = sorted({evaluation.model for evaluation in evaluations})
@@ -58,8 +99,14 @@ def summarize(evaluations: list[ScenarioEvaluation]) -> dict:
             if score_model == model
         ]
         critical_trials = sum(item.critical_error_count > 0 for item in selected)
+        chat_usable = [item.usable for item in selected if item.usable is not None]
         by_model[model] = {
             **_score_summary(scores),
+            "usableShare": (
+                round(sum(chat_usable) / len(chat_usable), 4) if chat_usable else None
+            ),
+            "usageWeightedScore": _usage_weighted_score(selected),
+            "criterionScores": _criterion_scores(selected),
             "scenarios": len(scores),
             "trials": len(selected),
             "criticalErrorRate": round(
@@ -124,6 +171,7 @@ def report_payload(
         item.pop("response", None)
         item["score"] = round(evaluation.score, 2)
         item["critical_error_count"] = evaluation.critical_error_count
+        item["usable"] = evaluation.usable
         public_evaluations.append(item)
     return {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -179,15 +227,25 @@ def write_markdown_report(
         (
             "IrisScore is the equal-weight average of the scenario criteria. Each "
             "criterion is rated `achieved` (100), `partly achieved` (50), or "
-            "`not achieved` (0). Critical errors and execution errors are reported "
-            "separately; there is no pass/fail threshold."
+            "`not achieved` (0). Chat scenarios are rated on the five shared rubric "
+            "criteria described in `qa/RUBRIC.md`. Critical errors and execution "
+            "errors are reported separately; there is no pass/fail threshold."
+        ),
+        "",
+        (
+            "**Usable answers** is the share of chat answers a student could rely "
+            "on: no critical error, and neither trustworthy nor moves-forward rated "
+            "`not achieved`. **Usage-weighted** applies the usage share of each chat "
+            "mode to the chat-mode means so a rarely used mode cannot move the "
+            "headline."
         ),
         "",
         "## Results",
         "",
-        "| Model | IrisScore | 95% interval | Scenarios | Mean/max repeat span | "
-        "Critical-error rate | Execution errors | Cost |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Model | IrisScore | Usable answers | Usage-weighted | 95% interval | "
+        "Scenarios | Mean/max repeat span | Critical-error rate | Execution errors | "
+        "Cost |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for model, item in summary["models"].items():
         repeat_span = (
@@ -195,8 +253,16 @@ def write_markdown_report(
             if item["meanRepeatSpan"] is not None
             else "—"
         )
+        usable = (
+            f"{item['usableShare']:.1%}" if item["usableShare"] is not None else "—"
+        )
+        weighted = (
+            f"{item['usageWeightedScore']:.2f}"
+            if item["usageWeightedScore"] is not None
+            else "—"
+        )
         lines.append(
-            f"| `{_cell(model)}` | **{item['score']:.2f}** | "
+            f"| `{_cell(model)}` | **{item['score']:.2f}** | {usable} | {weighted} | "
             f"{item['ci95Low']:.2f}–{item['ci95High']:.2f} | {item['scenarios']} | "
             f"{repeat_span} | "
             f"{item['criticalErrorRate']:.1%} | {item['executionErrors']} | "
@@ -215,6 +281,28 @@ def write_markdown_report(
             ),
         ]
     )
+    criterion_rows = [
+        (model, item["criterionScores"])
+        for model, item in summary["models"].items()
+        if item["criterionScores"]
+    ]
+    if criterion_rows:
+        lines.extend(
+            [
+                "",
+                "## By rubric criterion (chat scenarios, mean points)",
+                "",
+                "| Model | "
+                + " | ".join(f"`{c}`" for c in SHARED_CRITERION_IDS)
+                + " |",
+                "| --- | " + " | ".join("---:" for _ in SHARED_CRITERION_IDS) + " |",
+            ]
+        )
+        for model, scores in criterion_rows:
+            cells = [
+                f"{scores[c]:.1f}" if c in scores else "—" for c in SHARED_CRITERION_IDS
+            ]
+            lines.append(f"| `{_cell(model)}` | " + " | ".join(cells) + " |")
     for label, rows in payload["breakdowns"].items():
         lines.extend(
             [
