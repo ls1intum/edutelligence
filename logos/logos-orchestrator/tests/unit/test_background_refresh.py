@@ -169,3 +169,32 @@ def test_each_overlapping_load_replays_only_the_changes_after_its_start():
     assert value.refresh() is True
     # The second load started after both changes and replays neither.
     assert value.peek() == ("second",)
+
+
+def test_an_older_load_finishing_last_is_dropped_without_an_update_between():
+    """Two loads start with no change between them; the newer one finishes
+    first. The older one, finishing last, must not install its read."""
+    older_reading = threading.Event()
+    release_older = threading.Event()
+    reads = iter(["older", "newer"])
+
+    def loader():
+        which = next(reads)
+        if which == "older":
+            older_reading.set()
+            release_older.wait(5)
+            return "older read"
+        return "newer read"
+
+    value = BackgroundRefreshedValue(loader, initial="initial", refresh_after_s=60)
+    older = threading.Thread(target=value.refresh)
+    older.start()
+    assert older_reading.wait(5)
+
+    assert value.refresh() is True
+    assert value.peek() == "newer read"
+
+    release_older.set()
+    older.join(5)
+
+    assert value.peek() == "newer read"

@@ -70,7 +70,10 @@ class BackgroundRefreshedValue(Generic[T]):
         self._changes: list[tuple[int, Callable[[T], T]]] = []
         self._next_load_id = 0
         self._active_loads: dict[int, int] = {}
-        self._installed_start = -1
+        # The load whose value is installed. Load ids grow with start time, so
+        # a load that started earlier never replaces one that started later,
+        # even when no update happened between their starts.
+        self._installed_load = -1
 
     @property
     def loaded(self) -> bool:
@@ -152,12 +155,12 @@ class BackgroundRefreshedValue(Generic[T]):
             if value is None:
                 # The changes are already in the value that stays in use.
                 self._due_at = now + self._retry_after_s
-            elif started_at_seq >= self._installed_start:
+            elif load_id > self._installed_load:
                 for seq, change in self._changes:
                     if seq > started_at_seq:
                         value = change(value)
                 self._value = value
-                self._installed_start = started_at_seq
+                self._installed_load = load_id
                 self._loaded = True
                 self._due_at = now + self._refresh_after_s
                 installed = True
