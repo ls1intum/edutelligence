@@ -207,7 +207,7 @@ docker compose --env-file docker.env -f iris/docker/pyris-production.yml down
 | `APPLICATION_YML_PATH`                 | `/config/application.yml` | Container-internal config path (set automatically by compose)      |
 | `LLM_CONFIG_PATH`                      | `/config/llm_config.yml`  | Container-internal config path (set automatically by compose)      |
 
-The following environment variables are used for monitoring (see [Monitoring](./monitoring.md)):
+The following environment variables are used for monitoring (see [Monitoring](./monitoring.md)). Set them in the `env_vars` section of `application.yml`, not in `docker.env`:
 
 | Variable                   | Default       | Description                        |
 | -------------------------- | ------------- | ---------------------------------- |

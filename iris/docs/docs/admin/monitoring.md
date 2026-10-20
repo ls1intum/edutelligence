@@ -39,19 +39,17 @@ Sentry is configured entirely through environment variables. Sentry is off unles
 Set `SENTRY_ENABLE_TRACING=true` in production to get performance insights. The sampling rate automatically adjusts based on the environment.
 :::
 
-### Example Docker Configuration
+### Example Configuration
 
-Add these to your Docker Compose environment or a `.env` file:
+Set these in the `env_vars` section of `application.yml`. Iris sets them as environment variables at startup, before Sentry starts. The Docker Compose files do not pass variables from `docker.env` into the `pyris-app` container, so do not put them there.
 
 ```yaml
-services:
-  pyris-app:
-    environment:
-      SENTRY_DSN: "https://<key>@<sentry-host>/<project-id>"
-      SENTRY_ENVIRONMENT: "production"
-      SENTRY_ENABLE_TRACING: "true"
-      SENTRY_SERVER_NAME: "iris-prod-01"
-      SENTRY_RELEASE: "v2.1.0"
+env_vars:
+  SENTRY_DSN: "https://<key>@<sentry-host>/<project-id>"
+  SENTRY_ENVIRONMENT: "production"
+  SENTRY_ENABLE_TRACING: "true"
+  SENTRY_SERVER_NAME: "iris-prod-01"
+  SENTRY_RELEASE: "v2.1.0"
 ```
 
 ## LangFuse
