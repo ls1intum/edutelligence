@@ -131,6 +131,19 @@ def calibration_keys(
     }
 
 
+def slice_gpu_counts(
+    plans: list[dict[str, Any]], model_names: Iterable[str], devices: list[DeviceInfo]
+) -> dict[str, int]:
+    """GPUs each model may be calibrated and served on; the key leaves it out."""
+    plan_by_model = {p["model"]: p for p in plans if p.get("model")}
+    return {name: len(calibration_devices(plan_by_model.get(name) or {"model": name}, devices)) for name in model_names}
+
+
+def node_slice_gpu_counts(cfg: AppConfig, plans: list[dict[str, Any]], devices: list[DeviceInfo]) -> dict[str, int]:
+    models = list(cfg.logos.configured_models) if cfg.logos else []
+    return slice_gpu_counts(plans, models, devices)
+
+
 def node_calibration_keys(
     cfg: AppConfig, plans: list[dict[str, Any]], devices: list[DeviceInfo]
 ) -> dict[str, dict[str, Any]]:

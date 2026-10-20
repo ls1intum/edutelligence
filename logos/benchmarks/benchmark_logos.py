@@ -5260,16 +5260,60 @@ async def _wait_for_calibration_complete(
             await asyncio.sleep(poll_interval_s)
 
 
+def _sharing_mismatch_message(shared: bool, expect_shared: bool) -> str:
+    return (
+        f"Logos runs with calibration sharing {'on' if shared else 'off'} but --shared-profiles "
+        f"{'on' if expect_shared else 'off'} was given. Set LOGOS_SHARED_PROFILES="
+        f"{1 if expect_shared else 0} on the Logos server and restart it, or drop the option."
+    )
+
+
+def _sharing_unconfirmed_message() -> str:
+    return (
+        "--shared-profiles on was given, but this Logos does not report its sharing setting, "
+        "so the arm cannot be confirmed. Update Logos, or drop the option."
+    )
+
+
+async def _verify_sharing_arm(admin_url: str, logos_key: str, expect_shared: Optional[bool]) -> None:
+    """Refuse the wrong sharing arm before any node is stopped or any profile reset."""
+    if expect_shared is None:
+        return
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        r = await client.post(
+            f"{admin_url}/logosdb/providers/logosnode/calibration-sharing", json={"logos_key": logos_key}
+        )
+    if r.status_code == 404:
+        # A Logos that predates sharing never shares, which is all "off" asks for.
+        if expect_shared:
+            raise RuntimeError(_sharing_unconfirmed_message())
+        print("  [calib] WARNING: this Logos cannot report its sharing setting; the reset response is checked instead.")
+        return
+    if r.status_code != 200:
+        raise RuntimeError(f"Cannot read the calibration sharing setting: HTTP {r.status_code} {r.text[:200]}")
+    shared = bool((r.json() or {}).get("shared_profiles"))
+    if shared != expect_shared:
+        raise RuntimeError(_sharing_mismatch_message(shared, expect_shared))
+
+
+def _expected_shared_profiles(args: argparse.Namespace) -> Optional[bool]:
+    choice = getattr(args, "shared_profiles", None)
+    return None if choice is None else choice == "on"
+
+
 async def _reset_profiles_via_rest(
     admin_url: str,
     logos_key: str,
     provider_id: int,
     models: Optional[list[str]] = None,
+    expect_shared: Optional[bool] = None,
 ) -> list[str]:
     """Make Logos empty a node's profiles (``models=None``: all of them).
 
     A connected worker adopts the empty profiles at once, so the reset does
-    not depend on the worker being stopped.
+    not depend on the worker being stopped. With calibration sharing on, a
+    reset node adopts an identical node's calibration instead of measuring;
+    ``expect_shared`` makes a run for the other arm fail instead.
     """
     async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
         r = await client.post(
@@ -5278,8 +5322,15 @@ async def _reset_profiles_via_rest(
         )
     if r.status_code != 200:
         raise RuntimeError(f"Cannot reset profiles of provider {provider_id}: HTTP {r.status_code} {r.text[:200]}")
-    reset = list((r.json() or {}).get("reset") or [])
-    print(f"  [calib] provider {provider_id}: reset {len(reset)} profile(s)")
+    body = r.json() or {}
+    reset = list(body.get("reset") or [])
+    shared = body.get("shared_profiles")
+    state = "unknown" if shared is None else ("on" if shared else "off")
+    print(f"  [calib] provider {provider_id}: reset {len(reset)} profile(s), calibration sharing {state}")
+    if expect_shared and shared is None:
+        raise RuntimeError(_sharing_unconfirmed_message())
+    if expect_shared is not None and shared is not None and bool(shared) != expect_shared:
+        raise RuntimeError(_sharing_mismatch_message(bool(shared), expect_shared))
     return reset
 
 
@@ -5361,6 +5412,7 @@ async def _reset_and_calibrate_all_nodes(
     use_sudo: bool,
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
+    expect_shared_profiles: Optional[bool] = None,
 ) -> bool:
     """Full from-scratch reset + calibration across all nodes simultaneously.
 
@@ -5387,9 +5439,10 @@ async def _reset_and_calibrate_all_nodes(
         )
         return False
     admin_url = _admin_base_url(logos_url, admin_port)
+    await _verify_sharing_arm(admin_url, logos_key, expect_shared_profiles)
     _stop_workernode_via_ssh(hosts, ssh_user, ssh_key, workernode_dir, use_sudo, relay_host, relay_user)
     for pid in provider_ids:
-        await _reset_profiles_via_rest(admin_url, logos_key, pid)
+        await _reset_profiles_via_rest(admin_url, logos_key, pid, expect_shared=expect_shared_profiles)
     _wipe_calibration_and_weights_via_ssh(
         hosts, ssh_user, ssh_key, workernode_dir, weight_cache_path, use_sudo, relay_host, relay_user
     )
@@ -5433,6 +5486,7 @@ async def _ensure_calibration_complete_all_nodes(
     use_sudo: bool,
     relay_host: Optional[str] = None,
     relay_user: Optional[str] = None,
+    expect_shared_profiles: Optional[bool] = None,
 ) -> bool:
     """Finish calibration for any incomplete model WITHOUT wiping prior work.
 
@@ -5463,6 +5517,7 @@ async def _ensure_calibration_complete_all_nodes(
     """
     models = list(benchmark_models)
     admin_url = _admin_base_url(logos_url, admin_port)
+    await _verify_sharing_arm(admin_url, logos_key, expect_shared_profiles)
 
     print("\n[Ensure-Calibrate] Checking calibration status on all providers ...")
     pending_by_provider: dict[int, list[str]] = {}
@@ -5512,7 +5567,7 @@ async def _ensure_calibration_complete_all_nodes(
     # otherwise skip a base_residency-only profile as already calibrated).
     for pid, pending in pending_by_provider.items():
         if pending:
-            await _reset_profiles_via_rest(admin_url, logos_key, pid, pending)
+            await _reset_profiles_via_rest(admin_url, logos_key, pid, pending, expect_shared=expect_shared_profiles)
 
     # Calibration needs sleep enabled to produce a complete profile.
     _set_logos_sleep_mode_via_ssh(
@@ -5864,6 +5919,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     use_sudo,
                     relay_host,
                     relay_user,
+                    expect_shared_profiles=_expected_shared_profiles(args),
                 ):
                     print(
                         "  WARNING: calibration did not fully complete — continuing anyway.",
@@ -5891,6 +5947,7 @@ async def _async_run_all(args: argparse.Namespace) -> None:
                     use_sudo,
                     relay_host,
                     relay_user,
+                    expect_shared_profiles=_expected_shared_profiles(args),
                 ):
                     print(
                         "  WARNING: calibration did not fully complete — continuing anyway.",
@@ -6659,6 +6716,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "benchmark model is calibrated before running. Re-downloads all weights "
         "— expect this to add hours. Use when stale calibration is mis-sizing "
         "lanes (e.g. KV cache starved to the floor).",
+    )
+    svc_grp.add_argument(
+        "--shared-profiles",
+        choices=("on", "off"),
+        default=None,
+        help="Calibration-sharing arm of this run. With sharing on, a node whose "
+        "profiles were reset adopts an identical node's calibration instead of "
+        "measuring; the run aborts when Logos (LOGOS_SHARED_PROFILES) is set "
+        "the other way. Unset: no check.",
     )
     svc_grp.add_argument(
         "--calibration-timeout",

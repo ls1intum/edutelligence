@@ -167,6 +167,8 @@ services:
       # request, so the default keeps lanes warm through ordinary pauses.
       # Locked lanes (statistics page) never sleep, whatever this value is.
       LOGOS_IDLE_SLEEP_L1_S: "${LOGOS_IDLE_SLEEP_L1_S:-1800}"
+      LOGOS_SHARED_PROFILES: "${LOGOS_SHARED_PROFILES:-1}"
+      LOGOS_SHARED_PROFILE_MAX_AGE_DAYS: "${LOGOS_SHARED_PROFILE_MAX_AGE_DAYS:-30}"
       ECCS_DECISION_LOG: "${ECCS_DECISION_LOG:-/tmp/eccs_decisions.jsonl}"
       # Kill switch for prefix-cache-aware placement (see
       # logos-orchestrator/docs/ettft-scheduling.md §11).
