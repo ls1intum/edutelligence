@@ -62,4 +62,4 @@ For more on the pedagogical philosophy, see [Pedagogical Approach](./pedagogical
 - [Custom Instructions](./custom-instructions) — tailor Iris's behavior to your course
 - [Variants](./variants) — choose between different model configurations
 - [Rate Limits](./rate-limits) — manage how many messages students can send
-- [Lecture Ingestion](./lecture-ingestion) — feed your lecture materials into Iris
+- [Lecture Ingestion](./lecture-ingestion): how Iris processes your lecture materials

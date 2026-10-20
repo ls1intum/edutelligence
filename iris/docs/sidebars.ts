@@ -65,7 +65,13 @@ const sidebars: SidebarsConfig = {
     { type: "doc", id: "developer/viewing-context", label: "Viewing Context" },
     { type: "doc", id: "developer/client-commands", label: "Client Commands" },
     { type: "doc", id: "developer/rag-pipeline", label: "RAG Pipeline" },
+    { type: "doc", id: "developer/global-search", label: "Global Search" },
     { type: "doc", id: "developer/ingestion-jobs", label: "Ingestion Jobs" },
+    {
+      type: "doc",
+      id: "developer/ingestion-reliability",
+      label: "Ingestion Reliability",
+    },
     { type: "doc", id: "developer/citations", label: "Citations" },
     { type: "doc", id: "developer/domain-models", label: "Domain Models" },
     { type: "doc", id: "developer/configuration", label: "Configuration" },

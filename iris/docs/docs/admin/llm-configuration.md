@@ -42,15 +42,16 @@ The file is a YAML list of model definitions. Each entry defines a single model:
 
 Iris supports the following model types, each connecting to a different provider:
 
-| Type                   | Provider        | Purpose                                        |
-| ---------------------- | --------------- | ---------------------------------------------- |
-| `openai_chat`          | OpenAI API      | Chat completion models                         |
-| `azure_chat`           | Azure OpenAI    | Chat completion models via Azure               |
-| `ollama`               | Ollama (local)  | Locally hosted models                          |
-| `openai_embedding`     | OpenAI API      | Text embedding models                          |
-| `azure_embedding`      | Azure OpenAI    | Text embedding models via Azure                |
-| `cohere_azure`         | Cohere on Azure | Reranking models                               |
-| `passthrough_reranker` | Local           | Preserve vector-search order without reranking |
+| Type                   | Provider                                      | Purpose                                        |
+| ---------------------- | --------------------------------------------- | ---------------------------------------------- |
+| `openai_chat`          | OpenAI API                                    | Chat completion models                         |
+| `azure_chat`           | Azure OpenAI                                  | Chat completion models via Azure               |
+| `ollama`               | Ollama (local)                                | Locally hosted models                          |
+| `openai_embedding`     | OpenAI API or an OpenAI-compatible gateway    | Text embedding models                          |
+| `azure_embedding`      | Azure OpenAI                                  | Text embedding models via Azure                |
+| `cohere_azure`         | Cohere on Azure                               | Reranking models                               |
+| `vllm_rerank`          | vLLM-served cross-encoder, e.g. through Logos | Reranking models                               |
+| `passthrough_reranker` | Local                                         | Preserve vector-search order without reranking |
 
 ## Common Fields
 
@@ -69,7 +70,8 @@ These fields are shared across all model types:
 
 ### OpenAI Chat (`openai_chat`)
 
-Uses the common fields only. No additional fields required.
+Needs only the common fields. A reasoning model additionally declares the reasoning effort it accepts; see
+[Reasoning Effort](#reasoning-effort).
 
 ```yaml
 - id: "oai-gpt-52"
@@ -82,6 +84,38 @@ Uses the common fields only. No additional fields required.
   cost_per_million_input_token: 3.0
   cost_per_million_output_token: 12.0
 ```
+
+### Reasoning Effort
+
+Reasoning models such as the GPT-5 family trade answer latency for reasoning tokens. How much they reason is set per
+model entry, so one model can appear several times with different efforts, for example a fast `minimal` entry for the
+global search answer and a `medium` entry for the chat. The fields apply to `openai_chat` and `azure_chat`:
+
+| Field                       | Default | Description                                                                                                  |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `supports_reasoning_effort` | `false` | Whether the model accepts the `reasoning_effort` request parameter.                                          |
+| `reasoning_effort`          | none    | The effort sent when a pipeline requests none itself: `none`, `minimal`, `low`, `medium`, `high` or `xhigh`. |
+| `reasoning_effort_values`   | none    | The efforts this model accepts. A requested effort outside the list is clamped to the nearest listed one.    |
+
+```yaml
+- id: "oai-gpt-5-mini-minimal"
+  type: "openai_chat"
+  model: "gpt-5-mini"
+  api_key: "<your-openai-api-key>"
+  supports_temperature: false
+  supports_reasoning_effort: true
+  reasoning_effort: minimal
+  reasoning_effort_values: [minimal, low, medium, high]
+  cost_per_million_input_token: 0.4
+  cost_per_million_output_token: 1.6
+```
+
+A pipeline that requests an effort itself overrides `reasoning_effort`. For a model without
+`supports_reasoning_effort`, the request is sent without the parameter and a log line names the ignored value, so a
+pipeline can request an effort without knowing the model. Configuring `reasoning_effort` or `reasoning_effort_values`
+without `supports_reasoning_effort: true`, an empty `reasoning_effort_values`, or a `reasoning_effort` that is not in
+`reasoning_effort_values` fails at startup. Reasoning models usually reject `temperature`, so they also set
+`supports_temperature: false`.
 
 ### Azure Chat (`azure_chat`)
 
@@ -149,7 +183,12 @@ Ollama also supports embedding models. Use `mxbai-embed-large` or `nomic-embed-t
 
 ### OpenAI Embedding (`openai_embedding`)
 
-For OpenAI text embedding models:
+For OpenAI text embedding models, and for any embedding model behind an OpenAI-compatible endpoint:
+
+| Field                   | Required | Description                                                                                                     |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+| `base_url`              | No       | OpenAI-compatible endpoint, for example a vLLM server or Logos. Without it, the official OpenAI API is used.    |
+| `retrieval_instruction` | No       | Text put in front of a search query before it is embedded; see [Retrieval Instruction](#retrieval-instruction). |
 
 ```yaml
 - id: "oai-embedding-small"
@@ -214,6 +253,32 @@ quality can be lower than with a dedicated reranker.
   cost_per_1k_requests: 0
 ```
 
+### vLLM Reranker (`vllm_rerank`)
+
+For a cross-encoder served by vLLM, such as Qwen3-Reranker, behind a Jina- or Cohere-compatible `/rerank` endpoint:
+
+| Field                     | Required | Description                                                                                                                                                                          |
+| ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `base_url`                | Yes      | Base URL of the server, for example a Logos instance                                                                                                                                 |
+| `rerank_path`             | No       | Path of the rerank endpoint, default `/rerank`                                                                                                                                       |
+| `request_timeout`         | No       | Request timeout in seconds, default `10.0`                                                                                                                                           |
+| `instruction`             | No       | Instruction folded into the query. Leave it empty when the server applies the reranker's chat template, as Logos does for Qwen3-Reranker-8B; a second instruction lowers the scores. |
+| `rerank_floor_calibrated` | No       | Set to `true` only for Qwen3-Reranker-8B, against which `global_search_rerank_floor` is calibrated. Default `false`, which skips the floor.                                          |
+
+```yaml
+- id: "qwen3-reranker"
+  name: "Qwen3 Reranker 8B"
+  description: "Qwen3-Reranker-8B through Logos"
+  type: "vllm_rerank"
+  model: "Qwen/Qwen3-Reranker-8B"
+  base_url: "https://your-logos-instance"
+  api_key: "<your-logos-api-key>"
+  rerank_floor_calibrated: true
+  cost_per_1k_requests: 0
+```
+
+Global search uses the `reranker` role of `global_search_pipeline`, and falls back to that of `lecture_retrieval_pipeline`. See [Global search](../developer/global-search.md#ranking).
+
 ## Cost Tracking
 
 Cost fields are optional but recommended for monitoring usage:
@@ -251,11 +316,11 @@ Iris uses embedding models for Retrieval-Augmented Generation (RAG): ingested le
 
 ### Supported Embedding Types
 
-| `type`             | Provider     | Notes                                              |
-| ------------------ | ------------ | -------------------------------------------------- |
-| `openai_embedding` | OpenAI API   | `text-embedding-3-small`, `text-embedding-3-large` |
-| `azure_embedding`  | Azure OpenAI | Same models, deployed on Azure                     |
-| `ollama`           | Ollama       | e.g., `mxbai-embed-large`, `nomic-embed-text`      |
+| `type`             | Provider                                                    | Notes                                                                                        |
+| ------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `openai_embedding` | OpenAI API, or an OpenAI-compatible gateway with `base_url` | `text-embedding-3-small`, `text-embedding-3-large`, or Qwen3-Embedding through Logos or vLLM |
+| `azure_embedding`  | Azure OpenAI                                                | Same models, deployed on Azure                                                               |
+| `ollama`           | Ollama                                                      | e.g., `mxbai-embed-large`, `nomic-embed-text`                                                |
 
 ### Client-Side (`self_provided`) Vectors
 
@@ -264,12 +329,39 @@ Iris uses client-side embedding: the application calls the embedding model, comp
 - Any embedding model type supported by Iris (`openai_embedding`, `azure_embedding`, `ollama`) can be used without changes to the Weaviate setup.
 - Weaviate collections are created with `Configure.Vectors.self_provided()`, so no Weaviate vectorizer module needs to be installed.
 
+### Retrieval Instruction
+
+Instruction-tuned embedding models such as Qwen3-Embedding expect a search query to be embedded with an instruction in front of it, while the documents are embedded as they are. Set the instruction once on the model entry, and Iris adds it to the query of the global search retrieval only, never to ingested content:
+
+```yaml
+- id: "qwen3-embedding"
+  name: "Qwen3 Embedding 8B"
+  description: "Qwen3-Embedding-8B through Logos"
+  type: "openai_embedding"
+  model: "Qwen/Qwen3-Embedding-8B"
+  base_url: "https://your-logos-instance/v1"
+  api_key: "<your-logos-api-key>"
+  retrieval_instruction: >-
+    Instruct: Given a search query from a university student, retrieve
+    relevant passages from lecture materials that answer or cover the
+    query
+    Query:
+  cost_per_million_input_token: 0
+```
+
+Do not set `retrieval_instruction` on a plain OpenAI or Azure model: it has no instruction protocol and would embed the instruction as part of the query.
+
+:::info TUM-internal deployment
+The TUM deployment embeds all Iris collections with Qwen3-Embedding-8B through Logos, the LLM gateway that Artemis also uses for its global search index. Global search reranks with Qwen3-Reranker-8B through Logos. Other deployments can use any of the embedding and reranker types above.
+:::
+
 ### Embedding Dimensions
 
 Different embedding models produce vectors of different sizes. Iris does **not** validate dimension consistency at startup — misconfigured dimensions will cause silent retrieval failures (zero similarity scores). The dimension is implicit in the model; you do not set it in `llm_config.yml`. Common values:
 
 | Model                    | Dimensions |
 | ------------------------ | ---------- |
+| `Qwen3-Embedding-8B`     | 4096       |
 | `text-embedding-3-small` | 1536       |
 | `text-embedding-3-large` | 3072       |
 | `mxbai-embed-large`      | 1024       |
@@ -287,10 +379,10 @@ In `application.yml`, embedding models are assigned by referencing their `id` fr
 llm_configuration:
   lecture_unit_page_ingestion_pipeline:
     default:
-      embedding: oai-embedding-small # matches id in llm_config.yml
+      embedding: qwen3-embedding # matches id in llm_config.yml
   lecture_retrieval_pipeline:
     default:
-      embedding: oai-embedding-small # must be the same model used for ingestion
+      embedding: qwen3-embedding # must be the same model used for ingestion
 ```
 
 See `application.example.yml` in the repository for the full list of pipelines that require an embedding model.
