@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Ordered lane lock changes.
+
+         The webservice pushes every committed lock and unlock to the capacity
+         planner, which keeps the locks in memory. The pushes are sent
+         asynchronously and can arrive out of order, so each change carries a
+         revision from lane_lock_revision_seq and the planner ignores a change
+         older than the one it already holds for that lane.
+
+         An unlock keeps the row with locked = FALSE instead of deleting it,
+         so its revision survives: a re-read of the table then tells the
+         planner that a lane was unlocked after a lock push it may still
+         receive. Two changes of one lane serialize on its row, and the
+         revision is drawn after the row is written, so revisions follow the
+         commit order per lane. -->
+    <changeSet id="063-lane-lock-revisions" author="logos">
+        <preConditions onFail="MARK_RAN">
+            <not><columnExists tableName="lane_locks" columnName="revision"/></not>
+        </preConditions>
+        <sql>
+            CREATE SEQUENCE IF NOT EXISTS lane_lock_revision_seq;
+            ALTER TABLE lane_locks
+                ADD COLUMN locked BOOLEAN NOT NULL DEFAULT TRUE,
+                ADD COLUMN revision BIGINT NOT NULL DEFAULT nextval('lane_lock_revision_seq');
+        </sql>
+        <rollback>
+            <sql>
+                ALTER TABLE lane_locks DROP COLUMN IF EXISTS revision, DROP COLUMN IF EXISTS locked;
+                DROP SEQUENCE IF EXISTS lane_lock_revision_seq;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

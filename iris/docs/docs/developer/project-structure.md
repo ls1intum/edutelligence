@@ -78,6 +78,7 @@ domain/
 │   └── interaction_suggestion_dto.py      # Follow-up suggestion DTO
 ├── data/                                  # Shared data models
 │   ├── course_dto.py, exercise DTOs, ...
+│   ├── command_marker.py                  # History marker: a command the client carried out
 │   └── metrics/                           # Student performance metrics
 ├── variant/                               # Variant configurations
 │   ├── abstract_variant.py                # AbstractVariant
@@ -86,7 +87,10 @@ domain/
 ├── retrieval/                             # Retrieval result DTOs
 ├── status/                                # Stage/status DTOs
 │   ├── chat_status_update_dto.py          # Chat result, suggestions, memories, activities
-│   └── suggested_context_dto.py           # Context switch requested by the agent
+│   ├── suggested_context_dto.py           # Context switch requested by the agent
+│   ├── command_dto.py                     # Generic client-command envelope (type + parameters)
+│   ├── point_out_command_dto.py           # Point-out command and its parameters
+│   └── command_result_dto.py              # Whether the client carried a command out
 ├── event/                                 # Event DTOs
 └── communication/                         # Communication pipeline DTOs
 ```
@@ -133,6 +137,8 @@ tools/
 ├── chat_tool_providers.py                 # Per-request tool selection for ChatPipeline
 ├── lecture_content_retrieval.py            # RAG retrieval from lecture content
 ├── faq_content_retrieval.py               # RAG retrieval from FAQs
+├── current_view_content.py                # Read the material at the student's current position
+├── combined_view_point_out.py             # Move the student's combined view to a slide or moment
 ├── repository_files.py                    # List student repository files
 ├── file_lookup.py                         # Read specific file contents
 ├── submission_details.py                  # Get submission metadata

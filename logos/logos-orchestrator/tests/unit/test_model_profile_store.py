@@ -13,6 +13,8 @@ from logos.model_profile_store import (
     persistable_profile,
     profile_digest,
     reported_profile,
+    shared_profile_max_age_days,
+    shared_profiles_enabled,
 )
 
 
@@ -148,3 +150,38 @@ def test_volatile_only_changes_wait_for_the_flush_interval():
     assert not cache.unchanged(1, "m", "d2", "material", now=300.0)
     assert not cache.unchanged(1, "m", "d2", "other", now=1.0)
     assert not cache.unchanged(1, "m", "d2", now=1.0)
+
+
+def test_a_write_overtaken_by_an_invalidation_is_not_remembered():
+    cache = ProfileWriteCache()
+    before = cache.generation(1, "m")
+    cache.forget(1, "m")
+    cache.remember(1, "m", "d", generation=before)
+    assert not cache.unchanged(1, "m", "d")
+
+    before = cache.generation(1, "m")
+    cache.forget(1)
+    cache.remember(1, "m", "d", generation=before)
+    assert not cache.unchanged(1, "m", "d")
+
+    cache.remember(1, "m", "d", generation=cache.generation(1, "m"))
+    assert cache.unchanged(1, "m", "d")
+
+
+def test_sharing_is_on_by_default_and_switchable(monkeypatch):
+    monkeypatch.delenv("LOGOS_SHARED_PROFILES", raising=False)
+    assert shared_profiles_enabled() is True
+    for off in ("0", "false", "OFF", "no"):
+        monkeypatch.setenv("LOGOS_SHARED_PROFILES", off)
+        assert shared_profiles_enabled() is False
+    monkeypatch.setenv("LOGOS_SHARED_PROFILES", "1")
+    assert shared_profiles_enabled() is True
+
+
+def test_the_adoption_age_limit_falls_back_to_thirty_days(monkeypatch):
+    monkeypatch.delenv("LOGOS_SHARED_PROFILE_MAX_AGE_DAYS", raising=False)
+    assert shared_profile_max_age_days() == 30
+    monkeypatch.setenv("LOGOS_SHARED_PROFILE_MAX_AGE_DAYS", "7")
+    assert shared_profile_max_age_days() == 7
+    monkeypatch.setenv("LOGOS_SHARED_PROFILE_MAX_AGE_DAYS", "soon")
+    assert shared_profile_max_age_days() == 30

@@ -77,6 +77,20 @@ Both are reasonable, and they do different things:
 
 Changing the context keeps what Iris knows about your work so far. Starting a new chat discards it, which is what you want when a conversation has gone off the rails.
 
+## What You Are Viewing
+
+Alongside the active context, a question asked from a lecture page carries **where you are in the material**: the slide page you have open and, once you have played the video, the moment you are at. In the combined view it is the one unit open there.
+
+This is what lets you ask "what does this mean?" or "explain this part" without naming the page or the timestamp. Iris is always told which page or moment you are at, and looks up what is actually on it when your question calls for that — not for every message, since where you happen to be standing often has nothing to do with what you are asking.
+
+Three things are worth knowing:
+
+- **It describes the moment you hit send.** If you move on to another slide afterwards, your next message carries the new position, not the old one.
+- **Only material Iris has indexed counts.** If Iris has no indexed material at your position, it leaves that position out of the context it uses to answer. It cannot infer what is on your screen from the position alone.
+- **It is not stored with the conversation.** Reopening an old chat shows its messages without the positions they were asked from.
+
+Your position is also what Iris needs in order to [show you a place in the material](./chat#when-iris-shows-you-the-place) rather than describe it.
+
 ## Next Steps
 
 - [The Iris Chat](./chat) — opening Iris, citations, chat history

@@ -396,19 +396,17 @@ class RequestPipeline:
         # 3. Resolve execution context (with authorization check)
         #    For logosnode providers, the lane may be starting (not yet ready to
         #    accept requests). Retry with backoff instead of failing immediately.
-        try:
-            with perf_trace.phase(request_id, "pipeline.context"):
-                ctx_result = await self._resolve_context_with_retry(
-                    scheduling_result=scheduling_result,
-                    classification_result=classification_result,
-                    request_path=request.request_path,
-                    request_id=request_id,
-                    schedule_start_s=schedule_start_s,
-                    deployment_info=self._scheduled_deployment(request, scheduling_result),
-                )
-        except asyncio.CancelledError:
-            self._release_scheduler_safe(scheduling_result, request_id, "cancellation")
-            raise
+        with perf_trace.phase(request_id, "pipeline.context"):
+            ctx_result = await self._resolve_context_with_retry(
+                scheduling_result=scheduling_result,
+                classification_result=classification_result,
+                request_path=request.request_path,
+                request_id=request_id,
+                schedule_start_s=schedule_start_s,
+                deployment_info=self._scheduled_deployment(request, scheduling_result),
+                pipeline_request=request,
+                scheduling_request=scheduling_request,
+            )
         if not ctx_result.success:
             return ctx_result
 
@@ -444,6 +442,10 @@ class RequestPipeline:
     # before its lane was ever ready. 600s gives the drain+load the full window.
     _CONTEXT_RESOLVE_TIMEOUT_S = global_timeout_s(600.0)
     _CONTEXT_RESOLVE_INTERVAL_S = 2.0
+    # A wake takes a few seconds, so the first polls are quick; after that the
+    # loop settles to the interval above.
+    _CONTEXT_RESOLVE_FAST_POLLS = 10
+    _CONTEXT_RESOLVE_FAST_INTERVAL_S = 0.5
 
     @staticmethod
     def _scheduled_deployment(request: "PipelineRequest", scheduling_result) -> Optional[Dict[str, Any]]:
@@ -471,68 +473,152 @@ class RequestPipeline:
         request_path: Optional[str] = None,
         schedule_start_s: Optional[float] = None,
         deployment_info: Optional[Dict[str, Any]] = None,
+        pipeline_request: Optional[PipelineRequest] = None,
+        scheduling_request: Optional[SchedulingRequest] = None,
     ) -> "PipelineResult":
-        """Resolve execution context, retrying for logosnode providers whose lane may still be starting."""
+        """Resolve the execution context, waiting for a logosnode lane that is not ready yet.
+
+        A logosnode reservation does not guarantee a ready lane: the lane can
+        go to sleep between the scheduler's choice and this lookup. While the
+        request waits, two things keep it from waiting in vain:
+
+        * the context resolver registers it with the capacity planner as
+          queued demand, so the planner wakes or loads a lane for it;
+        * every poll checks whether another deployment of the same model can
+          serve now, and moves the request there if so.
+        """
+        try:
+            return await self._resolve_context_loop(
+                scheduling_result,
+                classification_result,
+                request_id,
+                request_path=request_path,
+                schedule_start_s=schedule_start_s,
+                deployment_info=deployment_info,
+                pipeline_request=pipeline_request,
+                scheduling_request=scheduling_request,
+            )
+        finally:
+            self._clear_lane_waiter(request_id)
+
+    async def _resolve_context_loop(
+        self,
+        scheduling_result,
+        classification_result: "_ClassificationResult",
+        request_id: str,
+        request_path: Optional[str] = None,
+        schedule_start_s: Optional[float] = None,
+        deployment_info: Optional[Dict[str, Any]] = None,
+        pipeline_request: Optional[PipelineRequest] = None,
+        scheduling_request: Optional[SchedulingRequest] = None,
+    ) -> "PipelineResult":
         deadline = time.monotonic() + self._CONTEXT_RESOLVE_TIMEOUT_S
         first_attempt = True
+        polls = 0
 
-        while True:
-            try:
-                exec_context = await self._context_resolver.resolve_context(
-                    model_id=scheduling_result.model_id,
-                    provider_id=scheduling_result.provider_id,
-                    request_path=request_path,
-                    request_id=request_id,
-                    deployment_info=deployment_info,
-                )
-            except Exception as exc:  # noqa: BLE001
-                self._release_scheduler_safe(scheduling_result, request_id, "exception")
-                logger.warning(
-                    "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
-                    request_id,
-                    scheduling_result.model_id,
-                    scheduling_result.provider_id,
-                    exc,
-                )
-                return self._context_failure(
-                    scheduling_result,
-                    classification_result,
-                    request_id,
-                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}: {exc}",
-                )
+        try:
+            while True:
+                try:
+                    exec_context = await self._context_resolver.resolve_context(
+                        model_id=scheduling_result.model_id,
+                        provider_id=scheduling_result.provider_id,
+                        request_path=request_path,
+                        request_id=request_id,
+                        deployment_info=deployment_info,
+                        wait_for_lane=False,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._release_scheduler_safe(scheduling_result, request_id, "exception")
+                    logger.warning(
+                        "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
+                        request_id,
+                        scheduling_result.model_id,
+                        scheduling_result.provider_id,
+                        exc,
+                    )
+                    return self._context_failure(
+                        scheduling_result,
+                        classification_result,
+                        request_id,
+                        error=f"Failed to resolve execution context for model {scheduling_result.model_id}: {exc}",
+                    )
 
-            if exec_context is not None:
-                return PipelineResult(
-                    success=True,
-                    model_id=scheduling_result.model_id,
-                    provider_id=scheduling_result.provider_id,
-                    execution_context=exec_context,
-                    classification_stats=classification_result.stats,
-                    scheduling_stats=self._scheduling_stats(scheduling_result, request_id, schedule_start_s),
-                )
+                if exec_context is not None:
+                    return PipelineResult(
+                        success=True,
+                        model_id=scheduling_result.model_id,
+                        provider_id=scheduling_result.provider_id,
+                        execution_context=exec_context,
+                        classification_stats=classification_result.stats,
+                        scheduling_stats=self._scheduling_stats(scheduling_result, request_id, schedule_start_s),
+                    )
 
-            # For cloud providers or after timeout, fail immediately
-            if scheduling_result.provider_type != "logosnode" or time.monotonic() >= deadline:
-                self._release_scheduler_safe(scheduling_result, request_id, "failure")
-                return self._context_failure(
-                    scheduling_result,
-                    classification_result,
-                    request_id,
-                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
-                )
+                # For cloud providers or after timeout, fail immediately
+                if scheduling_result.provider_type != "logosnode" or time.monotonic() >= deadline:
+                    self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                    return self._context_failure(
+                        scheduling_result,
+                        classification_result,
+                        request_id,
+                        error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
+                    )
 
-            if first_attempt:
-                logger.info(
-                    "No lane ready yet for request %s (model=%s, provider=%s); "
-                    "waiting up to %.0fs for lane to become available",
-                    request_id,
-                    scheduling_result.model_id,
-                    scheduling_result.provider_id,
-                    self._CONTEXT_RESOLVE_TIMEOUT_S,
-                )
-                first_attempt = False
+                if first_attempt:
+                    logger.info(
+                        "No lane ready yet for request %s (model=%s, provider=%s); "
+                        "waiting up to %.0fs for lane to become available",
+                        request_id,
+                        scheduling_result.model_id,
+                        scheduling_result.provider_id,
+                        self._CONTEXT_RESOLVE_TIMEOUT_S,
+                    )
+                    first_attempt = False
 
-            await asyncio.sleep(self._CONTEXT_RESOLVE_INTERVAL_S)
+                # Never wait for this lane while another deployment of the model
+                # could serve the request now.
+                rerouted = self._try_reroute(scheduling_result, scheduling_request, request_id)
+                if rerouted is not None:
+                    self._clear_lane_waiter(request_id)
+                    self._monitoring.record_scheduled(
+                        request_id=request_id,
+                        model_id=rerouted.model_id,
+                        provider_id=rerouted.provider_id,
+                        priority_when_scheduled=rerouted.priority_when_scheduled,
+                        queue_depth_at_schedule=rerouted.queue_depth_at_schedule,
+                        provider_metrics=rerouted.provider_metrics,
+                    )
+                    scheduling_result = rerouted
+                    if pipeline_request is not None:
+                        deployment_info = self._scheduled_deployment(pipeline_request, scheduling_result)
+                    continue
+
+                polls += 1
+                await asyncio.sleep(
+                    self._CONTEXT_RESOLVE_FAST_INTERVAL_S
+                    if polls <= self._CONTEXT_RESOLVE_FAST_POLLS
+                    else self._CONTEXT_RESOLVE_INTERVAL_S
+                )
+        except asyncio.CancelledError:
+            self._release_scheduler_safe(scheduling_result, request_id, "cancellation")
+            raise
+
+    def _clear_lane_waiter(self, request_id: str) -> None:
+        clear = getattr(self._context_resolver, "clear_lane_waiter", None)
+        if callable(clear):
+            clear(request_id)
+
+    def _try_reroute(self, scheduling_result, scheduling_request: Optional[SchedulingRequest], request_id: str):
+        """Move a waiting request to another deployment of its model that is ready now, if any."""
+        if scheduling_request is None:
+            return None
+        reroute = getattr(self._scheduler, "try_reroute", None)
+        if not callable(reroute):
+            return None
+        try:
+            return reroute(scheduling_request, scheduling_result.model_id, scheduling_result.provider_id)
+        except Exception:  # noqa: BLE001 — a failed reroute leaves the request waiting as before
+            logger.warning("Reroute check failed for request %s", request_id, exc_info=True)
+            return None
 
     def _release_scheduler_safe(self, scheduling_result, request_id: str, reason: str) -> None:
         try:
@@ -757,6 +843,10 @@ class RequestPipeline:
         instant captured after request preparation); omitted it stamps now.
         """
         self._monitoring.record_provider_call(request_id, at=at)
+
+    def record_reasoning_effort(self, request_id: str, effort: Optional[str]) -> None:
+        """Note the reasoning effort the upstream received (see ``effective_reasoning_effort``)."""
+        self._monitoring.record_reasoning_effort(request_id, effort)
 
     def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
         """Stamp the instant the upstream provider's response has fully arrived.

@@ -1126,3 +1126,26 @@ def test_an_unlinked_calibration_reports_the_key_it_was_measured_under():
     registry.apply_calibration_result("org/m", {"base_residency_mb": 15000.0, "residency_source": "calibrated"})
     registry.set_calibration_keys({"org/m": {"plan_hash": "b"}})
     assert registry.get_all_profiles()["org/m"]["calibration_key_hash"] == key_hash({"plan_hash": "a"})
+
+
+def test_a_local_calibration_reports_how_long_it_took():
+    registry = ModelProfileRegistry()
+    registry.apply_calibration_result(
+        "org/m", {"base_residency_mb": 15000.0, "residency_source": "calibrated"}, duration_s=412.46
+    )
+    assert registry.get_all_profiles()["org/m"]["calibration_duration_s"] == 412.5
+
+
+def test_slice_gpu_counts_are_kept_per_model():
+    registry = ModelProfileRegistry()
+    registry.set_slice_gpu_counts({"org/m": 2})
+    assert registry.slice_gpu_counts() == {"org/m": 2}
+
+
+def test_a_local_calibration_awaits_its_snapshot_until_logos_links_it():
+    registry = ModelProfileRegistry()
+    registry.apply_calibration_result("org/m", {"base_residency_mb": 1.0, "residency_source": "calibrated"})
+    registry.replace_from_sync({"org/other": {"base_residency_mb": 2.0, "sync_revision": 1, "calibration_id": 3}})
+    assert registry.awaiting_snapshot_models() == ["org/m"]
+    registry.replace_from_sync({"org/m": {"base_residency_mb": 1.0, "sync_revision": 1, "calibration_id": 4}})
+    assert registry.awaiting_snapshot_models() == []

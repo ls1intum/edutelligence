@@ -8,7 +8,6 @@ on:
       - develop
     paths:
       - "logos/**"
-      - "shared/**"
       - ".github/workflows/logos_lint.yml"
   pull_request:
     branches:
@@ -16,7 +15,6 @@ on:
       - develop
     paths:
       - "logos/**"
-      - "shared/**"
       - ".github/workflows/logos_lint.yml"
 
 concurrency:
@@ -35,9 +33,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-
-      - name: Link shared dependency
-        run: ln -s ../shared logos/shared
 
       - name: Cache pre-commit envs
         uses: actions/cache@v4

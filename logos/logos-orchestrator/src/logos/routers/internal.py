@@ -48,6 +48,7 @@ from logos.dbutils.dbrequest import (
     InternalSleepLaneRequest,
     InternalStopCalibrationRequest,
     InternalWakeLaneRequest,
+    LaneLockChangedRequest,
     RefreshPipelineRequest,
 )
 from logos.dbutils.types import Deployment
@@ -174,6 +175,20 @@ async def internal_model_health(request: Request):
         status_code=200 if local_ok else 503,
         content={"models": [{"name": name, "status": model_status[name]} for name in sorted(model_status)]},
     )
+
+
+@router.post("/internal/lane_lock_changed", tags=["admin"])
+async def internal_lane_lock_changed(data: LaneLockChangedRequest, request: Request):
+    """Apply a committed lane lock change to the planner's in-memory locks.
+
+    The planner serves locks from memory and only re-reads ``lane_locks`` in
+    the background, so this push is what makes a lock take effect at once.
+    """
+    _require_internal_secret(request, disabled_detail="Internal lane lock endpoint disabled")
+    if _main._capacity_planner is None:
+        raise HTTPException(status_code=503, detail="Capacity planner not initialized")
+    _main._capacity_planner.apply_lane_lock(data.provider_id, data.lane_id, data.locked, data.revision)
+    return {"status": "ok"}
 
 
 @router.post("/internal/refresh_pipeline", tags=["admin"])

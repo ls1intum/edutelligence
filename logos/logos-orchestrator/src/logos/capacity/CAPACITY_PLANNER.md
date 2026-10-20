@@ -160,12 +160,44 @@ The background planner never *stops* lanes proactively. It only *sleeps* them. L
 
 | Timer | Action | Condition |
 |-------|--------|-----------|
-| `IDLE_SLEEP_L1 = 300s` | `sleep_l1` | vLLM lane awake, no active requests for 5 minutes |
-| `IDLE_SLEEP_L2 = 600s` | `sleep_l2` | vLLM lane already in L1 sleep for 10 further minutes |
+| `IDLE_SLEEP_L1 = 1800s` | `sleep_l1` | vLLM lane awake, no active requests for 30 minutes (override: `LOGOS_IDLE_SLEEP_L1_S`) |
+| `IDLE_SLEEP_L2 = 86400s` | `sleep_l2` | vLLM lane already in L1 sleep for 24 further hours (effectively off) |
 
 Sleep L2 offloads the model weights from VRAM to CPU RAM (or disk), further reducing GPU residency at the cost of a longer wake time (~10-20s instead of ~2s).
 
+The L1 timer is long on purpose. Demand-driven eviction (section 7) still sleeps an idle lane at once when another model needs its VRAM, so the timer only covers the case without contention. A short timer made every request after a quiet gap pay a wake, and put lanes to sleep while requests were on their way to them.
+
 The idle clock (`_lane_idle_since`) resets whenever a lane receives any request traffic. It also resets on wake, since a freshly-woken lane is counted as active at the moment it wakes.
+
+The idle pass never sleeps a lane when:
+
+- an operator locked it warm (section 6.2);
+- a request waits for a lane of its model on this worker (section 6.1);
+- requests the scheduler already reserved for its model have not reached the worker yet and no other awake lane of the model on the worker can take them (`_model_inflight_without_other_lane`, fed by `LogosNodeSchedulingDataFacade.get_inflight_request_count_by_model_name`).
+
+The last check runs again in the executor, after the lane is marked cold and drained and right before the sleep command: a request reserved in the moment before the cold mark landed aborts the sleep instead of being stranded.
+
+### 6.1 Requests waiting for a lane
+
+A logosnode reservation does not guarantee a ready lane: the lane can go to sleep between the scheduler's choice and the context lookup. Such a request is not in the scheduler queue any more, so on its own the demand pass would not see it, and the wake gate's queued-demand bypass would not apply.
+
+`RequestPipeline._resolve_context_with_retry` therefore polls with `ContextResolver.resolve_context(..., wait_for_lane=False)`. A lookup that finds no lane registers the request with `CapacityPlanner.register_lane_waiter`, which:
+
+- counts the request in `_get_queue_depth_for_model`, so the wake (or load) of a lane for it bypasses the demand floor like any queued request;
+- counts as activity in `_update_idle_tracking`, so the model's lanes are not idle-slept while it waits;
+- wakes the cycle at once.
+
+On every poll the pipeline also calls `ClassificationCorrectingScheduler.try_reroute`: if another deployment of the same model can serve now (a warm lane on another worker, or a cloud deployment), the request moves there instead of waiting. The waiter entry is cleared when the request has a lane, moves, or gives up; entries older than `LANE_WAITER_TTL_SECONDS` are dropped.
+
+### 6.2 Operator lane locks
+
+An operator can lock a lane warm from the statistics page. Locks live in the `lane_locks` table (owned by the webservice). The planner serves them from memory (`BackgroundRefreshedValue`, `logos/background_refresh.py`): the webservice pushes every committed lock or unlock to `POST /internal/lane_lock_changed`, which applies it at once (`apply_lane_lock`), and the table is read through the `lane_lock_reader` only once before the first cycle and then in the background every `LANE_LOCK_REFRESH_S` (300 s) to catch a lost push. No lock check waits for the database. A failed read keeps the previous set and is retried after `LANE_LOCK_RETRY_S` (10 s); a push that lands while a read runs is replayed onto what that read returns. Every change carries a per-lane `revision` (`lane_lock_revision_seq`; an unlock keeps its row with `locked = FALSE` so its revision survives), and both pushes and reads only replace a lane's state with a newer revision, because the asynchronous pushes can arrive out of order. A locked lane:
+
+- is never idle-slept (L1 or L2);
+- is never an eviction, reclaim or headroom-stop victim for another model;
+- is woken when the planner finds it asleep (`_compute_lock_wake_actions`; the wake goes through VRAM validation and never evicts).
+
+`_execute_action_with_confirmation` refuses a planner-initiated `sleep_l1`, `sleep_l2` or `stop` on a locked lane as a last line of defence. Actions an operator asked for (`CapacityPlanAction.operator_initiated`, set by the panel's drain) still run, and the panel's direct sleep and unload buttons are not planner actions at all; a lane slept that way is woken again on the next cycle while the lock stands.
 
 ---
 
@@ -470,8 +502,9 @@ All constants are defined as class variables on `CapacityPlanner` in `capacity_p
 
 | Constant | Value | Meaning |
 |---------|-------|---------|
-| `IDLE_SLEEP_L1` | 300s | Awake idle → sleep L1 |
-| `IDLE_SLEEP_L2` | 600s | Sleep L1 idle → sleep L2 |
+| `IDLE_SLEEP_L1` | 1800s | Awake idle → sleep L1 (override: `LOGOS_IDLE_SLEEP_L1_S`) |
+| `IDLE_SLEEP_L2` | 86400s | Sleep L1 idle → sleep L2 (effectively off) |
+| `LANE_WAITER_TTL_SECONDS` | 900s | A registered lane waiter older than this is dropped |
 | `DEMAND_WAKE_FLOOR` | 0.5 | Minimum eff demand to wake when VRAM is free |
 | `DEMAND_LOAD_FLOOR` | 1.0 | Minimum eff demand to cold load when VRAM is free |
 | `WAKE_COMPETITIVE_RATIO` | 1.2 | Wake eviction: target must beat victims by 20% |

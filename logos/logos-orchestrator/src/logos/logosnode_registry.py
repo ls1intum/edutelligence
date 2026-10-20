@@ -270,6 +270,18 @@ CALIBRATION_SESSION_STARTED_EVENT = "calibration_session_started"
 # calibrating the moment it dispatches this, rather than waiting for the
 # worker's started event — see send_command for why.
 START_CALIBRATION_SESSION_ACTION = "start_calibration_session"
+CALIBRATION_MODEL_STARTED_EVENTS = frozenset({"calibration_model_selected", "calibration_model_started"})
+CALIBRATION_MODEL_COMPLETED_EVENT = "calibration_model_completed"
+# How long a finished model stays protected from adoption while its result
+# waits to be snapshotted; far above the worker's status interval.
+PENDING_SNAPSHOT_SECONDS = 60.0
+CALIBRATION_MODEL_ENDED_EVENTS = frozenset(
+    {
+        "calibration_model_failed",
+        "calibration_model_skipped",
+        "calibration_model_cancelled",
+    }
+)
 TERMINAL_CALIBRATION_SESSION_EVENTS = frozenset({"calibration_session_finished", "calibration_session_cancelled"})
 
 # How long the optimistic mark set when start_calibration_session is dispatched
@@ -360,6 +372,18 @@ class ProviderSession:
     # worker has freed all VRAM for its probes, so its idle lanes and free
     # VRAM are reserved rather than available.
     calibrating: bool = False
+    # The model the running session is calibrating right now, from its live
+    # events; None between models.
+    calibrating_model: str | None = None
+    # Models whose calibration finished but is not snapshotted yet, with the
+    # monotonic time the protection lapses. Adopting a shared snapshot now
+    # would outdate the result in flight.
+    pending_snapshots: dict[str, float] = field(default_factory=dict)
+    # Models the worker has reserved for calibration; its events reach us up to
+    # a second late, so a reservation is what bars adoption. Each is lifted by
+    # the events naming that model alone: a late event of an earlier model
+    # says nothing about this one.
+    reserved_models: set[str] = field(default_factory=set)
     # Set when start_calibration_session is dispatched: until it passes, a
     # status reporting no session is treated as a snapshot that predates the
     # command rather than as proof the session ended. See
@@ -768,6 +792,8 @@ class LogosNodeRuntimeRegistry:
         configured_models: list[str] | None = None,
         calibrating: bool | None = None,
         actions: list[str] | None = None,
+        calibrating_model: str | None = None,
+        pending_snapshots: list[str] | None = None,
     ) -> None:
         session = await self._get_session(provider_id)
         if session is None:
@@ -792,6 +818,12 @@ class LogosNodeRuntimeRegistry:
         if calibrating is not None:
             session.optimistic_calibration_until = None
             self._set_calibrating(session, bool(calibrating), "hello")
+            # A new session knows nothing of the model its worker is probing;
+            # the replayed start event is never applied.
+            session.calibrating_model = (calibrating_model or None) if calibrating else None
+        for model in pending_snapshots or ():
+            if isinstance(model, str) and model:
+                session.pending_snapshots[model] = time.monotonic() + PENDING_SNAPSHOT_SECONDS
         if capabilities_models is not None:
             new_caps = {m for m in capabilities_models if isinstance(m, str) and m.strip()}
             if new_caps != session.capabilities_models:
@@ -1005,7 +1037,27 @@ class LogosNodeRuntimeRegistry:
             self._set_calibrating(session, True, event_name)
         elif event_name in TERMINAL_CALIBRATION_SESSION_EVENTS:
             session.optimistic_calibration_until = None
+            session.calibrating_model = None
+            session.reserved_models.clear()
             self._set_calibrating(session, False, event_name)
+        elif event_name in CALIBRATION_MODEL_STARTED_EVENTS:
+            model = str(event.get("model") or "")
+            session.calibrating_model = model or None
+            session.reserved_models.discard(model)
+        elif event_name == CALIBRATION_MODEL_COMPLETED_EVENT:
+            model = str(event.get("model") or "")
+            session.reserved_models.discard(model)
+            if model:
+                now = time.monotonic()
+                session.pending_snapshots = {m: t for m, t in session.pending_snapshots.items() if t > now}
+                session.pending_snapshots[model] = now + PENDING_SNAPSHOT_SECONDS
+            if session.calibrating_model in (model, None):
+                session.calibrating_model = None
+        elif event_name in CALIBRATION_MODEL_ENDED_EVENTS:
+            model = str(event.get("model") or "")
+            session.reserved_models.discard(model)
+            if session.calibrating_model in (model, None):
+                session.calibrating_model = None
 
     def _reconcile_calibrating_from_status(self, session: ProviderSession, calibrating: bool) -> None:
         """Settle ``session.calibrating`` from the worker's own status snapshot.
@@ -1057,6 +1109,45 @@ class LogosNodeRuntimeRegistry:
                 session.worker_id or str(session.provider_id),
                 source,
             )
+
+    def calibrating_model(self, provider_id: int) -> str | None:
+        """The model a node is calibrating right now, if it reported one."""
+        session = self._sessions.get(int(provider_id))
+        return session.calibrating_model if session is not None and session.calibrating else None
+
+    def models_in_calibration(self, provider_id: int) -> frozenset[str]:
+        """Models a node is calibrating or has just finished: not to be adopted.
+
+        Read from worker threads; it never mutates.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return frozenset()
+        now = time.monotonic()
+        busy = {model for model, until in list(session.pending_snapshots.items()) if until > now}
+        if session.calibrating and session.calibrating_model:
+            busy.add(session.calibrating_model)
+        busy.update(list(session.reserved_models))
+        return frozenset(busy)
+
+    def reserve_calibration(self, provider_id: int, model_name: str) -> bool:
+        """Bar adoption for a model the worker is about to calibrate.
+
+        Called from a request thread, synchronously: unlike the worker's
+        events it takes effect before the caller continues.
+        """
+        session = self._sessions.get(int(provider_id))
+        if session is None:
+            return False
+        session.reserved_models.add(model_name)
+        return True
+
+    def snapshots_linked(self, provider_id: int, models: list[str]) -> None:
+        """Lift the protection of models whose result is now snapshotted."""
+        session = self._sessions.get(int(provider_id))
+        if session is not None:
+            for model in models:
+                session.pending_snapshots.pop(model, None)
 
     def is_calibrating(self, provider_id: int) -> bool:
         """Return True while the worker is running a calibration session."""

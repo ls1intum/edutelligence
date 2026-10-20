@@ -64,5 +64,9 @@
     <include file="liquibase/changelog/058_central_model_profiles.xml"/>
     <include file="liquibase/changelog/059_notifications.xml"/>
     <include file="liquibase/changelog/060_log_entry_gateway_unfinalized_index.xml"/>
+    <include file="liquibase/changelog/061_lane_locks.xml"/>
+    <include file="liquibase/changelog/062_log_entry_reasoning_effort.xml"/>
+    <include file="liquibase/changelog/063_lane_lock_revisions.xml"/>
+    <include file="liquibase/changelog/064_model_calibration_sharing.xml"/>
 
 </databaseChangeLog>

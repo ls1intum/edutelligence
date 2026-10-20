@@ -77,7 +77,11 @@ from logos.middleware import APIPrefixStripperMiddleware
 from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
-from logos.pipeline.effort_normalization import adapt_payload_after_effort_rejection, parse_effort_rejection
+from logos.pipeline.effort_normalization import (
+    adapt_payload_after_effort_rejection,
+    effective_reasoning_effort,
+    parse_effort_rejection,
+)
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, queue_role_rank
@@ -1195,6 +1199,12 @@ def _prefer_deployments_with_context_room(
     return fitting or deployments
 
 
+def _read_lane_locks() -> Optional[list[tuple[int, str, bool, int]]]:
+    """Operator lane locks for the capacity planner; ``None`` when unreadable."""
+    with DBManager() as db:
+        return db.get_lane_locks()
+
+
 async def start_pipeline():
     """Initialize the new request pipeline components."""
     global _pipeline, _queue_mgr, _logosnode_facade, _azure_facade, _context_resolver
@@ -1253,6 +1263,7 @@ async def start_pipeline():
         enabled=planner_enabled,
         on_state_change=scheduler.reevaluate_model_queues,
         latency_store=_latency_store,
+        lane_lock_reader=_read_lane_locks,
     )
     # Every worker report restores the forwarding gate's budget, so it is
     # also the moment to reconsider requests being held for it.
@@ -1782,6 +1793,7 @@ async def _streaming_response(
 
     # Prepare headers and payload using context resolver
     headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, payload)
+    _record_sent_effort(request_id, prepared_payload)
 
     upstream_stream_headers: dict[str, str] = {}
 
@@ -1999,6 +2011,7 @@ async def _streaming_response(
                                     getattr(context, "model_name", None),
                                 )
                                 stream_payload = adapted
+                                _record_sent_effort(request_id, stream_payload)
                                 effort_retried = True
                                 continue
                             # Nothing to adapt: the client gets the upstream's
@@ -2171,6 +2184,7 @@ async def _streaming_response(
                 getattr(context, "model_name", None),
             )
             prepared_payload = adapted
+            _record_sent_effort(request_id, prepared_payload)
             stream_status = StreamingExecutionStatus()
             chunk_iter = _pipeline.executor.execute_streaming(
                 context.forward_url,
@@ -2519,6 +2533,20 @@ def _persist_terminal_response(
         )
 
 
+def _record_sent_effort(request_id: Optional[str], payload: Any) -> None:
+    """Note the reasoning effort ``payload`` sends upstream on the request's log row.
+
+    Called with the payload as prepared (after Logos remapped the effort onto
+    the model's scale) and again with a resend's payload, which wins.
+    """
+    if not request_id:
+        return
+    try:
+        _pipeline.record_reasoning_effort(request_id, effective_reasoning_effort(payload))
+    except Exception:  # noqa: BLE001 — bookkeeping must never fail the request
+        logger.debug("Could not note the reasoning effort for %s", request_id, exc_info=True)
+
+
 async def _sync_response(
     context,
     payload,
@@ -2550,6 +2578,7 @@ async def _sync_response(
         )
         # Prepare headers and payload using context resolver
         headers, prepared_payload = _context_resolver.prepare_headers_and_payload(context, upstream_payload)
+        _record_sent_effort(request_id, prepared_payload)
         # The provider-call stamp is taken at the actual dispatch below — after
         # preparation, and for LogosNode after session acquisition and the
         # send lock — so the queue/exec split excludes the rate-limit and
@@ -2605,6 +2634,7 @@ async def _sync_response(
                             getattr(context, "model_name", None),
                         )
                         prepared_payload = adapted
+                        _record_sent_effort(request_id, prepared_payload)
                         sync_payload = force_non_streaming_payload(prepared_payload)
                         rpc_result = await _logosnode_registry.send_command(
                             provider_id=provider_id,
@@ -2725,6 +2755,7 @@ async def _sync_response(
                     getattr(context, "model_name", None),
                 )
                 prepared_payload = adapted
+                _record_sent_effort(request_id, prepared_payload)
                 exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
             # The executor captured both instants where they belong: the
             # dispatch after its request preparation (the multipart decode for

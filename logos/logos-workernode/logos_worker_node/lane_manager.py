@@ -275,6 +275,30 @@ class LaneNotServingError(RuntimeError):
     a lane that is being torn down (which surfaces as RemoteProtocolError)."""
 
 
+_NEVER_SERVED: Any = object()
+
+# What vLLM prints when a calibration's memory figures do not hold on a node.
+_MEMORY_TROUBLE_MARKERS = (
+    "out of memory",
+    "no available memory for the cache blocks",
+    "can be stored in kv cache",
+    "free memory on device",
+)
+
+
+# A wedged GPU fails every start, whatever the calibration says.
+_NODE_FAULT_MARKERS = ("busy or unavailable", "nccl warn cuda failure")
+
+
+def _log_shows_memory_trouble(handle: Any) -> bool:
+    tail = str(getattr(handle, "recent_log_tail", "") or "").lower()
+    if any(marker in tail for marker in _NODE_FAULT_MARKERS):
+        return False
+    return bool(getattr(handle, "has_metal_allocation_failure", False)) or any(
+        marker in tail for marker in _MEMORY_TROUBLE_MARKERS
+    )
+
+
 class LaneManager:
     """Manages a pool of vLLM process handles, one per model lane."""
 
@@ -415,6 +439,11 @@ class LaneManager:
             _stuck_dwell = 180.0
         self._stuck_duration_seconds = _stuck_dwell if _stuck_dwell > 0 else 180.0
         self._last_crash_restart_attempt_at: dict[str, float] = {}
+        self._rejected_calibrations: set[tuple[str, int]] = set()
+        # lane -> calibration its latest start was planned with
+        self._lane_calibration_at_spawn: dict[str, int | None] = {}
+        # model -> calibration under which one of its lanes was seen serving
+        self._served_models: dict[str, int | None] = {}
         self._crash_restart_counts: dict[str, int] = {}
         self._static_lane_ids: set[str] = set()
         # GPUs held by a running calibration session. Non-None while
@@ -1409,6 +1438,9 @@ class LaneManager:
                 continue
             lid = status.lane_id
             handle = self._handles.get(lid)
+            # Before the skip branches below: an out-of-memory crash is
+            # exactly what they stop on.
+            self._reject_unproven_shared_calibration(lid, lane_config.model, handle)
 
             # Skip if the handle has fatal CUDA errors (GPU unrecoverable without reboot)
             if handle is not None and getattr(handle, "has_fatal_cuda_errors", False):
@@ -2837,6 +2869,7 @@ class LaneManager:
                 )
             await self._wait_for_vram_headroom(lane_id, lane_config)
             port = self._port_alloc.allocate(lane_id)
+            self._note_lane_spawn(lane_id, lane_config.model)
             handle = _create_handle(
                 lane_id,
                 port,
@@ -2859,6 +2892,7 @@ class LaneManager:
                         f"return_code={status.return_code})"
                     )
             except Exception:
+                self._reject_unproven_shared_calibration(lane_id, lane_config.model, handle)
                 # Keep apply_lanes transactional: failed startup must not leak ports
                 # or dangling handles.
                 self._port_alloc.release(lane_id)
@@ -2949,6 +2983,7 @@ class LaneManager:
                 new_config = await self._auto_place_gpu_devices(lane_id, new_config)
 
                 # Spawn new process on the same port
+                self._note_lane_spawn(lane_id, new_config.model)
                 new_handle = _create_handle(
                     lane_id,
                     port,
@@ -2981,6 +3016,7 @@ class LaneManager:
                     exc,
                 )
                 self._record_event(lane_id, "restart_failed", model=new_config.model, details=str(exc))
+                self._reject_unproven_shared_calibration(lane_id, new_config.model, new_handle)
                 if new_handle is not None:
                     try:
                         await new_handle.destroy()
@@ -3174,6 +3210,41 @@ class LaneManager:
     # ------------------------------------------------------------------
     # Event log
     # ------------------------------------------------------------------
+
+    def _current_calibration_id(self, model: str) -> int | None:
+        profile = self._model_profiles.get_profile(model) if self._model_profiles is not None else None
+        return profile.calibration_id if profile is not None else None
+
+    def _note_lane_spawn(self, lane_id: str, model: str) -> None:
+        self._lane_calibration_at_spawn[lane_id] = self._current_calibration_id(model)
+
+    def _note_lane_served(self, lane_id: str, model: str) -> None:
+        """A lane started with the current calibration is up: it has proven it."""
+        current = self._current_calibration_id(model)
+        if self._lane_calibration_at_spawn.get(lane_id, current) == current:
+            self._served_models[model] = current
+
+    def _reject_unproven_shared_calibration(self, lane_id: str, model: str, handle: Any = None) -> None:
+        """Report a start that failed with a calibration taken from another node.
+
+        Logos then stops handing it out. Only a start planned with that
+        calibration counts, on a node that never saw it serve, and only when
+        the log shows memory trouble: download or port failures say nothing
+        about the calibration.
+        """
+        profile = self._model_profiles.get_profile(model) if self._model_profiles is not None else None
+        if (
+            profile is None
+            or profile.calibration_origin != "shared"
+            or profile.calibration_id is None
+            or self._lane_calibration_at_spawn.get(lane_id) != profile.calibration_id
+            or self._served_models.get(model, _NEVER_SERVED) == profile.calibration_id
+            or (model, profile.calibration_id) in self._rejected_calibrations
+            or not _log_shows_memory_trouble(handle)
+        ):
+            return
+        self._rejected_calibrations.add((model, profile.calibration_id))
+        self._record_event(lane_id, "calibration_rejected", model=model, details=str(profile.calibration_id))
 
     def _record_event(
         self,
@@ -3573,6 +3644,8 @@ class LaneManager:
         model = status.model
         if not model:
             return
+        if status.runtime_state in ("loaded", "running"):
+            self._note_lane_served(status.lane_id, model)
         vram = float(status.effective_vram_mb or 0.0)
         if vram <= 0:
             return

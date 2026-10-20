@@ -2720,6 +2720,10 @@ class VllmProcessHandle:
         except Exception:
             logger.debug("[%s] vLLM log streaming ended", self.lane_id, exc_info=True)
 
+    @property
+    def recent_log_tail(self) -> str:
+        return self._recent_log_tail()
+
     def _recent_log_tail(self) -> str:
         if not self._recent_logs:
             return ""

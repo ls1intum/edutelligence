@@ -15,6 +15,7 @@ import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import de.tum.cit.aet.logos.logoswebservice.common.RequestTiming;
+import de.tum.cit.aet.logos.logoswebservice.gateway.GatewayRelayCleanup;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -56,6 +57,9 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void configureAsyncSupport(AsyncSupportConfigurer configurer) {
+        // A cloud relay's upstream reader starts before the relay task runs;
+        // this closes it however the async request ends.
+        configurer.registerCallableInterceptors(new GatewayRelayCleanup());
         // StreamingResponseBody (inference gateway) runs on this pool — keep it
         // bounded via spring.task.execution.pool.* in application.properties.
         Executor executor = applicationTaskExecutor.getIfAvailable();

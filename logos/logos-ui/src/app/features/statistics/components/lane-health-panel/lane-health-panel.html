@@ -8,6 +8,9 @@
     @if (sleepWakeError()) {
       <div class="action-error">{{ sleepWakeError() }}</div>
     }
+    @if (lockError()) {
+      <div class="action-error">{{ lockError() }}</div>
+    }
     @if (lanes.length === 0) {
       <div class="lane-empty">No lanes loaded.</div>
     }
@@ -22,6 +25,36 @@
               <span class="lane-id">{{ row.laneId }}</span>
               <span class="state-label" [style.color]="row.stateColor">{{ row.stateLabel }}</span>
               <div class="lane-badges">
+                @if (providerId != null) {
+                  <!-- The lock is a standing instruction to the capacity planner,
+                       not a worker command, so it stays usable while the worker
+                       is offline: the planner applies it once the lane reports. -->
+                  @let locked = isLocked(row.laneId);
+                  <button
+                    type="button"
+                    class="btn-lane-lock"
+                    [class.btn-lane-lock--locked]="locked"
+                    [disabled]="lockingLaneId() !== null"
+                    [attr.aria-pressed]="locked"
+                    [attr.aria-label]="(locked ? 'Unlock lane ' : 'Lock lane warm ') + row.laneId"
+                    [title]="locked
+                      ? 'Locked: this lane stays warm — the capacity planner never puts it to sleep or unloads it. Click to unlock.'
+                      : 'Lock this lane warm: the capacity planner then never puts it to sleep or unloads it.'"
+                    (click)="handleToggleLock(row)"
+                  >
+                    @if (locked) {
+                      <svg class="lock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="5" y="11" width="14" height="10" rx="2" />
+                        <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+                      </svg>
+                    } @else {
+                      <svg class="lock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="5" y="11" width="14" height="10" rx="2" />
+                        <path d="M8 11V7a4 4 0 0 1 7.75-1.4" />
+                      </svg>
+                    }
+                  </button>
+                }
                 @if (canUnload) {
                   <button
                     class="btn-unload"

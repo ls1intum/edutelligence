@@ -31,7 +31,7 @@ from logos_worker_node.metal import MetalMetricsCollector, is_metal_backend
 from logos_worker_node.model_cache import ModelRamCache, _DisabledModelRamCache, create_model_cache
 from logos_worker_node.model_profiles import ModelProfileRegistry
 from logos_worker_node.models import ProcessState, model_can_sleep
-from logos_worker_node.profile_fingerprint import node_calibration_keys
+from logos_worker_node.profile_fingerprint import node_calibration_keys, node_slice_gpu_counts
 from logos_worker_node.runtime import SERVICE_VERSION, _build_host_memory_summary, existing_volume_path
 
 logging.basicConfig(
@@ -211,6 +211,7 @@ async def _load_central_profiles(
     config_path = LogosBridgeClient._resolve_config_path()
     plans = plans_from_config(config_path) if config_path.exists() else []
     model_profiles.set_calibration_keys(node_calibration_keys(cfg, plans, list(snapshot.devices)))
+    model_profiles.set_slice_gpu_counts(node_slice_gpu_counts(cfg, plans, list(snapshot.devices)))
     if not (cfg.logos and cfg.logos.enabled):
         logger.info("Logos bridge disabled — starting without model profiles")
         return
@@ -220,7 +221,9 @@ async def _load_central_profiles(
     delay = 5.0
     while True:
         try:
-            profiles = await logos_bridge.fetch_model_profiles(model_profiles.calibration_key_hashes(), legacy_import)
+            profiles = await logos_bridge.fetch_model_profiles(
+                model_profiles.calibration_key_hashes(), model_profiles.slice_gpu_counts(), legacy_import
+            )
             break
         except Exception as exc:  # noqa: BLE001
             logger.warning(
