@@ -105,6 +105,12 @@ FlashInfer warmup completed in 0.3s (single_prefill=3/3, batch_prefill=1/1, 2 ke
 `+0 new this boot` means every kernel was already on disk and reused.
 A non-zero value indicates either a fresh worker or a new model head shape.
 
+## Updating with the node manager
+On a host with `COMPOSE_PROFILES=node-manager` in `.env`, the `logos-node-manager` service replaces the worker
+container: it pulls the new image, starts the new container, checks that it comes up, and starts the previous version
+again if it does not. Where it runs, nothing else should restart the worker. See
+[../logos-node-manager/README.md](../logos-node-manager/README.md) for the commands and the checks.
+
 ## Local dev
 1. Copy `.env.example` to `.env` and fill in connection credentials.
 2. Edit `config.yml` for capabilities and engine settings.

@@ -7,7 +7,7 @@
 # .env, and a self-built stack points it at wherever those images were pushed.
 services:
   traefik:
-    image: traefik:v3.7.14
+    image: traefik:v3.7.15
     container_name: traefik
     restart: unless-stopped
     command:
@@ -171,6 +171,16 @@ services:
       - "traefik.http.routers.public-rate-gateway.entrypoints=websecure,secure8080"
       - "traefik.http.routers.public-rate-gateway.tls=true"
       - "traefik.http.routers.public-rate-gateway.tls.certresolver=letsencrypt"
+      # ACME takes its domain set from the router's Host matcher, and this
+      # router deliberately has none — the catch-all above is what funnels
+      # every path through the per-IP budget. Without a domain Traefik has
+      # nothing to ask Let's Encrypt for: it never registers an account,
+      # acme.json stays empty, and every request is served the built-in
+      # TRAEFIK DEFAULT CERT. Worse, that is a WARN and Traefik's default
+      # log level is ERROR, so it fails in total silence — add
+      # --log.level=INFO above when diagnosing a resolver that will not
+      # fire. Name the domain explicitly instead.
+      - "traefik.http.routers.public-rate-gateway.tls.domains[0].main=${LOGOS_DOMAIN:-localhost}"
       - "traefik.http.routers.public-rate-gateway.service=logos-rate-gateway-svc"
       - "traefik.http.routers.public-rate-gateway.priority=100"
       - "traefik.http.services.logos-rate-gateway-svc.loadbalancer.server.port=80"
@@ -350,6 +360,13 @@ services:
       DB_PASSWORD: root
       REDIS_HOST: logos-redis
       REDIS_PORT: 6379
+      # Hikari pool per replica. Auth, admission and settlement each need a
+      # connection, so a few slow queries must not be able to take them all.
+      # The pool grows on demand and shrinks back to the idle floor; keep
+      # replicas x maximum plus the orchestrator's pools below
+      # LOGOS_DB_MAX_CONNECTIONS on logos-db.
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "${LOGOS_WEBSERVICE_DB_POOL_SIZE:-100}"
+      SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: "${LOGOS_WEBSERVICE_DB_POOL_MIN_IDLE:-10}"
       LOGOS_ORCHESTRATOR_URL: "http://logos-orchestrator:8080"
       LOGOS_INTERNAL_SECRET: "${LOGOS_INTERNAL_SECRET:-}"
       # Deploy-key PEM encryption. Production must set LOGOS_REPO_CREDENTIALS_KEY.
@@ -479,8 +496,17 @@ services:
     container_name: logos-db
     restart: unless-stopped
     user: postgres
+    # max_connections must cover every client pool at its maximum: each
+    # logos-webservice replica (LOGOS_WEBSERVICE_DB_POOL_SIZE), the
+    # orchestrator (LOGOS_DB_POOL_SIZE + LOGOS_DB_MAX_OVERFLOW per process),
+    # logos-agent, plus headroom for admin sessions and pg_cron. Every
+    # connection costs memory, so do not set it far above that sum.
+    # shared_buffers is the page cache Postgres keeps itself; the default of
+    # 128MB is far below the working set of log_entry.
     command: >
       postgres -c shared_preload_libraries=pg_cron -c cron.database_name=logosdb
+      -c max_connections=${LOGOS_DB_MAX_CONNECTIONS:-200}
+      -c shared_buffers=${LOGOS_DB_SHARED_BUFFERS:-2GB}
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: root

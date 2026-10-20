@@ -7,6 +7,7 @@ from fastapi.params import Query
 from weaviate.collections.classes.filters import Filter
 
 from iris.dependencies import TokenValidator
+from iris.vector_database.instance_filter import artemis_instance_filter
 
 from ...vector_database.database import VectorDatabase
 from ...vector_database.lecture_unit_schema import (
@@ -43,7 +44,7 @@ def get_lecture_unit_ingestion_state(
     decoded_base_url = unquote(base_url)
     result = db.lecture_units.query.fetch_objects(
         filters=(
-            Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(decoded_base_url)
+            artemis_instance_filter(LectureUnitSchema, decoded_base_url)
             & Filter.by_property(LectureUnitSchema.COURSE_ID.value).equal(course_id)
             & Filter.by_property(LectureUnitSchema.LECTURE_ID.value).equal(lecture_id)
             & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(

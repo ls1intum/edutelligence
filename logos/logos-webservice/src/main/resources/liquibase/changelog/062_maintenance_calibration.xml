@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog logicalFilePath="liquibase/changelog/061_maintenance_calibration.xml" xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+ xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+ <changeSet id="061-maintenance-calibration" author="logos">
+  <sql>
+   CREATE TABLE maintenance_calibration (
+     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+     provider_id integer NOT NULL,
+     token text NOT NULL,
+     automatic boolean NOT NULL DEFAULT false,
+     confirmed boolean NOT NULL DEFAULT false,
+     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+   CREATE TABLE maintenance_benchmark (
+     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+     job_id integer NOT NULL,
+     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+  </sql>
+  <rollback><sql>DROP TABLE maintenance_benchmark; DROP TABLE maintenance_calibration;</sql></rollback>
+ </changeSet>
+</databaseChangeLog>

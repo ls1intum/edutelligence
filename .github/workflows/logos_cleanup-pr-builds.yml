@@ -59,7 +59,7 @@ jobs:
 
           # Repositories inside the project (images are ${HARBOR_REGISTRY}/${PROJECT}/<name>).
           # The API path is project-relative, so these carry no "logos/" prefix.
-          REPOS=("logos" "logos-webservice" "logos-ui" "logos-db" "logos-workernode-vllm")
+          REPOS=("logos" "logos-webservice" "logos-ui" "logos-db" "logos-workernode-vllm" "logos-node-manager")
 
           # GET <url>: prints the body on 200, nothing on 404 (repository not
           # created yet), and aborts the run on anything else — a 401/403 must

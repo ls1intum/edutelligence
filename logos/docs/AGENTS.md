@@ -228,6 +228,7 @@ flows use a **concept** name (no role prefix); role-only list pages keep the
 | File | Login as | Route / state | Documented in |
 |---|---|---|---|
 | `logos-admin-statistics.png` | `tobias.wasner` | `/statistics` | `roles/logos-admin.md` |
+| `logos-admin-statistics-requesters.png` | `tobias.wasner` | `/statistics?tab=requests` — **Requesters** list open | `roles/logos-admin.md` |
 | `logos-admin-models.png` | `tobias.wasner` | `/models` | `roles/logos-admin.md` |
 | `logos-admin-nightly-enable.png` | `tobias.wasner` | `/models/<id>/details?tab=performance` — activation dialog | `roles/logos-admin.md#nightly-benchmarks` |
 | `logos-admin-nightly-benchmarks.png` | `tobias.wasner` | `/models/<id>/details?tab=performance` — active schedule, plan and dataset preview | `roles/logos-admin.md#nightly-benchmarks` |

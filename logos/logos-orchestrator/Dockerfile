@@ -15,7 +15,7 @@ RUN apt-get update \
 
 # Install uv – a drop-in pip replacement written in Rust (10-100× faster)
 # Pinned to a specific version to mitigate supply-chain risk (update explicitly)
-COPY --from=ghcr.io/astral-sh/uv:0.13.0 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.1 /uv /usr/local/bin/uv
 
 # Create an isolated virtual-env that we will copy into the runtime image
 RUN uv venv /opt/venv
@@ -98,7 +98,6 @@ RUN if [ -f src/grpclocal/model.proto ]; then \
 
 # Copy other project files
 COPY logos/db/ ./logos/db/
-COPY logos/logos-orchestrator/tests/ ./tests/
 
 EXPOSE 8080 50051
 

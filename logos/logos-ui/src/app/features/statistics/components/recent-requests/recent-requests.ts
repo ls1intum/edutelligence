@@ -166,6 +166,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
   @Input() filterUserId: number | null = null;
   @Input() filterTeamId: number | null = null;
   @Input() filterProviderId: number | null = null;
+  @Input() filterApiKeyId: number | null = null;
   @Input() filterErrorsOnly = false;
   /**
    * The lifecycle bucket the feed is narrowed to (queued/running/error/
@@ -204,6 +205,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
   private readonly _filterUserId = signal<number | null>(null);
   private readonly _filterTeamId = signal<number | null>(null);
   private readonly _filterProviderId = signal<number | null>(null);
+  private readonly _filterApiKeyId = signal<number | null>(null);
   private readonly _filterErrorsOnly = signal(false);
   private readonly _filterModelIds = signal<string[]>([]);
   private readonly _filterStatus = signal<string | null>(null);
@@ -214,6 +216,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
       this._filterUserId() !== null ||
       this._filterTeamId() !== null ||
       this._filterProviderId() !== null ||
+      this._filterApiKeyId() !== null ||
       this._filterErrorsOnly() ||
       this._filterModelIds().length > 0,
   );
@@ -321,6 +324,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
     if (changes['filterUserId']) this._filterUserId.set(this.filterUserId);
     if (changes['filterTeamId']) this._filterTeamId.set(this.filterTeamId);
     if (changes['filterProviderId']) this._filterProviderId.set(this.filterProviderId);
+    if (changes['filterApiKeyId']) this._filterApiKeyId.set(this.filterApiKeyId);
     if (changes['filterErrorsOnly']) this._filterErrorsOnly.set(this.filterErrorsOnly);
     if (changes['filterModelIds']) this._filterModelIds.set(this.filterModelIds);
     if (changes['filterStatus']) this._filterStatus.set(this.filterStatus);
@@ -331,6 +335,7 @@ export class RecentRequests implements OnChanges, OnDestroy {
       (changes['filterUserId'] && !changes['filterUserId'].firstChange) ||
       (changes['filterTeamId'] && !changes['filterTeamId'].firstChange) ||
       (changes['filterProviderId'] && !changes['filterProviderId'].firstChange) ||
+      (changes['filterApiKeyId'] && !changes['filterApiKeyId'].firstChange) ||
       (changes['filterErrorsOnly'] && !changes['filterErrorsOnly'].firstChange) ||
       (changes['filterStatus'] && !changes['filterStatus'].firstChange) ||
       (changes['filterModelIds'] && !changes['filterModelIds'].firstChange);
@@ -421,7 +426,8 @@ export class RecentRequests implements OnChanges, OnDestroy {
         range.endIso,
         PAGE_SIZE,
         { userId: this._filterUserId(), teamId: this._filterTeamId(),
-          providerId: this._filterProviderId(), errorsOnly: this._filterErrorsOnly(),
+          providerId: this._filterProviderId(), apiKeyId: this._filterApiKeyId(),
+          errorsOnly: this._filterErrorsOnly(),
           status: this._filterStatus(), modelIds: this._filterModelIds().map(Number) },
         cursor,
       );

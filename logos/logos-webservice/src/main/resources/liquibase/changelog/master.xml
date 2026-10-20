@@ -63,7 +63,8 @@
     <include file="liquibase/changelog/057_requested_models.xml"/>
     <include file="liquibase/changelog/058_central_model_profiles.xml"/>
     <include file="liquibase/changelog/059_notifications.xml"/>
+    <include file="liquibase/changelog/060_log_entry_gateway_unfinalized_index.xml"/>
 
-    <include file="liquibase/changelog/060_nightly_benchmarks.xml"/>
-    <include file="liquibase/changelog/061_maintenance_calibration.xml"/>
+    <include file="liquibase/changelog/061_nightly_benchmarks.xml"/>
+    <include file="liquibase/changelog/062_maintenance_calibration.xml"/>
 </databaseChangeLog>

@@ -83,6 +83,9 @@ import { WorkerGpuPanel } from './components/worker-gpu-panel/worker-gpu-panel';
 
 // ── Raw VRAM cap ──────────────────────────────────────────────────────────────
 const RAW_VRAM_SAMPLE_CAP = 720;
+/** Value prefixes of the requester picker, which offers users and application keys. */
+const REQUESTER_USER = 'u:';
+const REQUESTER_KEY = 'k:';
 
 /** One Local Providers glass row — everything the panels for a single worker need. */
 type ProviderGlassRow = {
@@ -214,6 +217,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly feedUsers = signal<FeedFilterOption[]>([]);
   readonly feedTeams = signal<FeedFilterOption[]>([]);
   readonly feedProviders = signal<FeedFilterOption[]>([]);
+  readonly feedApiKeys = signal<FeedFilterOption[]>([]);
   readonly feedModels = signal<FeedFilterOption[]>([]);
 
   // ── Scope ─────────────────────────────────────────────────────────────────
@@ -228,6 +232,7 @@ export class Statistics implements OnInit, OnDestroy {
   readonly filterUserId = signal<number | null>(null);
   readonly filterTeamId = signal<number | null>(null);
   readonly filterProviderId = signal<number | null>(null);
+  readonly filterApiKeyId = signal<number | null>(null);
 
   // Every loadScopeOptions bumps this; a response that resolves for an older
   // value is stale — its range or team moved on while the request was in
@@ -239,21 +244,38 @@ export class Statistics implements OnInit, OnDestroy {
     () =>
       this.filterUserId() !== null ||
       this.filterTeamId() !== null ||
-      this.filterProviderId() !== null,
+      this.filterProviderId() !== null ||
+      this.filterApiKeyId() !== null,
   );
 
   // Both lists carry their request count, so the dropdown says which entries
   // are worth opening instead of being an alphabet of names. Ordered busiest
   // first by the server, which only reads as deliberate once the numbers show.
+  //
+  // A requester is either a person or an application key: the keys a team's
+  // deployments call with (PROD, staging, …) have no person behind them, so
+  // they share this picker with the users instead of taking a row of their
+  // own. Developer keys are not offered — their requests are the owner's.
+  // Values carry the kind, since a user and a key can share an id.
   readonly userFilterOptions = computed<AppSelectOption[]>(() => [
     {
       value: '',
       label: this.filterTeamId() === null ? 'All requesters' : 'Everyone in this team',
     },
-    ...this.feedUsers().map((u) => ({
-      value: String(u.id),
-      label: `${u.label} (${u.requestCount.toLocaleString()})`,
-    })),
+    ...[
+      ...this.feedUsers().map((u) => ({
+        value: `${REQUESTER_USER}${u.id}`,
+        label: `${u.label} (${u.requestCount.toLocaleString()})`,
+        count: u.requestCount,
+      })),
+      ...this.feedApiKeys().map((k) => ({
+        value: `${REQUESTER_KEY}${k.id}`,
+        label: `App key: ${k.label} (${k.requestCount.toLocaleString()})`,
+        count: k.requestCount,
+      })),
+    ]
+      .sort((a, b) => b.count - a.count)
+      .map(({ value, label }) => ({ value, label })),
   ]);
 
   readonly teamFilterOptions = computed<AppSelectOption[]>(() => [
@@ -278,12 +300,15 @@ export class Statistics implements OnInit, OnDestroy {
    * empty picker otherwise reads as a page that failed to load its options.
    */
   readonly noRequestersInScope = computed(
-    () => this.feedUsers().length === 0 && this.feedTeams().length > 0,
+    () =>
+      this.feedUsers().length === 0 && this.feedApiKeys().length === 0 && this.feedTeams().length > 0,
   );
 
   readonly selectedUserValue = computed(() => {
-    const id = this.filterUserId();
-    return id === null ? '' : String(id);
+    const userId = this.filterUserId();
+    if (userId !== null) return `${REQUESTER_USER}${userId}`;
+    const keyId = this.filterApiKeyId();
+    return keyId === null ? '' : `${REQUESTER_KEY}${keyId}`;
   });
 
   readonly selectedTeamValue = computed(() => {
@@ -307,6 +332,10 @@ export class Statistics implements OnInit, OnDestroy {
     if (userId !== null) {
       parts.push(this.feedUsers().find((u) => u.id === userId)?.label ?? `user ${userId}`);
     }
+    const apiKeyId = this.filterApiKeyId();
+    if (apiKeyId !== null) {
+      parts.push(this.feedApiKeys().find((k) => k.id === apiKeyId)?.label ?? `key ${apiKeyId}`);
+    }
     const providerId = this.filterProviderId();
     if (providerId !== null) {
       parts.push(
@@ -321,6 +350,7 @@ export class Statistics implements OnInit, OnDestroy {
       userId: this.filterUserId(),
       teamId: this.filterTeamId(),
       providerId: this.filterProviderId(),
+      apiKeyId: this.filterApiKeyId(),
       // Outcomes are no longer a page-scope control — the feed's state filter
       // covers error/finished buckets. Keep the wire field for the socket.
       errorsOnly: false,
@@ -1020,11 +1050,18 @@ export class Statistics implements OnInit, OnDestroy {
 
   // ── Scope handlers ────────────────────────────────────────────────────────
 
+  /** Pick a requester: a user or an application key, never both at once. */
   setUserFilter(value: string | null): void {
-    const id = value ? Number(value) : null;
-    const next = Number.isFinite(id as number) ? id : null;
-    if (next === this.filterUserId()) return;
-    this.filterUserId.set(next);
+    const parse = (prefix: string): number | null => {
+      if (!value?.startsWith(prefix)) return null;
+      const id = Number(value.slice(prefix.length));
+      return Number.isFinite(id) ? id : null;
+    };
+    const userId = parse(REQUESTER_USER);
+    const keyId = parse(REQUESTER_KEY);
+    if (userId === this.filterUserId() && keyId === this.filterApiKeyId()) return;
+    this.filterUserId.set(userId);
+    this.filterApiKeyId.set(keyId);
     this.applyScope();
     void this.loadScopeOptions();
   }
@@ -1068,6 +1105,7 @@ export class Statistics implements OnInit, OnDestroy {
       this.filterUserId.set(null);
       this.filterTeamId.set(null);
       this.filterProviderId.set(null);
+      this.filterApiKeyId.set(null);
       this.applyScope();
       void this.loadScopeOptions();
     }
@@ -1115,6 +1153,7 @@ export class Statistics implements OnInit, OnDestroy {
         teamId: scope.teamId,
         userId: scope.userId,
         providerId: scope.providerId,
+        apiKeyId: scope.apiKeyId,
         errorsOnly: scope.errorsOnly,
       });
       if (generation !== this.scopeOptionsGeneration) {
@@ -1127,6 +1166,7 @@ export class Statistics implements OnInit, OnDestroy {
       this.feedTeams.set(options.teams ?? []);
       this.feedUsers.set(options.requesters ?? []);
       this.feedProviders.set(options.providers ?? []);
+      this.feedApiKeys.set(options.apiKeys ?? []);
       this.feedModels.set(options.models ?? []);
 
       // The model multi-select keeps ids that vanish from the new option list
@@ -1153,6 +1193,11 @@ export class Statistics implements OnInit, OnDestroy {
       const providerId = this.filterProviderId();
       if (providerId !== null && !this.feedProviders().some((p) => p.id === providerId)) {
         this.filterProviderId.set(null);
+        this.applyScope();
+      }
+      const apiKeyId = this.filterApiKeyId();
+      if (apiKeyId !== null && !this.feedApiKeys().some((k) => k.id === apiKeyId)) {
+        this.filterApiKeyId.set(null);
         this.applyScope();
       }
     } catch {

@@ -154,7 +154,7 @@ Imported profiles are stale until calibration succeeds.
 Automatic calibration runs first during the maintenance window.
 Benchmarks use the remaining time.
 
-Deploy webservice migrations `060_nightly_benchmarks.xml` and `061_maintenance_calibration.xml`, the orchestrator,
+Deploy webservice migrations `061_nightly_benchmarks.xml` and `062_maintenance_calibration.xml`, the orchestrator,
 the web application and the updated worker code. Workers advertise
 `supports_benchmark_restart`; activation rejects workers without this feature.
 Enable only the desired model/worker pairs after deployment. No schedules are

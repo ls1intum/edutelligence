@@ -10,7 +10,7 @@ The application runs calibration first, then opt-in benchmarks if time remains.
 A shared 15-second loop drives both. At most one calibration or benchmark runs
 across the cluster, including manual starts.
 Schedules default to disabled and are stored in PostgreSQL by the webservice's
-`060_nightly_benchmarks.xml` migration. Migration `061_maintenance_calibration.xml`
+`061_nightly_benchmarks.xml` migration. Migration `062_maintenance_calibration.xml`
 adds durable calibration and manual benchmark claims. Worker confirmation is
 required before a calibration claim is released.
 

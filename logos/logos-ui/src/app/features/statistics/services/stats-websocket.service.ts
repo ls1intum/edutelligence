@@ -57,6 +57,7 @@ export interface StatsScope {
   userId: number | null;
   teamId: number | null;
   providerId: number | null;
+  apiKeyId: number | null;
   errorsOnly: boolean;
 }
 
@@ -158,6 +159,7 @@ export class StatsWebsocketService {
           user_id: scope.userId,
           team_id: scope.teamId,
           provider_id: scope.providerId,
+          api_key_id: scope.apiKeyId,
           errors_only: scope.errorsOnly || null,
         })
       );
@@ -371,6 +373,7 @@ export class StatsWebsocketService {
           user_id: current.scope?.userId ?? null,
           team_id: current.scope?.teamId ?? null,
           provider_id: current.scope?.providerId ?? null,
+          api_key_id: current.scope?.apiKeyId ?? null,
           errors_only: current.scope?.errorsOnly || null,
           status: current.feedStatus ?? null,
           model_ids: current.feedModelIds ?? [],

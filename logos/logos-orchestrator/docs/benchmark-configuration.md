@@ -65,7 +65,7 @@ All Spring endpoints below require `logos_admin` and forward to the internal orc
 - `POST /logosdb/model_benchmarks/datasets/metadata`: `{ "dataset": "openai/gsm8k", "subset": "main", "split": "test" }` (subset and split are optional)
 - `POST /logosdb/model_benchmarks/run`: existing target and sample fields plus `dataset`, `subset`, `split`, `text_column`, `profile`, `concurrency`, `seed` and optional `serving_overrides`.
 
-The selected settings are persisted with the job; successful results store the actual GuideLLM scenario and the worker's serving snapshot. The manual configuration API requires no additional migration. Nightly schedules require `060_nightly_benchmarks.xml`.
+The selected settings are persisted with the job; successful results store the actual GuideLLM scenario and the worker's serving snapshot. The manual configuration API requires no additional migration. Nightly schedules require `061_nightly_benchmarks.xml`.
 
 
 ## Benchmark batches and comparison
@@ -102,7 +102,7 @@ by default). Benchmarks use the remaining time; new nightly configurations stop
 at 04:50. Manual starts share the same PostgreSQL admission lock and durable
 claims. At most one calibration or benchmark runs across all providers.
 Conflicting manual starts return HTTP 409 rather than queueing.
-Migration `061_maintenance_calibration.xml` and workers with
+Migration `062_maintenance_calibration.xml` and workers with
 `get_calibration_status` support are required. Calibration completion and
 benchmark cleanup must finish before their claims are released.
 See the [operator guide](../../docs/admin/nightly-benchmarks.md#calibration-priority-and-shared-execution).

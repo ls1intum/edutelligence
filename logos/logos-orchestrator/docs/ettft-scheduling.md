@@ -149,21 +149,7 @@ The normalization by weight span is related to **range normalization** in multi-
 
 > Hwang, C. L., & Yoon, K. (1981). *Multiple Attribute Decision Making: Methods and Applications*. Springer-Verlag.
 
-## 8. Benchmark Evidence
-
-Comprehensive benchmarks comparing LogosWorkerNode (with ECCS) against raw Ollama (without orchestration) on identical hardware (2×16GB GPUs, TP=2) demonstrate the approach's effectiveness.
-
-See [`docs/benchmark-results-analysis.md`](benchmark-results-analysis.md) for full analysis. Key results at 600 requests over 10 minutes:
-
-| Metric | LogosWorkerNode | Ollama | Speedup |
-|--------|----------------|--------|---------|
-| P50 TTFT | 42.4s | 360.4s | **8.5×** |
-| P95 TTFT | 117.8s | 1,237.0s | **10.5×** |
-| Success rate | 100% | 99.3% | — |
-
-The advantage grows super-linearly with load because Ollama's lack of scheduling causes O(n) queue buildup while ECCS maintains bounded latencies through infrastructure-aware model selection and queue-fair capacity management.
-
-## 9. System Architecture
+## 8. System Architecture
 
 ```
 Request → Classification Layer → ECCS Scheduler → Provider
@@ -192,7 +178,7 @@ Request → Classification Layer → ECCS Scheduler → Provider
 
 4. **Queue Manager** (`priority_queue.py`): Per-(model_id, provider_id) priority queues with starvation prevention (priority aging: LOW→NORMAL after 10s, NORMAL→HIGH after 30s).
 
-## 10. Orchestrator-Level Admission Control
+## 9. Orchestrator-Level Admission Control
 
 Scoring decides *where* a request should go; admission decides *whether it should leave the orchestrator at all*. The two are separate on purpose.
 
@@ -224,9 +210,9 @@ What the gate does deliver is bounded exposure and gated decisions: a 60-wide bu
 
 | Signal | Source | Gate |
 |--------|--------|------|
-| `queue_waiting` | vLLM `num_requests_waiting` | The engine is already parking work → hold (`BACKEND_QUEUE_PRESSURE_THRESHOLD`, a constant — see §12) |
+| `queue_waiting` | vLLM `num_requests_waiting` | The engine is already parking work → hold (`BACKEND_QUEUE_PRESSURE_THRESHOLD`, a constant — see §11) |
 | forwarded since the last report | orchestrator-local | Step used up → hold as `awaiting_signal` until the worker reports back |
-| `gpu_cache_usage_percent` | vLLM `gpu_cache_usage_perc` | ≥ 90% → hold: vLLM is about to preempt and recompute, which also evicts the prefix-cache blocks §11 depends on |
+| `gpu_cache_usage_percent` | vLLM `gpu_cache_usage_perc` | ≥ 90% → hold: vLLM is about to preempt and recompute, which also evicts the prefix-cache blocks §10 depends on |
 
 **`num_parallel` is deliberately not used as a ceiling.** It is the concurrency vLLM guarantees *at full context* — the "Maximum concurrency for N tokens per request" line from its startup log, which the lane-health panel shows as `(min. c)`. Real requests use a fraction of their context, so the engine runs far past it: a production lane serves 8 concurrent requests with `num_parallel = 1` at 78% KV. Read as a ceiling, that lane would be throttled eightfold. It is a *lower bound on capacity*, which makes it sound as a step size and wrong as a limit.
 
@@ -270,7 +256,7 @@ Cancelling the relay task is what closes the stream to the lane, and that closed
 
 This also keeps the admission signals honest: a ghost generation inflates `requests_running` and KV usage, so without it the gate above would throttle traffic on load that no longer exists.
 
-## 11. Prefix-Cache-Aware Placement
+## 10. Prefix-Cache-Aware Placement
 
 With the same model deployed on several workers, two warm workers tie on corrected score and the tie-break is random. For a coding agent that is the worst possible placement: every turn re-sends a prompt the *previous* worker already has in its KV cache, and a random landing throws that cache away.
 
@@ -297,7 +283,7 @@ bonus = weight_span × CORRECTION_STRENGTH × PREFIX_AFFINITY_BONUS_FRACTION
 
 At the default `0.25` that is worth roughly 15s of expected wait (penalty saturates at 60s). The stream stays on the familiar worker unless a peer is *meaningfully* faster — the "if cheaply possible" the routing is meant to honour. The bonus applies only to `WARM` candidates, so affinity never wakes a sleeping worker or triggers a cold load just to stay put, and only logosnode placements are recorded: cloud upstreams route internally.
 
-## 12. Configuration
+## 11. Configuration
 
 | Parameter | Default | Location | Effect |
 |-----------|---------|----------|--------|
