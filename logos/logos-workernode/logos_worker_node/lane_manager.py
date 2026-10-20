@@ -3008,7 +3008,12 @@ class LaneManager:
                     port,
                 )
 
-                await new_handle.spawn(new_config)
+                status = await new_handle.spawn(new_config)
+                if status.state != ProcessState.RUNNING:
+                    raise RuntimeError(
+                        f"Replacement process did not enter running state "
+                        f"(state={status.state.value}, return_code={status.return_code})"
+                    )
             except Exception as exc:
                 logger.error(
                     "Restart '%s' failed during preparation or spawn: %s",

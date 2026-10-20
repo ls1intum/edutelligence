@@ -3686,7 +3686,12 @@ async def test_tp_restart_refreshes_released_vram_and_resizes_per_rank_cache(mon
     )
     manager._handles["lane"] = old
     manager._port_alloc._used["lane"] = 15000
-    new = MagicMock(init=AsyncMock(), spawn=AsyncMock(), destroy=AsyncMock(), close=AsyncMock())
+    new = MagicMock(
+        init=AsyncMock(),
+        spawn=AsyncMock(return_value=ProcessStatus(state=ProcessState.RUNNING, pid=12345)),
+        destroy=AsyncMock(),
+        close=AsyncMock(),
+    )
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: new)
     requested = current.model_copy(
         update={
@@ -3720,6 +3725,39 @@ async def test_failed_restart_placement_removes_dead_lane_bookkeeping() -> None:
     assert "lane" not in manager._active_requests
     assert "lane" not in manager._starting_deadlines
     assert not manager.starting_models()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [ProcessState.STOPPED, ProcessState.ERROR])
+async def test_restart_rejects_a_replacement_that_exited_after_readiness(monkeypatch, state) -> None:
+    lane = LaneConfig(model="org/model", vllm=True)
+    old = _StubHandle(lane)
+    manager = _manager_with_handles({"lane": old})
+    manager._port_alloc._used["lane"] = 15000
+    manager._active_requests["lane"] = 0
+    manager._starting_deadlines["lane"] = 123
+    manager._get_status_unlocked = AsyncMock()
+    replacement = MagicMock(
+        init=AsyncMock(),
+        spawn=AsyncMock(return_value=ProcessStatus(state=state, pid=12345, return_code=1)),
+        destroy=AsyncMock(),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: replacement)
+
+    with pytest.raises(RuntimeError, match=f"state={state.value}, return_code=1"):
+        await manager.reconfigure_lane("lane", {}, force_restart=True)
+
+    replacement.destroy.assert_awaited_once()
+    replacement.close.assert_awaited_once()
+    assert "lane" not in manager._handles
+    assert manager._port_alloc.get_port("lane") is None
+    assert "lane" not in manager._active_requests
+    assert "lane" not in manager._starting_deadlines
+    assert not manager.starting_models()
+    events = [event.event for event in manager._event_log]
+    assert "restart_failed" in events
+    assert "restart_ok" not in events
 
 
 class TestValidateCapabilities:

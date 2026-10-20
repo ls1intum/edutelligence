@@ -46,6 +46,20 @@ def test_old_job_cannot_release_new_job_reservation():
     assert lease.owner(1, "m") == 8
 
 
+@pytest.mark.parametrize("other_deployment", [(2, "m"), (1, "other")])
+def test_scoped_completion_preserves_access_for_a_different_deployment(other_deployment):
+    lease = BenchmarkReservations()
+    assert lease.try_admit(1, "m", "production", lambda: True)
+    lease.reserve(1, "m", 7)
+    lease.register_request(1, "m", 7, "benchmark")
+
+    for request_id in ("production", "benchmark"):
+        lease.finish_request(request_id, deployment=other_deployment)
+        assert lease.allows(1, "m", request_id)
+        lease.finish_request(request_id, deployment=(1, "m"))
+        assert not lease.allows(1, "m", request_id)
+
+
 def test_reserved_queue_leaves_production_waiting_for_other_workers():
     queue = PriorityQueueManager()
     queue.enqueue("production", 1, priority=Priority.HIGH, api_key_id=12)
@@ -159,6 +173,79 @@ async def test_admitted_production_survives_reservation_until_completion(action)
     finally:
         benchmark_reservations.finish_request("admitted")
         benchmark_reservations.release(9011)
+
+
+@pytest.mark.parametrize("action", ["infer", "infer_stream"])
+async def test_rerouted_production_keeps_destination_admission_during_benchmark(action):
+    from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+    from logos.pipeline.ettft_estimator import ReadinessTier
+    from logos.pipeline.scheduler_interface import SchedulingRequest
+
+    source, destination, job_id = 9050, 9051, 9052
+    model_id, model, request_id = 1, "rerouted-model", "rerouted-production"
+    queue = PriorityQueueManager()
+    facade = LogosNodeSchedulingDataFacade(queue)
+    for provider_id in (source, destination):
+        provider = MagicMock(provider_id=provider_id)
+        provider._model_id_to_name = {model_id: model}
+        provider.try_reserve_capacity.return_value = True
+        provider.get_model_status.return_value = SimpleNamespace(queue_depth=0, active_requests=0, is_loaded=True)
+        facade._providers[provider_id] = provider
+
+    scheduler = ClassificationCorrectingScheduler.__new__(ClassificationCorrectingScheduler)
+    scheduler._logosnode = facade
+    scheduler._queue_mgr = queue
+    scheduler._check_starvation = MagicMock()
+    scheduler.reevaluate_model_queues = MagicMock()
+    scheduler._weighted_shuffle_tied = lambda scored: scored
+    scheduler._compute_candidate_scores = MagicMock(
+        return_value=[
+            (
+                model_id,
+                destination,
+                "logosnode",
+                1.0,
+                1,
+                SimpleNamespace(
+                    tier=ReadinessTier.WARM,
+                    ettft_ms=0.0,
+                    warmth_state=0,
+                    expected_wait_s=0.0,
+                ),
+            )
+        ]
+    )
+    request = SchedulingRequest(
+        request_id=request_id,
+        payload={"input": "hello"},
+        deployments=[{"model_id": model_id, "provider_id": pid, "type": "logosnode"} for pid in (source, destination)],
+        classified_models=[(model_id, 1.0, 1)],
+    )
+    lane = {"lane_id": "destination-lane", "model": model, "runtime_state": "running"}
+    session = SimpleNamespace(provider_id=destination, capabilities_models=[model], latest_runtime={"lanes": [lane]})
+    registry = LogosNodeRuntimeRegistry()
+    registry._get_active_session = AsyncMock(return_value=session)
+    try:
+        assert facade.try_reserve_capacity(model_id, source, request_id)
+        scheduler._create_result(model_id, source, "logosnode", 1, request_id, was_queued=False)
+        result = scheduler.try_reroute(request, model_id, source)
+        assert result.provider_id == destination
+
+        benchmark_reservations.reserve(destination, model, job_id)
+        assert benchmark_reservations.admitted_requests(destination, model) == {request_id}
+        assert facade.model_inflight_requests(destination, model) == 1
+        assert await registry.select_lane_for_model(destination, model, request_id=request_id) == lane
+        registry._check_benchmark_reservation(session, action, {"lane_id": lane["lane_id"]}, request_id)
+        assert not facade.try_reserve_capacity(model_id, destination, "new-production")
+
+        scheduler.release(model_id, destination, "logosnode", request_id)
+        assert not benchmark_reservations.admitted_requests(destination, model)
+        assert facade.model_inflight_requests(destination, model) == 0
+        with pytest.raises(LogosNodeCommandError, match="reserved"):
+            registry._check_benchmark_reservation(session, action, {"lane_id": lane["lane_id"]}, request_id)
+    finally:
+        benchmark_reservations.finish_request(request_id)
+        benchmark_reservations.release(job_id)
 
 
 def test_failed_capacity_admission_does_not_keep_access():

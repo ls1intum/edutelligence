@@ -74,10 +74,18 @@ class BenchmarkReservations:
                 or self._admitted.get(request_id) == (provider_id, model)
             )
 
-    def finish_request(self, request_id: str) -> None:
+    def finish_request(self, request_id: str, *, deployment: tuple[int, str] | None = None) -> None:
+        """Release request access, optionally only for the completed deployment.
+
+        A reroute admits the destination before releasing the source. Scoped
+        cleanup must preserve access already granted on the destination.
+        """
         with self._lock:
-            self._requests.pop(request_id, None)
-            self._admitted.pop(request_id, None)
+            registered = self._requests.get(request_id)
+            if deployment is None or (registered is not None and registered[:2] == deployment):
+                self._requests.pop(request_id, None)
+            if deployment is None or self._admitted.get(request_id) == deployment:
+                self._admitted.pop(request_id, None)
 
     def release(self, job_id: int) -> None:
         with self._lock:

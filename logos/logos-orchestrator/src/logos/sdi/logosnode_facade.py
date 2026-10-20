@@ -410,7 +410,6 @@ class LogosNodeSchedulingDataFacade:
         reuse_slot: bool = False,
         provider_id: Optional[int] = None,
     ) -> RequestMetrics:
-        benchmark_reservations.finish_request(request_id)
         with self._lock:
             if request_id not in self._request_tracking:
                 raise KeyError(f"Request {request_id} not found in tracking")
@@ -419,6 +418,9 @@ class LogosNodeSchedulingDataFacade:
             provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
             queue_wait_ms = (time.time() - tracking_data["arrival_time"]) * 1000 - duration_ms
             provider = self._get_provider_for_model(model_id, provider_id)
+            model_name = provider._model_id_to_name.get(model_id)
+            if model_name is not None:
+                benchmark_reservations.finish_request(request_id, deployment=(provider.provider_id, model_name))
             provider.decrement_active(
                 model_id, reuse_slot=reuse_slot, request_id=request_id, api_key_id=tracking_data.get("api_key_id")
             )
