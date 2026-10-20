@@ -9067,6 +9067,9 @@ class CapacityPlanner:
                         # reject the escalation on a freshly loaded lane — exactly
                         # the case the safety valve exists to handle.
                         bypass_load_cooldown=True,
+                        # An operator's sleep of a locked lane stays an operator
+                        # action when it escalates, or the lock guard refuses it.
+                        operator_initiated=action.operator_initiated,
                     )
                     # The escalated stop keeps the caller's shared deadline:
                     # it spends the same pot the sleep was spending.

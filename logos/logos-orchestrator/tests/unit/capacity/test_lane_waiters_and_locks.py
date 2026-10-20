@@ -336,6 +336,33 @@ def test_the_executor_still_runs_an_operator_sleep_of_a_locked_lane():
     assert ran == ["sleep_l1"]
 
 
+def test_an_operator_sleep_escalated_to_a_stop_stays_an_operator_action():
+    planner = _planner(_Facade(), lock_reader=lambda: [(PROVIDER, LANE)])
+    planner._refresh_lane_locks()
+    planner._safe_get_profiles = lambda *a: {}
+    planner._safe_get_capacity = lambda *a: None
+    planner._lane_gpu_devices_str = lambda *a: None
+    planner._get_per_gpu_free = lambda *a: {}
+    planner._check_host_ram_headroom_for_sleep = lambda *a, **k: (False, 100.0, 4_000.0)
+    escalated = []
+
+    async def confirm(action, timeout_seconds=60.0, deadline=None):  # noqa: ARG001
+        escalated.append(action)
+        return True
+
+    planner._execute_action_with_confirmation = confirm
+    action = CapacityPlanAction(
+        action="sleep_l1",
+        provider_id=PROVIDER,
+        lane_id=LANE,
+        model_name=MODEL,
+        operator_initiated=True,
+    )
+
+    assert asyncio.run(planner._execute_action_core(action)) is True
+    assert [(a.action, a.operator_initiated) for a in escalated] == [("stop", True)]
+
+
 def test_a_locked_lane_on_one_worker_does_not_suppress_another_workers_lock_wake():
     # The model was already planned this cycle — by the lock wake of a copy on
     # another worker whose wake may still fail VRAM validation. This worker's
