@@ -36,38 +36,88 @@ class GatewayUpstreamPumpTest {
         assertThat(pump.currentChunkAt()).isBefore(relayStarted.minusMillis(300));
     }
 
-    @Test
-    void aRelayThatNeverStarts_releasesTheUpstream() throws Exception {
-        AtomicBoolean closed = new AtomicBoolean();
-        InputStream endless = new InputStream() {
-            @Override
-            public int read() {
-                return 'x';
-            }
+    /** Sends one small event, then stalls in read() until it is closed. */
+    private static final class StallingUpstream extends InputStream {
+        final java.util.concurrent.CountDownLatch closed = new java.util.concurrent.CountDownLatch(1);
+        private boolean sent;
 
-            @Override
-            public int read(byte[] b, int off, int len) throws IOException {
-                if (closed.get()) {
-                    throw new IOException("closed");
-                }
-                java.util.Arrays.fill(b, off, off + len, (byte) 'x');
-                return len;
-            }
-
-            @Override
-            public void close() {
-                closed.set(true);
-            }
-        };
-        GatewayCloudForwarder.UpstreamPump pump = GatewayCloudForwarder.UpstreamPump.start(
-            endless, Instant.now(), Duration.ofMillis(100));
-
-        long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-        while (!closed.get() && System.nanoTime() < deadline) {
-            Thread.sleep(50);
+        @Override
+        public int read() throws IOException {
+            byte[] one = new byte[1];
+            return read(one, 0, 1) == -1 ? -1 : one[0];
         }
 
-        assertThat(closed).isTrue();
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            if (!sent) {
+                sent = true;
+                b[off] = 'x';
+                return 1;
+            }
+            try {
+                closed.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            throw new IOException("closed");
+        }
+
+        @Override
+        public void close() {
+            closed.countDown();
+        }
+    }
+
+    @Test
+    void aRelayThatNeverStarts_releasesAStalledUpstreamAfterTheAttachTimeout() throws Exception {
+        StallingUpstream upstream = new StallingUpstream();
+        GatewayCloudForwarder.UpstreamPump pump = GatewayCloudForwarder.UpstreamPump.start(
+            upstream, Instant.now(), Duration.ofMillis(200));
+
+        assertThat(upstream.closed.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        assertThat(pump.isClosed()).isTrue();
         assertThatThrownBy(() -> pump.transferTo(new ByteArrayOutputStream())).isInstanceOf(IOException.class);
+    }
+
+    @Test
+    void theEndOfTheRequest_releasesTheUpstreamOfARelayThatNeverRan() throws Exception {
+        StallingUpstream upstream = new StallingUpstream();
+        GatewayCloudForwarder.UpstreamPump pump = GatewayCloudForwarder.UpstreamPump.start(
+            upstream, Instant.now(), Duration.ofMinutes(30));
+        org.springframework.mock.web.MockHttpServletRequest servletRequest =
+            new org.springframework.mock.web.MockHttpServletRequest();
+        org.springframework.web.context.request.ServletWebRequest request =
+            new org.springframework.web.context.request.ServletWebRequest(servletRequest);
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(request);
+        try {
+            GatewayRelayCleanup.closeWhenRequestEnds(pump);
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+
+        new GatewayRelayCleanup().afterCompletion(request, () -> null);
+
+        assertThat(upstream.closed.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        assertThat(pump.isClosed()).isTrue();
+    }
+
+    @Test
+    void closingThePump_endsARelayWaitingForTheNextChunk() throws Exception {
+        StallingUpstream upstream = new StallingUpstream();
+        GatewayCloudForwarder.UpstreamPump pump = GatewayCloudForwarder.UpstreamPump.start(
+            upstream, Instant.now(), Duration.ofMinutes(30));
+        java.util.concurrent.CompletableFuture<Void> relay = java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                pump.transferTo(new ByteArrayOutputStream());
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
+        Thread.sleep(200);
+
+        pump.close();
+
+        assertThatThrownBy(() -> relay.get(5, java.util.concurrent.TimeUnit.SECONDS))
+            .hasCauseInstanceOf(java.io.UncheckedIOException.class);
     }
 }

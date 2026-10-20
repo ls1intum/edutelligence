@@ -34,10 +34,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 public class GatewayCloudForwarder {
 
     /**
-     * How long the upstream reader waits for the relay to start taking chunks
-     * once its buffer is full. A relay that was rejected or cancelled before it
-     * ran never starts; the reader then closes the upstream. Matches the
-     * default async request timeout, after which the relay is gone anyway.
+     * How long the upstream reader waits for the relay to start. A relay that
+     * was rejected or cancelled before it ran never starts; the pump then
+     * closes the upstream if {@link GatewayRelayCleanup} has not already.
+     * Matches the default async request timeout, after which the relay is
+     * gone anyway.
      */
     static final Duration RELAY_ATTACH_TIMEOUT = Duration.ofMinutes(30);
 
@@ -167,6 +168,7 @@ public class GatewayCloudForwarder {
         // an executor thread to run the relay shifts the provider's timestamps.
         // It starts here, not in the relay, for the second reason.
         UpstreamPump pump = UpstreamPump.start(upstream.body(), headersAt, RELAY_ATTACH_TIMEOUT);
+        GatewayRelayCleanup.closeWhenRequestEnds(pump);
         String upstreamContentType = upstream.headers().firstValue("content-type").orElse(null);
         StreamingResponseBody stream = outputStream -> {
             IOException streamError = null;
@@ -213,6 +215,12 @@ public class GatewayCloudForwarder {
      * the client is slow, so the stamps follow the upstream. It buffers up to
      * {@link #MAX_CHUNKS} chunks; past that it waits for the client like a
      * direct relay would.
+     *
+     * <p>The reader starts before the relay runs. A relay that never starts
+     * (rejected or cancelled before it ran) must not leave the reader and the
+     * upstream connection behind: {@link GatewayRelayCleanup} closes the pump
+     * when the request ends, and a watchdog closes it when no relay attached
+     * within the attach timeout, whether or not the buffer is full.
      */
     static final class UpstreamPump implements AutoCloseable {
 
@@ -228,28 +236,39 @@ public class GatewayCloudForwarder {
         private final java.util.concurrent.BlockingQueue<Chunk> chunks =
             new java.util.concurrent.ArrayBlockingQueue<>(MAX_CHUNKS);
         private final Thread reader;
-        private final Duration attachTimeout;
+        private final Thread watchdog;
+        private final java.util.concurrent.atomic.AtomicBoolean closed =
+            new java.util.concurrent.atomic.AtomicBoolean();
         private volatile Instant endedAt;
-        private volatile boolean closed;
         private volatile boolean attached;
         private Instant currentChunkAt;
 
         private UpstreamPump(InputStream in, Instant headersAt, Duration attachTimeout) {
             this.in = in;
-            this.attachTimeout = attachTimeout;
             this.currentChunkAt = headersAt;
             this.endedAt = headersAt;
             this.reader = Thread.ofVirtual().name("gateway-upstream-reader").unstarted(this::pump);
+            this.watchdog = Thread.ofVirtual().name("gateway-upstream-watchdog").unstarted(() -> {
+                try {
+                    Thread.sleep(attachTimeout);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (!attached) {
+                    close();
+                }
+            });
         }
 
         /**
          * Starts reading {@code in} at once. If no relay starts taking chunks
-         * within {@code attachTimeout} of the buffer filling up, the reader
-         * closes the upstream and a late relay fails.
+         * within {@code attachTimeout}, the pump closes the upstream and a late
+         * relay fails.
          */
         static UpstreamPump start(InputStream in, Instant headersAt, Duration attachTimeout) {
             UpstreamPump pump = new UpstreamPump(in, headersAt, attachTimeout);
             pump.reader.start();
+            pump.watchdog.start();
             return pump;
         }
 
@@ -262,7 +281,7 @@ public class GatewayCloudForwarder {
                     Instant at = Instant.now();
                     endedAt = at;
                     if (n > 0) {
-                        put(new Chunk(java.util.Arrays.copyOf(buf, n), at, null));
+                        chunks.put(new Chunk(java.util.Arrays.copyOf(buf, n), at, null));
                     }
                 }
                 endedAt = Instant.now();
@@ -272,52 +291,21 @@ public class GatewayCloudForwarder {
             } catch (InterruptedException e) {
                 return;
             }
-            try {
-                put(last);
-            } catch (InterruptedException ignored) {
-                // The relay was closed; nobody takes the end marker any more.
-            }
-        }
-
-        private void put(Chunk chunk) throws InterruptedException {
-            if (closed) {
-                return;
-            }
-            if (attached) {
-                chunks.put(chunk);
-                return;
-            }
-            long deadline = System.nanoTime() + attachTimeout.toNanos();
-            while (!chunks.offer(chunk, 1, java.util.concurrent.TimeUnit.SECONDS)) {
-                if (closed) {
-                    return;
+            if (!closed.get()) {
+                try {
+                    chunks.put(last);
+                } catch (InterruptedException ignored) {
+                    // Closed meanwhile; close() leaves its own end marker.
                 }
-                if (attached) {
-                    chunks.put(chunk);
-                    return;
-                }
-                if (System.nanoTime() - deadline > 0) {
-                    abandon();
-                    throw new InterruptedException("No relay took the upstream body");
-                }
-            }
-        }
-
-        private void abandon() {
-            closed = true;
-            chunks.clear();
-            try {
-                in.close();
-            } catch (IOException ignored) {
-                // Closing only releases the connection; nothing waits on it.
             }
         }
 
         /** Relays every chunk to {@code out}, in order, until the upstream ends. */
         void transferTo(OutputStream out) throws IOException {
             attached = true;
-            if (closed) {
-                throw new IOException("The upstream body was abandoned before the relay started");
+            watchdog.interrupt();
+            if (closed.get()) {
+                throw new IOException("The upstream body was released before the relay started");
             }
             while (true) {
                 Chunk chunk;
@@ -348,12 +336,26 @@ public class GatewayCloudForwarder {
             return endedAt;
         }
 
+        boolean isClosed() {
+            return closed.get();
+        }
+
+        /** Stops the reader and releases the upstream; safe to call more than once. */
         @Override
-        public void close() throws IOException {
-            closed = true;
+        public void close() {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            watchdog.interrupt();
             reader.interrupt();
             chunks.clear();
-            in.close();
+            // A relay blocked on take() ends instead of waiting forever.
+            chunks.offer(new Chunk(null, null, new IOException("The upstream body was released")));
+            try {
+                in.close();
+            } catch (IOException ignored) {
+                // Closing only releases the connection; nothing waits on it.
+            }
         }
     }
 
