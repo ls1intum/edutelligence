@@ -73,6 +73,7 @@ This section is a behavioral rule, not a technical control — the repository ca
 
 - **Do not add dependencies by default.** Before adding one, check that the standard library, the framework already in use, or existing code cannot do the job; keep it only if removing it demonstrably breaks something.
 - **Verify existing dependencies too.** When touching a manifest, test whether each entry is still needed (grep imports, runtime `subprocess` calls, Dockerfiles, workflows, then remove it, re-lock, and run the build and tests). Remove what is unused, including transitive security-floor pins nothing needs anymore.
+- **Pin exact versions.** Never use range operators (`^`, `~`, `>=`, `*`) in a manifest or an `overrides` entry; write the specific version (`==1.2.3` in Python, `1.2.3` in `package.json`). Upgrades are explicit edits that re-lock.
 - **Keep lock files current.** Re-lock to the latest versions that satisfy the manifest (`uv lock --upgrade`, `npm update`) instead of only editing the manifest, and commit the lock file with it.
 - **Watch security alerts.** Check `gh api repos/ls1intum/edutelligence/dependabot/alerts?state=open` for the packages you touch, fix them in the same change (upgrade, or an `overrides` entry when a transitive parent caps the version), and say in the PR which alerts remain because no patched release exists.
 
