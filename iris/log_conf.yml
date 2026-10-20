@@ -36,8 +36,6 @@ loggers:
     level: WARNING
   asyncio:
     level: WARNING
-  apscheduler:
-    level: WARNING
 
 root:
   level: INFO

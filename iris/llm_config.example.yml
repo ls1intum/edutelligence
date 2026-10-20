@@ -273,7 +273,7 @@
   cost_per_million_input_token: 0
   cost_per_million_output_token: 0
 # Logos queues requests by the priority of the calling API key. To let
-# interactive chat overtake background work (Memiris, ingestion), add a copy
+# interactive chat overtake background work (ingestion), add a copy
 # of this entry with another id (e.g. qwen3.8-27b-background) and a second,
 # lower-priority Logos key, and reference that id from the background slots.
 - id: mxbai-embed-large

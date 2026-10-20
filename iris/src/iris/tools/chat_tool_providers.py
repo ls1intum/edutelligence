@@ -294,27 +294,6 @@ def provide_faq_retrieval(state: State) -> Optional[Callable]:
 
 
 # ---------------------------------------------------------------------------
-# Memiris providers
-# ---------------------------------------------------------------------------
-
-
-def provide_memory_search(state: State) -> Optional[Callable]:
-    if not state.allow_memiris_tool:
-        return None
-    return state.memiris_wrapper.create_tool_memory_search(
-        state.accessed_memory_storage
-    )
-
-
-def provide_find_similar_memories(state: State) -> Optional[Callable]:
-    if not state.allow_memiris_tool:
-        return None
-    return state.memiris_wrapper.create_tool_find_similar_memories(
-        state.accessed_memory_storage
-    )
-
-
-# ---------------------------------------------------------------------------
 # Context switching provider
 # ---------------------------------------------------------------------------
 
@@ -392,8 +371,6 @@ CHAT_TOOL_PROVIDERS: list[Callable[[State], Optional[Callable]]] = [
     provide_feedbacks,
     provide_repository_files,
     provide_file_lookup,
-    provide_memory_search,
-    provide_find_similar_memories,
     provide_mcq_generation,
     provide_switch_chat_context,
 ]

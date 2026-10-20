@@ -4,7 +4,7 @@ title: Monitoring
 
 # Monitoring
 
-Iris integrates with **Sentry** for error tracking and **LangFuse** for LLM observability. It also runs background jobs via **APScheduler**.
+Iris integrates with **Sentry** for error tracking and **LangFuse** for LLM observability.
 
 ## Sentry
 
@@ -118,28 +118,6 @@ LangFuse tracing is designed to be non-intrusive:
 - If the LangFuse server is unreachable, pipeline execution continues normally.
 - The `@observe` decorator becomes a no-op pass-through when tracing is disabled, adding zero overhead.
 
-## APScheduler Background Jobs
-
-Iris uses [APScheduler](https://apscheduler.readthedocs.io/) (`BackgroundScheduler`) to run periodic tasks. Currently, one job is registered:
-
-| Job                 | Schedule       | Description                                           |
-| ------------------- | -------------- | ----------------------------------------------------- |
-| `memory_sleep_task` | Daily at 01:00 | Runs the Memiris memory consolidation (sleep) process |
-
-The scheduler starts during application startup and shuts down gracefully when the application stops.
-
-:::tip
-Memiris memory features can be toggled in `application.yml`:
-
-```yaml
-memiris:
-  enabled: true
-  sleep_enabled: true
-```
-
-Set `sleep_enabled: false` to disable the nightly memory consolidation job while keeping other Memiris features active.
-:::
-
 ## Logging
 
 Iris uses Python's standard `logging` module with structured log formatting. Logs include:
@@ -154,4 +132,4 @@ View application logs via Docker:
 docker compose -f <compose-file> logs -f pyris-app
 ```
 
-The log verbosity for third-party libraries (including `apscheduler`) is configured in `iris/src/iris/common/logging_config.py`.
+The log verbosity for third-party libraries is configured in `iris/src/iris/common/logging_config.py`.

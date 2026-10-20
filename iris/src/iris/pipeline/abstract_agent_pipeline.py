@@ -5,10 +5,8 @@ from typing import Any, Callable, Generic, List, Optional, TypeVar
 
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
-from memiris.domain.memory import Memory
 
 from iris.common.logging_config import get_logger
-from iris.common.memiris_setup import MemirisWrapper
 from iris.common.message_converters import convert_iris_message_to_langchain_message
 from iris.common.pipeline_enum import PipelineEnum
 from iris.common.pyris_message import IrisMessageRole, PyrisMessage
@@ -66,9 +64,6 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     dto: DTO
     variant: VARIANT
     callback: StatusCallback
-    memiris_wrapper: Optional[MemirisWrapper]
-    memiris_memory_creation_thread: Optional[Thread]
-    memiris_memory_creation_storage: list[Memory]
     message_history: list[PyrisMessage]
     tools: list[Callable]
     result: str
@@ -83,10 +78,8 @@ class AgentPipelineExecutionState(Generic[DTO, VARIANT]):
     # that reads it out and the point-out tool that invalidates it after moving the student.
     current_view_storage: dict
     faq_storage: dict
-    accessed_memory_storage: list
     allow_lecture_tool: bool
     allow_faq_tool: bool
-    allow_memiris_tool: bool
     # perf_counter() timestamp of the run start, for latency span logging
     start_time: float
     # Session title generated after the final result was already delivered;
@@ -180,29 +173,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
     # ========================================
 
     @abstractmethod
-    def is_memiris_memory_creation_enabled(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
-    ) -> bool:
-        """Return True if background memory creation should be enabled for this run."""
-
-    def _create_memiris_wrapper(
-        self, state: AgentPipelineExecutionState[DTO, VARIANT]
-    ) -> Optional[MemirisWrapper]:
-        """The memory wrapper of this run, or None while Weaviate is unavailable.
-
-        The memory repositories make sure their collections exist when they are created, which needs Weaviate.
-        Without it the run answers without memories instead of failing.
-        """
-        try:
-            return MemirisWrapper(state.db.client, self.get_memiris_tenant(state.dto))
-        except Exception:
-            logger.warning(
-                "Memories are unavailable, Weaviate could not be reached; answering without them",
-                exc_info=True,
-            )
-            return None
-
-    @abstractmethod
     def get_tools(
         self, state: AgentPipelineExecutionState[DTO, VARIANT]
     ) -> list[Callable]:
@@ -245,14 +215,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Compaction then runs for models with max_input_tokens in their config.
         """
         return False
-
-    @abstractmethod
-    def get_memiris_tenant(self, dto: DTO) -> str:
-        """Return the Memiris tenant identifier for the current user."""
-
-    @abstractmethod
-    def get_memiris_reference(self, dto: DTO):
-        """Return the reference to use for the Memiris learnings created in this pipeline."""
 
     # ========================================
     # === CAN override (optional methods) ===
@@ -337,7 +299,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         Subclasses may override this to pull from domain-specific DTOs or
         to support non-text inputs.
 
-        Returns an empty string by default, which is safe for memory creation.
+        Returns an empty string when the latest message has no text.
         """
         latest_user = self.get_latest_user_message(state)
         if (
@@ -897,8 +859,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.db = VectorDatabase()
         state.variant = variant
         state.callback = callback
-        state.memiris_memory_creation_thread = None
-        state.memiris_memory_creation_storage = []
         state.message_history = []
         state.tools = []
         state.result = ""
@@ -909,10 +869,8 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
         state.lecture_content_storage = {}
         state.current_view_storage = {}
         state.faq_storage = {}
-        state.accessed_memory_storage = []
         state.allow_lecture_tool = False
         state.allow_faq_tool = False
-        state.allow_memiris_tool = False
         state.start_time = start_time
         state.deferred_session_title = None
         state.answer_language = None
@@ -929,7 +887,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             getattr(state.callback, "activity_snapshot", lambda _items, _seq: None)
         )
         state.tracing_context = self.create_tracing_context(dto, variant)
-        state.memiris_wrapper = self._create_memiris_wrapper(state)
 
         # Set up LangFuse tracing context for this thread
         set_current_context(state.tracing_context)
@@ -949,7 +906,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 state.compaction_settings = get_compaction_settings(selected_version)
 
             state.message_history = _filter_empty_messages(self._load_history(state))
-            user_query = self.get_text_of_latest_user_message(state)
 
             # Create LLM from variant's model selection (local/cloud)
             completion_args = CompletionArguments(temperature=0.5)
@@ -986,21 +942,6 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
             else:
                 logger.info("Using cloud model with tool calling support")
 
-            # 4. Start memory creation if enabled
-            if (
-                state.memiris_wrapper is not None
-                and self.is_memiris_memory_creation_enabled(state)
-            ):
-                reference = self.get_memiris_reference(dto=state.dto)
-                state.memiris_memory_creation_thread = (
-                    state.memiris_wrapper.create_memories_in_separate_thread(
-                        user_query,
-                        reference,
-                        state.memiris_memory_creation_storage,
-                        use_local=state.local,
-                    )
-                )
-
             # 7.1. Run pre agent hook
             self.pre_agent_hook(state)
 
@@ -1014,7 +955,7 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 if state.partial_result_sender is not None:
                     state.partial_result_sender.stop()
 
-            # Runs next to the post agent hook and memory creation, off the answer's path.
+            # Runs next to the post agent hook, off the answer's path.
             state.compaction_thread = self._start_compaction(
                 state, state.compaction_holder
             )
@@ -1031,16 +972,11 @@ class AbstractAgentPipeline(ABC, Pipeline, Generic[DTO, VARIANT]):
                 else state.deferred_session_title
             )
 
-            # 8. Wait for compaction and memory creation to finish if enabled
+            # 8. Wait for compaction to finish if enabled
             finish_fields: dict[str, Any] = {}
             compaction = self._collect_compaction(state)
             if compaction is not None:
                 finish_fields["compaction"] = compaction
-            if state.memiris_memory_creation_thread:
-                state.memiris_memory_creation_thread.join()
-                finish_fields["created_memories"] = (
-                    state.memiris_memory_creation_storage
-                )
             state.callback.finish(
                 session_title=deferred_title,
                 tokens=state.tokens,

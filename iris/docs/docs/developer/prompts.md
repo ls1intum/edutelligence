@@ -62,7 +62,6 @@ The template is a sequence of blocks in a fixed order. Some are unconditional, o
 | Lecture retrieval       | `allow_lecture_tool`             | How to retrieve and cite lecture content, and which page number to quote |
 | Combined-view point-out | `can_point_out_in_combined_view` | When and how to move the student's slides or video                       |
 | FAQ retrieval           | `allow_faq_tool`                 | How to use FAQ answers                                                   |
-| Memory                  | `allow_memiris_tool`             | How to use and create memories                                           |
 | Competencies            | `has_competencies`               | How to talk about competencies                                           |
 | Exercises               | `has_exercises`                  | How to talk about the course exercises                                   |
 | Metrics                 | `metrics_enabled`                | How to interpret student analytics                                       |
@@ -83,7 +82,6 @@ template_context = {
     "course_name": dto.course.name,
     "allow_lecture_tool": state.allow_lecture_tool,
     "allow_faq_tool": state.allow_faq_tool,
-    "allow_memiris_tool": state.allow_memiris_tool,
     "lecture_name": dto.lecture.title if dto.lecture else None,
     "exercise_title": exercise.title if exercise else "",
     "programming_language": ...,

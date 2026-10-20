@@ -78,7 +78,7 @@ Iris requires two YAML configuration files:
 cp application.example.yml application.local.yml
 ```
 
-The application config defines API keys, Weaviate connection settings, Memiris configuration, and optional LangFuse tracing:
+The application config defines API keys, Weaviate connection settings, and optional LangFuse tracing:
 
 ```yaml title="application.local.yml"
 api_keys:
@@ -88,10 +88,6 @@ weaviate:
   host: "localhost"
   port: "8001"
   grpc_port: "50051"
-
-memiris:
-  enabled: true
-  sleep_enabled: true
 
 langfuse:
   enabled: false

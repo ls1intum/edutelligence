@@ -30,7 +30,6 @@
 !logos/.pre-commit-config.yaml
 !iris/.pre-commit-config.yaml
 !athena/.pre-commit-config.yaml
-!memiris/.pre-commit-config.yaml
 # The model gateway's nginx configuration, shipped in its image rather than
 # bind-mounted: a deployment copies only the compose file to its VM.
 !logos/agent-gateway/nginx.conf
@@ -44,14 +43,6 @@
 !iris/src/iris
 !iris/log_conf.yml
 !iris/models
-# Memiris packaging inputs only (iris installs it as a path dependency):
-# pyproject + declared readme + both declared package dirs (src, tests).
-# Deliberately NOT the whole tree — gitignored local secrets (.env,
-# application.local.yml, llm_config.local.yml) must never enter the image.
-!memiris/pyproject.toml
-!memiris/README.md
-!memiris/src
-!memiris/tests
 **/__pycache__
 **/.venv
 **/.pytest_cache
