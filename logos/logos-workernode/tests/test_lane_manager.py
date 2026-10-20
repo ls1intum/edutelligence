@@ -194,12 +194,28 @@ async def test_reconfigure_lane_rejects_change_without_nvidia_smi() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
-    manager = LaneManager(WorkerConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
+@pytest.mark.parametrize(
+    ("global_args", "lane_args", "pipeline_size"),
+    [
+        ([], [], 1),
+        (["--pipeline-parallel-size", "2"], [], 2),
+        (["-pp=2"], [], 2),
+        ([], ["-pp", "3"], 3),
+        (["--pipeline-parallel-size=2"], ["-pp", "3"], 3),
+        (["-pp", "2"], ["--pipeline-parallel-size=3", "-pp=4"], 4),
+    ],
+)
+async def test_build_lane_status_includes_vllm_runtime_fields(global_args, lane_args, pipeline_size) -> None:
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        vllm_engine_config=VllmEngineConfig(global_extra_args=global_args),
+        lane_port_start=15001,
+        lane_port_end=15010,
+    )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
-        vllm_config=VllmConfig(enable_sleep_mode=True, tensor_parallel_size=2),
+        vllm_config=VllmConfig(enable_sleep_mode=True, tensor_parallel_size=2, extra_args=lane_args),
     )
 
     class FakeVllmHandle:
@@ -237,6 +253,7 @@ async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
     assert status.sleep_state == "sleeping"
     assert status.runtime_state == "sleeping"
     assert status.backend_metrics["tensor_parallel_size"] == 2
+    assert status.backend_metrics["pipeline_parallel_size"] == pipeline_size
     assert status.reported_vram_mb == pytest.approx(1.0)
     assert status.pid_vram_mb == pytest.approx(7680.0)
     assert status.vram_source == "pid"

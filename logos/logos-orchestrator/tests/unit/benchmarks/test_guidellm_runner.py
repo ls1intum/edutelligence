@@ -365,9 +365,17 @@ async def test_worker_preparation_failure_keeps_specific_error_and_skips_warmup(
 
 
 @pytest.mark.parametrize(
-    "extra_args,expected", [([], 1), (["--pipeline-parallel-size", "2"], 2), (["--pipeline-parallel-size=3"], 3)]
+    "extra_args,expected",
+    [
+        ([], None),
+        (["--pipeline-parallel-size", "2"], 2),
+        (["--pipeline-parallel-size=3"], 3),
+        (["-pp", "2"], 2),
+        (["-pp=3"], 3),
+        (["--pipeline-parallel-size", "2", "-pp=3"], 3),
+    ],
 )
-def test_reported_vllm_lane_captures_effective_pipeline_parallelism(extra_args, expected):
+def test_legacy_lane_only_records_explicit_pipeline_parallelism(extra_args, expected):
     snapshot = {
         "runtime": {
             "lanes": [
@@ -378,7 +386,26 @@ def test_reported_vllm_lane_captures_effective_pipeline_parallelism(extra_args, 
             ]
         }
     }
-    assert extract_serving_configuration(snapshot, "m")["pipeline_parallel_size"] == expected
+    assert extract_serving_configuration(snapshot, "m").get("pipeline_parallel_size") == expected
+
+
+@pytest.mark.parametrize("effective_size", [1, 2, 4])
+def test_benchmark_uses_worker_reported_effective_pipeline_parallelism(effective_size):
+    snapshot = {
+        "runtime": {
+            "lanes": [
+                {
+                    "model": "m",
+                    "lane_config": {
+                        "vllm": True,
+                        "vllm_config": {"extra_args": ["--pipeline-parallel-size", "3"]},
+                    },
+                    "backend_metrics": {"pipeline_parallel_size": effective_size},
+                }
+            ]
+        }
+    }
+    assert extract_serving_configuration(snapshot, "m")["pipeline_parallel_size"] == effective_size
 
 
 def test_missing_worker_configuration_does_not_invent_pipeline_parallelism():

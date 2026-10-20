@@ -2041,12 +2041,12 @@ class LaneManager:
     }
 
     @classmethod
-    def _launch_gpu_count(cls, vllm_config: VllmConfig, global_extra_args: list[str]) -> int:
-        """The GPUs a vLLM engine uses, read from its command line as launched.
+    def _launch_parallel_sizes(cls, vllm_config: VllmConfig, global_extra_args: list[str]) -> dict[str, int] | None:
+        """Effective parallelism from the arguments passed to vLLM.
 
         The command passes the configured tensor_parallel_size first, then the
         worker-wide and the lane's extra_args; argparse keeps the last value,
-        so an extra --tensor-parallel-size wins. 0 when a value is unreadable.
+        so an extra --tensor-parallel-size wins. None when a value is unreadable.
         """
         args = ["--tensor-parallel-size", str(vllm_config.tensor_parallel_size), *global_extra_args]
         args += vllm_config.extra_args
@@ -2059,9 +2059,14 @@ class LaneManager:
             if not has_value:
                 raw = args[index + 1] if index + 1 < len(args) else ""
             if not raw.isdigit() or int(raw) < 1:
-                return 0
+                return None
             sizes[key] = int(raw)
-        return sizes["tp"] * sizes["pp"] * sizes["dp"]
+        return sizes
+
+    @classmethod
+    def _launch_gpu_count(cls, vllm_config: VllmConfig, global_extra_args: list[str]) -> int:
+        sizes = cls._launch_parallel_sizes(vllm_config, global_extra_args)
+        return sizes["tp"] * sizes["pp"] * sizes["dp"] if sizes else 0
 
     async def _lane_occupied_gpu_devices(self, lc: LaneConfig, selector: str, gpu_count: int) -> str:
         """The GPUs a lane's engine runs on, read from its final launch environment.
@@ -3715,6 +3720,9 @@ class LaneManager:
             if lc.vllm_config:
                 sleep_mode_enabled = bool(lc.vllm_config.enable_sleep_mode)
                 backend_metrics = lc.vllm_config.model_dump(mode="json")
+                parallel_sizes = self._launch_parallel_sizes(lc.vllm_config, self._vllm_engine_config.global_extra_args)
+                if parallel_sizes:
+                    backend_metrics["pipeline_parallel_size"] = parallel_sizes["pp"]
         if hasattr(handle, "get_backend_metrics"):
             try:
                 backend_metrics.update(await handle.get_backend_metrics())

@@ -299,22 +299,24 @@ def extract_serving_configuration(snapshot: dict[str, Any] | None, model: str) -
         result = {key: vllm_config[key] for key in _SERVING_KEYS if key in vllm_config}
         extra_args = list(vllm_config.get("extra_args") or [])
         for key, flag in _EXTRA_SERVING_FLAGS.items():
+            aliases = (flag, "-pp") if key == "pipeline_parallel_size" else (flag,)
             for index, arg in enumerate(extra_args):
-                raw = (
-                    extra_args[index + 1]
-                    if arg == flag and index + 1 < len(extra_args)
-                    else str(arg).split("=", 1)[1] if str(arg).startswith(flag + "=") else None
-                )
+                name, has_value, inline_value = str(arg).partition("=")
+                if name not in aliases:
+                    continue
+                raw = inline_value if has_value else extra_args[index + 1] if index + 1 < len(extra_args) else None
                 if raw is not None:
                     try:
                         result[key] = json.loads(raw)
                     except (ValueError, TypeError):
                         result[key] = raw
-        # The worker represents pipeline parallelism only in extra_args.
-        # Its absence on a reported vLLM lane means the engine default of 1,
-        # not an unknown value. Persist it so default runs can be compared.
-        if lane_config.get("vllm") and vllm_config:
-            result.setdefault("pipeline_parallel_size", 1)
+        # The worker includes global flags, aliases and lane override precedence.
+        # Older workers without this field cannot establish an implicit default.
+        backend_metrics = lane.get("backend_metrics")
+        if isinstance(backend_metrics, dict):
+            pipeline_size = backend_metrics.get("pipeline_parallel_size")
+            if type(pipeline_size) is int and pipeline_size > 0:
+                result["pipeline_parallel_size"] = pipeline_size
         if "kv_cache_memory_bytes" in result:
             result["kv_cache_memory"] = result.pop("kv_cache_memory_bytes")
         if lane_config.get("gpu_devices"):
