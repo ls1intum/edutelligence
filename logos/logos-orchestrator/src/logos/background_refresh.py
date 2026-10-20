@@ -38,7 +38,11 @@ class BackgroundRefreshedValue(Generic[T]):
 
     A change applied with :meth:`update` while a load is running is replayed
     onto the loaded value when it is installed, so the load cannot discard it
-    (it may have read the database before the change).
+    (it may have read the database before the change). Loads can overlap (a
+    forced :meth:`refresh` during a background one): each replays only the
+    changes made after it started, and a load that started before the one
+    whose value is installed is dropped, so an older read never overwrites a
+    newer one.
     """
 
     def __init__(
@@ -60,8 +64,13 @@ class BackgroundRefreshedValue(Generic[T]):
         self._lock = threading.Lock()
         self._loaded = False
         self._due_at = 0.0
-        self._refreshing = False
-        self._pending: list[Callable[[T], T]] = []
+        # Every update gets the next sequence number; a load remembers the
+        # number current when it started.
+        self._seq = 0
+        self._changes: list[tuple[int, Callable[[T], T]]] = []
+        self._next_load_id = 0
+        self._active_loads: dict[int, int] = {}
+        self._installed_start = -1
 
     @property
     def loaded(self) -> bool:
@@ -72,11 +81,11 @@ class BackgroundRefreshedValue(Generic[T]):
         """The current value; starts a background refresh when one is due."""
         with self._lock:
             value = self._value
-            due = not self._refreshing and self._clock() >= self._due_at
-            if due:
-                self._refreshing = True
-        if due:
-            self._start_background_refresh()
+            load = None
+            if not self._active_loads and self._clock() >= self._due_at:
+                load = self._begin_load()
+        if load is not None:
+            self._start_background_refresh(*load)
         return value
 
     def peek(self) -> T:
@@ -87,8 +96,8 @@ class BackgroundRefreshedValue(Generic[T]):
     def refresh(self) -> bool:
         """Load now on the calling thread. Returns whether a new value was installed."""
         with self._lock:
-            self._refreshing = True
-        return self._load_and_install()
+            load = self._begin_load()
+        return self._load_and_install(*load)
 
     async def refresh_async(self) -> bool:
         """:meth:`refresh` off the event loop."""
@@ -98,43 +107,61 @@ class BackgroundRefreshedValue(Generic[T]):
         """Apply a known write to the memory copy at once and return the new value."""
         with self._lock:
             self._value = change(self._value)
-            if self._refreshing:
-                self._pending.append(change)
+            self._seq += 1
+            if self._active_loads:
+                self._changes.append((self._seq, change))
             return self._value
 
-    def _start_background_refresh(self) -> None:
+    def _begin_load(self) -> tuple[int, int]:
+        # Caller holds the lock.
+        load_id = self._next_load_id
+        self._next_load_id += 1
+        self._active_loads[load_id] = self._seq
+        return load_id, self._seq
+
+    def _start_background_refresh(self, load_id: int, started_at_seq: int) -> None:
+        def run() -> None:
+            self._load_and_install(load_id, started_at_seq)
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
         try:
             if loop is not None:
-                loop.run_in_executor(None, self._load_and_install)
+                loop.run_in_executor(None, run)
             else:
-                threading.Thread(target=self._load_and_install, name=f"refresh-{self._name}", daemon=True).start()
+                threading.Thread(target=run, name=f"refresh-{self._name}", daemon=True).start()
         except Exception:  # noqa: BLE001 — a refresh that cannot start is retried on a later read
             logger.warning("Could not start a background refresh of %s", self._name, exc_info=True)
-            with self._lock:
-                self._refreshing = False
-                self._due_at = self._clock() + self._retry_after_s
+            self._finish_load(load_id, started_at_seq, None)
 
-    def _load_and_install(self) -> bool:
+    def _load_and_install(self, load_id: int, started_at_seq: int) -> bool:
         try:
             value = self._loader()
         except Exception:  # noqa: BLE001 — the previous value stays in use
             logger.warning("Could not refresh %s; keeping the previous value", self._name, exc_info=True)
             value = None
+        return self._finish_load(load_id, started_at_seq, value)
+
+    def _finish_load(self, load_id: int, started_at_seq: int, value: Optional[T]) -> bool:
         with self._lock:
-            self._refreshing = False
-            pending, self._pending = self._pending, []
+            self._active_loads.pop(load_id, None)
             now = self._clock()
+            installed = False
             if value is None:
                 # The changes are already in the value that stays in use.
                 self._due_at = now + self._retry_after_s
-                return False
-            for change in pending:
-                value = change(value)
-            self._value = value
-            self._loaded = True
-            self._due_at = now + self._refresh_after_s
-            return True
+            elif started_at_seq >= self._installed_start:
+                for seq, change in self._changes:
+                    if seq > started_at_seq:
+                        value = change(value)
+                self._value = value
+                self._installed_start = started_at_seq
+                self._loaded = True
+                self._due_at = now + self._refresh_after_s
+                installed = True
+            # Keep only the changes a load still running has to replay.
+            oldest = min(self._active_loads.values(), default=None)
+            self._changes = [] if oldest is None else [(seq, c) for seq, c in self._changes if seq > oldest]
+            return installed

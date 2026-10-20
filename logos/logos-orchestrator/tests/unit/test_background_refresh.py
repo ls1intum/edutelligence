@@ -108,3 +108,64 @@ def test_an_update_applies_at_once():
 
     assert value.update(lambda s: s | {1}) == frozenset({1})
     assert value.peek() == frozenset({1})
+
+
+def test_an_older_overlapping_load_does_not_overwrite_a_newer_one():
+    """A background load is still reading when a change lands and a forced
+    refresh starts, reads the change and finishes first. The older load must
+    not install its read, which predates the change, over the newer one."""
+    old_read_started = threading.Event()
+    release_old_read = threading.Event()
+    reads = iter(["old-read"])
+
+    def loader():
+        value = next(reads, None)
+        if value == "old-read":
+            old_read_started.set()
+            release_old_read.wait(5)
+            return frozenset()
+        return frozenset({"lock"})
+
+    value = BackgroundRefreshedValue(loader, initial=frozenset(), refresh_after_s=60)
+    old_load = threading.Thread(target=value.refresh)
+    old_load.start()
+    assert old_read_started.wait(5)
+
+    value.update(lambda locks: locks | {"lock"})
+    assert value.refresh() is True
+    assert value.peek() == frozenset({"lock"})
+
+    release_old_read.set()
+    old_load.join(5)
+
+    assert value.peek() == frozenset({"lock"})
+
+
+def test_each_overlapping_load_replays_only_the_changes_after_its_start():
+    first_reading = threading.Event()
+    release_first = threading.Event()
+    calls = []
+
+    def loader():
+        calls.append(1)
+        if len(calls) == 1:
+            first_reading.set()
+            release_first.wait(5)
+            return ("first",)
+        return ("second",)
+
+    value = BackgroundRefreshedValue(loader, initial=(), refresh_after_s=60)
+    first = threading.Thread(target=value.refresh)
+    first.start()
+    assert first_reading.wait(5)
+
+    value.update(lambda v: v + ("change-1",))
+    release_first.set()
+    first.join(5)
+    # The first load started before change-1, so it replays it.
+    assert value.peek() == ("first", "change-1")
+
+    value.update(lambda v: v + ("change-2",))
+    assert value.refresh() is True
+    # The second load started after both changes and replays neither.
+    assert value.peek() == ("second",)
