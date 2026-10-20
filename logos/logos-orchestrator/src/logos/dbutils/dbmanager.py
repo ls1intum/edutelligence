@@ -540,6 +540,7 @@ class DBManager:
             "queue_depth_at_arrival",
             "utilization_at_arrival",
             "queue_wait_ms",
+            "reasoning_effort",
             "api_key_id",
             "team_id",
             "user_id",

@@ -840,6 +840,10 @@ class RequestPipeline:
         """
         self._monitoring.record_provider_call(request_id, at=at)
 
+    def record_reasoning_effort(self, request_id: str, effort: Optional[str]) -> None:
+        """Note the reasoning effort the upstream received (see ``effective_reasoning_effort``)."""
+        self._monitoring.record_reasoning_effort(request_id, effort)
+
     def record_provider_response(self, request_id: str, at: Optional[datetime.datetime] = None) -> None:
         """Stamp the instant the upstream provider's response has fully arrived.
 

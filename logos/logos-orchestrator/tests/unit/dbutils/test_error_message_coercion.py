@@ -75,3 +75,10 @@ def test_stringify_helper_handles_lists_and_scalars():
     assert json.loads(_stringify_error_message([{"message": "a"}])) == [{"message": "a"}]
     assert _stringify_error_message(42) == "42"
     assert _stringify_error_message({"message": ""}) == '{"message":""}'
+
+
+def test_the_reasoning_effort_reaches_the_row():
+    db = _db()
+    db.update_log_entry_metrics(log_id=1, reasoning_effort="xhigh")
+
+    assert _captured_params(db)["reasoning_effort"] == "xhigh"
