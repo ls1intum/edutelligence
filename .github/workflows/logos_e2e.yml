@@ -8,7 +8,6 @@ on:
       - develop
     paths:
       - "logos/**"
-      - "shared/**"
       - ".github/workflows/logos_e2e.yml"
   pull_request:
     branches:
@@ -16,7 +15,6 @@ on:
       - develop
     paths:
       - "logos/**"
-      - "shared/**"
       - ".github/workflows/logos_e2e.yml"
 
 concurrency:
@@ -98,11 +96,6 @@ jobs:
           uv pip install --python .venv/bin/python -e .
         working-directory: logos/e2e
 
-      # The orchestrator image builds from the repo root because it depends on
-      # shared/; the same link the unit-test workflow creates.
-      - name: Link shared dependency
-        run: ln -s ../../shared logos/logos-orchestrator/shared || true
-
       - name: Start the stack
         run: .venv/bin/python -m harness.stack.compose up
         working-directory: logos/e2e
@@ -173,9 +166,6 @@ jobs:
           uv venv .venv
           uv pip install --python .venv/bin/python -e .
         working-directory: logos/e2e
-
-      - name: Link shared dependency
-        run: ln -s ../../shared logos/logos-orchestrator/shared || true
 
       - name: Install UI dependencies
         run: npm ci
