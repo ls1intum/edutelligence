@@ -60,12 +60,10 @@ pip install uv
 
 #### Dependencies
 
-From the repository root (`edutelligence/`), link the common `shared` package
-once and install the orchestrator dependencies:
+From the repository root (`edutelligence/`), install the orchestrator dependencies:
 
 ```bash
 cd logos/logos-orchestrator
-ln -s ../../shared shared
 uv sync --locked --python 3.13
 ```
 
@@ -76,9 +74,7 @@ orchestrator package. The warning about its missing `[project]` table is harmles
 In PyCharm, use `logos/logos-orchestrator/.venv/bin/python` as the interpreter.
 The **Package requirements are not satisfied** notification means that this
 interpreter is missing dependencies or has different versions than the project
-requires. **Sync project** installs them using uv. If it reports that the `shared`
-distribution cannot be found, check the symlink above before retrying. No separate
-`requirements.txt` is needed.
+requires. **Sync project** installs them using uv. No separate `requirements.txt` is needed.
 
 ## Development
 

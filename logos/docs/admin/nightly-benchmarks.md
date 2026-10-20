@@ -7,7 +7,7 @@ title: Nightly Benchmarks
 Logos admins enable or disable a nightly schedule for each model/worker pair on
 **Model Details → Performance**. Both actions require confirmation. Schedules
 show the model and concrete parameter values to be tested, above the existing
-dataset editor and question previews. Unknown serving limits show a
+**Run benchmark** view with its dataset editor and question previews. Unknown serving limits show a
 current-configuration-only plan. The preview reflects the worker's current
 settings; the scheduler builds the plan again when the nightly run starts.
 
@@ -36,9 +36,8 @@ an updated, connected worker. Run admission also checks the lane and the other
 available workers.
 
 The card shows a plan for this pair, not a guaranteed reservation for tonight.
-The scheduler selects eligible pairs at runtime. The dataset editor and question
-previews below the card remain available for manual runs; they do not alter the
-nightly workload.
+The scheduler selects eligible pairs at runtime. Select **Run benchmark** below the card for the dataset editor and question previews.
+These controls configure manual runs. They do not alter the nightly workload.
 
 The next day, expand **Latest nightly results** and inspect each configuration's
 outcome, attempt and benchmark ID. Use the performance comparison below for
@@ -167,7 +166,7 @@ Imported profiles are stale until calibration succeeds.
 Automatic calibration runs first during the maintenance window.
 Benchmarks use the remaining time.
 
-Deploy webservice migrations `061_nightly_benchmarks.xml` and `062_maintenance_calibration.xml`, the orchestrator,
+Deploy webservice migrations `065_nightly_benchmarks.xml` and `066_maintenance_calibration.xml`, the orchestrator,
 the web application and the updated worker code. Workers advertise
 `supports_benchmark_restart`; activation rejects workers without this feature.
 Enable only the desired model/worker pairs after deployment. No schedules are

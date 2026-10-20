@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 import time
 from typing import Any, Mapping
@@ -27,6 +28,7 @@ CALIBRATION_FIELDS = frozenset(
         "calibration_max_num_seqs",
         "tensor_parallel_size",
         "enforce_eager_at_calibration",
+        "sleep_mode_disabled",
         "engine",
         "sleeping_residual_mb",
         "sleep_l1_transient_host_ram_mb",
@@ -48,9 +50,22 @@ SYNC_METADATA_FIELDS = frozenset(
         "calibration_stale",
         "calibration_key",
         "calibration_key_hash",
+        "calibration_duration_s",
         "overridden_fields",
     }
 )
+
+
+def shared_profiles_enabled() -> bool:
+    """Whether a node may take over another node's calibration."""
+    return os.environ.get("LOGOS_SHARED_PROFILES", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def shared_profile_max_age_days() -> int:
+    try:
+        return max(1, int(os.environ.get("LOGOS_SHARED_PROFILE_MAX_AGE_DAYS", "30")))
+    except ValueError:
+        return 30
 
 
 def is_central_profile_payload(profiles: Mapping[str, Any]) -> bool:
@@ -171,8 +186,19 @@ class ProfileWriteCache:
     def __init__(self, flush_seconds: float = VOLATILE_FLUSH_SECONDS) -> None:
         # (provider, model) -> (digest, material digest, monotonic write time)
         self._entries: dict[tuple[int, str], tuple[str, str | None, float]] = {}
+        # Bumped by forget(): a write that started before must not repopulate.
+        self._model_generations: dict[tuple[int, str], int] = {}
+        self._provider_generations: dict[int, int] = {}
         self._flush_seconds = flush_seconds
         self._lock = threading.Lock()
+
+    def generation(self, provider_id: int, model_name: str) -> tuple[int, int]:
+        """Read before a database write; pass it to remember() afterwards."""
+        with self._lock:
+            return (
+                self._provider_generations.get(provider_id, 0),
+                self._model_generations.get((provider_id, model_name), 0),
+            )
 
     def unchanged(
         self,
@@ -204,15 +230,26 @@ class ProfileWriteCache:
         digest: str,
         material: str | None = None,
         now: float | None = None,
+        generation: tuple[int, int] | None = None,
     ) -> None:
         written_at = time.monotonic() if now is None else now
+        key = (provider_id, model_name)
         with self._lock:
-            self._entries[(provider_id, model_name)] = (digest, material, written_at)
+            current = (self._provider_generations.get(provider_id, 0), self._model_generations.get(key, 0))
+            if generation is not None and generation != current:
+                return
+            self._entries[key] = (digest, material, written_at)
 
     def forget(self, provider_id: int, model_name: str | None = None) -> None:
         with self._lock:
             if model_name is not None:
-                self._entries.pop((provider_id, model_name), None)
+                key = (provider_id, model_name)
+                self._entries.pop(key, None)
+                self._model_generations[key] = self._model_generations.get(key, 0) + 1
                 return
             for key in [k for k in self._entries if k[0] == provider_id]:
                 del self._entries[key]
+            # The provider generation alone invalidates older reads now.
+            for key in [k for k in self._model_generations if k[0] == provider_id]:
+                del self._model_generations[key]
+            self._provider_generations[provider_id] = self._provider_generations.get(provider_id, 0) + 1

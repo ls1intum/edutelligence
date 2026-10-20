@@ -138,10 +138,24 @@ describe('Benchmark comparison', () => {
     expect(charts[0].groups.map(group => group.parameter)).toEqual([1, 2]);
     expect(charts[1].groups.map(group => group.parameter)).toEqual([1, 4, 16]);
     expect(charts.flatMap(chart => chart.groups).flatMap(group => group.rows).every(row => row.value === 0.68)).toBe(true);
-    expect(fixture.nativeElement.querySelector('.quartile-box').style.height).not.toBe('');
+    expect(fixture.nativeElement.querySelector('.single-value').style.bottom).not.toBe('');
     expect(fixture.nativeElement.querySelectorAll('tbody tr')).toHaveLength(4);
     expect(fixture.nativeElement.querySelectorAll('tbody .active-metric')).toHaveLength(4);
     expect(fixture.nativeElement.querySelector('tbody').textContent).toContain('7.6');
+  });
+
+  it.each([1, 4])('renders one repetition with concurrency %s as a visible point for every metric', concurrency => {
+    fixture.componentRef.setInput('runs', [run(1, 1, concurrency)]);
+    for (const metric of ['throughput', 'ttft', 'ttlt'] as const) {
+      fixture.componentInstance.metric.set(metric);
+      fixture.detectChanges();
+      expect(fixture.nativeElement.querySelectorAll('figure')).toHaveLength(2);
+      const points = [...fixture.nativeElement.querySelectorAll('.single-value')] as HTMLElement[];
+      expect(points).toHaveLength(2);
+      expect(points.every(point => Math.abs(parseFloat(point.style.bottom) - 50) < 0.001)).toBe(true);
+      expect(fixture.nativeElement.querySelector('.run-count').textContent).toContain('n = 1');
+      expect(fixture.nativeElement.querySelector('.empty')).toBeNull();
+    }
   });
 
   it('fits each chart independently and recomputes the scale on metric changes', () => {

@@ -271,6 +271,12 @@ def _text(value: Any) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
+def _slice_gpu_count(value: Any) -> Optional[int]:
+    """A plausible GPU count, else None; an unchecked value must not fail a report."""
+    count = _number(value, int)
+    return count if count is not None and 0 < count <= 4096 else None
+
+
 def _model_profile_column_params(data: Dict[str, Any]) -> Dict[str, Any]:
     """Bind values for the typed model_profiles columns of one profile dict.
 
@@ -299,6 +305,10 @@ def _model_profile_column_params(data: Dict[str, Any]) -> Dict[str, Any]:
 # A row the central store owns. A profile emptied by a central change (an
 # unsupported verdict cleared) still counts: the worker must adopt it.
 _CENTRAL_PROFILE_ROW = "(mp.profile <> '{}'::jsonb OR mp.sync_revision > 0)"
+
+# Nodes that fail to start a model with a shared calibration before it is
+# invalidated for all of them.
+_REJECTIONS_TO_INVALIDATE = 2
 
 # Typed model_profiles columns that only a calibration fills; cleared when a
 # calibration is invalidated. max_reported_context_length is a high-water mark
@@ -539,6 +549,7 @@ class DBManager:
             "queue_depth_at_arrival",
             "utilization_at_arrival",
             "queue_wait_ms",
+            "reasoning_effort",
             "api_key_id",
             "team_id",
             "user_id",
@@ -1855,6 +1866,7 @@ class DBManager:
         calibration_key: Optional[Dict[str, Any]],
         calibration_key_hash: Optional[str],
         calibrated_at: datetime.datetime,
+        duration_s: Optional[float] = None,
     ) -> Optional[int]:
         """Snapshot a calibration and link the node's profile row to it.
 
@@ -1862,7 +1874,7 @@ class DBManager:
         New ``sync_revision``, or None when it already linked this snapshot.
         """
         calibration_id, inserted = self._insert_calibration_snapshot(
-            provider_id, model_name, snapshot, calibration_key, calibration_key_hash, calibrated_at
+            provider_id, model_name, snapshot, calibration_key, calibration_key_hash, calibrated_at, duration_s
         )
         if inserted and calibration_key_hash:
             self._count_calibration_agreement(model_name, calibration_key_hash, calibration_id, snapshot)
@@ -1876,6 +1888,7 @@ class DBManager:
         calibration_key: Optional[Dict[str, Any]],
         calibration_key_hash: Optional[str],
         calibrated_at: datetime.datetime,
+        duration_s: Optional[float] = None,
     ) -> Tuple[int, bool]:
         """Id of the snapshot for this run, and whether it was just created."""
         params = {"provider_id": provider_id, "model_name": model_name, "calibrated_at": calibrated_at}
@@ -1883,10 +1896,10 @@ class DBManager:
             text("""
                 INSERT INTO model_calibrations (
                     model_name, calibration_key_hash, calibration_key,
-                    profile, source_provider_id, calibrated_at
+                    profile, source_provider_id, calibrated_at, calibration_duration_s
                 ) VALUES (
                     :model_name, :key_hash, CAST(:key AS jsonb),
-                    CAST(:profile AS jsonb), :provider_id, :calibrated_at
+                    CAST(:profile AS jsonb), :provider_id, :calibrated_at, :duration_s
                 )
                 ON CONFLICT (source_provider_id, model_name, calibrated_at) DO NOTHING
                 RETURNING id
@@ -1896,6 +1909,7 @@ class DBManager:
                 "key_hash": calibration_key_hash,
                 "key": _json_for_jsonb(calibration_key) if calibration_key else None,
                 "profile": _json_for_jsonb(snapshot),
+                "duration_s": _number(duration_s, float),
             },
         ).fetchone()
         if inserted is not None:
@@ -1988,25 +2002,233 @@ class DBManager:
             results.append(entry)
         return results
 
-    def update_reported_calibration_keys(self, provider_id: int, key_hashes: Dict[str, str]) -> None:
-        """Record the calibration key each model has on the node right now."""
+    def update_reported_calibration_keys(
+        self,
+        provider_id: int,
+        key_hashes: Dict[str, str],
+        slice_gpu_counts: Optional[Dict[str, int]] = None,
+    ) -> None:
+        """Record the calibration key and GPU count each model has on the node.
+
+        A model without a row gets an empty one, so a node that never ran the
+        model can still be offered a shared calibration.
+        """
         if not key_hashes:
             return
+        counts = slice_gpu_counts or {}
         self.session.execute(
             text("""
-                UPDATE model_profiles mp SET calibration_key_hash = k.key_hash
-                FROM unnest(CAST(:model_names AS text[]), CAST(:key_hashes AS text[]))
-                     AS k(model_name, key_hash)
-                WHERE mp.provider_id = :provider_id AND mp.model_name = k.model_name
-                  AND mp.calibration_key_hash IS DISTINCT FROM k.key_hash
+                INSERT INTO model_profiles (provider_id, model_name, calibration_key_hash, slice_gpu_count)
+                SELECT :provider_id, k.model_name, k.key_hash, k.slice_gpu_count
+                FROM unnest(CAST(:model_names AS text[]), CAST(:key_hashes AS text[]),
+                            CAST(:slice_counts AS integer[]))
+                     AS k(model_name, key_hash, slice_gpu_count)
+                ON CONFLICT (provider_id, model_name) DO UPDATE
+                SET calibration_key_hash = EXCLUDED.calibration_key_hash,
+                    slice_gpu_count = COALESCE(EXCLUDED.slice_gpu_count, model_profiles.slice_gpu_count)
+                WHERE model_profiles.calibration_key_hash IS DISTINCT FROM EXCLUDED.calibration_key_hash
+                   OR model_profiles.slice_gpu_count IS DISTINCT FROM
+                      COALESCE(EXCLUDED.slice_gpu_count, model_profiles.slice_gpu_count)
             """),
             {
                 "provider_id": provider_id,
                 "model_names": list(key_hashes),
                 "key_hashes": list(key_hashes.values()),
+                "slice_counts": [_slice_gpu_count(counts.get(name)) for name in key_hashes],
             },
         )
         self.session.commit()
+
+    def adopt_shared_calibrations(
+        self, provider_id: int, model_names: List[str], max_age_days: int, adopt: bool = True
+    ) -> List[Tuple[str, int]]:
+        """Give a node another node's calibration for each model it fits.
+
+        With ``adopt`` off, a shared calibration that no longer fits is only
+        dropped. Returns the (model, calibration_id) pairs adopted; commits
+        once.
+        """
+        adopted = []
+        for model_name in self._adoption_candidates(provider_id, model_names):
+            _, calibration_id = self._adopt_shared_calibration(provider_id, model_name, max_age_days, adopt)
+            if calibration_id is not None:
+                adopted.append((model_name, calibration_id))
+        self.session.commit()
+        return adopted
+
+    def _adoption_candidates(self, provider_id: int, model_names: List[str]) -> List[str]:
+        """The models whose calibration may need to change; a reconnecting node
+        that is already settled costs this one query."""
+        if not model_names:
+            return []
+        rows = self.session.execute(
+            text("""
+                SELECT mp.model_name
+                FROM model_profiles mp
+                LEFT JOIN model_calibrations mc ON mc.id = mp.calibration_id
+                WHERE mp.provider_id = :provider_id
+                  AND mp.model_name = ANY(CAST(:model_names AS text[]))
+                  AND mp.calibration_key_hash IS NOT NULL
+                  AND COALESCE(mp.slice_gpu_count, 0) > 0
+                  AND (mc.calibration_key_hash IS DISTINCT FROM mp.calibration_key_hash
+                       OR (mc.source_provider_id IS DISTINCT FROM mp.provider_id
+                           AND CASE WHEN mc.profile->>'tensor_parallel_size' ~ '^[0-9]+$'
+                                    THEN (mc.profile->>'tensor_parallel_size')::int ELSE 1 END
+                               > mp.slice_gpu_count))
+                ORDER BY mp.model_name
+            """),
+            {"provider_id": provider_id, "model_names": list(model_names)},
+        ).fetchall()
+        return [str(row.model_name) for row in rows]
+
+    def adopt_shared_calibration_for_siblings(
+        self,
+        provider_id: int,
+        model_name: str,
+        max_age_days: int,
+        skip: Optional[Callable[[int], bool]] = None,
+    ) -> List[Tuple[int, Optional[int]]]:
+        """Offer a node's fresh calibration to every other node of its key.
+
+        ``skip`` names nodes to leave alone, e.g. one calibrating the model.
+        Returns (provider, adopted calibration or None) for each profile that
+        changed; commits once.
+        """
+        rows = self.session.execute(
+            text("""
+                SELECT mp.provider_id
+                FROM model_profiles mp
+                JOIN model_profiles own
+                  ON own.provider_id = :provider_id AND own.model_name = mp.model_name
+                WHERE mp.model_name = :model_name
+                  AND mp.provider_id <> :provider_id
+                  AND mp.calibration_key_hash = own.calibration_key_hash
+                ORDER BY mp.provider_id
+            """),
+            {"provider_id": provider_id, "model_name": model_name},
+        ).fetchall()
+        changed = []
+        for row in rows:
+            sibling = int(row.provider_id)
+            if skip is not None and skip(sibling):
+                continue
+            did_change, calibration_id = self._adopt_shared_calibration(sibling, model_name, max_age_days)
+            if did_change:
+                changed.append((sibling, calibration_id))
+        self.session.commit()
+        return changed
+
+    def _node_calibration_state(self, provider_id: int, model_name: str, lock: bool = False) -> Any:
+        return self.session.execute(
+            text(f"""
+                SELECT mp.profile, mp.calibration_id, mp.calibration_key_hash, mp.slice_gpu_count,
+                       mc.calibration_key_hash AS linked_key_hash,
+                       mc.source_provider_id AS linked_source,
+                       mc.profile->>'tensor_parallel_size' AS linked_tp
+                FROM model_profiles mp
+                LEFT JOIN model_calibrations mc ON mc.id = mp.calibration_id
+                WHERE mp.provider_id = :provider_id AND mp.model_name = :model_name
+                {"FOR UPDATE OF mp" if lock else ""}
+            """),
+            {"provider_id": provider_id, "model_name": model_name},
+        ).fetchone()
+
+    def _adopt_shared_calibration(
+        self, provider_id: int, model_name: str, max_age_days: int, adopt: bool = True
+    ) -> Tuple[bool, Optional[int]]:
+        """Drop a shared calibration the node's GPUs no longer fit, else adopt one.
+
+        Returns whether the row changed and the snapshot adopted. The
+        snapshot is locked before the row, as invalidation does, so one
+        invalidated meanwhile is never linked; FOR UPDATE keeps two adopters
+        from deadlocking on its counter.
+        """
+        hint = self._node_calibration_state(provider_id, model_name)
+        if hint is None or not hint.calibration_key_hash or not hint.slice_gpu_count:
+            return False, None
+        snapshot = (
+            None
+            if not adopt
+            else self.session.execute(
+                text("""
+                SELECT id, profile
+                FROM model_calibrations
+                WHERE model_name = :model_name
+                  AND calibration_key_hash = :key_hash
+                  AND invalidated_at IS NULL
+                  AND source_provider_id IS DISTINCT FROM :provider_id
+                  AND NOT (CAST(:provider_id AS integer) = ANY(rejected_by))
+                  AND calibrated_at >= CURRENT_TIMESTAMP - make_interval(days => :max_age_days)
+                  AND CASE WHEN profile->>'tensor_parallel_size' ~ '^[0-9]+$'
+                           THEN (profile->>'tensor_parallel_size')::int ELSE 1 END <= :slice_gpu_count
+                ORDER BY calibrated_at DESC
+                LIMIT 1
+                FOR UPDATE
+            """),
+                {
+                    "model_name": model_name,
+                    "key_hash": hint.calibration_key_hash,
+                    "provider_id": provider_id,
+                    "max_age_days": int(max_age_days),
+                    "slice_gpu_count": int(hint.slice_gpu_count),
+                },
+            ).fetchone()
+        )
+        node = self._node_calibration_state(provider_id, model_name, lock=True)
+        if (
+            node is None
+            or node.calibration_key_hash != hint.calibration_key_hash
+            or node.slice_gpu_count != hint.slice_gpu_count
+        ):
+            return False, None
+        profile = json.loads(node.profile) if isinstance(node.profile, str) else dict(node.profile or {})
+        linked_id = node.calibration_id
+        changed = False
+        if node.linked_key_hash == node.calibration_key_hash:
+            linked_tp = int(node.linked_tp) if node.linked_tp and node.linked_tp.isdigit() else 1
+            if node.linked_source == provider_id or linked_tp <= int(node.slice_gpu_count):
+                return False, None
+            self._clear_linked_calibration(
+                "provider_id = :provider_id AND model_name = :model_name",
+                {"provider_id": provider_id, "model_name": model_name},
+            )
+            profile = {key: value for key, value in profile.items() if key not in CALIBRATION_FIELDS}
+            linked_id = None
+            changed = True
+        if snapshot is None or profile.get("calibration_unsupported"):
+            return changed, None
+        # A calibration this node just ran is snapshotted by its next status.
+        if linked_id is None and profile.get("residency_source") == "calibrated":
+            return changed, None
+        shared = json.loads(snapshot.profile) if isinstance(snapshot.profile, str) else dict(snapshot.profile)
+        kept = {key: value for key, value in profile.items() if key not in CALIBRATION_FIELDS}
+        merged = {**kept, **shared}
+        assignments = ", ".join(f"{column} = :{column}" for column in _RESET_PROFILE_COLUMNS)
+        self.session.execute(
+            text(f"""
+                UPDATE model_profiles
+                SET profile = CAST(:profile AS jsonb),
+                    {assignments},
+                    max_reported_context_length = GREATEST(
+                        COALESCE(max_reported_context_length, 0), :max_reported_context_length),
+                    calibration_id = :calibration_id,
+                    sync_revision = sync_revision + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE provider_id = :provider_id AND model_name = :model_name
+            """),
+            {
+                **_model_profile_column_params(merged),
+                "profile": _json_for_jsonb(merged),
+                "calibration_id": int(snapshot.id),
+                "provider_id": provider_id,
+                "model_name": model_name,
+            },
+        )
+        self.session.execute(
+            text("UPDATE model_calibrations SET adoptions = adoptions + 1 WHERE id = :id"),
+            {"id": int(snapshot.id)},
+        )
+        return True, int(snapshot.id)
 
     def import_legacy_model_profiles(
         self,
@@ -2037,14 +2259,18 @@ class DBManager:
             entry = merged.setdefault(str(model_name), {})
             entry["calibration_unsupported"] = True
             entry["calibration_unsupported_reason"] = reason
+        # A central change (e.g. a reset) committed since the check above
+        # owns the row; the import must not write over it.
         upsert = text(
             _upsert_model_profile_sql(
                 extra={"profile": "CAST(:profile AS jsonb)"},
                 conflict_set={"profile": "EXCLUDED.profile"},
+                where="model_profiles.profile = '{}'::jsonb AND model_profiles.sync_revision = 0",
             )
         )
+        imported = 0
         for model_name, data in merged.items():
-            self.session.execute(
+            written = self.session.execute(
                 upsert,
                 {
                     "provider_id": provider_id,
@@ -2052,7 +2278,10 @@ class DBManager:
                     **_model_profile_column_params(data),
                     "profile": _json_for_jsonb(data),
                 },
-            )
+            ).rowcount
+            if not written:
+                continue
+            imported += 1
             calibrated_at = _epoch_to_datetime(data.get("last_measured_epoch"))
             if data.get("residency_source") != "calibrated" or calibrated_at is None:
                 continue
@@ -2061,7 +2290,7 @@ class DBManager:
             )
             self._link_calibration(provider_id, model_name, calibration_id)
         self.session.commit()
-        return len(merged)
+        return imported
 
     def clear_calibration_unsupported(self, provider_id: int, model_name: str) -> Optional[int]:
         """Drop a node's unsupported verdict; returns the new sync_revision."""
@@ -2121,6 +2350,16 @@ class DBManager:
         if marked is None:
             self.session.commit()
             return []
+        cleared = self._clear_linked_calibration("calibration_id = :calibration_id", {"calibration_id": calibration_id})
+        self.session.commit()
+        return cleared
+
+    def _clear_linked_calibration(self, where: str, params: Dict[str, Any]) -> List[Tuple[int, str]]:
+        """Strip the calibration from the node rows matching ``where``.
+
+        ``where`` is a constant of this module. The rows re-calibrate; the
+        caller commits. Returns their (provider_id, model_name).
+        """
         cleared_columns = ", ".join(f"{column} = NULL" for column in _CALIBRATED_PROFILE_COLUMNS)
         rows = self.session.execute(
             text(f"""
@@ -2130,13 +2369,52 @@ class DBManager:
                     calibration_id = NULL,
                     sync_revision = sync_revision + 1,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE calibration_id = :calibration_id
+                WHERE {where}
                 RETURNING provider_id, model_name
             """),
-            {"calibration_id": calibration_id, "fields": sorted(CALIBRATION_FIELDS)},
+            {**params, "fields": sorted(CALIBRATION_FIELDS)},
         ).fetchall()
-        self.session.commit()
         return [(int(r.provider_id), str(r.model_name)) for r in rows]
+
+    def reject_shared_calibration(
+        self, provider_id: int, model_name: str, calibration_id: int
+    ) -> List[Tuple[int, str]]:
+        """Count a node's failed start with a calibration it adopted.
+
+        The node drops it and never adopts it again. A start failing for a
+        second node invalidates it for everyone, since one failure may have
+        a cause of its own. Does nothing unless the node runs it as another
+        node's snapshot. Returns the (provider_id, model_name) rows that
+        lost it.
+        """
+        counted = self.session.execute(
+            text("""
+                UPDATE model_calibrations
+                SET rejected_by = array_append(rejected_by, CAST(:provider_id AS integer))
+                WHERE id = :calibration_id
+                  AND source_provider_id IS DISTINCT FROM :provider_id
+                  AND NOT (CAST(:provider_id AS integer) = ANY(rejected_by))
+                  AND EXISTS (
+                      SELECT 1 FROM model_profiles mp
+                      WHERE mp.provider_id = :provider_id AND mp.model_name = :model_name
+                        AND mp.calibration_id = :calibration_id)
+                RETURNING cardinality(rejected_by) AS rejections
+            """),
+            {"provider_id": provider_id, "model_name": model_name, "calibration_id": calibration_id},
+        ).fetchone()
+        if counted is None:
+            self.session.commit()
+            return []
+        if int(counted.rejections) >= _REJECTIONS_TO_INVALIDATE:
+            return self.invalidate_model_calibration(
+                calibration_id, f"lane start failed on {int(counted.rejections)} providers"
+            )
+        cleared = self._clear_linked_calibration(
+            "provider_id = :provider_id AND model_name = :model_name AND calibration_id = :calibration_id",
+            {"provider_id": provider_id, "model_name": model_name, "calibration_id": calibration_id},
+        )
+        self.session.commit()
+        return cleared
 
     def get_historic_max_context_by_model(self) -> Dict[str, int]:
         """Model name -> widest context ever reported for it, across providers.
@@ -3785,6 +4063,23 @@ class DBManager:
                 logger.warning("settled-cost snapshot failed for %d batch rows: %s", len(log_ids), exc)
             written += len(log_ids)
         return written
+
+    def get_lane_locks(self) -> Optional[list[tuple[int, str, bool, int]]]:
+        """Return every lane lock row as ``(provider_id, lane_id, locked, revision)``.
+
+        An unlocked lane keeps its row (``locked`` false) so its revision tells
+        the planner that a lock push it may still receive is older. Returns
+        ``None`` when the read fails (for example while the table does not
+        exist yet on a database the webservice has not migrated), so the
+        caller can tell "no locks" apart from "could not read the locks".
+        """
+        try:
+            rows = self.session.execute(text("SELECT provider_id, lane_id, locked, revision FROM lane_locks")).all()
+        except Exception as exc:  # noqa: BLE001 — a lock read must never break the planner
+            self.session.rollback()
+            logger.warning("Reading lane locks failed: %s", exc)
+            return None
+        return [(int(row[0]), str(row[1]), bool(row[2]), int(row[3])) for row in rows]
 
     # ADMIN ONLY
     def get_all_deployments(self) -> list[Deployment]:

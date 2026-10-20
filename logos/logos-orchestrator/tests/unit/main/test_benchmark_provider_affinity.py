@@ -503,3 +503,32 @@ async def test_dataset_routes_are_registered_and_secret_gated(monkeypatch, path,
     assert response.status_code == 200
     assert response.json() == {"result": "ok"}
     lookup.assert_awaited_once_with(*expected_args)
+
+
+async def test_cancelled_benchmark_cleanup_rejects_new_job_before_database_insert(monkeypatch):
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    db = MagicMock()
+    db.__enter__.return_value = db
+    db.get_model_provider_benchmark_target.return_value = {
+        "provider_id": 9020,
+        "provider_type": "logosnode",
+        "model_name": "replacement",
+        "provider_name": "worker",
+        "model_id": 1,
+    }
+    db.find_active_model_benchmark_job.return_value = None
+    monkeypatch.setattr(internal_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(internal_mod, "_INTERNAL_SECRET", "internal-secret")
+    monkeypatch.setattr(main, "_capacity_planner", MagicMock())
+    request = MagicMock(headers={"authorization": "Bearer internal-secret"})
+    benchmark_reservations.reserve(9020, "old-model", 9021)
+    try:
+        with pytest.raises(main.HTTPException) as error:
+            await internal_mod.internal_run_model_benchmark(
+                main.InternalBenchmarkRequest(model_provider_id=31, samples=5), request
+            )
+        assert error.value.status_code == 409
+        db.create_job_record.assert_not_called()
+    finally:
+        benchmark_reservations.release(9021)

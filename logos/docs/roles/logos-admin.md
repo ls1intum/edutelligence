@@ -44,6 +44,27 @@ copy the commit. With this information, you can find which workers have the
 update. If a worker cannot report a commit, the page shows `version: unknown`.
 The icon then shows the reason.
 
+### Idle lanes and lane locks
+
+The capacity planner puts a lane to sleep after the lane has no requests for
+30 minutes (`LOGOS_IDLE_SLEEP_L1_S`, see
+[deployment](../deployment.md#environment-variables)). A sleeping lane frees
+most of its GPU memory. The next request to the lane must wait until the lane
+wakes.
+
+To keep a lane warm, lock it. In the lane list of a worker, click the lock icon
+next to the lane. A closed lock shows a locked lane. The capacity planner does
+not put a locked lane to sleep and does not unload it to make memory free for
+other models. If a locked lane sleeps, the planner wakes it. To release the
+lane, click the lock icon again. The lock stays after a restart of Logos. Only a
+Logos admin can lock or unlock a lane.
+
+![Lanes of two workers, the upper lane locked](/img/roles/logos-admin-statistics-lanes.png)
+
+The **Sleep** action on a locked lane still puts the lane to sleep. Use it only
+if you must make memory free at once. The planner then wakes the locked lane
+again.
+
 ![Statistics page](/img/roles/logos-admin-statistics.png)
 
 ## Models
@@ -55,6 +76,39 @@ model to open its **Model Details** view. This view shows the request history,
 the error reports and the scheduling statistics of the model.
 
 ![Models page](/img/roles/logos-admin-models.png)
+
+The **Delays** tab of the **Model Details** view shows where the time of a
+request goes. The tab shows local and cloud providers. It has one row for each
+provider of the model and for each reasoning effort. A **Local** or **Cloud** tag
+next to the provider name shows the provider type. The row shows these values,
+each as the median (p50) and as the 95th percentile (p95):
+
+- **Logos wait**: the time from the arrival of the request at Logos until the
+  call to the provider. This includes the authentication, the rate limit, the
+  budget check and the scheduling.
+- **Provider**: the time from the call to the provider until the end of the
+  response.
+- **TTFT**: the time from the arrival of the request until the first token.
+  **TTFT N** shows how many requests these values come from: only requests
+  that sent a first token count. If this number is less than **Requests**,
+  the cell also shows the number of requests (for example, "5 of 60").
+
+The **Effort** column shows the reasoning effort that Logos sent to the
+provider. Some local models accept only some effort levels. For these models,
+Logos changes the effort of the client to the nearest level that the model
+accepts. The column then shows the changed level, not the level of the client.
+The value `default` shows that the request did not contain an effort.
+
+If the **Logos wait** values increase, Logos itself slows the requests down.
+Use the time range bar of the tab to select the period.
+
+![Delays tab of a model](/img/roles/logos-admin-model-details-delays.png)
+
+### Model benchmarks
+
+Open the model's **Performance** tab to configure and start a benchmark.
+The orchestrator reserves the selected model lanes during a worker benchmark.
+The [Model Benchmarks guide](../admin/model-benchmarks.md) explains the confirmation dialog, single-run charts, batches and failed-model retries.
 
 ### Nightly benchmarks
 
@@ -83,7 +137,7 @@ Each night, Logos selects up to 2 eligible pairs, with new or older attempts fir
 The card shows possible parameter values for this pair, not a guaranteed place for tonight.
 
 The example shows the state before the first benchmark, so the results section is empty.
-The dataset editor and question previews below the card remain available for manual benchmarks.
+Select **Run benchmark** below the card to open the dataset editor and question previews for manual benchmarks.
 These controls do not change the nightly workload.
 
 ![Active schedule with the model, parameter values and dataset previews](../static/img/roles/logos-admin-nightly-benchmarks.png)

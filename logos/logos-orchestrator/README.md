@@ -4,13 +4,28 @@ Python FastAPI service — LLM gateway, proxy, scheduling, and capacity manageme
 
 See the root [README](../README.md) for the full project overview.
 
+## Model-provider benchmarks
+
+The orchestrator reserves the selected worker/model pair, including lanes created
+after the reservation. The internal benchmark runner drains
+existing traffic, and allows only authenticated benchmark requests through those
+lanes until job cleanup. A batch retains ownership between runs. Failed lane
+preparation applies requested serving overrides before another startup attempt.
+
+See [Configurable model benchmarks](docs/benchmark-configuration.md) for the API,
+reservation lifecycle, configuration persistence, implementation entry points,
+and Dev verification steps.
+
+The [screenshot walkthrough](../docs/admin/model-benchmarks.md) shows
+configuration, confirmation, results and GPU limits in the web application.
+
 ## Nightly benchmarks
 
 The application runs calibration first, then opt-in benchmarks if time remains.
 A shared 15-second loop drives both. At most one calibration or benchmark runs
 across the cluster, including manual starts.
 Schedules default to disabled and are stored in PostgreSQL by the webservice's
-`061_nightly_benchmarks.xml` migration. Migration `062_maintenance_calibration.xml`
+`065_nightly_benchmarks.xml` migration. Migration `066_maintenance_calibration.xml`
 adds durable calibration and manual benchmark claims. Worker confirmation is
 required before a calibration claim is released.
 

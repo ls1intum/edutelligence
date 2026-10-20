@@ -12,13 +12,10 @@ requires-python = ">=3.13,<4.0.0"
 python = ">=3.13,<4.0.0"
 fastapi = {extras = ["standard"], version = "==0.141.1"}
 httpx = "==0.27.2"
-shared = { path = "./shared", develop = true }
 requests = "==2.34.2"
-langchain = "==1.4.1"
-langchain-community = "==0.3.31"
 openai = "==1.109.1"
-pytest = "==8.4.2"
-pytest-asyncio = "==0.26.0"
+pytest = "==9.1.1"
+pytest-asyncio = "==1.4.0"
 psycopg2-binary = "==2.9.13"
 # Held on 2.0: SQLAlchemy 2.1 made psycopg (v3) the default driver for
 # `postgresql://` URLs, and the driver installed here is psycopg2-binary.
@@ -28,12 +25,11 @@ SQLAlchemy = "==2.0.54"
 grpcio = "==1.84.0"
 grpcio-tools = "==1.71.2"
 protobuf = "==5.29.6"
-tiktoken = "==0.9.0"
 python-dateutil = "==2.9.0.post0"
 sentence-transformers = "==5.7.0"
 torch = "==2.14.0"
 matplotlib = "==3.11.2"
-aiohttp = "==3.14.3"
+aiohttp = "==3.14.5"
 prometheus-client = "==0.21.1"
 python-multipart = "==0.0.32"
 guidellm = {version = "==0.7.2", extras = ["recommended"]}
@@ -43,8 +39,6 @@ guidellm = {version = "==0.7.2", extras = ["recommended"]}
 # runs, the benchmark workflow and local environments resolve from this
 # manifest alone, so these pins are what keep a fresh resolve off a
 # vulnerable version.
-langchain-core = "==1.6.3"
-langsmith = "==0.12.6"
 pillow = "==12.3.0"
 urllib3 = "==2.8.0"
 httpcore2 = "==2.13.0"
@@ -85,14 +79,6 @@ url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
-# Declare the `shared` path dependency to uv directly. It is already declared
-# in [tool.poetry.dependencies], but uv only sees that through poetry-core's
-# built metadata, which hands back an absolute directory -- so uv.lock ended up
-# recording whoever last ran `uv lock` (e.g.
-# /Users/<name>/.../logos/logos-orchestrator/shared). That made the lock
-# machine-specific: it churned on every developer and could never be used to
-# install from. Declared here, uv records the relative "../../shared" instead.
-shared = { path = "../../shared" }
 torch = { index = "pytorch-cpu" }
 
 # ---------------------------------------------------------------------------
@@ -148,4 +134,4 @@ extend-exclude = '''
 [tool.isort]
 profile = "black"
 line_length = 120
-skip = ["shared", ".venv", "logos-ui"]
+skip = [".venv", "logos-ui"]

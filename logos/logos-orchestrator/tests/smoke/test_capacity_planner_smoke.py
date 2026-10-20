@@ -402,11 +402,11 @@ def test_demand_score_visible_in_scheduler_state(client, http_headers, internal_
 def test_idle_lane_sleeps_after_threshold(client, http_headers, internal_secret, smoke_model, planner_cycle_s):
     """
     If smoke_model lane is loaded and has been idle, the planner must issue
-    sleep_l1 after IDLE_SLEEP_L1 = 300 s.  This test does not wait 5 minutes;
+    sleep_l1 after IDLE_SLEEP_L1 = 1800 s.  This test does not wait 30 minutes;
     instead it checks that the planner cycle did not erroneously reset the idle
     timer for a lane that had no traffic (observed within the last 3 cycles).
 
-    Practical use: run this test after the deployment has been idle for >5 min.
+    Practical use: run this test after the deployment has been idle for >30 min.
     """
     if not smoke_model:
         pytest.skip("--smoke-model not provided")

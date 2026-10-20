@@ -42,6 +42,7 @@ from logos_worker_node.models import (
     LaneConfig,
     LogosConfig,
     ProcessState,
+    ProcessStatus,
     VllmConfig,
     WorkerConfig,
 )
@@ -1034,8 +1035,8 @@ def _restart_env(
         async def init(self) -> None:
             pass
 
-        async def spawn(self, _cfg: LaneConfig) -> None:
-            pass
+        async def spawn(self, _cfg: LaneConfig) -> ProcessStatus:
+            return ProcessStatus(state=ProcessState.RUNNING, pid=12345)
 
     old_handle = _Handle(
         LaneConfig(model=model_old, vllm=True, lane_id=lane_id, vllm_config=VllmConfig(enable_sleep_mode=True))

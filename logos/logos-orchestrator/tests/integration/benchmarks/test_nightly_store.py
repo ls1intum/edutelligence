@@ -29,7 +29,7 @@ def database(monkeypatch):
         os.getenv("NIGHTLY_SCHEMA_FILE")
         or (
             Path(__file__).resolve().parents[4]
-            / "logos-webservice/src/main/resources/liquibase/changelog/061_nightly_benchmarks.xml"
+            / "logos-webservice/src/main/resources/liquibase/changelog/065_nightly_benchmarks.xml"
         )
     )
     tree = ElementTree.parse(migration)
@@ -38,7 +38,7 @@ def database(monkeypatch):
         connection.execute(text("CREATE TABLE model_provider (id integer PRIMARY KEY)"))
         connection.execute(text("INSERT INTO model_provider VALUES (31), (32)"))
         connection.execute(text(sql))
-        maintenance = ElementTree.parse(migration.with_name("062_maintenance_calibration.xml"))
+        maintenance = ElementTree.parse(migration.with_name("066_maintenance_calibration.xml"))
         connection.execute(text(maintenance.find("{*}changeSet/{*}sql").text))
         connection.execute(
             text(

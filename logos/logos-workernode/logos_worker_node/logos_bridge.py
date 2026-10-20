@@ -343,9 +343,36 @@ class LogosBridgeClient:
             raise RuntimeError("logos.shared_key (LOGOS_API_KEY) is required")
         return logos_url
 
+    async def _reserve_calibration(self, model_name: str) -> dict[str, Any] | None:
+        """Have Logos stop adopting for this model, and get its profile.
+
+        The events below reach Logos up to a second late, so they cannot bar
+        an adoption in time. None when Logos cannot answer (an older server,
+        unreachable): the events are then the only barrier.
+        """
+        url = f"{self._logos_base_url()}/logosdb/providers/logosnode/calibration-reservation"
+        profiles = self._app.state.model_profiles
+        body: dict[str, Any] = {"shared_key": self._cfg.shared_key, "model_name": model_name}
+        # A config edit since the last status is known only here.
+        if model_name in profiles.calibration_key_hashes():
+            body["calibration_key_hash"] = profiles.calibration_key_hashes()[model_name]
+            body["slice_gpu_count"] = profiles.slice_gpu_counts().get(model_name)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, json=body)
+            if resp.status_code != 200:
+                logger.info("[Calibration] No reservation for %s (HTTP %s)", model_name, resp.status_code)
+                return None
+            profile = ((resp.json() if resp.content else {}).get("profiles") or {}).get(model_name)
+        except Exception:  # noqa: BLE001
+            logger.info("[Calibration] Could not reserve %s with Logos", model_name, exc_info=True)
+            return None
+        return profile if isinstance(profile, dict) else None
+
     async def fetch_model_profiles(
         self,
         calibration_key_hashes: dict[str, str],
+        slice_gpu_counts: dict[str, int],
         legacy_import: dict[str, Any] | None,
     ) -> dict[str, dict[str, Any]]:
         """This node's profiles from Logos, the only place they are stored."""
@@ -353,6 +380,7 @@ class LogosBridgeClient:
         payload: dict[str, Any] = {
             "shared_key": self._cfg.shared_key,
             "calibration_key_hashes": calibration_key_hashes,
+            "slice_gpu_counts": slice_gpu_counts,
         }
         if legacy_import is not None:
             payload["legacy_import"] = legacy_import
@@ -552,8 +580,12 @@ class LogosBridgeClient:
         if hasattr(self._app, "state") and hasattr(self._app.state, "lane_manager"):
             static_lane_ids = sorted(self._app.state.lane_manager._static_lane_ids)
         calibration_key_hashes: dict[str, str] = {}
+        slice_gpu_counts: dict[str, int] = {}
+        pending_snapshots: list[str] = []
         if hasattr(self._app, "state") and hasattr(self._app.state, "model_profiles"):
             calibration_key_hashes = self._app.state.model_profiles.calibration_key_hashes()
+            slice_gpu_counts = self._app.state.model_profiles.slice_gpu_counts()
+            pending_snapshots = self._app.state.model_profiles.awaiting_snapshot_models()
         await self._send_json(
             ws,
             {
@@ -573,7 +605,10 @@ class LogosBridgeClient:
                 # start clears it, and reporting that as live would exclude this
                 # worker from placement for as long as no new session begins.
                 "calibrating": self._calibration_session_is_live(),
+                "calibrating_model": self._calibrating_model(),
+                "pending_snapshots": pending_snapshots,
                 "calibration_key_hashes": calibration_key_hashes,
+                "slice_gpu_counts": slice_gpu_counts,
                 "actions": [
                     "infer",
                     "infer_stream",
@@ -956,11 +991,9 @@ class LogosBridgeClient:
         if action == "reconfigure_lane":
             updates = params.get("updates") or {}
             if params.get("force_restart"):
-                status = await lane_manager.reconfigure_lane(
-                    lane_id, updates, require_idle=bool(params.get("require_idle")), force_restart=True
-                )
+                status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True, force_restart=True)
                 return {**status.model_dump(mode="json"), "restarted": True}
-            if params.get("require_idle"):
+            elif params.get("require_idle"):
                 status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True)
             else:
                 status = await lane_manager.reconfigure_lane(lane_id, updates)
@@ -978,6 +1011,10 @@ class LogosBridgeClient:
             return await self._handle_run_compatibility_precheck(params)
 
         raise ValueError(f"Unsupported bridge command '{action}'")
+
+    def _calibrating_model(self) -> str | None:
+        session = self._active_calibration_session
+        return session.current_model if session is not None and self._calibration_session_is_live() else None
 
     def _handle_sync_model_profiles(self, params: dict[str, Any]) -> dict[str, Any]:
         """Adopt profiles Logos changed centrally (a new calibration snapshot,
@@ -1731,7 +1768,7 @@ class LogosBridgeClient:
         )
         self._record_calibration_probe_log(model_name, result, None)
 
-    def _list_uncalibrated_models(self) -> list[str]:
+    def _list_uncalibrated_models(self, log_skips: bool = True) -> list[str]:
         """Pick configured models that still need calibration.
 
         Mirrors the previous server-side selection logic so behaviour is
@@ -1760,11 +1797,12 @@ class LogosBridgeClient:
         ordered: list[str] = []
         for model_name in candidates:
             if model_name in session_skip_models:
-                logger.info(
-                    "[Calibration] skipping %s — orchestrator flagged it as "
-                    "too large for this node's known capacity",
-                    model_name,
-                )
+                if log_skips:
+                    logger.info(
+                        "[Calibration] skipping %s — orchestrator flagged it as "
+                        "too large for this node's known capacity",
+                        model_name,
+                    )
                 continue
             profile = model_profiles.get_profile(model_name)
             if profile is not None and profile.calibration_unsupported:
@@ -1820,16 +1858,21 @@ class LogosBridgeClient:
             return
         try:
             from logos_worker_node.calibration import plans_from_config  # noqa: PLC0415
-            from logos_worker_node.profile_fingerprint import node_calibration_keys  # noqa: PLC0415
+            from logos_worker_node.profile_fingerprint import (  # noqa: PLC0415
+                node_calibration_keys,
+                node_slice_gpu_counts,
+            )
 
             snapshot = await gpu_collector.get_snapshot()
             config_path = self._resolve_config_path()
             plans = plans_from_config(config_path) if config_path.exists() else []
             # Resolving an unknown vLLM version may fork a subprocess.
             keys = await asyncio.to_thread(node_calibration_keys, self._app.state.config, plans, list(snapshot.devices))
+            counts = node_slice_gpu_counts(self._app.state.config, plans, list(snapshot.devices))
         except Exception:  # noqa: BLE001
             logger.warning("[Calibration] Could not refresh calibration keys; keeping the previous ones", exc_info=True)
             return
+        self._app.state.model_profiles.set_slice_gpu_counts(counts)
         changed = self._app.state.model_profiles.set_calibration_keys(keys)
         if changed:
             logger.info("[Calibration] Calibration key changed for %s — re-measuring", ", ".join(sorted(changed)))
@@ -1922,7 +1965,22 @@ class LogosBridgeClient:
                     terminal_event = "calibration_session_cancelled"
                     break
 
+                # Reserved: Logos adopts nothing for it from here, and the
+                # answer carries its profile now. Probe from that, or not
+                # at all when another node's calibration already arrived.
+                reserved = await self._reserve_calibration(model_name)
+                if reserved is not None:
+                    model_profiles.replace_from_sync({model_name: reserved})
+                if model_name not in self._list_uncalibrated_models(log_skips=False):
+                    self._record_calibration_event(
+                        "calibration_model_skipped", model=model_name, details="calibrated meanwhile"
+                    )
+                    continue
+
                 session.current_model = model_name
+                # Without a reservation this is the only barrier; the
+                # precheck below can take a while.
+                self._record_calibration_event("calibration_model_selected", model=model_name)
                 plan = plan_by_model.get(model_name) or {"model": model_name}
 
                 # Pin to the slice begin_calibration_session actually freed
@@ -2068,6 +2126,7 @@ class LogosBridgeClient:
                         )
                         return False
 
+                started_at = time.monotonic()
                 try:
                     if is_metal_backend():
                         # No TP escalation, no KV sweep, no sleep/wake — see
@@ -2126,7 +2185,9 @@ class LogosBridgeClient:
                 if result.success:
                     # Logos snapshots it from the next runtime status (pushed
                     # right below) and answers with its calibration_id.
-                    model_profiles.apply_calibration_result(model_name, result_to_profile_dict(result))
+                    model_profiles.apply_calibration_result(
+                        model_name, result_to_profile_dict(result), time.monotonic() - started_at
+                    )
                     # Models pruned from capabilities at startup for lack of a
                     # profile must be announced now, or Logos never learns the
                     # worker can serve them.

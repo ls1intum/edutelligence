@@ -119,6 +119,9 @@ class QueueEntry:
     """When set, only this provider may dispatch the entry. Normal requests
     leave this unset and retain the model-wide, cross-provider queue behavior."""
 
+    request_id: str | None = None
+    """Inference request identity retained when the queue admits it to a worker."""
+
     api_key_id: int | None = None
     """Caller key that enqueued this entry, when known. Lets a runner tell how
     much of a model's backlog is its own traffic rather than a waiting user."""

@@ -84,6 +84,7 @@ class PriorityQueueManager:
         raw_priority: int | None = None,
         role_rank: int = 0,
         api_key_id: int | None = None,
+        request_id: str | None = None,
     ) -> str:
         """Add a task to the priority queue for ``model_id``.
 
@@ -117,6 +118,7 @@ class PriorityQueueManager:
                 is_cold_at_queue=is_cold_at_queue,
                 provider_affinity=provider_affinity,
                 api_key_id=api_key_id,
+                request_id=request_id,
             )
 
             heap_entry = (

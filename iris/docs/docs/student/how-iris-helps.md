@@ -40,9 +40,9 @@ If you feel like Iris is being too vague, tell it what you have already tried. T
 
 ## Citations
 
-When Iris references course materials — lecture slides, transcripts, or FAQs — it includes numbered **citation markers** in the response (e.g., [1], [2]).
+When Iris references course materials — lecture slides, transcripts, or FAQs — it places **citation markers** inline, beside the sentences they support.
 
-- **Hover** over a citation to see the source (which slide, video timestamp, or FAQ entry).
+- **Hover** over a citation marker to see the source (which slide, video timestamp, or FAQ entry).
 - Use citations to **verify** what Iris tells you and to find additional context in the original materials.
 
 Citations make Iris's responses transparent and traceable, so you always know where the information comes from.

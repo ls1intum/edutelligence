@@ -193,6 +193,35 @@ class LogosNodeSchedulingDataFacade:
                 return self.queue_manager.get_total_depth_by_deployment(model_id, provider_id)
         return 0
 
+    # A tracked request older than this is not counted as in flight: every
+    # request releases its tracking when it ends, so an entry this old was
+    # leaked, and it must not keep a lane awake forever.
+    INFLIGHT_TRACKING_MAX_AGE_S = 900.0
+
+    def get_inflight_request_count_by_model_name(self, model_name: str, provider_id: int) -> int:
+        """Requests the scheduler placed on this (model, provider) that have not ended.
+
+        Counts every tracked request, including one that holds a reservation
+        but has not reached the worker yet. The worker's own active_requests
+        cannot see that one, which is what the capacity planner needs this
+        figure for: it must not sleep the lane such a request is about to use.
+        """
+        provider = self._providers.get(int(provider_id))
+        if not provider:
+            return 0
+        model_ids = {mid for mid, name in provider._model_id_to_name.items() if name == model_name}
+        if not model_ids:
+            return 0
+        cutoff = time.time() - self.INFLIGHT_TRACKING_MAX_AGE_S
+        with self._lock:
+            return sum(
+                1
+                for data in self._request_tracking.values()
+                if data.get("model_id") in model_ids
+                and data.get("provider_id") == int(provider_id)
+                and (data.get("arrival_time") or 0.0) >= cutoff
+            )
+
     def has_cold_queued_entries_by_model_name(self, model_name: str, provider_id: int) -> bool:
         """Return True iff any queued entry for this (model, provider) was flagged
         is_cold_at_queue at enqueue time. Used by the planner to extend lane
@@ -385,7 +414,6 @@ class LogosNodeSchedulingDataFacade:
         provider_id: Optional[int] = None,
     ) -> RequestMetrics:
         with self._lock:
-            benchmark_reservations.finish_request(request_id)
             if request_id not in self._request_tracking:
                 raise KeyError(f"Request {request_id} not found in tracking")
             tracking_data = self._request_tracking.pop(request_id)
@@ -393,6 +421,9 @@ class LogosNodeSchedulingDataFacade:
             provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
             queue_wait_ms = (time.time() - tracking_data["arrival_time"]) * 1000 - duration_ms
             provider = self._get_provider_for_model(model_id, provider_id)
+            model_name = provider._model_id_to_name.get(model_id)
+            if model_name is not None:
+                benchmark_reservations.finish_request(request_id, deployment=(provider.provider_id, model_name))
             provider.decrement_active(
                 model_id, reuse_slot=reuse_slot, request_id=request_id, api_key_id=tracking_data.get("api_key_id")
             )
@@ -420,12 +451,13 @@ class LogosNodeSchedulingDataFacade:
     def model_inflight_requests(self, provider_id: int, model_name: str) -> int:
         """Count locally admitted requests, including sends not in worker status yet."""
         with self._lock:
-            return sum(
-                1
-                for tracking in self._request_tracking.values()
+            tracked = {
+                rid
+                for rid, tracking in self._request_tracking.items()
                 if tracking.get("provider_id") == provider_id
                 and self.get_model_name(tracking["model_id"], provider_id) == model_name
-            )
+            }
+            return len(tracked | benchmark_reservations.admitted_requests(provider_id, model_name))
 
     def is_model_lane_ready(self, model_id: int, provider_id: int) -> bool:
         """Check if at least one lane for this model is in a ready state (loaded/running)."""
@@ -438,9 +470,11 @@ class LogosNodeSchedulingDataFacade:
     def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
         provider = self._get_provider_for_model(model_id, provider_id)
         model = self.get_model_name(model_id, provider_id)
-        if model and not benchmark_reservations.allows(provider_id, model, request_id):
-            return False
-        return provider.try_reserve_capacity(model_id, request_id)
+        if not model:
+            return provider.try_reserve_capacity(model_id, request_id)
+        return benchmark_reservations.try_admit(
+            provider_id, model, request_id, lambda: provider.try_reserve_capacity(model_id, request_id)
+        )
 
     def evaluate_admission(self, model_id: int, provider_id: int) -> AdmissionDecision:
         """Whether this worker could start another request for the model now.

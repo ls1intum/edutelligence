@@ -80,7 +80,7 @@
       <input type="number" min="0" max="2147483647" step="1" required [ngModel]="settings().seed" (ngModelChange)="update('seed', $event)" />
     </label>
   </div>
-  <details class="dataset-preview" open>
+  <details class="dataset-preview">
     <summary>Dataset preview</summary>
     @if (loading()) {
       <p role="status">Loading examples…</p>
@@ -109,23 +109,27 @@
   <details (toggle)="onServingToggle($event)">
     <summary>vLLM settings for the next run</summary>
     <p>Applies to the selected Logos worker before the benchmark and may reload the model. Changed settings remain active afterwards. Empty fields keep the current worker value.</p>
-    @if (pair()?.provider_type === 'logosnode') {
-      <p>{{ pair()!.provider_name }}: {{ limits()?.gpu_count ?? 'unknown' }} GPUs available for this model.
-        Limits include GPU assignments. Model architecture and available memory can impose additional restrictions.</p>
-      @if (limitsLoading()) { <p role="status">Checking worker capacity…</p> }
-      @if (limitsError()) {
-        <div class="settings-feedback"><p role="alert" class="settings-error">{{ limitsError() }}</p>
-          <button type="button" (click)="loadLimits()" [disabled]="limitsLoading()">Retry worker limits</button>
-        </div>
+    <div class="serving-toolbar">
+      @if (pair()?.provider_type === 'logosnode') {
+        <p class="serving-hardware">{{ pair()!.provider_name }} · {{ limits()?.gpu_count ?? 'Unknown' }} {{ limits()?.gpu_count === 1 ? 'GPU' : 'GPUs' }}</p>
       }
-    }
-    @for (message of validationErrors(); track message) { <p role="alert" class="settings-error">{{ message }}</p> }
-    <button type="button" (click)="update('serving_overrides', {}); jsonError.set(null)">Clear vLLM changes</button>
-    <div class="settings-grid">
+      <div class="serving-actions">
+        @if (pair()?.provider_type === 'logosnode') {
+          <button class="serving-action" type="button" (click)="loadLimits()" [disabled]="limitsLoading()">
+            <i class="pi pi-refresh" [class.pi-spin]="limitsLoading()" aria-hidden="true"></i>
+            {{ limitsLoading() ? 'Loading GPU limits…' : 'Reload GPU limits' }}
+          </button>
+        }
+        <button class="serving-action serving-action--reset" type="button" (click)="update('serving_overrides', {}); jsonError.set(null)">
+          <i class="pi pi-undo" aria-hidden="true"></i> Reset vLLM changes
+        </button>
+      </div>
+    </div>
+    <div class="settings-grid serving-grid">
       @for (field of fields; track field.key) {
-        <label>{{ field.label }}
+        <label class="serving-field">{{ field.label }}
           @if (field.key === 'tensor_parallel_size' || field.key === 'pipeline_parallel_size') {
-            <select [attr.aria-label]="field.label" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)"
+            <select [attr.aria-label]="field.label" [attr.aria-describedby]="'help-' + field.key" [attr.aria-invalid]="fieldErrors(field.key).length > 0" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)"
               [disabled]="limits()?.gpu_count == null || limitsLoading()">
               <option [ngValue]="''">Keep current ({{ limits()?.current?.[field.key] ?? 'auto' }})</option>
               @if (settings().serving_overrides[field.key] != null && !parallelOptions(field.key).includes(+$any(settings().serving_overrides[field.key]))) {
@@ -134,33 +138,55 @@
               @for (value of parallelOptions(field.key); track value) { <option [ngValue]="value">{{ value }}</option> }
             </select>
           } @else if (choices[field.key]) {
-            <select [attr.aria-label]="field.label" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
+            <select [attr.aria-label]="field.label" [attr.aria-describedby]="'help-' + field.key" [attr.aria-invalid]="fieldErrors(field.key).length > 0" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
               <option [ngValue]="''">Keep current</option>
               @for (value of choices[field.key]; track value) {
                 <option [ngValue]="value" [disabled]="field.key === 'attention_backend' && !!backendRestriction(value)">{{ value }}{{ field.key === 'attention_backend' ? (backendRestriction(value) ? ' — unavailable' : ' — unverified') : '' }}</option>
               }
             </select>
           } @else if (field.type === 'boolean') {
-            <select [attr.aria-label]="field.label" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
+            <select [attr.aria-label]="field.label" [attr.aria-describedby]="'help-' + field.key" [attr.aria-invalid]="fieldErrors(field.key).length > 0" [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)">
               <option [ngValue]="''">Keep current</option><option [ngValue]="true">Enabled</option><option [ngValue]="false">Disabled</option>
             </select>
           } @else {
-            <input [type]="field.type" [attr.min]="field.min ?? null" [attr.max]="field.max ?? null" [attr.step]="field.step ?? 1"
+            <input [type]="field.type" [attr.aria-label]="field.label" [attr.aria-describedby]="'help-' + field.key" [attr.aria-invalid]="fieldErrors(field.key).length > 0" [attr.min]="field.min ?? null" [attr.max]="field.max ?? null" [attr.step]="field.step ?? 1"
               [ngModel]="settings().serving_overrides[field.key] ?? ''" (ngModelChange)="setServing(field.key, $event)" placeholder="Keep current" />
           }
-          @if (field.key === 'attention_backend') {
-            <small>{{ gpuDescription() }}</small>
-            @for (backend of choices['attention_backend']; track backend) {
-              @if (backendRestriction(backend); as reason) { <small>{{ reason }}</small> }
+          <span class="field-help" [id]="'help-' + field.key">
+            @if (field.key === 'tensor_parallel_size' || field.key === 'pipeline_parallel_size') {
+              @if (limitsLoading()) {
+                <small role="status">Checking worker capacity…</small>
+              } @else if (limitsError()) {
+                <small class="settings-error" role="status">{{ limitsError() }} Select Reload GPU limits to retry.</small>
+              } @else if (limits()?.gpu_count == null) {
+                <small role="status">GPU capacity is unknown. Select Reload GPU limits after the next worker update.</small>
+              } @else {
+                <small>TP × PP must fit within {{ limits()!.gpu_count }} available {{ limits()!.gpu_count === 1 ? 'GPU' : 'GPUs' }}.</small>
+              }
             }
-            <small>Other backends are unverified for this model. TURBOQUANT also requires a turboquant KV cache dtype.</small>
-          }
+            @if (field.key === 'attention_backend') {
+              <small>{{ gpuDescription() }}</small>
+              @for (backend of choices['attention_backend']; track backend) {
+                @if (backendRestriction(backend); as reason) { <small>{{ reason }}</small> }
+              }
+              <small>Other backends are unverified for this model.</small>
+            }
+            @if (field.key === 'kv_cache_dtype') {
+              <small>TurboQuant formats require the TURBOQUANT attention backend.</small>
+            }
+            @for (message of fieldErrors(field.key); track message) {
+              <small role="alert" class="settings-error">{{ message }}</small>
+            }
+          </span>
         </label>
       }
     </div>
     <label>Hugging Face model overrides (JSON)
-      <textarea rows="3" [ngModel]="hfOverrides()" (ngModelChange)="setHfOverrides($event)" placeholder="{}"></textarea>
+      <textarea rows="3" aria-label="Hugging Face model overrides (JSON)" [attr.aria-invalid]="!!jsonError() || fieldErrors('hf_overrides').length > 0" aria-describedby="help-hf-overrides" [ngModel]="hfOverrides()" (ngModelChange)="setHfOverrides($event)" placeholder="{}"></textarea>
+      <span id="help-hf-overrides" class="field-help">
+        @if (jsonError()) { <small role="alert" class="settings-error">{{ jsonError() }}</small> }
+        @for (message of fieldErrors('hf_overrides'); track message) { <small role="alert" class="settings-error">{{ message }}</small> }
+      </span>
     </label>
-    @if (jsonError()) { <p role="alert" class="settings-error">{{ jsonError() }}</p> }
   </details>
 </div>

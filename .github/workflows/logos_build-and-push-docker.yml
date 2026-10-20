@@ -33,7 +33,6 @@ on:
   pull_request:
     paths:
       - "logos/**"
-      - "shared/**"
       - ".github/workflows/logos_build-and-push-docker.yml"
       - "!logos/README.md"
   push:
@@ -41,7 +40,6 @@ on:
       - main
     paths:
       - "logos/**"
-      - "shared/**"
       - ".github/workflows/logos_build-and-push-docker.yml"
       - "!logos/README.md"
   release:

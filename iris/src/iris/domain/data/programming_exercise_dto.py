@@ -1,21 +1,7 @@
 from datetime import datetime
-from enum import Enum
 from typing import Dict, Optional
 
 from pydantic import BaseModel, Field
-
-
-class ProgrammingLanguage(str, Enum):
-    JAVA = "JAVA"
-    PYTHON = "PYTHON"
-    C = "C"
-    HASKELL = "HASKELL"
-    KOTLIN = "KOTLIN"
-    VHDL = "VHDL"
-    ASSEMBLER = "ASSEMBLER"
-    SWIFT = "SWIFT"
-    OCAML = "OCAML"
-    EMPTY = "EMPTY"
 
 
 class ProgrammingExerciseDTO(BaseModel):

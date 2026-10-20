@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import WebSocketDisconnect
 
 import logos as main_mod
 from logos.dbutils.dbrequest import (
+    LogosKeyModel,
+    LogosNodeCalibrationReservationRequest,
     LogosNodeClearUnsupportedRequest,
     LogosNodeInvalidateCalibrationRequest,
     LogosNodeModelProfilesRequest,
     LogosNodeResetProfilesRequest,
 )
+from logos.logosnode_registry import LogosNodeRuntimeRegistry, ProviderSession
 from logos.model_profile_store import ProfileWriteCache
 from logos.routers import logosnode as logosnode_mod
 
@@ -52,6 +57,11 @@ class _FakeDB:
         self.reported_keys: list = []
         self.cleared: list = []
         self.invalidated: list = []
+        self.adopted: list = []
+        self.sibling_adopters: dict = {}
+        self.rejected: list = []
+        self.reject_result: list = []
+        self.adoptions: list = [("org/model", 11)]
 
     def __enter__(self):
         return self
@@ -70,16 +80,31 @@ class _FakeDB:
         self.reported = reported
         return self.accept
 
-    def record_model_calibration(self, provider_id, model_name, snapshot, key, key_hash, calibrated_at):
+    def record_model_calibration(
+        self, provider_id, model_name, snapshot, key, key_hash, calibrated_at, duration_s=None
+    ):
         self.calibrations.append((provider_id, model_name, snapshot, key, key_hash, calibrated_at))
+        self.durations = getattr(self, "durations", []) + [duration_s]
         return self.new_revision
 
     def import_legacy_model_profiles(self, provider_id, profiles, unsupported):
         self.imports.append((provider_id, profiles, unsupported))
         return len(profiles)
 
-    def update_reported_calibration_keys(self, provider_id, key_hashes):
+    def update_reported_calibration_keys(self, provider_id, key_hashes, slice_gpu_counts=None):
         self.reported_keys.append((provider_id, key_hashes))
+        self.slice_counts = slice_gpu_counts
+
+    def adopt_shared_calibrations(self, provider_id, model_names, max_age_days, adopt=True):
+        self.adopted.append((provider_id, model_names, max_age_days, adopt))
+        return self.adoptions if adopt else []
+
+    def adopt_shared_calibration_for_siblings(self, provider_id, model_name, max_age_days, skip=None):
+        return [(p, c) for p, c in self.sibling_adopters.get(model_name, []) if skip is None or not skip(p)]
+
+    def reject_shared_calibration(self, provider_id, model_name, calibration_id):
+        self.rejected.append((provider_id, model_name, calibration_id))
+        return self.reject_result
 
     def get_central_model_profiles(self, provider_id, model_names=None):
         return [
@@ -235,6 +260,7 @@ def test_push_sends_effective_profiles(monkeypatch):
     db = _FakeDB()
     monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
     monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-1")
     asyncio.run(logosnode_mod._push_model_profiles(1, ["org/model"], {"org/model": "H1"}))
     assert db.reported_keys == [(1, {"org/model": "H1"})]
     provider_id, action, params = registry.sent[0]
@@ -323,7 +349,7 @@ def test_reset_is_a_central_change_pushed_to_the_worker(monkeypatch):
     data = LogosNodeResetProfilesRequest(logos_key="k", provider_id=1, model_names=["org/model"])
     result = asyncio.run(logosnode_mod.logosnode_reset_profiles(data))
     assert db.reset == (1, ["org/model"])
-    assert result == {"provider_id": 1, "reset": ["org/model"]}
+    assert result == {"provider_id": 1, "reset": ["org/model"], "shared_profiles": True}
     assert pushed == [(1, ["org/model"])]
     assert (1, "org/model") not in logosnode_mod._recorded_calibrations
     assert not logosnode_mod._profile_write_cache.unchanged(1, "org/model", "d")
@@ -461,3 +487,325 @@ def test_only_a_session_without_successor_drops_the_bookkeeping(monkeypatch, new
     asyncio.run(logosnode_mod.logosnode_session(_DisconnectingSocket(), token="t"))
 
     assert (1 in logosnode_mod._last_runtime_ts) is newer_session
+
+
+def test_a_reset_landing_between_commit_and_cache_update_is_not_masked():
+    """The status write commits, a reset commits and forgets, then the
+    writer updates the cache: the old echo must still reach the database."""
+
+    class _ResetRacingDB(_FakeDB):
+        def persist_central_model_profile(self, provider_id, model_name, *args):
+            accepted = super().persist_central_model_profile(provider_id, model_name, *args)
+            logosnode_mod._profile_write_cache.forget(provider_id, model_name)
+            return accepted
+
+    echo = {"org/model": {"base_residency_mb": 1.0, "sync_revision": 3}}
+    logosnode_mod._persist_model_profiles(_ResetRacingDB(), 1, echo)
+    later = _FakeDB(accept=False)
+    _, rejected = logosnode_mod._persist_model_profiles(later, 1, echo)
+    assert len(later.persisted) == 1
+    assert rejected == ["org/model"]
+
+
+def test_the_admin_endpoints_check_the_root_key_off_the_event_loop(monkeypatch):
+    """The loop also relays every worker's stream; a slow key lookup must
+    not stall it."""
+    threads: list = []
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: _FakeDB())
+    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: threads.append(threading.get_ident()))
+
+    async def _push(provider_id, model_names=None, calibration_key_hashes=None):
+        return None
+
+    monkeypatch.setattr(logosnode_mod, "_push_model_profiles", _push)
+
+    async def _run():
+        loop_thread = threading.get_ident()
+        await logosnode_mod.logosnode_clear_unsupported(
+            LogosNodeClearUnsupportedRequest(logos_key="k", provider_id=1, model_name="org/model")
+        )
+        await logosnode_mod.logosnode_invalidate_calibration(
+            LogosNodeInvalidateCalibrationRequest(logos_key="k", calibration_id=9)
+        )
+        await logosnode_mod.logosnode_reset_profiles(LogosNodeResetProfilesRequest(logos_key="k", provider_id=1))
+        return loop_thread
+
+    loop_thread = asyncio.run(_run())
+    assert len(threads) == 3
+    assert loop_thread not in threads
+
+
+def test_a_reported_key_lets_the_node_adopt_a_shared_calibration(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
+    logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H1"}, {"org/model": 2})
+    assert db.slice_counts == {"org/model": 2}
+    assert db.adopted == [(5, ["org/model"], 30, True)]
+
+
+def test_sharing_can_be_switched_off(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setenv("LOGOS_SHARED_PROFILES", "0")
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H1"}, {"org/model": 2})
+    assert db.reported_keys
+    assert db.adopted == [(5, ["org/model"], 30, False)]  # a misfit calibration is still dropped
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {}
+
+
+def test_a_fresh_calibration_is_offered_to_the_nodes_of_its_key(monkeypatch):
+    db = _FakeDB()
+    db.sibling_adopters = {"org/model": [(7, 21), (8, None)]}
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model", "other"]) == {
+        7: ["org/model"],
+        8: ["org/model"],
+    }
+
+
+def test_a_node_calibrating_the_model_is_not_offered_one(monkeypatch):
+    db = _FakeDB()
+    db.sibling_adopters = {"org/model": [(7, 21), (8, 21)]}
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
+    monkeypatch.setattr(
+        logosnode_mod, "_models_in_calibration", lambda pid: frozenset({"org/model"}) if pid == 7 else frozenset()
+    )
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {8: ["org/model"]}
+
+
+def test_a_reconnecting_node_does_not_adopt_the_model_it_is_calibrating(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
+    monkeypatch.setattr(logosnode_mod, "_models_in_calibration", lambda pid: frozenset({"org/busy"}))
+    logosnode_mod._update_reported_calibration_keys(5, {"org/busy": "H1", "org/idle": "H2"}, {})
+    assert db.adopted == [(5, ["org/idle"], 30, True)]
+
+
+def test_a_reset_says_whether_calibration_sharing_is_on(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: None)
+
+    async def _push(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(logosnode_mod, "_push_model_profiles", _push)
+    data = LogosNodeResetProfilesRequest(logos_key="k", provider_id=1, model_names=["org/model"])
+    assert asyncio.run(logosnode_mod.logosnode_reset_profiles(data))["shared_profiles"] is True
+    monkeypatch.setenv("LOGOS_SHARED_PROFILES", "0")
+    assert asyncio.run(logosnode_mod.logosnode_reset_profiles(data))["shared_profiles"] is False
+
+
+def test_the_calibration_duration_is_stored_with_the_snapshot(monkeypatch):
+    db = _FakeDB()
+    echoed = dict(_CALIBRATED, calibration_duration_s=412.5)
+    logosnode_mod._persist_model_profiles(db, 1, {"org/model": echoed})
+    assert db.durations == [412.5]
+
+
+def test_a_rejected_shared_calibration_is_pushed_to_every_node_that_lost_it(monkeypatch):
+    db = _FakeDB()
+    db.reject_result = [(1, "org/model"), (2, "org/model")]
+    pushed: list = []
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
+    monkeypatch.setattr(
+        logosnode_mod, "_schedule_model_profile_push", lambda pid, names=None: pushed.append((pid, names))
+    )
+
+    async def _run():
+        await logosnode_mod._handle_calibration_rejected(2, {"model": "org/model", "details": "11"})
+
+    asyncio.run(_run())
+    assert db.rejected == [(2, "org/model", 11)]
+    assert pushed == [(1, ["org/model"]), (2, ["org/model"])]
+
+
+def test_a_rejection_without_a_calibration_id_is_ignored(monkeypatch):
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    asyncio.run(logosnode_mod._handle_calibration_rejected(2, {"model": "org/model", "details": "n/a"}))
+    assert db.rejected == []
+
+
+def test_gpu_counts_from_the_worker_are_kept_only_when_positive_integers():
+    assert logosnode_mod._int_map({"a": 2, "b": 0, "c": "3", "d": True, "e": -1}) == {"a": 2}
+    assert logosnode_mod._int_map(None) == {}
+
+
+def test_a_failing_adoption_never_keeps_a_worker_from_its_profiles(monkeypatch):
+    class _BrokenAdoption(_FakeDB):
+        def adopt_shared_calibrations(self, provider_id, model_names, max_age_days):
+            raise RuntimeError("sql error")
+
+    db = _BrokenAdoption()
+    rollbacks: list = []
+    db.session.rollback = lambda: rollbacks.append(1)
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H1"}, {"org/model": 2})
+    assert db.reported_keys == [(5, {"org/model": "H1"})]
+    assert rollbacks == [1]
+
+
+def test_the_sharing_setting_can_be_read_without_changing_it(monkeypatch):
+    monkeypatch.setattr(logosnode_mod, "_require_root_access", lambda key: None)
+    data = LogosKeyModel(logos_key="k")
+    result = asyncio.run(logosnode_mod.logosnode_calibration_sharing(data))
+    assert result == {"shared_profiles": True, "max_age_days": 30}
+    monkeypatch.setenv("LOGOS_SHARED_PROFILES", "0")
+    assert asyncio.run(logosnode_mod.logosnode_calibration_sharing(data))["shared_profiles"] is False
+
+
+def test_a_linked_snapshot_lifts_the_protection_of_a_finished_model(monkeypatch):
+    lifted: list = []
+    monkeypatch.setattr(
+        main_mod,
+        "_logosnode_registry",
+        SimpleNamespace(snapshots_linked=lambda pid, models: lifted.append((pid, models))),
+    )
+    logosnode_mod._snapshots_linked(5, ["org/model"])
+    assert lifted == [(5, ["org/model"])]
+    monkeypatch.setattr(main_mod, "_logosnode_registry", None)
+    logosnode_mod._snapshots_linked(5, ["org/model"])  # no registry: nothing to lift
+    assert logosnode_mod._models_in_calibration(5) == frozenset()
+
+
+def _registry_with_sessions(*provider_ids):
+    registry = LogosNodeRuntimeRegistry()
+    for pid in provider_ids:
+        session = ProviderSession(provider_id=pid, worker_id=f"w{pid}", websocket=MagicMock())
+        registry._sessions[pid] = session  # noqa: SLF001
+    return registry
+
+
+def _reservation_endpoint(monkeypatch, provider_id=5):
+    monkeypatch.setattr(logosnode_mod, "_require_tls_request", lambda request: None)
+    monkeypatch.setattr(logosnode_mod, "_logosnode_provider_for_key", lambda key: {"id": provider_id})
+    data = LogosNodeCalibrationReservationRequest(shared_key="k", model_name="org/model")
+    return lambda: asyncio.run(logosnode_mod.logosnode_calibration_reservation(data, request=None))
+
+
+def test_a_reservation_answers_with_the_profile_and_bars_adoption(monkeypatch):
+    registry = _registry_with_sessions(5)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(
+        logosnode_mod, "_load_effective_profiles", lambda pid, names=None: {"org/model": {"sync_revision": 4}}
+    )
+    reserve = _reservation_endpoint(monkeypatch)
+    assert reserve() == {"profiles": {"org/model": {"sync_revision": 4}}}
+    assert registry.models_in_calibration(5) == frozenset({"org/model"})
+
+
+def test_a_node_that_reserved_a_model_is_not_offered_one_before_its_events_arrive(monkeypatch):
+    """Event delivery is delayed: no calibration_model_selected has been seen,
+    yet a sibling finishing now must not be adopted by the reserving node."""
+    registry = _registry_with_sessions(7, 8)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    db = _FakeDB()
+    db.sibling_adopters = {"org/model": [(7, 21), (8, 21)]}
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: f"gpu-{pid}")
+
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {  # noqa: SLF001
+        7: ["org/model"],
+        8: ["org/model"],
+    }
+    registry.reserve_calibration(7, "org/model")
+    assert logosnode_mod._offer_calibrations_to_siblings(5, ["org/model"]) == {8: ["org/model"]}  # noqa: SLF001
+
+
+def test_a_reservation_waits_for_an_adoption_in_flight_and_answers_after_it(monkeypatch):
+    """An adoption that already checked for a reservation commits first, and
+    the answer then carries what it changed; none can slip in afterwards."""
+    started, release = threading.Event(), threading.Event()
+    state = {"adopted": False}
+
+    class _SlowAdoption(_FakeDB):
+        def adopt_shared_calibrations(self, provider_id, model_names, max_age_days, adopt=True):
+            started.set()
+            release.wait(5)
+            state["adopted"] = True
+            return [("org/model", 11)]
+
+    registry = _registry_with_sessions(5)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: _SlowAdoption())
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
+    monkeypatch.setattr(
+        logosnode_mod, "_load_effective_profiles", lambda pid, names=None: {"org/model": {"adopted": state["adopted"]}}
+    )
+    reserve = _reservation_endpoint(monkeypatch)
+    adopting = threading.Thread(
+        target=lambda: logosnode_mod._update_reported_calibration_keys(5, {"org/model": "H"}, {})  # noqa: SLF001
+    )
+    adopting.start()
+    assert started.wait(5)
+
+    answer: dict = {}
+    reserving = threading.Thread(target=lambda: answer.update(reserve()))
+    reserving.start()
+    reserving.join(0.5)
+    assert reserving.is_alive(), "the reservation must wait for the adoption"
+    assert registry.models_in_calibration(5) == frozenset()  # not reserved yet
+
+    release.set()
+    adopting.join(5)
+    reserving.join(5)
+    assert answer["profiles"]["org/model"] == {"adopted": True}
+    assert registry.models_in_calibration(5) == frozenset({"org/model"})
+
+
+def test_once_reserved_the_hello_adoption_leaves_the_model_alone(monkeypatch):
+    registry = _registry_with_sessions(5)
+    registry.reserve_calibration(5, "org/busy")
+    monkeypatch.setattr(main_mod, "_logosnode_registry", registry)
+    db = _FakeDB()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
+    logosnode_mod._update_reported_calibration_keys(5, {"org/busy": "H1", "org/idle": "H2"}, {})  # noqa: SLF001
+    assert db.adopted == [(5, ["org/idle"], 30, True)]
+
+
+def test_a_reservation_stores_the_workers_key_before_judging_the_profile(monkeypatch):
+    """A config edit not yet reported through a status: Logos must still mark the
+    profile stale, so the worker does not skip the recalibration it needs."""
+
+    class _Db(_FakeDB):
+        reported = "OLD"
+
+        def update_reported_calibration_keys(self, provider_id, key_hashes, slice_gpu_counts=None):
+            self.reported = key_hashes["org/model"]
+            self.slice_counts = slice_gpu_counts
+
+        def get_central_model_profiles(self, provider_id, model_names=None):
+            return [
+                {
+                    "model_name": "org/model",
+                    "profile": {"base_residency_mb": 1.0},
+                    "sync_revision": 2,
+                    "calibration_key_hash": self.reported,
+                    "cal_id": 11,
+                    "cal_key_hash": "OLD",
+                    "cal_source_provider_id": 5,
+                    "cal_invalidated_at": None,
+                }
+            ]
+
+    db = _Db()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", _registry_with_sessions(5))
+    monkeypatch.setattr(logosnode_mod, "_require_tls_request", lambda request: None)
+    monkeypatch.setattr(logosnode_mod, "_logosnode_provider_for_key", lambda key: {"id": 5})
+
+    def reserve(**fields):
+        data = LogosNodeCalibrationReservationRequest(shared_key="k", model_name="org/model", **fields)
+        return asyncio.run(logosnode_mod.logosnode_calibration_reservation(data, request=None))
+
+    assert reserve()["profiles"]["org/model"]["calibration_stale"] is False  # an older worker
+    answer = reserve(calibration_key_hash="NEW", slice_gpu_count=2)
+    assert answer["profiles"]["org/model"]["calibration_stale"] is True
+    assert (db.reported, db.slice_counts) == ("NEW", {"org/model": 2})

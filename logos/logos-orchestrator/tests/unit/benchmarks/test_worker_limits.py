@@ -233,7 +233,8 @@ def test_missing_or_estimated_metal_telemetry_does_not_allow_tuning(change):
         validate_worker_overrides(ServingOverrides(max_num_seqs=20), worker_limits(status, "m"))
 
 
-async def test_metal_batching_is_admitted_through_internal_benchmark_route(monkeypatch):
+@pytest.mark.parametrize("nightly", [False, True])
+async def test_metal_batching_is_admitted_through_internal_benchmark_route(monkeypatch, nightly):
     import importlib
 
     from logos.benchmarks import nightly_store
@@ -266,10 +267,22 @@ async def test_metal_batching_is_admitted_through_internal_benchmark_route(monke
     monkeypatch.setattr(internal, "dataset_metadata", AsyncMock(return_value={"text_columns": ["question"]}))
     runner = AsyncMock(return_value=1)
     monkeypatch.setattr(internal, "run_benchmark_job", runner)
-    response = await internal.internal_run_model_benchmark(
-        internal.InternalBenchmarkRequest(model_provider_id=31, serving_overrides={"max_num_seqs": 20}),
-        MagicMock(),
-    )
-    assert response.status_code == 202
-    await main._benchmark_tasks_by_job[712]
+    from logos.benchmarks.nightly import NIGHTLY_CONTEXT
+    from logos.benchmarks.reservations import benchmark_reservations
+
+    monkeypatch.setattr(internal, "can_start", lambda _: True)
+    monkeypatch.setattr(nightly_store, "status", lambda _: {"enabled": True})
+    token = NIGHTLY_CONTEXT.set(nightly)
+    if nightly:
+        benchmark_reservations.reserve(7, "*", -31)
+    try:
+        response = await internal.internal_run_model_benchmark(
+            internal.InternalBenchmarkRequest(model_provider_id=31, serving_overrides={"max_num_seqs": 20}),
+            MagicMock(),
+        )
+        assert response.status_code == 202
+        await main._benchmark_tasks_by_job[712]
+    finally:
+        NIGHTLY_CONTEXT.reset(token)
+        benchmark_reservations.release(-31)
     assert runner.await_args.kwargs["settings"].serving_overrides.max_num_seqs == 20

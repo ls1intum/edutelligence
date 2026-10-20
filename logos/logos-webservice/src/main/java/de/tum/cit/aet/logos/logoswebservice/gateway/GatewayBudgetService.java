@@ -5,10 +5,8 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,6 +16,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import de.tum.cit.aet.logos.logoswebservice.common.BackgroundRefreshedCache;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 
 /**
@@ -55,8 +54,15 @@ import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
  * <p>Nothing here serializes admissions on the budget check itself: the
  * snapshot is refreshed at most once per TTL per key (concurrent misses share
  * one load), and a refresh is the only query whose cost grows with the key's
- * month of traffic. Reservations noted while a refresh is in flight are queued
- * and merged into the new snapshot so a reload cannot discard them; if the load
+ * month of traffic. No admission waits for that query once a key has a
+ * snapshot: an expired snapshot keeps answering while one refresh runs in the
+ * background, so the bound above grows by one refresh's duration. Only a key
+ * without a snapshot, or one older than
+ * {@code logos.gateway.budget-cache-max-stale-seconds} (default 60, the
+ * fallback when background refreshes keep failing), loads in line. The
+ * mechanics live in {@link BackgroundRefreshedCache}. Reservations noted while
+ * a refresh is in flight are queued and merged into the new snapshot so a
+ * reload cannot discard them; if the load
  * already counted the same row, the merge double-counts until the next TTL
  * (refuse-more), and the following refresh installs the database total without
  * preserving the inflated value. The bound is the price of that. Trading it for
@@ -72,49 +78,35 @@ public class GatewayBudgetService {
     private final Clock clock;
 
     /**
-     * Process-local budget snapshot cache. Remaining gateway state (none beyond
-     * this map and the JDK HttpClient connection pools in the forwarders).
+     * Process-local budget snapshots: usage, limits and provider overrides per
+     * key or team. The only budget-related process state of the gateway.
      */
-    private final ConcurrentHashMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
-
-    /**
-     * Reservation increments noted while a usage refresh is in flight. Merged
-     * on install; if the load already counted the same row this double-counts
-     * until the next TTL (refuse-more). The next refresh installs the database
-     * total and does not preserve the inflated value.
-     */
-    private final ConcurrentHashMap<String, LongAdder> pendingUsageIncrements = new ConcurrentHashMap<>();
-
-    /** Single-flight usage/limit loads: concurrent misses share one refresh. */
-    private final ConcurrentHashMap<String, CompletableFuture<CacheEntry>> inflight = new ConcurrentHashMap<>();
-
-    /** Bounded monitors: same stripe serializes bump vs install for a given key. */
-    private static final int MONITOR_STRIPES = 64;
-    private final Object[] monitorStripes = new Object[MONITOR_STRIPES];
-
-    {
-        for (int i = 0; i < MONITOR_STRIPES; i++) {
-            monitorStripes[i] = new Object();
-        }
-    }
-
-    private Object monitorFor(String cacheKey) {
-        int h = cacheKey.hashCode();
-        return monitorStripes[(h ^ (h >>> 16)) & (MONITOR_STRIPES - 1)];
-    }
+    private final BackgroundRefreshedCache cache;
 
     @Autowired
     public GatewayBudgetService(
             NamedParameterJdbcTemplate jdbc,
-            @Value("${logos.gateway.budget-cache-ttl-seconds:15}") long ttlSeconds) {
-        this(jdbc, ttlSeconds, Clock.systemUTC());
+            @Value("${logos.gateway.budget-cache-ttl-seconds:15}") long ttlSeconds,
+            @Value("${logos.gateway.budget-cache-max-stale-seconds:60}") long maxStaleSeconds) {
+        this(jdbc, ttlSeconds, maxStaleSeconds, Clock.systemUTC(), Executors.newVirtualThreadPerTaskExecutor());
     }
 
-    /** Package-private for tests with a fixed clock / TTL. */
+    /**
+     * Package-private for tests with a fixed clock / TTL. Without a stale
+     * window every expired snapshot loads in line.
+     */
     GatewayBudgetService(NamedParameterJdbcTemplate jdbc, long ttlSeconds, Clock clock) {
+        this(jdbc, ttlSeconds, ttlSeconds, clock, Runnable::run);
+    }
+
+    /** Package-private for tests of the background refresh. */
+    GatewayBudgetService(NamedParameterJdbcTemplate jdbc, long ttlSeconds, long maxStaleSeconds,
+                         Clock clock, Executor refreshExecutor) {
         this.jdbc = jdbc;
         this.ttlMillis = Math.max(0, ttlSeconds) * 1000L;
         this.clock = clock;
+        this.cache = new BackgroundRefreshedCache("budget snapshot", ttlMillis,
+            Math.max(0, maxStaleSeconds) * 1000L, clock, refreshExecutor);
     }
 
     /**
@@ -195,7 +187,7 @@ public class GatewayBudgetService {
     }
 
     private Long apiKeyBudgetLimit(int apiKeyId) {
-        return cached("limit:key:" + apiKeyId, () -> {
+        return cache.get("limit:key:" + apiKeyId, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource("aki", apiKeyId);
             return jdbc.query("""
                 SELECT CAST(ak.settings ->>'budget_limit_micro_cents' AS BIGINT) AS specific_limit,
@@ -223,18 +215,12 @@ public class GatewayBudgetService {
      * which no price exists for yet.
      */
     private long apiKeyBudgetUsage(int apiKeyId, String monthStart) {
-        Long v = cached("usage:key:" + apiKeyId + ":" + monthStart, () -> {
+        Long v = cache.get("usage:key:" + apiKeyId + ":" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("aki", apiKeyId)
                 .addValue("month", monthStart);
             Long total = jdbc.queryForObject("""
-                SELECT COALESCE((
-                    SELECT SUM(lec.cost_micro_cents)
-                    FROM log_entry_cost lec
-                    WHERE lec.api_key_id = :aki
-                      AND lec.timestamp_request >= CAST(:month AS DATE)
-                      AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
-                ), 0) + COALESCE((
+                SELECT {priced} + COALESCE((
                     SELECT SUM(le.settled_cost_micro_cents)
                     FROM log_entry le
                     WHERE le.api_key_id = :aki
@@ -245,14 +231,14 @@ public class GatewayBudgetService {
                       AND le.timestamp_request >= CAST(:month AS DATE)
                       AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0)
-                """, params, Long.class);
+                """.replace("{priced}", pricedSpend(KEY_FILTER, "")), params, Long.class);
             return total == null ? 0L : total;
         });
         return v == null ? 0L : v;
     }
 
     private Long teamMonthlyBudget(int teamId) {
-        return cached("limit:team:" + teamId, () -> {
+        return cache.get("limit:team:" + teamId, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource("tid", teamId);
             return jdbc.query("""
                 SELECT team_monthly_budget_micro_cents
@@ -273,7 +259,7 @@ public class GatewayBudgetService {
      * unlimited for that provider.
      */
     private ProviderBudgetOverride teamProviderBudget(int teamId, int providerId) {
-        ProviderBudgetOverride cached = cached(
+        ProviderBudgetOverride cached = cache.get(
             "limit:team:" + teamId + ":provider:" + providerId,
             () -> {
                 MapSqlParameterSource params = new MapSqlParameterSource()
@@ -296,20 +282,12 @@ public class GatewayBudgetService {
 
     /** Month-to-date developer-key spend for one team; same two parts as {@link #apiKeyBudgetUsage}. */
     private long teamBudgetUsage(int teamId, String monthStart) {
-        Long v = cached("usage:team:" + teamId + ":" + monthStart, () -> {
+        Long v = cache.get("usage:team:" + teamId + ":" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("tid", teamId)
                 .addValue("month", monthStart);
             Long total = jdbc.queryForObject("""
-                SELECT COALESCE((
-                    SELECT SUM(lec.cost_micro_cents)
-                    FROM log_entry_cost lec
-                    WHERE lec.api_key_id = ANY(
-                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
-                          )
-                      AND lec.timestamp_request >= CAST(:month AS DATE)
-                      AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
-                ), 0) + COALESCE((
+                SELECT {priced} + COALESCE((
                     SELECT SUM(le.settled_cost_micro_cents)
                     FROM log_entry le
                     WHERE le.api_key_id = ANY(
@@ -322,7 +300,7 @@ public class GatewayBudgetService {
                       AND le.timestamp_request >= CAST(:month AS DATE)
                       AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0)
-                """, params, Long.class);
+                """.replace("{priced}", pricedSpend(TEAM_FILTER, "")), params, Long.class);
             return total == null ? 0L : total;
         });
         return v == null ? 0L : v;
@@ -334,24 +312,12 @@ public class GatewayBudgetService {
      * override row.
      */
     private long teamDefaultBudgetUsage(int teamId, String monthStart) {
-        Long v = cached("usage:team:" + teamId + ":default:" + monthStart, () -> {
+        Long v = cache.get("usage:team:" + teamId + ":default:" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("tid", teamId)
                 .addValue("month", monthStart);
             Long total = jdbc.queryForObject("""
-                SELECT COALESCE((
-                    SELECT SUM(lec.cost_micro_cents)
-                    FROM log_entry_cost lec
-                    JOIN log_entry le ON le.id = lec.log_entry_id
-                    WHERE lec.api_key_id = ANY(
-                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
-                          )
-                      AND lec.timestamp_request >= CAST(:month AS DATE)
-                      AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
-                      AND (le.provider_id IS NULL OR le.provider_id NOT IN (
-                            SELECT provider_id FROM team_provider_budgets WHERE team_id = :tid
-                          ))
-                ), 0) + COALESCE((
+                SELECT {priced} + COALESCE((
                     SELECT SUM(le.settled_cost_micro_cents)
                     FROM log_entry le
                     WHERE le.api_key_id = ANY(
@@ -367,7 +333,7 @@ public class GatewayBudgetService {
                             SELECT provider_id FROM team_provider_budgets WHERE team_id = :tid
                           ))
                 ), 0)
-                """, params, Long.class);
+                """.replace("{priced}", pricedSpend(TEAM_FILTER, WITHOUT_PROVIDER_OVERRIDE)), params, Long.class);
             return total == null ? 0L : total;
         });
         return v == null ? 0L : v;
@@ -375,23 +341,13 @@ public class GatewayBudgetService {
 
     /** Developer-key spend on one provider for the team (settled + in-flight). */
     private long teamProviderBudgetUsage(int teamId, int providerId, String monthStart) {
-        Long v = cached("usage:team:" + teamId + ":provider:" + providerId + ":" + monthStart, () -> {
+        Long v = cache.get("usage:team:" + teamId + ":provider:" + providerId + ":" + monthStart, () -> {
             MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("tid", teamId)
                 .addValue("pid", providerId)
                 .addValue("month", monthStart);
             Long total = jdbc.queryForObject("""
-                SELECT COALESCE((
-                    SELECT SUM(lec.cost_micro_cents)
-                    FROM log_entry_cost lec
-                    JOIN log_entry le ON le.id = lec.log_entry_id
-                    WHERE lec.api_key_id = ANY(
-                            ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer')
-                          )
-                      AND le.provider_id = :pid
-                      AND lec.timestamp_request >= CAST(:month AS DATE)
-                      AND lec.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
-                ), 0) + COALESCE((
+                SELECT {priced} + COALESCE((
                     SELECT SUM(le.settled_cost_micro_cents)
                     FROM log_entry le
                     WHERE le.api_key_id = ANY(
@@ -405,7 +361,7 @@ public class GatewayBudgetService {
                       AND le.timestamp_request >= CAST(:month AS DATE)
                       AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
                 ), 0)
-                """, params, Long.class);
+                """.replace("{priced}", pricedSpend(TEAM_FILTER, ON_PROVIDER)), params, Long.class);
             return total == null ? 0L : total;
         });
         return v == null ? 0L : v;
@@ -463,133 +419,51 @@ public class GatewayBudgetService {
     }
 
     private void addToCachedUsage(String cacheKey, long microCents) {
-        synchronized (monitorFor(cacheKey)) {
-            cache.compute(cacheKey, (k, entry) -> {
-                if (entry == null) {
-                    return null;
-                }
-                long current = entry.value instanceof Long l ? l : 0L;
-                return new CacheEntry(current + microCents, entry.loadedAtMs, entry.loadStartedAtMs);
-            });
-            if (inflight.containsKey(cacheKey)) {
-                pendingUsageIncrements.computeIfAbsent(cacheKey, ignored -> new LongAdder()).add(microCents);
-            }
-        }
+        cache.update(cacheKey, value -> value instanceof Long current ? current + microCents : value);
     }
 
-    @SuppressWarnings("unchecked")
-    private <T> T cached(String key, Loader<T> loader) {
-        if (ttlMillis <= 0) {
-            return loader.load();
-        }
-        long now = clock.millis();
-        CacheEntry entry = cache.get(key);
-        if (entry != null && now - entry.loadedAtMs < ttlMillis) {
-            return (T) entry.value;
-        }
-        CacheEntry loaded = refresh(key, loader, now);
-        if (cache.size() > 4096) {
-            long t = clock.millis();
-            cache.entrySet().removeIf(e -> t - e.getValue().loadedAtMs >= ttlMillis);
-        }
-        return (T) loaded.value;
-    }
+    private static final String KEY_FILTER = "le.api_key_id = :aki";
+    private static final String TEAM_FILTER =
+        "le.api_key_id = ANY(ARRAY(SELECT id FROM api_keys WHERE team_id = :tid AND key_type = 'developer'))";
+    private static final String WITHOUT_PROVIDER_OVERRIDE =
+        "AND (le.provider_id IS NULL OR le.provider_id NOT IN "
+            + "(SELECT provider_id FROM team_provider_budgets WHERE team_id = :tid))";
+    private static final String ON_PROVIDER = "AND le.provider_id = :pid";
 
     /**
-     * Load a fresh snapshot for {@code key}, sharing the work among concurrent
-     * misses. Pending reservation bumps are added to the database total on
-     * install; the previous entry is never preserved via {@code Math.max}.
+     * The month's priced spend of the rows {@code keyFilter} and
+     * {@code extraFilter} select: what {@code log_entry_cost} sums for them,
+     * in two parts. A row whose price is stored ({@code cost_finalized}, the
+     * view's first branch) is summed straight from {@code log_entry}; only the
+     * rows still unpriced go through the view, which prices them with
+     * {@code logos_price_usage}. Summing every row through the view gives the
+     * same total, but the planner then costs each row at the pricing
+     * function's estimate and JIT-compiles the query, which took longer than
+     * the scan itself on a key with a busy month.
      */
-    @SuppressWarnings("unchecked")
-    private <T> CacheEntry refresh(String key, Loader<T> loader, long refreshStartedAtMs) {
-        CompletableFuture<CacheEntry> created = new CompletableFuture<>();
-        CompletableFuture<CacheEntry> winner = inflight.computeIfAbsent(key, k -> created);
-        if (winner != created) {
-            return join(winner);
-        }
-        Object monitor = monitorFor(key);
-        final long[] loadStartedAtMs = { clock.millis() };
-        try {
-            synchronized (monitor) {
-                CacheEntry latest = cache.get(key);
-                long now = clock.millis();
-                if (latest != null && now - latest.loadedAtMs < ttlMillis) {
-                    // Another caller installed a fresh entry after we registered
-                    // inflight. Drop any increments queued against that spurious
-                    // flight — noteReservation already bumped the live entry, and
-                    // leaving them pending would double-count on the next refresh.
-                    pendingUsageIncrements.remove(key);
-                    created.complete(latest);
-                    inflight.remove(key, created);
-                    return latest;
-                }
-                loadStartedAtMs[0] = clock.millis();
-            }
-
-            T value = loader.load();
-            long loadedAt = clock.millis();
-
-            synchronized (monitor) {
-                LongAdder pending = value instanceof Long ? pendingUsageIncrements.remove(key) : null;
-                long extra = pending == null ? 0L : pending.sum();
-
-                CacheEntry installed = cache.compute(key, (k, existing) -> {
-                    if (existing != null
-                            && existing.loadedAtMs >= refreshStartedAtMs
-                            && loadedAt - existing.loadedAtMs < ttlMillis) {
-                        if (extra > 0L && existing.value instanceof Long current) {
-                            return new CacheEntry(current + extra, existing.loadedAtMs, existing.loadStartedAtMs);
-                        }
-                        return existing;
-                    }
-                    Object toStore = value;
-                    if (value instanceof Long loaded) {
-                        // DB total + bumps noted during this load. Do not
-                        // Math.max with the previous entry — that made a
-                        // one-TTL double-count sticky across refreshes.
-                        toStore = loaded + extra;
-                    }
-                    return new CacheEntry(toStore, loadedAt, loadStartedAtMs[0]);
-                });
-                created.complete(installed);
-                inflight.remove(key, created);
-                return installed;
-            }
-        } catch (RuntimeException | Error e) {
-            created.completeExceptionally(e);
-            throw e;
-        } finally {
-            inflight.remove(key, created);
-        }
-    }
-
-    private static CacheEntry join(CompletableFuture<CacheEntry> future) {
-        try {
-            return future.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted waiting for budget cache refresh", e);
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException re) {
-                throw re;
-            }
-            if (cause instanceof Error err) {
-                throw err;
-            }
-            throw new IllegalStateException("Budget cache refresh failed", cause);
-        }
-    }
-
-    @FunctionalInterface
-    private interface Loader<T> {
-        T load();
-    }
-
-    record CacheEntry(Object value, long loadedAtMs, long loadStartedAtMs) {
-        CacheEntry(Object value, long loadedAtMs) {
-            this(value, loadedAtMs, loadedAtMs);
-        }
+    private static String pricedSpend(String keyFilter, String extraFilter) {
+        return """
+            COALESCE((
+                SELECT SUM(le.settled_cost_micro_cents)
+                FROM log_entry le
+                WHERE {key} {extra}
+                  AND le.cost_finalized
+                  AND le.result_status IN ('success', 'error', 'timeout')
+                  AND le.timestamp_request >= CAST(:month AS DATE)
+                  AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+            ), 0) + COALESCE((
+                SELECT SUM(lec.cost_micro_cents)
+                FROM log_entry_cost lec
+                WHERE lec.log_entry_id IN (
+                    SELECT le.id
+                    FROM log_entry le
+                    WHERE {key} {extra}
+                      AND le.cost_finalized IS NOT TRUE
+                      AND le.result_status IN ('success', 'error', 'timeout')
+                      AND le.timestamp_request >= CAST(:month AS DATE)
+                      AND le.timestamp_request < CAST(:month AS DATE) + INTERVAL '1 month'
+                )
+            ), 0)""".replace("{key}", keyFilter).replace("{extra}", extraFilter);
     }
 
     /**
@@ -608,7 +482,7 @@ public class GatewayBudgetService {
     }
 
     /** Visible for tests. */
-    Map<String, CacheEntry> cacheView() {
-        return cache;
+    Map<String, BackgroundRefreshedCache.Entry> cacheView() {
+        return cache.view();
     }
 }

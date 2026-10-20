@@ -35,11 +35,6 @@
       "commitMessagePrefix": "`Memiris`:"
     },
     {
-      "groupName": "shared",
-      "matchFileNames": ["shared/**"],
-      "commitMessagePrefix": "`Shared`:"
-    },
-    {
       "description": "tiktoken (via PyO3 0.22) does not build on Python 3.14 yet",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["python"],

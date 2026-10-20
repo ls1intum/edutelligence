@@ -119,7 +119,18 @@ class LogosNodeModelProfilesRequest(BaseModel):
     shared_key: str
     # model name -> calibration key hash the worker computes for it right now
     calibration_key_hashes: dict[str, str] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
+    # model name -> GPUs the node can calibrate and serve the model on
+    slice_gpu_counts: dict[str, int] = Field(default_factory=dict, max_length=_MAX_PROFILE_MODELS)
     legacy_import: LogosNodeLegacyProfileImport | None = None
+
+
+class LogosNodeCalibrationReservationRequest(BaseModel):
+    shared_key: str
+    model_name: str
+    # The key and GPU count the worker computed for the model just now; a
+    # config edit may not have reached Logos through a status yet.
+    calibration_key_hash: str | None = None
+    slice_gpu_count: int | None = None
 
 
 class LogosNodeClearUnsupportedRequest(LogosKeyModel):
@@ -177,6 +188,17 @@ class RefreshPipelineRequest(BaseModel):
     # until its /v1/models listing is read, and that otherwise waits for the
     # next interval tick — a quarter of an hour of an empty model list.
     sync_cloud_models: bool = False
+
+
+class LaneLockChangedRequest(BaseModel):
+    """A lane lock the webservice just committed, pushed so the planner applies it at once."""
+
+    provider_id: int
+    lane_id: str
+    locked: bool
+    # Order of the change among all changes of this lane; the pushes can
+    # arrive out of order, so an older revision is ignored.
+    revision: int
 
 
 class InternalCalibrateRequest(BaseModel):

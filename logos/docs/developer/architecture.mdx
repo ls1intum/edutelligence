@@ -111,7 +111,8 @@ This design has three properties:
 | **Batch** | An OpenAI Batch API job (`/v1/batches`). It is many requests in one `.jsonl` upload. These requests can wait for the result. See [batch processing](../batch-processing.md). |
 | **Agent session** | One run of a coding agent in an isolated container. The agent runner starts the run from a task (usually a GitHub issue or pull request). |
 | **Calibration** | The measurement by the worker of the GPU memory that each model needs when it is loaded and when it sleeps. The capacity planner uses the profiles. |
-| **Capacity planner** | The background loop of the orchestrator. It puts idle lanes to sleep, wakes lanes on demand, and adjusts the GPU memory utilization. |
+| **Capacity planner** | The background loop of the orchestrator. It puts idle lanes to sleep (by default after 30 minutes without a request), wakes lanes on demand, and adjusts the GPU memory utilization. It does not sleep or unload a locked lane. |
+| **Lane lock** | A mark that a Logos admin sets on a lane on the statistics page. The capacity planner keeps a locked lane warm: it does not put the lane to sleep, and it does not unload the lane for other models. The lock is stored in the `lane_locks` table. |
 
 ## Roles
 

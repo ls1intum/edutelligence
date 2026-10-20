@@ -5,7 +5,7 @@
 -- Idempotent: deletes its own rows first (matched by marker ids), so it can
 -- be re-run without touching migration-seeded rows.
 --
--- base_url below (host.docker.internal:9100) matches fake_cloud_upstream.py's
+-- base_url below (host.docker.internal:19100) matches fake_cloud_upstream.py's
 -- default LOGOS_BENCH_GW_UPSTREAM_PORT. If you override that port, update the
 -- provider row here too (same coupling as ../per_request_overhead/seed.sql
 -- has with its mock lane port).
@@ -63,7 +63,7 @@ VALUES (
 -- ---------------------------------------------------------------------------
 -- Model + cloud provider, no per-model endpoint override (NULL): the URL
 -- builder falls back to base_url + inbound path, i.e. exactly
--- http://host.docker.internal:9100/v1/chat/completions — a plain
+-- http://host.docker.internal:19100/v1/chat/completions — a plain
 -- OpenAI-compatible endpoint, no Azure deployment-path handling needed.
 -- ---------------------------------------------------------------------------
 INSERT INTO models (id, name, description)
@@ -74,7 +74,7 @@ INSERT INTO providers (
     privacy_level, auth_name, auth_format, api_key
 )
 VALUES (
-    501, 'bench-cloud-upstream', 'http://host.docker.internal:9100', 'cloud', 'openai',
+    501, 'bench-cloud-upstream', 'http://host.docker.internal:19100', 'cloud', 'openai',
     'CLOUD_IN_EU_BY_US_PROVIDER', 'Authorization', 'Bearer {api_key}', 'bench-upstream-key'
 );
 

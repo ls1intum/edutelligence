@@ -983,3 +983,108 @@ describe('LaneHealthPanel single-action gate', () => {
     void sleeping;
   });
 });
+
+/**
+ * The lock toggle beside each lane.
+ *
+ * A lock is a standing instruction to the capacity planner, keyed by provider
+ * and lane id — the same lane id on another worker is a different lane. The
+ * panel reads the locks once and after every toggle, and a failed toggle
+ * reports itself without losing the known locks.
+ */
+describe('LaneHealthPanel lane locks', () => {
+  let fixture: ComponentFixture<LaneHealthPanel>;
+  let panel: LaneHealthPanel;
+  let locks: { provider_id: number; lane_id: string; model_name: string | null; locked_by: string | null; locked_at: string }[];
+  let lockLane: ReturnType<typeof vi.fn>;
+  let unlockLane: ReturnType<typeof vi.fn>;
+  let getLaneLocks: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    locks = [];
+    getLaneLocks = vi.fn(() => Promise.resolve([...locks]));
+    lockLane = vi.fn((pid: number, laneId: string, model: string | null) => {
+      locks.push({ provider_id: pid, lane_id: laneId, model_name: model, locked_by: 'admin', locked_at: 'now' });
+      return Promise.resolve(locks[locks.length - 1]);
+    });
+    unlockLane = vi.fn((pid: number, laneId: string) => {
+      locks = locks.filter((l) => !(l.provider_id === pid && l.lane_id === laneId));
+      return Promise.resolve({ unlocked: true });
+    });
+    await TestBed.configureTestingModule({
+      imports: [LaneHealthPanel],
+      providers: [{ provide: StatisticsService, useValue: { getLaneLocks, lockLane, unlockLane } }],
+    }).compileComponents();
+    fixture = TestBed.createComponent(LaneHealthPanel);
+    panel = fixture.componentInstance;
+    fixture.componentRef.setInput('lanesByProvider', {
+      'gpu-01': { 'planner-embed': lane({ model: 'org/embed', runtime_state: 'loaded' }) },
+    });
+    fixture.componentRef.setInput('providerMeta', { 'gpu-01': { provider_id: 1 } });
+    fixture.componentRef.setInput('selectedProvider', 'gpu-01');
+    fixture.detectChanges();
+    await fixture.whenStable();
+  });
+
+  function row() {
+    return panel.lanes[0];
+  }
+
+  it('reads the locks once when the panel first renders', () => {
+    expect(getLaneLocks).toHaveBeenCalledTimes(1);
+    expect(panel.isLocked('planner-embed')).toBe(false);
+  });
+
+  it('locks a lane with its model, then unlocks it', async () => {
+    await panel.handleToggleLock(row());
+    expect(lockLane).toHaveBeenCalledWith(1, 'planner-embed', 'org/embed');
+    expect(panel.isLocked('planner-embed')).toBe(true);
+
+    await panel.handleToggleLock(row());
+    expect(unlockLane).toHaveBeenCalledWith(1, 'planner-embed');
+    expect(panel.isLocked('planner-embed')).toBe(false);
+    expect(panel.lockingLaneId()).toBeNull();
+  });
+
+  it('does not treat the same lane id on another provider as locked', async () => {
+    locks.push({ provider_id: 2, lane_id: 'planner-embed', model_name: 'org/embed', locked_by: null, locked_at: 'now' });
+    await panel.refreshLocks();
+    expect(panel.isLocked('planner-embed')).toBe(false);
+  });
+
+  it('renders a pressed lock button for a locked lane', async () => {
+    locks.push({ provider_id: 1, lane_id: 'planner-embed', model_name: 'org/embed', locked_by: null, locked_at: 'now' });
+    await panel.refreshLocks();
+    fixture.detectChanges();
+    const button: HTMLButtonElement = fixture.nativeElement.querySelector('.btn-lane-lock');
+    expect(button.classList).toContain('btn-lane-lock--locked');
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.title).toContain('stays warm');
+  });
+
+  it('reports a failed toggle and keeps the known locks', async () => {
+    locks.push({ provider_id: 1, lane_id: 'planner-embed', model_name: 'org/embed', locked_by: null, locked_at: 'now' });
+    await panel.refreshLocks();
+    unlockLane.mockImplementationOnce(() => Promise.reject({ status: 500, error: { error: 'boom' } }));
+
+    await panel.handleToggleLock(row());
+    expect(panel.lockError()).toContain('Unlock of planner-embed failed');
+    expect(panel.isLocked('planner-embed')).toBe(true);
+    expect(panel.lockingLaneId()).toBeNull();
+  });
+
+  it('ignores a lock read that finishes after a newer one', async () => {
+    // The first read is still in flight when a toggle re-reads; its older
+    // answer must not flip the button back.
+    let releaseStale!: (value: unknown) => void;
+    getLaneLocks.mockImplementationOnce(() => new Promise((resolve) => (releaseStale = resolve)));
+    const stale = panel.refreshLocks();
+
+    await panel.handleToggleLock(row());
+    expect(panel.isLocked('planner-embed')).toBe(true);
+
+    releaseStale([]);
+    await stale;
+    expect(panel.isLocked('planner-embed')).toBe(true);
+  });
+});
