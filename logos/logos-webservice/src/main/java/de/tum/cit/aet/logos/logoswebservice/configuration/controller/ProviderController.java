@@ -3,8 +3,10 @@ package de.tum.cit.aet.logos.logoswebservice.configuration.controller;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,6 +26,9 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DeleteProviderRequ
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DisconnectModelProviderRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.DrainLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LaneLoadStatusRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.LockLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.dto.UnlockLaneRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.LaneLockService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.GetProviderModelsRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.SleepLaneRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.configuration.dto.StopCalibrationRequestDTO;
@@ -48,8 +53,10 @@ public class ProviderController {
     private final OrchestratorWorkerAdminClient workerAdminClient;
     private final OrchestratorModelSyncClient modelSyncClient;
     private final ObjectMapper objectMapper;
+    private final LaneLockService laneLockService;
 
-    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService, ModelRepository modelRepository, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper) {
+    public ProviderController(ProviderService providerService, PriceUpdaterService priceUpdaterService, ModelCapabilitiesUpdaterService modelCapabilitiesUpdaterService, ModelRepository modelRepository, OrchestratorWorkerAdminClient workerAdminClient, OrchestratorModelSyncClient modelSyncClient, ObjectMapper objectMapper, LaneLockService laneLockService) {
+        this.laneLockService = laneLockService;
         this.providerService = providerService;
         this.priceUpdaterService = priceUpdaterService;
         this.modelCapabilitiesUpdaterService = modelCapabilitiesUpdaterService;
@@ -268,6 +275,40 @@ public class ProviderController {
         } catch (Exception e) {
             return ResponseEntity.status(503).body(errorBody(e));
         }
+    }
+
+    /**
+     * Lanes locked warm. The capacity planner reads the same table every
+     * cycle and never sleeps, drains or unloads a locked lane.
+     */
+    @GetMapping("/providers/logosnode/lanes/locks")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> getLaneLocks() {
+        return ResponseEntity.ok(laneLockService.listLocks());
+    }
+
+    /** Locks a lane warm. Idempotent: locking a locked lane keeps the existing lock. */
+    @PostMapping("/providers/logosnode/lanes/lock")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> lockLane(@RequestAttribute("authContext") AuthContext auth,
+                                      @RequestBody LockLaneRequestDTO req) {
+        if (req == null || req.providerId() == null || req.laneId() == null || req.laneId().isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        try {
+            return ResponseEntity.ok(laneLockService.lock(auth, req.providerId(), req.laneId().trim(), req.modelName()));
+        } catch (DataIntegrityViolationException e) {
+            return ResponseEntity.status(404).body(Map.of("error", "Unknown provider " + req.providerId()));
+        }
+    }
+
+    /** Releases a lane lock. Idempotent: unlocking an unlocked lane succeeds. */
+    @PostMapping("/providers/logosnode/lanes/unlock")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> unlockLane(@RequestBody UnlockLaneRequestDTO req) {
+        if (req == null || req.providerId() == null || req.laneId() == null || req.laneId().isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "provider_id and lane_id are required"));
+        boolean removed = laneLockService.unlock(req.providerId(), req.laneId().trim());
+        return ResponseEntity.ok(Map.of("unlocked", removed));
     }
 
     /** e.getMessage() is null for some exceptions, and Map.of rejects null values. */

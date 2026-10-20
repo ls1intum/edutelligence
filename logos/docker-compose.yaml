@@ -213,6 +213,11 @@ services:
     environment:
       LOGOS_DOMAIN: "${LOGOS_DOMAIN:-localhost}"
       LOGOS_CAPACITY_PLANNER_ENABLED: "${LOGOS_CAPACITY_PLANNER_ENABLED:-true}"
+      # Seconds a vLLM lane may stay idle before the capacity planner puts it to
+      # sleep (level 1). Waking a sleeping lane costs seconds on the next
+      # request, so the default keeps lanes warm through ordinary pauses.
+      # Locked lanes (statistics page) never sleep, whatever this value is.
+      LOGOS_IDLE_SLEEP_L1_S: "${LOGOS_IDLE_SLEEP_L1_S:-1800}"
       # Global request-lifecycle timeout knob. When set (>0) it overrides the
       # scheduler queue-wait, execution-context resolve, and worker stream
       # timeouts so a request effectively never times out (benchmark uses
@@ -375,6 +380,7 @@ services:
       # the orchestrator after API-key auth.
       LOGOS_GATEWAY_ENABLED: "${LOGOS_GATEWAY_ENABLED:-true}"
       LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS: "${LOGOS_GATEWAY_BUDGET_CACHE_TTL_SECONDS:-15}"
+      LOGOS_GATEWAY_BUDGET_CACHE_MAX_STALE_SECONDS: "${LOGOS_GATEWAY_BUDGET_CACHE_MAX_STALE_SECONDS:-60}"
       LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS: "${LOGOS_GATEWAY_BUDGET_RESERVATION_MICRO_CENTS:-1000000}"
       LOGOS_GATEWAY_BUDGET_RESERVATION_STALE_MINUTES: "${LOGOS_GATEWAY_BUDGET_RESERVATION_STALE_MINUTES:-30}"
       LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS: "${LOGOS_GATEWAY_BUDGET_RESERVATION_RECONCILE_SECONDS:-60}"
@@ -464,7 +470,7 @@ services:
       # and to both services but not to this line is still routed straight to the
       # orchestrator — which does not serve Spring's paths and answers 404. That
       # is what happened to lanes/add: present end to end, unreachable in prod.
-      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/drain`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`)"
+      - "traefik.http.routers.webservice-logosnode-admin.rule=Path(`/api/logosdb/providers/logosnode/calibrate_uncalibrated`) || Path(`/api/logosdb/providers/logosnode/stop_calibration`) || Path(`/api/logosdb/providers/logosnode/lanes/delete`) || Path(`/api/logosdb/providers/logosnode/lanes/add`) || Path(`/api/logosdb/providers/logosnode/lanes/load_status`) || Path(`/api/logosdb/providers/logosnode/lanes/sleep`) || Path(`/api/logosdb/providers/logosnode/lanes/drain`) || Path(`/api/logosdb/providers/logosnode/lanes/wake`) || Path(`/api/logosdb/providers/logosnode/lanes/locks`) || Path(`/api/logosdb/providers/logosnode/lanes/lock`) || Path(`/api/logosdb/providers/logosnode/lanes/unlock`)"
       - "traefik.http.routers.webservice-logosnode-admin.entrypoints=internal8090"
       - "traefik.http.routers.webservice-logosnode-admin.service=logos-webservice-svc"
       - "traefik.http.routers.webservice-logosnode-admin.middlewares=strip-api,rl-admin"

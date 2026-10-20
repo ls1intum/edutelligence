@@ -1132,6 +1132,98 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("errorsOnly") Boolean errorsOnly);
 
     /**
+     * How long finished requests waited and ran, per model, provider and
+     * reasoning effort: the 50th and 95th percentile of the Logos-side wait
+     * (arrival to the provider call), of the provider's own time (provider
+     * call to provider response) and of the time to first token (arrival to
+     * first token). Covers local workers and cloud providers alike; each row
+     * says which it is, classified as {@link #findTimeSeries} does (a provider
+     * whose privacy level is LOCAL, or none, is local; a request without a
+     * provider counts as local too).
+     *
+     * The window predicate, the scope and the provider-call split are the ones
+     * {@link #findModelBreakdown} uses, so a model's averages there and its
+     * percentiles here describe the same requests. Percentiles need the single
+     * rows, so this reads log_entry directly instead of the hourly rollup; it
+     * runs when the range or the scope changes, not on the push cadence.
+     *
+     * The effort is the one the provider was sent (log_entry.reasoning_effort,
+     * after the orchestrator mapped it onto the model's scale), so a local
+     * model shows the efforts it actually served, not the ones clients asked
+     * for. Requests without an effort form their own row (effort null).
+     *
+     * A model that still exists is one row per provider and effort under its
+     * current name, however its rows captured the name at request time. Only
+     * rows of a deleted model fall back to the captured name.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        WITH finished AS (
+            SELECT le.model_id, le.model_name, le.provider_id, le.reasoning_effort,
+                   (le.result_status IS DISTINCT FROM 'success'
+                    OR (le.error_message IS NOT NULL AND le.error_message <> '')) AS failed,
+                   CASE WHEN le.timestamp_request IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_call, le.timestamp_forwarding)
+                                                - le.timestamp_request)) * 1000 END AS queue_ms,
+                   CASE WHEN COALESCE(le.timestamp_provider_call, le.timestamp_forwarding) IS NOT NULL
+                          AND COALESCE(le.timestamp_provider_response, le.timestamp_response) IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (COALESCE(le.timestamp_provider_response, le.timestamp_response)
+                                                - COALESCE(le.timestamp_provider_call, le.timestamp_forwarding))) * 1000
+                   END AS upstream_ms,
+                   CASE WHEN le.timestamp_request IS NOT NULL AND le.time_at_first_token IS NOT NULL
+                        THEN EXTRACT(EPOCH FROM (le.time_at_first_token - le.timestamp_request)) * 1000 END AS ttft_ms
+            FROM log_entry le
+            WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+              AND le.timestamp_response IS NOT NULL
+              AND (le.model_id IS NOT NULL OR le.model_name IS NOT NULL)
+              AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+              AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+              AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
+              AND (:allModels = TRUE OR le.model_id IN (:modelIds))
+              AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
+        ),
+        named AS (
+            SELECT f.*, m.id AS live_model_id, m.name AS live_model_name,
+                   CASE WHEN m.id IS NULL THEN f.model_name END AS deleted_model_name,
+                   CASE WHEN m.id IS NULL AND f.model_name IS NULL THEN f.model_id END AS unnamed_model_id
+            FROM finished f
+            LEFT JOIN models m ON m.id = f.model_id
+        )
+        SELECT COALESCE(f.live_model_id, MIN(f.model_id)) AS modelId,
+               COALESCE(f.live_model_name, f.deleted_model_name, 'Model ' || MIN(f.model_id)) AS modelName,
+               f.provider_id AS providerId,
+               COALESCE(p.name, 'Provider ' || f.provider_id) AS providerName,
+               (p.privacy_level = 'LOCAL' OR p.privacy_level IS NULL) AS local,
+               f.reasoning_effort AS reasoningEffort,
+               COUNT(*)::bigint AS requestCount,
+               COUNT(*) FILTER (WHERE f.failed)::bigint AS errorCount,
+               (percentile_cont(0.5)  WITHIN GROUP (ORDER BY f.queue_ms))::double precision    AS queueP50Ms,
+               (percentile_cont(0.95) WITHIN GROUP (ORDER BY f.queue_ms))::double precision    AS queueP95Ms,
+               (percentile_cont(0.5)  WITHIN GROUP (ORDER BY f.upstream_ms))::double precision AS upstreamP50Ms,
+               (percentile_cont(0.95) WITHIN GROUP (ORDER BY f.upstream_ms))::double precision AS upstreamP95Ms,
+               COUNT(f.ttft_ms)::bigint AS ttftSamples,
+               (percentile_cont(0.5)  WITHIN GROUP (ORDER BY f.ttft_ms))::double precision     AS ttftP50Ms,
+               (percentile_cont(0.95) WITHIN GROUP (ORDER BY f.ttft_ms))::double precision     AS ttftP95Ms
+        FROM named f
+        LEFT JOIN providers p ON p.id = f.provider_id
+        GROUP BY f.live_model_id, f.live_model_name, f.deleted_model_name, f.unnamed_model_id, f.provider_id, p.name,
+                 p.privacy_level, f.reasoning_effort
+        ORDER BY requestCount DESC, modelName, providerName, reasoningEffort NULLS FIRST
+        """, nativeQuery = true)
+    List<RequestLatencyProjection> findRequestLatency(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("userId") Integer userId,
+        @Param("teamId") Integer teamId,
+        @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
+        @Param("allModels") boolean allModels,
+        @Param("modelIds") List<Integer> modelIds,
+        @Param("errorsOnly") Boolean errorsOnly);
+
+    /**
      * The request-volume series.
      *
      * {@code useRollup} is false for the sub-hour buckets, which the hourly

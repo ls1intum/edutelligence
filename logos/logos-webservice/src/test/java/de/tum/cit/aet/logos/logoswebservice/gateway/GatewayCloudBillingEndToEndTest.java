@@ -8,6 +8,10 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -90,6 +94,9 @@ class GatewayCloudBillingEndToEndTest {
     private volatile int responseStatus = 200;
     private volatile String responseContentType = "application/json";
     private volatile String responseBody = "{}";
+    /** When set, the upstream sends this after {@link #responseBody}, {@link #tailDelayMs} later. */
+    private volatile String responseTail;
+    private volatile long tailDelayMs;
 
     @BeforeEach
     void startUpstream() throws IOException {
@@ -98,8 +105,20 @@ class GatewayCloudBillingEndToEndTest {
             seenRequestBody.set(exchange.getRequestBody().readAllBytes());
             byte[] out = responseBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", responseContentType);
-            exchange.sendResponseHeaders(responseStatus, out.length);
-            exchange.getResponseBody().write(out);
+            if (responseTail == null) {
+                exchange.sendResponseHeaders(responseStatus, out.length);
+                exchange.getResponseBody().write(out);
+            } else {
+                exchange.sendResponseHeaders(responseStatus, 0);
+                exchange.getResponseBody().write(out);
+                exchange.getResponseBody().flush();
+                try {
+                    Thread.sleep(tailDelayMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                exchange.getResponseBody().write(responseTail.getBytes(StandardCharsets.UTF_8));
+            }
             exchange.close();
         });
         upstream.start();
@@ -113,6 +132,163 @@ class GatewayCloudBillingEndToEndTest {
     }
 
     // ------------------------------------------------------ non-streaming
+
+    // ------------------------------------------------------------ timings
+
+    @Test
+    void reasoningEffort_isStoredOnTheRow() throws Exception {
+        Fixture f = seedPricedDeployment();
+        Integer withEffort = accounting.admitAndReserve(
+            f.key(), f.deployment(), requestBody(false), "BILLING", Instant.now(), "high");
+        Integer withoutEffort = accounting.admitAndReserve(
+            f.key(), f.deployment(), requestBody(false), "BILLING", Instant.now(), null);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT reasoning_effort FROM log_entry WHERE id = ?", String.class, withEffort)).isEqualTo("high");
+        assertThat(jdbc.queryForObject(
+            "SELECT reasoning_effort FROM log_entry WHERE id = ?", String.class, withoutEffort)).isNull();
+    }
+
+    @Test
+    void admissionWait_isDatedFromArrivalSoTheQueueFigureShowsIt() throws Exception {
+        // A request that waited for its key lookup and budget check before the
+        // row existed must not read as admitted instantly.
+        responseBody = "{\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}";
+        Fixture f = seedPricedDeployment();
+        Instant arrivedAt = Instant.now().minusSeconds(42);
+        Integer logId = accounting.admitAndReserve(
+            f.key(), f.deployment(), requestBody(false), "BILLING", arrivedAt);
+        assertThat(logId).isNotNull();
+
+        runForward(f, requestBody(false));
+
+        Map<String, Object> row = timings(logId);
+        assertThat(((Timestamp) row.get("timestamp_request")).toInstant()).isEqualTo(
+            arrivedAt.truncatedTo(ChronoUnit.MICROS));
+        Double queueSeconds = jdbc.queryForObject(
+            "SELECT EXTRACT(EPOCH FROM (timestamp_provider_call - timestamp_request)) "
+            + "FROM log_entry WHERE id = ?", Double.class, logId);
+        assertThat(queueSeconds).isGreaterThanOrEqualTo(42.0);
+    }
+
+    @Test
+    void settledRow_carriesTheProviderWindowAndTimeToFirstToken() throws Exception {
+        responseContentType = "text/event-stream";
+        responseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+            + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"
+            + "data: [DONE]\n\n";
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+
+        runForward(f, requestBody(true));
+
+        Map<String, Object> row = timings(logId);
+        assertThat(row.values()).doesNotContainNull();
+        assertThat(instant(row, "timestamp_request")).isBeforeOrEqualTo(instant(row, "timestamp_forwarding"));
+        assertThat(instant(row, "timestamp_forwarding")).isBeforeOrEqualTo(instant(row, "timestamp_provider_call"));
+        assertThat(instant(row, "timestamp_provider_call")).isBeforeOrEqualTo(instant(row, "time_at_first_token"));
+        assertThat(instant(row, "time_at_first_token"))
+            .isBeforeOrEqualTo(instant(row, "timestamp_provider_response"));
+        assertThat(instant(row, "timestamp_provider_response"))
+            .isBeforeOrEqualTo(instant(row, "timestamp_response"));
+    }
+
+    @Test
+    void slowClient_doesNotStretchTheProviderTime() throws Exception {
+        responseContentType = "text/event-stream";
+        responseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+            + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"
+            + "data: [DONE]\n\n";
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+
+        ResponseEntity<StreamingResponseBody> response = forward(f, requestBody(true), "/v1/chat/completions");
+        response.getBody().writeTo(new OutputStream() {
+            @Override
+            public void write(int b) throws IOException {
+                write(new byte[] {(byte) b}, 0, 1);
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) throws IOException {
+                try {
+                    Thread.sleep(400);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(e);
+                }
+            }
+        });
+
+        Map<String, Object> row = timings(logId);
+        assertThat(Duration.between(instant(row, "timestamp_provider_response"), instant(row, "timestamp_response")))
+            .isGreaterThanOrEqualTo(Duration.ofMillis(350));
+        assertThat(instant(row, "time_at_first_token"))
+            .isBeforeOrEqualTo(instant(row, "timestamp_provider_response"));
+    }
+
+    @Test
+    void providerWorkDuringABlockedClientWrite_staysInTheProviderTime() throws Exception {
+        // The client blocks on the role-only event while the upstream takes
+        // 600 ms to send the content; that time is the provider's.
+        responseContentType = "text/event-stream";
+        responseBody = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n";
+        responseTail = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+            + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"
+            + "data: [DONE]\n\n";
+        tailDelayMs = 600;
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+
+        ResponseEntity<StreamingResponseBody> response = forward(f, requestBody(true), "/v1/chat/completions");
+        java.util.concurrent.atomic.AtomicBoolean first = new java.util.concurrent.atomic.AtomicBoolean(true);
+        response.getBody().writeTo(new OutputStream() {
+            @Override
+            public void write(int b) throws IOException {
+                write(new byte[] {(byte) b}, 0, 1);
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) throws IOException {
+                if (first.getAndSet(false)) {
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException(e);
+                    }
+                }
+            }
+        });
+
+        Map<String, Object> row = timings(logId);
+        Instant call = instant(row, "timestamp_provider_call");
+        assertThat(Duration.between(call, instant(row, "time_at_first_token")))
+            .isGreaterThanOrEqualTo(Duration.ofMillis(550))
+            .isLessThan(Duration.ofMillis(1400));
+        assertThat(Duration.between(call, instant(row, "timestamp_provider_response")))
+            .isGreaterThanOrEqualTo(Duration.ofMillis(550))
+            .isLessThan(Duration.ofMillis(1400));
+        assertThat(Duration.between(instant(row, "timestamp_provider_response"), instant(row, "timestamp_response")))
+            .isGreaterThanOrEqualTo(Duration.ofMillis(300));
+    }
+
+    @Test
+    void failedUpstream_keepsItsProviderWindow() throws Exception {
+        // An upstream error took provider time; without the window it would be
+        // read as time spent waiting inside Logos.
+        responseStatus = 500;
+        responseBody = "{\"error\":\"boom\"}";
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+
+        runForward(f, requestBody(false));
+
+        Map<String, Object> row = timings(logId);
+        assertThat(status(logId)).isEqualTo("error");
+        assertThat(row.get("timestamp_provider_call")).isNotNull();
+        assertThat(row.get("timestamp_provider_response")).isNotNull();
+    }
 
     @Test
     void jsonCompletion_isBilledFromItsReportedTokens() throws Exception {
@@ -476,8 +652,8 @@ class GatewayCloudBillingEndToEndTest {
             Map.of("content-type", List.of("application/json")),
             f.key().logsFullPayloads(),
             result -> accounting.settleSuccess(
-                logId, result.usage(), result.responseBody(), result.serviceTier()),
-            err -> accounting.settleFailure(logId, err));
+                logId, result.usage(), result.responseBody(), result.serviceTier(), result.timings()),
+            (err, timings) -> accounting.settleFailure(logId, err, timings));
     }
 
     /** The reservation this forward belongs to — the one the controller just made. */
@@ -552,6 +728,16 @@ class GatewayCloudBillingEndToEndTest {
     private Long cost(int logEntryId) {
         return jdbc.queryForObject(
             "SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = ?", Long.class, logEntryId);
+    }
+
+    private Map<String, Object> timings(int logEntryId) {
+        return jdbc.queryForMap(
+            "SELECT timestamp_request, timestamp_forwarding, timestamp_provider_call, time_at_first_token, "
+            + "timestamp_provider_response, timestamp_response FROM log_entry WHERE id = ?", logEntryId);
+    }
+
+    private static Instant instant(Map<String, Object> row, String column) {
+        return ((Timestamp) row.get(column)).toInstant();
     }
 
     private Long settledCost(int logEntryId) {

@@ -1,0 +1,48 @@
+:host {
+  display: block;
+}
+
+// The tag stays visible; only a long provider name is shortened.
+.cell-provider {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.cell-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cell-strong {
+  font-weight: var(--font-weight-semibold);
+}
+
+.cell-errors {
+  margin-left: 4px;
+  font-size: var(--font-size-xs);
+  color: rgb(var(--color-error));
+}
+
+// Same look as the Cloud/Local badge of the recent requests list.
+.cell-kind {
+  flex: none;
+  display: inline-block;
+  margin-left: 6px;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--letter-spacing-wider);
+  border-radius: 8px;
+  padding: 2px 6px;
+  background: rgb(var(--color-outline-200) / var(--opacity-soft));
+  color: rgb(var(--color-typography-300));
+}
+
+.cell-muted {
+  font-style: italic;
+  color: rgb(var(--color-typography-700));
+}

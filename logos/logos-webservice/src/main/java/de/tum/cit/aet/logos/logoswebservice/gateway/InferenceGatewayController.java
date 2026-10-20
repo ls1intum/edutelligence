@@ -1,6 +1,7 @@
 package de.tum.cit.aet.logos.logoswebservice.gateway;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -73,6 +74,10 @@ public class InferenceGatewayController {
 
     @RequestMapping({"/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**"})
     public ResponseEntity<StreamingResponseBody> handle(HttpServletRequest request) throws IOException {
+        // Taken before the key lookup: waiting for a database connection or a
+        // budget refresh is part of what the caller waited for, and the log
+        // row should show it.
+        Instant arrivedAt = Instant.now();
         String apiKeyValue = GatewayApiKeyExtractor.extract(request);
         String path = pathWithinApp(request);
 
@@ -102,7 +107,8 @@ public class InferenceGatewayController {
         // Named-model path: key-only auth first, then body, then deployments.
         GatewayKey key = authService.requireActiveKey(apiKeyValue);
         byte[] body = GatewayBodyReader.read(request.getInputStream());
-        String modelName = extractModelName(body, contentType);
+        JsonNode root = parseJsonBody(body, contentType);
+        String modelName = extractModelName(root);
 
         if (modelName != null
                 && GatewayRouteResolver.isDirectCloudEligible(path, request.getMethod())
@@ -117,7 +123,8 @@ public class InferenceGatewayController {
                 cloudRateLimiter.enforce(ctx.key(), body);
                 String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
                 Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), body, logLevel);
+                    ctx.key(), decision.deployment(), body, logLevel, arrivedAt,
+                    GatewayReasoningEffort.from(root));
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());
@@ -130,8 +137,8 @@ public class InferenceGatewayController {
                     copyHeaders(request),
                     GatewayLoggingLevel.storesPayloads(logLevel),
                     result -> cloudAccounting.settleSuccess(
-                        logId, result.usage(), result.responseBody(), result.serviceTier()),
-                    err -> cloudAccounting.settleFailure(logId, err));
+                        logId, result.usage(), result.responseBody(), result.serviceTier(), result.timings()),
+                    (err, timings) -> cloudAccounting.settleFailure(logId, err, timings));
             }
             log.debug("Orchestrator proxy {} {} reason={}",
                 request.getMethod(), path, decision.reason());
@@ -184,7 +191,8 @@ public class InferenceGatewayController {
                 before, modelName, threshold);
     }
 
-    private String extractModelName(byte[] body, String contentType) {
+    /** The JSON body, parsed once for the model name and the reasoning effort; null when it is none. */
+    private JsonNode parseJsonBody(byte[] body, String contentType) {
         if (body == null || body.length == 0) {
             return null;
         }
@@ -192,16 +200,22 @@ public class InferenceGatewayController {
             return null;
         }
         try {
-            JsonNode root = objectMapper.readTree(body);
-            JsonNode model = root.get("model");
-            if (model == null || model.isNull()) {
-                return null;
-            }
-            String value = model.asText(null);
-            return value == null || value.isBlank() ? null : value.strip();
+            return objectMapper.readTree(body);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static String extractModelName(JsonNode root) {
+        if (root == null) {
+            return null;
+        }
+        JsonNode model = root.get("model");
+        if (model == null || model.isNull()) {
+            return null;
+        }
+        String value = model.asText(null);
+        return value == null || value.isBlank() ? null : value.strip();
     }
 
     private static String pathWithinApp(HttpServletRequest request) {
