@@ -34,6 +34,12 @@ permissions:
   issues: write
   pull-requests: write
 
+# The self-hosted runners carry a newer system Python, which uv would pick over
+# the setup-python interpreter; the orchestrator must stay on 3.13 (tiktoken
+# has no wheels for newer versions and would need a Rust toolchain to build).
+env:
+  UV_PYTHON: "3.13"
+
 jobs:
   benchmark:
     name: Benchmark

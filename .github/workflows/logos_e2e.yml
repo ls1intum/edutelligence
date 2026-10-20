@@ -29,6 +29,12 @@ concurrency:
 permissions:
   contents: read
 
+# The self-hosted runners carry a newer system Python, which uv would pick over
+# the setup-python interpreter; the orchestrator must stay on 3.13 (tiktoken
+# has no wheels for newer versions and would need a Rust toolchain to build).
+env:
+  UV_PYTHON: "3.13"
+
 jobs:
   # Tier 1: the real worker driven against simulated GPUs. No Docker, no
   # network — this is the fast gate, and it is where the GPU-compatibility
@@ -182,7 +188,9 @@ jobs:
         working-directory: logos/logos-ui
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        # Browser only: the self-hosted runners have no passwordless sudo for
+        # --with-deps, and carry the system libraries Chromium needs.
+        run: npx playwright install chromium
         working-directory: logos/logos-ui
 
       - name: Start the stack with the UI profile
