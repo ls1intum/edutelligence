@@ -256,7 +256,9 @@ class ContextResolver:
                 with perf_trace.phase(request_id, "context.select_lane"):
                     lane = prepared_lane
                     if lane is None:
-                        lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                        lane = await self._logosnode_registry.select_lane_for_model(
+                            provider_id, model_name, request_id=request_id
+                        )
                     # Retry loop: lane may be transitioning (loading/waking)
                     # after reevaluate_model_queues dispatched us.
                     if lane is None and wait_for_lane:
@@ -268,7 +270,9 @@ class ContextResolver:
                         # retries back off to 2s.
                         for attempt in range(65):
                             await asyncio.sleep(1.0 if attempt < 10 else 2.0)
-                            lane = await self._logosnode_registry.select_lane_for_model(provider_id, model_name)
+                            lane = await self._logosnode_registry.select_lane_for_model(
+                                provider_id, model_name, request_id=request_id
+                            )
                             if lane is not None:
                                 logger.info(
                                     "Lane became available after %ds for provider=%s model=%s",

@@ -4092,6 +4092,15 @@ async def test_a_command_answer_carries_the_lifecycle_revision_after_the_command
 
 
 @pytest.mark.asyncio
+async def test_reconfigure_passes_explicit_restart_to_lane_manager():
+    client = _client_with_calibration_session(session_done=True)
+    manager = SimpleNamespace(reconfigure_lane=AsyncMock(return_value=_make_lane_status()))
+    client._app.state.lane_manager = manager
+    await client._execute_command("reconfigure_lane", {"lane_id": "lane-a", "updates": {}, "force_restart": True})
+    manager.reconfigure_lane.assert_awaited_once_with("lane-a", {}, require_idle=True, force_restart=True)
+
+
+@pytest.mark.asyncio
 async def test_a_model_calibrated_meanwhile_is_not_calibrated_again(tmp_path, monkeypatch):
     """Logos may hand the node a calibration measured elsewhere during the
     session; probing that model anyway would be wasted GPU time."""

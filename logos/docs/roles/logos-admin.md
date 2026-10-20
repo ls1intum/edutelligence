@@ -104,6 +104,12 @@ Use the time range bar of the tab to select the period.
 
 ![Delays tab of a model](/img/roles/logos-admin-model-details-delays.png)
 
+### Model benchmarks
+
+Open the model's **Performance** tab to configure and start a benchmark.
+The orchestrator reserves the selected model lanes during a worker benchmark.
+The [Model Benchmarks guide](../admin/model-benchmarks.md) explains the confirmation dialog, single-run charts, batches and failed-model retries.
+
 ## Providers
 
 This page shows each provider that the deployment knows. These are cloud

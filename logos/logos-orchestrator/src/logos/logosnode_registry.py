@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from fastapi import WebSocket
 
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.monitoring import prometheus_metrics as prom
 from logos.terminal_logging import (
     BOLD,
@@ -1249,6 +1250,17 @@ class LogosNodeRuntimeRegistry:
                 }
             )
 
+    @staticmethod
+    def _check_benchmark_reservation(session, action, params, request_id) -> None:
+        if action not in {"infer", "infer_stream"}:
+            return
+        lane_id = (params or {}).get("lane_id")
+        lanes = (session.latest_runtime or {}).get("lanes") or []
+        lane = next((lane for lane in lanes if lane.get("lane_id") == lane_id), None)
+        model = lane.get("model") if lane else ((params or {}).get("payload") or {}).get("model")
+        if model and not benchmark_reservations.allows(session.provider_id, model, request_id):
+            raise LogosNodeCommandError("The lane is reserved for an active benchmark")
+
     async def send_command(
         self,
         provider_id: int,
@@ -1258,6 +1270,7 @@ class LogosNodeRuntimeRegistry:
         stale_after_seconds: int = 30,
         on_sent: Callable[[], None] | None = None,
         on_dispatched: Callable[[asyncio.Future], None] | None = None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
         """Send a command to the worker and wait for its answer.
 
@@ -1309,6 +1322,7 @@ class LogosNodeRuntimeRegistry:
         writing = False
         try:
             async with session.send_lock:
+                self._check_benchmark_reservation(session, action, params, request_id)
                 # Handed over right before the frame is written: a caller
                 # cancelled while it is being written cannot tell whether the
                 # worker got it, so the answer must already be in its hands.
@@ -1398,6 +1412,7 @@ class LogosNodeRuntimeRegistry:
         timeout_seconds: int = 20,
         stale_after_seconds: int = 30,
         on_sent: Callable[[], None] | None = None,
+        request_id: str | None = None,
     ) -> AsyncIterator[bytes]:
         session = await self._get_active_session(provider_id, stale_after_seconds)
         cmd_id = str(uuid.uuid4())
@@ -1412,6 +1427,7 @@ class LogosNodeRuntimeRegistry:
         }
         try:
             async with session.send_lock:
+                self._check_benchmark_reservation(session, action, params, request_id)
                 await session.websocket.send_json(message)
         except Exception as exc:  # noqa: BLE001
             session.pending_streams.pop(cmd_id, None)
@@ -1726,8 +1742,11 @@ class LogosNodeRuntimeRegistry:
         provider_id: int,
         model_name: str,
         stale_after_seconds: int = 30,
+        request_id: str | None = None,
     ) -> dict[str, Any] | None:
         session = await self._get_active_session(provider_id, stale_after_seconds)
+        if not benchmark_reservations.allows(provider_id, model_name, request_id):
+            return None
         if session.capabilities_models and model_name not in session.capabilities_models:
             return None
         lanes = (session.latest_runtime or {}).get("lanes") or []

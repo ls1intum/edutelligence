@@ -8,15 +8,15 @@ provider-model pair → GuideLLM → benchmarks.json → Logos import endpoint �
 
 ## Run from Logos
 
-For the normal admin flow, open **Models → Model Management → model → Performance**
-and select **Run benchmark** next to the provider-model pair. Logos runs 5 questions
-from GSM8K `main/test` with at most 512 output tokens, shows the live job status, and
-adds the successful summary to the same page automatically. Logos worker-node runs
-use a signed, job-scoped internal endpoint and therefore need no benchmark endpoint
-or API key under **Providers**. External provider runs still use their configured
-server-side endpoint and credential.
+For the admin workflow, use **Models → Model Management → model → Performance → Run benchmark**.
+Follow the [Model Benchmarks guide](../docs/admin/model-benchmarks.md) for configuration,
+confirmation, results and screenshots.
 
 The commands below remain available for local diagnosis and manual imports.
+They do not create an internal benchmark job or acquire its lane reservation.
+Requests sent to Logos through a public endpoint remain normal production requests.
+See [Configurable model benchmarks](../logos-orchestrator/docs/benchmark-configuration.md)
+for the orchestrator's reservation and API behavior.
 
 ## Setup
 
@@ -46,7 +46,7 @@ python run_guidellm_gsm8k.py \
 
 ## Run without importing
 
-For the current test against Logos-dev, only its API key is required:
+To measure Logos Dev without importing results, use its API key:
 
 ```bash
 export MODEL_PROVIDER_API_KEY='<logos-dev-api-key>'

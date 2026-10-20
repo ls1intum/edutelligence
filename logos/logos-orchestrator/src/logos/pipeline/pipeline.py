@@ -516,87 +516,91 @@ class RequestPipeline:
         first_attempt = True
         polls = 0
 
-        while True:
-            try:
-                exec_context = await self._context_resolver.resolve_context(
-                    model_id=scheduling_result.model_id,
-                    provider_id=scheduling_result.provider_id,
-                    request_path=request_path,
-                    request_id=request_id,
-                    deployment_info=deployment_info,
-                    wait_for_lane=False,
-                )
-            except Exception as exc:  # noqa: BLE001
-                self._release_scheduler_safe(scheduling_result, request_id, "exception")
-                logger.warning(
-                    "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
-                    request_id,
-                    scheduling_result.model_id,
-                    scheduling_result.provider_id,
-                    exc,
-                )
-                return self._context_failure(
-                    scheduling_result,
-                    classification_result,
-                    request_id,
-                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}: {exc}",
-                )
+        try:
+            while True:
+                try:
+                    exec_context = await self._context_resolver.resolve_context(
+                        model_id=scheduling_result.model_id,
+                        provider_id=scheduling_result.provider_id,
+                        request_path=request_path,
+                        request_id=request_id,
+                        deployment_info=deployment_info,
+                        wait_for_lane=False,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._release_scheduler_safe(scheduling_result, request_id, "exception")
+                    logger.warning(
+                        "Execution context resolution raised for request %s (model_id=%s, provider_id=%s): %s",
+                        request_id,
+                        scheduling_result.model_id,
+                        scheduling_result.provider_id,
+                        exc,
+                    )
+                    return self._context_failure(
+                        scheduling_result,
+                        classification_result,
+                        request_id,
+                        error=f"Failed to resolve execution context for model {scheduling_result.model_id}: {exc}",
+                    )
 
-            if exec_context is not None:
-                return PipelineResult(
-                    success=True,
-                    model_id=scheduling_result.model_id,
-                    provider_id=scheduling_result.provider_id,
-                    execution_context=exec_context,
-                    classification_stats=classification_result.stats,
-                    scheduling_stats=self._scheduling_stats(scheduling_result, request_id, schedule_start_s),
-                )
+                if exec_context is not None:
+                    return PipelineResult(
+                        success=True,
+                        model_id=scheduling_result.model_id,
+                        provider_id=scheduling_result.provider_id,
+                        execution_context=exec_context,
+                        classification_stats=classification_result.stats,
+                        scheduling_stats=self._scheduling_stats(scheduling_result, request_id, schedule_start_s),
+                    )
 
-            # For cloud providers or after timeout, fail immediately
-            if scheduling_result.provider_type != "logosnode" or time.monotonic() >= deadline:
-                self._release_scheduler_safe(scheduling_result, request_id, "failure")
-                return self._context_failure(
-                    scheduling_result,
-                    classification_result,
-                    request_id,
-                    error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
-                )
+                # For cloud providers or after timeout, fail immediately
+                if scheduling_result.provider_type != "logosnode" or time.monotonic() >= deadline:
+                    self._release_scheduler_safe(scheduling_result, request_id, "failure")
+                    return self._context_failure(
+                        scheduling_result,
+                        classification_result,
+                        request_id,
+                        error=f"Failed to resolve execution context for model {scheduling_result.model_id}",
+                    )
 
-            if first_attempt:
-                logger.info(
-                    "No lane ready yet for request %s (model=%s, provider=%s); "
-                    "waiting up to %.0fs for lane to become available",
-                    request_id,
-                    scheduling_result.model_id,
-                    scheduling_result.provider_id,
-                    self._CONTEXT_RESOLVE_TIMEOUT_S,
-                )
-                first_attempt = False
+                if first_attempt:
+                    logger.info(
+                        "No lane ready yet for request %s (model=%s, provider=%s); "
+                        "waiting up to %.0fs for lane to become available",
+                        request_id,
+                        scheduling_result.model_id,
+                        scheduling_result.provider_id,
+                        self._CONTEXT_RESOLVE_TIMEOUT_S,
+                    )
+                    first_attempt = False
 
-            # Never wait for this lane while another deployment of the model
-            # could serve the request now.
-            rerouted = self._try_reroute(scheduling_result, scheduling_request, request_id)
-            if rerouted is not None:
-                self._clear_lane_waiter(request_id)
-                self._monitoring.record_scheduled(
-                    request_id=request_id,
-                    model_id=rerouted.model_id,
-                    provider_id=rerouted.provider_id,
-                    priority_when_scheduled=rerouted.priority_when_scheduled,
-                    queue_depth_at_schedule=rerouted.queue_depth_at_schedule,
-                    provider_metrics=rerouted.provider_metrics,
-                )
-                scheduling_result = rerouted
-                if pipeline_request is not None:
-                    deployment_info = self._scheduled_deployment(pipeline_request, scheduling_result)
-                continue
+                # Never wait for this lane while another deployment of the model
+                # could serve the request now.
+                rerouted = self._try_reroute(scheduling_result, scheduling_request, request_id)
+                if rerouted is not None:
+                    self._clear_lane_waiter(request_id)
+                    self._monitoring.record_scheduled(
+                        request_id=request_id,
+                        model_id=rerouted.model_id,
+                        provider_id=rerouted.provider_id,
+                        priority_when_scheduled=rerouted.priority_when_scheduled,
+                        queue_depth_at_schedule=rerouted.queue_depth_at_schedule,
+                        provider_metrics=rerouted.provider_metrics,
+                    )
+                    scheduling_result = rerouted
+                    if pipeline_request is not None:
+                        deployment_info = self._scheduled_deployment(pipeline_request, scheduling_result)
+                    continue
 
-            polls += 1
-            await asyncio.sleep(
-                self._CONTEXT_RESOLVE_FAST_INTERVAL_S
-                if polls <= self._CONTEXT_RESOLVE_FAST_POLLS
-                else self._CONTEXT_RESOLVE_INTERVAL_S
-            )
+                polls += 1
+                await asyncio.sleep(
+                    self._CONTEXT_RESOLVE_FAST_INTERVAL_S
+                    if polls <= self._CONTEXT_RESOLVE_FAST_POLLS
+                    else self._CONTEXT_RESOLVE_INTERVAL_S
+                )
+        except asyncio.CancelledError:
+            self._release_scheduler_safe(scheduling_result, request_id, "cancellation")
+            raise
 
     def _clear_lane_waiter(self, request_id: str) -> None:
         clear = getattr(self._context_resolver, "clear_lane_waiter", None)

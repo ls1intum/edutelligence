@@ -45,6 +45,7 @@ from logos.benchmarks.guidellm_runner import (
     BENCHMARK_TOKEN_HEADER,
     benchmark_affinity_token,
 )
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.billing.budget import check_monthly_budget
 from logos.billing.finalize import finalize_billing_inputs
 from logos.capacity.calibration_orchestrator import CalibrationConfig, CalibrationOrchestrator
@@ -145,6 +146,7 @@ def _forget_benchmark_task(job_id: int, task: asyncio.Task) -> None:
     _benchmark_tasks.discard(task)
     _benchmark_tasks_by_job.pop(job_id, None)
     _benchmark_sessions_by_job.pop(job_id, None)
+    benchmark_reservations.release(job_id)
 
 
 def _cancel_benchmark_job(job_id: int, reason: str) -> bool:
@@ -1909,6 +1911,7 @@ async def _streaming_response(
             return _logosnode_registry.send_stream_command(
                 provider_id=provider_id,
                 action="infer_stream",
+                request_id=request_id,
                 params={
                     "lane_id": context.lane_id,
                     "payload": stream_payload,
@@ -2604,6 +2607,7 @@ async def _sync_response(
                     rpc_result = await _logosnode_registry.send_command(
                         provider_id=provider_id,
                         action="infer",
+                        request_id=request_id,
                         params={
                             "lane_id": context.lane_id,
                             "payload": sync_payload,
@@ -2635,6 +2639,7 @@ async def _sync_response(
                         rpc_result = await _logosnode_registry.send_command(
                             provider_id=provider_id,
                             action="infer",
+                            request_id=request_id,
                             params={
                                 "lane_id": context.lane_id,
                                 "payload": sync_payload,

@@ -7,7 +7,10 @@ woken for it, and (b) move the request to another deployment of the same model
 that can serve it now, instead of waiting for the sleeping lane.
 """
 
+import asyncio
 from types import SimpleNamespace
+
+import pytest
 
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.pipeline import RequestPipeline, _ClassificationResult
@@ -54,7 +57,7 @@ class _Registry:
         self.lookups = {ASLEEP: 0, WARM: 0}
         self.wake_after = wake_after
 
-    async def select_lane_for_model(self, provider_id, model_name):  # noqa: ARG002
+    async def select_lane_for_model(self, provider_id, model_name, *, request_id=None):  # noqa: ARG002
         self.lookups[provider_id] += 1
         if provider_id == WARM:
             return {"lane_id": "warm-lane"}
@@ -148,6 +151,27 @@ async def test_a_request_on_a_sleeping_lane_moves_to_a_warm_deployment():
     # The planner was told about the waiting request, and the entry is gone
     # once the request has a lane.
     assert planner.registered == [("req-1", ASLEEP, "intfloat/multilingual-e5-large")]
+    assert planner.waiters == {}
+
+
+async def test_cancellation_after_rerouting_releases_the_current_deployment(monkeypatch):
+    planner = _Planner()
+    registry = _Registry()
+    scheduler = _Scheduler(reroute_to=WARM)
+    pipeline = _pipeline(scheduler, registry, planner)
+    resolve_context = pipeline._context_resolver.resolve_context
+
+    async def cancel_at_new_provider(**kwargs):
+        if kwargs["provider_id"] == WARM:
+            raise asyncio.CancelledError
+        return await resolve_context(**kwargs)
+
+    monkeypatch.setattr(pipeline._context_resolver, "resolve_context", cancel_at_new_provider)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _resolve(pipeline, _result(ASLEEP))
+
+    assert scheduler.released == [(MODEL_ID, ASLEEP), (MODEL_ID, WARM)]
     assert planner.waiters == {}
 
 

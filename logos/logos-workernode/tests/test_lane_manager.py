@@ -194,12 +194,28 @@ async def test_reconfigure_lane_rejects_change_without_nvidia_smi() -> None:
 
 
 @pytest.mark.asyncio
-async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
-    manager = LaneManager(WorkerConfig(gpu_devices="all"), lane_port_start=15001, lane_port_end=15010)
+@pytest.mark.parametrize(
+    ("global_args", "lane_args", "pipeline_size"),
+    [
+        ([], [], 1),
+        (["--pipeline-parallel-size", "2"], [], 2),
+        (["-pp=2"], [], 2),
+        ([], ["-pp", "3"], 3),
+        (["--pipeline-parallel-size=2"], ["-pp", "3"], 3),
+        (["-pp", "2"], ["--pipeline-parallel-size=3", "-pp=4"], 4),
+    ],
+)
+async def test_build_lane_status_includes_vllm_runtime_fields(global_args, lane_args, pipeline_size) -> None:
+    manager = LaneManager(
+        WorkerConfig(gpu_devices="all"),
+        vllm_engine_config=VllmEngineConfig(global_extra_args=global_args),
+        lane_port_start=15001,
+        lane_port_end=15010,
+    )
     lane = LaneConfig(
         model="deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
         vllm=True,
-        vllm_config=VllmConfig(enable_sleep_mode=True, tensor_parallel_size=2),
+        vllm_config=VllmConfig(enable_sleep_mode=True, tensor_parallel_size=2, extra_args=lane_args),
     )
 
     class FakeVllmHandle:
@@ -237,6 +253,7 @@ async def test_build_lane_status_includes_vllm_runtime_fields() -> None:
     assert status.sleep_state == "sleeping"
     assert status.runtime_state == "sleeping"
     assert status.backend_metrics["tensor_parallel_size"] == 2
+    assert status.backend_metrics["pipeline_parallel_size"] == pipeline_size
     assert status.reported_vram_mb == pytest.approx(1.0)
     assert status.pid_vram_mb == pytest.approx(7680.0)
     assert status.vram_source == "pid"
@@ -3669,7 +3686,12 @@ async def test_tp_restart_refreshes_released_vram_and_resizes_per_rank_cache(mon
     )
     manager._handles["lane"] = old
     manager._port_alloc._used["lane"] = 15000
-    new = MagicMock(init=AsyncMock(), spawn=AsyncMock(), destroy=AsyncMock(), close=AsyncMock())
+    new = MagicMock(
+        init=AsyncMock(),
+        spawn=AsyncMock(return_value=ProcessStatus(state=ProcessState.RUNNING, pid=12345)),
+        destroy=AsyncMock(),
+        close=AsyncMock(),
+    )
     monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: new)
     requested = current.model_copy(
         update={
@@ -3703,6 +3725,39 @@ async def test_failed_restart_placement_removes_dead_lane_bookkeeping() -> None:
     assert "lane" not in manager._active_requests
     assert "lane" not in manager._starting_deadlines
     assert not manager.starting_models()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [ProcessState.STOPPED, ProcessState.ERROR])
+async def test_restart_rejects_a_replacement_that_exited_after_readiness(monkeypatch, state) -> None:
+    lane = LaneConfig(model="org/model", vllm=True)
+    old = _StubHandle(lane)
+    manager = _manager_with_handles({"lane": old})
+    manager._port_alloc._used["lane"] = 15000
+    manager._active_requests["lane"] = 0
+    manager._starting_deadlines["lane"] = 123
+    manager._get_status_unlocked = AsyncMock()
+    replacement = MagicMock(
+        init=AsyncMock(),
+        spawn=AsyncMock(return_value=ProcessStatus(state=state, pid=12345, return_code=1)),
+        destroy=AsyncMock(),
+        close=AsyncMock(),
+    )
+    monkeypatch.setattr("logos_worker_node.lane_manager._create_handle", lambda *args, **kwargs: replacement)
+
+    with pytest.raises(RuntimeError, match=f"state={state.value}, return_code=1"):
+        await manager.reconfigure_lane("lane", {}, force_restart=True)
+
+    replacement.destroy.assert_awaited_once()
+    replacement.close.assert_awaited_once()
+    assert "lane" not in manager._handles
+    assert manager._port_alloc.get_port("lane") is None
+    assert "lane" not in manager._active_requests
+    assert "lane" not in manager._starting_deadlines
+    assert not manager.starting_models()
+    events = [event.event for event in manager._event_log]
+    assert "restart_failed" in events
+    assert "restart_ok" not in events
 
 
 class TestValidateCapabilities:
@@ -4373,6 +4428,25 @@ async def test_lane_occupancy_follows_a_tensor_parallel_override_in_extra_args()
     manager = _inventory_manager([_inventory_gpu(0), _inventory_gpu(1)])
     count = LaneManager._launch_gpu_count(vc, [])  # noqa: SLF001
     assert await manager._lane_occupied_gpu_devices(lane, "1,0", count) == "1"  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active", [0, 1])
+async def test_explicit_benchmark_restart_with_unchanged_configuration(active):
+    manager = LaneManager(WorkerConfig(), lane_port_start=15100, lane_port_end=15110)
+    current = LaneConfig(model="org/model", vllm=True)
+    manager._handles["lane"] = _StubHandle(current)
+    manager._active_requests["lane"] = active
+    manager._restart_lane_unlocked = AsyncMock()
+    manager._get_status_unlocked = AsyncMock()
+    manager._validate_vllm_runtime_requirements = MagicMock()
+    if active:
+        with pytest.raises(RuntimeError, match="still has 1 active request"):
+            await manager.reconfigure_lane("lane", {"model": current.model}, force_restart=True)
+        manager._restart_lane_unlocked.assert_not_awaited()
+    else:
+        await manager.reconfigure_lane("lane", {"model": current.model}, force_restart=True)
+        manager._restart_lane_unlocked.assert_awaited_once()
 
 
 def _shared_profile_manager(**profile: Any) -> LaneManager:

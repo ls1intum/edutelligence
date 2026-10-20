@@ -987,7 +987,9 @@ class LogosBridgeClient:
             return status.model_dump(mode="json")
         if action == "reconfigure_lane":
             updates = params.get("updates") or {}
-            if params.get("require_idle"):
+            if params.get("force_restart"):
+                status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True, force_restart=True)
+            elif params.get("require_idle"):
                 status = await lane_manager.reconfigure_lane(lane_id, updates, require_idle=True)
             else:
                 status = await lane_manager.reconfigure_lane(lane_id, updates)

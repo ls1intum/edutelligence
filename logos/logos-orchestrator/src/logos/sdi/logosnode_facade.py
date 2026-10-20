@@ -5,6 +5,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Set
 
+from logos.benchmarks.reservations import benchmark_reservations
 from logos.logosnode_registry import LogosNodeRuntimeRegistry
 
 from .models import (
@@ -417,6 +418,9 @@ class LogosNodeSchedulingDataFacade:
             provider_id = provider_id if provider_id is not None else tracking_data.get("provider_id")
             queue_wait_ms = (time.time() - tracking_data["arrival_time"]) * 1000 - duration_ms
             provider = self._get_provider_for_model(model_id, provider_id)
+            model_name = provider._model_id_to_name.get(model_id)
+            if model_name is not None:
+                benchmark_reservations.finish_request(request_id, deployment=(provider.provider_id, model_name))
             provider.decrement_active(
                 model_id, reuse_slot=reuse_slot, request_id=request_id, api_key_id=tracking_data.get("api_key_id")
             )
@@ -431,6 +435,17 @@ class LogosNodeSchedulingDataFacade:
                 priority=tracking_data["priority"],
             )
 
+    def model_inflight_requests(self, provider_id: int, model_name: str) -> int:
+        """Count locally admitted requests, including sends not in worker status yet."""
+        with self._lock:
+            tracked = {
+                rid
+                for rid, tracking in self._request_tracking.items()
+                if tracking.get("provider_id") == provider_id
+                and self.get_model_name(tracking["model_id"], provider_id) == model_name
+            }
+            return len(tracked | benchmark_reservations.admitted_requests(provider_id, model_name))
+
     def is_model_lane_ready(self, model_id: int, provider_id: int) -> bool:
         """Check if at least one lane for this model is in a ready state (loaded/running)."""
         try:
@@ -441,7 +456,12 @@ class LogosNodeSchedulingDataFacade:
 
     def try_reserve_capacity(self, model_id: int, provider_id: int, request_id: str) -> bool:
         provider = self._get_provider_for_model(model_id, provider_id)
-        return provider.try_reserve_capacity(model_id, request_id)
+        model = self.get_model_name(model_id, provider_id)
+        if not model:
+            return provider.try_reserve_capacity(model_id, request_id)
+        return benchmark_reservations.try_admit(
+            provider_id, model, request_id, lambda: provider.try_reserve_capacity(model_id, request_id)
+        )
 
     def evaluate_admission(self, model_id: int, provider_id: int) -> AdmissionDecision:
         """Whether this worker could start another request for the model now.

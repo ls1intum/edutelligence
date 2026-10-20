@@ -14,7 +14,7 @@ import { BenchmarkComparison } from './benchmark-comparison';
 import { BenchmarkBatchEditor } from './benchmark-batch-editor';
 import { BenchmarkBatch } from './benchmark-batch';
 import { BenchmarkSettingsEditor } from './benchmark-settings-editor';
-import { BenchmarkSettings, BenchmarkWorkerLimits, COMPARISON_SAMPLE_SIZE, comparisonBaseline, DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
+import { benchmarkErrorMessage, BenchmarkSettings, BenchmarkWorkerLimits, COMPARISON_SAMPLE_SIZE, comparisonBaseline, DEFAULT_BENCHMARK_SETTINGS, settingsFromBenchmark } from './benchmark-settings';
 import {
   CdkVirtualScrollViewport,
   ScrollingModule,
@@ -39,6 +39,7 @@ import type { RequestLatencyScope } from '../statistics/services/request-latency
 import { TimeRangeBarComponent } from '../../shared/components/time-range-bar/time-range-bar';
 import { TimePreset, calendarRange } from '../../shared/utils/time-range';
 
+import { ModalConfirmComponent } from '../../shared/components/modal/modal-confirm/modal-confirm';
 import { ErrorMessageComponent } from '../../shared/components/error-message/error-message';
 import { ModelAccess } from '../model-access/model-access';
 import {
@@ -634,6 +635,7 @@ const GENERIC_CALIBRATION_ERROR_DETAIL_MAX_LINES = 80;
     BenchmarkBatchEditor,
     BenchmarkComparison,
     BenchmarkRunFailure,
+    ModalConfirmComponent,
     ScrollingModule,
     ErrorMessageComponent,
     ModelAccess,
@@ -719,6 +721,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly performanceLoading = signal(false);
   private performanceRequestVersion = 0;
   readonly performanceError = signal(false);
+  readonly performanceView = signal<'results' | 'run'>('results');
   readonly benchmarkStartingPairId = signal<number | null>(null);
   readonly benchmarkCancellingJobId = signal<number | null>(null);
   readonly benchmarkStartError = signal<string | null>(null);
@@ -729,14 +732,56 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   readonly benchmarkBatchValid = signal(true);
   readonly benchmarkWorkerLimits = signal<BenchmarkWorkerLimits | null>(null);
   readonly benchmarkConfirmPairId = signal<number | null>(null);
+  readonly benchmarkConfirmPair = computed(() => this.benchmarkPairs().find(
+    pair => pair.model_provider_id === this.benchmarkConfirmPairId(),
+  ) ?? null);
+  readonly benchmarkConfirmationMessage = computed(() =>
+    this.benchmarkConfirmPair()?.provider_type === 'logosnode'
+      ? 'Existing requests finish first. New production requests wait or use another worker until this benchmark ends.'
+      : 'Other traffic can affect the results. This benchmark uses the provider alongside normal requests.',
+  );
   readonly benchmarkTotalRuns = computed(() => {
     const batch = this.benchmarkBatch();
     return batch ? batch.configurations.length * batch.repetitions : 1;
   });
   readonly selectedBenchmarkPairId = signal<number | null>(null);
-  readonly selectedBenchmarkPair = computed<ModelBenchmarkPair | null>(() => this.benchmarkPairs().find(
-    pair => pair.model_provider_id === this.selectedBenchmarkPairId(),
-  ) ?? this.benchmarkPairs()[0] ?? null);
+  readonly benchmarkAvailability = signal<ReadonlyMap<number, 'online' | 'offline' | 'unavailable' | 'unknown'>>(new Map());
+  private availabilityCheckedAt = 0;
+  readonly selectedBenchmarkPair = computed<ModelBenchmarkPair | null>(() => {
+    const pairs = this.benchmarkPairs();
+    return pairs.find(pair => pair.model_provider_id === this.selectedBenchmarkPairId())
+      ?? pairs.find(pair => pair.endpoint_configured && this.benchmarkAvailability().get(pair.model_provider_id) === 'online')
+      ?? pairs.find(pair => pair.endpoint_configured && pair.provider_type !== 'logosnode')
+      ?? pairs.find(pair => !this.benchmarkProviderUnavailable(pair))
+      ?? pairs[0] ?? null;
+  });
+
+  benchmarkProviderUnavailable(pair: ModelBenchmarkPair): boolean {
+    const status = this.benchmarkAvailability().get(pair.model_provider_id);
+    return !pair.endpoint_configured || status === 'offline' || status === 'unavailable';
+  }
+
+  benchmarkProviderLabel(pair: ModelBenchmarkPair): string {
+    if (!pair.endpoint_configured) return `${pair.provider_name} · No endpoint`;
+    if (pair.provider_type !== 'logosnode') return pair.provider_name;
+    const status = this.benchmarkAvailability().get(pair.model_provider_id);
+    const labels = { online: 'Online', offline: 'Offline', unavailable: 'No GPUs available', unknown: 'Status unknown' };
+    return `${pair.provider_name} · ${status ? labels[status] : 'Checking…'}`;
+  }
+
+  private async checkBenchmarkAvailability(pairs: readonly ModelBenchmarkPair[]): Promise<ReadonlyMap<number, 'online' | 'offline' | 'unavailable' | 'unknown'>> {
+    return new Map(await Promise.all(pairs.filter(pair => pair.provider_type === 'logosnode').map(async pair => {
+      let status: 'online' | 'offline' | 'unavailable' | 'unknown' = 'unknown';
+      try {
+        // This endpoint only returns limits for currently connected workers.
+        const limits = await this.modelService.getBenchmarkWorkerLimits(pair.model_provider_id);
+        status = limits.gpu_count === 0 ? 'unavailable' : 'online';
+      } catch (error) {
+        if (benchmarkErrorMessage(error, '').toLowerCase().includes('worker is offline')) status = 'offline';
+      }
+      return [pair.model_provider_id, status] as const;
+    })));
+  }
 
 
   useComparisonBaseline(): void {
@@ -746,9 +791,10 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   useBenchmarkConfiguration(benchmark: ModelProviderBenchmark): void {
+    this.performanceView.set('run');
     this.benchmarkSettings.set(settingsFromBenchmark(benchmark));
     this.benchmarkSampleSize.set(Math.min(100, Math.max(1, benchmark.sample_size)));
-    document.getElementById('benchmark-runner')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('performance-view-controls')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   hasServingOverrides(): boolean {
@@ -756,13 +802,18 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       || (this.benchmarkBatch()?.configurations.some(settings => Object.keys(settings.serving_overrides).length > 0) ?? false);
   }
 
-  readonly benchmarkSampleLabel = computed(
-    () => this.formatSampleCount(this.benchmarkSampleSize()),
-  );
-  readonly benchmarkSampleTicks = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100] as const;
-  readonly benchmarkSampleProgress = computed(
-    () => `${((this.benchmarkSampleSize() - 1) / 99) * 100}%`,
-  );
+  readonly benchmarkSampleRange = computed(() => {
+    const configurations = this.benchmarkBatch()?.configurations;
+    if (!configurations?.length) return String(this.benchmarkSampleSize());
+    const samples = configurations.map(configuration => configuration.samples);
+    const minimum = Math.min(...samples);
+    const maximum = Math.max(...samples);
+    return minimum === maximum ? String(minimum) : `${minimum}–${maximum}`;
+  });
+  readonly benchmarkSampleLabel = computed(() => {
+    const range = this.benchmarkSampleRange();
+    return `${range} ${range === '1' ? 'sample' : 'samples'}`;
+  });
   private readonly selectedBenchmarkIds = signal<ReadonlyMap<number, number>>(new Map());
   readonly benchmarkDeletingId = signal<number | null>(null);
   readonly benchmarkDeleteError = signal<string | null>(null);
@@ -1243,6 +1294,14 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       this.performance.set(response.benchmarks);
       this.benchmarkPairs.set(response.pairs ?? []);
       this.benchmarkRuns.set(response.runs ?? []);
+      const pairs = response.pairs ?? [];
+      if (!silent || Date.now() - this.availabilityCheckedAt >= 30000
+        || pairs.some(pair => pair.provider_type === 'logosnode' && !this.benchmarkAvailability().has(pair.model_provider_id))) {
+        const availability = await this.checkBenchmarkAvailability(pairs);
+        if (this.destroyed || requestVersion !== this.performanceRequestVersion) return;
+        this.benchmarkAvailability.set(availability);
+        this.availabilityCheckedAt = Date.now();
+      }
     } catch {
       if (this.destroyed || requestVersion !== this.performanceRequestVersion) return;
       if (!silent || this.performanceLoading()) {
@@ -1260,7 +1319,13 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   }
 
   async startBenchmark(pair: ModelBenchmarkPair): Promise<void> {
-    if ((this.selectedBenchmarkPair() && this.selectedBenchmarkPair()!.model_provider_id !== pair.model_provider_id) || !this.benchmarkSettingsValid() || !this.benchmarkBatchValid() || (this.hasServingOverrides() && pair.provider_type !== 'logosnode') || this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured) {
+    if ((this.selectedBenchmarkPair() && this.selectedBenchmarkPair()!.model_provider_id !== pair.model_provider_id) || !this.benchmarkSettingsValid() || !this.benchmarkBatchValid() || (this.hasServingOverrides() && pair.provider_type !== 'logosnode') || this.benchmarkStartingPairId() !== null || this.providerHasActiveBenchmark(pair.provider_id) || this.benchmarkProviderUnavailable(pair)) {
+      if (this.benchmarkConfirmPairId() === pair.model_provider_id) {
+        this.benchmarkConfirmPairId.set(null);
+        this.benchmarkStartError.set(this.providerHasActiveBenchmark(pair.provider_id)
+          ? 'A benchmark is already running on this provider. Wait for it to finish or choose another provider.'
+          : 'The provider or settings changed. Review the benchmark setup and try again.');
+      }
       return;
     }
     const settings = structuredClone(this.benchmarkSettings());
@@ -1272,6 +1337,7 @@ export class ModelErrorReport implements OnInit, OnDestroy {
     this.benchmarkStartError.set(null);
     try {
       await this.modelService.startBenchmark(pair.model_provider_id, sampleSize, settings, batch);
+      this.performanceView.set('results');
       await this.loadPerformance(this.modelId(), true);
     } catch (error) {
       const response = error instanceof HttpErrorResponse ? error.error : null;
