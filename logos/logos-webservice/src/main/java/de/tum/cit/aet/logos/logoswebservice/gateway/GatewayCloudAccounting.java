@@ -38,11 +38,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * rows), so it runs on a schedule rather than inside a request.
  *
  * <p>On success the reservation is replaced by the real charge: the reported
- * token counts are written to {@code usage_tokens} and the row is un-finalized,
- * which hands pricing to {@code logos_price_usage} through the
- * {@code log_entry_cost} view — the same computation the orchestrator path
- * settles with. Only a response that reports no usage at all keeps the flat
- * reservation, and failure zeros it.
+ * token counts are written to {@code usage_tokens}, priced once with
+ * {@code logos_price_usage} — the same computation the orchestrator path
+ * settles with — and the price is stored on the row with
+ * {@code cost_finalized = TRUE}. A row left un-finalized would be re-priced by
+ * the {@code log_entry_cost} view on every read, and every budget refresh
+ * reads the key's whole month, so admission would slow down with every
+ * request the key makes. Only a response that reports no usage at all, or
+ * usage that prices to nothing, keeps the flat reservation, and failure
+ * zeros it.
+ *
+ * <p>{@link #finalizeUnsettled} finalizes successful rows that still carry no
+ * stored price, in bounded batches on a schedule.
  *
  * <p>The row is written at the effective logging level for the request (the
  * key's configured level, or a per-request {@code logos-logging} override).
@@ -53,6 +60,32 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Service
 public class GatewayCloudAccounting {
 
+    /**
+     * Freeze the price of settled successes: the token usage priced by
+     * {@code logos_price_usage}, or the reservation when it prices to nothing.
+     * Spelled like the orchestrator's settled-cost snapshot so both paths store
+     * the same figure the {@code log_entry_cost} view would compute live; a
+     * later price change does not rewrite completed budget history.
+     * {@code %s} selects the rows.
+     */
+    private static final String SETTLED_COST_SNAPSHOT_SQL = """
+        UPDATE log_entry le
+           SET settled_cost_micro_cents = COALESCE(
+                   logos_price_usage(
+                       le.model_id, le.provider_id,
+                       COALESCE(le.timestamp_response, le.timestamp_request),
+                       le.service_tier,
+                       (SELECT jsonb_object_agg(tt.name, ut.token_count)
+                          FROM usage_tokens ut
+                          JOIN token_types tt ON tt.id = ut.type_id
+                         WHERE ut.log_entry_id = le.id)),
+                   CAST(:reservation AS BIGINT)),
+               cost_finalized = TRUE
+         WHERE le.result_status = 'success'
+           AND le.cost_finalized = FALSE
+           AND %s
+        """;
+
     /** The only levels {@code logging_enum} has; anything else is not a level we may store. */
     private static final String LEVEL_FULL = GatewayLoggingLevel.LEVEL_FULL;
     private static final String LEVEL_BILLING = GatewayLoggingLevel.LEVEL_BILLING;
@@ -62,18 +95,24 @@ public class GatewayCloudAccounting {
     private final ObjectMapper objectMapper;
     private final long reservationMicroCents;
     private final int staleAfterMinutes;
+    private final int finalizeBatchSize;
+    private final int finalizeMaxBatches;
 
     public GatewayCloudAccounting(
             NamedParameterJdbcTemplate jdbc,
             GatewayBudgetService budgetService,
             ObjectMapper objectMapper,
             @Value("${logos.gateway.budget-reservation-micro-cents:1000000}") long reservationMicroCents,
-            @Value("${logos.gateway.budget-reservation-stale-minutes:30}") int staleAfterMinutes) {
+            @Value("${logos.gateway.budget-reservation-stale-minutes:30}") int staleAfterMinutes,
+            @Value("${logos.gateway.cost-finalize-batch-size:1000}") int finalizeBatchSize,
+            @Value("${logos.gateway.cost-finalize-max-batches:50}") int finalizeMaxBatches) {
         this.jdbc = jdbc;
         this.budgetService = budgetService;
         this.objectMapper = objectMapper;
         this.reservationMicroCents = Math.max(0L, reservationMicroCents);
         this.staleAfterMinutes = Math.max(1, staleAfterMinutes);
+        this.finalizeBatchSize = Math.max(1, finalizeBatchSize);
+        this.finalizeMaxBatches = Math.max(1, finalizeMaxBatches);
     }
 
     /**
@@ -164,12 +203,12 @@ public class GatewayCloudAccounting {
     /**
      * Settle the in-flight reservation as a success.
      *
-     * <p>With usage reported, the row is un-finalized after the token counts
-     * are stored, so {@code log_entry_cost} prices it from
-     * {@code logos_price_usage} instead of the reservation. Without usage —
-     * a streaming upstream that ignored {@code include_usage}, a body past the
-     * capture cap — the flat reservation stands, because an unpriced success
-     * must not read as free budget.
+     * <p>With usage reported, the token counts are stored and priced once by
+     * {@code logos_price_usage}, and that price replaces the reservation as
+     * the row's finalized cost. Without usage — a streaming upstream that
+     * ignored {@code include_usage}, a body past the capture cap — or with
+     * usage that prices to nothing, the flat reservation stands, because an
+     * unpriced success must not read as free budget.
      *
      * @param usage        canonical token counts, empty when the response reported none
      * @param responseBody the response to store, or {@code null} when the key does
@@ -214,34 +253,62 @@ public class GatewayCloudAccounting {
         storeResponsePayload(logEntryId, responseBody);
         if (priced) {
             upsertUsageTokens(logEntryId, usage);
-            restoreReservationIfUnpriced(logEntryId);
+            jdbc.update(SETTLED_COST_SNAPSHOT_SQL.formatted("le.id = :id"),
+                snapshotParams().addValue("id", logEntryId));
         }
     }
 
     /**
-     * Put the reservation back when the stored usage prices to nothing.
+     * Store the price of successful direct-cloud rows that settled without one.
+     *
+     * <p>{@link #settleSuccess} finalizes its row in the same transaction, so
+     * this only finds rows written before it did, or by a settle that did not
+     * get that far. Each batch is its own statement, so a long backlog never
+     * holds one connection or one set of row locks for the whole sweep, and
+     * {@code SKIP LOCKED} lets replicas sweep at once without waiting on each
+     * other or on a settle in progress. The batch is collected with
+     * {@code ARRAY(...)}, which runs once; a plain {@code IN (SELECT ...
+     * LIMIT)} may be re-run by the planner and lock more rows than the limit.
+     * The predicate is the one
+     * {@code idx_log_entry_gateway_unfinalized} is defined on, which keeps the
+     * sweep proportional to the rows still unpriced rather than to the table.
      *
      * <p>Reported usage is not the same as billable usage: a deployment with no
      * price rows, or a response that reports only a total, leaves
-     * {@code logos_price_usage} with nothing to charge and
-     * {@code log_entry_cost} NULL. Releasing the reservation on that row would
-     * make a successful request free — the opposite failure to the one this
-     * path is here to fix.
+     * {@code logos_price_usage} with nothing to charge. Such a row keeps the
+     * reservation — releasing it would make a successful request free.
+     *
+     * @return number of rows finalized
      */
-    private void restoreReservationIfUnpriced(int logEntryId) {
-        if (reservationMicroCents <= 0) {
-            return;
+    @Scheduled(
+        initialDelayString = "${logos.gateway.cost-finalize-seconds:60}",
+        fixedDelayString = "${logos.gateway.cost-finalize-seconds:60}",
+        timeUnit = TimeUnit.SECONDS)
+    public int finalizeUnsettled() {
+        int total = 0;
+        for (int batch = 0; batch < finalizeMaxBatches; batch++) {
+            int updated = jdbc.update(SETTLED_COST_SNAPSHOT_SQL.formatted("""
+                le.id = ANY(ARRAY(
+                    SELECT id FROM log_entry
+                     WHERE result_status = 'success'
+                       AND cost_finalized = FALSE
+                       AND request_id LIKE 'gw-%'
+                     ORDER BY id
+                     LIMIT :limit
+                       FOR UPDATE SKIP LOCKED))
+                """), snapshotParams().addValue("limit", finalizeBatchSize));
+            total += updated;
+            if (updated < finalizeBatchSize) {
+                break;
+            }
         }
-        jdbc.update("""
-            UPDATE log_entry
-               SET settled_cost_micro_cents = :settled,
-                   cost_finalized = TRUE
-             WHERE id = :id
-               AND cost_finalized = FALSE
-               AND (SELECT cost_micro_cents FROM log_entry_cost WHERE log_entry_id = :id) IS NULL
-            """, new MapSqlParameterSource()
-            .addValue("id", logEntryId)
-            .addValue("settled", reservationMicroCents));
+        return total;
+    }
+
+    /** The reservation an unpriced success keeps; NULL when reservations are off. */
+    private MapSqlParameterSource snapshotParams() {
+        return new MapSqlParameterSource("reservation",
+            reservationMicroCents > 0 ? reservationMicroCents : null);
     }
 
     /**

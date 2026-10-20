@@ -8,7 +8,13 @@ const config: Config = {
   favicon: "img/iris/iris-logo-small.png",
 
   future: {
-    v4: true,
+    v4: {
+      removeLegacyPostBuildHeadAttribute: true,
+      useCssCascadeLayers: true,
+      siteStorageNamespacing: false,
+      fasterByDefault: false,
+      mdx1CompatDisabledByDefault: false,
+    },
   },
 
   url: "https://ls1intum.github.io",

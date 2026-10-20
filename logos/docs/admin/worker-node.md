@@ -30,6 +30,11 @@ By default, the production Compose file pulls the worker image
 from the deployment registry or from your own mirror, set `REGISTRY` and
 `IMAGE_TAG` in the `.env` file of the worker. Do this only for that purpose.
 
+The optional node manager can replace the worker container for you. It checks
+the new container. If the new container does not become healthy, the node
+manager starts the previous version again. For the steps, see
+[Update a worker node with the node manager](../deployment.md#update-a-worker-node-with-the-node-manager).
+
 To run an image that you built yourself, build it from the worker directory.
 The worker directory is the build context. Put the values in the `.env` file
 of the worker. Also export the values in the shell, because the Docker CLI

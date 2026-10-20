@@ -207,6 +207,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND le.provider_id IS NOT NULL
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
+          AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         GROUP BY le.provider_id, p.name
         ORDER BY requestCount DESC
@@ -216,6 +217,43 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("end") Timestamp end,
         @Param("teamId") Integer teamId,
         @Param("userId") Integer userId,
+        @Param("apiKeyId") Integer apiKeyId,
+        @Param("errorsOnly") Boolean errorsOnly);
+
+    /**
+     * Application and service keys that actually sent something in the range,
+     * optionally only within one team or provider.
+     *
+     * These keys have no person behind them, so the requester picker offers
+     * them next to the people: a requester is either a user or one of these
+     * keys. Developer keys stay out, because their requests are already
+     * attributed to their owner. Labelled the way the request feed shows them:
+     * team and environment, falling back to the key name. Never narrowed by the
+     * selected requester or key, because this list is part of that picker.
+     */
+    @Transactional(readOnly = true)
+    @Query(value = """
+        SELECT le.api_key_id AS id,
+               CONCAT_WS(' · ', t.name,
+                         COALESCE(NULLIF(NULLIF(TRIM(k.environment), ''), '-'), k.name,
+                                  'Key ' || le.api_key_id)) AS label,
+               COUNT(*) AS requestCount
+        FROM log_entry le
+        JOIN api_keys k ON k.id = le.api_key_id
+        LEFT JOIN teams t ON t.id = k.team_id
+        WHERE COALESCE(le.timestamp_forwarding, le.timestamp_request, le.timestamp_response) BETWEEN :start AND :end
+          AND k.key_type::text <> 'developer'
+          AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
+          AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
+        GROUP BY le.api_key_id, t.name, k.environment, k.name
+        ORDER BY requestCount DESC, label
+        """, nativeQuery = true)
+    List<ScopeOptionProjection> findApiKeysWithTraffic(
+        @Param("start") Timestamp start,
+        @Param("end") Timestamp end,
+        @Param("teamId") Integer teamId,
+        @Param("providerId") Integer providerId,
         @Param("errorsOnly") Boolean errorsOnly);
 
     @Transactional(readOnly = true)
@@ -231,6 +269,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         GROUP BY le.model_id, COALESCE(m.name, le.model_name, 'Model ' || le.model_id)
         ORDER BY requestCount DESC, label
@@ -241,6 +280,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("teamId") Integer teamId,
         @Param("userId") Integer userId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("errorsOnly") Boolean errorsOnly);
 
     @Transactional(readOnly = true)
@@ -327,6 +367,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
           AND (:allModels = TRUE OR le.model_id IN (:modelIds))
           AND (:allProviders = TRUE OR le.provider_id IN (:providerIds))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
@@ -374,6 +415,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("errorsOnly") Boolean errorsOnly,
         @Param("allModels") boolean allModels,
         @Param("modelIds") List<Integer> modelIds,
@@ -417,6 +459,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
           AND (:allModels = TRUE OR le.model_id IN (:modelIds))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         """, nativeQuery = true)
@@ -426,6 +469,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("allModels") boolean allModels,
         @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
@@ -445,6 +489,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
           AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
           AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
           AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+          AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
           AND (:allModels = TRUE OR le.model_id IN (:modelIds))
           AND (:allProviders = TRUE OR le.provider_id IN (:providerIds))
           AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
@@ -471,6 +516,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("errorsOnly") Boolean errorsOnly,
         @Param("allModels") boolean allModels,
         @Param("modelIds") List<Integer> modelIds,
@@ -857,6 +903,11 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      * collapses the window to empty, which makes the whole query read log_entry
      * and is how the sub-hour buckets (60s..1800s) are served.
      *
+     * A selected API key collapses the window the same way. The rollup grain
+     * has no key dimension, so a key-scoped aggregate reads log_entry for the
+     * whole range, narrowed to the key's rows through
+     * idx_log_entry_api_key_timestamp_request.
+     *
      * Both bounds are read as scalar subqueries - (SELECT mv_lo FROM w) - and
      * not by joining w into the FROM list, which is load-bearing rather than
      * stylistic. Joined, the bound is a join column, so Postgres cannot turn it
@@ -876,7 +927,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
 
     @Transactional(readOnly = true)
     @Query(value = """
-        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, TRUE)),
+        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, CAST(:apiKeyId AS INTEGER) IS NULL)),
         parts AS (
             SELECT s.requests, s.provider_id, s.was_cold_start,
                    s.queue_seconds_sum, s.queue_seconds_count,
@@ -922,6 +973,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
               AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
@@ -955,13 +1007,14 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("allModels") boolean allModels,
         @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
 
     @Transactional(readOnly = true)
     @Query(value = """
-        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, TRUE)),
+        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, CAST(:apiKeyId AS INTEGER) IS NULL)),
         parts AS (
             SELECT s.result_status, s.requests
             FROM log_entry_hourly_stats s
@@ -980,6 +1033,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
               AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
@@ -993,6 +1047,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("allModels") boolean allModels,
         @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
@@ -1003,7 +1058,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
     // name) renders as duplicated entries for the same model.
     @Transactional(readOnly = true)
     @Query(value = """
-        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, TRUE)),
+        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, CAST(:apiKeyId AS INTEGER) IS NULL)),
         parts AS (
             SELECT s.model_id, s.model_name, s.provider_id, s.was_cold_start, s.requests, s.error_count,
                    s.queue_seconds_sum, s.queue_seconds_count, s.run_seconds_sum, s.run_seconds_count
@@ -1044,6 +1099,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
               AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
@@ -1070,6 +1126,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("allModels") boolean allModels,
         @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
@@ -1083,7 +1140,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
      */
     @Transactional(readOnly = true)
     @Query(value = """
-        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, :useRollup)),
+        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, :useRollup AND CAST(:apiKeyId AS INTEGER) IS NULL)),
         parts AS (
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM s.bucket_hour) / :bucketSec) * :bucketSec) AS bucket_ts,
                    s.provider_id, s.requests, s.run_seconds_sum, s.run_seconds_count
@@ -1111,6 +1168,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
               AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         ),
@@ -1148,13 +1206,14 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("allModels") boolean allModels,
         @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
 
     @Transactional(readOnly = true)
     @Query(value = """
-        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, :useRollup)),
+        WITH w AS (SELECT * FROM logos_stats_rollup_window(:start, :end, :useRollup AND CAST(:apiKeyId AS INTEGER) IS NULL)),
         parts AS (
             SELECT to_timestamp(FLOOR(EXTRACT(EPOCH FROM s.bucket_hour) / :bucketSec) * :bucketSec) AS bucket_ts,
                    s.model_id, s.model_name, s.requests
@@ -1181,6 +1240,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
               AND (CAST(:userId AS INTEGER) IS NULL OR le.user_id = CAST(:userId AS INTEGER))
               AND (CAST(:teamId AS INTEGER) IS NULL OR le.team_id = CAST(:teamId AS INTEGER))
               AND (CAST(:providerId AS INTEGER) IS NULL OR le.provider_id = CAST(:providerId AS INTEGER))
+              AND (CAST(:apiKeyId AS INTEGER) IS NULL OR le.api_key_id = CAST(:apiKeyId AS INTEGER))
               AND (:allModels = TRUE OR le.model_id IN (:modelIds))
               AND (CAST(:errorsOnly AS BOOLEAN) IS NOT TRUE OR le.result_status IN ('error', 'timeout'))
         )
@@ -1201,6 +1261,7 @@ public interface LogEntryRepository extends JpaRepository<LogEntry, Integer> {
         @Param("userId") Integer userId,
         @Param("teamId") Integer teamId,
         @Param("providerId") Integer providerId,
+        @Param("apiKeyId") Integer apiKeyId,
         @Param("allModels") boolean allModels,
         @Param("modelIds") List<Integer> modelIds,
         @Param("errorsOnly") Boolean errorsOnly);
