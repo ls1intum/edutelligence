@@ -901,6 +901,14 @@
                 (presetChange)="cloudDelayPreset.set($event)"
                 (offsetChange)="cloudDelayOffset.set($event)"
               />
+              <button
+                type="button"
+                class="btn-copy-log"
+                aria-label="Refresh cloud request delays"
+                (click)="refreshCloudDelays()"
+              >
+                <i class="pi pi-refresh" aria-hidden="true"></i> Refresh
+              </button>
             </div>
             @if (modelId() !== null) {
               <app-stats-cloud-latency-panel

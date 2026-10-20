@@ -842,13 +842,16 @@ export class ModelErrorReport implements OnInit, OnDestroy {
   /** Same presets and paging as the statistics page, so the ranges read alike. */
   readonly cloudDelayPreset = signal<TimePreset>('30d');
   readonly cloudDelayOffset = signal(0);
+  /** Bumped by Refresh and on opening the tab, so a range that ends now moves its end along. */
+  readonly cloudDelayRefresh = signal(0);
 
   /**
-   * The window the delay table covers. Recomputed only when the preset or the
-   * offset changes, so the table does not refetch on every change detection
-   * pass.
+   * The window the delay table covers. Recomputed only when the preset, the
+   * offset or the refresh counter changes, so the table does not refetch on
+   * every change detection pass. Each recomputation reads the clock again.
    */
   readonly cloudDelayWindow = computed(() => {
+    this.cloudDelayRefresh();
     const range = calendarRange(this.cloudDelayPreset(), this.cloudDelayOffset());
     return { start: range.currStart.toISOString(), end: range.currEnd.toISOString() };
   });
@@ -1409,11 +1412,18 @@ export class ModelErrorReport implements OnInit, OnDestroy {
 
   setTab(tab: ModelErrorTab): void {
     this.activeTab.set(tab);
+    if (tab === 'cloud_delays') {
+      this.refreshCloudDelays();
+    }
     if (tab === 'performance') {
       void this.loadPerformance(this.modelId(), true);
     } else {
       this.schedulePerformancePoll();
     }
+  }
+
+  refreshCloudDelays(): void {
+    this.cloudDelayRefresh.update(n => n + 1);
   }
 
   formatDuration(milliseconds: number | null): string {
