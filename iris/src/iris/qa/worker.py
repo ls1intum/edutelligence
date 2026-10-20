@@ -390,13 +390,23 @@ def _production_context(scenario) -> dict[str, Any]:
     )
     state.message_history = list(dto.chat_history or [])
     state.lecture_content_storage = {}
+    state.current_view_storage = {}
     state.faq_storage = {}
+    state.pending_context_switch = None
+    # The candidate pipeline gets the scenario's event, so the reconstruction must too.
+    pipeline.event = scenario.event
 
     with ScenarioAdapters(metadata):
         pipeline.prepare_state(state)
         instructions = pipeline.build_system_message(state)
+        # Production sends the per-message context (date, current position,
+        # submission, event) as a separate message after the chat history.
+        turn_context = pipeline.build_turn_context_message(state)
 
-    return {"productionInstructions": _bounded(instructions, 16_000)}
+    return {
+        "productionInstructions": _bounded(instructions, 16_000),
+        "productionTurnContext": _bounded(turn_context, 4_000),
+    }
 
 
 def _judge_evidence(scenario, diagnostics: dict[str, Any]) -> dict[str, Any]:

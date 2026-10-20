@@ -49,6 +49,7 @@ def _state(dto, metadata: dict):
         message_history=dto.chat_history,
         lecture_content_storage={},
         faq_storage={},
+        pending_context_switch=None,
         local=False,
         accessed_memory_storage=[],
         allow_lecture_tool=bool(retrieval.get("lectureAvailable")),
@@ -157,7 +158,7 @@ def test_mcq_and_tutor_artifact_fixtures_execute_production_tool_wrappers():
 
     class FakeMcqPipeline:
         def __call__(self, **kwargs):
-            assert kwargs["user_language"] == "en"
+            assert kwargs["language"] == "English"
             return json.dumps(
                 {
                     "type": "mcq",
