@@ -13,14 +13,16 @@ import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.User;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.UserRepository;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificationService;
 
 /**
  * Worker lanes an administrator has locked warm ({@code lane_locks}).
  *
- * <p>This service only writes the table. The capacity planner in
- * logos-orchestrator reads it every cycle and keeps a locked lane awake —
- * never idle-sleeps, drains or unloads it, and wakes it when it finds it
- * asleep — so no call to the orchestrator is needed here.
+ * <p>This service writes the table and, once a change is committed, pushes it
+ * to logos-orchestrator. The capacity planner serves the locks from memory
+ * (it re-reads the table only in the background, to catch a lost push) and
+ * keeps a locked lane awake — never idle-sleeps, drains or unloads it, and
+ * wakes it when it finds it asleep.
  *
  * <p>Locking and unlocking are idempotent: locking a locked lane refreshes
  * the model name and keeps the original lock, unlocking an unlocked lane is a
@@ -32,12 +34,14 @@ public class LaneLockService {
     private final NamedParameterJdbcTemplate jdbc;
     private final UserRepository userRepository;
     private final AuditLogService auditLog;
+    private final OrchestratorNotificationService orchestratorNotification;
 
     public LaneLockService(NamedParameterJdbcTemplate jdbc, UserRepository userRepository,
-                           AuditLogService auditLog) {
+                           AuditLogService auditLog, OrchestratorNotificationService orchestratorNotification) {
         this.jdbc = jdbc;
         this.userRepository = userRepository;
         this.auditLog = auditLog;
+        this.orchestratorNotification = orchestratorNotification;
     }
 
     /** All locks, oldest first. */
@@ -101,6 +105,7 @@ public class LaneLockService {
         // lock that changes nothing leaves no entry.
         auditLog.record("lane.locked", "lane", providerId + "/" + laneId, null,
             auditState(before), auditState(after));
+        orchestratorNotification.notifyLaneLock(providerId, laneId, true);
         return after;
     }
 
@@ -121,6 +126,7 @@ public class LaneLockService {
         }
         auditLog.record("lane.unlocked", "lane", providerId + "/" + laneId, null,
             auditState(deleted.get(0)), Map.of());
+        orchestratorNotification.notifyLaneLock(providerId, laneId, false);
         return true;
     }
 

@@ -396,9 +396,14 @@ def test_an_unlocked_victim_still_makes_the_worker_feasible():
     assert planner._estimate_demand_action_cost(PROVIDER, MODEL, lanes, profiles, capacity) is not None
 
 
-def test_the_executor_reads_the_locks_again_before_an_automatic_sleep():
-    locks = []
-    planner = _planner(_Facade(), lock_reader=lambda: list(locks))
+def test_a_lock_pushed_after_planning_refuses_the_automatic_sleep():
+    reads = []
+
+    def reader():
+        reads.append(1)
+        return []
+
+    planner = _planner(_Facade(), lock_reader=reader)
     planner._refresh_lane_locks()
     ran = []
 
@@ -407,12 +412,14 @@ def test_the_executor_reads_the_locks_again_before_an_automatic_sleep():
         return True
 
     planner._execute_action_core = core
-    # Locked after the cycle read the locks.
-    locks.append((PROVIDER, LANE))
+    # The webservice pushes a lock taken after the cycle planned the sleep.
+    planner.apply_lane_lock(PROVIDER, LANE, True)
     action = CapacityPlanAction(action="sleep_l1", provider_id=PROVIDER, lane_id=LANE, model_name=MODEL)
 
     assert asyncio.run(planner._execute_action_with_confirmation(action)) is False
     assert ran == []
+    # Decided from memory: no database read on the execution path.
+    assert len(reads) == 1
 
 
 def test_a_lane_locked_while_it_drains_is_not_slept():
@@ -428,8 +435,9 @@ def test_a_lane_locked_while_it_drains_is_not_slept():
     sent = []
 
     async def drain(provider_id, lane_id, timeout_seconds=60.0):  # noqa: ARG001
-        # The operator locks the lane while its requests drain.
-        locks.append((PROVIDER, LANE))
+        # The operator locks the lane while its requests drain; the
+        # webservice pushes the change.
+        planner.apply_lane_lock(PROVIDER, LANE, True)
         return True
 
     async def send_command(*args, **kwargs):  # noqa: ARG001

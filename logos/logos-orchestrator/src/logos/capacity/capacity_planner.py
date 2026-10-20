@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from itertools import combinations
 from typing import Any, Callable, Dict, List, Optional
 
+from logos.background_refresh import BackgroundRefreshedValue
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeRuntimeRegistry
 from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.latency_store import LatencyStore
@@ -475,9 +476,11 @@ class CapacityPlanner:
         self._lane_waiters: dict[str, tuple[int, str, float]] = {}
 
         # Lanes an operator locked warm: never idle-slept, never evicted for
-        # another model, and woken when found asleep. Read from the
-        # ``lane_locks`` table once per cycle. Key: (provider_id, lane_id).
-        self._locked_lanes: set[tuple[int, str]] = set()
+        # another model, and woken when found asleep. Key: (provider_id,
+        # lane_id). Served from memory: the webservice pushes every lock change
+        # (apply_lane_lock), and the ``lane_locks`` table is only re-read in
+        # the background to catch a push that was lost.
+        self._lane_locks = self._new_lane_lock_cache()
 
         # Structural load-failure cooldown: lanes whose add_lane was rejected
         # by the worker for a non-transient reason (e.g. no feasible GPU
@@ -680,33 +683,68 @@ class CapacityPlanner:
         cutoff = time.time() - self.LANE_WAITER_TTL_SECONDS
         return {model for pid, model, at in waiters.values() if pid == provider_id and at >= cutoff}
 
-    def is_lane_locked(self, provider_id: int, lane_id: str) -> bool:
-        """Whether an operator locked this lane warm."""
-        return (int(provider_id), lane_id) in getattr(self, "_locked_lanes", ())
+    # How long the in-memory lane locks are trusted before they are re-read
+    # in the background, and how soon a failed read is retried. Every change
+    # made through the webservice is pushed at once, so the re-read only
+    # catches a lost push.
+    LANE_LOCK_REFRESH_S = 300.0
+    LANE_LOCK_RETRY_S = 10.0
 
-    async def _reload_lane_locks(self) -> None:
-        """Reload the locks off the event loop; without a reader there is nothing to read."""
-        if getattr(self, "_lane_lock_reader", None) is None:
-            return
-        await asyncio.to_thread(self._refresh_lane_locks)
+    def _new_lane_lock_cache(self) -> BackgroundRefreshedValue[frozenset[tuple[int, str]]]:
+        return BackgroundRefreshedValue(
+            self._read_lane_locks,
+            initial=frozenset(),
+            refresh_after_s=self.LANE_LOCK_REFRESH_S,
+            retry_after_s=self.LANE_LOCK_RETRY_S,
+            name="lane locks",
+        )
 
-    def _refresh_lane_locks(self) -> None:
-        """Reload the operator lane locks.
+    def _lock_cache(self) -> BackgroundRefreshedValue[frozenset[tuple[int, str]]]:
+        # Tolerates a planner built without __init__ (several tests do that).
+        cache = getattr(self, "_lane_locks", None)
+        if cache is None:
+            cache = self._lane_locks = self._new_lane_lock_cache()
+        return cache
 
-        A failed read keeps the previous set: dropping every lock because the
-        database blinked would let the next idle pass sleep a locked lane.
-        """
+    def _read_lane_locks(self) -> Optional[frozenset[tuple[int, str]]]:
+        """The ``lane_locks`` table as (provider_id, lane_id) pairs; ``None`` when unreadable."""
         reader = getattr(self, "_lane_lock_reader", None)
         if reader is None:
-            return
-        try:
-            locks = reader()
-        except Exception:  # noqa: BLE001 — a lock read must never break the cycle
-            logger.warning("Could not read lane locks; keeping the previous set", exc_info=True)
-            return
+            return None
+        locks = reader()
         if locks is None:
+            return None
+        return frozenset((int(pid), str(lane_id)) for pid, lane_id in locks)
+
+    def is_lane_locked(self, provider_id: int, lane_id: str) -> bool:
+        """Whether an operator locked this lane warm (from memory; never waits for the database)."""
+        cache = self._lock_cache()
+        # Without a reader there is nothing to refresh from; only pushed changes count.
+        locks = cache.get() if getattr(self, "_lane_lock_reader", None) is not None else cache.peek()
+        return (int(provider_id), lane_id) in locks
+
+    def apply_lane_lock(self, provider_id: int, lane_id: str, locked: bool) -> None:
+        """Apply a lock change the webservice just committed, without waiting for a re-read."""
+        key = (int(provider_id), str(lane_id))
+        self._lock_cache().update(lambda locks: locks | {key} if locked else locks - {key})
+        logger.info(
+            "Lane %s on worker=%s %s",
+            lane_id,
+            self._facade.get_provider_name(provider_id) or provider_id,
+            "locked warm" if locked else "unlocked",
+        )
+
+    async def _ensure_lane_locks_loaded(self) -> None:
+        """Load the locks once before the first cycle plans with them; later reads refresh in the background."""
+        if getattr(self, "_lane_lock_reader", None) is None:
             return
-        self._locked_lanes = {(int(pid), str(lane_id)) for pid, lane_id in locks}
+        cache = self._lock_cache()
+        if not cache.loaded:
+            await cache.refresh_async()
+
+    def _refresh_lane_locks(self) -> None:
+        """Re-read the locks now (startup and tests). A failed read keeps the previous set."""
+        self._lock_cache().refresh()
 
     def _compute_lock_wake_actions(
         self,
@@ -767,7 +805,6 @@ class CapacityPlanner:
         """
         if action.operator_initiated:
             return False
-        await self._reload_lane_locks()
         if not self.is_lane_locked(action.provider_id, action.lane_id):
             return False
         logger.info(
@@ -967,7 +1004,7 @@ class CapacityPlanner:
             logger.warning("Cleaned %d stale host-RAM reservations", stale_host_ram)
 
         self._demand.decay_all()
-        await self._reload_lane_locks()
+        await self._ensure_lane_locks_loaded()
 
         # Keep pending-capacity models alive in the demand signal. A model lands
         # in _pending_capacity when a request is actively waiting but its lane
@@ -8975,11 +9012,6 @@ class CapacityPlanner:
         """
         key = (action.provider_id, action.lane_id)
         marks_cold = action.action in ("sleep_l1", "sleep_l2", "stop")
-        if marks_cold and not action.operator_initiated:
-            # The cycle's locks can be minutes old by now: a long action ahead
-            # of this one in the batch, or a reclaim on the request path. Read
-            # them again so a lane locked in the meantime is not slept.
-            await self._reload_lane_locks()
         if marks_cold and not action.operator_initiated and self.is_lane_locked(action.provider_id, action.lane_id):
             # Last line of defence: the planning passes skip locked lanes, but
             # a path that does not (or a lock taken after planning) must not

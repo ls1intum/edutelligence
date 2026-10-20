@@ -32,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -629,6 +630,31 @@ class ProviderControllerTest {
             "SELECT COUNT(*) FROM audit_log WHERE action = 'lane.locked' AND target_id = '6001/lane-1'",
             Integer.class);
         assertEquals(1, audited);
+    }
+
+    @Test
+    void lockAndUnlock_pushTheChangeToTheOrchestrator() throws Exception {
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/lock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isOk());
+        verify(orchestratorNotificationService).notifyLaneLock(6001, "lane-1", true);
+
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/unlock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isOk());
+        verify(orchestratorNotificationService).notifyLaneLock(6001, "lane-1", false);
+
+        // Unlocking a lane that is not locked changes nothing and pushes nothing.
+        mvc.perform(post("/logosdb/providers/logosnode/lanes/unlock")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
+           .andExpect(status().isOk());
+        verify(orchestratorNotificationService, times(1)).notifyLaneLock(6001, "lane-1", false);
     }
 
     @Test
