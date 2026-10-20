@@ -65,6 +65,12 @@ LOGOS_CANDIDATE_VARIANTS = {
 # Logos too.
 HELPER_ROUTE_ENV = "IRIS_QA_HELPER_ROUTE"
 LOGOS_HELPER_MODEL = "gpt-5.4-mini"
+# Production roles: Iris' own side tasks run on gpt-6-luna with low reasoning effort,
+# and the programming exercise review pass (the guide role) is answered by the chat
+# model, because the production role mapping has no separate guide model. Needs Logos
+# for the helper.
+PRODUCTION_ROLES_ENV = "IRIS_QA_PRODUCTION_ROLES"
+PRODUCTION_HELPER_MODEL = "gpt-6-luna"
 LOGOS_ENVIRONMENT_NAMES = (
     HELPER_ROUTE_ENV,
     "IRIS_QA_LOGOS_BASE_URL",
@@ -368,10 +374,12 @@ def _logos_model(
     return entry
 
 
-def _application(candidate_id: str) -> dict:
+def _application(candidate_id: str, *, guide_by_chat_model: bool = False) -> dict:
     mini = "qa-aux-mini"
     both = {"local": candidate_id, "cloud": candidate_id}
     mini_both = {"local": mini, "cloud": mini}
+    # With no guide role the pipeline falls back to the chat model, as in production.
+    guide = {} if guide_by_chat_model else {"guide": mini_both}
     return {
         "api_keys": [],
         "env_vars": {},
@@ -381,8 +389,8 @@ def _application(candidate_id: str) -> dict:
         "local_llm_enabled": False,
         "llm_configuration": {
             "chat_pipeline": {
-                "default": {"chat": both, "guide": mini_both},
-                "advanced": {"chat": both, "guide": mini_both},
+                "default": {"chat": both, **guide},
+                "advanced": {"chat": both, **guide},
             },
             "citation_pipeline": {
                 "default": {"chat": mini_both, "keyword_summary": mini_both},
@@ -444,24 +452,25 @@ def _logos_candidate(candidate_model: str) -> tuple[str, str | None] | None:
     return None
 
 
-def _logos_helper_model(rate, api_key: str) -> dict:
+def _logos_helper_model(rate, api_key: str, *, production_roles: bool = False) -> dict:
     """The model Iris calls for its own side tasks, served by Logos instead of Azure."""
     base_url = _required("IRIS_QA_LOGOS_BASE_URL").rstrip("/")
     _validate_logos_base_url(base_url)
-    return {
+    entry = {
         "id": "qa-aux-mini",
         "type": "openai_chat",
-        "model": LOGOS_HELPER_MODEL,
+        "model": PRODUCTION_HELPER_MODEL if production_roles else LOGOS_HELPER_MODEL,
         "base_url": base_url,
         "api_key": api_key,  # pragma: allowlist secret
-        "use_responses_api": False,
+        "use_responses_api": production_roles,
         "supports_temperature": False,
         "supports_reasoning_effort": True,
-        "reasoning_effort": "none",
+        "reasoning_effort": "low" if production_roles else "none",
         "reasoning_effort_values": ["none", "low", "medium", "high", "xhigh"],
         "cost_per_million_input_token": float(rate.input_per_million),
         "cost_per_million_output_token": float(rate.output_per_million),
     }
+    return entry
 
 
 def create_worker_configuration(
@@ -471,6 +480,9 @@ def create_worker_configuration(
         raise ValueError(f"Unsupported QA candidate model: {candidate_model}")
     logos_candidate = _logos_candidate(candidate_model)
     helper_via_logos = os.environ.get(HELPER_ROUTE_ENV) == "logos"
+    production_roles = os.environ.get(PRODUCTION_ROLES_ENV) == "1"
+    if production_roles and not helper_via_logos:
+        raise ValueError("Production roles need a Logos-only configuration")
     rates = {rate.model: rate for rate in (*rate_card.candidates, rate_card.judge)}
     models: list[dict] = []
     if helper_via_logos:
@@ -536,10 +548,14 @@ def create_worker_configuration(
                 reasoning_effort=reasoning_effort,
             )
         )
-    mini_rate = rates["gpt-5.4-mini"]
+    mini_rate = rates[PRODUCTION_HELPER_MODEL if production_roles else "gpt-5.4-mini"]
     if helper_via_logos:
         models.append(
-            _logos_helper_model(mini_rate, _required("IRIS_QA_LOGOS_API_KEY"))
+            _logos_helper_model(
+                mini_rate,
+                _required("IRIS_QA_LOGOS_API_KEY"),
+                production_roles=production_roles,
+            )
         )
     else:
         models.append(
@@ -561,7 +577,12 @@ def create_worker_configuration(
     root = Path(directory.name)
     application = root / "application.yml"
     llm_config = root / "llm-config.yml"
-    application.write_text(yaml.safe_dump(_application(candidate_id)), encoding="utf-8")
+    application.write_text(
+        yaml.safe_dump(
+            _application(candidate_id, guide_by_chat_model=production_roles)
+        ),
+        encoding="utf-8",
+    )
     llm_config.write_text(yaml.safe_dump(models), encoding="utf-8")
     environment = dict(os.environ)
     environment.update(

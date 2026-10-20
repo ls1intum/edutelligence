@@ -196,6 +196,7 @@ def run_paid_suite(
                                 "durationSeconds": round(duration, 2),
                                 "executionError": payload.get("executionError"),
                                 "judgePending": bool(payload.get("judgePending")),
+                                "timing": payload.get("timing"),
                             }
                         )
                         collect_error = payload.get("executionError")

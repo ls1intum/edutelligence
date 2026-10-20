@@ -7,6 +7,7 @@ import math
 import os
 import sys
 import threading
+import time
 import traceback
 from contextlib import ExitStack
 from pathlib import Path
@@ -146,11 +147,13 @@ def _recording_callback(base):
     class RecordingCallback(base):
         def __init__(self, run_id: str, base_url: str):
             self.payloads: list[dict] = []
+            self.timestamps: list[float] = []
             self.activities: list[dict] = []
             self.failure_exception: str | None = None
             super().__init__(run_id, base_url)
 
         def _send_status_payload(self, payload, **_kwargs):
+            self.timestamps.append(time.monotonic())
             self.payloads.append(json.loads(json.dumps(payload, default=str)))
             return True
 
@@ -168,6 +171,31 @@ def _recording_callback(base):
             return super().fail(*args, **kwargs)
 
     return RecordingCallback
+
+
+def _timing(callback, started: float) -> dict[str, float | None]:
+    """When the student could first see text and the answer, from the pipeline start.
+
+    ``answerSeconds`` is the send that carries the final answer, which is what the
+    student waits for; ``firstTextSeconds`` is the first send with any text (a streamed
+    chunk or a narration); ``pipelineSeconds`` is the terminal send, after the title
+    and suggestions are done.
+    """
+
+    def first(match) -> float | None:
+        for payload, at in zip(callback.payloads, callback.timestamps):
+            if match(payload):
+                return round(at - started, 2)
+        return None
+
+    answer = first(lambda payload: payload.get("final"))
+    if answer is None:
+        answer = first(lambda payload: payload.get("result") or payload.get("artifact"))
+    return {
+        "firstTextSeconds": first(lambda payload: payload.get("result")),
+        "answerSeconds": answer,
+        "pipelineSeconds": first(lambda payload: payload.get("runState") == "FINISHED"),
+    }
 
 
 def _extract_callback(
@@ -293,6 +321,8 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
     diagnostics: dict[str, Any] = {}
     raw_tokens: list[Any] = []
     budget = _ScenarioRequestBudget(scenario.token_ceiling)
+    timing: dict[str, float | None] = {}
+    started = time.monotonic()
     with budget, ScenarioAdapters(metadata):
         if scenario.use_case.value == "chat":
             callback = _recording_callback(ChatRunCallback)(
@@ -302,6 +332,7 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
             pipeline = ChatPipeline(dto.chat_mode)
             variant_id = "default" if model == "gpt-5.4-mini" else "advanced"
             pipeline(dto, _variant(model, variant_id), callback, event=scenario.event)
+            timing = _timing(callback, started)
             response, activities, terminal, artifacts = _extract_callback(
                 callback, "chat"
             )
@@ -316,6 +347,7 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
             pipeline = TutorSuggestionPipeline()
             variant_id = "default" if model == "gpt-5.4-mini" else "advanced"
             pipeline(dto, _variant(model, variant_id), callback)
+            timing = _timing(callback, started)
             response, activities, terminal, artifacts = _extract_callback(
                 callback, "tutor_suggestion"
             )
@@ -327,6 +359,7 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
             dto = AutonomousTutorPipelineExecutionDTO.model_validate(payload)
             pipeline = AutonomousTutorPipeline()
             pipeline(dto, _variant(model), callback)
+            timing = _timing(callback, started)
             response, activities, terminal, artifacts = _extract_callback(
                 callback, "autonomous_tutor"
             )
@@ -364,6 +397,7 @@ def _run_pipeline(scenario, model: str) -> dict[str, Any]:
         "activities": activities,
         "diagnostics": diagnostics,
         "usage": [_token_usage(token) for token in raw_tokens],
+        "timing": timing,
     }
 
 

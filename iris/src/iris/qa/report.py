@@ -79,6 +79,31 @@ def _criterion_scores(selected: list[ScenarioEvaluation]) -> dict[str, float]:
     }
 
 
+def _percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    position = fraction * (len(ordered) - 1)
+    low, high = math.floor(position), math.ceil(position)
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def _latency(selected: list[ScenarioEvaluation]) -> dict[str, float | None]:
+    """Median and 90th percentile of the time to the final answer, chat trials."""
+    seconds = [
+        item.timing["answerSeconds"]
+        for item in selected
+        if item.use_case == "chat"
+        and not item.execution_error
+        and item.timing
+        and item.timing.get("answerSeconds") is not None
+    ]
+    if not seconds:
+        return {"answerSecondsMedian": None, "answerSecondsP90": None}
+    return {
+        "answerSecondsMedian": round(statistics.median(seconds), 2),
+        "answerSecondsP90": round(_percentile(seconds, 0.9), 2),
+    }
+
+
 def summarize(evaluations: list[ScenarioEvaluation]) -> dict:
     scenario_means = _scenario_means(evaluations)
     models = sorted({evaluation.model for evaluation in evaluations})
@@ -107,6 +132,7 @@ def summarize(evaluations: list[ScenarioEvaluation]) -> dict:
             ),
             "usageWeightedScore": _usage_weighted_score(selected),
             "criterionScores": _criterion_scores(selected),
+            **_latency(selected),
             "scenarios": len(scores),
             "trials": len(selected),
             "criticalErrorRate": round(
@@ -242,10 +268,11 @@ def write_markdown_report(
         "",
         "## Results",
         "",
-        "| Model | IrisScore | Usable answers | Usage-weighted | 95% interval | "
-        "Scenarios | Mean/max repeat span | Critical-error rate | Execution errors | "
-        "Cost |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Model | IrisScore | Usable answers | Usage-weighted | Median / p90 answer "
+        "time | 95% interval | Scenarios | Mean/max repeat span | "
+        "Critical-error rate | "
+        "Execution errors | Cost |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for model, item in summary["models"].items():
         repeat_span = (
@@ -261,8 +288,14 @@ def write_markdown_report(
             if item["usageWeightedScore"] is not None
             else "—"
         )
+        answer_time = (
+            f"{item['answerSecondsMedian']:.1f}s / {item['answerSecondsP90']:.1f}s"
+            if item["answerSecondsMedian"] is not None
+            else "—"
+        )
         lines.append(
             f"| `{_cell(model)}` | **{item['score']:.2f}** | {usable} | {weighted} | "
+            f"{answer_time} | "
             f"{item['ci95Low']:.2f}–{item['ci95High']:.2f} | {item['scenarios']} | "
             f"{repeat_span} | "
             f"{item['criticalErrorRate']:.1%} | {item['executionErrors']} | "

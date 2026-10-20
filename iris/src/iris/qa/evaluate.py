@@ -75,6 +75,7 @@ class ScenarioEvaluation:
     usage: list[ProviderUsage] = field(default_factory=list)
     duration_seconds: float = 0.0
     execution_error: str | None = None
+    timing: dict[str, float | None] | None = None
 
     @property
     def score(self) -> float:
@@ -243,4 +244,7 @@ def evaluation_from_worker(
         usage=usage,
         duration_seconds=duration_seconds,
         execution_error=str(execution_error) if execution_error else None,
+        timing=(
+            payload.get("timing") if isinstance(payload.get("timing"), dict) else None
+        ),
     )

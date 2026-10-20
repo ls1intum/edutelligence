@@ -44,7 +44,13 @@ from iris.qa.rubric import (  # noqa: E402
 )
 from iris.qa.run import COLLECTION_FILE, run_paid_suite  # noqa: E402
 from iris.qa.schema import Criterion, Scenario, shared_criteria  # noqa: E402
-from iris.qa.worker import JUDGE_SYSTEM_PROMPT, build_judge_request  # noqa: E402
+from iris.qa.worker import (  # noqa: E402
+    _ITERATION_LIMIT_MARKERS,
+    JUDGE_SYSTEM_PROMPT,
+    _extract_callback,
+    _timing,
+    build_judge_request,
+)
 
 QA_ROOT = Path(__file__).parents[1] / "qa"
 
@@ -611,3 +617,118 @@ def test_skipping_the_judge_collects_answers_and_reserves_only_the_pipeline(
     records = ledger.records()
     assert len(records) == 1
     assert records[0].reservation is False
+
+
+def _callback(payloads, timestamps=None):
+    return SimpleNamespace(
+        payloads=payloads,
+        timestamps=timestamps or [float(index) for index in range(len(payloads))],
+        activities=[],
+        failure_exception=None,
+    )
+
+
+def test_tokens_of_every_send_are_collected_not_only_those_of_the_terminal_send():
+    callback = _callback(
+        [
+            {"runState": "RUNNING", "tokens": [{"model": "agent"}]},
+            {"runState": "RUNNING", "final": True, "result": "Hi", "tokens": []},
+            {"runState": "FINISHED", "tokens": [{"model": "title"}]},
+        ]
+    )
+
+    response, _, terminal, _ = _extract_callback(callback, "chat")
+
+    assert response == "Hi"
+    assert [token["model"] for token in terminal["tokens"]] == ["agent", "title"]
+
+
+def test_the_agent_executors_own_stop_texts_count_as_iteration_limit():
+    for text in (
+        "Agent stopped due to max iterations.",
+        "Agent stopped due to iteration limit or time limit.",
+    ):
+        assert any(marker in text for marker in _ITERATION_LIMIT_MARKERS)
+
+
+def test_timing_separates_first_text_answer_and_end_of_the_pipeline():
+    callback = _callback(
+        [
+            {"runState": "RUNNING"},
+            {"runState": "RUNNING", "result": "Looking at your code..."},
+            {"runState": "RUNNING", "final": True, "result": "The answer"},
+            {"runState": "FINISHED"},
+        ],
+        [10.0, 12.5, 18.0, 25.0],
+    )
+
+    assert _timing(callback, 10.0) == {
+        "firstTextSeconds": 2.5,
+        "answerSeconds": 8.0,
+        "pipelineSeconds": 15.0,
+    }
+
+
+def test_timing_of_a_run_without_a_final_answer_falls_back_to_the_first_result():
+    callback = _callback(
+        [{"runState": "RUNNING", "artifact": "x"}, {"runState": "FINISHED"}],
+        [1.0, 4.0],
+    )
+
+    timing = _timing(callback, 0.0)
+
+    assert timing["answerSeconds"] == 1.0
+    assert timing["pipelineSeconds"] == 4.0
+
+
+def test_summary_reports_median_and_p90_of_the_chat_answer_time():
+    evaluations = []
+    for index, seconds in enumerate([4.0, 6.0, 8.0, 10.0, 30.0]):
+        evaluation = _evaluation(_scenario(id=f"rubric-latency-{index}"))
+        evaluation.timing = {"answerSeconds": seconds, "pipelineSeconds": seconds + 2}
+        evaluations.append(evaluation)
+
+    model = summarize(evaluations)["models"]["m"]
+
+    assert model["answerSecondsMedian"] == 8.0
+    assert model["answerSecondsP90"] == pytest.approx(22.0)
+
+
+@pytest.mark.usefixtures("isolated_environment")
+def test_production_roles_use_luna_low_helpers_and_let_the_chat_model_review(
+    tmp_path, monkeypatch
+):
+    apply_local_llm_config(_logos_only_config(tmp_path), judge=False)
+    monkeypatch.setenv("IRIS_QA_PRODUCTION_ROLES", "1")
+
+    configuration = create_worker_configuration(
+        _rate_card(), "gpt-6-luna-medium", skip_judge=True
+    )
+    try:
+        models = yaml.safe_load(
+            Path(configuration.environment["LLM_CONFIG_PATH"]).read_text(
+                encoding="utf-8"
+            )
+        )
+        application = yaml.safe_load(
+            Path(configuration.environment["APPLICATION_YML_PATH"]).read_text(
+                encoding="utf-8"
+            )
+        )
+    finally:
+        configuration.close()
+
+    helper = next(model for model in models if model["id"] == "qa-aux-mini")
+    assert helper["model"] == "gpt-6-luna"
+    assert helper["reasoning_effort"] == "low"
+    assert helper["use_responses_api"] is True
+    chat = application["llm_configuration"]["chat_pipeline"]
+    assert "guide" not in chat["default"] and "guide" not in chat["advanced"]
+
+
+def test_production_roles_are_refused_without_a_logos_only_configuration(monkeypatch):
+    monkeypatch.setenv("IRIS_QA_PRODUCTION_ROLES", "1")
+    monkeypatch.setenv("IRIS_QA_HELPER_ROUTE", "")
+
+    with pytest.raises(ValueError, match="Production roles need a Logos-only"):
+        create_worker_configuration(_rate_card(), "gpt-6-luna-medium", skip_judge=True)

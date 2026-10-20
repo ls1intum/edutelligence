@@ -179,10 +179,20 @@ def command_plan(args) -> int:
     return 0
 
 
+def _apply_production_roles(args) -> None:
+    from iris.qa.bootstrap import PRODUCTION_ROLES_ENV
+
+    if args.production_roles:
+        os.environ[PRODUCTION_ROLES_ENV] = "1"
+    else:
+        os.environ.pop(PRODUCTION_ROLES_ENV, None)
+
+
 def command_doctor(args) -> int:
     from iris.qa.bootstrap import apply_local_llm_config, create_worker_configuration
 
     apply_local_llm_config(Path(args.llm_config), judge=not args.skip_judge)
+    _apply_production_roles(args)
     rate_card = load_rate_card(Path(args.rates), require_confirmed=False)
     for model in _models(args):
         configuration = create_worker_configuration(
@@ -205,6 +215,7 @@ def command_run(args) -> int:
         root, scenarios, rate_card, ledger_path, plan = _plan(args)
         _validate_contracts(root, scenarios)
         apply_local_llm_config(Path(args.llm_config), judge=not args.skip_judge)
+        _apply_production_roles(args)
         max_run_cost = _decimal(args.max_cost_usd, "--max-cost-usd")
         if max_run_cost <= 0:
             raise ValueError("--max-cost-usd must be greater than zero")
@@ -363,6 +374,14 @@ def _add_run_shape(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="collect the answers only; they are judged outside the harness",
     )
+    parser.add_argument(
+        "--production-roles",
+        action="store_true",
+        help=(
+            "run Iris' side tasks on gpt-6-luna with low effort and let the chat "
+            "model answer the exercise review pass, as in production (needs Logos)"
+        ),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -389,6 +408,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--rates", required=True)
     doctor.add_argument("--model", action="append", choices=CANDIDATE_MODELS)
     doctor.add_argument("--skip-judge", action="store_true")
+    doctor.add_argument("--production-roles", action="store_true")
     doctor.set_defaults(handler=command_doctor)
 
     run = subparsers.add_parser("run", help="run the benchmark")

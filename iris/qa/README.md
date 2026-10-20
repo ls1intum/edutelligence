@@ -114,6 +114,25 @@ poetry run iris-benchmark run \
   --output qa-results/effort-comparison
 ```
 
+### Production-like roles and answer time
+
+`--production-roles` makes a Logos-only run follow the production role
+mapping: Iris' own side tasks (citations, titles, suggestions, MCQs) run on
+`gpt-6-luna` with low reasoning effort instead of `gpt-5.4-mini`, and the
+review pass of programming exercise chat is answered by the chat model, because
+production has no separate guide model. Use it with `gpt-6-luna-medium` (the
+default variant) and `gpt-6.1-sol-medium` (the advanced variant) to compare what
+students get.
+
+Every trial records when the student could see the answer: `answerSeconds` is
+the time from the start of the pipeline to the send that carries the final
+answer, `firstTextSeconds` the first send with any text, and `pipelineSeconds`
+the end of the run, after the title and suggestions. The report shows the
+median and 90th percentile of the answer time of chat trials. Retrieval,
+embeddings and Artemis calls are fixtures, so the time covers the model calls
+and the tool loop of the pipeline, not the services around it, and trials run
+one after another without other load.
+
 ### Collect now, judge later
 
 The built-in judge needs Azure credentials. To run without it, collect the
