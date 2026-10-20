@@ -24,11 +24,10 @@
 13. [Action Execution & Confirmation](#13-action-execution--confirmation)
 14. [Scheduler Integration](#14-scheduler-integration)
 15. [Deadlock, Starvation & Race Condition Analysis](#15-deadlock-starvation--race-condition-analysis)
-16. [Benchmark Evidence](#16-benchmark-evidence)
-17. [Refinement Proposals](#17-refinement-proposals)
-18. [Fairness Inversion: New Arrivals Preempt Established Queues](#18-fairness-inversion-new-arrivals-preempt-established-queues)
-19. [Anti-Thrashing Mechanism Audit: What to Keep, What to Simplify](#19-anti-thrashing-mechanism-audit-what-to-keep-what-to-simplify)
-20. [Academic Foundations and Thesis Research Anchors](#20-academic-foundations-and-thesis-research-anchors)
+16. [Refinement Proposals](#16-refinement-proposals)
+17. [Fairness Inversion: New Arrivals Preempt Established Queues](#17-fairness-inversion-new-arrivals-preempt-established-queues)
+18. [Anti-Thrashing Mechanism Audit: What to Keep, What to Simplify](#18-anti-thrashing-mechanism-audit-what-to-keep-what-to-simplify)
+19. [Academic Foundations and Thesis Research Anchors](#19-academic-foundations-and-thesis-research-anchors)
 
 ---
 
@@ -896,11 +895,11 @@ NORMAL priority: after 30s → promote to HIGH
 
 **Evidence**: At 600/10m benchmark, the 14B model hits `return False` 44 times in `_ensure_request_capacity`. Each time, the fire-and-forget task exits and the queued requests wait up to 30s for the next planner cycle.
 
-**Compounding factor**: Request-time idle reclaim has NO demand comparison (see §18.2, Issue 2). Any single request can sleep any idle lane regardless of how many requests are queued for the victim model.
+**Compounding factor**: Request-time idle reclaim has NO demand comparison (see §17.2, Issue 2). Any single request can sleep any idle lane regardless of how many requests are queued for the victim model.
 
 **Severity**: HIGH — this is the primary cause of 14B starvation (avgQ=116.7s at 600/10m)
 
-See §18 for full analysis and proposed fix.
+See §17 for full analysis and proposed fix.
 
 #### Starvation S3: Single-Request Models Never Trigger Drain
 
@@ -980,57 +979,13 @@ See §18 for full analysis and proposed fix.
 
 ---
 
-## 16. Benchmark Evidence
+## 16. Refinement Proposals
 
-Hardware: 2× GPUs, 32,768 MB total VRAM. Three models: Qwen 7B, Qwen 14B, Mistral 7B.
-Benchmark date: 2026-04-11. Full analysis: [`docs/benchmark-results-analysis.md`](benchmark-results-analysis.md).
-Charts: [`tests/performance/results/`](../logos-orchestrator/tests/performance/results/).
-
-### 16.1 Results Summary (LogosWorkerNode with Queue-Fair Scheduling)
-
-| Metric | 150 req/10m | 300 req/10m | 600 req/10m |
-|---|---|---|---|
-| Success rate | 100% (150/150) | 99.3% (298/300) | 100% (600/600) |
-| P50 TTFT | 18,653ms | 27,634ms | 42,357ms |
-| P95 TTFT | 66,440ms | 70,667ms | 117,773ms |
-| P99 TTFT | 75,677ms | 85,746ms | 137,653ms |
-| P50 Total Latency | 25,111ms | 34,464ms | 52,155ms |
-| P95 Total Latency | 70,685ms | 75,078ms | 129,794ms |
-| P99 Total Latency | 86,444ms | 97,288ms | 142,396ms |
-| P50 TPOT | 43.8ms/tok | 43.0ms/tok | 53.0ms/tok |
-| P50 Queue Wait | 8,998ms | 8,799ms | 9,534ms |
-
-### 16.2 Comparison vs Ollama Baseline
-
-| Metric (600 req) | LogosWorkerNode | Ollama | Speedup |
-|---|---|---|---|
-| Success rate | **100%** | 99.3% | -- |
-| P50 TTFT | **42.4s** | 360.4s | **8.5x** |
-| P95 TTFT | **117.8s** | 1,237.0s | **10.5x** |
-| P50 Total Latency | **52.2s** | 362.2s | **6.9x** |
-| P95 Total Latency | **129.8s** | 1,239.6s | **9.6x** |
-
-The advantage grows super-linearly with load because Ollama's lack of scheduling causes O(n) queue buildup while LogosWorkerNode's queue-fair scheduling maintains bounded latencies.
-
-### 16.3 Key Observations
-
-1. **Queue wait is stable across load levels**: P50 queue wait stays at ~9s regardless of whether the workload is 150 or 600 requests. This floor corresponds to the vLLM sleep-to-wake transition time and demonstrates that the scheduling layer successfully bounds queuing overhead.
-
-2. **TPOT scales gracefully**: P50 TPOT increases from 43.8ms (150 req) to 53.0ms (600 req) — only 21% degradation at 4x load — because vLLM's continuous batching amortizes GPU compute across concurrent requests.
-
-3. **Zero cold starts**: All three runs show 0 cold starts. Models transition between sleeping and loaded states via the fast wake path (2-3s), never requiring a full cold load (30-60s). The capacity planner's preemptive sleep strategy keeps model weights on GPU.
-
-4. **Queue-fair scheduling prevents starvation**: The P95/P99 ratio stays tight (1.10-1.17x across all loads), meaning no long tail of starved requests. Previous implementations without queue-fair reclaim showed P99 queue waits of 162s (vs current 84s at 600 req).
-
----
-
-## 17. Refinement Proposals
-
-> **Status (2026-04-11)**: Proposal P1 Part A (queue-fair idle reclaim) and Part B (pending capacity retry) have been implemented. The benchmark results in §16 reflect these fixes. Proposals P2 and P3 remain open for future evaluation.
+> **Status (2026-04-11)**: Proposal P1 Part A (queue-fair idle reclaim) and Part B (pending capacity retry) have been implemented. Proposals P2 and P3 remain open for future evaluation.
 
 ### Proposal P1: Demand-Gated Reclaim + Retry Registration — IMPLEMENTED
 
-**Problem**: Two compounding issues cause VRAM starvation (see §18 for full analysis):
+**Problem**: Two compounding issues cause VRAM starvation (see §17 for full analysis):
 1. Fire-and-forget capacity triggers silently fail with no retry — when VRAM frees up, no one re-checks
 2. Request-time idle reclaim has no demand comparison — 1 request can preempt 20 queued requests
 
@@ -1200,9 +1155,9 @@ The provider capacity lock is only acquired in the request-time path (`_ensure_r
 
 ---
 
-## 18. Fairness Inversion: Last-Arrival Wins the VRAM Race
+## 17. Fairness Inversion: Last-Arrival Wins the VRAM Race
 
-### 18.1 The Problem
+### 17.1 The Problem
 
 The current system has a structural fairness bug: **a single new request for model C can claim freed VRAM ahead of model B which has 20 requests queued**, because the capacity trigger is fire-and-forget with no retry and no demand comparison.
 
@@ -1251,7 +1206,7 @@ t=18  Lane C is now running. Lane B still sleeping with 20 queued requests.
       then another 2-3s for wake = 33s+ of starvation caused by 1 request.
 ```
 
-### 18.2 Root Causes (Three Compounding Issues)
+### 17.2 Root Causes (Three Compounding Issues)
 
 #### Issue 1: Fire-and-Forget Capacity Triggers With No Retry
 
@@ -1291,7 +1246,7 @@ await asyncio.wait_for(lock.acquire(), timeout=remaining_for_lock)
 
 Whoever acquires the lock first gets exclusive access to reclaim. There is no priority queue on lock acquisition. Model C's 1 request and model B's 20 requests have equal weight at the lock level.
 
-### 18.3 The Information Asymmetry
+### 17.3 The Information Asymmetry
 
 ```
                     prepare_lane_for_request (request-time)
@@ -1315,7 +1270,7 @@ Whoever acquires the lock first gets exclusive access to reclaim. There is no pr
       idle lanes)
 ```
 
-### 18.4 Proposed Fix: Demand-Gated Idle Reclaim + Retry Registration
+### 17.4 Proposed Fix: Demand-Gated Idle Reclaim + Retry Registration
 
 **Part A — Demand gate on idle reclaim**: Before sleeping an idle lane, compare the target's total demand against the victim's total demand:
 
@@ -1352,15 +1307,15 @@ This ensures that model B's 20 queued requests don't silently vanish from the ca
 
 ---
 
-## 19. Anti-Thrashing Mechanism Audit: What to Keep, What to Simplify
+## 18. Anti-Thrashing Mechanism Audit: What to Keep, What to Simplify
 
 The current system has **7 distinct anti-thrashing mechanisms**. Several overlap, and some add complexity without clear benefit under the observed workload patterns.
 
-### 19.1 Current Mechanisms and Their Effectiveness
+### 18.1 Current Mechanisms and Their Effectiveness
 
 | # | Mechanism | Lines | Effective? | Recommendation |
 |---|---|---|---|---|
-| 1 | **Tenure protection** (10s) | 2992-3026, 4164-4182 | Partially — causes 98 blocks at 600/10m, many on genuinely idle lanes | **SIMPLIFY**: Replace fixed 10s with queue-aware adaptive (see §18.4) |
+| 1 | **Tenure protection** (10s) | 2992-3026, 4164-4182 | Partially — causes 98 blocks at 600/10m, many on genuinely idle lanes | **SIMPLIFY**: Replace fixed 10s with queue-aware adaptive (see §17.4) |
 | 2 | **Competitive ratios** (1.5×/2.0×/3.0×) | 69-71, 1932, 2020 | Yes — prevents background planner thrashing | **KEEP**: Well-calibrated for background cycle |
 | 3 | **Drain suppression** (cooldown after drain) | 534-564, 191 | Partially — useful concept but overlaps with tenure | **SIMPLIFY**: Merge into a unified "recently displaced" cooldown |
 | 4 | **Switch tracking** (metrics only) | 1300-1343 | No operational effect — `SWITCH_TENURE_MULTIPLIER = 1.0` | **REMOVE**: Pure overhead. Keep Prometheus counter if desired |
@@ -1368,7 +1323,7 @@ The current system has **7 distinct anti-thrashing mechanisms**. Several overlap
 | 6 | **Wake failure cooldown** (15s) | 598-605, 4558 | Yes — prevents hammering broken lanes | **KEEP** |
 | 7 | **Cold marking** (pre-drain scheduling exclusion) | 4471, 4677 | Yes — prevents TOCTOU routing races | **KEEP** |
 
-### 19.2 Proposed Simplification
+### 18.2 Proposed Simplification
 
 Remove **switch tracking** (mechanism 4) entirely — it does nothing operational. Merge **tenure** and **drain suppression** into a single "displacement cooldown" that is:
 - Queue-aware: waived when the displaced model has zero total demand (scheduler + backend)
@@ -1378,11 +1333,11 @@ This reduces the anti-thrashing surface from 7 mechanisms to 5, with clearer sem
 
 ---
 
-## 20. Academic Foundations and Thesis Research Anchors
+## 19. Academic Foundations and Thesis Research Anchors
 
 The Logos capacity management system sits at the intersection of several well-studied domains. Below are the primary research threads that provide theoretical grounding for the architecture, the identified issues, and the proposed refinements.
 
-### 20.1 GPU Cluster Scheduling and Multi-Tenant Serving
+### 19.1 GPU Cluster Scheduling and Multi-Tenant Serving
 
 #### Model Multiplexing on Shared GPUs
 
@@ -1390,7 +1345,7 @@ The core problem — dynamically placing and displacing multiple LLM instances o
 
 - **Gandiva** (Xiao et al., OSDI 2018) — *"Introspective Cluster Scheduling for Deep Learning"*. Introduces time-slicing and migration of DL jobs across GPUs. Directly relevant: Gandiva's *packing* heuristic is analogous to our eviction set algorithm (§9), and its *migration* mechanism maps to our sleep/wake cycle. Gandiva shows that introspective scheduling (reacting to runtime metrics rather than static placement) reduces GPU waste by 26%.
 
-- **Tiresias** (Gu et al., NSDI 2019) — *"A GPU Cluster Manager for Distributed Deep Learning"*. Studies job placement with **Least Attained Service (LAS)** scheduling — the jobs that have received the least GPU time get priority. This is the theoretical fix for our fairness inversion (§18): the 20-request model has more "unattained service" and should not be preempted by a 1-request model. Our `_effective_demand()` is a rough approximation of LAS but lacks the queue-depth awareness that Tiresias uses.
+- **Tiresias** (Gu et al., NSDI 2019) — *"A GPU Cluster Manager for Distributed Deep Learning"*. Studies job placement with **Least Attained Service (LAS)** scheduling — the jobs that have received the least GPU time get priority. This is the theoretical fix for our fairness inversion (§17): the 20-request model has more "unattained service" and should not be preempted by a 1-request model. Our `_effective_demand()` is a rough approximation of LAS but lacks the queue-depth awareness that Tiresias uses.
 
 - **AntMan** (Xiao et al., OSDI 2020) — *"Dynamic Scaling on GPU Clusters for Deep Learning"*. Proposes co-locating multiple DNN models on the same GPU via dynamic memory management. Directly analogous to our VRAM ledger and sleep/wake mechanism — AntMan's "memory swapping" is our L1 sleep (weights moved to host/CUDA pool), and its "opportunistic scaling" maps to our demand-based wake.
 
@@ -1406,11 +1361,11 @@ The core problem — dynamically placing and displacing multiple LLM instances o
 
 - **DistServe** (Zhong et al., OSDI 2024) — *"Disaggregating Prefill and Decoding for Goodput-optimized Large Language Model Serving"*. Separates prefill and decode to different GPUs. Relevant for understanding why our TP=2 setup creates the rank 0 VRAM asymmetry (§15.5, Issue C2) — disaggregated serving would eliminate this.
 
-### 20.2 Operating Systems: Scheduling Theory
+### 19.2 Operating Systems: Scheduling Theory
 
 #### Priority Inversion and the Mars Pathfinder Problem
 
-Our fairness inversion (§18) is a form of **priority inversion**: a high-priority workload (20 queued requests) is preempted by a low-priority workload (1 request) because the scheduler lacks awareness of the full priority context.
+Our fairness inversion (§17) is a form of **priority inversion**: a high-priority workload (20 queued requests) is preempted by a low-priority workload (1 request) because the scheduler lacks awareness of the full priority context.
 
 - **Sha et al., 1990** — *"Priority Inheritance Protocols"*. Introduced **Priority Inheritance** and **Priority Ceiling** protocols for real-time systems. In our context, priority inheritance would mean: if model B's reclaim would displace model A, model A's effective priority should temporarily inherit the combined priority of its 20 queued requests, making it unpreemptable by a single request.
 
@@ -1426,7 +1381,7 @@ Our fairness inversion (§18) is a form of **priority inversion**: a high-priori
 
 - **Clock-PRO** (Jiang et al., USENIX ATC 2005) — Adaptive page replacement combining frequency and recency. Our eviction algorithm sorts by `effective_demand` (frequency × decay = recency-weighted frequency), which is conceptually similar to Clock-PRO's "cold page" detection. The difference: Clock-PRO has a "test period" for cold pages before they're evicted — our system has no equivalent, which is why cold marking leaks (Race R3) and why freshly-loaded models need the tenure protection hack.
 
-### 20.3 Resource Allocation Fairness
+### 19.3 Resource Allocation Fairness
 
 #### Dominant Resource Fairness
 
@@ -1440,7 +1395,7 @@ Our fairness inversion (§18) is a form of **priority inversion**: a high-priori
 
 - **Shreedhar & Varghese, 1995** — *"Efficient Fair Queuing using Deficit Round-Robin"*. DRR is simpler to implement than WFQ and provides the same fairness guarantees. Our model switching could be modeled as DRR across models: each model gets a "quantum" of GPU time proportional to its queue depth, and switching only occurs when the current model's quantum is exhausted.
 
-### 20.4 Memory Management in Virtualized Systems
+### 19.4 Memory Management in Virtualized Systems
 
 #### VRAM as Virtual Memory
 
@@ -1462,19 +1417,19 @@ Our VRAM management is structurally identical to OS virtual memory management, w
 
 - **Agesen et al., 2010** — *"The Evolution of an x86 Virtual Machine Monitor"*. Describes VMware's evolution from simple paging to sophisticated memory reclamation with **idle memory detection**. The parallel to our idle check is direct — VMware evolved from simple "recently accessed" to statistical sampling of working sets. Our idle check could similarly evolve from binary (active_requests > 0) to probabilistic (demand decay + queue prediction).
 
-### 20.5 Capacity Planning and Autoscaling
+### 19.5 Capacity Planning and Autoscaling
 
 - **Gulati et al., 2012** — *"VMware Distributed Resource Management: Design, Implementation, and Lessons Learned"*. DRS handles live migration and load balancing across hosts. Our planner cycle is a simplified version of DRS's periodic rebalancing. Key lesson from DRS: **admission control** — don't start a migration (model switch) unless the target state is provably better than the current state. Our competitive ratios approximate this, but without formal admission control, the system can start a reclaim that worsens overall throughput.
 
 - **Rzadca et al., 2020** — *"Autopilot: Workload Autoscaling at Google"*. Autopilot uses historical demand patterns and ML-based prediction for resource allocation. Our exponential decay demand tracker is a simpler version of this. Relevant refinement: rather than purely reactive demand tracking, use **short-horizon prediction** (e.g., EWMA with trend) to anticipate demand shifts and pre-position models.
 
-### 20.6 Queueing Theory
+### 19.6 Queueing Theory
 
 - **Harchol-Balter, 2013** — *"Performance Modeling and Design of Computer Systems: Queueing Theory in Action"*. Provides the theoretical framework for analyzing our system as a **processor-sharing queue with setup times**. Each model switch imposes a setup time (sleep/wake cost), and the optimal policy minimizes the product of setup frequency × setup cost. The current system lacks this optimization — it switches whenever any demand signal exists, without amortizing the setup cost over the expected request burst length.
 
 - **Coffman & Denning, 1973** — *"Operating Systems Theory"*. Classic analysis of **multiprogramming with variable memory demands** — exactly our scenario. The key theorem: with N processes competing for M memory units where the total demand exceeds M, the optimal policy is to maintain the **balance set** (subset of processes whose combined demand fits in memory and maximizes throughput). Our planner heuristically approximates the balance set but doesn't formalize it.
 
-### 20.7 Specific Techniques Mapped to Our Anti-Thrashing Mechanisms
+### 19.7 Specific Techniques Mapped to Our Anti-Thrashing Mechanisms
 
 | Our Mechanism | Academic Technique | Source |
 |---|---|---|
@@ -1486,7 +1441,7 @@ Our VRAM management is structurally identical to OS virtual memory management, w
 | Eviction by demand ascending | **LRU / LFU hybrid replacement** — evict least-recently/frequently-used; our `effective_demand` combines frequency (decay score) and recency (queue depth) | O'Neil et al., 1993 (2Q/ARC) |
 | Drain suppression | **Negative feedback in control loops** — dampen the system's response to prevent overshoot | Control theory, Åström & Murray, 2008 |
 
-### 20.8 Thesis Research Directions
+### 19.8 Thesis Research Directions
 
 Based on this analysis, the following thesis-level research questions emerge:
 
@@ -1513,7 +1468,7 @@ Based on this analysis, the following thesis-level research questions emerge:
 
 **Question**: What is the optimal preemption policy when models have heterogeneous VRAM costs, queue depths, and serve times?
 
-**Novelty**: The fairness inversion (§18) is a manifestation of the **preemptive scheduling problem with setup times**. Optimal policies exist for simpler variants (e.g., single-machine scheduling with setup times: Allahverdi et al. 2008), but the multi-GPU, multi-model, heterogeneous-VRAM variant is unstudied. A regret-bounded online algorithm could provide formal guarantees that no model starves for more than O(setup_time × log(N)) seconds.
+**Novelty**: The fairness inversion (§17) is a manifestation of the **preemptive scheduling problem with setup times**. Optimal policies exist for simpler variants (e.g., single-machine scheduling with setup times: Allahverdi et al. 2008), but the multi-GPU, multi-model, heterogeneous-VRAM variant is unstudied. A regret-bounded online algorithm could provide formal guarantees that no model starves for more than O(setup_time × log(N)) seconds.
 
 **Anchors**: Allahverdi et al. 2008 (scheduling with setup times), Azar et al. 1994 (online load balancing), Sleator & Tarjan 1985 (competitive analysis)
 

@@ -98,7 +98,6 @@ RUN if [ -f src/grpclocal/model.proto ]; then \
 
 # Copy other project files
 COPY logos/db/ ./logos/db/
-COPY logos/logos-orchestrator/tests/ ./tests/
 
 EXPOSE 8080 50051
 

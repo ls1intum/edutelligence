@@ -121,8 +121,7 @@ def _reject_cleartext_internal_secret_transport(api_base, internal_secret):
     an on-path attacker capture the secret and reuse it against the internal
     endpoints. Plain HTTP is only acceptable for loopback bases; a remote
     deployment must be HTTPS (or a local tunnel that lands on loopback, e.g.
-    http://127.0.0.1:18443). Mirrors the guard in the performance workload
-    runner (tests/performance/run_api_workload.py).
+    http://127.0.0.1:18443).
     """
     if not internal_secret:
         return  # nothing sensitive in flight; the scheduler_state calls will 401

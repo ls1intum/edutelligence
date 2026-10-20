@@ -12,9 +12,8 @@ exclude =
     .venv,
     shared,
     logos-ui,
-    # Benchmark / data-generation scripts — script style, not library code.
+    # Benchmark scripts — script style, not library code.
     logos/logos-orchestrator/tests/performance,
-    logos/logos-orchestrator/tests/scheduling_data,
     logos/logos-workernode/tools
 
 per-file-ignores =
