@@ -2347,6 +2347,8 @@ class CapacityPlanner:
         min_wait: Optional[float] = None
 
         for lane in lanes:
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue  # never reclaimable, so never worth waiting for
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
@@ -2425,6 +2427,8 @@ class CapacityPlanner:
         min_wait: Optional[float] = None
 
         for lane in lanes:
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue  # never reclaimable, so never worth waiting for
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests > 0 or lane.queue_waiting > 0:
@@ -2493,6 +2497,8 @@ class CapacityPlanner:
         target_gpu_ids = self._parse_gpu_device_ids(target.gpu_devices)
 
         for lane in lanes:
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue  # never reclaimable, so never worth waiting for
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests <= 0 and lane.queue_waiting <= 0:
@@ -2567,6 +2573,8 @@ class CapacityPlanner:
         target_eff = self._effective_demand(target.model_name, provider_id, lanes)
 
         for lane in lanes:
+            if self.is_lane_locked(provider_id, lane.lane_id):
+                continue  # never reclaimable, so never worth waiting for
             if lane.lane_id == target.lane_id or lane.model_name == target.model_name:
                 continue
             if lane.active_requests <= 0 and lane.queue_waiting <= 0:

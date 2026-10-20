@@ -371,3 +371,16 @@ def test_demand_drain_skips_a_locked_busy_lane_and_takes_the_next_one():
     actions = planner._compute_demand_drain_actions(PROVIDER, lanes)
 
     assert [a.lane_id for a in actions] == [third_lane]
+
+
+def test_a_busy_locked_lane_is_not_worth_waiting_for():
+    # A request needs the memory a busy locked lane holds. The lane can never
+    # be reclaimed, so the request must not poll until its deadline for it.
+    busy_locked = _signal(LANE, MODEL, active=2)
+    target = _signal(OTHER_LANE, OTHER_MODEL, runtime_state="cold", sleep_state="unsupported")
+    planner = _planner(_Facade([busy_locked]), lock_reader=lambda: [(PROVIDER, LANE)])
+    kwargs = dict(provider_id=PROVIDER, target=target, lanes=[busy_locked], profiles={}, required_free_mb=10_000.0)
+
+    assert planner._has_blocking_busy_lanes(**kwargs) is True  # before the lock is read
+    planner._refresh_lane_locks()
+    assert planner._has_blocking_busy_lanes(**kwargs) is False
