@@ -102,4 +102,25 @@ describe('Benchmark runner', () => {
     expect(component.benchmarkStartError()).toBe('Could not start the benchmark.');
   });
 
+  it('summarizes the actual batch sample sizes instead of the base value', () => {
+    component.benchmarkBatch.set({
+      repetitions: 2,
+      configurations: [1, 10].map(samples => ({ ...component.benchmarkSettings(), samples })),
+    });
+    expect(component.benchmarkSampleRange()).toBe('1–10');
+    expect(component.benchmarkSampleLabel()).toBe('1–10 samples');
+    expect(component.benchmarkTotalRuns()).toBe(4);
+  });
+
+  it('shows one sample when every batch configuration uses one sample', () => {
+    component.benchmarkBatch.set({
+      repetitions: 2,
+      configurations: [{ ...component.benchmarkSettings(), samples: 1 }],
+    });
+    expect(component.benchmarkSampleRange()).toBe('1');
+    expect(component.benchmarkSampleLabel()).toBe('1 sample');
+    component.benchmarkBatch.set(null);
+    expect(component.benchmarkSampleLabel()).toBe('50 samples');
+  });
+
 });

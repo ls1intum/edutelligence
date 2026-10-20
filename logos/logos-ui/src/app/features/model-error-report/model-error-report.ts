@@ -761,9 +761,18 @@ export class ModelErrorReport implements OnInit, OnDestroy {
       || (this.benchmarkBatch()?.configurations.some(settings => Object.keys(settings.serving_overrides).length > 0) ?? false);
   }
 
-  readonly benchmarkSampleLabel = computed(
-    () => this.formatSampleCount(this.benchmarkSampleSize()),
-  );
+  readonly benchmarkSampleRange = computed(() => {
+    const configurations = this.benchmarkBatch()?.configurations;
+    if (!configurations?.length) return String(this.benchmarkSampleSize());
+    const samples = configurations.map(configuration => configuration.samples);
+    const minimum = Math.min(...samples);
+    const maximum = Math.max(...samples);
+    return minimum === maximum ? String(minimum) : `${minimum}–${maximum}`;
+  });
+  readonly benchmarkSampleLabel = computed(() => {
+    const range = this.benchmarkSampleRange();
+    return `${range} ${range === '1' ? 'sample' : 'samples'}`;
+  });
   private readonly selectedBenchmarkIds = signal<ReadonlyMap<number, number>>(new Map());
   readonly benchmarkDeletingId = signal<number | null>(null);
   readonly benchmarkDeleteError = signal<string | null>(null);

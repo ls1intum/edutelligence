@@ -109,6 +109,7 @@ Each configuration repeats before the next configuration starts.
 Multiple varied parameters produce all combinations.
 The limits are 1,000 configurations and 10,000 total runs.
 The sample count applies separately to each run.
+If the configurations use different sample counts, the confirmation shows their minimum and maximum.
 
 The reservation remains active between configurations and repetitions.
 The first failed run stops the remaining batch. Completed measurements remain stored.
