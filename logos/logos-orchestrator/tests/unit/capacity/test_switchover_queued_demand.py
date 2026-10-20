@@ -226,6 +226,8 @@ def _planner(
         get_gpu_effective_available_mb=lambda pid, g, f: f,
     )
     planner._build_load_params = lambda *a, **k: {}
+    planner._enabled = False
+    planner._tick_event = None
     return planner
 
 
@@ -343,3 +345,35 @@ class TestSequentialSwitchover:
         kinds = [(a.action, a.lane_id) for a in actions]
         assert ("sleep_l1", "A-inc") in kinds
         assert ("load", "planner-model-b") in kinds
+
+
+class TestLaneWaiterWithoutDemand:
+    """A request waits for B's sleeping lane, but B has no demand score.
+
+    The pipeline records demand only for the top classification choice, so
+    a fallback model can be waited for without ever being ranked, and a
+    score decays while the request waits. The waiter itself must make B a
+    candidate, or the cycles it triggers never consider B.
+    """
+
+    def test_a_waiter_alone_wakes_the_sleeping_lane(self):
+        planner, provider = _switchover_scenario(score_a=0.3, queue_b=0, b_sleeping_lane=True)
+        planner._demand.get_ranked_models.return_value = [("model-a", 0.3)]
+        planner._demand.get_score.side_effect = lambda name: 0.3 if name == "model-a" else 0.0
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []
+
+        planner.register_lane_waiter("req-b", 1, "model-b")
+        actions = planner._compute_demand_actions(1, provider.lanes)
+
+        kinds = [(a.action, a.lane_id) for a in actions]
+        assert ("wake", "B-s") in kinds, f"the waiter must wake B's sleeping lane; got {kinds}"
+
+    def test_a_waiter_on_another_worker_is_not_a_candidate_here(self):
+        planner, provider = _switchover_scenario(score_a=0.3, queue_b=0, b_sleeping_lane=True)
+        planner._demand.get_ranked_models.return_value = [("model-a", 0.3)]
+        planner._demand.get_score.side_effect = lambda name: 0.3 if name == "model-a" else 0.0
+
+        planner.register_lane_waiter("req-b", 2, "model-b")
+
+        assert planner._compute_demand_actions(1, provider.lanes) == []

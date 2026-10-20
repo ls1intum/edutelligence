@@ -672,6 +672,14 @@ class CapacityPlanner:
             waiters.pop(rid, None)
         return sum(1 for pid, model, _ in waiters.values() if pid == provider_id and model == model_name)
 
+    def _lane_waiter_models(self, provider_id: int) -> set[str]:
+        """Models with a live waiter on ``provider_id`` (expired ones are dropped)."""
+        waiters = self._waiters()
+        if not waiters:
+            return set()
+        cutoff = time.time() - self.LANE_WAITER_TTL_SECONDS
+        return {model for pid, model, at in waiters.values() if pid == provider_id and at >= cutoff}
+
     def is_lane_locked(self, provider_id: int, lane_id: str) -> bool:
         """Whether an operator locked this lane warm."""
         return (int(provider_id), lane_id) in getattr(self, "_locked_lanes", ())
@@ -4013,13 +4021,19 @@ class CapacityPlanner:
 
         # Build candidate list: ranked demand models + any capability model
         # with queued scheduler requests (covers cold models whose demand
-        # decayed but still have requests waiting in the scheduler queue).
+        # decayed but still have requests waiting in the scheduler queue)
+        # + any model with a request waiting for a lane here. A waiter can
+        # have no demand score at all: demand is recorded only for the top
+        # classification choice, and a score decays while the request waits.
         candidates: list[tuple[str, float]] = list(ranked)
         ranked_names = {m for m, _ in ranked}
         for cap_model in capabilities - ranked_names:
             sq = self._facade.get_scheduler_queue_depth_by_model_name(cap_model, provider_id)
             if sq > 0:
                 candidates.append((cap_model, 0.0))
+        listed = {m for m, _ in candidates}
+        for waiter_model in sorted(self._lane_waiter_models(provider_id) - listed):
+            candidates.append((waiter_model, 0.0))
 
         for model_name, score in candidates:
             if capabilities and model_name not in capabilities:
