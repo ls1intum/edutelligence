@@ -94,6 +94,9 @@ class GatewayCloudBillingEndToEndTest {
     private volatile int responseStatus = 200;
     private volatile String responseContentType = "application/json";
     private volatile String responseBody = "{}";
+    /** When set, the upstream sends this after {@link #responseBody}, {@link #tailDelayMs} later. */
+    private volatile String responseTail;
+    private volatile long tailDelayMs;
 
     @BeforeEach
     void startUpstream() throws IOException {
@@ -102,8 +105,20 @@ class GatewayCloudBillingEndToEndTest {
             seenRequestBody.set(exchange.getRequestBody().readAllBytes());
             byte[] out = responseBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", responseContentType);
-            exchange.sendResponseHeaders(responseStatus, out.length);
-            exchange.getResponseBody().write(out);
+            if (responseTail == null) {
+                exchange.sendResponseHeaders(responseStatus, out.length);
+                exchange.getResponseBody().write(out);
+            } else {
+                exchange.sendResponseHeaders(responseStatus, 0);
+                exchange.getResponseBody().write(out);
+                exchange.getResponseBody().flush();
+                try {
+                    Thread.sleep(tailDelayMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                exchange.getResponseBody().write(responseTail.getBytes(StandardCharsets.UTF_8));
+            }
             exchange.close();
         });
         upstream.start();
@@ -196,6 +211,52 @@ class GatewayCloudBillingEndToEndTest {
             .isGreaterThanOrEqualTo(Duration.ofMillis(350));
         assertThat(instant(row, "time_at_first_token"))
             .isBeforeOrEqualTo(instant(row, "timestamp_provider_response"));
+    }
+
+    @Test
+    void providerWorkDuringABlockedClientWrite_staysInTheProviderTime() throws Exception {
+        // The client blocks on the role-only event while the upstream takes
+        // 600 ms to send the content; that time is the provider's.
+        responseContentType = "text/event-stream";
+        responseBody = "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n";
+        responseTail = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"
+            + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\n"
+            + "data: [DONE]\n\n";
+        tailDelayMs = 600;
+        Fixture f = seedPricedDeployment();
+        int logId = admit(f);
+
+        ResponseEntity<StreamingResponseBody> response = forward(f, requestBody(true), "/v1/chat/completions");
+        java.util.concurrent.atomic.AtomicBoolean first = new java.util.concurrent.atomic.AtomicBoolean(true);
+        response.getBody().writeTo(new OutputStream() {
+            @Override
+            public void write(int b) throws IOException {
+                write(new byte[] {(byte) b}, 0, 1);
+            }
+
+            @Override
+            public void write(byte[] b, int off, int len) throws IOException {
+                if (first.getAndSet(false)) {
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException(e);
+                    }
+                }
+            }
+        });
+
+        Map<String, Object> row = timings(logId);
+        Instant call = instant(row, "timestamp_provider_call");
+        assertThat(Duration.between(call, instant(row, "time_at_first_token")))
+            .isGreaterThanOrEqualTo(Duration.ofMillis(550))
+            .isLessThan(Duration.ofMillis(1400));
+        assertThat(Duration.between(call, instant(row, "timestamp_provider_response")))
+            .isGreaterThanOrEqualTo(Duration.ofMillis(550))
+            .isLessThan(Duration.ofMillis(1400));
+        assertThat(Duration.between(instant(row, "timestamp_provider_response"), instant(row, "timestamp_response")))
+            .isGreaterThanOrEqualTo(Duration.ofMillis(300));
     }
 
     @Test

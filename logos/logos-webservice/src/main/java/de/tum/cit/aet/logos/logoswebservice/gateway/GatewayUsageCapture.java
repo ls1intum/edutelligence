@@ -68,7 +68,8 @@ final class GatewayUsageCapture extends OutputStream {
 
     /**
      * @param clock dates the arrival of each chunk; the forwarder passes the
-     *              upstream read clock so a slow client does not shift it
+     *              instant its reader took the chunk from the upstream, so a
+     *              slow client does not shift it
      */
     GatewayUsageCapture(OutputStream delegate, ObjectMapper objectMapper,
                         String upstreamContentType, boolean retainBody, Supplier<Instant> clock) {

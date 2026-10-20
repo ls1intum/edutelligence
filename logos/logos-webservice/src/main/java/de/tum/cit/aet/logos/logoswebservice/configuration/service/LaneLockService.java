@@ -65,23 +65,31 @@ public class LaneLockService {
             .addValue("laneId", laneId)
             .addValue("modelName", blankToNull(modelName))
             .addValue("lockedBy", actorName(actor));
-        List<Map<String, Object>> inserted = jdbc.queryForList("""
-            INSERT INTO lane_locks (provider_id, lane_id, model_name, locked_by)
-            VALUES (:providerId, :laneId, :modelName, :lockedBy)
-            ON CONFLICT (provider_id, lane_id) DO NOTHING
-            RETURNING provider_id, lane_id, model_name, locked_by, locked_at
-            """, params);
-        Map<String, Object> before;
-        Map<String, Object> after;
-        if (!inserted.isEmpty()) {
-            before = null;
-            after = inserted.get(0);
-        } else {
-            before = jdbc.queryForList("""
+        Map<String, Object> before = null;
+        Map<String, Object> after = null;
+        // A concurrent unlock can delete the row between the insert that saw
+        // it and the locking read; the insert is then simply tried again.
+        while (after == null) {
+            List<Map<String, Object>> inserted = jdbc.queryForList("""
+                INSERT INTO lane_locks (provider_id, lane_id, model_name, locked_by)
+                VALUES (:providerId, :laneId, :modelName, :lockedBy)
+                ON CONFLICT (provider_id, lane_id) DO NOTHING
+                RETURNING provider_id, lane_id, model_name, locked_by, locked_at
+                """, params);
+            if (!inserted.isEmpty()) {
+                before = null;
+                after = inserted.get(0);
+                break;
+            }
+            List<Map<String, Object>> existing = jdbc.queryForList("""
                 SELECT provider_id, lane_id, model_name, locked_by, locked_at
                 FROM lane_locks WHERE provider_id = :providerId AND lane_id = :laneId
                 FOR UPDATE
-                """, params).get(0);
+                """, params);
+            if (existing.isEmpty()) {
+                continue;
+            }
+            before = existing.get(0);
             after = jdbc.queryForList("""
                 UPDATE lane_locks
                 SET model_name = COALESCE(CAST(:modelName AS TEXT), model_name)

@@ -154,24 +154,27 @@ public class GatewayCloudForwarder {
             responseHeaders.put(name, values);
         });
 
-        UpstreamReadClock upstreamBody = new UpstreamReadClock(upstream.body());
+        InputStream upstreamBody = upstream.body();
         String upstreamContentType = upstream.headers().firstValue("content-type").orElse(null);
         StreamingResponseBody stream = outputStream -> {
             IOException streamError = null;
+            // A separate reader stamps each chunk as it arrives from the
+            // upstream, so a client that is slow to take the bytes never
+            // shifts the provider's timestamps.
+            UpstreamPump pump = UpstreamPump.start(upstreamBody, headersAt);
             // The capture sits between the upstream and the client so the
             // reported token counts can be billed; it never delays or alters
             // the bytes the client receives.
             GatewayUsageCapture capture = new GatewayUsageCapture(
-                outputStream, objectMapper, upstreamContentType, retainResponseBody,
-                () -> upstreamBody.at(headersAt));
-            try (upstreamBody; OutputStream out = capture) {
-                upstreamBody.transferTo(out);
+                outputStream, objectMapper, upstreamContentType, retainResponseBody, pump::currentChunkAt);
+            try (pump; OutputStream out = capture) {
+                pump.transferTo(out);
                 out.flush();
             } catch (IOException e) {
                 streamError = e;
             }
             GatewayForwardTimings timings = new GatewayForwardTimings(
-                providerCall, capture.firstTokenAt(), upstreamBody.at(headersAt));
+                providerCall, capture.firstTokenAt(), pump.endedAt());
             if (streamError != null) {
                 if (onFailure != null) {
                     onFailure.accept(streamError.getMessage(), timings);
@@ -193,52 +196,116 @@ public class GatewayCloudForwarder {
     }
 
     /**
-     * Times the upstream body apart from the client it is relayed to.
+     * Reads the upstream body on its own thread and stamps each chunk with the
+     * instant it arrived.
      *
-     * <p>Reads and client writes alternate on one thread, so the instant the
-     * last read returns is late by every write that blocked on a slow client.
-     * Summing only the time spent inside {@code read} and adding it to the
-     * instant the response headers arrived gives the instant the upstream
-     * finished sending, as far as this process could observe it: time the
-     * relay spent writing is excluded, time spent waiting for the upstream is
-     * not. Bytes the upstream sent while a write blocked are already buffered,
-     * so their reads return at once and add next to nothing.
+     * <p>Relaying on one thread would date every chunk read after a blocked
+     * client write too late, and dating by read time alone would drop provider
+     * work that overlapped such a write. The reader keeps taking bytes while
+     * the client is slow, so the stamps follow the upstream. It buffers up to
+     * {@link #MAX_CHUNKS} chunks; past that it waits for the client like a
+     * direct relay would.
      */
-    static final class UpstreamReadClock extends java.io.FilterInputStream {
+    static final class UpstreamPump implements AutoCloseable {
 
-        private long readNanos;
+        static final int MAX_CHUNKS = 1024;
+        private static final int CHUNK_BYTES = 8192;
 
-        UpstreamReadClock(InputStream in) {
-            super(in);
+        private record Chunk(byte[] bytes, Instant at, IOException error) {
         }
 
-        @Override
-        public int read() throws IOException {
-            long start = System.nanoTime();
+        private static final Chunk END = new Chunk(null, null, null);
+
+        private final InputStream in;
+        private final java.util.concurrent.BlockingQueue<Chunk> chunks =
+            new java.util.concurrent.ArrayBlockingQueue<>(MAX_CHUNKS);
+        private final Thread reader;
+        private volatile Instant endedAt;
+        private volatile boolean closed;
+        private Instant currentChunkAt;
+
+        private UpstreamPump(InputStream in, Instant headersAt) {
+            this.in = in;
+            this.currentChunkAt = headersAt;
+            this.endedAt = headersAt;
+            this.reader = Thread.ofVirtual().name("gateway-upstream-reader").unstarted(this::pump);
+        }
+
+        static UpstreamPump start(InputStream in, Instant headersAt) {
+            UpstreamPump pump = new UpstreamPump(in, headersAt);
+            pump.reader.start();
+            return pump;
+        }
+
+        private void pump() {
+            Chunk last = END;
             try {
-                return super.read();
-            } finally {
-                readNanos += System.nanoTime() - start;
+                byte[] buf = new byte[CHUNK_BYTES];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    Instant at = Instant.now();
+                    endedAt = at;
+                    if (n > 0) {
+                        put(new Chunk(java.util.Arrays.copyOf(buf, n), at, null));
+                    }
+                }
+                endedAt = Instant.now();
+            } catch (IOException e) {
+                endedAt = Instant.now();
+                last = new Chunk(null, null, e);
+            } catch (InterruptedException e) {
+                return;
+            }
+            try {
+                put(last);
+            } catch (InterruptedException ignored) {
+                // The relay was closed; nobody takes the end marker any more.
             }
         }
 
-        @Override
-        public int read(byte[] b, int off, int len) throws IOException {
-            long start = System.nanoTime();
-            try {
-                return in.read(b, off, len);
-            } finally {
-                readNanos += System.nanoTime() - start;
+        private void put(Chunk chunk) throws InterruptedException {
+            if (!closed) {
+                chunks.put(chunk);
             }
         }
 
-        /**
-         * The upstream's progress as an instant: when the headers arrived plus
-         * the time spent waiting on reads so far. After the last read it is
-         * the instant the upstream body ended.
-         */
-        Instant at(Instant headersAt) {
-            return headersAt.plusNanos(readNanos);
+        /** Relays every chunk to {@code out}, in order, until the upstream ends. */
+        void transferTo(OutputStream out) throws IOException {
+            while (true) {
+                Chunk chunk;
+                try {
+                    chunk = chunks.take();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new java.io.InterruptedIOException("Relay interrupted");
+                }
+                if (chunk.error() != null) {
+                    throw chunk.error();
+                }
+                if (chunk.bytes() == null) {
+                    return;
+                }
+                currentChunkAt = chunk.at();
+                out.write(chunk.bytes());
+            }
+        }
+
+        /** When the chunk being relayed arrived from the upstream. */
+        Instant currentChunkAt() {
+            return currentChunkAt;
+        }
+
+        /** When the upstream body ended, or the last chunk so far arrived. */
+        Instant endedAt() {
+            return endedAt;
+        }
+
+        @Override
+        public void close() throws IOException {
+            closed = true;
+            reader.interrupt();
+            chunks.clear();
+            in.close();
         }
     }
 
