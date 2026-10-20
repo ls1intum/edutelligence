@@ -226,8 +226,14 @@ async def run() -> Dict[str, Any]:
     slowest = sorted(rows, key=lambda r: r["total_ms"], reverse=True)[:5]
 
     threshold: Dict[str, Any] = {"p99_max_ms": p99_max_ms, "exceeded": False}
-    if p99_max_ms is not None and load.get("n", 0):
-        threshold["exceeded"] = load["p99_ms"] > p99_max_ms
+    if p99_max_ms is not None:
+        if load.get("n", 0):
+            threshold["exceeded"] = load["p99_ms"] > p99_max_ms
+        else:
+            # No successful request means no p99 to hold against the limit; a
+            # run where every request failed must not read as passing.
+            threshold["exceeded"] = True
+            threshold["reason"] = "no successful requests"
 
     print(
         f"  [budget] {len(rows)} requests in {wall_s:.1f}s, "

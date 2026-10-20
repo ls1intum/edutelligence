@@ -206,7 +206,25 @@ def run() -> int:
         paths = write_reports(result, str(out_dir))
         print(f"\n  report: {paths['md']}")
         if fail_on_threshold and budget_result.get("threshold", {}).get("exceeded"):
-            print("  budget admission p99 above LOGOS_BENCH_GW_BUDGET_P99_MAX_MS", file=sys.stderr)
+            reason = budget_result["threshold"].get("reason")
+            print(
+                (
+                    f"  budget admission gate failed: {reason}"
+                    if reason
+                    else "  budget admission p99 above LOGOS_BENCH_GW_BUDGET_P99_MAX_MS"
+                ),
+                file=sys.stderr,
+            )
+            return 1
+        if (
+            fail_on_threshold
+            and os.environ.get("LOGOS_BENCH_GW_BUDGET_P99_MAX_MS")
+            and budget_result.get("skipped")
+            and not skip_budget
+        ):
+            # A gate that was asked for but could not measure (e.g. the budget
+            # key was rejected) must not pass silently.
+            print(f"  budget admission gate failed: leg skipped ({budget_result.get('reason')})", file=sys.stderr)
             return 1
         return 0
     finally:
