@@ -768,3 +768,44 @@ def test_once_reserved_the_hello_adoption_leaves_the_model_alone(monkeypatch):
     monkeypatch.setattr(logosnode_mod, "_resolve_provider_name", lambda pid: "gpu-5")
     logosnode_mod._update_reported_calibration_keys(5, {"org/busy": "H1", "org/idle": "H2"}, {})  # noqa: SLF001
     assert db.adopted == [(5, ["org/idle"], 30, True)]
+
+
+def test_a_reservation_stores_the_workers_key_before_judging_the_profile(monkeypatch):
+    """A config edit not yet reported through a status: Logos must still mark the
+    profile stale, so the worker does not skip the recalibration it needs."""
+
+    class _Db(_FakeDB):
+        reported = "OLD"
+
+        def update_reported_calibration_keys(self, provider_id, key_hashes, slice_gpu_counts=None):
+            self.reported = key_hashes["org/model"]
+            self.slice_counts = slice_gpu_counts
+
+        def get_central_model_profiles(self, provider_id, model_names=None):
+            return [
+                {
+                    "model_name": "org/model",
+                    "profile": {"base_residency_mb": 1.0},
+                    "sync_revision": 2,
+                    "calibration_key_hash": self.reported,
+                    "cal_id": 11,
+                    "cal_key_hash": "OLD",
+                    "cal_source_provider_id": 5,
+                    "cal_invalidated_at": None,
+                }
+            ]
+
+    db = _Db()
+    monkeypatch.setattr(logosnode_mod, "DBManager", lambda: db)
+    monkeypatch.setattr(main_mod, "_logosnode_registry", _registry_with_sessions(5))
+    monkeypatch.setattr(logosnode_mod, "_require_tls_request", lambda request: None)
+    monkeypatch.setattr(logosnode_mod, "_logosnode_provider_for_key", lambda key: {"id": 5})
+
+    def reserve(**fields):
+        data = LogosNodeCalibrationReservationRequest(shared_key="k", model_name="org/model", **fields)
+        return asyncio.run(logosnode_mod.logosnode_calibration_reservation(data, request=None))
+
+    assert reserve()["profiles"]["org/model"]["calibration_stale"] is False  # an older worker
+    answer = reserve(calibration_key_hash="NEW", slice_gpu_count=2)
+    assert answer["profiles"]["org/model"]["calibration_stale"] is True
+    assert (db.reported, db.slice_counts) == ("NEW", {"org/model": 2})

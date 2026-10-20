@@ -117,6 +117,10 @@ class LogosNodeModelProfilesRequest(BaseModel):
 class LogosNodeCalibrationReservationRequest(BaseModel):
     shared_key: str
     model_name: str
+    # The key and GPU count the worker computed for the model just now; a
+    # config edit may not have reached Logos through a status yet.
+    calibration_key_hash: str | None = None
+    slice_gpu_count: int | None = None
 
 
 class LogosNodeClearUnsupportedRequest(LogosKeyModel):

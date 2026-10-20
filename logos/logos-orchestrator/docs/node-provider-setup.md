@@ -199,7 +199,9 @@ Before a worker calibrates a model it reserves it with Logos
 (`POST /logosdb/providers/logosnode/calibration-reservation`, shared key).
 From then on Logos adopts nothing for that model, and the answer carries the
 profile as Logos holds it, so a calibration that just arrived from another
-node is used and the probe is skipped. The reservation is serialized with
+node is used and the probe is skipped. The worker sends the node's current
+calibration key with it, so a config edit that no status has reported yet still
+marks the profile stale. The reservation is serialized with
 adoption inside one orchestrator process; with several processes a worker's
 events remain the only, up to a second late, barrier. An older Logos answers
 404 and the worker relies on the events alone.

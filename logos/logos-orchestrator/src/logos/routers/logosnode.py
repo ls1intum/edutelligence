@@ -885,7 +885,8 @@ async def logosnode_calibration_reservation(data: LogosNodeCalibrationReservatio
 
     Answers with the model's profile as of the reservation, so the worker
     probes from the revision Logos holds, and skips a model another node's
-    calibration just reached.
+    calibration just reached. The key the worker sends is stored first, so a
+    config edit still marks the profile stale.
     """
     _require_tls_request(request)
     provider_id = int(_logosnode_provider_for_key(data.shared_key)["id"])
@@ -895,6 +896,13 @@ async def logosnode_calibration_reservation(data: LogosNodeCalibrationReservatio
             reserve = getattr(_main._logosnode_registry, "reserve_calibration", None)
             if reserve is not None:
                 reserve(provider_id, data.model_name)
+            if data.calibration_key_hash:
+                # Staleness is judged against the key Logos has on file.
+                counts = {data.model_name: data.slice_gpu_count} if data.slice_gpu_count else None
+                with DBManager() as db:
+                    db.update_reported_calibration_keys(
+                        provider_id, {data.model_name: data.calibration_key_hash}, counts
+                    )
             return _load_effective_profiles(provider_id, [data.model_name])
 
     return {"profiles": await asyncio.to_thread(_reserve)}

@@ -351,9 +351,15 @@ class LogosBridgeClient:
         unreachable): the events are then the only barrier.
         """
         url = f"{self._logos_base_url()}/logosdb/providers/logosnode/calibration-reservation"
+        profiles = self._app.state.model_profiles
+        body: dict[str, Any] = {"shared_key": self._cfg.shared_key, "model_name": model_name}
+        # A config edit since the last status is known only here.
+        if model_name in profiles.calibration_key_hashes():
+            body["calibration_key_hash"] = profiles.calibration_key_hashes()[model_name]
+            body["slice_gpu_count"] = profiles.slice_gpu_counts().get(model_name)
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(url, json={"shared_key": self._cfg.shared_key, "model_name": model_name})
+                resp = await client.post(url, json=body)
             if resp.status_code != 200:
                 logger.info("[Calibration] No reservation for %s (HTTP %s)", model_name, resp.status_code)
                 return None

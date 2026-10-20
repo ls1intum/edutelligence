@@ -110,6 +110,43 @@ def test_the_workers_events_take_over_from_the_reservation():
         assert registry.models_in_calibration(1) == expected, event_name
 
 
+@pytest.mark.parametrize(
+    "late_event",
+    [
+        "calibration_model_selected",
+        "calibration_model_started",
+        "calibration_model_completed",
+        "calibration_model_skipped",
+        "calibration_model_failed",
+        "calibration_model_cancelled",
+    ],
+)
+def test_a_late_event_of_an_earlier_model_leaves_the_next_reservation_alone(late_event):
+    """The worker reserved B over HTTP while A's events were still buffered."""
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    registry.reserve_calibration(1, "org/b")
+
+    asyncio.run(registry.append_event(1, {"event": late_event, "model": "org/a", "details": ""}))
+    assert "org/b" in registry.models_in_calibration(1)
+
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_selected", "model": "org/b", "details": ""}))
+    assert "org/b" in registry.models_in_calibration(1)  # now through its own event
+    assert registry.calibrating_model(1) == "org/b"
+
+
+def test_models_reserved_one_after_the_other_are_each_lifted_by_their_own_events():
+    registry, _ = _registry_with_session()
+    asyncio.run(registry.append_event(1, _event("calibration_session_started")))
+    registry.reserve_calibration(1, "org/a")
+    registry.reserve_calibration(1, "org/b")
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_completed", "model": "org/a", "details": ""}))
+    assert registry.models_in_calibration(1) == frozenset({"org/a", "org/b"})  # A awaits its snapshot
+    registry.snapshots_linked(1, ["org/a"])
+    asyncio.run(registry.append_event(1, {"event": "calibration_model_skipped", "model": "org/b", "details": ""}))
+    assert registry.models_in_calibration(1) == frozenset()
+
+
 def test_a_finished_session_drops_the_reservation():
     registry, _ = _registry_with_session()
     registry.reserve_calibration(1, "org/m")

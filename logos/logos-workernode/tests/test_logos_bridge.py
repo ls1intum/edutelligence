@@ -4292,7 +4292,22 @@ async def test_a_reservation_is_asked_of_logos_with_the_shared_key(tmp_path, mon
     assert await _REAL_RESERVE_CALIBRATION(client, "org/ready") == {"sync_revision": 3}
     url, body = http.posted[0]
     assert url == "https://logos.example/logosdb/providers/logosnode/calibration-reservation"
-    assert body == {"shared_key": "secret", "model_name": "org/ready"}
+    registry = client._app.state.model_profiles  # noqa: SLF001
+    assert body == {
+        "shared_key": "secret",
+        "model_name": "org/ready",
+        "calibration_key_hash": registry.calibration_key_hashes()["org/ready"],
+        "slice_gpu_count": 2,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_model_without_a_known_key_is_reserved_by_name_only(tmp_path, monkeypatch):
+    client = _central_client(tmp_path)
+    http = _Http(body={"profiles": {}})
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", http)
+    await _REAL_RESERVE_CALIBRATION(client, "org/unknown")
+    assert http.posted[0][1] == {"shared_key": "secret", "model_name": "org/unknown"}
 
 
 @pytest.mark.asyncio
@@ -4304,3 +4319,56 @@ async def test_without_a_reservation_the_events_remain_the_barrier(tmp_path, mon
     client = _central_client(tmp_path)
     monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", http)
     assert await _REAL_RESERVE_CALIBRATION(client, "org/ready") is None
+
+
+class _LogosJudgingStaleness(_Http):
+    """Answers a reservation as Logos does: staleness is judged against the key
+    on file, which a config edit not yet reported through a status has not changed."""
+
+    def __init__(self, key_on_file: str):
+        super().__init__()
+        self.key_on_file = key_on_file
+
+    async def post(self, url, json=None):
+        if "calibration_key_hash" in json:
+            self.key_on_file = json["calibration_key_hash"]  # stored before the profile is built
+        self.posted.append((url, json))
+        outer = self
+
+        class _Resp:
+            status_code = 200
+            content = b"{}"
+            text = ""
+
+            @staticmethod
+            def json():
+                profile = {**_ADOPTED, "calibration_origin": "local", "calibration_id": 9, "sync_revision": 5}
+                profile["calibration_stale"] = outer.key_on_file != "KEY-IN-MEASUREMENT"
+                return {"profiles": {json["model_name"]: profile}}
+
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_a_config_edit_not_yet_reported_still_gets_its_model_recalibrated(tmp_path, monkeypatch):
+    """The session refreshes the node's keys and marks the calibration stale. The
+    reservation must not let Logos, still holding the old key, say otherwise."""
+    app, client, probed = _calibration_session_client(tmp_path, monkeypatch, ["org/first"])
+    registry = app.state.model_profiles
+    registry.replace_from_sync({"org/first": dict(_ADOPTED, calibration_origin="local")})
+    registry.set_calibration_keys({"org/first": {"plan": "KEY-IN-MEASUREMENT"}})
+    registry.set_slice_gpu_counts({"org/first": 2})
+    registry.set_calibration_keys({"org/first": {"plan": "after-the-config-edit"}})
+    assert registry.get_profile("org/first").calibration_stale is True
+
+    logos = _LogosJudgingStaleness(key_on_file="KEY-IN-MEASUREMENT")
+    monkeypatch.setattr("logos_worker_node.logos_bridge.httpx.AsyncClient", logos)
+    monkeypatch.setattr(LogosBridgeClient, "_reserve_calibration", _REAL_RESERVE_CALIBRATION)
+    assert (await client._handle_start_calibration_session({"sleep_level": 0}))["ok"] is True  # noqa: SLF001
+    await _drain_session(client)
+
+    assert logos.posted[0][1]["calibration_key_hash"] == registry.calibration_key_hashes()["org/first"]
+    events = [(e.event, e.details) for e in app.state.lane_manager._event_log if e.model == "org/first"]
+    assert ("calibration_model_skipped", "calibrated meanwhile") not in events
+    assert any(name == "calibration_model_selected" for name, _ in events)
+    assert registry.get_profile("org/first").calibration_stale is True
