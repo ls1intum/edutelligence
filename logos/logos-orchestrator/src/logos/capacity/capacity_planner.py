@@ -684,6 +684,12 @@ class CapacityPlanner:
         """Whether an operator locked this lane warm."""
         return (int(provider_id), lane_id) in getattr(self, "_locked_lanes", ())
 
+    async def _reload_lane_locks(self) -> None:
+        """Reload the locks off the event loop; without a reader there is nothing to read."""
+        if getattr(self, "_lane_lock_reader", None) is None:
+            return
+        await asyncio.to_thread(self._refresh_lane_locks)
+
     def _refresh_lane_locks(self) -> None:
         """Reload the operator lane locks.
 
@@ -761,7 +767,7 @@ class CapacityPlanner:
         """
         if action.operator_initiated:
             return False
-        await asyncio.to_thread(self._refresh_lane_locks)
+        await self._reload_lane_locks()
         if not self.is_lane_locked(action.provider_id, action.lane_id):
             return False
         logger.info(
@@ -961,7 +967,7 @@ class CapacityPlanner:
             logger.warning("Cleaned %d stale host-RAM reservations", stale_host_ram)
 
         self._demand.decay_all()
-        await asyncio.to_thread(self._refresh_lane_locks)
+        await self._reload_lane_locks()
 
         # Keep pending-capacity models alive in the demand signal. A model lands
         # in _pending_capacity when a request is actively waiting but its lane
@@ -8973,7 +8979,7 @@ class CapacityPlanner:
             # The cycle's locks can be minutes old by now: a long action ahead
             # of this one in the batch, or a reclaim on the request path. Read
             # them again so a lane locked in the meantime is not slept.
-            await asyncio.to_thread(self._refresh_lane_locks)
+            await self._reload_lane_locks()
         if marks_cold and not action.operator_initiated and self.is_lane_locked(action.provider_id, action.lane_id):
             # Last line of defence: the planning passes skip locked lanes, but
             # a path that does not (or a lock taken after planning) must not
