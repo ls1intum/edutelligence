@@ -123,18 +123,25 @@ public class InferenceGatewayController {
             GatewayRouteDecision decision = GatewayRouteResolver.decideFromDeployments(privacyFiltered);
             if (decision.route() == GatewayRoute.CLOUD && decision.deployment() != null) {
                 String logLevel = GatewayLoggingLevel.resolve(request, ctx.key().logLevel());
+                // Every request turned away between here and the forward is
+                // recorded, whatever the reason — a request that fails must
+                // never be missing from the request log.
+                final Integer logId;
                 try {
                     cloudRateLimiter.enforce(ctx.key(), body);
+                    logId = cloudAccounting.admitAndReserve(
+                        ctx.key(), decision.deployment(), body, logLevel, arrivedAt,
+                        GatewayReasoningEffort.from(root));
                 } catch (ResponseStatusException e) {
-                    if (e.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value()) {
-                        cloudAccounting.recordRateLimited(
-                            ctx.key(), decision.deployment(), logLevel, e.getReason());
-                    }
+                    cloudAccounting.recordRejected(ctx.key(), decision.deployment(), logLevel,
+                        "HTTP " + e.getStatusCode().value() + ": " + e.getReason(),
+                        e.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value());
+                    throw e;
+                } catch (RuntimeException e) {
+                    cloudAccounting.recordRejected(ctx.key(), decision.deployment(), logLevel,
+                        "Gateway error: " + e.getClass().getSimpleName(), false);
                     throw e;
                 }
-                Integer logId = cloudAccounting.admitAndReserve(
-                    ctx.key(), decision.deployment(), body, logLevel, arrivedAt,
-                    GatewayReasoningEffort.from(root));
                 String inferencePath = GatewayRouteResolver.normalizeInferencePath(path);
                 log.debug("Cloud forward {} {} model={} reason={}",
                     request.getMethod(), path, modelName, decision.reason());

@@ -539,17 +539,22 @@ public class GatewayCloudAccounting {
     }
 
     /**
-     * Record a request the cloud RPM/TPM limiter turned away, so it shows up in
+     * Record a request the gateway turned away before forwarding it (rate
+     * limit, budget, or an unexpected failure in admission), so it shows up in
      * the request log and the stats like any other failed request.
      *
-     * <p>The row is already settled: no reservation, no cost, and
-     * {@code rate_limit_admitted = FALSE} so the key's window usage does not
-     * count it, exactly as for a rejection on the orchestrator path. The request
-     * payload is not stored — a rejected request was never processed. A failure
-     * to write the row must not replace the 429 the caller is about to receive.
+     * <p>The row is already settled: no reservation, no cost. A limiter
+     * rejection also sets {@code rate_limit_admitted = FALSE} so the key's
+     * window usage does not count it, exactly as on the orchestrator path; any
+     * other rejection leaves it NULL, because the limiter did not decide it. The
+     * request payload is not stored — a rejected request was never processed. A
+     * failure to write the row must not replace the error the caller is about
+     * to receive.
+     *
+     * @param rateLimited whether the cloud RPM/TPM limiter made the rejection
      */
-    public void recordRateLimited(GatewayKey key, GatewayDeployment deployment,
-                                  String logLevel, String message) {
+    public void recordRejected(GatewayKey key, GatewayDeployment deployment,
+                               String logLevel, String message, boolean rateLimited) {
         String msg = message == null ? null
             : (message.length() > 500 ? message.substring(0, 500) : message);
         try {
@@ -564,7 +569,7 @@ public class GatewayCloudAccounting {
                     NOW(), NOW(),
                     :api_key_id, :team_id, :user_id, :environment,
                     :model_id, :provider_id, :request_id,
-                    'error', :error_message, FALSE,
+                    'error', :error_message, :rate_limit_admitted,
                     TRUE, 0, CAST(:privacy_level AS logging_enum)
                 )
                 """, new MapSqlParameterSource()
@@ -576,9 +581,10 @@ public class GatewayCloudAccounting {
                 .addValue("provider_id", deployment.providerId())
                 .addValue("request_id", "gw-" + UUID.randomUUID())
                 .addValue("error_message", msg)
+                .addValue("rate_limit_admitted", rateLimited ? Boolean.FALSE : null)
                 .addValue("privacy_level", privacyLevel(logLevel)));
         } catch (RuntimeException e) {
-            log.warn("Could not record rate-limited request keyId={}", key.id(), e);
+            log.warn("Could not record rejected request keyId={}", key.id(), e);
         }
     }
 
