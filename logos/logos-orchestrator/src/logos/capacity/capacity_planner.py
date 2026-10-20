@@ -3712,13 +3712,22 @@ class CapacityPlanner:
         if needed_mb > free_vram:
             # Eviction will be needed. Pick the cheapest available victim type:
             # sleep_l1 if any non-target lane can sleep, otherwise stop.
-            other_can_sleep = any(
-                lane.runtime_state in ("loaded", "running")
-                and lane.sleep_state == "awake"
-                and lane.model_name != model_name
+            # A locked lane is never evicted, so it is no victim here either:
+            # counting it would let a worker that cannot make room outrank one
+            # that can, and the planning pass would then place nothing.
+            victims = [
+                lane
                 for lane in lanes
+                if lane.model_name != model_name and not self.is_lane_locked(provider_id, lane.lane_id)
+            ]
+            if len(victims) < sum(1 for lane in lanes if lane.model_name != model_name):
+                freeable_mb = sum(float(lane.effective_vram_mb or 0.0) for lane in victims)
+                if free_vram + freeable_mb < needed_mb:
+                    return None
+            other_can_sleep = any(
+                lane.runtime_state in ("loaded", "running") and lane.sleep_state == "awake" for lane in victims
             )
-            other_has_any_lane = any(lane.model_name != model_name for lane in lanes)
+            other_has_any_lane = bool(victims)
             if other_can_sleep:
                 victim_cost = self.VICTIM_ACTION_COST_S["sleep_l1"]
             elif other_has_any_lane:
@@ -8891,6 +8900,11 @@ class CapacityPlanner:
         """
         key = (action.provider_id, action.lane_id)
         marks_cold = action.action in ("sleep_l1", "sleep_l2", "stop")
+        if marks_cold and not action.operator_initiated:
+            # The cycle's locks can be minutes old by now: a long action ahead
+            # of this one in the batch, or a reclaim on the request path. Read
+            # them again so a lane locked in the meantime is not slept.
+            await asyncio.to_thread(self._refresh_lane_locks)
         if marks_cold and not action.operator_initiated and self.is_lane_locked(action.provider_id, action.lane_id):
             # Last line of defence: the planning passes skip locked lanes, but
             # a path that does not (or a lock taken after planning) must not

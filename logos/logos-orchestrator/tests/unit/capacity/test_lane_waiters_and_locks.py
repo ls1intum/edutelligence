@@ -10,6 +10,7 @@ requests have no other lane, and the operator lock that keeps a lane warm.
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 from logos import CapacityPlanner, LaneSchedulerSignals
 from logos.capacity.demand_tracker import DemandTracker
@@ -361,6 +362,57 @@ def test_an_operator_sleep_escalated_to_a_stop_stays_an_operator_action():
 
     assert asyncio.run(planner._execute_action_core(action)) is True
     assert [(a.action, a.operator_initiated) for a in escalated] == [("stop", True)]
+
+
+def _profile(loaded_vram_mb):
+    return SimpleNamespace(
+        loaded_vram_mb=loaded_vram_mb,
+        sleeping_residual_mb=500.0,
+        base_residency_mb=loaded_vram_mb,
+        kv_budget_mb=0.0,
+        tensor_parallel_size=1,
+        residency_source="calibrated",
+        engine="vllm",
+        estimate_base_residency_mb=lambda: loaded_vram_mb,
+    )
+
+
+def test_a_worker_whose_only_victim_is_locked_cannot_win_the_ranking():
+    planner = _planner(_Facade(), lock_reader=lambda: [(PROVIDER, OTHER_LANE)])
+    planner._refresh_lane_locks()
+    lanes = [_signal(OTHER_LANE, OTHER_MODEL)]
+    profiles = {MODEL: _profile(30_000.0)}
+    capacity = SimpleNamespace(available_vram_mb=5_000.0, total_vram_mb=48_000.0)
+
+    assert planner._estimate_demand_action_cost(PROVIDER, MODEL, lanes, profiles, capacity) is None
+
+
+def test_an_unlocked_victim_still_makes_the_worker_feasible():
+    planner = _planner(_Facade())
+    lanes = [_signal(OTHER_LANE, OTHER_MODEL)]
+    profiles = {MODEL: _profile(30_000.0)}
+    capacity = SimpleNamespace(available_vram_mb=5_000.0, total_vram_mb=48_000.0)
+
+    assert planner._estimate_demand_action_cost(PROVIDER, MODEL, lanes, profiles, capacity) is not None
+
+
+def test_the_executor_reads_the_locks_again_before_an_automatic_sleep():
+    locks = []
+    planner = _planner(_Facade(), lock_reader=lambda: list(locks))
+    planner._refresh_lane_locks()
+    ran = []
+
+    async def core(action, timeout_seconds=60.0, deadline=None):  # noqa: ARG001
+        ran.append(action.action)
+        return True
+
+    planner._execute_action_core = core
+    # Locked after the cycle read the locks.
+    locks.append((PROVIDER, LANE))
+    action = CapacityPlanAction(action="sleep_l1", provider_id=PROVIDER, lane_id=LANE, model_name=MODEL)
+
+    assert asyncio.run(planner._execute_action_with_confirmation(action)) is False
+    assert ran == []
 
 
 def test_a_locked_lane_on_one_worker_does_not_suppress_another_workers_lock_wake():
