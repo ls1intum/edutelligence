@@ -30,6 +30,7 @@ import static org.hamcrest.Matchers.nullValue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -639,14 +640,14 @@ class ProviderControllerTest {
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
            .andExpect(status().isOk());
-        verify(orchestratorNotificationService).notifyLaneLock(6001, "lane-1", true);
+        verify(orchestratorNotificationService).notifyLaneLock(eq(6001), eq("lane-1"), eq(true), anyLong());
 
         mvc.perform(post("/logosdb/providers/logosnode/lanes/unlock")
                 .with(TestJwt.logosAdmin())
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
            .andExpect(status().isOk());
-        verify(orchestratorNotificationService).notifyLaneLock(6001, "lane-1", false);
+        verify(orchestratorNotificationService).notifyLaneLock(eq(6001), eq("lane-1"), eq(false), anyLong());
 
         // Unlocking a lane that is not locked changes nothing and pushes nothing.
         mvc.perform(post("/logosdb/providers/logosnode/lanes/unlock")
@@ -654,7 +655,27 @@ class ProviderControllerTest {
                 .contentType("application/json")
                 .content("{\"provider_id\":6001,\"lane_id\":\"lane-1\"}"))
            .andExpect(status().isOk());
-        verify(orchestratorNotificationService, times(1)).notifyLaneLock(6001, "lane-1", false);
+        verify(orchestratorNotificationService, times(1)).notifyLaneLock(eq(6001), eq("lane-1"), eq(false), anyLong());
+    }
+
+    @Test
+    void everyLockChange_carriesAHigherRevisionForTheLane() {
+        jdbc.update("DELETE FROM audit_log WHERE target_type = 'lane'");
+        laneLockService.lock(null, 6001, "lane-1", "embed-model");
+        long locked = revision();
+        laneLockService.unlock(6001, "lane-1");
+        long unlocked = revision();
+        laneLockService.lock(null, 6001, "lane-1", null);
+        long relocked = revision();
+
+        assertTrue(locked < unlocked && unlocked < relocked);
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(orchestratorNotificationService);
+        order.verify(orchestratorNotificationService).notifyLaneLock(6001, "lane-1", true, locked);
+        order.verify(orchestratorNotificationService).notifyLaneLock(6001, "lane-1", false, unlocked);
+        order.verify(orchestratorNotificationService).notifyLaneLock(6001, "lane-1", true, relocked);
+        // A relock after an unlock is a new lock, not a refresh of the old one.
+        assertEquals(1, lockCount());
+        assertEquals(2, auditCount("lane.locked"));
     }
 
     @Test
@@ -754,8 +775,14 @@ class ProviderControllerTest {
         assertEquals(0, lockCount());
     }
 
+    private long revision() {
+        Long n = jdbc.queryForObject(
+            "SELECT revision FROM lane_locks WHERE provider_id = 6001 AND lane_id = 'lane-1'", Long.class);
+        return n == null ? -1 : n;
+    }
+
     private int lockCount() {
-        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM lane_locks", Integer.class);
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM lane_locks WHERE locked", Integer.class);
         return n == null ? 0 : n;
     }
 }

@@ -175,6 +175,9 @@ class LaneLockChangedRequest(BaseModel):
     provider_id: int
     lane_id: str
     locked: bool
+    # Order of the change among all changes of this lane; the pushes can
+    # arrive out of order, so an older revision is ignored.
+    revision: int
 
 
 class InternalCalibrateRequest(BaseModel):

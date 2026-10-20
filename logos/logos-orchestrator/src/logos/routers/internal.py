@@ -186,7 +186,7 @@ async def internal_lane_lock_changed(data: LaneLockChangedRequest, request: Requ
     _require_internal_secret(request, disabled_detail="Internal lane lock endpoint disabled")
     if _main._capacity_planner is None:
         raise HTTPException(status_code=503, detail="Capacity planner not initialized")
-    _main._capacity_planner.apply_lane_lock(data.provider_id, data.lane_id, data.locked)
+    _main._capacity_planner.apply_lane_lock(data.provider_id, data.lane_id, data.locked, data.revision)
     return {"status": "ok"}
 
 

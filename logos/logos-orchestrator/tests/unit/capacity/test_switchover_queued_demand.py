@@ -389,7 +389,7 @@ class TestLockedLaneThatNeedsRoom:
 
     def _scenario(self):
         planner, provider = _switchover_scenario(score_a=0.3, queue_b=0, b_sleeping_lane=True)
-        planner.apply_lane_lock(1, "B-s", True)
+        planner.apply_lane_lock(1, "B-s", True, 1)
         planner._cross_provider_dedup = True
         planner._safe_get_profiles = lambda pid: provider.profiles
         planner._safe_get_capacity = lambda pid: planner._facade.get_capacity_info(pid)

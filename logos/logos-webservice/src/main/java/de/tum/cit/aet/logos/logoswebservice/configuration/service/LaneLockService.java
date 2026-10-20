@@ -27,6 +27,12 @@ import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorNotificatio
  * <p>Locking and unlocking are idempotent: locking a locked lane refreshes
  * the model name and keeps the original lock, unlocking an unlocked lane is a
  * no-op. Both are recorded in the audit trail.
+ *
+ * <p>Every change draws a new revision from {@code lane_lock_revision_seq}
+ * and is pushed with it, because the pushes are asynchronous and can arrive
+ * out of order; the planner ignores a change older than the one it holds.
+ * An unlock therefore keeps the row ({@code locked = FALSE}) with its
+ * revision instead of deleting it.
  */
 @Service
 public class LaneLockService {
@@ -49,6 +55,7 @@ public class LaneLockService {
         return jdbc.queryForList("""
             SELECT provider_id, lane_id, model_name, locked_by, locked_at
             FROM lane_locks
+            WHERE locked
             ORDER BY locked_at, provider_id, lane_id
             """, new MapSqlParameterSource());
     }
@@ -70,64 +77,73 @@ public class LaneLockService {
             .addValue("modelName", blankToNull(modelName))
             .addValue("lockedBy", actorName(actor));
         Map<String, Object> before = null;
-        Map<String, Object> after = null;
-        // A concurrent unlock can delete the row between the insert that saw
-        // it and the locking read; the insert is then simply tried again.
-        while (after == null) {
-            List<Map<String, Object>> inserted = jdbc.queryForList("""
-                INSERT INTO lane_locks (provider_id, lane_id, model_name, locked_by)
-                VALUES (:providerId, :laneId, :modelName, :lockedBy)
-                ON CONFLICT (provider_id, lane_id) DO NOTHING
-                RETURNING provider_id, lane_id, model_name, locked_by, locked_at
-                """, params);
-            if (!inserted.isEmpty()) {
-                before = null;
-                after = inserted.get(0);
-                break;
-            }
-            List<Map<String, Object>> existing = jdbc.queryForList("""
-                SELECT provider_id, lane_id, model_name, locked_by, locked_at
+        Map<String, Object> after;
+        List<Map<String, Object>> inserted = jdbc.queryForList("""
+            INSERT INTO lane_locks (provider_id, lane_id, model_name, locked_by, locked, revision)
+            VALUES (:providerId, :laneId, :modelName, :lockedBy, TRUE, nextval('lane_lock_revision_seq'))
+            ON CONFLICT (provider_id, lane_id) DO NOTHING
+            RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision
+            """, params);
+        if (!inserted.isEmpty()) {
+            after = inserted.get(0);
+        } else {
+            // The row exists (rows are never deleted, an unlock only clears
+            // locked): lock it, then read its previous state.
+            Map<String, Object> existing = jdbc.queryForList("""
+                SELECT provider_id, lane_id, model_name, locked_by, locked_at, locked
                 FROM lane_locks WHERE provider_id = :providerId AND lane_id = :laneId
                 FOR UPDATE
-                """, params);
-            if (existing.isEmpty()) {
-                continue;
+                """, params).get(0);
+            if (Boolean.TRUE.equals(existing.get("locked"))) {
+                before = existing;
             }
-            before = existing.get(0);
             after = jdbc.queryForList("""
                 UPDATE lane_locks
-                SET model_name = COALESCE(CAST(:modelName AS TEXT), model_name)
+                SET model_name = CASE WHEN locked THEN COALESCE(CAST(:modelName AS TEXT), model_name)
+                                      ELSE CAST(:modelName AS TEXT) END,
+                    locked_by = CASE WHEN locked THEN locked_by ELSE CAST(:lockedBy AS TEXT) END,
+                    locked_at = CASE WHEN locked THEN locked_at ELSE now() END,
+                    locked = TRUE,
+                    revision = nextval('lane_lock_revision_seq')
                 WHERE provider_id = :providerId AND lane_id = :laneId
-                RETURNING provider_id, lane_id, model_name, locked_by, locked_at
+                RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision
                 """, params).get(0);
         }
         // record() drops a transition whose two states are equal, so a repeat
         // lock that changes nothing leaves no entry.
         auditLog.record("lane.locked", "lane", providerId + "/" + laneId, null,
             auditState(before), auditState(after));
-        orchestratorNotification.notifyLaneLock(providerId, laneId, true);
-        return after;
+        orchestratorNotification.notifyLaneLock(providerId, laneId, true, revisionOf(after));
+        Map<String, Object> stored = new LinkedHashMap<>(after);
+        stored.remove("revision");
+        return stored;
     }
 
     /**
-     * Releases a lane lock. Returns whether a lock was removed. Only the call
-     * whose delete removed the row records {@code lane.unlocked}.
+     * Releases a lane lock. Returns whether a lock was released. Only the call
+     * whose update cleared the lock records {@code lane.unlocked}.
      */
     @Transactional
     public boolean unlock(int providerId, String laneId) {
-        List<Map<String, Object>> deleted = jdbc.queryForList("""
-            DELETE FROM lane_locks WHERE provider_id = :providerId AND lane_id = :laneId
-            RETURNING provider_id, lane_id, model_name, locked_by, locked_at
+        List<Map<String, Object>> released = jdbc.queryForList("""
+            UPDATE lane_locks
+            SET locked = FALSE, revision = nextval('lane_lock_revision_seq')
+            WHERE provider_id = :providerId AND lane_id = :laneId AND locked
+            RETURNING provider_id, lane_id, model_name, locked_by, locked_at, revision
             """, new MapSqlParameterSource()
                 .addValue("providerId", providerId)
                 .addValue("laneId", laneId));
-        if (deleted.isEmpty()) {
+        if (released.isEmpty()) {
             return false;
         }
         auditLog.record("lane.unlocked", "lane", providerId + "/" + laneId, null,
-            auditState(deleted.get(0)), Map.of());
-        orchestratorNotification.notifyLaneLock(providerId, laneId, false);
+            auditState(released.get(0)), Map.of());
+        orchestratorNotification.notifyLaneLock(providerId, laneId, false, revisionOf(released.get(0)));
         return true;
+    }
+
+    private static long revisionOf(Map<String, Object> row) {
+        return ((Number) row.get("revision")).longValue();
     }
 
     /** What the audit trail keeps of a lock: whether it is held, and for which model. */

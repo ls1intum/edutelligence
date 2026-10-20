@@ -3787,20 +3787,22 @@ class DBManager:
             written += len(log_ids)
         return written
 
-    def get_lane_locks(self) -> Optional[list[tuple[int, str]]]:
-        """Return every lane an operator locked warm, as ``(provider_id, lane_id)``.
+    def get_lane_locks(self) -> Optional[list[tuple[int, str, bool, int]]]:
+        """Return every lane lock row as ``(provider_id, lane_id, locked, revision)``.
 
-        Returns ``None`` when the read fails (for example while the table does
-        not exist yet on a database the webservice has not migrated), so the
+        An unlocked lane keeps its row (``locked`` false) so its revision tells
+        the planner that a lock push it may still receive is older. Returns
+        ``None`` when the read fails (for example while the table does not
+        exist yet on a database the webservice has not migrated), so the
         caller can tell "no locks" apart from "could not read the locks".
         """
         try:
-            rows = self.session.execute(text("SELECT provider_id, lane_id FROM lane_locks")).all()
+            rows = self.session.execute(text("SELECT provider_id, lane_id, locked, revision FROM lane_locks")).all()
         except Exception as exc:  # noqa: BLE001 — a lock read must never break the planner
             self.session.rollback()
             logger.warning("Reading lane locks failed: %s", exc)
             return None
-        return [(int(row[0]), str(row[1])) for row in rows]
+        return [(int(row[0]), str(row[1]), bool(row[2]), int(row[3])) for row in rows]
 
     # ADMIN ONLY
     def get_all_deployments(self) -> list[Deployment]:

@@ -1197,7 +1197,7 @@ def _prefer_deployments_with_context_room(
     return fitting or deployments
 
 
-def _read_lane_locks() -> Optional[list[tuple[int, str]]]:
+def _read_lane_locks() -> Optional[list[tuple[int, str, bool, int]]]:
     """Operator lane locks for the capacity planner; ``None`` when unreadable."""
     with DBManager() as db:
         return db.get_lane_locks()

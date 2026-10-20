@@ -88,23 +88,25 @@ public class OrchestratorNotificationService {
      * push is what makes a lock or an unlock take effect at once. Deferred to
      * {@code afterCommit} and sent off the request thread like
      * {@link #notifyRefresh(boolean, boolean)}; a lost push is caught by the
-     * planner's next re-read.
+     * planner's next re-read. The sends can arrive out of order, so each
+     * carries the change's {@code revision}; the planner ignores a change
+     * older than the one it holds for the lane.
      */
-    public void notifyLaneLock(int providerId, String laneId, boolean locked) {
+    public void notifyLaneLock(int providerId, String laneId, boolean locked, long revision) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    self.getObject().sendLaneLock(providerId, laneId, locked);
+                    self.getObject().sendLaneLock(providerId, laneId, locked, revision);
                 }
             });
             return;
         }
-        self.getObject().sendLaneLock(providerId, laneId, locked);
+        self.getObject().sendLaneLock(providerId, laneId, locked, revision);
     }
 
     @Async
-    public void sendLaneLock(int providerId, String laneId, boolean locked) {
+    public void sendLaneLock(int providerId, String laneId, boolean locked, long revision) {
         if (orchestratorUrl.isBlank() || internalSecret.isBlank()) {
             return;
         }
@@ -113,7 +115,7 @@ public class OrchestratorNotificationService {
             headers.set("Authorization", "Bearer " + internalSecret);
             headers.set("Content-Type", "application/json");
             HttpEntity<Map<String, Object>> request = new HttpEntity<>(
-                Map.of("provider_id", providerId, "lane_id", laneId, "locked", locked), headers
+                Map.of("provider_id", providerId, "lane_id", laneId, "locked", locked, "revision", revision), headers
             );
             restTemplate.postForEntity(orchestratorUrl + "/internal/lane_lock_changed", request, Void.class);
         } catch (Exception e) {

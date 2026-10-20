@@ -413,7 +413,7 @@ def test_a_lock_pushed_after_planning_refuses_the_automatic_sleep():
 
     planner._execute_action_core = core
     # The webservice pushes a lock taken after the cycle planned the sleep.
-    planner.apply_lane_lock(PROVIDER, LANE, True)
+    planner.apply_lane_lock(PROVIDER, LANE, True, 1)
     action = CapacityPlanAction(action="sleep_l1", provider_id=PROVIDER, lane_id=LANE, model_name=MODEL)
 
     assert asyncio.run(planner._execute_action_with_confirmation(action)) is False
@@ -437,7 +437,7 @@ def test_a_lane_locked_while_it_drains_is_not_slept():
     async def drain(provider_id, lane_id, timeout_seconds=60.0):  # noqa: ARG001
         # The operator locks the lane while its requests drain; the
         # webservice pushes the change.
-        planner.apply_lane_lock(PROVIDER, LANE, True)
+        planner.apply_lane_lock(PROVIDER, LANE, True, 1)
         return True
 
     async def send_command(*args, **kwargs):  # noqa: ARG001
@@ -449,6 +449,40 @@ def test_a_lane_locked_while_it_drains_is_not_slept():
 
     assert asyncio.run(planner._execute_action_core(action)) is False
     assert sent == []
+
+
+def test_lock_changes_delivered_in_reverse_order_keep_the_newer_one():
+    planner = _planner(_Facade())
+
+    # The admin unlocked (revision 1) and then locked (revision 2); the
+    # unlock push arrives last.
+    planner.apply_lane_lock(PROVIDER, LANE, True, 2)
+    planner.apply_lane_lock(PROVIDER, LANE, False, 1)
+
+    assert planner.is_lane_locked(PROVIDER, LANE)
+
+    planner.apply_lane_lock(PROVIDER, LANE, False, 3)
+    assert not planner.is_lane_locked(PROVIDER, LANE)
+
+
+def test_a_push_older_than_the_last_read_is_ignored():
+    # The table already shows the lane unlocked at revision 5.
+    planner = _planner(_Facade(), lock_reader=lambda: [(PROVIDER, LANE, False, 5)])
+    planner._refresh_lane_locks()
+
+    planner.apply_lane_lock(PROVIDER, LANE, True, 4)
+
+    assert not planner.is_lane_locked(PROVIDER, LANE)
+
+
+def test_a_read_newer_than_a_push_wins():
+    rows = [(PROVIDER, LANE, True, 9)]
+    planner = _planner(_Facade(), lock_reader=lambda: list(rows))
+    planner.apply_lane_lock(PROVIDER, LANE, False, 8)
+
+    planner._refresh_lane_locks()
+
+    assert planner.is_lane_locked(PROVIDER, LANE)
 
 
 def test_a_locked_lane_on_one_worker_does_not_suppress_another_workers_lock_wake():

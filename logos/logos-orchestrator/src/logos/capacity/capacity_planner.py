@@ -44,6 +44,9 @@ from .host_ram_ledger import HostRamLedger
 from .lane_comparator import best_lane
 from .vram_ledger import VRAMLedger
 
+# Lane locks per (provider_id, lane_id): (locked, revision of the last change).
+LaneLockState = Dict[tuple[int, str], tuple[bool, int]]
+
 logger = logging.getLogger(__name__)
 
 # How long a worker may stay excluded from lane placement before the planner
@@ -300,7 +303,7 @@ class CapacityPlanner:
         enabled: bool = True,
         on_state_change: Optional[Any] = None,
         latency_store: Optional[LatencyStore] = None,
-        lane_lock_reader: Optional[Callable[[], Optional[List[tuple[int, str]]]]] = None,
+        lane_lock_reader: Optional[Callable[[], Optional[List[tuple]]]] = None,
     ) -> None:
         self._facade = logosnode_facade
         self._registry = logosnode_registry
@@ -690,48 +693,70 @@ class CapacityPlanner:
     LANE_LOCK_REFRESH_S = 300.0
     LANE_LOCK_RETRY_S = 10.0
 
-    def _new_lane_lock_cache(self) -> BackgroundRefreshedValue[frozenset[tuple[int, str]]]:
+    def _new_lane_lock_cache(self) -> BackgroundRefreshedValue[LaneLockState]:
         return BackgroundRefreshedValue(
             self._read_lane_locks,
-            initial=frozenset(),
+            initial={},
             refresh_after_s=self.LANE_LOCK_REFRESH_S,
             retry_after_s=self.LANE_LOCK_RETRY_S,
             name="lane locks",
         )
 
-    def _lock_cache(self) -> BackgroundRefreshedValue[frozenset[tuple[int, str]]]:
+    def _lock_cache(self) -> BackgroundRefreshedValue[LaneLockState]:
         # Tolerates a planner built without __init__ (several tests do that).
         cache = getattr(self, "_lane_locks", None)
         if cache is None:
             cache = self._lane_locks = self._new_lane_lock_cache()
         return cache
 
-    def _read_lane_locks(self) -> Optional[frozenset[tuple[int, str]]]:
-        """The ``lane_locks`` table as (provider_id, lane_id) pairs; ``None`` when unreadable."""
+    def _read_lane_locks(self) -> Optional[LaneLockState]:
+        """The ``lane_locks`` table as {(provider_id, lane_id): (locked, revision)}; ``None`` when unreadable.
+
+        A reader row is ``(provider_id, lane_id, locked, revision)``; a bare
+        ``(provider_id, lane_id)`` pair counts as locked at revision 0.
+        """
         reader = getattr(self, "_lane_lock_reader", None)
         if reader is None:
             return None
-        locks = reader()
-        if locks is None:
+        rows = reader()
+        if rows is None:
             return None
-        return frozenset((int(pid), str(lane_id)) for pid, lane_id in locks)
+        state: LaneLockState = {}
+        for row in rows:
+            locked, revision = (bool(row[2]), int(row[3])) if len(row) >= 4 else (True, 0)
+            state[(int(row[0]), str(row[1]))] = (locked, revision)
+        return state
 
     def is_lane_locked(self, provider_id: int, lane_id: str) -> bool:
         """Whether an operator locked this lane warm (from memory; never waits for the database)."""
         cache = self._lock_cache()
         # Without a reader there is nothing to refresh from; only pushed changes count.
         locks = cache.get() if getattr(self, "_lane_lock_reader", None) is not None else cache.peek()
-        return (int(provider_id), lane_id) in locks
+        entry = locks.get((int(provider_id), lane_id))
+        return entry is not None and entry[0]
 
-    def apply_lane_lock(self, provider_id: int, lane_id: str, locked: bool) -> None:
-        """Apply a lock change the webservice just committed, without waiting for a re-read."""
+    def apply_lane_lock(self, provider_id: int, lane_id: str, locked: bool, revision: int) -> None:
+        """Apply a lock change the webservice just committed, without waiting for a re-read.
+
+        The pushes can arrive out of order: a change older than the one held
+        for the lane (by push or by the last read) is ignored.
+        """
         key = (int(provider_id), str(lane_id))
-        self._lock_cache().update(lambda locks: locks | {key} if locked else locks - {key})
+
+        def apply(locks: LaneLockState) -> LaneLockState:
+            held = locks.get(key)
+            if held is not None and held[1] >= revision:
+                return locks
+            return {**locks, key: (bool(locked), int(revision))}
+
+        applied = self._lock_cache().update(apply).get(key) == (bool(locked), int(revision))
         logger.info(
-            "Lane %s on worker=%s %s",
+            "Lane %s on worker=%s %s (revision %d)%s",
             lane_id,
             self._facade.get_provider_name(provider_id) or provider_id,
             "locked warm" if locked else "unlocked",
+            revision,
+            "" if applied else "; ignored, a newer change is already held",
         )
 
     async def _ensure_lane_locks_loaded(self) -> None:
