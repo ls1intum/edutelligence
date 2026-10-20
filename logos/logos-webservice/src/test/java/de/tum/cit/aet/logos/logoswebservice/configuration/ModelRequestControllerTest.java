@@ -1,6 +1,9 @@
 package de.tum.cit.aet.logos.logoswebservice.configuration;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -16,8 +19,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import de.tum.cit.aet.logos.logoswebservice.TestContainersConfig;
 import de.tum.cit.aet.logos.logoswebservice.TestJwt;
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.RequestedModelHfStatusSweeper;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorHfReachabilityClient;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorHfReachabilityClient.HfReachabilityResult;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -37,7 +45,16 @@ class ModelRequestControllerTest {
 
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate jdbc;
+    @Autowired RequestedModelHfStatusSweeper hfStatusSweeper;
     @MockitoBean JwtDecoder jwtDecoder;
+    @MockitoBean OrchestratorHfReachabilityClient hfReachabilityClient;
+
+    /** The precheck answers "reachable" unless a test says otherwise. */
+    @BeforeEach
+    void stubHfReachabilityReachable() {
+        Mockito.lenient().when(hfReachabilityClient.check(ArgumentMatchers.anyString()))
+            .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REACHABLE, null, null));
+    }
 
     @Test
     void getModelRequests_emptyReturnsEmptyArray() throws Exception {
@@ -60,6 +77,7 @@ class ModelRequestControllerTest {
            .andExpect(jsonPath("$.name").value("openai/gpt-5"))
            .andExpect(jsonPath("$.request_count").value(1))
            .andExpect(jsonPath("$.has_voted").value(true))
+           .andExpect(jsonPath("$.hugging_face_status").value("reachable"))
            .andExpect(jsonPath("$.id").isNumber());
     }
 
@@ -110,6 +128,53 @@ class ModelRequestControllerTest {
         } finally {
             jdbc.update("DELETE FROM models WHERE id = 5098");
         }
+        // The local availability check runs before the Hugging Face precheck.
+        Mockito.verify(hfReachabilityClient, Mockito.never()).check(ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void vote_rejectedByTheHfPrecheckIsBadRequest() throws Exception {
+        Mockito.when(hfReachabilityClient.check("openai/does-not-exist"))
+            .thenReturn(new HfReachabilityResult(
+                HfReachabilityResult.STATUS_REJECTED, "model-not-found-or-unauthorized", null));
+
+        mvc.perform(post("/logosdb/add_model_request")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"name\": \"openai/does-not-exist\"}"))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.error").value(
+               "Model not found on HuggingFace. Maybe it is a cloud model (unsupported)?"));
+
+        // The precheck runs before the registry row is created: nothing was stored.
+        assertThat(jdbc.queryForObject(
+            "SELECT COUNT(*) FROM requested_models WHERE name = 'openai/does-not-exist'", Integer.class)).isZero();
+    }
+
+    @Test
+    void vote_unknownHfPrecheckResultShowsATimeout() throws Exception {
+        Mockito.when(hfReachabilityClient.check("openai/slow-hub"))
+            .thenReturn(HfReachabilityResult.unknown("Hugging Face Hub did not answer within 15s."));
+
+        mvc.perform(post("/logosdb/add_model_request")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"name\": \"openai/slow-hub\"}"))
+           .andExpect(status().isServiceUnavailable())
+           .andExpect(jsonPath("$.error").value(
+               "Hugging Face did not respond in time. Please try again later."));
+    }
+
+    @Test
+    void vote_checksTheNormalizedNameAgainstHuggingFace() throws Exception {
+        mvc.perform(post("/logosdb/add_model_request")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"name\": \"https://huggingface.co/openai/gpt-oss-120b\"}"))
+           .andExpect(status().isOk());
+
+        // The URL prefix is stripped before the precheck sees the name.
+        Mockito.verify(hfReachabilityClient).check("openai/gpt-oss-120b");
     }
 
     @Test
@@ -235,6 +300,35 @@ class ModelRequestControllerTest {
                 .contentType("application/json")
                 .content("{}"))
            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void sweep_recordsOnlyDecisiveVerdictsOnUnverifiedRows() {
+        // Rows that predate the precheck (no verdict yet) plus one row that
+        // already carries one.
+        jdbc.update("INSERT INTO requested_models (name) VALUES ('acme/legacy-a'), ('acme/legacy-b'), ('acme/legacy-c')");
+        jdbc.update("INSERT INTO requested_models (name, hugging_face_status) VALUES ('acme/legacy-d', 'reachable')");
+
+        Mockito.when(hfReachabilityClient.check("acme/legacy-a"))
+            .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REACHABLE, null, null));
+        Mockito.when(hfReachabilityClient.check("acme/legacy-b"))
+            .thenReturn(new HfReachabilityResult(HfReachabilityResult.STATUS_REJECTED, "model-not-found-or-unauthorized", null));
+        // A timeout is no verdict: the row must stay empty.
+        Mockito.when(hfReachabilityClient.check("acme/legacy-c"))
+            .thenReturn(HfReachabilityResult.unknown("Hugging Face Hub did not answer within 15s."));
+
+        hfStatusSweeper.sweepUnverified();
+
+        assertThat(hfStatus("acme/legacy-a")).isEqualTo("reachable");
+        assertThat(hfStatus("acme/legacy-b")).isEqualTo("rejected");
+        assertThat(hfStatus("acme/legacy-c")).isNull();
+        // An existing verdict is never clobbered by the sweep.
+        assertThat(hfStatus("acme/legacy-d")).isEqualTo("reachable");
+    }
+
+    private String hfStatus(String name) {
+        return jdbc.queryForObject("SELECT hugging_face_status FROM requested_models WHERE name = ?",
+            String.class, name);
     }
 
     @Test

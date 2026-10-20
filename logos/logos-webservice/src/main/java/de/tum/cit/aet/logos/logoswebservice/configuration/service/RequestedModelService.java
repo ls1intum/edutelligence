@@ -19,6 +19,8 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelAliasR
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.ModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.RequestedModelRepository;
 import de.tum.cit.aet.logos.logoswebservice.configuration.repository.RequestedModelVoteRepository;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorHfReachabilityClient;
+import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorHfReachabilityClient.HfReachabilityResult;
 
 /**
  * The model-request voting feature: record demand for models Logos does not
@@ -34,6 +36,14 @@ import de.tum.cit.aet.logos.logoswebservice.configuration.repository.RequestedMo
  * {@code openai/gpt-oss-120b}); a leading {@code https://huggingface.co/} URL
  * prefix is accepted and stripped, so a model is always stored under its
  * plain name.
+ *
+ * A submission is only recorded when the name passes the Hugging Face
+ * precheck (via the orchestrator): the repository must be visible to the
+ * central HF_TOKEN, otherwise the demand signal would point at a model that
+ * cannot be pulled. The row then carries the verdict ({@code reachable} or
+ * {@code rejected}) in {@code hugging_face_status}; rows that predate the
+ * precheck are backfilled by {@link RequestedModelHfStatusSweeper} at
+ * application start.
  */
 @Service
 public class RequestedModelService {
@@ -75,19 +85,44 @@ public class RequestedModelService {
         }
     }
 
+    /**
+     * Raised when the Hugging Face precheck reports the repository as not
+     * found or not visible to the central HF_TOKEN: it is not a model that
+     * can be requested.
+     */
+    public static class ModelNotOnHuggingFaceException extends RuntimeException {
+        public ModelNotOnHuggingFaceException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * Raised when the Hugging Face precheck could not be performed (Hub
+     * timeout, orchestrator unreachable): there is no verdict, so no vote is
+     * recorded and the user is asked to try again.
+     */
+    public static class HfReachabilityUnavailableException extends RuntimeException {
+        public HfReachabilityUnavailableException(String message) {
+            super(message);
+        }
+    }
+
     private final RequestedModelRepository requestedModelRepository;
     private final RequestedModelVoteRepository voteRepository;
     private final ModelRepository modelRepository;
     private final ModelAliasRepository modelAliasRepository;
+    private final OrchestratorHfReachabilityClient hfReachabilityClient;
 
     public RequestedModelService(RequestedModelRepository requestedModelRepository,
                                  RequestedModelVoteRepository voteRepository,
                                  ModelRepository modelRepository,
-                                 ModelAliasRepository modelAliasRepository) {
+                                 ModelAliasRepository modelAliasRepository,
+                                 OrchestratorHfReachabilityClient hfReachabilityClient) {
         this.requestedModelRepository = requestedModelRepository;
         this.voteRepository = voteRepository;
         this.modelRepository = modelRepository;
         this.modelAliasRepository = modelAliasRepository;
+        this.hfReachabilityClient = hfReachabilityClient;
     }
 
     /**
@@ -119,7 +154,8 @@ public class RequestedModelService {
                 model.getId(),
                 model.getName(),
                 voteCounts.getOrDefault(model.getId(), 0L).intValue(),
-                myVotedModelIds.contains(model.getId())))
+                myVotedModelIds.contains(model.getId()),
+                model.getHuggingFaceStatus()))
             .sorted(Comparator
                 .comparingInt(RequestedModelResponse::requestCount).reversed()
                 .thenComparing(RequestedModelResponse::name, String.CASE_INSENSITIVE_ORDER))
@@ -135,14 +171,22 @@ public class RequestedModelService {
      * processing, so the model is stored and listed under its plain name.
      *
      * Refused when the name is already served by Logos, as a model name or an
-     * alias of one (it is not something to request). Otherwise the model's
-     * registry row is created if needed and the user's vote recorded. The
-     * unique (model, user) index means a second vote by the same user is a
-     * no-op — everyone still gets exactly one vote.
+     * alias of one (it is not something to request). Only then is the name
+     * checked against Hugging Face through the orchestrator: the vote is
+     * recorded when the repository is visible to the central HF_TOKEN,
+     * refused when the Hub does not know it, and retriable when the Hub could
+     * not be asked. Otherwise the model's registry row is created if needed
+     * and the user's vote recorded. The unique (model, user) index means a
+     * second vote by the same user is a no-op — everyone still gets exactly
+     * one vote.
      *
      * @throws IllegalArgumentException when no name is given, the name is not
      *     in {@code provider/model} form, or it exceeds the maximum length
      * @throws ModelAlreadyAvailableException when the name is already in Logos
+     * @throws ModelNotOnHuggingFaceException when the Hub does not know the
+     *     repository (or the central HF_TOKEN may not see it)
+     * @throws HfReachabilityUnavailableException when the precheck timed out
+     *     or the orchestrator could not be reached
      */
     @Transactional
     public RequestedModelResponse vote(Integer userId, String name) {
@@ -163,6 +207,7 @@ public class RequestedModelService {
             || modelAliasRepository.existsByAliasIgnoreCase(normalized)) {
             throw new ModelAlreadyAvailableException("This model is already available in Logos.");
         }
+        requireModelOnHuggingFace(normalized);
 
         requestedModelRepository.lockRequestedModelsNamespace(REQUESTED_MODELS_NAMESPACE_LOCK_KEY);
         RequestedModel model = requestedModelRepository.findByNameIgnoreCase(normalized).orElseGet(() -> {
@@ -170,6 +215,8 @@ public class RequestedModelService {
             created.setName(normalized);
             return created;
         });
+        // The precheck just answered reachable: record the verdict with the row.
+        model.setHuggingFaceStatus(HfReachabilityResult.STATUS_REACHABLE);
         model = requestedModelRepository.save(model);
 
         if (!voteRepository.existsByRequestedModelIdAndUserId(model.getId(), userId)) {
@@ -204,19 +251,53 @@ public class RequestedModelService {
         requestedModelRepository.lockRequestedModelsNamespace(REQUESTED_MODELS_NAMESPACE_LOCK_KEY);
         RequestedModel model = requestedModelRepository.findByNameIgnoreCase(normalized).orElse(null);
         if (model == null) {
-            return new RequestedModelResponse(null, normalized, 0, false);
+            return new RequestedModelResponse(null, normalized, 0, false, null);
         }
         voteRepository.findByRequestedModelIdAndUserId(model.getId(), userId)
             .ifPresent(voteRepository::delete);
         if (voteRepository.countByRequestedModelId(model.getId()) == 0) {
             requestedModelRepository.delete(model);
-            return new RequestedModelResponse(model.getId(), model.getName(), 0, false);
+            return new RequestedModelResponse(model.getId(), model.getName(), 0, false, model.getHuggingFaceStatus());
         }
         return toResponse(model, (int) voteRepository.countByRequestedModelId(model.getId()), false);
     }
 
+    /**
+     * The Hugging Face precheck gate for a submission. The normalized name is
+     * the repository id; only {@code reachable} lets the vote through.
+     * {@code rejected} is a verdict from the Hub, {@code unknown} (Hub
+     * timeout, orchestrator unreachable) is not a verdict — both refuse the
+     * vote, with a message that tells the user which case they hit.
+     */
+    private void requireModelOnHuggingFace(String normalized) {
+        HfReachabilityResult reachability = hfReachabilityClient.check(normalized);
+        if (HfReachabilityResult.STATUS_REACHABLE.equals(reachability.status())) {
+            return;
+        }
+        if (HfReachabilityResult.STATUS_REJECTED.equals(reachability.status())) {
+            throw new ModelNotOnHuggingFaceException(
+                "Model not found on HuggingFace. Maybe it is a cloud model (unsupported)?");
+        }
+        throw new HfReachabilityUnavailableException(
+            "Hugging Face did not respond in time. Please try again later.");
+    }
+
     private RequestedModelResponse toResponse(RequestedModel model, int count, boolean hasVoted) {
-        return new RequestedModelResponse(model.getId(), model.getName(), count, hasVoted);
+        return new RequestedModelResponse(
+            model.getId(), model.getName(), count, hasVoted, model.getHuggingFaceStatus());
+    }
+
+    /**
+     * Record a decisive Hugging Face verdict on a registry row that has none
+     * yet (the application-start sweep path). A row that already carries a
+     * verdict — for instance one a concurrent vote just wrote — is left
+     * untouched.
+     *
+     * @return the number of rows updated (0 when the row already had a verdict)
+     */
+    @Transactional
+    public int recordHfVerdictIfAbsent(Integer modelId, String status) {
+        return requestedModelRepository.setHuggingFaceStatusIfNull(modelId, status);
     }
 
     private void requireUser(Integer userId) {

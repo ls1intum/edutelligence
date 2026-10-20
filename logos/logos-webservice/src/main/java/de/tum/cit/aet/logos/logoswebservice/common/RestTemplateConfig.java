@@ -41,6 +41,21 @@ public class RestTemplateConfig {
     }
 
     /**
+     * Template for the orchestrator's HF reachability precheck.
+     *
+     * The orchestrator bounds its own call to the Hub (15 s by default,
+     * LOGOS_HF_REACHABILITY_TIMEOUT_S), so the shared 5 s read timeout above
+     * would cut the check off while the Hub is still being asked.
+     */
+    @Bean
+    public RestTemplate hfReachabilityRestTemplate() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(3_000);
+        factory.setReadTimeout(20_000);
+        return new RestTemplate(factory);
+    }
+
+    /**
      * Template for the batch proxy.
      *
      * A redirect would carry the request's credential along — the connection
