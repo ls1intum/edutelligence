@@ -68,6 +68,10 @@ def _budget_section(bud: Dict[str, Any]) -> List[str]:
                 f"{_ms(s['p99_ms'])} ms | {_ms(s['max_ms'])} ms |"
             )
     if logos:
+        lines.append(
+            f"| Time in Logos, per request of the load | {in_logos['n']} | {_ms(logos['p50_ms'])} ms | "
+            f"{_ms(logos['p95_ms'])} ms | {_ms(logos['p99_ms'])} ms | {_ms(logos['max_ms'])} ms |"
+        )
         for key, label in (
             ("admission", "… admission (auth, rate limit, budget, reservation)"),
             ("call", "… call (admission end to the provider call)"),
