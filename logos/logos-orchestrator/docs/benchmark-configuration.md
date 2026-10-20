@@ -222,7 +222,7 @@ by default). Benchmarks use the remaining time; new nightly configurations stop
 at 07:50. Manual starts share the same PostgreSQL admission lock and durable
 claims. At most one calibration or benchmark runs across all providers.
 Conflicting manual starts return HTTP 409 rather than queueing.
-Migration `066_maintenance_calibration.xml` and workers with
+Migration `065_nightly_benchmarks.xml` and workers with
 `get_calibration_status` support are required. Calibration completion and
 benchmark cleanup must finish before their claims are released.
 See the [operator guide](../../docs/admin/nightly-benchmarks.md#calibration-priority-and-shared-execution).

@@ -155,7 +155,7 @@ To see the latest deployment, run `docker exec logos-node-manager node-manager s
 ## Nightly benchmarks
 
 Nightly benchmarks require updates to the webservice, orchestrator, web application and selected workers.
-The webservice applies migrations `065_nightly_benchmarks.xml`, `066_maintenance_calibration.xml` and `067_parallel_maintenance.xml` before the new scheduler starts.
+The webservice applies changelog `065_nightly_benchmarks.xml` before the new scheduler starts.
 Workers report `supports_benchmark_restart` in their runtime status.
 The activation API rejects workers without this capability.
 All schedules default to disabled.
@@ -196,7 +196,7 @@ Before activation:
 Automatic calibration runs first, from 05:00 to 08:00 in `Europe/Berlin` by default.
 Benchmarks use the remaining time and start no new configuration after 07:50.
 `LOGOS_MAINTENANCE_MAX_NODES` limits simultaneous maintenance workers, including manual starts. The default `1` keeps runs sequential.
-Apply `066_maintenance_calibration.xml` and update workers for the `get_calibration_status` command.
+Apply `065_nightly_benchmarks.xml` and update workers for the `get_calibration_status` command.
 The coordinator releases calibration claims only after worker confirmation.
 The `LOGOS_MAINTENANCE_WINDOW_*` variables control both calibration and benchmarks.
 `LOGOS_MAINTENANCE_TIMEZONE` controls their shared timezone.

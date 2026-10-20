@@ -33,13 +33,9 @@ def database(monkeypatch):
         )
     )
     tree = ElementTree.parse(migration)
-    sql = tree.find("{*}changeSet/{*}sql").text
     with engine.begin() as connection:
         connection.execute(text("CREATE TABLE model_provider (id integer PRIMARY KEY)"))
         connection.execute(text("INSERT INTO model_provider VALUES (31), (32)"))
-        connection.execute(text(sql))
-        maintenance = ElementTree.parse(migration.with_name("066_maintenance_calibration.xml"))
-        connection.execute(text(maintenance.find("{*}changeSet/{*}sql").text))
         connection.execute(
             text(
                 "CREATE TABLE jobs(id integer PRIMARY KEY, environment text, status text, "
@@ -48,9 +44,8 @@ def database(monkeypatch):
             )
         )
 
-    with engine.begin() as connection:
-        parallel = ElementTree.parse(migration.with_name("067_parallel_maintenance.xml"))
-        connection.execute(text(parallel.find("{*}changeSet/{*}sql").text))
+        for sql in tree.findall("{*}changeSet/{*}sql"):
+            connection.execute(text(sql.text))
 
     class Database(store.DBManager):
         def __enter__(self):

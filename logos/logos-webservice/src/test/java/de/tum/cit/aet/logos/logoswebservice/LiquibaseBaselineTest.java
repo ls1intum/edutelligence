@@ -1,11 +1,19 @@
 package de.tum.cit.aet.logos.logoswebservice;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import java.sql.DriverManager;
 import java.util.List;
+import java.util.UUID;
+import liquibase.Contexts;
+import liquibase.LabelExpression;
+import liquibase.Liquibase;
+import liquibase.database.jvm.JdbcConnection;
+import liquibase.resource.ClassLoaderResourceAccessor;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -64,6 +72,53 @@ class LiquibaseBaselineTest {
             "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
             String.class, "061-maintenance-calibration", "logos"))
             .containsExactly("liquibase/changelog/061_maintenance_calibration.xml");
+        assertThat(jdbc.queryForList(
+            "SELECT filename FROM databasechangelog WHERE id = ? AND author = ?",
+            String.class, "067-parallel-maintenance", "logos"))
+            .containsExactly("liquibase/changelog/067_parallel_maintenance.xml");
+        // Checksums recorded before the maintenance changelogs were consolidated.
+        assertThat(jdbc.queryForList(
+            "SELECT md5sum FROM databasechangelog WHERE author = 'logos'"
+                + " AND id IN ('057-nightly-benchmarks', '061-maintenance-calibration', '067-parallel-maintenance')"
+                + " ORDER BY id", String.class))
+            .containsExactly("9:07a33eb8d33de94d9437ff1629a470ae",
+                "9:c13b407277eb225167567e6bb10792ff", "9:47bd15cbf792ae230e09e42f31ccffa1");
+    }
+
+    @Test
+    void consolidatedMaintenanceChangelogUpgradesExistingClaimsAndDoesNotReplay() throws Exception {
+        String schema = "maintenance_upgrade_" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.execute("CREATE SCHEMA " + schema);
+        try (var connection = DriverManager.getConnection(
+                postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword());
+                var resources = new ClassLoaderResourceAccessor();
+                var liquibase = new Liquibase("liquibase/changelog/065_nightly_benchmarks.xml",
+                    resources, new JdbcConnection(connection))) {
+            connection.setSchema(schema);
+            liquibase.getDatabase().setDefaultSchemaName(schema);
+            liquibase.getDatabase().setLiquibaseSchemaName(schema);
+            var isolated = new JdbcTemplate(new SingleConnectionDataSource(connection, true));
+            isolated.execute("CREATE TABLE jobs (id integer PRIMARY KEY, request_payload jsonb)");
+            isolated.execute("INSERT INTO jobs VALUES (1, '{\"provider_id\":42}')");
+            connection.commit();
+            liquibase.update(2, new Contexts(), new LabelExpression());
+            isolated.execute("INSERT INTO nightly_benchmarks (model_provider_id, enabled) VALUES (31, true)");
+            isolated.execute("INSERT INTO maintenance_calibration (provider_id, token) VALUES (42, 'existing')");
+            isolated.execute("INSERT INTO maintenance_benchmark (job_id) VALUES (1)");
+            connection.commit();
+
+            liquibase.update(new Contexts(), new LabelExpression());
+            liquibase.update(new Contexts(), new LabelExpression());
+
+            assertThat(isolated.queryForObject("SELECT count(*) FROM databasechangelog", Integer.class)).isEqualTo(3);
+            assertThat(isolated.queryForObject("SELECT enabled FROM nightly_benchmarks", Boolean.class)).isTrue();
+            assertThat(isolated.queryForObject("SELECT token FROM maintenance_calibration", String.class)).isEqualTo("existing");
+            assertThat(isolated.queryForObject("SELECT provider_id FROM maintenance_benchmark", Integer.class)).isEqualTo(42);
+            isolated.execute("INSERT INTO maintenance_calibration (provider_id, token) VALUES (43, 'parallel')");
+            isolated.execute("INSERT INTO maintenance_benchmark (job_id, provider_id) VALUES (2, 43)");
+        } finally {
+            jdbc.execute("DROP SCHEMA " + schema + " CASCADE");
+        }
     }
 
     @Test

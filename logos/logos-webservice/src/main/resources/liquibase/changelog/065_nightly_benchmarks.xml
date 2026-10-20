@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Keep the identity of schedules already migrated before this file was renumbered. -->
-<databaseChangeLog logicalFilePath="liquibase/changelog/057_nightly_benchmarks.xml"
+<!-- Preserve applied changeSet identities and checksums when grouping maintenance migrations. -->
+<databaseChangeLog
  xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
  xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
- <changeSet id="057-nightly-benchmarks" author="logos">
+ <changeSet id="057-nightly-benchmarks" author="logos" logicalFilePath="liquibase/changelog/057_nightly_benchmarks.xml">
   <sql>
    CREATE TABLE nightly_benchmarks (
      model_provider_id integer PRIMARY KEY,
@@ -17,5 +17,36 @@
    );
   </sql>
   <rollback><sql>DROP TABLE nightly_benchmarks;</sql></rollback>
+ </changeSet>
+ <changeSet id="061-maintenance-calibration" author="logos" logicalFilePath="liquibase/changelog/061_maintenance_calibration.xml">
+  <sql>
+   CREATE TABLE maintenance_calibration (
+     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+     provider_id integer NOT NULL,
+     token text NOT NULL,
+     automatic boolean NOT NULL DEFAULT false,
+     confirmed boolean NOT NULL DEFAULT false,
+     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+   CREATE TABLE maintenance_benchmark (
+     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+     job_id integer NOT NULL,
+     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP
+   );
+  </sql>
+  <rollback><sql>DROP TABLE maintenance_benchmark; DROP TABLE maintenance_calibration;</sql></rollback>
+ </changeSet>
+ <changeSet id="067-parallel-maintenance" author="logos" logicalFilePath="liquibase/changelog/067_parallel_maintenance.xml">
+  <sql>
+   ALTER TABLE maintenance_calibration DROP CONSTRAINT maintenance_calibration_pkey;
+   ALTER TABLE maintenance_calibration ADD PRIMARY KEY (provider_id);
+   ALTER TABLE maintenance_calibration ADD UNIQUE (token);
+   ALTER TABLE maintenance_benchmark DROP CONSTRAINT maintenance_benchmark_pkey;
+   ALTER TABLE maintenance_benchmark ADD PRIMARY KEY (job_id);
+   ALTER TABLE maintenance_benchmark ADD COLUMN provider_id integer;
+   UPDATE maintenance_benchmark AS claim SET provider_id = (job.request_payload->>'provider_id')::integer
+     FROM jobs AS job WHERE job.id = claim.job_id;
+   ALTER TABLE maintenance_benchmark ADD UNIQUE (provider_id);
+  </sql>
  </changeSet>
 </databaseChangeLog>

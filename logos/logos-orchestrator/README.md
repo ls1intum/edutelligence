@@ -26,10 +26,10 @@ A shared 15-second loop drives both. `LOGOS_MAINTENANCE_MAX_NODES` limits simult
 maintenance workers, including manual starts. It defaults to `1`; `2` permits two
 workers in parallel. Calibration and benchmark phases remain separate.
 Schedules default to disabled and are stored in PostgreSQL by the webservice's
-`065_nightly_benchmarks.xml` migration. Migration `066_maintenance_calibration.xml`
-adds durable calibration and manual benchmark claims. Worker confirmation is
-required before a calibration claim is released. Migration `067_parallel_maintenance.xml`
-replaces singleton claims with provider/job claims.
+`065_nightly_benchmarks.xml` changelog. It also adds durable calibration and
+manual benchmark claims, keyed by provider and job. Worker confirmation is
+required before a calibration claim is released. Existing changeSet identities
+and checksums remain unchanged for upgrades.
 
 The scheduler admits at most two enabled model/worker pairs per Berlin date.
 A cluster lock owns each bounded parallel batch, and persisted date claims retain the quota

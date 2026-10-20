@@ -70,6 +70,4 @@
     <include file="liquibase/changelog/064_model_calibration_sharing.xml"/>
 
     <include file="liquibase/changelog/065_nightly_benchmarks.xml"/>
-    <include file="liquibase/changelog/066_maintenance_calibration.xml"/>
-    <include file="liquibase/changelog/067_parallel_maintenance.xml"/>
 </databaseChangeLog>
