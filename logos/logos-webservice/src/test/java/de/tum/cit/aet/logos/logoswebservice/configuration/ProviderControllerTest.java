@@ -35,6 +35,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import de.tum.cit.aet.logos.logoswebservice.configuration.service.LaneLockService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.PriceUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.configuration.service.ModelCapabilitiesUpdaterService;
 import de.tum.cit.aet.logos.logoswebservice.orchestrator.OrchestratorModelSyncClient;
@@ -62,6 +63,7 @@ class ProviderControllerTest {
     @Autowired MockMvc mvc;
     @Autowired JdbcTemplate jdbc;
     @Autowired DataSource dataSource;
+    @Autowired LaneLockService laneLockService;
     @MockitoBean JwtDecoder jwtDecoder;
     // Mocked so the price refresh triggered by connect_model_provider does not
     // reach the live litellm catalog during tests.
@@ -645,6 +647,47 @@ class ProviderControllerTest {
             "SELECT COUNT(*) FROM audit_log WHERE action = 'lane.locked' AND target_id = '6001/lane-1'",
             Integer.class);
         assertEquals(1, audited);
+    }
+
+    @Test
+    void concurrentFirstLocksAndUnlocks_recordOneTransitionEach() throws Exception {
+        jdbc.update("DELETE FROM audit_log WHERE target_type = 'lane'");
+        runTogether(() -> laneLockService.lock(null, 6001, "lane-1", "embed-model"));
+        assertEquals(1, lockCount());
+        assertEquals(1, auditCount("lane.locked"));
+
+        runTogether(() -> laneLockService.unlock(6001, "lane-1"));
+        assertEquals(0, lockCount());
+        assertEquals(1, auditCount("lane.unlocked"));
+    }
+
+    /** Runs the action on several threads released at the same instant. */
+    private void runTogether(Runnable action) throws Exception {
+        int threads = 4;
+        CountDownLatch start = new CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        try {
+            java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    action.run();
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (java.util.concurrent.Future<?> f : futures) {
+                f.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private int auditCount(String action) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM audit_log WHERE action = ? AND target_id = '6001/lane-1'", Integer.class, action);
+        return n == null ? 0 : n;
     }
 
     @Test

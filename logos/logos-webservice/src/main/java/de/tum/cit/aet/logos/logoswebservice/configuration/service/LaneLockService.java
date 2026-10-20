@@ -49,52 +49,71 @@ public class LaneLockService {
             """, new MapSqlParameterSource());
     }
 
-    /** Locks a lane warm. Returns the stored lock. */
+    /**
+     * Locks a lane warm. Returns the stored lock.
+     *
+     * <p>The transition is read from the writes themselves, not from a read
+     * before them: the insert reports whether it created the lock, and an
+     * existing lock is row-locked before it is changed. Two concurrent first
+     * locks therefore record one {@code lane.locked} entry — the losing insert
+     * waits for the winner, then finds the lock and changes nothing.
+     */
     @Transactional
     public Map<String, Object> lock(AuthContext actor, int providerId, String laneId, String modelName) {
-        Map<String, Object> before = currentLock(providerId, laneId);
-        String lockedBy = actorName(actor);
-        jdbc.update("""
+        MapSqlParameterSource params = new MapSqlParameterSource()
+            .addValue("providerId", providerId)
+            .addValue("laneId", laneId)
+            .addValue("modelName", blankToNull(modelName))
+            .addValue("lockedBy", actorName(actor));
+        List<Map<String, Object>> inserted = jdbc.queryForList("""
             INSERT INTO lane_locks (provider_id, lane_id, model_name, locked_by)
             VALUES (:providerId, :laneId, :modelName, :lockedBy)
-            ON CONFLICT (provider_id, lane_id)
-            DO UPDATE SET model_name = COALESCE(EXCLUDED.model_name, lane_locks.model_name)
-            """, new MapSqlParameterSource()
-                .addValue("providerId", providerId)
-                .addValue("laneId", laneId)
-                .addValue("modelName", blankToNull(modelName))
-                .addValue("lockedBy", lockedBy));
-        Map<String, Object> after = currentLock(providerId, laneId);
+            ON CONFLICT (provider_id, lane_id) DO NOTHING
+            RETURNING provider_id, lane_id, model_name, locked_by, locked_at
+            """, params);
+        Map<String, Object> before;
+        Map<String, Object> after;
+        if (!inserted.isEmpty()) {
+            before = null;
+            after = inserted.get(0);
+        } else {
+            before = jdbc.queryForList("""
+                SELECT provider_id, lane_id, model_name, locked_by, locked_at
+                FROM lane_locks WHERE provider_id = :providerId AND lane_id = :laneId
+                FOR UPDATE
+                """, params).get(0);
+            after = jdbc.queryForList("""
+                UPDATE lane_locks
+                SET model_name = COALESCE(CAST(:modelName AS TEXT), model_name)
+                WHERE provider_id = :providerId AND lane_id = :laneId
+                RETURNING provider_id, lane_id, model_name, locked_by, locked_at
+                """, params).get(0);
+        }
+        // record() drops a transition whose two states are equal, so a repeat
+        // lock that changes nothing leaves no entry.
         auditLog.record("lane.locked", "lane", providerId + "/" + laneId, null,
             auditState(before), auditState(after));
         return after;
     }
 
-    /** Releases a lane lock. Returns whether a lock was removed. */
+    /**
+     * Releases a lane lock. Returns whether a lock was removed. Only the call
+     * whose delete removed the row records {@code lane.unlocked}.
+     */
     @Transactional
     public boolean unlock(int providerId, String laneId) {
-        Map<String, Object> before = currentLock(providerId, laneId);
-        if (before == null) {
+        List<Map<String, Object>> deleted = jdbc.queryForList("""
+            DELETE FROM lane_locks WHERE provider_id = :providerId AND lane_id = :laneId
+            RETURNING provider_id, lane_id, model_name, locked_by, locked_at
+            """, new MapSqlParameterSource()
+                .addValue("providerId", providerId)
+                .addValue("laneId", laneId));
+        if (deleted.isEmpty()) {
             return false;
         }
-        jdbc.update("""
-            DELETE FROM lane_locks WHERE provider_id = :providerId AND lane_id = :laneId
-            """, new MapSqlParameterSource()
-                .addValue("providerId", providerId)
-                .addValue("laneId", laneId));
         auditLog.record("lane.unlocked", "lane", providerId + "/" + laneId, null,
-            auditState(before), Map.of());
+            auditState(deleted.get(0)), Map.of());
         return true;
-    }
-
-    private Map<String, Object> currentLock(int providerId, String laneId) {
-        List<Map<String, Object>> rows = jdbc.queryForList("""
-            SELECT provider_id, lane_id, model_name, locked_by, locked_at
-            FROM lane_locks WHERE provider_id = :providerId AND lane_id = :laneId
-            """, new MapSqlParameterSource()
-                .addValue("providerId", providerId)
-                .addValue("laneId", laneId));
-        return rows.isEmpty() ? null : rows.get(0);
     }
 
     /** What the audit trail keeps of a lock: whether it is held, and for which model. */
