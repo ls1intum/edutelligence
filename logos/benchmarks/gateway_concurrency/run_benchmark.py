@@ -121,7 +121,7 @@ def _check_gateway_reachable(*, attempts: int = 15, delay_s: float = 2.0) -> Non
 
 def run() -> int:
     out_dir = Path(os.environ.get("LOGOS_BENCH_GW_OUTPUT", str(_HERE / "reports")))
-    upstream_port = int(os.environ.get("LOGOS_BENCH_GW_UPSTREAM_PORT", "9100"))
+    upstream_port = int(os.environ.get("LOGOS_BENCH_GW_UPSTREAM_PORT", "19100"))
     skip_failover = os.environ.get("LOGOS_BENCH_GW_SKIP_FAILOVER") == "1"
     skip_budget = os.environ.get("LOGOS_BENCH_GW_SKIP_BUDGET") == "1"
     fail_on_threshold = os.environ.get("LOGOS_BENCH_GW_BUDGET_FAIL_ON_THRESHOLD") == "1"
@@ -161,6 +161,15 @@ def run() -> int:
             start_new_session=True,
         )
         _wait_http(f"{gw.upstream_url()}/health", "fake-cloud-upstream")
+        # Something else on the port (a node exporter, a leftover upstream)
+        # can answer the health probe while the upstream itself failed to
+        # bind; every request would then go to that process and hang.
+        time.sleep(1.0)
+        if upstream_proc.poll() is not None:
+            raise RuntimeError(
+                f"fake-cloud-upstream exited (code {upstream_proc.returncode}) on port {upstream_port}: "
+                f"{log_path.read_text().strip()[-500:]}"
+            )
 
         import asyncio
 
