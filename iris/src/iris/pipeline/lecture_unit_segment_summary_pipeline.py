@@ -37,6 +37,7 @@ from iris.vector_database.batch_verify import (
     fetch_with_retry,
 )
 from iris.vector_database.database import batch_update_lock
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -276,9 +277,9 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             LectureUnitSegmentSchema.LECTURE_UNIT_ID.value
         ).equal(self.lecture_unit_dto.lecture_unit_id)
         if self.lecture_unit_dto.base_url is not None:
-            segment_filter &= Filter.by_property(
-                LectureUnitSegmentSchema.BASE_URL.value
-            ).equal(self.lecture_unit_dto.base_url)
+            segment_filter &= artemis_instance_filter(
+                LectureUnitSegmentSchema, self.lecture_unit_dto.base_url
+            )
         return segment_filter
 
     def _get_transcriptions(self, slide_number: int):
@@ -402,9 +403,9 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value
         ).equal(self.lecture_unit_dto.lecture_unit_id)
         if self.lecture_unit_dto.base_url is not None:
-            slide_filter &= Filter.by_property(
-                LectureUnitPageChunkSchema.BASE_URL.value
-            ).equal(self.lecture_unit_dto.base_url)
+            slide_filter &= artemis_instance_filter(
+                LectureUnitPageChunkSchema, self.lecture_unit_dto.base_url
+            )
         return slide_filter
 
     def _get_lecture_transcription_filter(self):
@@ -418,9 +419,9 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             LectureTranscriptionSchema.LECTURE_UNIT_ID.value
         ).equal(self.lecture_unit_dto.lecture_unit_id)
         if self.lecture_unit_dto.base_url is not None:
-            transcription_filter &= Filter.by_property(
-                LectureTranscriptionSchema.BASE_URL.value
-            ).equal(self.lecture_unit_dto.base_url)
+            transcription_filter &= artemis_instance_filter(
+                LectureTranscriptionSchema, self.lecture_unit_dto.base_url
+            )
         return transcription_filter
 
     def _create_summary(self, transcriptions, slides, cancel_event=None) -> str:
@@ -503,6 +504,7 @@ class LectureUnitSegmentSummaryPipeline(SubPipeline):
             LectureUnitSegmentSchema.PAGE_NUMBER.value: slide_number,
             LectureUnitSegmentSchema.DISPLAY_PAGE_NUMBER.value: display_page_number,
             LectureUnitSegmentSchema.BASE_URL.value: self.lecture_unit_dto.base_url,
+            LectureUnitSegmentSchema.BASE_URL_EXACT.value: self.lecture_unit_dto.base_url,
             LectureUnitSegmentSchema.CONTENT_FINGERPRINT.value: self.lecture_unit_dto.content_fingerprint,
         }
         embedding = self.llm_embedding.embed(summary)

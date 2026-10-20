@@ -9,7 +9,11 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
-from iris.vector_database.lecture_unit_schema import _add_property_if_missing
+from iris.vector_database.schema_properties import (
+    BASE_URL_EXACT_MARKER,
+    add_property_if_missing,
+    base_url_exact_property,
+)
 
 
 class LectureUnitPageChunkSchema(Enum):
@@ -26,6 +30,7 @@ class LectureUnitPageChunkSchema(Enum):
     PAGE_NUMBER = "page_number"
     DISPLAY_PAGE_NUMBER = "display_page_number"
     BASE_URL = "base_url"
+    BASE_URL_EXACT = "base_url_exact"
     PAGE_VERSION = "attachment_version"
     HIDDEN_UNTIL = "hidden_until"
     INGESTION_RUN_ID = "ingestion_run_id"
@@ -69,7 +74,7 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 )
             )
 
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitPageChunkSchema.HIDDEN_UNTIL.value,
@@ -79,7 +84,7 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
             ),
         )
 
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitPageChunkSchema.INGESTION_RUN_ID.value,
@@ -92,10 +97,12 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
             ),
         )
 
+        add_property_if_missing(collection, base_url_exact_property())
         return collection
 
     return client.collections.create(
         name=LectureUnitPageChunkSchema.COLLECTION_NAME.value,
+        description=BASE_URL_EXACT_MARKER,
         vector_config=Configure.Vectors.self_provided(
             vector_index_config=Configure.VectorIndex.hnsw(
                 distance_metric=VectorDistances.COSINE
@@ -150,6 +157,7 @@ def init_lecture_unit_page_chunk_schema(client: WeaviateClient) -> Collection:
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
+            base_url_exact_property(),
             Property(
                 name=LectureUnitPageChunkSchema.PAGE_VERSION.value,
                 description="The version of the page",

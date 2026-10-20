@@ -29,6 +29,7 @@ from iris.retrieval.lecture.lecture_visibility import (
     is_unit_released,
 )
 from iris.tracing import TracedThreadPoolExecutor, observe
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_unit_page_chunk_schema import (
     LectureUnitPageChunkSchema,
     init_lecture_unit_page_chunk_schema,
@@ -195,9 +196,9 @@ class LecturePageChunkRetrieval(SubPipeline):
                 else filter_weaviate & lecture_unit_filter
             )
         if lecture_unit_dto.base_url is not None:
-            base_url_filter = Filter.by_property(
-                LectureUnitPageChunkSchema.BASE_URL.value
-            ).equal(lecture_unit_dto.base_url)
+            base_url_filter = artemis_instance_filter(
+                LectureUnitPageChunkSchema, lecture_unit_dto.base_url
+            )
             filter_weaviate = (
                 base_url_filter
                 if filter_weaviate is None
@@ -262,9 +263,10 @@ class LecturePageChunkRetrieval(SubPipeline):
             ).equal(
                 lecture_page_chunk[LectureUnitPageChunkSchema.LECTURE_UNIT_ID.value]
             )
-            lecture_unit_filter &= Filter.by_property(
-                LectureUnitSchema.BASE_URL.value
-            ).equal(lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value])
+            lecture_unit_filter &= artemis_instance_filter(
+                LectureUnitSchema,
+                lecture_page_chunk[LectureUnitPageChunkSchema.BASE_URL.value],
+            )
 
             lecture_units = self.lecture_unit_collection.query.fetch_objects(
                 filters=lecture_unit_filter

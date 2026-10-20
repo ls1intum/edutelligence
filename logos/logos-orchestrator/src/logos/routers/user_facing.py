@@ -14,7 +14,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from pydantic import ValidationError
 
 import logos.main as _main
 from logos.anthropic_compat import translate_error
@@ -24,7 +26,7 @@ from logos.batch_api import handle_batch_api_request
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
 from logos.dbutils.dbrequest import SystemOneRequest, WebSearchRequest
-from logos.decision import DecisionError, answer_system_one
+from logos.decision import DecisionError, answer_system_one, profile_for
 from logos.errors import coerce_upstream_error
 from logos.jobs.job_service import JobService
 from logos.logosnode_snapshot import _resolve_requested_model_name, claude_visible_id
@@ -620,12 +622,31 @@ async def _serve_server_web_search(request: Request, payload: dict, tool: dict):
 
 
 @router.post("/v1/systemone", tags=["decisions"], summary="Answer typed questions with a decision model")
-async def system_one(body: SystemOneRequest, request: Request):
-    """Answer noul, choice and score questions about a state with calibrated probabilities.
+async def system_one(request: Request):
+    """Answer noul, choice and score questions about a state with probabilities.
 
-    Each question is one completion on the decision model's lane, run through
-    the normal pipeline (authorisation, scheduling, logging, billing).
+    A model with a decision profile (its own prompt format and calibration) is
+    read out by Logos. Every other model goes to its lane like any proxied
+    endpoint: vLLM serves ``/v1/systemone`` itself from v0.32.0 on, and answers
+    501 for a model it cannot read.
     """
+    try:
+        payload = json.loads(await request.body())
+    except ValueError:
+        payload = None
+    model = payload.get("model") if isinstance(payload, dict) else None
+    if not isinstance(model, str) or profile_for(model) is None:
+        return await handle_sync_request("v1/systemone", request)
+    try:
+        body = SystemOneRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+    return await _answer_with_decision_profile(body, request)
+
+
+async def _answer_with_decision_profile(body: SystemOneRequest, request: Request):
+    """Each question is one completion on the decision model's lane, run through
+    the normal pipeline (authorisation, scheduling, logging, billing)."""
     authenticate_api_key(dict(request.headers), client_ip=get_client_ip(request))
 
     async def turn(path: str, payload: dict) -> tuple[int, Optional[dict]]:

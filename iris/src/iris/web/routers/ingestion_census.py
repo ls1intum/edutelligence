@@ -27,6 +27,7 @@ from iris.domain.ingestion.ingestion_census_dto import (
     IngestionCensusDTO,
     IngestionCensusUnitDTO,
 )
+from iris.vector_database.instance_filter import artemis_instance_filter
 
 from ...vector_database.batch_verify import confirmed_generations, confirmed_rows
 from ...vector_database.database import VectorDatabase
@@ -49,9 +50,9 @@ _UNIT_ROW_LIMIT = 10_000
 
 
 def _course_filter(schema, course_id: int, base_url: str):
-    return Filter.by_property(schema.BASE_URL.value).equal(
-        base_url
-    ) & Filter.by_property(schema.COURSE_ID.value).equal(course_id)
+    return artemis_instance_filter(schema, base_url) & Filter.by_property(
+        schema.COURSE_ID.value
+    ).equal(course_id)
 
 
 def _discover_unit_ids(collection, schema, course_id: int, base_url: str) -> set[int]:

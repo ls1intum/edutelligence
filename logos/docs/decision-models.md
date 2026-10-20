@@ -94,8 +94,22 @@ Use low values to send an answer to a human for review.
 |-------|-------|
 | `autotrust/JEV-27B-VL` | Qwen3.8-27B with a decision head. The same lane also serves ordinary chat requests under the model name. |
 
-The API key needs access to the model, as for any other request. Logos rejects
-other models on this endpoint with HTTP 400.
+The API key needs access to the model, as for any other request.
+
+### Other models
+
+Logos sends a request for any other model to that model's lane unchanged. vLLM
+serves `/v1/systemone` itself from v0.32.0 on, for architectures it can read,
+among them Qwen3 and Qwen3.5 models. The lane must run with
+`--logprobs-mode=processed_logprobs` (or `raw_logprobs`); otherwise vLLM answers
+HTTP 501. vLLM writes its own generic prompt, reads the labels `A` to `Z`,
+`yes`/`no` and `0` to `9`, and returns `diagnostics` next to the answers. Its
+limits apply instead of the ones below, and fields such as `instructions` or
+`chat_template_kwargs` work as vLLM documents them.
+
+vLLM's generic prompt is not the format a decision head was trained on. That is
+why a model in the table above stays with Logos' own read-out: through vLLM's
+endpoint, the same model gives noticeably different probabilities.
 
 ## How Logos answers
 
@@ -145,6 +159,8 @@ engines:
 - The model needs one GPU with at least 80 GB of memory.
 
 ## Limits
+
+These limits apply to the models in the table above.
 
 - At most 32 questions in one request. Each question is one completion.
 - `choice`: 2 to 16 options. The decision head is calibrated for the labels A to P.

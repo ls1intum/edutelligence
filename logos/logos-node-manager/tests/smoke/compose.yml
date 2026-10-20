@@ -1,0 +1,60 @@
+# A throw-away compose project for the smoke test: a dummy worker instead of the GPU worker, and the real manager image.
+# run-smoke.sh copies this file next to a .env that sets SMOKE_DIR, SMOKE_REGISTRY and IMAGE_TAG.
+name: nm-smoke
+
+services:
+  worker:
+    image: ${SMOKE_REGISTRY}/dummy-worker:${IMAGE_TAG:-v1}
+    container_name: nm-smoke-worker
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 80), 2).close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+
+  node-manager:
+    profiles: ["node-manager"]
+    image: nm-smoke-manager:local
+    pull_policy: never
+    container_name: nm-smoke-manager
+    init: true
+    restart: unless-stopped
+    # The same hardening as the manager in logos-workernode/docker-compose.yml.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    environment:
+      NODE_MANAGER_PROJECT_DIR: ${SMOKE_DIR}
+      NODE_MANAGER_PROJECT_NAME: nm-smoke
+      NODE_MANAGER_SERVICE: worker
+      NODE_MANAGER_CONTAINER: nm-smoke-worker
+      NODE_MANAGER_STABILITY_WINDOW_S: "6"
+      NODE_MANAGER_POLL_INTERVAL_S: "1"
+      NODE_MANAGER_LOOP_INTERVAL_S: "1"
+      NODE_MANAGER_SWAP_TIMEOUT_S: "60"
+      NODE_MANAGER_VERIFY_TIMEOUT_S: "60"
+      NODE_MANAGER_ROLLBACK_VERIFY_TIMEOUT_S: "60"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${SMOKE_DIR}:${SMOKE_DIR}:ro
+      - ${SMOKE_DIR}/node-manager:${SMOKE_DIR}/node-manager
+      - type: bind
+        source: ${SMOKE_DIR}/docker-config.json
+        target: /root/.docker/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "node-manager", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3

@@ -20,6 +20,7 @@ from iris.pipeline.sub_pipeline import SubPipeline
 from iris.tracing import observe
 from iris.vector_database.batch_verify import purge_other_rows
 from iris.vector_database.database import VectorDatabase, batch_update_lock
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -87,9 +88,7 @@ class LectureUnitPipeline(SubPipeline):
             & Filter.by_property(LectureUnitSchema.LECTURE_UNIT_ID.value).equal(
                 lecture_unit.lecture_unit_id
             )
-            & Filter.by_property(LectureUnitSchema.BASE_URL.value).equal(
-                lecture_unit.base_url
-            )
+            & artemis_instance_filter(LectureUnitSchema, lecture_unit.base_url)
         )
 
     def _try_reuse_stored_summary(
@@ -179,7 +178,7 @@ class LectureUnitPipeline(SubPipeline):
             & Filter.by_property(schema.LECTURE_UNIT_ID.value).equal(
                 lecture_unit.lecture_unit_id
             )
-            & Filter.by_property(schema.BASE_URL.value).equal(lecture_unit.base_url)
+            & artemis_instance_filter(schema, lecture_unit.base_url)
         )
         limit = settings.lecture_ingestion.skip_check_fetch_limit
         rows = collection.query.fetch_objects(
@@ -328,6 +327,7 @@ class LectureUnitPipeline(SubPipeline):
                         LectureUnitSchema.VIDEO_LINK.value, lecture_unit.video_link
                     ),
                     LectureUnitSchema.BASE_URL.value: lecture_unit.base_url,
+                    LectureUnitSchema.BASE_URL_EXACT.value: lecture_unit.base_url,
                     LectureUnitSchema.LECTURE_UNIT_SUMMARY.value: lecture_unit.lecture_unit_summary,
                     LectureUnitSchema.RELEASE_DATE.value: latest_properties.get(
                         LectureUnitSchema.RELEASE_DATE.value

@@ -60,6 +60,12 @@ describe('statistics websocket feed filters', () => {
       model_ids: [1, 2],
       provider_ids: [3, 4],
     });
+    service.setScope({ userId: null, teamId: 7, providerId: null, apiKeyId: 41, errorsOnly: false });
+    expect(JSON.parse(socket.send.mock.calls.at(-1)![0])).toMatchObject({
+      action: 'set_scope',
+      team_id: 7,
+      api_key_id: 41,
+    });
     socket.onclose!();
     service.setFeedFilters('finished', [2], [4]);
     await vi.advanceTimersByTimeAsync(2000);
@@ -67,6 +73,9 @@ describe('statistics websocket feed filters', () => {
     reconnected.onopen!();
     expect(JSON.parse(reconnected.send.mock.calls[0][0])).toMatchObject({
       action: 'init',
+      // The page scope survives the reconnect, the API key included.
+      team_id: 7,
+      api_key_id: 41,
       status: 'finished',
       model_ids: [2],
       provider_ids: [4],

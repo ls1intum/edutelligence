@@ -516,10 +516,18 @@ DELETE FROM models m
 WHERE m.name = 'gpt-4o-mini'
   AND m.description LIKE '%[docs-role-screenshots]';
 
+-- The usage token types are created on first use by real traffic, so a fresh
+-- database does not have them yet: without them the request feed shows no
+-- token line and the Tokens card on Statistics stays at 0.
+INSERT INTO token_types (name)
+VALUES ('prompt_tokens'), ('completion_tokens'), ('total_tokens')
+ON CONFLICT (name) DO NOTHING;
+
 INSERT INTO usage_tokens (type_id, log_entry_id, token_count)
-SELECT tt.id, le.id, 350 + (le.id % 200)
+SELECT tt.id, le.id,
+       CASE WHEN tt.name = 'total_tokens' THEN 2 * (350 + (le.id % 200)) ELSE 350 + (le.id % 200) END
 FROM log_entry le
-JOIN token_types tt ON tt.name IN ('prompt_tokens', 'completion_tokens', 'billed_output_text')
+JOIN token_types tt ON tt.name IN ('prompt_tokens', 'completion_tokens', 'total_tokens', 'billed_output_text')
 WHERE le.environment = 'docs-role-screenshots'
   AND NOT EXISTS (
       SELECT 1 FROM usage_tokens ut
