@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
-import { ActivatedRoute } from '@angular/router';
-import { HttpClient } from '@angular/common/http';
+import { ActivatedRoute, provideRouter } from '@angular/router';
+import { HttpClient, provideHttpClient } from '@angular/common/http';
 import { ModelManagementService } from '../../core/services/model-management.service';
 import { ModelBenchmarkPair, ModelBenchmarkRun, ModelBenchmarkResponse } from '../../shared/models/provider.model';
 import { ModelErrorReport } from './model-error-report';
@@ -13,13 +13,13 @@ function deferred<T>() {
 
 describe('Benchmark runner', () => {
   let component: ModelErrorReport;
-  let service: { getBenchmarks: ReturnType<typeof vi.fn>; startBenchmark: ReturnType<typeof vi.fn>; cancelBenchmark: ReturnType<typeof vi.fn> };
+  let service: { getBenchmarks: ReturnType<typeof vi.fn>; getBenchmarkWorkerLimits: ReturnType<typeof vi.fn>; startBenchmark: ReturnType<typeof vi.fn>; cancelBenchmark: ReturnType<typeof vi.fn> };
   const empty: ModelBenchmarkResponse = { benchmarks: [], pairs: [], runs: [] };
   const pair = { model_provider_id: 1, provider_id: 2, endpoint_configured: true } as ModelBenchmarkPair;
   const run = { id: 3, status: 'running', request: { provider_id: 2 }, result: {} } as ModelBenchmarkRun;
 
   beforeEach(() => {
-    service = { getBenchmarks: vi.fn().mockResolvedValue(empty), startBenchmark: vi.fn(), cancelBenchmark: vi.fn() };
+    service = { getBenchmarks: vi.fn().mockResolvedValue(empty), getBenchmarkWorkerLimits: vi.fn(), startBenchmark: vi.fn(), cancelBenchmark: vi.fn() };
     TestBed.configureTestingModule({ providers: [
       { provide: ActivatedRoute, useValue: {} },
       { provide: HttpClient, useValue: {} },
@@ -29,6 +29,56 @@ describe('Benchmark runner', () => {
     component.modelId.set(1);
   });
   afterEach(() => { component.ngOnDestroy(); vi.restoreAllMocks(); });
+
+  it('defaults to an online worker instead of the first offline provider', async () => {
+    const offline = { ...pair, provider_type: 'logosnode', provider_name: 'Offline worker' } as ModelBenchmarkPair;
+    const online = { ...offline, model_provider_id: 2, provider_id: 3, provider_name: 'Online worker' };
+    service.getBenchmarks.mockResolvedValue({ ...empty, pairs: [offline, online] });
+    service.getBenchmarkWorkerLimits.mockImplementation(async (id: number) => {
+      if (id === offline.model_provider_id) throw { error: { error: { message: 'Worker is offline. Hardware limits are unavailable.' } } };
+      return { gpu_count: 1, current: {} };
+    });
+    await component.loadPerformance();
+    expect(component.selectedBenchmarkPair()).toEqual(online);
+    expect(component.benchmarkProviderUnavailable(offline)).toBe(true);
+    expect(component.benchmarkProviderLabel(online)).toBe('Online worker · Online');
+    await component.startBenchmark(offline);
+    expect(service.startBenchmark).not.toHaveBeenCalled();
+  });
+
+  it('preserves an explicit provider choice while online status refreshes', async () => {
+    const first = { ...pair, provider_type: 'logosnode' } as ModelBenchmarkPair;
+    const second = { ...first, model_provider_id: 2, provider_id: 3 };
+    component.selectedBenchmarkPairId.set(second.model_provider_id);
+    service.getBenchmarks.mockResolvedValue({ ...empty, pairs: [first, second] });
+    service.getBenchmarkWorkerLimits.mockResolvedValue({ gpu_count: 1, current: {} });
+    await component.loadPerformance();
+    expect(component.selectedBenchmarkPair()).toEqual(second);
+    await component.loadPerformance(1, true);
+    expect(service.getBenchmarkWorkerLimits).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps cloud providers usable when worker status cannot be determined', async () => {
+    const worker = { ...pair, provider_type: 'logosnode' } as ModelBenchmarkPair;
+    const cloud = { ...pair, model_provider_id: 2, provider_id: 3, provider_type: 'cloud' } as ModelBenchmarkPair;
+    service.getBenchmarks.mockResolvedValue({ ...empty, pairs: [worker, cloud] });
+    service.getBenchmarkWorkerLimits.mockRejectedValue(new Error('Network error'));
+    await component.loadPerformance();
+    expect(component.selectedBenchmarkPair()).toEqual(cloud);
+    expect(component.benchmarkAvailability().get(worker.model_provider_id)).toBe('unknown');
+    expect(component.benchmarkProviderUnavailable(cloud)).toBe(false);
+  });
+
+  it('blocks starting when every worker has no GPUs available', async () => {
+    const worker = { ...pair, provider_type: 'logosnode' } as ModelBenchmarkPair;
+    service.getBenchmarks.mockResolvedValue({ ...empty, pairs: [worker] });
+    service.getBenchmarkWorkerLimits.mockResolvedValue({ gpu_count: 0, current: {} });
+    await component.loadPerformance();
+    component.benchmarkConfirmPairId.set(worker.model_provider_id);
+    await component.startBenchmark(worker);
+    expect(service.startBenchmark).not.toHaveBeenCalled();
+    expect(component.benchmarkConfirmPairId()).toBeNull();
+  });
 
   it('does not replace a newer status with a stale polling response', async () => {
     const old = deferred<ModelBenchmarkResponse>();
@@ -143,4 +193,45 @@ describe('Benchmark runner', () => {
     expect(component.benchmarkSampleLabel()).toBe('50 samples');
   });
 
+});
+
+describe('Benchmark provider picker', () => {
+  it('displays the online selection after asynchronously loaded options arrive', async () => {
+    const offline = { model_provider_id: 1, provider_id: 1, provider_name: 'Offline worker',
+      provider_type: 'logosnode', endpoint_configured: true } as ModelBenchmarkPair;
+    const online = { ...offline, model_provider_id: 2, provider_id: 2, provider_name: 'Online worker' };
+    TestBed.configureTestingModule({
+      imports: [ModelErrorReport],
+      providers: [provideRouter([]), provideHttpClient(), {
+        provide: ModelManagementService, useValue: {
+          getBenchmarks: async () => ({ benchmarks: [], runs: [], pairs: [offline, online] }),
+          getBenchmarkWorkerLimits: async (id: number) => {
+            if (id === 1) throw { error: { detail: 'Worker is offline.' } };
+            return { gpu_count: 1, current: {} };
+          },
+          getBenchmarkDatasetMetadata: async () => ({ dataset: 'openai/gsm8k', subset: 'main', split: 'test',
+            splits: [{ subset: 'main', split: 'test' }], text_columns: ['question'] }),
+        },
+      }],
+    });
+    vi.spyOn(ModelErrorReport.prototype, 'ngOnInit').mockResolvedValue();
+    const fixture = TestBed.createComponent(ModelErrorReport);
+    const component = fixture.componentInstance;
+    component.model.set({ id: 1, name: 'Test model' } as any);
+    component.modelId.set(1);
+    component.loading.set(false);
+    component.activeTab.set('performance');
+    component.performanceView.set('run');
+    fixture.detectChanges();
+    await component.loadPerformance();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const picker = fixture.nativeElement.querySelector('.benchmark-basics select') as HTMLSelectElement;
+    expect(picker.value).toBe('2');
+    expect(picker.selectedOptions[0].textContent).toContain('Online worker · Online');
+    expect(picker.options[0].disabled).toBe(true);
+    fixture.destroy();
+    vi.restoreAllMocks();
+  });
 });

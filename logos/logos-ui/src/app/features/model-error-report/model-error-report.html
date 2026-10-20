@@ -582,9 +582,9 @@
               </header>
               <div class="benchmark-basics">
                 <label>Provider
-                  <select [value]="pair.model_provider_id" (change)="selectedBenchmarkPairId.set(+$any($event.target).value)">
+                  <select (change)="selectedBenchmarkPairId.set(+$any($event.target).value)">
                     @for (option of benchmarkPairs(); track option.model_provider_id) {
-                      <option [value]="option.model_provider_id">{{ option.provider_name }}</option>
+                      <option [value]="option.model_provider_id" [selected]="option.model_provider_id === pair.model_provider_id" [disabled]="benchmarkProviderUnavailable(option)">{{ benchmarkProviderLabel(option) }}</option>
                     }
                   </select>
                 </label>
@@ -624,6 +624,8 @@
 
               @if (!pair.endpoint_configured) {
                 <p class="benchmark-runner__error">Add an endpoint under Providers before running a benchmark.</p>
+              } @else if (benchmarkProviderUnavailable(pair)) {
+                <p class="benchmark-runner__error" role="status">This worker is unavailable. Choose an online worker to run a benchmark.</p>
               }
               @if (!benchmarkSettingsValid()) {
                 <p class="benchmark-runner__error" role="status">Check Dataset and settings before starting.</p>
@@ -635,7 +637,7 @@
                 <p>{{ benchmarkSampleLabel() }} per run · {{ benchmarkTotalRuns() }} {{ benchmarkTotalRuns() === 1 ? 'run' : 'runs' }}</p>
                 <button class="benchmark-run-button" type="button"
                   (click)="benchmarkConfirmPairId.set(pair.model_provider_id)"
-                  [disabled]="!benchmarkSettingsValid() || !benchmarkBatchValid() || (hasServingOverrides() && pair.provider_type !== 'logosnode') || benchmarkStartingPairId() !== null || providerHasActiveBenchmark(pair.provider_id) || !pair.endpoint_configured">
+                  [disabled]="!benchmarkSettingsValid() || !benchmarkBatchValid() || (hasServingOverrides() && pair.provider_type !== 'logosnode') || benchmarkStartingPairId() !== null || providerHasActiveBenchmark(pair.provider_id) || benchmarkProviderUnavailable(pair)">
                   @if (benchmarkStartingPairId() !== null) { Starting… }
                   @else if (providerHasActiveBenchmark(pair.provider_id)) { Running… }
                   @else { {{ benchmarkBatch() ? 'Review batch' : 'Review benchmark' }} <i class="pi pi-arrow-right" aria-hidden="true"></i> }

@@ -20,11 +20,14 @@ Benchmarks measure speed and throughput. They do not grade the generated answers
 1. Open **Models → Model Management**.
 2. Select the model.
 3. Open **Performance → Run benchmark**.
-4. Select the worker or provider.
+4. Check the selected online worker, or select another available provider.
 5. Set the sample size.
 6. Open **Dataset and settings** to change the dataset, request profile or output limit.
 7. If necessary, change the vLLM settings for the selected Logos worker.
 8. Open **Repeat or compare settings** to configure a batch.
+
+Logos selects an online worker when available. Offline workers cannot be selected.
+Your explicit provider selection remains unchanged when the status updates.
 
 The default dataset is `openai/gsm8k`, variant `main`, split `test`, with the `question` prompt column.
 The default run uses 50 samples, a sequential profile, seed 42 and at most 512 output tokens per request.
@@ -50,7 +53,8 @@ A small sample size does not necessarily limit the dataset download size.
 Your draft settings remain unchanged when you switch views.
 Active jobs remain visible in both views.
 
-The screenshots show the Dev application with its navigation and complete page content.
+The screenshots show the local application with example data, navigation and complete page content.
+They demonstrate the interface, not a live benchmark measurement.
 Provider names and measured values depend on your deployment.
 Select an image to view it at full size.
 
@@ -152,7 +156,7 @@ There is no automatic retry.
 
 Applied vLLM settings remain active after completion, failure or cancellation.
 Logos does not restore the previous settings automatically.
-**Clear vLLM changes** clears draft overrides only. **Stop varying** removes a parameter from the batch.
+**Reset vLLM changes** clears draft overrides only. **Stop varying** removes a parameter from the batch.
 Restore the intended worker settings explicitly when necessary.
 
 ## Verify on Dev
@@ -167,6 +171,14 @@ For deployment checks, use the [developer verification checklist](https://github
 4. Select **Reload GPU limits** again.
 
 The button stays available after a failed request or an unknown GPU count.
-Use **Clear vLLM changes** to discard draft overrides and keep the current worker configuration.
+Reload preserves your draft settings. Parameter warnings appear below the relevant fields.
+Use **Reset vLLM changes** to discard draft overrides and keep the current worker configuration.
 
 [![Desktop view of the GPU limits reload button](/img/benchmarks/gpu-limits-desktop.png)](/img/benchmarks/gpu-limits-desktop.png)
+
+### Dark mode
+
+Use the theme button at the top right to change between light and dark mode.
+The controls, charts and parameter hints use the selected theme.
+
+[![Dark mode with vLLM controls and parameter hints](/img/benchmarks/gpu-limits-dark-desktop.png)](/img/benchmarks/gpu-limits-dark-desktop.png)
