@@ -4,8 +4,9 @@
 Reads ``result.json`` (from ``LOGOS_BENCH_OUTPUT``, default ``reports/`` next
 to this file) and:
 
-  * with ``--check``: exits 0 while the overhead p50 is within the CI fail
-    threshold (``FAIL_NS``), 1 above it — the blocking gate;
+  * with ``--check``: exits 0 while the overhead p50/p95 stay within the CI
+    fail thresholds (``FAIL_NS`` / ``FAIL_P95_NS``), 1 above them — the
+    blocking gate;
   * without the flag: posts (or edits the last, idempotent via the HTML
     anchor) one PR comment with the verdict, the phase table, and the gate
     result, then exits with the same gate code. A comment failure (e.g.
@@ -28,7 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-from report import FAIL_NS, GOAL_NS, P95_GOAL_NS, overall_verdict  # noqa: E402
+from report import FAIL_NS, FAIL_P95_NS, GOAL_NS, P95_GOAL_NS, overall_verdict  # noqa: E402
 
 _ANCHOR = "<!-- logos-overhead-bench -->"
 _API_TIMEOUT_S = 30.0
@@ -46,22 +47,26 @@ def _gate(result: Dict[str, Any]) -> int:
     overhead = result["overhead"]
     p50_ns = float(overhead.get("overhead_p50_ns", overhead["overhead_ns"]))
     p95_ns = float(overhead.get("overhead_p95_ns", 0.0))
-    if p50_ns > FAIL_NS or p95_ns > P95_GOAL_NS:
+    if p50_ns > FAIL_NS or p95_ns > FAIL_P95_NS:
         failures = []
         if p50_ns > FAIL_NS:
             failures.append(
                 f"p50 {p50_ns / 1000.0:,.1f} µs exceeds the CI fail threshold of {FAIL_NS / 1000.0:,.0f} µs"
             )
-        if p95_ns > P95_GOAL_NS:
-            failures.append(f"p95 {p95_ns / 1000.0:,.1f} µs exceeds the goal of {P95_GOAL_NS / 1000.0:,.0f} µs")
+        if p95_ns > FAIL_P95_NS:
+            failures.append(
+                f"p95 {p95_ns / 1000.0:,.1f} µs exceeds the CI fail threshold of {FAIL_P95_NS / 1000.0:,.0f} µs"
+            )
         print(
             f"GATE FAIL: {'; '.join(failures)} "
-            f"(goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs)"
+            f"(goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs; "
+            f"CI fail thresholds p50 {FAIL_NS / 1000.0:,.0f} µs / p95 {FAIL_P95_NS / 1000.0:,.0f} µs)"
         )
         return 1
     print(
         f"GATE PASS: overhead p50 {p50_ns / 1000.0:,.1f} µs, p95 {p95_ns / 1000.0:,.1f} µs "
-        f"(goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs)"
+        f"(goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs; "
+        f"CI fail thresholds p50 {FAIL_NS / 1000.0:,.0f} µs / p95 {FAIL_P95_NS / 1000.0:,.0f} µs)"
     )
     return 0
 
@@ -96,7 +101,7 @@ def _comment_markdown(result: Dict[str, Any]) -> str:
         "",
         f"**Overhead p50 = {p50_ns / 1000.0:,.1f} µs; p95 = {p95_ns / 1000.0:,.1f} µs** — "
         f"goals: p50 < {GOAL_NS / 1000.0:,.0f} µs, p95 < {P95_GOAL_NS / 1000.0:,.0f} µs; "
-        f"CI p50 fail threshold {FAIL_NS / 1000.0:,.0f} µs.",
+        f"CI fail thresholds p50 {FAIL_NS / 1000.0:,.0f} µs / p95 {FAIL_P95_NS / 1000.0:,.0f} µs.",
         "",
         "| Path | p50 | p95 | samples |",
         "| --- | ---: | ---: | ---: |",

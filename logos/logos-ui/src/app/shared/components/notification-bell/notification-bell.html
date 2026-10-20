@@ -1,0 +1,88 @@
+<button
+  type="button"
+  class="bell"
+  [class.bell--open]="open()"
+  (click)="toggle()"
+  [attr.aria-label]="'Notifications, ' + notifications.unreadCount() + ' unread'"
+  [attr.aria-expanded]="open()"
+  aria-controls="notification-panel"
+  title="Notifications"
+>
+  <i class="pi pi-bell" aria-hidden="true"></i>
+  @if (notifications.unreadCount() > 0) {
+    <span class="bell__badge" aria-hidden="true">{{ badgeLabel() }}</span>
+  }
+</button>
+
+@if (open()) {
+  <div class="panel" id="notification-panel" role="dialog" aria-label="Notifications">
+    <div class="panel__header">
+      <h2 class="panel__title">Notifications</h2>
+      <button
+        type="button"
+        class="panel__action"
+        (click)="markAllRead()"
+        [disabled]="notifications.unreadCount() === 0"
+      >
+        Mark all as read
+      </button>
+    </div>
+
+    <div class="panel__tabs" role="group" aria-label="Filter">
+      <button type="button" class="tab" [class.tab--active]="!unreadOnly()" (click)="setFilter(false)">All</button>
+      <button type="button" class="tab" [class.tab--active]="unreadOnly()" (click)="setFilter(true)">
+        Unread
+        @if (notifications.unreadCount() > 0) {
+          <span class="tab__count">{{ badgeLabel() }}</span>
+        }
+      </button>
+    </div>
+
+    <div class="panel__body" (scroll)="onScroll($event)">
+      @if (error()) {
+        <p class="panel__state panel__state--error" role="alert">{{ error() }}</p>
+      }
+      @if (loading() && items().length === 0) {
+        <p class="panel__state">Loading…</p>
+      } @else if (items().length === 0 && !error()) {
+        <div class="panel__empty">
+          <i class="pi pi-inbox" aria-hidden="true"></i>
+          <p>{{ unreadOnly() ? "You're all caught up." : 'No notifications yet.' }}</p>
+        </div>
+      } @else {
+        <ul class="panel__list">
+          @for (item of items(); track item.id) {
+            <li>
+              <button
+                type="button"
+                class="item"
+                [class.item--unread]="!item.read"
+                (click)="markRead(item)"
+                [attr.aria-label]="(item.read ? '' : 'Unread: ') + item.title"
+              >
+                <span class="item__icon" [class]="'item__icon item__icon--' + meta(item.type).tone" aria-hidden="true">
+                  <i [class]="'pi ' + meta(item.type).icon"></i>
+                </span>
+                <span class="item__text">
+                  <span class="item__title">{{ item.title }}</span>
+                  @if (item.body) {
+                    <span class="item__body">{{ item.body }}</span>
+                  }
+                  <span class="item__meta">{{ meta(item.type).label }} · {{ age(item.created_at) }}</span>
+                </span>
+                @if (!item.read) {
+                  <span class="item__dot" aria-hidden="true"></span>
+                }
+              </button>
+            </li>
+          }
+        </ul>
+        @if (loading()) {
+          <p class="panel__state panel__state--more">
+            <i class="pi pi-spin pi-spinner" aria-hidden="true"></i> Loading older notifications…
+          </p>
+        }
+      }
+    </div>
+  </div>
+}

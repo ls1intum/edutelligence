@@ -16,8 +16,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
-import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.service.RequestLogService;
@@ -45,7 +43,6 @@ class TeamActivityServiceAggregateCacheTest {
         LogEntryRepository repository = mock(LogEntryRepository.class);
         RequestLogService requestLogService = mock(RequestLogService.class);
         TeamRepository teamRepository = mock(TeamRepository.class);
-        ApiKeyRepository apiKeyRepository = mock(ApiKeyRepository.class);
 
         // The key-usage aggregate is the expensive query the cache exists to
         // amortize: count how often it runs, and hold the load open briefly
@@ -66,11 +63,10 @@ class TeamActivityServiceAggregateCacheTest {
                                                  anyInt(), anyBoolean()))
             .thenReturn(Map.of("requests", List.of(), "total", 0L, "has_more", false));
         when(teamRepository.findById(anyInt())).thenReturn(Optional.empty());
-        when(apiKeyRepository.existsByTeamIdAndLogAndIsActive(anyInt(), any(LogLevel.class), anyBoolean()))
-            .thenReturn(false);
+        when(repository.existsFullPrivacyInWindow(anyInt(), any(), any())).thenReturn(false);
 
         TeamActivityService service = new TeamActivityService(repository, requestLogService,
-            teamRepository, apiKeyRepository, new ObjectMapper(), 10000, 10000, 60);
+            teamRepository, new ObjectMapper(), 10000, 10000, 60);
 
         // Eight tabs polling one (team, window) the moment its aggregates are
         // not cached yet: they must funnel through one load, and they must
@@ -97,18 +93,16 @@ class TeamActivityServiceAggregateCacheTest {
         LogEntryRepository repository = mock(LogEntryRepository.class);
         RequestLogService requestLogService = mock(RequestLogService.class);
         TeamRepository teamRepository = mock(TeamRepository.class);
-        ApiKeyRepository apiKeyRepository = mock(ApiKeyRepository.class);
 
         when(repository.findTeamLiveCounts(anyInt(), any(), any())).thenReturn(null);
         when(requestLogService.getLatestRequests(any(), any(), any(), any(), any(), any(), any(),
                                                  anyInt(), anyBoolean()))
             .thenReturn(Map.of("requests", List.of(), "total", 0L, "has_more", false));
         when(teamRepository.findById(anyInt())).thenReturn(Optional.empty());
-        when(apiKeyRepository.existsByTeamIdAndLogAndIsActive(anyInt(), any(LogLevel.class), anyBoolean()))
-            .thenReturn(false);
+        when(repository.existsFullPrivacyInWindow(anyInt(), any(), any())).thenReturn(false);
 
         TeamActivityService service = new TeamActivityService(repository, requestLogService,
-            teamRepository, apiKeyRepository, new ObjectMapper(), 10000, 10000, 60);
+            teamRepository, new ObjectMapper(), 10000, 10000, 60);
 
         service.getTeamActivity(2001, 7, null, null, null);
         service.getTeamActivity(2001, 7, null, null, null);
@@ -136,7 +130,6 @@ class TeamActivityServiceAggregateCacheTest {
         LogEntryRepository repository = mock(LogEntryRepository.class);
         RequestLogService requestLogService = mock(RequestLogService.class);
         TeamRepository teamRepository = mock(TeamRepository.class);
-        ApiKeyRepository apiKeyRepository = mock(ApiKeyRepository.class);
 
         AtomicInteger racedLoads = new AtomicInteger();
         CountDownLatch firstLoadHolding = new CountDownLatch(1);
@@ -167,13 +160,12 @@ class TeamActivityServiceAggregateCacheTest {
                                                  anyInt(), anyBoolean()))
             .thenReturn(Map.of("requests", List.of(), "total", 0L, "has_more", false));
         when(teamRepository.findById(anyInt())).thenReturn(Optional.empty());
-        when(apiKeyRepository.existsByTeamIdAndLogAndIsActive(anyInt(), any(LogLevel.class), anyBoolean()))
-            .thenReturn(false);
+        when(repository.existsFullPrivacyInWindow(anyInt(), any(), any())).thenReturn(false);
 
         // A one-second TTL: long enough for the test's own loads to stay
         // fresh, short enough that a sleep ages out the filled cache.
         TeamActivityService service = new TeamActivityService(repository, requestLogService,
-            teamRepository, apiKeyRepository, new ObjectMapper(), 10000, 10000, 1);
+            teamRepository, new ObjectMapper(), 10000, 10000, 1);
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {

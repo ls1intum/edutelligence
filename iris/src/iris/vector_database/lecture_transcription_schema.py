@@ -9,6 +9,12 @@ from weaviate.collections.classes.config import (
     VectorDistances,
 )
 
+from iris.vector_database.schema_properties import (
+    BASE_URL_EXACT_MARKER,
+    add_property_if_missing,
+    base_url_exact_property,
+)
+
 
 class LectureTranscriptionSchema(Enum):
     """
@@ -26,14 +32,47 @@ class LectureTranscriptionSchema(Enum):
     SEGMENT_TEXT = "segment_text"
     SEGMENT_SUMMARY = "segment_summary"
     BASE_URL = "base_url"
+    BASE_URL_EXACT = "base_url_exact"
+    CONTENT_FINGERPRINT = "content_fingerprint"
+    INGESTION_RUN_ID = "ingestion_run_id"
+
+
+def _stamp_properties() -> list[Property]:
+    return [
+        Property(
+            name=LectureTranscriptionSchema.CONTENT_FINGERPRINT.value,
+            description=(
+                "Fingerprint of the source content this row was derived "
+                "from, stamped verbatim as sent by Artemis"
+            ),
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureTranscriptionSchema.INGESTION_RUN_ID.value,
+            description=(
+                "Id of the ingestion run that wrote this row; rows of "
+                "other runs are swept after a successful write"
+            ),
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+    ]
 
 
 def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureTranscriptionSchema.COLLECTION_NAME.value):
-        return client.collections.get(LectureTranscriptionSchema.COLLECTION_NAME.value)
+        collection = client.collections.get(
+            LectureTranscriptionSchema.COLLECTION_NAME.value
+        )
+        for stamp_property in _stamp_properties():
+            add_property_if_missing(collection, stamp_property)
+        add_property_if_missing(collection, base_url_exact_property())
+        return collection
 
     return client.collections.create(
         name=LectureTranscriptionSchema.COLLECTION_NAME.value,
+        description=BASE_URL_EXACT_MARKER,
         vector_config=Configure.Vectors.self_provided(
             vector_index_config=Configure.VectorIndex.hnsw(
                 distance_metric=VectorDistances.COSINE
@@ -100,5 +139,7 @@ def init_lecture_transcription_schema(client: WeaviateClient) -> Collection:
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
+            base_url_exact_property(),
+            *_stamp_properties(),
         ],
     )

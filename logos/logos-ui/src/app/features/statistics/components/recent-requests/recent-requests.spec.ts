@@ -284,11 +284,11 @@ describe('caller chips', () => {
   });
 });
 
-describe('model and provider selections across request pages', () => {
+describe('model selection across request pages', () => {
   let fixture: ComponentFixture<RecentRequests>;
   afterEach(() => fixture?.destroy());
 
-  it('passes both selections to older pages and discards an in-flight page when they change', async () => {
+  it('passes the model selection to older pages and discards an in-flight page when it changes', async () => {
     let resolvePage!: (value: import('../../services/statistics.service').LatestRequestsPage) => void;
     const calls: unknown[][] = [];
     const getLatestRequests = (...args: unknown[]) => {
@@ -307,10 +307,12 @@ describe('model and provider selections across request pages', () => {
     fixture.componentRef.setInput('liveRequests', rows);
     fixture.componentRef.setInput('range', { startIso: '2026-09-01T00:00:00Z', endIso: '2026-09-02T00:00:00Z' });
     fixture.componentRef.setInput('filterModelIds', ['1', '2']);
-    fixture.componentRef.setInput('filterProviderIds', ['3', '4']);
     fixture.detectChanges();
     const next = fixture.componentInstance.nextPage();
-    expect(calls[0][3]).toMatchObject({ modelIds: [1, 2], providerIds: [3, 4] });
+    expect(calls[0][3]).toMatchObject({ modelIds: [1, 2] });
+    // The page's single provider filter narrows the feed instead of a second,
+    // feed-local provider multi-select.
+    expect(calls[0][3]).not.toHaveProperty('providerIds');
     fixture.componentRef.setInput('filterModelIds', ['2']);
     fixture.detectChanges();
     resolvePage({ requests: [rows[0]], total: 11, limit: 10, has_more: false, next_cursor: null });

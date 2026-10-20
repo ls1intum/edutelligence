@@ -1,11 +1,14 @@
 package de.tum.cit.aet.logos.logoswebservice.identity.service;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import de.tum.cit.aet.logos.logoswebservice.audit.AuditLogService;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKey;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.ApiKeyType;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.TeamMember;
@@ -24,17 +27,20 @@ public class TeamMembershipService {
     private final UserRepository userRepository;
     private final TeamRepository teamRepository;
     private final ApiKeyFactory apiKeyFactory;
+    private final AuditLogService auditLog;
 
     public TeamMembershipService(TeamMemberRepository memberRepository,
                                  ApiKeyRepository apiKeyRepository,
                                  UserRepository userRepository,
                                  TeamRepository teamRepository,
-                                 ApiKeyFactory apiKeyFactory) {
+                                 ApiKeyFactory apiKeyFactory,
+                                 AuditLogService auditLog) {
         this.memberRepository = memberRepository;
         this.apiKeyRepository = apiKeyRepository;
         this.userRepository = userRepository;
         this.teamRepository = teamRepository;
         this.apiKeyFactory = apiKeyFactory;
+        this.auditLog = auditLog;
     }
 
     @Transactional
@@ -54,6 +60,10 @@ public class TeamMembershipService {
         Optional<TeamMember> existingMember = memberRepository.findById(memberId);
         boolean alreadyMember = existingMember.isPresent();
 
+        // Taken before the entity is changed: an existing membership is mutated in
+        // place, so a snapshot read afterwards would equal the new state.
+        Map<String, Object> before = existingMember.map(TeamMembershipService::snapshot).orElseGet(() -> absent());
+
         TeamMember member = existingMember.orElseGet(TeamMember::new);
         member.setId(memberId);
         if (!alreadyMember) {
@@ -63,6 +73,8 @@ public class TeamMembershipService {
             member.setSource(TeamMemberSource.KEYCLOAK);
         }
         memberRepository.save(member);
+        auditLog.record("team.member_joined", "team_member", teamId + "/" + userId, teamId,
+            before, snapshot(member));
 
         List<ApiKey> existing = apiKeyRepository.findByUserIdAndTeamIdAndKeyType(userId, teamId, ApiKeyType.developer);
         if (!existing.isEmpty()) {
@@ -77,20 +89,45 @@ public class TeamMembershipService {
         return Optional.of(newKey.getKeyValue());
     }
 
+    /** What the audit trail keeps of a membership. */
+    static Map<String, Object> snapshot(TeamMember m) {
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("member", true);
+        s.put("is_owner", Boolean.TRUE.equals(m.getIsOwner()));
+        s.put("source", m.getSource() == null ? null : m.getSource().name());
+        return s;
+    }
+
+    static Map<String, Object> absent() {
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("member", false);
+        s.put("is_owner", null);
+        s.put("source", null);
+        return s;
+    }
+
     /** Clears every ownership flag of the user; the memberships themselves stay. */
     @Transactional
     public void revokeOwnerships(Integer userId) {
         for (TeamMember member : memberRepository.findById_UserId(userId)) {
             if (Boolean.TRUE.equals(member.getIsOwner())) {
+                Map<String, Object> before = snapshot(member);
                 member.setIsOwner(false);
                 memberRepository.save(member);
+                Integer teamId = member.getId().getTeamId();
+                auditLog.record("team.ownership_revoked", "team_member", teamId + "/" + userId, teamId,
+                    before, snapshot(member));
             }
         }
     }
 
     @Transactional
     public void leave(Integer userId, Integer teamId) {
-        memberRepository.deleteById(new TeamMemberId(userId, teamId));
+        TeamMemberId memberId = new TeamMemberId(userId, teamId);
+        Optional<TeamMember> existing = memberRepository.findById(memberId);
+        memberRepository.deleteById(memberId);
+        existing.ifPresent(m -> auditLog.record("team.member_removed", "team_member", teamId + "/" + userId, teamId,
+            snapshot(m), absent()));
 
         List<ApiKey> keys = apiKeyRepository.findByUserIdAndTeamIdAndKeyType(userId, teamId, ApiKeyType.developer);
         for (ApiKey key : keys) {

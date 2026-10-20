@@ -199,27 +199,76 @@ class UserControllerTest {
 
     @Test
     void importUsers_returns_summary() throws Exception {
-        String csv = "prename,name,email,team\nAlice,Smith,alice@import.com,test-team\n";
-        mvc.perform(multipart("/users/import")
-                .file(new MockMultipartFile("file", "users.csv", "text/csv", csv.getBytes()))
-                .with(TestJwt.adminUser()))
+        mvc.perform(post("/users/import")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"rows\":[{\"prename\":\"Alice\",\"name\":\"Smith\",\"email\":\"alice@import.com\"}]}"))
         .andExpect(status().isOk())
-        .andExpect(jsonPath("$.summary.created").value(1));
+        .andExpect(jsonPath("$.summary.created").value(1))
+        .andExpect(jsonPath("$.rows[0].username").value("asmith"));
     }
 
     @Test
-    void importUsers_rejects_non_csv() throws Exception {
-        mvc.perform(multipart("/users/import")
-                .file(new MockMultipartFile("file", "users.txt", "text/plain", "data".getBytes()))
+    void importUsers_marks_existing_email() throws Exception {
+        mvc.perform(post("/users/import")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{\"rows\":[{\"prename\":\"Test\",\"name\":\"User\",\"email\":\"test@test.com\"}]}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.summary.existing").value(1))
+        .andExpect(jsonPath("$.rows[0].status").value("existing"))
+        .andExpect(jsonPath("$.rows[0].username").value("testuser"));
+    }
+
+    @Test
+    void importUsers_ignores_missing_rows() throws Exception {
+        mvc.perform(post("/users/import")
+                .with(TestJwt.adminUser())
+                .contentType("application/json")
+                .content("{}"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.summary.created").value(0))
+        .andExpect(jsonPath("$.rows").isEmpty());
+    }
+
+    @Test
+    void importUsers_forbidden_for_developer() throws Exception {
+        mvc.perform(post("/users/import")
+                .with(TestJwt.testUser())
+                .contentType("application/json")
+                .content("{\"rows\":[]}"))
+        .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void importPreview_returns_columns_and_rows() throws Exception {
+        String csv = "First Name,Last Name,Email,Matriculation Number,Pass Status\n"
+            + "Tobias,Wasner,tobias.wasner@tum.de,984734,passed\n"
+            + "Jane,Doe,jane@example.com,123456,failed\n";
+        mvc.perform(multipart("/users/import/preview")
+                .file(new MockMultipartFile("file", "people.csv", "text/csv", csv.getBytes()))
+                .with(TestJwt.adminUser()))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.columns[0]").value("First Name"))
+        .andExpect(jsonPath("$.columns[4]").value("Pass Status"))
+        .andExpect(jsonPath("$.rows[0][0]").value("Tobias"))
+        .andExpect(jsonPath("$.rows[1][2]").value("jane@example.com"))
+        .andExpect(jsonPath("$.rows.length()").value(2));
+    }
+
+    @Test
+    void importPreview_rejects_non_csv() throws Exception {
+        mvc.perform(multipart("/users/import/preview")
+                .file(new MockMultipartFile("file", "people.txt", "text/plain", "data".getBytes()))
                 .with(TestJwt.adminUser()))
         .andExpect(status().isBadRequest());
     }
 
     @Test
-    void importUsers_forbidden_for_developer() throws Exception {
-        String csv = "prename,name,email\nAlice,Smith,alice2@import.com\n";
-        mvc.perform(multipart("/users/import")
-                .file(new MockMultipartFile("file", "users.csv", "text/csv", csv.getBytes()))
+    void importPreview_forbidden_for_developer() throws Exception {
+        String csv = "First Name,Last Name,Email\nTobias,Wasner,t@tum.de\n";
+        mvc.perform(multipart("/users/import/preview")
+                .file(new MockMultipartFile("file", "people.csv", "text/csv", csv.getBytes()))
                 .with(TestJwt.testUser()))
         .andExpect(status().isForbidden());
     }

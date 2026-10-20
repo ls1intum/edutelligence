@@ -8,7 +8,7 @@ UPDATE: <new title>
 Update the title if ANY is true:
 1) No meaningful current title yet (empty or generic like "new chat").
 2) Significant topic change: The main subject or goal of the conversation in the newest messages has clearly shifted to a new task, domain, or user intent, and the current title no longer reasonably describes the recent conversation.
-3) The language of the latest user message is different from the language of the current title.
+3) The current title is not written in {{ language }}.
 
 Decision rules:
 - Prioritize the newer user messages and their assistant replies.
@@ -31,8 +31,4 @@ Requirements:
 - Focus on the core topic of the recent conversation
 - Prefer broader, stable titles over narrow or situational ones
 
-{% if user_language == "de" %}
-Generate the title in German.
-{% else %}
-Generate the title in English.
-{% endif %}
+Generate the title in {{ language }}, the language of the latest answer.

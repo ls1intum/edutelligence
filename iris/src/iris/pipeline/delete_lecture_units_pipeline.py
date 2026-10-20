@@ -7,6 +7,7 @@ from iris.common.logging_config import get_logger
 from iris.domain.data.lecture_unit_page_dto import LectureUnitPageDTO
 from iris.pipeline import Pipeline
 from iris.tracing import observe
+from iris.vector_database.instance_filter import artemis_instance_filter
 from iris.vector_database.lecture_transcription_schema import (
     LectureTranscriptionSchema,
     init_lecture_transcription_schema,
@@ -98,9 +99,7 @@ class LectureUnitDeletionPipeline(Pipeline):
         """
         try:
             collection.data.delete_many(
-                where=Filter.by_property(schema.BASE_URL.value).equal(
-                    self.artemis_base_url
-                )
+                where=artemis_instance_filter(schema, self.artemis_base_url)
                 & Filter.by_property(schema.COURSE_ID.value).equal(
                     lecture_unit.course_id
                 )

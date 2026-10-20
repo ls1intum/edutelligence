@@ -261,6 +261,46 @@ class RequestLogStatsControllerTest {
     }
 
     @Test
+    void scopeOptions_offerApplicationKeysAndAKeyNarrowsTheAggregates() throws Exception {
+        // One request through the application key 3002; the seeded ones went
+        // through the developer key 3001, which the picker leaves to its owner.
+        jdbc.update("""
+            INSERT INTO log_entry (id, request_id, api_key_id, model_id, provider_id, result_status,
+                                   timestamp_request, timestamp_forwarding, timestamp_response,
+                                   was_cold_start, user_id, team_id, environment)
+            VALUES (9012, 'req-app-key', 3002, 5001, 6001, 'success',
+                    NOW() - INTERVAL '2 minutes', NOW() - INTERVAL '90 seconds', NOW() - INTERVAL '70 seconds',
+                    false, NULL, NULL, NULL)
+            """);
+        mvc.perform(post("/logosdb/request_log_scope_options")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                // A selected user does not hide the keys: the two share one
+                // picker, and switching between them must not need a reset.
+                .content("{\"user_id\": 1001}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.apiKeys.length()").value(1))
+           .andExpect(jsonPath("$.apiKeys[0].id").value(3002))
+           .andExpect(jsonPath("$.apiKeys[0].label").value("svc key"))
+           .andExpect(jsonPath("$.apiKeys[0].requestCount").value(1));
+
+        mvc.perform(post("/logosdb/request_log_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"api_key_id\": 3002}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.stats.totals.requests").value(1));
+
+        // A key with no traffic in range narrows everything to nothing.
+        mvc.perform(post("/logosdb/request_log_stats")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"api_key_id\": 3004}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.stats.totals.requests").value(0));
+    }
+
+    @Test
     void scopeOptions_narrowRequestersToTheTeam() throws Exception {
         mvc.perform(post("/logosdb/request_log_scope_options")
                 .with(TestJwt.logosAdmin())

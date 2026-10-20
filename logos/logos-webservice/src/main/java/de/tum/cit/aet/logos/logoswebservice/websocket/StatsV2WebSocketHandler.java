@@ -43,7 +43,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
 
 
     // The vram window a session is looking at: the selected day (null =
-    // today), the cursor into it, the provider connection-state baseline, and
+    // today), the cursor into it, the provider-metadata baseline, and
     // whether the window's init — the full-day payload that establishes the
     // viewer's baseline — has gone out. One immutable reference so a
     // transition (init, set_vram_day) is a single atomic swap and the tick
@@ -90,6 +90,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         volatile Integer scopeUserId = null;
         volatile Integer scopeTeamId = null;
         volatile Integer scopeProviderId = null;
+        volatile Integer scopeApiKeyId = null;
         volatile boolean scopeErrorsOnly = false;
 
         // One lifecycle bucket the request feed is narrowed to (queued, running,
@@ -140,6 +141,16 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         // the whole range, so it is driven by this flag rather than by the clock:
         // an idle session costs nothing.
         volatile boolean statsDirty = false;
+
+        // Bumped by every timeline_init, i.e. whenever range or scope moved. The
+        // periodic aggregate push runs on the tick thread and can still be
+        // querying the previous range when a narrower one has already been
+        // answered; its result must then be dropped, or it lands after the
+        // init and puts the previous range's totals back on screen. The check
+        // and the send share statsLock with the bump, so a stale push either
+        // goes out before the init or not at all.
+        long statsGeneration = 0;
+        final Object statsLock = new Object();
 
         void initDefaultTimeline() {
             ZonedDateTime now = ZonedDateTime.now(ZoneOffset.UTC);
@@ -228,10 +239,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             case "set_timeline_range" -> handleSetTimelineRange(session, state, msg);
             case "set_scope" -> handleSetScope(session, state, msg);
             case "set_feed_status" -> handleSetFeedStatus(session, state, msg);
-            case "set_feed_filters" -> {
-                applyFeedIds(state, msg);
-                handleSetFeedStatus(session, state, msg);
-            }
+            case "set_feed_filters" -> handleSetFeedFilters(session, state, msg);
             case "set_interest" -> handleSetInterest(session, state, msg);
             case "ping" -> send(session, Map.of("type", "pong"));
         }
@@ -312,6 +320,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         state.scopeUserId = msg.get("user_id") instanceof Number n ? n.intValue() : null;
         state.scopeTeamId = msg.get("team_id") instanceof Number n ? n.intValue() : null;
         state.scopeProviderId = msg.get("provider_id") instanceof Number n ? n.intValue() : null;
+        state.scopeApiKeyId = msg.get("api_key_id") instanceof Number n ? n.intValue() : null;
         state.scopeErrorsOnly = Boolean.TRUE.equals(msg.get("errors_only"));
     }
 
@@ -344,6 +353,25 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
      * and a state filter does not change what they describe. A forced feed push
      * is enough — no delta turns the unfiltered rows into the filtered ones.
      */
+    /**
+     * The state bucket narrows the feed alone; the model selection narrows the
+     * whole page, aggregates included, so a changed model set is handled like
+     * a scope change: the aggregates are re-pushed for it, not just the rows.
+     */
+    private void handleSetFeedFilters(WebSocketSession session, SessionState state, Map<String, Object> msg) {
+        List<Integer> previousModels = state.feedModelIds;
+        applyFeedIds(state, msg);
+        if (previousModels.equals(state.feedModelIds)) {
+            handleSetFeedStatus(session, state, msg);
+            return;
+        }
+        applyFeedStatus(state, msg);
+        if (!state.wantsRequests()) return;
+        state.prevScopeSig = "";
+        pushTimelineInit(session, state);
+        pushRequests(session, state, true);
+    }
+
     private void handleSetFeedStatus(WebSocketSession session, SessionState state, Map<String, Object> msg) {
         applyFeedStatus(state, msg);
         if (!state.wantsRequests()) return;
@@ -420,6 +448,8 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
     }
 
     private int globalTick = 0;
+    /** VRAM cadence, in ticks, while the session looks at the Requests tab. */
+    private static final int VRAM_IDLE_TICKS = 10;
 
     private void tick() {
         int t = globalTick++;
@@ -438,8 +468,17 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // The fetch is cursor-scoped (new snapshots only) and the
                 // provider-status hop is cached for 3 s, so the per-tick cost
                 // stays small; the push itself is still skipped when nothing
-                // moved (no new samples, cursor, or connection state).
+                // moved (no new samples, cursor, or provider metadata).
                 if (state.wantsLocalProviders()) {
+                    pushVramDelta(session, state);
+                } else if (t % VRAM_IDLE_TICKS == 0) {
+                    // The failed-GPU banner shows on the Requests tab too and is
+                    // read from the VRAM samples, so they keep coming there, at a
+                    // tenth of the cadence. A session that opened on Requests
+                    // has no baseline yet; the init goes out once, then deltas.
+                    synchronized (state.vramLock) {
+                        pushVramInit(session, state);
+                    }
                     pushVramDelta(session, state);
                 }
                 // Aggregates are the expensive push (findTotals alone scans the
@@ -530,9 +569,9 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 // Providers are always present (connection metadata is
                 // attached even without new snapshots), so deltas are pushed
                 // only when new samples arrived, the cursor moved, or a
-                // provider's connection state flipped (e.g. a worker went
+                // provider's metadata changed (vramMetaSig): a worker went
                 // offline — exactly the moment no new snapshots arrive
-                // anymore).
+                // anymore — or came back reporting another version.
                 boolean hasNewSamples = hasSamples(payload);
                 String metaSig = vramMetaSig(payload);
                 boolean metaChanged = !metaSig.equals(window.metaSig());
@@ -569,6 +608,15 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
         return false;
     }
 
+    /**
+     * Fingerprint of the provider metadata a viewer renders next to the
+     * samples: per provider its id, connection state, calibration state and the
+     * version its worker reports. A delta goes out when it changes even though
+     * no snapshot came with it, which is how a worker going offline, or coming
+     * back on another build, reaches the page. Fields that move constantly,
+     * such as the last heartbeat, stay out: they would turn every tick into a
+     * push.
+     */
     private static String vramMetaSig(Map<String, Object> payload) {
         if (!(payload.get("providers") instanceof java.util.List<?> providers)) return "";
         StringBuilder sb = new StringBuilder();
@@ -576,16 +624,21 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             if (!(p instanceof Map<?, ?> provider)) continue;
             sb.append(provider.get("provider_id")).append(':')
               .append(provider.get("connection_state")).append(':')
-              .append(provider.get("calibrating")).append(',');
+              .append(provider.get("calibrating")).append(':')
+              .append(provider.get("worker_version_checksum")).append(',');
         }
         return sb.toString();
     }
 
     private void pushTimelineInit(WebSocketSession session, SessionState state) {
+        synchronized (state.statsLock) {
+            state.statsGeneration++;
+        }
         try {
             Map<String, Object> stats = statsService.getRequestLogStats(
-                state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
+                state.timelineStart, liveEnd(state), state.targetBuckets,
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeApiKeyId,
+                state.scopeErrorsOnly, state.feedModelIds);
             state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n ? n.intValue() : 60;
 
             send(session, Map.of("type", "timeline_init", "payload", stats));
@@ -602,21 +655,38 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
      * what is on screen) from a periodic refresh of the range it already shows.
      */
     private void pushStats(WebSocketSession session, SessionState state) {
+        long generation;
+        synchronized (state.statsLock) {
+            generation = state.statsGeneration;
+        }
         try {
-            // A live selection keeps growing, so it has to be queried up to now,
-            // the same way pushRequests does. Only the end moves; the start
-            // stays where the preset put it.
-            if (state.timelineLive) state.timelineEnd = Instant.now().toString();
-
             Map<String, Object> stats = statsService.getRequestLogStats(
-                state.timelineStart, state.timelineEnd, state.targetBuckets,
-                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeErrorsOnly);
-            state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
-                ? n.intValue() : state.bucketSeconds;
-            send(session, Map.of("type", "stats", "payload", stats));
+                state.timelineStart, liveEnd(state), state.targetBuckets,
+                state.scopeUserId, state.scopeTeamId, state.scopeProviderId, state.scopeApiKeyId,
+                state.scopeErrorsOnly, state.feedModelIds);
+            synchronized (state.statsLock) {
+                // Range or scope moved while the query ran: the init that moved
+                // it already carries the current aggregates.
+                if (generation != state.statsGeneration) return;
+                state.bucketSeconds = stats.get("bucketSeconds") instanceof Number n
+                    ? n.intValue() : state.bucketSeconds;
+                send(session, Map.of("type", "stats", "payload", stats));
+            }
         } catch (Exception e) {
             log.warn("[ws/stats/v2] stats push error: {}", e.getMessage());
         }
+    }
+
+    /**
+     * The end a query for the session's range reads up to. A live selection
+     * ("last 30 days", "today", …) keeps growing while the page is open, so it
+     * is queried up to now; only the end moves, the start stays where the
+     * preset put it. Computed per query rather than written back into the
+     * session: a write from the tick thread could land after a range change on
+     * the websocket thread and overwrite the end the viewer just picked.
+     */
+    private static String liveEnd(SessionState state) {
+        return state.timelineLive ? Instant.now().toString() : state.timelineEnd;
     }
 
     private void pushRequests(WebSocketSession session, SessionState state, boolean force) {
@@ -626,11 +696,11 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             // state.timelineEnd is only moved by a range change, so reading it
             // here would pin the list to the instant the range was set and no
             // request enqueued after page load would ever show up.
-            String end = state.timelineLive ? Instant.now().toString() : state.timelineEnd;
+            String end = liveEnd(state);
             Map<String, Object> payload;
             payload = requestLogService.getLatestRequests(
                 state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                state.scopeProviderId, state.scopeErrorsOnly,
+                state.scopeProviderId, state.scopeApiKeyId, state.scopeErrorsOnly,
                 state.feedStatus, null, null, LATEST_REQUESTS_PUSH_SIZE, false,
                 state.feedModelIds, state.feedProviderIds);
             mergeLiveStreams(payload);
@@ -649,7 +719,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
             if (state.hasFeedFilter()) {
                 String scopeSig = requestLogService.scopeMovementSig(
                     state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                    state.scopeProviderId, state.scopeErrorsOnly);
+                    state.scopeProviderId, state.scopeApiKeyId, state.scopeErrorsOnly, state.feedModelIds);
                 if (scopeSig != null && !scopeSig.equals(state.prevScopeSig)) {
                     // The first probe after a fresh baseline (init, scope or
                     // range change re-pushed the aggregates moments ago) just
@@ -681,7 +751,7 @@ public class StatsV2WebSocketHandler extends TextWebSocketHandler {
                 if (state.hasFeedFilter() && (force || rowsChanged || selectionCountMoved)) {
                     long total = requestLogService.countFeedRows(
                         state.timelineStart, end, state.scopeUserId, state.scopeTeamId,
-                        state.scopeProviderId, state.scopeErrorsOnly, state.feedStatus,
+                        state.scopeProviderId, state.scopeApiKeyId, state.scopeErrorsOnly, state.feedStatus,
                         state.feedModelIds, state.feedProviderIds);
                     payload.put("total", total);
                 }

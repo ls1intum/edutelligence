@@ -4,20 +4,34 @@ title: Configuration
 
 # Configuration
 
-Copy `.env.example` to `.env` and review every production value. The compose
-files provide safe local defaults, but an empty or default secret is not
-suitable for an internet-facing instance.
+Copy `.env.example` to `.env`. Check every production value. The compose
+files contain safe local defaults. An empty secret or a default secret is not
+safe for an instance that is open to the internet.
 
 | Variable | Purpose |
 | --- | --- |
-| `LOGOS_DOMAIN` | Hostname used for UI and API routing |
-| `ACME_EMAIL` | Email used for Let's Encrypt certificates |
-| `LOGOS_CORS_ALLOWED_ORIGINS` | Exact browser origins allowed by the API |
-| `KEYCLOAK_ISSUER_URI` | OIDC issuer used to validate user tokens |
-| `KEYCLOAK_CLIENT_ID` | Public OIDC client used by the UI |
-| `LOGOS_INTERNAL_SECRET` | Shared secret between the Spring API and orchestrator |
-| `PROMETHEUS_API_KEY` | Credential required by the metrics endpoint |
+| `LOGOS_DOMAIN` | Hostname for UI and API routing |
+| `ACME_EMAIL` | Email address for Let's Encrypt certificates |
+| `LOGOS_CORS_ALLOWED_ORIGINS` | Exact browser origins that the API allows |
+| `KEYCLOAK_ISSUER_URI` | OIDC issuer that validates user tokens |
+| `KEYCLOAK_CLIENT_ID` | Public OIDC client of the UI |
+| `LOGOS_INTERNAL_SECRET` | Shared secret between the Spring API and the orchestrator |
+| `PROMETHEUS_API_KEY` | Credential that the metrics endpoint requires |
 | `HF_TOKEN` | Optional token for gated Hugging Face models |
 
-Use exact origins including scheme and port for CORS; do not use `*` with
-credentialed browser requests. Keep `.env` out of source control.
+For CORS, use exact origins with the scheme and the port. Do not use `*` with
+browser requests that send credentials. Do not put `.env` in source control.
+
+## Provider endpoints
+
+Logos sends a provider's credentials only over HTTPS. Plain HTTP is allowed
+only on loopback (`localhost`, `127.0.0.1`, `::1`). If a provider has an API
+key and its endpoint is plain HTTP on another host, Logos refuses the request
+and logs `Refusing to send the credentials of provider … over an insecure
+transport`.
+
+To use an upstream on another host, put it behind HTTPS (for example behind
+Traefik with a certificate). An upstream that needs no credentials is not
+affected: when the provider has no API key, Logos forwards over plain HTTP.
+Worker nodes (`logosnode` providers) connect over their own websocket and are
+not affected either.

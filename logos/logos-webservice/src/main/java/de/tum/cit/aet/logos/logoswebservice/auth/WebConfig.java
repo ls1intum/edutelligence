@@ -9,9 +9,14 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.core.task.support.TaskExecutorAdapter;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+
+import de.tum.cit.aet.logos.logoswebservice.common.RequestTiming;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
@@ -35,8 +40,18 @@ public class WebConfig implements WebMvcConfigurer {
             .excludePathPatterns(
                 "/error", "/info", "/ws/**",
                 "/logosdb/get_model_health", "/internal/models_discovered",
+                "/internal/notifications",
                 "/internal/gateway_relay_stats", "/internal/gateway_relay_stats/**",
                 "/v1", "/v1/**", "/openai", "/openai/**", "/jobs", "/jobs/**");
+        // Registered after the auth interceptor, so it marks where authentication
+        // ends and the controller begins for the request timing log.
+        registry.addInterceptor(new HandlerInterceptor() {
+            @Override
+            public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+                RequestTiming.markHandlerStart();
+                return true;
+            }
+        });
     }
 
     @Override

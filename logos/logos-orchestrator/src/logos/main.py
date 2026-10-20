@@ -35,7 +35,7 @@ from logos.anthropic_compat import (
     translate_response,
 )
 from logos.anthropic_compat.common import sse
-from logos.auth import AuthContext, authenticate_api_key
+from logos.auth import AuthContext, authenticate_api_key, resolve_log_level
 from logos.batch_api import batch_reconciler_loop, handle_batch_api_request
 from logos.batch_local import local_batch_runner_loop
 from logos.benchmarks.guidellm_runner import (
@@ -52,6 +52,7 @@ from logos.capacity.capacity_planner import CapacityPlanner
 from logos.capacity.demand_tracker import DemandTracker
 from logos.classification.classification_balancer import Balancer
 from logos.classification.classification_manager import ClassificationManager
+from logos.client_tags import ClientTagCancellationMiddleware
 from logos.context_budget import estimate_prompt_tokens, required_context_tokens
 from logos.dbutils.dbmanager import DBManager
 from logos.dbutils.dbmodules import JobStatus
@@ -62,7 +63,7 @@ from logos.dbutils.types import (
     infer_cloud_provider_type,
     normalize_provider_type,
 )
-from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response
+from logos.errors import UpstreamStreamError, coerce_upstream_error, openai_error_response, upstream_error_message
 from logos.jobs.job_service import JobService, JobSubmission
 from logos.live_stream import _LiveStreamRegistry, _StreamingLogAccumulator, _usage_tokens_from_payload
 from logos.logosnode_registry import LogosNodeCommandError, LogosNodeOfflineError, LogosNodeRuntimeRegistry
@@ -75,6 +76,7 @@ from logos.middleware import APIPrefixStripperMiddleware
 from logos.monitoring import prometheus_metrics as prom
 from logos.pipeline.context_resolver import ContextResolver
 from logos.pipeline.correcting_scheduler import ClassificationCorrectingScheduler
+from logos.pipeline.effort_normalization import adapt_payload_after_effort_rejection, parse_effort_rejection
 from logos.pipeline.executor import ExecutionResult, Executor, StreamingExecutionStatus
 from logos.pipeline.latency_store import LatencyStore
 from logos.pipeline.pipeline import PipelineRequest, RequestPipeline, queue_role_rank
@@ -295,7 +297,7 @@ def _record_rate_limit_admission(request_id: Optional[str], admitted: bool) -> N
 def _is_timeout_failure(
     *,
     timed_out: bool = False,
-    error: Optional[str] = None,
+    error: Any = None,
     status_code: Optional[int] = None,
 ) -> bool:
     """Whether a failed execution should settle as ``timeout``, not ``error``.
@@ -304,13 +306,16 @@ def _is_timeout_failure(
     used to leave ``timed_out`` stuck at False, so worker command timeouts,
     HTTP 504s, and error text that named a timeout all landed as ``error`` —
     which is why the statistics Status chart's Timeout row stayed at zero.
+
+    ``error`` is usually text, but the executor passes an OpenAI-shaped error
+    body's ``error`` object through as a dict, so it is read as text either way.
     """
     if timed_out:
         return True
     if status_code == 504:
         return True
     if error:
-        lowered = error.lower()
+        lowered = str(error).lower()
         if "timeout" in lowered or "timed out" in lowered:
             return True
     return False
@@ -883,6 +888,7 @@ app.add_middleware(
 )
 
 
+app.add_middleware(ClientTagCancellationMiddleware)
 app.add_middleware(APIPrefixStripperMiddleware, prefix="/api")
 
 
@@ -1713,6 +1719,39 @@ async def _chunks_with_arrival(source):
             await pump
 
 
+def _int_or(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _upstream_error_text(body: Any) -> Any:
+    """The text of an upstream error body, for recognising an effort rejection.
+
+    Covers the OpenAI shape and vLLM's flat ``{"object": "error", "message": ...}``,
+    falling back to the body itself.
+    """
+    message = upstream_error_message(body)
+    if message is None and isinstance(body, dict) and isinstance(body.get("message"), str):
+        message = body["message"]
+    return message or body
+
+
+def _is_effort_rejection_body(chunk: Any) -> bool:
+    """Whether a stream's first chunk is an upstream error body rejecting the reasoning effort.
+
+    A worker forwards an upstream error status as the raw error body in the
+    first chunk. Only a bare JSON body counts: an event-stream chunk is model
+    output, whatever its text says.
+    """
+    try:
+        text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, (bytes, bytearray)) else str(chunk or "")
+    except Exception:
+        return False
+    return text.lstrip().startswith("{") and parse_effort_rejection(text) is not None
+
+
 async def _streaming_response(
     context,
     payload,
@@ -1838,9 +1877,10 @@ async def _streaming_response(
         )
 
     # ── logosnode path ────────────────────────────────────────────────────
-    # LogosNode streams come via WebSocket; status errors are raised as
-    # LogosNodeOfflineError / LogosNodeCommandError *before* streaming starts
-    # (handled in _sync_response). Just wrap in StreamingResponse as before.
+    # LogosNode streams come via WebSocket. An upstream error status arrives
+    # as the error body in the first chunk, followed by a LogosNodeCommandError
+    # at stream_end; transport problems raise LogosNodeOfflineError /
+    # LogosNodeCommandError without any chunk.
     if context.provider_type == "logosnode" and context.lane_id:
         stream_payload = set_payload_field(prepared_payload, "stream", True)
         if not is_audio_upload_path(request_path or ""):
@@ -1899,10 +1939,19 @@ async def _streaming_response(
             # post-loop stamp. Track whether we stamped so finally can persist
             # the captured arrival before record_completion when needed.
             provider_response_stamped = False
+            nonlocal stream_payload
+            # An upstream that rejects the reasoning effort answers with an
+            # error body naming the levels it supports. That body is held back
+            # rather than streamed, so the request can be resent once with the
+            # effort rewritten onto those levels (see effort_normalization).
+            effort_retried = False
+            held_rejection = None
             try:
                 attempts = _LOGOSNODE_PRETOKEN_RETRIES + 1
-                for attempt in range(attempts):
+                attempt = 0
+                while attempt < attempts:
                     produced = False
+                    held_rejection = None
                     try:
                         # `aclosing` is what makes an abandoned request reach
                         # the worker promptly. When this generator is closed
@@ -1916,6 +1965,9 @@ async def _streaming_response(
                         # arrival instant is captured off the client's pace.
                         async with aclosing(_chunks_with_arrival(_new_logosnode_chunk_iter())) as wrapped:
                             async for chunk, arrival in wrapped:
+                                if not produced and not effort_retried and _is_effort_rejection_body(chunk):
+                                    held_rejection = chunk
+                                    continue
                                 produced = True
                                 last_chunk_at = arrival
                                 # Parse before yielding: GuideLLM closes its HTTP
@@ -1934,6 +1986,24 @@ async def _streaming_response(
                                 _live_streams.update(request_id, stream_log.streamed_tokens())
                                 yield chunk
                     except Exception as e:
+                        if held_rejection is not None and not produced:
+                            adapted = adapt_payload_after_effort_rejection(
+                                stream_payload, getattr(context, "model_name", None), held_rejection
+                            )
+                            if adapted is not None:
+                                logger.warning(
+                                    "Upstream rejected the reasoning effort for %s; resending once with it adapted",
+                                    getattr(context, "model_name", None),
+                                )
+                                stream_payload = adapted
+                                effort_retried = True
+                                continue
+                            # Nothing to adapt: the client gets the upstream's
+                            # error body, as it would without the hold-back.
+                            stream_log.feed(held_rejection)
+                            yield held_rejection
+                            held_rejection = None
+                            produced = True
                         # Retry ONLY if nothing has been streamed to the client yet:
                         # a pre-token failure (e.g. a just-woken level-1 lane whose
                         # engine was not yet serveable — the worker fails cleanly
@@ -1948,6 +2018,7 @@ async def _streaming_response(
                                 e,
                             )
                             await asyncio.sleep(_LOGOSNODE_PRETOKEN_RETRY_BACKOFF_S)
+                            attempt += 1
                             continue
                         error_message = str(e)
                         # The worker stream failed; stamp the failure instant the
@@ -1960,6 +2031,11 @@ async def _streaming_response(
                             _pipeline.record_provider_response(request_id, at=getattr(e, _STREAM_FAILURE_AT, None))
                             provider_response_stamped = True
                         raise e
+                    if held_rejection is not None:
+                        # The worker ended cleanly after an error body (it never
+                        # should): hand the body on rather than swallow it.
+                        stream_log.feed(held_rejection)
+                        yield held_rejection
                     # The worker stream completed — the provider's last byte,
                     # stamped at that chunk's arrival (last_chunk_at), before
                     # the finally's billing/persistence runs.
@@ -2075,7 +2151,32 @@ async def _streaming_response(
     # that on_headers fires and – crucially – UpstreamStreamError is raised
     # for non-2xx responses before we commit to a StreamingResponse.
     try:
-        first_chunk = await chunk_iter.__anext__()
+        try:
+            first_chunk = await chunk_iter.__anext__()
+        except UpstreamStreamError as exc:
+            # An upstream that rejects the reasoning effort names the levels it
+            # supports; resend once with the effort rewritten onto them. Nothing
+            # has reached the client yet, and the retry's dispatch replaces this
+            # one's in the stats.
+            adapted = adapt_payload_after_effort_rejection(
+                prepared_payload, getattr(context, "model_name", None), _upstream_error_text(exc.body)
+            )
+            if adapted is None:
+                raise
+            logger.warning(
+                "Upstream rejected the reasoning effort for %s; resending once with it adapted",
+                getattr(context, "model_name", None),
+            )
+            prepared_payload = adapted
+            stream_status = StreamingExecutionStatus()
+            chunk_iter = _pipeline.executor.execute_streaming(
+                context.forward_url,
+                headers,
+                prepared_payload,
+                on_headers=process_headers,
+                status=stream_status,
+            )
+            first_chunk = await chunk_iter.__anext__()
     except UpstreamStreamError as exc:
         logger.error(
             "Pre-stream error from upstream (model_id=%s, provider_id=%s): HTTP %s",
@@ -2086,7 +2187,10 @@ async def _streaming_response(
         # The provider was called and answered (with an error status) — the
         # queue figure ends at the dispatch it captured.
         _stamp_provider_call()
-        return _pre_stream_error_response(exc.status_code, exc.body, str(exc))
+        upstream_message = upstream_error_message(exc.body)
+        return _pre_stream_error_response(
+            exc.status_code, exc.body, f"{exc}: {upstream_message}" if upstream_message else str(exc)
+        )
     except StopAsyncIteration:
         first_chunk = None
     except Exception as exc:
@@ -2459,6 +2563,8 @@ async def _sync_response(
         # at dispatch keeps that logos-side post-response work out of the
         # provider's run figure.
         response_at = None
+        # (status description, the same with the upstream's message appended)
+        upstream_error_detail = None
 
         if context.provider_type == "logosnode" and context.lane_id:
             sync_payload = force_non_streaming_payload(prepared_payload)
@@ -2477,6 +2583,36 @@ async def _sync_response(
                         timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
                         on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
                     )
+                    # An upstream that rejects the reasoning effort names the
+                    # levels it supports; resend once with the effort rewritten
+                    # onto them. The resend re-stamps the provider call.
+                    adapted = (
+                        adapt_payload_after_effort_rejection(
+                            prepared_payload,
+                            getattr(context, "model_name", None),
+                            _upstream_error_text(rpc_result.get("body")),
+                        )
+                        if isinstance(rpc_result, dict) and _int_or(rpc_result.get("status_code"), 200) >= 400
+                        else None
+                    )
+                    if adapted is not None:
+                        logger.warning(
+                            "Upstream rejected the reasoning effort for %s; resending once with it adapted",
+                            getattr(context, "model_name", None),
+                        )
+                        prepared_payload = adapted
+                        sync_payload = force_non_streaming_payload(prepared_payload)
+                        rpc_result = await _logosnode_registry.send_command(
+                            provider_id=provider_id,
+                            action="infer",
+                            params={
+                                "lane_id": context.lane_id,
+                                "payload": sync_payload,
+                                "request_path": request_path,
+                            },
+                            timeout_seconds=_LOGOSNODE_INFER_TIMEOUT_SECONDS,
+                            on_sent=(lambda: _pipeline.record_provider_call(request_id)) if request_id else None,
+                        )
                 # The full response is in hand the moment send_command returns;
                 # capture it before the perf merge and body decoding below,
                 # which are logos work that must stay out of the provider's
@@ -2517,11 +2653,16 @@ async def _sync_response(
                         and is_multipart_payload(sync_payload)
                     )
                     rpc_raw_body = response_payload.encode("utf-8") if raw_audio_response else None
-                if not isinstance(response_payload, dict) and not raw_audio_response:
-                    response_payload = {"response": response_payload}
                 rpc_error = str(rpc_result.get("error") or "").strip() or None
                 if status_override >= 400 and rpc_error is None:
                     rpc_error = f"logosnode infer returned HTTP {status_override}"
+                    upstream_message = upstream_error_message(response_payload)
+                    if upstream_message:
+                        upstream_error_detail = (rpc_error, f"{rpc_error}: {upstream_message}")
+                if not isinstance(response_payload, dict) and not raw_audio_response:
+                    # A plain-text error body is the error message itself.
+                    wrapper_key = "error" if status_override >= 400 else "response"
+                    response_payload = {wrapper_key: response_payload}
                 exec_result = ExecutionResult(
                     success=status_override < 400,
                     response=response_payload,
@@ -2558,6 +2699,28 @@ async def _sync_response(
                 )
         else:
             exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
+            # The effort rejection again (see the logosnode branch above): one
+            # resend, whose dispatch and response instants are the ones kept.
+            adapted = (
+                adapt_payload_after_effort_rejection(
+                    prepared_payload,
+                    getattr(context, "model_name", None),
+                    (
+                        _upstream_error_text(exec_result.response)
+                        if exec_result.response is not None
+                        else exec_result.error
+                    ),
+                )
+                if not exec_result.success and exec_result.status_code is not None
+                else None
+            )
+            if adapted is not None:
+                logger.warning(
+                    "Upstream rejected the reasoning effort for %s; resending once with it adapted",
+                    getattr(context, "model_name", None),
+                )
+                prepared_payload = adapted
+                exec_result = await _pipeline.executor.execute_sync(context.forward_url, headers, prepared_payload)
             # The executor captured both instants where they belong: the
             # dispatch after its request preparation (the multipart decode for
             # file uploads) and the response before its body parsing — both of
@@ -2623,6 +2786,12 @@ async def _sync_response(
                     error_message = exec_result.error
                     if status_override is None:
                         status_override = 504
+            # Appended after the timeout check, so an upstream message that
+            # mentions a timeout cannot turn an HTTP error into a timeout.
+            if upstream_error_detail and exec_result.error == upstream_error_detail[0]:
+                exec_result.error = upstream_error_detail[1]
+                if error_message == upstream_error_detail[0]:
+                    error_message = exec_result.error
 
         if exec_result.success and context.provider_type == "cloud":
             response_payload, _ = _response_with_cost(
@@ -3218,7 +3387,11 @@ async def _execute_resource_mode(
         with DBManager() if provider_type != "logosnode" else nullcontext() as db:
             try:
                 _check_budget_if_cloud(
-                    db, auth, provider_type != "logosnode", datetime.date.today().replace(day=1).isoformat()
+                    db,
+                    auth,
+                    provider_type != "logosnode",
+                    datetime.date.today().replace(day=1).isoformat(),
+                    provider_id=result.provider_id if provider_type != "logosnode" else None,
                 )
             except Exception as e:
                 try:
@@ -3349,9 +3522,10 @@ async def route_and_execute(
     This is the main entry point for all request handling. It decides between two execution modes:
 
     **PROXY MODE** (when body["model"] is specified):
-    - Bypasses classification/scheduling pipeline
-    - Forwards directly to the specified provider
-    - User has full control over model/provider selection
+    - Pins the request to the named model (access-checked against the key)
+    - Skips only the classification ranking (Laura)
+    - Still runs the scheduler across that model's deployments: privacy
+      filtering, policy thresholds, ETTFT scoring, queueing, capacity planner
 
     **RESOURCE MODE** (when body["model"] is NOT specified):
     - Full pipeline: Classification → Scheduling → Execution
@@ -3360,7 +3534,7 @@ async def route_and_execute(
 
     Routing logic:
     - Case 1: No deployments available → 404 error
-    - Case 2: body["model"] specified → PROXY mode (direct forwarding)
+    - Case 2: body["model"] specified → PROXY mode (model pinned, no classification)
     - Case 3: no body["model"] → RESOURCE mode (classification + scheduling)
 
     Args:
@@ -4328,7 +4502,9 @@ async def auth_parse_log(request: Request, use_profile_auth: bool = False, reque
             "team_id": auth.team_id,
             "user_id": auth.user_id,
             "environment": auth.environment,
-            "log_level": auth.log_level,
+            # The key's level is the default; a per-request logos-logging header
+            # (the end user's opt-in/out) overrides it for this request's row.
+            "log_level": resolve_log_level(headers, auth.log_level),
             "client_ip": client_ip,
             "input_payload": sanitized_payload_for_logging(body),
             "headers": sanitized_headers_for_persistence(headers),
@@ -4629,6 +4805,7 @@ def _find_uncalibrated_models_on_provider(provider_id: int) -> list[str]:
             or profile.get("sleep_l1_transient_host_ram_mb") is None
             or (profile.get("residency_source") == "calibrated" and not profile.get("kv_cache_to_max_model_len_pairs"))
             or collapsed_envelope
+            or bool(profile is not None and profile.get("calibration_stale"))
         ):
             uncalibrated.append(model_name)
     return uncalibrated
@@ -4930,6 +5107,8 @@ def _model_context_fields(entry: Optional[dict[str, int]]) -> dict[str, int]:
 # Add new routers above that line.
 
 from logos.routers import admin, internal, logosnode, monitoring, user_facing  # noqa: E402
+
+_logosnode_registry.on_cold_mark_changed = logosnode.republish_lane_snapshot
 
 app.include_router(monitoring.router)
 app.include_router(internal.router)

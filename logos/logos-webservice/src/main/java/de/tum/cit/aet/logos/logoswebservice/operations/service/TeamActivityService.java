@@ -28,9 +28,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-import de.tum.cit.aet.logos.logoswebservice.identity.entity.LogLevel;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Team;
-import de.tum.cit.aet.logos.logoswebservice.identity.repository.ApiKeyRepository;
 import de.tum.cit.aet.logos.logoswebservice.identity.repository.TeamRepository;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.ExportSliceCursorProjection;
 import de.tum.cit.aet.logos.logoswebservice.operations.repository.LogEntryRepository;
@@ -126,7 +124,6 @@ public class TeamActivityService {
     private final LogEntryRepository logEntryRepository;
     private final RequestLogService requestLogService;
     private final TeamRepository teamRepository;
-    private final ApiKeyRepository apiKeyRepository;
     private final ObjectMapper objectMapper;
 
     /**
@@ -194,7 +191,6 @@ public class TeamActivityService {
     public TeamActivityService(LogEntryRepository logEntryRepository,
                                RequestLogService requestLogService,
                                TeamRepository teamRepository,
-                               ApiKeyRepository apiKeyRepository,
                                ObjectMapper objectMapper,
                                @Value("${logos.team-activity.most-asked-scan-limit:10000}") int mostAskedScanLimit,
                                @Value("${logos.team-activity.export-max-rows:10000}") int exportMaxRows,
@@ -202,7 +198,6 @@ public class TeamActivityService {
         this.logEntryRepository = logEntryRepository;
         this.requestLogService = requestLogService;
         this.teamRepository = teamRepository;
-        this.apiKeyRepository = apiKeyRepository;
         this.objectMapper = objectMapper;
         this.mostAskedScanLimit = mostAskedScanLimit;
         this.exportMaxRows = exportMaxRows;
@@ -255,10 +250,13 @@ public class TeamActivityService {
         payload.put("team_id", teamId);
         payload.put("days", days);
         payload.put("since", since.toInstant().toString());
-        // Whether any key of the team is opted into FULL logging, so the view
-        // can say before an export is started that the download will hold no
-        // request or response content.
-        payload.put("full_logging_enabled", hasFullLoggingKey(teamId));
+        // Whether any request in the selected window was stored at FULL
+        // privacy, so the view can say before an export is started that the
+        // download will hold no request or response content. Derived from
+        // stored rows: a BILLING key can still produce FULL content via the
+        // per-request logging header.
+        payload.put("full_logging_enabled",
+            hasStoredFullLogging(teamId, since, Timestamp.from(now)));
         payload.put("live", live);
         payload.put("keys", period.keys());
         payload.put("total_tokens", totalTokens);
@@ -575,7 +573,7 @@ public class TeamActivityService {
         long count = sliceIds.size();
 
         String teamName = teamRepository.findById(teamId).map(Team::getName).orElse(null);
-        boolean fullLoggingEnabled = hasFullLoggingKey(teamId);
+        boolean fullLoggingEnabled = hasStoredFullLogging(teamId, since, end);
 
         String note = null;
         long consented = sliceIds.isEmpty()
@@ -841,12 +839,9 @@ public class TeamActivityService {
             : text;
     }
 
-    /** Whether any active key of the team is opted into FULL logging — the
-     *  only switch under which the orchestrator stores request and response
-     *  content at all.
-     */
-    private boolean hasFullLoggingKey(int teamId) {
-        return apiKeyRepository.existsByTeamIdAndLogAndIsActive(teamId, LogLevel.FULL, true);
+    /** Whether any request in the window was stored at FULL privacy. */
+    private boolean hasStoredFullLogging(int teamId, Timestamp since, Timestamp end) {
+        return logEntryRepository.existsFullPrivacyInWindow(teamId, since, end);
     }
 
     private static List<Map<String, Object>> toScopeOptions(List<ScopeOptionProjection> rows) {

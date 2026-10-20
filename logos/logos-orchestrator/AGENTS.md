@@ -49,10 +49,12 @@ Role-based authorization is separate (`role_auth.py`, on `users.role`):
 
 ```text
 Request → Auth → Log
-  ├── PROXY MODE (body has "model"): → Verify access → Resolve auth/URL → Execute
+  ├── PROXY MODE (body has "model"): → Verify access → Schedule (that model only) → Resolve → Execute
   └── RESOURCE MODE (no "model"):    → Classify → Schedule → Resolve → Execute
 → Log Response (tokens, provider, classifications, scheduling stats)
 ```
+
+PROXY mode is not a scheduler bypass: it only skips classification (Laura). Privacy filtering, policy thresholds, ETTFT scoring across the model's deployments, queueing and the capacity planner still run.
 
 `log_entry` rows are inserted at request arrival and updated later with routing, lifecycle timestamps, status, usage, and settled cost.
 

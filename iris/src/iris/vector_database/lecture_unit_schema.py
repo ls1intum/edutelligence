@@ -8,7 +8,12 @@ from weaviate.collections.classes.config import (
     DataType,
     VectorDistances,
 )
-from weaviate.exceptions import UnexpectedStatusCodeError, WeaviateInvalidInputError
+
+from .schema_properties import (
+    BASE_URL_EXACT_MARKER,
+    add_property_if_missing,
+    base_url_exact_property,
+)
 
 
 class LectureUnitSchema(Enum):
@@ -27,33 +32,71 @@ class LectureUnitSchema(Enum):
     LECTURE_UNIT_NAME = "lecture_unit_name"
     LECTURE_UNIT_LINK = "lecture_unit_link"
     BASE_URL = "base_url"
+    BASE_URL_EXACT = "base_url_exact"
     LECTURE_UNIT_SUMMARY = "lecture_unit_summary"
     VIDEO_LINK = "video_link"
     RELEASE_DATE = "release_date"
     SLIDE_VISIBILITY = "slide_visibility"
+    CONTENT_FINGERPRINT = "content_fingerprint"
+    INGESTION_RUN_ID = "ingestion_run_id"
+    EXPECTED_CHUNK_COUNTS = "expected_chunk_counts"
+    PIPELINE_VERSION = "ingestion_pipeline_version"
+    QUALITY_SCORE = "quality_score"
+    QUALITY_FLAGS = "quality_flags"
 
 
-def _add_property_if_missing(collection: Collection, new_property: Property) -> None:
-    def property_exists() -> bool:
-        return any(
-            schema_property.name == new_property.name
-            for schema_property in collection.config.get(simple=True).properties
-        )
-
-    if property_exists():
-        return
-    try:
-        collection.config.add_property(new_property)
-    except (UnexpectedStatusCodeError, WeaviateInvalidInputError):
-        # Another concurrent initializer may have added the property after our check.
-        if not property_exists():
-            raise
+def _ledger_properties() -> list[Property]:
+    """Properties of the per-unit ingestion ledger stamped by the write path."""
+    return [
+        Property(
+            name=LectureUnitSchema.CONTENT_FINGERPRINT.value,
+            description="Fingerprint of the ingested source content, stamped verbatim as sent by Artemis",
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.INGESTION_RUN_ID.value,
+            description=(
+                "Id of the ingestion run that wrote this row; rows of "
+                "other runs are swept after a successful write"
+            ),
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.EXPECTED_CHUNK_COUNTS.value,
+            description=(
+                "JSON map of page number to prepared chunk count, so "
+                "completeness is verifiable below page granularity"
+            ),
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.PIPELINE_VERSION.value,
+            description="Ingestion pipeline version that produced this unit's content",
+            data_type=DataType.INT,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.QUALITY_SCORE.value,
+            description="Deterministic quality score of the ingested content (0..1)",
+            data_type=DataType.NUMBER,
+            index_searchable=False,
+        ),
+        Property(
+            name=LectureUnitSchema.QUALITY_FLAGS.value,
+            description="JSON list of deterministic quality findings for this unit",
+            data_type=DataType.TEXT,
+            index_searchable=False,
+        ),
+    ]
 
 
 def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
     if client.collections.exists(LectureUnitSchema.COLLECTION_NAME.value):
         collection = client.collections.get(LectureUnitSchema.COLLECTION_NAME.value)
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitSchema.RELEASE_DATE.value,
@@ -62,7 +105,7 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
         )
-        _add_property_if_missing(
+        add_property_if_missing(
             collection,
             Property(
                 name=LectureUnitSchema.SLIDE_VISIBILITY.value,
@@ -71,9 +114,22 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 index_searchable=False,
             ),
         )
+        add_property_if_missing(
+            collection,
+            Property(
+                name=LectureUnitSchema.COURSE_LANGUAGE.value,
+                description="The language of the course",
+                data_type=DataType.TEXT,
+                index_searchable=False,
+            ),
+        )
+        for ledger_property in _ledger_properties():
+            add_property_if_missing(collection, ledger_property)
+        add_property_if_missing(collection, base_url_exact_property())
         return collection
     return client.collections.create(
         name=LectureUnitSchema.COLLECTION_NAME.value,
+        description=BASE_URL_EXACT_MARKER,
         vector_config=Configure.Vectors.self_provided(
             vector_index_config=Configure.VectorIndex.hnsw(
                 distance_metric=VectorDistances.COSINE
@@ -146,6 +202,7 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
+            base_url_exact_property(),
             Property(
                 name=LectureUnitSchema.LECTURE_UNIT_SUMMARY.value,
                 description="The summary of the lecture unit",
@@ -164,5 +221,6 @@ def init_lecture_unit_schema(client: WeaviateClient) -> Collection:
                 data_type=DataType.TEXT,
                 index_searchable=False,
             ),
+            *_ledger_properties(),
         ],
     )

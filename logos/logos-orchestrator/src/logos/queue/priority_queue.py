@@ -83,6 +83,7 @@ class PriorityQueueManager:
         provider_affinity: int | None = None,
         raw_priority: int | None = None,
         role_rank: int = 0,
+        api_key_id: int | None = None,
     ) -> str:
         """Add a task to the priority queue for ``model_id``.
 
@@ -96,6 +97,9 @@ class PriorityQueueManager:
         to ``int(priority)``. ``role_rank`` is the caller's tiebreak rank
         within equal priority (see pipeline.queue_role_rank); 0 = unknown
         caller, which waits behind interactive traffic.
+
+        ``api_key_id`` is who enqueued the entry, when known — exposed on the
+        scheduler-state payload so a runner can discount its own backlog.
         """
         with self._lock:
             self._entry_counter += 1
@@ -112,6 +116,7 @@ class PriorityQueueManager:
                 enqueue_time=datetime.now(),
                 is_cold_at_queue=is_cold_at_queue,
                 provider_affinity=provider_affinity,
+                api_key_id=api_key_id,
             )
 
             heap_entry = (
@@ -287,6 +292,21 @@ class PriorityQueueManager:
                 normal=len(self._queues[model_id][Priority.NORMAL]),
                 high=len(self._queues[model_id][Priority.HIGH]),
             )
+
+    def get_queued_by_api_key(self, model_id: int) -> Dict[int, int]:
+        """How many queued entries for ``model_id`` belong to each caller key.
+
+        Entries enqueued without a key are omitted: the split is a slice of
+        the depth, never something that must sum to it.
+        """
+        with self._lock:
+            counts: Dict[int, int] = {}
+            for priority in (Priority.LOW, Priority.NORMAL, Priority.HIGH):
+                for *_ordering, entry in self._queues[model_id][priority]:
+                    if entry.api_key_id is None:
+                        continue
+                    counts[entry.api_key_id] = counts.get(entry.api_key_id, 0) + 1
+            return counts
 
     def get_entries_for_priority(
         self,

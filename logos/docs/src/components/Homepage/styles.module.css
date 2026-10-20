@@ -46,7 +46,7 @@
 
 .heroBrand {
   margin: 0 0 0.35rem;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: var(--ifm-font-family-base);
   font-size: 1.35rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -56,7 +56,7 @@
 
 .heroHeadline {
   margin: 0 0 0.85rem;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: var(--ifm-font-family-base);
   font-size: clamp(2rem, 4vw, 2.75rem);
   font-weight: 700;
   line-height: 1.15;
@@ -128,7 +128,7 @@
 .sectionHeading {
   margin: 0 0 0.65rem;
   text-align: center;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: var(--ifm-font-family-base);
   font-size: 1.75rem;
   font-weight: 700;
   color: var(--logos-ink);

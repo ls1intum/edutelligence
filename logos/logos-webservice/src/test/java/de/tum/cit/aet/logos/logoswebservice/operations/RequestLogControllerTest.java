@@ -56,6 +56,19 @@ class RequestLogControllerTest {
     }
 
     @Test
+    void latestRequests_narrowsToOneApiKey() throws Exception {
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"api_key_id\":3001}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.total").value(2));
+        mvc.perform(post("/logosdb/latest_requests").with(TestJwt.logosAdmin())
+                .contentType("application/json").content("{\"api_key_id\":3002}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.requests").isEmpty())
+            .andExpect(jsonPath("$.total").value(0));
+    }
+
+    @Test
     void requestPayloads_preservesMissingAndStreamingContent() throws Exception {
         jdbc.update("UPDATE log_entry SET response_payload = CAST(? AS jsonb) WHERE request_id = ?",
             "\"data: chunk\\n\\ndata: [DONE]\"", "req-aaa-111");
@@ -313,6 +326,31 @@ class RequestLogControllerTest {
            .andExpect(jsonPath("$.requests").isEmpty())
            .andExpect(jsonPath("$.total").value(0))
            .andExpect(jsonPath("$.has_more").value(false));
+    }
+
+    @Test
+    @SqlMergeMode(SqlMergeMode.MergeMode.MERGE)
+    @Sql(scripts = {"/sql/seed-operations-status.sql"}, executionPhase = Sql.ExecutionPhase.BEFORE_TEST_METHOD)
+    void latestRequests_surfacesEstimatedPromptTokensOnErrorRows() throws Exception {
+        // Failed requests often have no upstream usage; the orchestrator stores a
+        // body-derived stand-in under estimated_prompt_tokens. The feed must show
+        // it as the prompt count (with the estimate flag) so the card is not blank.
+        jdbc.update("INSERT INTO token_types (name) VALUES ('estimated_prompt_tokens') ON CONFLICT (name) DO NOTHING");
+        jdbc.update("""
+            INSERT INTO usage_tokens (log_entry_id, type_id, token_count)
+            SELECT 9012, id, 1200 FROM token_types WHERE name = 'estimated_prompt_tokens'
+            """);
+
+        mvc.perform(post("/logosdb/latest_requests")
+                .with(TestJwt.logosAdmin())
+                .contentType("application/json")
+                .content("{\"status\": \"error\"}"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$.requests.length()").value(1))
+           .andExpect(jsonPath("$.requests[0].request_id").value("req-state-error"))
+           .andExpect(jsonPath("$.requests[0].prompt_tokens").value(1200))
+           .andExpect(jsonPath("$.requests[0].prompt_estimated").value(true))
+           .andExpect(jsonPath("$.requests[0].total_tokens").doesNotExist());
     }
 
     @Test

@@ -11,8 +11,10 @@ export interface Team {
   /** Queue priority of the team's traffic (1..10, same scale as API-key priorities); null = not set. */
   priority: number | null;
   is_caller_owner: boolean;
-  /** True when the team is provisioned from a Keycloak group; name and existence are Keycloak-owned. */
+  /** True when the team is linked to a Keycloak group; name and existence are Keycloak-owned. */
   managed: boolean;
+  /** The linked Keycloak group (or realm role); null when the team is Logos-owned. */
+  keycloak_group: string | null;
 }
 
 export interface AdminUser {
@@ -35,8 +37,24 @@ export interface TeamDetail {
   default_local_tpm_limit: number | null;
   /** Queue priority of the team's traffic (1..10); null = not set. */
   priority: number | null;
-  /** True when the team is provisioned from a Keycloak group; name and existence are Keycloak-owned. */
+  /** True when the team is linked to a Keycloak group; name and existence are Keycloak-owned. */
   managed: boolean;
+  /** The linked Keycloak group (or realm role); null when the team is Logos-owned. */
+  keycloak_group: string | null;
+}
+
+/** A Keycloak claim name a team can be linked to, as offered by the group picker. */
+export interface KeycloakGroupOption {
+  name: string;
+  source: 'group' | 'role';
+  linked_team_id: number | null;
+  linked_team_name: string | null;
+}
+
+export interface KeycloakGroupDirectory {
+  /** False when the deployment has no Keycloak directory access — type the group instead. */
+  available: boolean;
+  groups: KeycloakGroupOption[];
 }
 
 export interface TeamMember {
@@ -131,7 +149,15 @@ export interface TeamLimitsPayload {
   default_local_tpm_limit?: number | null;
 }
 
-/** GitHub repository linked to a team for later AI-workflow / SLA analysis. */
+/** Per-provider monthly budget override (null = unlimited / sponsored). */
+export interface TeamProviderBudget {
+  provider_id: number;
+  provider_name: string;
+  provider_type?: string;
+  monthly_budget_micro_cents: number | null;
+}
+
+/** GitHub repository linked to a team for later AI-workflow / SLO analysis. */
 export interface TeamRepository {
   id: number;
   team_id: number;
@@ -168,9 +194,13 @@ export interface AiWorkflow {
   trigger_summary?: string | null;
   diagram_mermaid: string;
   sort_order: number;
+  /** The owner saved diagram_mermaid; re-analyses keep it. */
+  diagram_set_by_owner?: boolean;
+  /** Agent Mermaid that differs from the owner's; Accept / Keep mine. */
+  proposed_diagram_mermaid?: string | null;
 }
 
-export type RecommendedSla = 'ux-critical' | 'ux-high-prio' | 'ux-background';
+export type RecommendedSlo = 'ux-critical' | 'ux-high-prio' | 'ux-background';
 
 export type RecommendationReviewStatus = 'pending' | 'accepted' | 'overridden' | 'rejected';
 
@@ -188,17 +218,39 @@ export interface AiLlmCallRecommendation {
   code_url?: string | null;
   detected_model?: string | null;
   api_key_id?: number | null;
-  recommended_sla: RecommendedSla;
+  recommended_slo: RecommendedSlo;
   /** Ranking of latency / quality / price (most important first). */
   objective_priority?: ObjectiveKey[];
   confidence: number;
   justification: string;
   traffic_flags?: Record<string, unknown> | null;
   review_status: RecommendationReviewStatus;
-  confirmed_sla?: RecommendedSla | null;
+  confirmed_slo?: RecommendedSlo | null;
   confirmed_objective_priority?: ObjectiveKey[] | null;
   reviewed_by?: number | null;
   reviewed_at?: string | null;
+  /** The owner picked detected_model; re-analyses keep it. */
+  model_set_by_owner?: boolean;
+  /** The review was carried over from an earlier decision by a re-analysis. */
+  review_carried_over?: boolean;
+  /** The owner's decision on the recommendation this one succeeds, when there was one. */
+  previous?: PreviousDecision | null;
+}
+
+/** What was decided on a call site before the latest analysis proposed it again. */
+export interface PreviousDecision {
+  id: number;
+  review_status: Exclude<RecommendationReviewStatus, 'pending'>;
+  slo: RecommendedSlo;
+  objective_priority: ObjectiveKey[];
+  reviewed_at?: string | null;
+}
+
+/** Result of queueing an analysis of every linked repository. */
+export interface AnalyzeAllResult {
+  queued: number;
+  already_in_flight: number;
+  message: string;
 }
 
 export interface TeamWorkflowsResponse {
@@ -217,7 +269,7 @@ export interface TeamWorkflowsResponse {
 
 export interface ReviewRecommendationPayload {
   action: 'accept' | 'override' | 'reject';
-  confirmed_sla?: RecommendedSla;
+  confirmed_slo?: RecommendedSlo;
   confirmed_objective_priority?: ObjectiveKey[];
   api_key_id?: number;
   /** "No key": bind and re-prioritise no key, not even the one linked before. */

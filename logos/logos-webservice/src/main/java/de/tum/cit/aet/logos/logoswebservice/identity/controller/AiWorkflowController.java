@@ -16,13 +16,15 @@ import org.springframework.web.bind.annotation.RestController;
 
 import de.tum.cit.aet.logos.logoswebservice.auth.AuthContext;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewRecommendationRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.ReviewWorkflowDiagramProposalRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetRecommendationModelRequestDTO;
+import de.tum.cit.aet.logos.logoswebservice.identity.dto.SetWorkflowDiagramRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.dto.StoreDeployKeyRequestDTO;
 import de.tum.cit.aet.logos.logoswebservice.identity.entity.Role;
 import de.tum.cit.aet.logos.logoswebservice.identity.service.AiWorkflowAnalysisService;
 
 /**
- * AI workflow analysis and SLA recommendation review for linked repositories.
+ * AI workflow analysis and SLO recommendation review for linked repositories.
  * Same ownership gate as {@link TeamRepoLinkController}: logos admins, or an
  * app admin who owns the team.
  */
@@ -62,6 +64,13 @@ public class AiWorkflowController {
         return ResponseEntity.ok(service.queueAgentAnalysis(teamId, linkId));
     }
 
+    /** Queue an analysis of every linked repository (Logos Admins only). */
+    @PostMapping("/repositories/analyze")
+    @PreAuthorize("hasAuthority('" + Role.Names.LOGOS_ADMIN + "')")
+    public ResponseEntity<?> analyzeAll() {
+        return ResponseEntity.ok(service.queueAllAgentAnalyses());
+    }
+
     @PostMapping("/teams/{teamId}/recommendations/{recId}/review")
     @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
     public ResponseEntity<?> reviewRecommendation(
@@ -86,6 +95,32 @@ public class AiWorkflowController {
             return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
         }
         return ResponseEntity.ok(service.setRecommendationModel(teamId, recId, body));
+    }
+
+    @PutMapping("/teams/{teamId}/workflows/{workflowId}/diagram")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> setWorkflowDiagram(
+            @PathVariable Integer teamId,
+            @PathVariable Integer workflowId,
+            @RequestBody SetWorkflowDiagramRequestDTO body,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (forbiddenForNonOwner(auth, teamId)) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        return ResponseEntity.ok(service.setWorkflowDiagram(teamId, workflowId, body));
+    }
+
+    @PostMapping("/teams/{teamId}/workflows/{workflowId}/diagram/proposal")
+    @PreAuthorize("hasAnyAuthority('" + Role.Names.LOGOS_ADMIN + "', '" + Role.Names.APP_ADMIN + "')")
+    public ResponseEntity<?> reviewWorkflowDiagramProposal(
+            @PathVariable Integer teamId,
+            @PathVariable Integer workflowId,
+            @RequestBody ReviewWorkflowDiagramProposalRequestDTO body,
+            @RequestAttribute("authContext") AuthContext auth) {
+        if (forbiddenForNonOwner(auth, teamId)) {
+            return ResponseEntity.status(403).body(Map.of("detail", "Team owner access required"));
+        }
+        return ResponseEntity.ok(service.reviewWorkflowDiagramProposal(teamId, workflowId, body));
     }
 
     @PutMapping("/teams/{teamId}/repositories/{linkId}/credentials")

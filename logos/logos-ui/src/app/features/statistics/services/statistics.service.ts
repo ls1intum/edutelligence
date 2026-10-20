@@ -38,6 +38,7 @@ export interface RequestFilter {
   userId: number | null;
   teamId: number | null;
   providerId: number | null;
+  apiKeyId?: number | null;
   /** Keep only error/timeout outcomes when true. */
   errorsOnly: boolean;
   /** One lifecycle bucket (queued/running/error/finished), or null for all. */
@@ -59,6 +60,7 @@ export interface ScopeOptions {
   requesters: ScopeOption[];
   providers: ScopeOption[];
   models: ScopeOption[];
+  apiKeys?: ScopeOption[];
 }
 
 @Injectable({ providedIn: 'root' })
@@ -92,6 +94,7 @@ export class StatisticsService {
       teamId: number | null;
       userId: number | null;
       providerId: number | null;
+      apiKeyId?: number | null;
       errorsOnly: boolean;
     },
   ): Promise<ScopeOptions> {
@@ -101,6 +104,7 @@ export class StatisticsService {
       team_id: scope.teamId,
       user_id: scope.userId,
       provider_id: scope.providerId,
+      api_key_id: scope.apiKeyId ?? null,
       errors_only: scope.errorsOnly || null,
     }));
   }
@@ -131,6 +135,7 @@ export class StatisticsService {
         user_id: filter.userId,
         team_id: filter.teamId,
         provider_id: filter.providerId,
+        api_key_id: filter.apiKeyId ?? null,
         errors_only: filter.errorsOnly || null,
         status: filter.status,
         model_ids: filter.modelIds ?? [],
